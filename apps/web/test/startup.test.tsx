@@ -8,10 +8,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, RunStatus, TaskServers } from "@dude/domain";
 import { act, mount, until } from "./dom.ts";
-import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
+import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
 import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
+import { runStatusShown } from "../src/runPresentation.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
 import { ApiError } from "../src/api/client.ts";
@@ -295,6 +296,27 @@ describe("a task's Run page", () => {
     const slow = await until(() => page.querySelector("[data-testid=start-slow]"), "the slow note");
     expect(slow.textContent).toContain("lux: waiting for capacity: 2 hosts lack cpus");
     expect(page.querySelector("[data-testid=waiting-for-host]")?.textContent ?? null).toBeNull();
+  });
+
+  test("the Run's own status: Scheduled while it waits for a machine, Starting once placed (any later stage), as lux moves it", async () => {
+    const t = Date.now() - 20_000;
+    const iso = (d: number) => new Date(t + d).toISOString();
+    const waiting = [{ ...created(), occurredAt: iso(0) }, { ...stage("waiting", 0), payload: { stage: "waiting", since: iso(0), epoch: 1 } }];
+    const page = await runPage("scheduled", waiting);
+    const status = () => page.querySelector("[data-testid=start-chip]")!.closest("header")!.querySelector("[data-status]")!;
+    await until(() => page.querySelector("[data-testid=start-chip]"), "the chip");
+    expect(status().getAttribute("data-status")).toBe("scheduled");
+    const placed = { ...stage("image", 0), payload: { stage: "image", since: iso(5_000), epoch: 1 } };
+    await act(async () => emit(placed));
+    await until(() => (status().getAttribute("data-status") === "starting" ? true : null), "Starting once placed");
+    expect(status().textContent).toContain("Starting");
+  });
+
+  test("the task's Runs read the same from the API's startStage", () => {
+    const run = { status: "scheduled" as const, startStage: { stage: "container", since: null, epoch: 1 } };
+    expect(runStatusShown(run)).toBe("starting");
+    expect(runStatusShown({ ...run, startStage: { stage: "waiting", since: null, epoch: 1 } })).toBe("scheduled");
+    expect(runStatusShown({ ...run, startStage: null })).toBe("scheduled");
   });
 
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {

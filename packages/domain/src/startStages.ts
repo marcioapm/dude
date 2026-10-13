@@ -32,3 +32,12 @@ export const MOVE_STAGES: readonly StartStage[] = ["park", ...RESUME_STAGES];
 export function isStartStage(value: unknown): value is StartStage {
   return typeof value === "string" && (START_STAGES as readonly string[]).includes(value);
 }
+
+/**
+ * A Run's status as it is shown: `scheduled` reads `starting` once lux has placed it, which is any start stage past
+ * `waiting` (the `running` stage is lux's state `starting`). dude records `scheduled` until lux reports the Run
+ * running; the stage is the ledger's, so the header and the run lists derive it here rather than from a column.
+ */
+export function shownRunStatus<S extends string>(status: S, stage: string | null | undefined): S | "starting" {
+  return status === "scheduled" && isStartStage(stage) && stage !== "waiting" && stage !== "park" ? "starting" : status;
+}

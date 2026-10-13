@@ -398,3 +398,10 @@ Where it differs from the proposal:
 - **The Run page keeps `WaitingForHost`** pinned only for a pool with no
   host that can run containers (an admin's to fix); any other lux wait
   reason is the row's slow note.
+- **A Run reads Starting once lux has placed it.** dude records
+  `scheduled` until lux reports the Run running, and nothing writes
+  `starting` for an agent Run; the shown status is derived in one place,
+  `shownRunStatus` in `@dude/domain`: `scheduled` with a stage past
+  `waiting` (`park` aside) reads `starting`. The Run's header takes the
+  stage from the projection, a task's run lists from the API's
+  `startStage`.

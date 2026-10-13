@@ -43,7 +43,7 @@ import {
   ImageViewer,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, waitsForContainerHost } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
 import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
@@ -417,7 +417,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const session = {
     id: run.id,
     role,
-    status: run.status,
+    // Starting once lux has placed it (a stage past waiting), from the live ledger, else the API's last stage.
+    status: shownRunStatus(run.status, conversation.start ? conversation.start.stage : run.startStage?.stage),
     statusLabel: runStatusLabel(run),
     // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's wait for a host.
     ...(conversation.start && !conversation.start.failed ? { statusNote: <StartHeaderChip start={conversation.start} bare /> }
