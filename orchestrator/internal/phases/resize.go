@@ -44,6 +44,9 @@ type ResizePlan struct {
 	unknown bool
 	// lux's refusal of Send, after which the resume went without it.
 	refused *lux.Error
+	// Records a refusal durably before the fallback resume is asked for,
+	// so a process that dies in between resumes the same way.
+	onRefused func(*lux.Error) error
 }
 
 // PlanResize compares the recorded size and pool with the target. A pool
@@ -140,6 +143,9 @@ func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *Resiz
 func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeInput, plan *ResizePlan) (lux.Run, error) {
 	if plan == nil || plan.Send == nil || plan.refused != nil {
 		in.Resources, in.Placement = nil, nil
+		if plan != nil && plan.refused != nil && plan.refused.Status != http.StatusConflict {
+			in.Input = plan.refused.Message
+		}
 		return c.Resume(ctx, runID, in)
 	}
 	in.Resources = plan.Send
@@ -151,6 +157,13 @@ func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeI
 		slog.Warn("lux refused a resume's resources; resuming without them", "luxRun", runID,
 			"status", le.Status, "code", le.Code, "error", le.Message)
 		plan.refused = le
+		// A 409 is a resume under way, whose outcome the answer shows; 400
+		// and 422 refuse these resources for good and are kept.
+		if plan.onRefused != nil && le.Status != http.StatusConflict {
+			if err := plan.onRefused(le); err != nil {
+				return lux.Run{}, err
+			}
+		}
 		in.Resources, in.Placement = nil, nil
 		in.Input = le.Message
 		return c.Resume(ctx, runID, in)
@@ -250,61 +263,134 @@ func (p *ResizePlan) keptNote() string {
 	}
 }
 
+// pendingMove is a Run's unsettled machine move.
+type pendingMove struct {
+	ID, Role, Kind, To string
+	From               struct {
+		delivery.Machine
+		PreviousRaise *delivery.Raise `json:"previousRaise"`
+	}
+	// lux's definitive refusal, kept before the fallback resume.
+	Code, Message string
+}
+
+func loadPendingMove(ctx context.Context, tx pgx.Tx, runID string) (*pendingMove, error) {
+	var m pendingMove
+	err := tx.QueryRow(ctx, `SELECT id, role, kind, to_size_id, from_size, COALESCE(refused, ''), COALESCE(refused_message, '')
+		FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID).Scan(&m.ID, &m.Role, &m.Kind, &m.To, &m.From, &m.Code, &m.Message)
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	return &m, err
+}
+
+// movePlan ties a resume's plan to its Run's pending move: a refusal kept
+// by an earlier attempt resumes without resources and with its message,
+// and a new refusal is kept before the fallback resume is asked for.
+func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) error {
+	if plan == nil {
+		return nil
+	}
+	var move *pendingMove
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		move, err = loadPendingMove(ctx, tx, r.ID)
+		return err
+	}); err != nil || move == nil {
+		return err
+	}
+	if move.Code != "" || move.Message != "" {
+		plan.refused = &lux.Error{Status: http.StatusUnprocessableEntity, Code: move.Code, Message: move.Message}
+	}
+	plan.onRefused = func(le *lux.Error) error {
+		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `UPDATE machine_moves SET refused = $2, refused_message = $3 WHERE id = $1 AND settled_at IS NULL`,
+				move.ID, le.Code, le.Message)
+			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			return restoreLayer(ctx, tx, r, move)
+		})
+	}
+	return nil
+}
+
+// restoreLayer puts back the layer a refused raise replaced, only while the
+// layer is still the one this move wrote: a later Reset or raise wins.
+func restoreLayer(ctx context.Context, tx pgx.Tx, r phaseRun, move *pendingMove) error {
+	if move.Kind != "raise" {
+		return nil
+	}
+	previous, _ := json.Marshal(move.From.PreviousRaise)
+	var err error
+	if r.SessionID != "" {
+		_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = NULLIF($2::jsonb, 'null'::jsonb) WHERE id = $1 AND agent_machine->>'moveId' = $3`, r.SessionID, previous, move.ID)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = CASE WHEN $3::jsonb = 'null'::jsonb THEN agent_machines - $2 ELSE jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) END WHERE id = $1 AND agent_machines->$2->>'moveId' = $4`, r.TaskID, move.Role, previous, move.ID)
+	}
+	return err
+}
+
+// settleMachine settles the Run's pending move from what lux reports the
+// resumed Run has: moved when it is on the move's size, else refused. An
+// answer that does not say leaves it for the next resume.
 func (s *Syncer) settleMachine(ctx context.Context, r phaseRun, plan *ResizePlan, answer lux.Run) error {
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var id, role, kind string
-		var from struct {
-			delivery.Machine
-			PreviousRaise *delivery.Raise `json:"previousRaise"`
-		}
-		err := tx.QueryRow(ctx, `SELECT id, role, kind, from_size FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, r.ID).Scan(&id, &role, &kind, &from)
-		if db.IsNotFound(err) {
-			return nil
-		}
+	if plan == nil {
+		return nil
+	}
+	if plan.Send != nil && answer.Resize == nil && answer.Spec.Resources == nil {
+		got, err := s.Lux.Get(ctx, r.LuxRunID)
 		if err != nil {
 			return err
 		}
-		var refusal *lux.Error
-		if plan != nil {
-			refusal = plan.refused
+		answer = got
+	}
+	actual := plan.Outcome(answer)
+	if actual == nil {
+		return nil
+	}
+	names := delivery.LoadPoolNames(ctx, s.Lux)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		move, err := loadPendingMove(ctx, tx, r.ID)
+		if err != nil || move == nil {
+			return err
 		}
-		code, message := "", ""
-		if refusal != nil {
-			code, message = refusal.Code, refusal.Message
+		code, message := move.Code, move.Message
+		moved := actual.SizeID == move.To
+		if moved {
+			code, message = "", ""
+		} else if code == "" && message == "" {
+			// lux kept the Run on another size without refusing the move
+			// for good (a resume already under way): the layer stays.
+			message = actual.Note
 		}
-		tag, err := tx.Exec(ctx, `UPDATE machine_moves SET settled_at = now(), refused = $2, refused_message = $3 WHERE id = $1 AND settled_at IS NULL`, id, db.Nullable(code), db.Nullable(message))
+		tag, err := tx.Exec(ctx, `UPDATE machine_moves SET settled_at = now(), refused = $2, refused_message = $3,
+			pool = CASE WHEN $4::text IS DISTINCT FROM $5::text THEN jsonb_build_object('from', $4::text, 'to', $5::text) END
+			WHERE id = $1 AND settled_at IS NULL`, move.ID, db.Nullable(code), db.Nullable(message), move.From.PoolID, actual.PoolID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		payload := map[string]any{"moveId": id, "role": role, "from": from.SizeID}
-		typ := "machine.raised"
-		if refusal != nil {
-			typ = "machine.refused"
-			payload["code"], payload["message"] = code, message
-			previous, _ := json.Marshal(from.PreviousRaise)
-			// Restore only the layer this move wrote; a later person's action wins.
-			if r.SessionID != "" {
-				_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = NULLIF($2::jsonb, 'null'::jsonb) WHERE id = $1 AND agent_machine->>'moveId' = $3`, r.SessionID, previous, id)
-			} else {
-				_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = CASE WHEN $3::jsonb = 'null'::jsonb THEN agent_machines - $2 ELSE jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) END WHERE id = $1 AND agent_machines->$2->>'moveId' = $4`, r.TaskID, role, previous, id)
-			}
-			if err != nil {
+		if moved {
+			// machine.raised (or machine.reset) told when the move started;
+			// run.resized says what lux applied.
+			return nil
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		asked, ok := sizes.ByID[move.To]
+		if !ok {
+			asked = delivery.Machine{SizeID: move.To}
+		}
+		payload := delivery.MovePayload(move.ID, move.Role, move.From.Machine, asked, names)
+		names.Name(actual)
+		payload["kind"], payload["kept"], payload["code"], payload["message"] = move.Kind, actual, code, message
+		if move.Code != "" || move.Message != "" {
+			if err := restoreLayer(ctx, tx, r, move); err != nil {
 				return err
 			}
-		} else {
-			var actual *delivery.Machine
-			if plan != nil {
-				actual = plan.Outcome(answer)
-			}
-			if actual != nil {
-				payload["to"] = actual.SizeID
-				payload["pool"] = map[string]any{"from": from.PoolID, "to": actual.PoolID}
-			}
-			if kind == "reset" {
-				typ = "machine.reset"
-			}
 		}
-		_, err = ledger.Append(ctx, tx, r.ref().Event(typ, ledger.ActorSystem, payload))
+		_, err = ledger.Append(ctx, tx, r.ref().Event(delivery.EvMachineRefused, ledger.ActorSystem, payload))
 		return err
 	})
 }

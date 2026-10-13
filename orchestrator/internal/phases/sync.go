@@ -2025,6 +2025,9 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
+	if err := s.movePlan(ctx, r, plan); err != nil {
+		return lux.Run{}, 0, err
+	}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var note, person string
 		err := tx.QueryRow(ctx, `SELECT COALESCE(reason,''), COALESCE(by_person,'') FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NULL`, r.ID).Scan(&note, &person)
@@ -2079,9 +2082,21 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
 	defer func() {
-		if err == nil {
-			RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, resumed)
-			err = s.settleMachine(ctx, r, plan, resumed)
+		answer := resumed
+		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
+			// Resuming already, an earlier attempt's answer lost: what lux
+			// says the Run has now is the observed result.
+			cur, gerr := s.Lux.Get(ctx, r.LuxRunID)
+			if gerr != nil || lux.Terminated(cur.State) || cur.State == "succeeded" {
+				return
+			}
+			answer = cur
+		} else if err != nil {
+			return
+		}
+		RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, answer)
+		if serr := s.settleMachine(ctx, r, plan, answer); serr != nil && err == nil {
+			err = serr
 		}
 	}()
 	resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)

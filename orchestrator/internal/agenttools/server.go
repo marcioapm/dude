@@ -423,6 +423,15 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	var refused refusal
+	if errors.As(err, &refused) && refused.record != nil {
+		if rerr := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			_, err := ledger.Append(ctx, tx, *refused.record)
+			return err
+		}); rerr != nil {
+			return nil, rerr
+		}
+	}
 	if err != nil || t.outside == nil {
 		return out, err
 	}
@@ -473,9 +482,12 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 }
 
 // refusal is a tool declining a request, with the reason for the caller.
+// record, when set, is a ledger event kept even though the tool's
+// transaction is rolled back.
 type refusal struct {
-	msg  string
-	code string
+	msg    string
+	code   string
+	record *ledger.Event
 }
 
 func (r refusal) Error() string { return r.msg }

@@ -247,8 +247,17 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	if target == nil {
 		return out, refuse("no size named %s; use dude machine sizes", in.Size)
 	}
+	names := delivery.LoadPoolNames(ctx, c.env.lux)
+	// A refusal once both sizes are known is recorded as machine.requested
+	// with refused and no moveId, so who asked for what has one source.
+	refusedAs := func(msg, code, recorded string) error {
+		payload := delivery.MovePayload("", c.Role, *current, *target, names)
+		payload["reason"], payload["refused"], payload["message"] = reason, recorded, msg
+		ev := c.event(delivery.EvMachineRequested, payload)
+		return refusal{msg: msg, code: code, record: &ev}
+	}
 	if !largerMachine(*target, *current) {
-		return out, refuse("you run on %s; ask for a size with more memory, or equal memory and more CPUs", current.Name)
+		return out, refusedAs(fmt.Sprintf("you run on %s; ask for a size with more memory, or equal memory and more CPUs", current.Name), "", "not_larger")
 	}
 	if c.env.lux == nil || c.env.validateMachine == nil {
 		return out, refuse("machine validation is unavailable")
@@ -259,7 +268,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	}
 	if err := c.env.validateMachine(ctx, live, current, target, before); err != nil {
 		if le, ok := lux.AsError(err); ok {
-			return out, refusal{msg: le.Message, code: le.Code}
+			return out, refusedAs(le.Message, le.Code, le.Code)
 		}
 		return out, err
 	}
@@ -300,7 +309,15 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	if err != nil {
 		return out, err
 	}
-	if _, err := ledger.Append(ctx, tx, c.event("machine.requested", map[string]any{"moveId": id, "role": c.Role, "from": current, "to": target, "reason": reason})); err != nil {
+	payload := delivery.MovePayload(id, c.Role, *current, *target, names)
+	payload["reason"] = reason
+	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRequested, payload)); err != nil {
+		return out, err
+	}
+	// The layer is written and the move starts: the notice and the
+	// stepper's pool come from this, whole Machines and pool names.
+	raised := delivery.MovePayload(id, c.Role, *current, *target, names)
+	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRaised, raised)); err != nil {
 		return out, err
 	}
 	return requestMachineOut{Size: target.Name, Answer: "End your turn now; you are resumed on " + target.Name + ". Your conversation and checkout are kept; running processes and /tmp are not. Start servers and watchers again."}, nil

@@ -26,6 +26,10 @@ func (machineLux) Get(context.Context, string) (lux.Run, error) {
 	return lux.Run{ID: "live", State: "running"}, nil
 }
 
+func (machineLux) Pools(context.Context) ([]lux.Pool, error) {
+	return []lux.Pool{{ID: "pool_default", Name: "general", IsDefault: true}}, nil
+}
+
 func TestMachineRequestValidatesBeforeParkingAndPersistsOnce(t *testing.T) {
 	for _, rejected := range []bool{true, false} {
 		t.Run(fmt.Sprint(rejected), func(t *testing.T) {
@@ -66,13 +70,21 @@ func TestMachineRequestValidatesBeforeParkingAndPersistsOnce(t *testing.T) {
 			if err := f.owner.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM machine_moves), r.control, t.agent_machines FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id='run_machine'`).Scan(&moves, &control, &raises); err != nil {
 				t.Fatal(err)
 			}
+			var requested, refusedRecorded, raised int
+			if err := f.owner.QueryRow(context.Background(), `SELECT
+				count(*) FILTER (WHERE event_type = 'machine.requested' AND payload ? 'moveId' AND payload->'to'->>'name' = 'Large' AND payload->'from'->>'pool' = 'general'),
+				count(*) FILTER (WHERE event_type = 'machine.requested' AND NOT payload ? 'moveId' AND payload->>'refused' = 'pool_unfit' AND payload->>'message' = 'exact lux refusal'),
+				count(*) FILTER (WHERE event_type = 'machine.raised' AND payload->'to'->>'sizeId' = 'ms_large' AND payload->'from'->>'name' = 'Small')
+				FROM events WHERE run_id = 'run_machine'`).Scan(&requested, &refusedRecorded, &raised); err != nil {
+				t.Fatal(err)
+			}
 			if rejected {
-				if moves != 0 || control != "none" || len(raises) != 0 {
-					t.Fatalf("refusal changed state: %d %s %+v", moves, control, raises)
+				if moves != 0 || control != "none" || len(raises) != 0 || refusedRecorded != 1 || requested+raised != 0 {
+					t.Fatalf("refusal changed state: %d %s %+v events %d/%d/%d", moves, control, raises, requested, refusedRecorded, raised)
 				}
 			} else {
-				if moves != 1 || control != "pause_graceful" || raises["reviewer"].SizeID != "ms_large" {
-					t.Fatalf("accepted state: %d %s %+v", moves, control, raises)
+				if moves != 1 || control != "pause_graceful" || raises["reviewer"].SizeID != "ms_large" || requested != 1 || raised != 1 || refusedRecorded != 0 {
+					t.Fatalf("accepted state: %d %s %+v events %d/%d/%d", moves, control, raises, requested, refusedRecorded, raised)
 				}
 				if status, _ := f.post(t, token, "request_machine", `{"size":"Large","reason":"retry"}`); status != 422 {
 					t.Fatalf("duplicate=%d", status)

@@ -37,12 +37,25 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 			if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_test', $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', $4, 'resize')`, w.run.Org, w.run.TaskID, w.run.ID, size); err != nil {
 				t.Fatal(err)
 			}
-			plan := &ResizePlan{Recorded: &delivery.Machine{SizeID: "old"}, Target: &delivery.Machine{SizeID: size}}
-			if refused {
-				plan.refused = &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+			w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+			old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+			target := &delivery.Machine{SizeID: size, Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+			plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+			if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+				t.Fatal(err)
 			}
+			applied := *plan.Send
+			if refused {
+				// Kept as ResumeSized does before its fallback resume.
+				if err := plan.onRefused(&lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}); err != nil {
+					t.Fatal(err)
+				}
+				plan.refused = &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+				applied = lux.Resources{CPUs: 2, Memory: 2048 << 20, Disk: 20 << 30}
+			}
+			answer := lux.Run{Spec: lux.StoredSpec{Resources: &applied}}
 			for i := 0; i < 2; i++ {
-				if err := w.s.settleMachine(w.ctx, w.run, plan, lux.Run{}); err != nil {
+				if err := w.s.settleMachine(w.ctx, w.run, plan, answer); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -50,10 +63,14 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 			var settled bool
 			var code *string
 			var events int
-			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type IN ('machine.raised','machine.refused')) FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID).Scan(&raises, &settled, &code, &events); err != nil {
+			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type = 'machine.refused' AND payload->>'message' = 'exact refusal' AND payload->'kept'->>'name' = 'Old') FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID).Scan(&raises, &settled, &code, &events); err != nil {
 				t.Fatal(err)
 			}
-			if !settled || events != 1 || refused && (len(raises) != 0 || code == nil || *code != "pool_unfit") || !refused && len(raises) != 1 {
+			wantEvents := 0
+			if refused {
+				wantEvents = 1
+			}
+			if !settled || events != wantEvents || refused && (len(raises) != 0 || code == nil || *code != "pool_unfit") || !refused && (len(raises) != 1 || code != nil) {
 				t.Fatalf("settled=%v events=%d raises=%+v code=%v", settled, events, raises, code)
 			}
 		})
@@ -64,10 +81,17 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 // Run with the placements set, or an error, and counts what was asked.
 type placementLux struct {
 	lux.Client
-	mu   sync.Mutex
-	run  lux.Run
-	err  error
-	gets int
+	mu    sync.Mutex
+	run   lux.Run
+	err   error
+	gets  int
+	pools []lux.Pool
+}
+
+func (f *placementLux) Pools(context.Context) ([]lux.Pool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pools, nil
 }
 
 func (f *placementLux) Get(context.Context, string) (lux.Run, error) {

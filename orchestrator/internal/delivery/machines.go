@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // Machine is a size as a Run records what it ran on (runs.machine).
@@ -89,6 +91,83 @@ func LoadSessionRaise(ctx context.Context, tx pgx.Tx, sessionID, role string) (R
 type DiskKept struct {
 	RequestedGiB int64  `json:"requestedGiB"`
 	Reason       string `json:"reason,omitempty"`
+}
+
+// Machine move events (docs/design/agent-machine-request.md, packages/domain
+// events/types.ts). requested and raised are the Run's at the agent's call,
+// refused the Run's when lux refused the move, reset the task's or
+// session's at a person's Reset.
+const (
+	EvMachineRequested = "machine.requested"
+	EvMachineRaised    = "machine.raised"
+	EvMachineRefused   = "machine.refused"
+	EvMachineReset     = "machine.reset"
+)
+
+// PoolNames are lux's pool names by id, and its default pool's name for a
+// size naming no pool.
+type PoolNames struct {
+	ByID    map[string]string
+	Default string
+}
+
+// LoadPoolNames reads lux's pool names; lux out of reach is no names, and
+// payloads then carry pool ids alone.
+func LoadPoolNames(ctx context.Context, c lux.Client) PoolNames {
+	out := PoolNames{ByID: map[string]string{}}
+	if c == nil {
+		return out
+	}
+	pools, err := c.Pools(ctx)
+	if err != nil {
+		return out
+	}
+	for _, p := range pools {
+		out.ByID[p.ID] = p.Name
+		if p.IsDefault {
+			out.Default = p.Name
+		}
+	}
+	return out
+}
+
+// Name fills m.Pool from the names when lux named its pool.
+func (n PoolNames) Name(m *Machine) {
+	if m == nil || m.Pool != nil {
+		return
+	}
+	name := n.Default
+	if m.PoolID != nil {
+		name = n.ByID[*m.PoolID]
+	}
+	if name != "" {
+		m.Pool = &name
+	}
+}
+
+// MovePayload is a move event's common payload: whole Machines, so a
+// notice and a stepper need no other read, and pool {from, to} (ids and
+// names) when the move changes pools.
+func MovePayload(moveID, role string, from, to Machine, names PoolNames) map[string]any {
+	names.Name(&from)
+	names.Name(&to)
+	out := map[string]any{"role": role, "from": from, "to": to}
+	if moveID != "" {
+		out["moveId"] = moveID
+	}
+	id := func(m Machine) string {
+		if m.PoolID == nil {
+			return ""
+		}
+		return *m.PoolID
+	}
+	if id(from) != id(to) {
+		out["pool"] = map[string]any{
+			"from": map[string]any{"id": from.PoolID, "name": from.Pool},
+			"to":   map[string]any{"id": to.PoolID, "name": to.Pool},
+		}
+	}
+	return out
 }
 
 // SameSize: a and b give a Run the same CPUs, memory and disk, whatever
