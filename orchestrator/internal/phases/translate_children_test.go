@@ -117,3 +117,136 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// A real Codex turn (0.144.1) that delegated a read to a spawned agent: the
+// agent's thread is a child of the call its subAgentActivity names, its
+// command and reply are its own, its tokens are not the Run's, and its
+// turn's end ends it. The Run's wait is an ordinary call.
+func TestACodexSpawnedAgentIsRecordedAsTheParentCallsChild(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(recorded(t, "codex-child.jsonl")...)
+	events := w.events()
+	want := []string{evAgentMessage, evToolCalled, evToolCompleted, evChildStarted, evModelRequestDone, evToolCalled,
+		evChildToolCalled, evChildToolCompleted, evChildMessage, evChildEnded, evToolCompleted, evModelRequestDone, evModelRequestDone}
+	if got := types(events); !slices.Equal(got, want) {
+		t.Fatalf("events = %v\nwant %v", got, want)
+	}
+	noChildCallAsTheParents(t, events)
+	const spawn, thread = "call_0f65b4f136284e79835158f965bcb10a", "01a133b0-0aa5-7b93-b598-a603ff0d58a5"
+	if p := ofType(events, evToolCalled)[0].Payload; p["tool"] != "task" || p["callId"] != spawn {
+		t.Errorf("spawn call %v", p)
+	}
+	if p := ofType(events, evToolCalled)[1].Payload; p["tool"] != "wait" {
+		t.Errorf("wait call %v", p)
+	}
+	if p := ofType(events, evChildStarted)[0].Payload; p["childId"] != thread || p["callId"] != spawn || p["kind"] != "spawn" ||
+		p["title"] != "/root/read_hosts" {
+		t.Errorf("started %v", p)
+	}
+	if p := ofType(events, evChildToolCalled)[0].Payload; p["tool"] != "bash" || p["parentCallId"] != spawn ||
+		p["input"].(map[string]any)["command"] != "head -n 1 /etc/hosts" {
+		t.Errorf("child call %v", p)
+	}
+	if p := ofType(events, evChildMessage)[0].Payload; p["text"] != "##" || p["childId"] != thread {
+		t.Errorf("child message %v", p)
+	}
+	ended := ofType(events, evChildEnded)[0].Payload
+	if tk := ended["tokens"].(map[string]any); ended["status"] != "completed" || ended["summary"] != "##" ||
+		tk["input"] != float64(16788-6912) || tk["cacheRead"] != float64(6912) || tk["output"] != float64(45) {
+		t.Errorf("ended %v", ended)
+	}
+	// The Run's turn is its own two requests: 8390 + 8476 input.
+	end := ofType(events, evModelRequestDone)[2].Payload["tokens"].(map[string]any)
+	if end["input"] != float64(16866) || end["output"] != float64(86) {
+		t.Errorf("the Run's turn %v", end)
+	}
+}
+
+// Two agents spawned at once, their threads' notifications interleaved,
+// each bound to its own spawn call (the spawn item first, as the brief's
+// shape has it): neither's calls are the other's or the Run's; the Run's
+// wait stays open, kept busy by both, until it completes.
+func TestTwoConcurrentCodexAgentsAreEachTheirOwnCallsChild(t *testing.T) {
+	const run, a, b = "thr_run", "thr_a", "thr_b"
+	n := func(method string, params map[string]any) map[string]any {
+		return map[string]any{"type": "codex." + method, "data": params}
+	}
+	spawnItem := func(id, prompt string, receivers ...string) map[string]any {
+		r := []any{}
+		for _, x := range receivers {
+			r = append(r, x)
+		}
+		return map[string]any{"type": "collabAgentToolCall", "id": id, "tool": "spawnAgent", "status": "inProgress",
+			"senderThreadId": run, "receiverThreadIds": r, "prompt": prompt, "model": "gpt-6-sol"}
+	}
+	activity := func(id, thread string) map[string]any {
+		return n("item/completed", map[string]any{"threadId": run, "item": map[string]any{"type": "subAgentActivity", "id": id,
+			"kind": "started", "agentThreadId": thread, "agentPath": "/root/" + thread}})
+	}
+	cmd := func(thread, id, line string, done bool) map[string]any {
+		item := map[string]any{"type": "commandExecution", "id": id, "command": line, "status": "inProgress"}
+		method := "item/started"
+		if done {
+			item["status"], item["aggregatedOutput"], item["exitCode"], method = "completed", "ok", 0, "item/completed"
+		}
+		return n(method, map[string]any{"threadId": thread, "item": item})
+	}
+	wait := map[string]any{"type": "collabAgentToolCall", "id": "w1", "tool": "wait", "status": "inProgress", "senderThreadId": run,
+		"receiverThreadIds": []any{a, b}}
+	w := newHarnessWorld(t)
+	w.feed(
+		n("thread/started", map[string]any{"thread": map[string]any{"id": run, "parentThreadId": nil}}),
+		n("item/started", map[string]any{"threadId": run, "item": spawnItem("s1", "Count the Go files\nin ./orchestrator")}),
+		activity("s1", a),
+		n("item/started", map[string]any{"threadId": run, "item": spawnItem("s2", "List the migrations")}),
+		activity("s2", b),
+		n("item/completed", map[string]any{"threadId": run, "item": spawnItem("s1", "Count the Go files\nin ./orchestrator", a)}),
+		n("item/completed", map[string]any{"threadId": run, "item": spawnItem("s2", "List the migrations", b)}),
+		n("item/started", map[string]any{"threadId": run, "item": wait}),
+		cmd(a, "ca", "find . -name '*.go'", false),
+		cmd(b, "cb", "ls migrations", false),
+	)
+	busy := w.children()
+	if busy["w1"]["childId"] == nil || !strings.Contains(busy["w1"]["lastEvent"].(string), "bash") {
+		t.Errorf("the wait call is not kept busy by its agents: %v", busy)
+	}
+	w.feed(
+		cmd(b, "cb", "ls migrations", true),
+		cmd(a, "ca", "find . -name '*.go'", true),
+		n("item/completed", map[string]any{"threadId": a, "item": map[string]any{"type": "agentMessage", "id": "ma", "text": "412"}}),
+		n("turn/completed", map[string]any{"threadId": b, "turn": map[string]any{"status": "completed"}}),
+		n("turn/completed", map[string]any{"threadId": a, "turn": map[string]any{"status": "failed"}}),
+		n("item/completed", map[string]any{"threadId": run, "item": map[string]any{"type": "collabAgentToolCall", "id": "w1",
+			"tool": "wait", "status": "completed"}}),
+	)
+	events := w.events()
+	noChildCallAsTheParents(t, events)
+	started := map[any]any{}
+	for _, e := range ofType(events, evChildStarted) {
+		started[e.Payload["childId"]] = e.Payload["callId"]
+		if e.Payload["childId"] == a && e.Payload["title"] != "Count the Go files" {
+			t.Errorf("a's title %v", e.Payload["title"])
+		}
+	}
+	if started[a] != "s1" || started[b] != "s2" || len(started) != 2 {
+		t.Errorf("children by call %v", started)
+	}
+	for _, e := range ofType(events, evChildToolCompleted) {
+		if owner := map[any]any{"ca": a, "cb": b}[e.Payload["callId"]]; e.Payload["childId"] != owner {
+			t.Errorf("call %v recorded as %v's", e.Payload["callId"], e.Payload["childId"])
+		}
+	}
+	ends := map[any]any{}
+	for _, e := range ofType(events, evChildEnded) {
+		ends[e.Payload["childId"]] = e.Payload["status"]
+	}
+	if ends[a] != "failed" || ends[b] != "completed" {
+		t.Errorf("ends %v", ends)
+	}
+	if calls := ofType(events, evToolCalled); len(calls) != 3 {
+		t.Errorf("the Run's own calls %v, want the two spawns and the wait", calls)
+	}
+	if len(w.children()) != 0 {
+		t.Errorf("children left: %v", w.children())
+	}
+}

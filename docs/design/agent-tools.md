@@ -151,7 +151,11 @@ it again.
 - **Codex** (`codex.*`): any notification on a thread other than the
   Run's (its session) is a child's. The parent's `collabAgentToolCall`
   item (`spawnAgent`) is the call; the `subAgentActivity` item that
-  follows it (`kind: started`) ties the child's `agentThreadId` to it. The
+  follows it (`kind: started`) ties the child's `agentThreadId` to it.
+  Codex 0.144.1 sends no item for the spawn itself, only the
+  `subAgentActivity` under the spawn call's id: the call is then recorded
+  from it, as a `task` already done. A spawned agent outlives its spawn
+  call; while it works, the parent's open `wait` calls count as busy. The
   child's `turn/completed` ends it; its `thread/tokenUsage/updated` are its
   tokens, not the Run's.
 - **OpenCode** (`acp.*` is the parent alone; lux relays the child's bus
