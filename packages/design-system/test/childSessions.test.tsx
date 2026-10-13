@@ -77,6 +77,58 @@ test("a live thread waiting on a permission says so in its header and marks itse
   expect(done!.querySelector("[data-testid='chat-thread-waiting']")).toBeNull();
 });
 
+test("an open-only row marks its whole root as clickable; a disclosure thread does not", async () => {
+  const el = await mount(
+    <>
+      <ChatThread sessionId="row" role="subagent" status="running" task="Research" openOnly collapsed onOpen={() => undefined} summary="Reading" />
+      <ChatThread sessionId="tree" role="subagent" status="running" task="Inline" summary="Reading"><p>inside</p></ChatThread>
+    </>,
+  );
+  const [row, tree] = [...el.querySelectorAll("section")];
+  expect(row!.getAttribute("data-open-only")).toBe("true");
+  expect(tree!.getAttribute("data-open-only")).toBeNull();
+});
+
+const press = (el: Element, key: string) => act(async () => { el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+
+test("an open-only row opens by click, Enter and Space and never discloses a body", async () => {
+  const opened: string[] = [];
+  const el = await mount(
+    <ChatThread sessionId="row" role="subagent" status="running" task="Research" openOnly collapsed onOpen={(id) => opened.push(id)}>
+      <p>Hidden transcript</p>
+    </ChatThread>,
+  );
+  const header = el.querySelector("section > [role='button']")!;
+  expect(header.getAttribute("aria-expanded")).toBeNull();
+  await act(async () => (header as HTMLElement).click());
+  await press(header, "Enter");
+  await press(header, " ");
+  expect(opened).toEqual(["row", "row", "row"]);
+  expect(el.querySelector("[role='group']")).toBeNull();
+  expect(el.textContent).not.toContain("Hidden transcript");
+  expect(el.querySelector("button[aria-label='Open session']")).toBeNull();
+});
+
+test("an ordinary disclosure thread toggles its body by Enter and Space without opening", async () => {
+  const opened: string[] = [];
+  const el = await mount(
+    <ChatThread sessionId="tree" role="subagent" status="running" task="Inline" onOpen={(id) => opened.push(id)}>
+      <p>Inline transcript</p>
+    </ChatThread>,
+  );
+  const header = el.querySelector("section > [role='button']")!;
+  expect(header.getAttribute("aria-expanded")).toBe("true");
+  expect(el.textContent).toContain("Inline transcript");
+  await press(header, "Enter");
+  expect(header.getAttribute("aria-expanded")).toBe("false");
+  expect(el.querySelector("[role='group']")).toBeNull();
+  await press(header, " ");
+  expect(header.getAttribute("aria-expanded")).toBe("true");
+  expect(el.textContent).toContain("Inline transcript");
+  await act(async () => (el.querySelector("section") as HTMLElement).click());
+  expect(opened).toEqual([]);
+});
+
 test("the gallery's child-session block draws a live, a waiting, a folded and two side-by-side children in dark and light", async () => {
   globalThis.IntersectionObserver = ControlledObserver as unknown as typeof IntersectionObserver;
   const el = await mount(

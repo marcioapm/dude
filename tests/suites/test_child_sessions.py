@@ -79,8 +79,20 @@ def test_a_child_session_is_recorded_and_drawn_under_its_call(page: Page, web_ur
     if waits:
         expect(thread).to_have_attribute("data-waiting", "true")
         expect(thread.get_by_test_id("chat-thread-waiting")).to_contain_text("on a permission")
-        expect(thread.get_by_test_id("child-waiting-notice")).to_contain_text(
+        expect(thread.get_by_test_id("child-waiting-notice")).to_have_count(0)
+
+    expect(thread.locator("[data-tool]")).to_have_count(0)
+    expect(page.get_by_test_id("child-panel")).to_have_count(0)
+    thread.get_by_role("button").click()
+    panel = page.get_by_test_id("child-panel")
+    expect(panel).to_have_attribute("data-child", CHILD)
+    expect(panel.locator("[data-tool=bash]")).to_be_visible()
+    if waits:
+        expect(panel).to_contain_text("on a permission")
+        expect(panel.get_by_test_id("child-waiting-notice")).to_contain_text(
             f"Waiting on a permission: {PERMISSION} for {PATTERN}. Nothing in this Run can answer it.")
+    page.keyboard.press("Escape")
+    expect(panel).to_have_count(0)
 
     _child(env, lux_run, "end", text="Playwright's 1280×720 default applies.")
     expect(thread).to_have_attribute("data-status", "completed", timeout=30_000)
@@ -133,9 +145,21 @@ def test_the_scripted_subagents_ask_is_answered_by_lux_and_its_child_ends(page: 
     assert query(owner_dsn, "SELECT children FROM runs WHERE id = %s", (run["id"],))[0]["children"] == {}
 
     sign_in(page, web_url, org["api_key"])
+    # Wide enough for the session rail: under 820px of session width the
+    # rail, and its Subagents quicklinks, are hidden (app.css).
+    page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(f"{web_url}#/session/{run['id']}")
     thread = page.get_by_test_id("child-thread")
     expect(thread).to_have_attribute("data-status", "completed", timeout=30_000)
     expect(thread).not_to_have_attribute("data-waiting", "true")
     expect(thread).to_contain_text("the child read a.txt: hello")
+    expect(thread.locator("[data-tool]")).to_have_count(0)
+    quicklink = page.get_by_test_id("rail-subagents").get_by_role("button").filter(
+        has=page.get_by_text("fake subagent (@general subagent)", exact=True)
+    )
+    expect(quicklink).to_be_visible()
+    quicklink.click()
+    panel = page.get_by_test_id("child-panel")
+    expect(panel.locator("[data-tool=bash]")).to_be_visible()
+    expect(panel).to_contain_text("the child read a.txt: hello")
     assert console_errors == []

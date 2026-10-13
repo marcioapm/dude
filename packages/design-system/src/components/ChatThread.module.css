@@ -79,6 +79,14 @@
 .header:hover {
   background: var(--ds-color-hover-wash);
 }
+/* An open-only row opens from anywhere on it, summary included: it all says so. */
+.root[data-open-only="true"] {
+  cursor: pointer;
+}
+.root[data-open-only="true"]:hover > .header,
+.root[data-open-only="true"]:hover > .summary {
+  background: var(--ds-color-hover-wash);
+}
 .header:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
 }

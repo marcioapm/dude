@@ -12,15 +12,17 @@ function waitingText(waitingOn: NonNullable<ChildTurn["waitingOn"]>): string {
 
 interface ChildBodyProps {
   child: ChildTurn;
+  briefing?: string | undefined;
   depth: number;
 }
 
-export function ChildBody({ child, depth }: ChildBodyProps): ReactElement {
+export function ChildBody({ child, depth, briefing }: ChildBodyProps): ReactElement {
   const waiting = child.waitingOn;
   // The call it is stuck in: its last one still running.
   const stuck = waiting ? child.turns.findLast((t) => t.kind === "tool" && t.status === "running")?.id : undefined;
   return (
     <>
+      {briefing ? <ChatMessage role="system" intent="prompt" content={briefing} startedAt={child.startedAt} /> : null}
       {child.turns.map((turn) => turn.kind === "tool"
         ? (
           <ToolWithChildren key={turn.id} turn={turn} depth={depth + 1}

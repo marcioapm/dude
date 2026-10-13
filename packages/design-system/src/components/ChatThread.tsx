@@ -32,6 +32,7 @@ export interface ChatThreadProps extends Omit<HTMLAttributes<HTMLElement>, "chil
   /** Nesting depth; the transcript sets it. Depth ≥ 2 flattens to a rail. */
   readonly depth?: number | undefined;
   readonly defaultCollapsed?: boolean | undefined;
+  readonly openOnly?: boolean | undefined;
   readonly collapsed?: boolean | undefined;
   readonly onCollapsedChange?: ((collapsed: boolean) => void) | undefined;
   /** Open this session in its own transcript. Rendered as an action in the header. */
@@ -90,6 +91,7 @@ export function ChatThread({
   depth = 1,
   defaultCollapsed,
   collapsed,
+  openOnly = false,
   onCollapsedChange,
   onOpen,
   turnCount,
@@ -100,7 +102,7 @@ export function ChatThread({
 }: ChatThreadProps) {
   const spec = statusSpec(status);
   const finished = spec.terminal;
-  const pinnedClosed = depth >= 3;
+  const pinnedClosed = openOnly || depth >= 3;
   const disclosure = useDisclosure({
     expanded: collapsed === undefined ? undefined : !collapsed,
     defaultExpanded: !(defaultCollapsed ?? (finished || depth >= 2)),
@@ -136,10 +138,12 @@ export function ChatThread({
       data-status={status}
       data-depth={depth}
       data-waiting={isWaiting ? "true" : undefined}
+      data-open-only={openOnly ? "true" : undefined}
       aria-label={`${ROLE_LABEL[role]} subagent: ${task}`}
+      onClick={openOnly ? () => onOpen?.(sessionId) : undefined}
       {...rest}
     >
-      <div className={styles["header"]} role="button" tabIndex={0} aria-expanded={pinnedClosed ? undefined : !isCollapsed} onClick={toggle} onKeyDown={onKey}>
+      <div className={styles["header"]} role="button" tabIndex={0} aria-expanded={pinnedClosed ? undefined : !isCollapsed} onClick={(event) => { event.stopPropagation(); toggle(); }} onKeyDown={onKey}>
         <Icon name="chevron-right" size={12} className={styles["chevron"]} />
         <AgentAvatar role={role} size="xs" live={status === "running"} />
         <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span>
@@ -152,7 +156,7 @@ export function ChatThread({
           {isCollapsed && turnCount !== undefined ? <span className={styles["turns"]}>{turnCount} turns</span> : null}
           {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="muted" /> : null}
           {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
-          {onOpen ? (
+          {onOpen && !openOnly ? (
             <button
               type="button"
               className={styles["open"]}
@@ -168,7 +172,7 @@ export function ChatThread({
           ) : null}
         </span>
       </div>
-      {isWaiting && waiting.detail !== undefined ? <div className={styles["waitingDetail"]}>{waiting.detail}</div> : null}
+      {!openOnly && isWaiting && waiting.detail !== undefined ? <div className={styles["waitingDetail"]}>{waiting.detail}</div> : null}
       {isCollapsed && summary !== undefined ? <div className={styles["summary"]}>{summary}</div> : null}
       {!isCollapsed ? (
         <div className={styles["body"]} role="group">

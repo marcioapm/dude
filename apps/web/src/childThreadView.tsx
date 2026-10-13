@@ -1,64 +1,48 @@
-/**
- * One child's subagent thread, unmemoised: its header, its body, and the
- * dialog its Open action shows. `childThreads.tsx` memoises it.
- */
-
-import { useState } from "react";
 import { ChatThread } from "@dude/design-system/components";
-import { Dialog } from "@dude/design-system/primitives";
 import type { ChildTurn } from "./api/conversation.ts";
-import { ChildBody } from "./childBody.tsx";
 
 export interface ChildThreadProps {
   child: ChildTurn;
   revision: number;
   settled: boolean;
   depth: number;
+  onOpen?: ((id: string) => void) | undefined;
 }
 
-export function ChildThreadView({ child, depth }: ChildThreadProps) {
-  const [open, setOpen] = useState(false);
-  const ended = child.status !== "running";
-  const lastMessage = child.summary === null ? child.turns.findLast((t) => t.kind === "message") : undefined;
-  const summary = child.summary ?? (lastMessage?.kind === "message" ? lastMessage.text : undefined);
+export function childTitle(child: ChildTurn): string {
+  return child.agentType ? `${child.title} · ${child.agentType}` : child.title;
+}
+
+export function childSummary(child: ChildTurn): string | undefined {
+  const last = child.turns.findLast((t) => t.kind === "message");
+  const text = child.summary ?? (last?.kind === "message" ? last.text : undefined);
+  return text?.split("\n").find((line) => line.trim())?.trim();
+}
+
+export function ChildThreadView({ child, depth, onOpen }: ChildThreadProps) {
   const waiting = child.waitingOn;
-  const task = child.agentType ? `${child.title} · ${child.agentType}` : child.title;
+  const lastTool = child.turns.findLast((t) => t.kind === "tool");
   return (
-    <>
-      <ChatThread
-        // Its end folds it, as a child already done is drawn: keyed on it.
-        key={ended ? "ended" : "live"}
-        data-testid="child-thread"
-        data-child={child.id}
-        sessionId={child.id}
-        role="subagent"
-        status={child.status}
-        model={child.model ?? undefined}
-        task={task}
-        startedAt={child.startedAt}
-        endedAt={child.endedAt}
-        costUsd={child.costUsd ?? undefined}
-        turnCount={child.turns.length}
-        summary={summary ? firstLine(summary) : undefined}
-        depth={depth}
-        // The design system's depth rule (depth 2 starts collapsed), and a done child folds.
-        defaultCollapsed={ended || depth >= 2}
-        onOpen={() => setOpen(true)}
-        waiting={waiting ? { on: "a permission", since: waiting.since, detail: `${waiting.permission}${waiting.patterns.length ? ` for ${waiting.patterns.join(", ")}` : ""}` } : undefined}
-      >
-        <ChildBody child={child} depth={depth} />
-      </ChatThread>
-      {open ? (
-        <Dialog open onOpenChange={setOpen} size="xl" context="Subagent" title={task}>
-          <div data-testid="child-session" data-child={child.id}>
-            <ChildBody child={child} depth={0} />
-          </div>
-        </Dialog>
-      ) : null}
-    </>
+    <ChatThread
+      data-testid="child-thread"
+      data-child={child.id}
+      sessionId={child.id}
+      role="subagent"
+      status={child.status}
+      model={child.model ?? undefined}
+      task={childTitle(child)}
+      startedAt={child.startedAt}
+      endedAt={child.endedAt}
+      costUsd={child.costUsd ?? undefined}
+      turnCount={child.turns.length}
+      summary={childSummary(child)}
+      depth={depth}
+      collapsed
+      openOnly
+      activity={child.status === "running" && lastTool?.kind === "tool" && lastTool.status === "running" ? "tool" : undefined}
+      activityProps={lastTool?.kind === "tool" ? { tool: lastTool.tool, since: lastTool.startedAt } : undefined}
+      onOpen={onOpen}
+      waiting={waiting ? { on: "a permission", since: waiting.since } : undefined}
+    />
   );
-}
-
-function firstLine(text: string): string {
-  return text.split("\n").find((l) => l.trim())?.trim() ?? text;
 }
