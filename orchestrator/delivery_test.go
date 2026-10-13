@@ -195,19 +195,45 @@ func (w *world) get(path, org string) (int, string) {
 	return res.StatusCode, string(b)
 }
 
+// seedRepo is a bare repository with one commit on main, made once per test
+// binary in seedRepo.dir and removed by TestMain. Every world copies it:
+// four git processes per repository, two repositories per world, were a
+// tenth of a second of every test.
+var seedRepo struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func makeSeedRepo() (string, error) {
+	dir, err := os.MkdirTemp("", "dude-seed-repo-")
+	if err != nil {
+		return "", err
+	}
+	bare, work := filepath.Join(dir, "seed.git"), filepath.Join(dir, "work")
+	for _, args := range [][]string{
+		{"init", "-q", "--bare", "-b", "main", bare},
+		{"init", "-q", "-b", "main", work},
+		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
+		{"-C", work, "push", "-q", bare, "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return dir, fmt.Errorf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir, nil
+}
+
 // bareRepo makes a bare repository with one commit on main.
 func bareRepo(t *testing.T, dir, name string) string {
 	t.Helper()
-	bare, seed := filepath.Join(dir, name+".git"), filepath.Join(dir, "seed-"+name)
-	for _, args := range [][]string{
-		{"init", "-q", "--bare", "-b", "main", bare},
-		{"init", "-q", "-b", "main", seed},
-		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
-		{"-C", seed, "push", "-q", bare, "main"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	seedRepo.once.Do(func() { seedRepo.dir, seedRepo.err = makeSeedRepo() })
+	if seedRepo.err != nil {
+		t.Fatal(seedRepo.err)
+	}
+	bare := filepath.Join(dir, name+".git")
+	if err := os.CopyFS(bare, os.DirFS(filepath.Join(seedRepo.dir, "seed.git"))); err != nil {
+		t.Fatal(err)
 	}
 	return bare
 }
@@ -2944,7 +2970,11 @@ func TestMain(m *testing.M) {
 		fmt.Println("git is required")
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if seedRepo.dir != "" {
+		_ = os.RemoveAll(seedRepo.dir)
+	}
+	os.Exit(code)
 }
 
 // A Run whose turn ended while no one was following its stream (a restart,
