@@ -117,8 +117,9 @@ async function myDetail(scope: OrgScope, id: string) {
  * members take turns (a transaction-scoped lock), so two admins demoting
  * each other at once cannot both pass the last-admin check.
  */
-async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promise<void> {
+export async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promise<void> {
   await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
+  if (ctx.principal.access?.superAdmin && ctx.url.pathname.startsWith("/v1/admin/")) return;
   const rows = (await scope.sql`
     SELECT role FROM people WHERE id = ${ctx.principal.personId} AND removed_at IS NULL`) as Array<{ role: string }>;
   if (rows[0]?.role !== "admin") {
@@ -245,6 +246,13 @@ async function updateMe(ctx: RequestContext): Promise<Response> {
   // Asked before the transaction: a GitHub call holds no row lock.
   const githubId = login ? await githubUserId(ctx, login) : null;
   const { person, old } = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [membership] = await scope.sql`SELECT account_id FROM people WHERE id=${ctx.principal.personId}`;
+    if (membership?.account_id && (input.name !== undefined || setPhoto)) {
+      await scope.sql`UPDATE accounts SET name=COALESCE(${input.name ?? null},name),
+        photo_url=CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
+        photo_key=CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
+        photo_token=CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END WHERE id=${membership.account_id}`;
+    }
     const [before] = (await scope.sql`
       SELECT photo_key AS key FROM people WHERE id = ${ctx.principal.personId} FOR UPDATE`) as Array<{ key: string | null }>;
     // A photo by URL, or none, replaces an uploaded one.
@@ -272,8 +280,12 @@ async function uploadMyPhoto(ctx: RequestContext): Promise<Response> {
     withOrg(organizationId, async (scope) => {
       const [before] = (await scope.sql`
         SELECT photo_key AS key FROM people WHERE id = ${personId} FOR UPDATE`) as Array<{ key: string | null }>;
-      await scope.sql`
-        UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
+       const [membership] = await scope.sql`SELECT account_id FROM people WHERE id=${personId}`;
+       if (membership?.account_id) {
+         await scope.sql`UPDATE accounts SET photo_key=${key}, photo_token=${token}, photo_url=NULL WHERE id=${membership.account_id}`;
+       }
+       await scope.sql`
+         UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
       return { result: await personDetail(scope, personId), old: before?.key };
     }));
   return json({ person });
@@ -294,6 +306,15 @@ async function getPhoto(ctx: PublicContext): Promise<Response> {
 const KEY_SELECT = `id, name, key_prefix AS prefix, created_at AS "createdAt", last_used_at AS "lastUsedAt"`;
 
 async function listMyKeys(ctx: RequestContext): Promise<Response> {
+  if (ctx.principal.access) {
+    const keys = [];
+    for (const membership of ctx.principal.access.memberships) {
+      const rows = await withOrg(membership.organization_id, ({ sql }) => sql`
+        SELECT ${sql.unsafe(KEY_SELECT)} FROM api_keys WHERE person_id=${membership.person_id} AND revoked_at IS NULL ORDER BY created_at`);
+      keys.push(...rows.map((k: Record<string, unknown>) => ({ ...k, organizationId: membership.organization_id, current: false })));
+    }
+    return json({ keys });
+  }
   const keys = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(KEY_SELECT)} FROM api_keys
@@ -304,12 +325,15 @@ async function listMyKeys(ctx: RequestContext): Promise<Response> {
   return json({ keys });
 }
 
-const createKeyInput = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+const createKeyInput = z.object({ name: z.string().trim().min(1).max(100), organizationId: z.string().optional() }).strict();
 
 async function createMyKey(ctx: RequestContext): Promise<Response> {
-  const { name } = await parseBody(ctx.request, createKeyInput);
-  const made = await withOrg(ctx.principal.organizationId, (scope) =>
-    insertApiKey(scope, { name, personId: ctx.principal.personId }));
+  const { name, organizationId } = await parseBody(ctx.request, createKeyInput);
+  const membership = ctx.principal.access?.memberships.find((m) => m.organization_id === organizationId);
+  if (ctx.principal.access && !membership) throw new HttpError(403, "not_a_member", "not_a_member");
+  if (!ctx.principal.access && organizationId && organizationId !== ctx.principal.organizationId) throw new HttpError(403, "not_a_member", "not_a_member");
+  const made = await withOrg(membership?.organization_id ?? ctx.principal.organizationId, (scope) =>
+    insertApiKey(scope, { name, personId: membership?.person_id ?? ctx.principal.personId }));
   // The plaintext, this once; only its hash is kept.
   return json({ id: made.id, name, prefix: made.keyPrefix, key: made.key }, 201);
 }
@@ -366,7 +390,7 @@ async function invite(ctx: RequestContext): Promise<Response> {
     const made = await insertPerson(scope, input);
     if (!made) return null;
     await recordAs(scope, ctx, EventTypes.PersonInvited, { personId: made.personId, role: input.role });
-    return { person: await personDetail(scope, made.personId), key: made.key };
+    return { person: await personDetail(scope, made.personId) };
   });
   if (!out) throw conflict(`${input.email} is already a member`);
   return json(out, 201);
@@ -377,7 +401,7 @@ const updatePersonInput = z
   .partial()
   .strict();
 
-async function updatePerson(ctx: RequestContext): Promise<Response> {
+export async function updatePerson(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updatePersonInput);
   if (input.name === undefined && input.role === undefined) throw badRequest("nothing to change");
   const id = ctx.params.id!;
@@ -386,6 +410,9 @@ async function updatePerson(ctx: RequestContext): Promise<Response> {
     const rows = (await scope.sql`
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing" as const;
+    if (id === ctx.principal.personId && input.role === "member" && rows[0].role === "admin") {
+      throw conflict("you cannot demote yourself; ask another admin");
+    }
     if (input.role === "member" && rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) {
       return "lastAdmin" as const;
     }
@@ -435,7 +462,7 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
  * leave the organization's lists. Their row stays, so what they did keeps
  * their name; their tasks pass on (see `passOnTasks`).
  */
-async function removePerson(ctx: RequestContext): Promise<Response> {
+export async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
@@ -475,7 +502,7 @@ export function registerPeopleRoutes(router: Router): void {
   router.delete("/v1/me/keys/:id", revokeMyKey);
 
   router.get("/v1/people", listPeople);
-  router.post("/v1/people", invite);
+  router.post("/v1/people", () => { throw new HttpError(410, "people join by invitation", "route_retired"); });
   router.patch("/v1/people/:id", updatePerson);
   router.delete("/v1/people/:id", removePerson);
   router.publicRoute("GET", "/v1/people/:id/photo", getPhoto);

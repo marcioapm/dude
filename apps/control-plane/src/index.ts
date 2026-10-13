@@ -25,6 +25,8 @@ import { registerRelationRoutes } from "./api/routes/relations.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { registerPushRoutes } from "./api/routes/push.ts";
+import { registerAdminRoutes } from "./api/routes/admin.ts";
+import { registerInvitationRoutes } from "./api/routes/invitations.ts";
 import { registerPeopleRoutes } from "./api/routes/people.ts";
 import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { registerSettingsRoutes } from "./api/routes/settings.ts";
@@ -72,6 +74,8 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerInterventionRoutes(router);
   registerPushRoutes(router);
   registerPeopleRoutes(router);
+  registerInvitationRoutes(router);
+  registerAdminRoutes(router);
   registerMetricsRoutes(router);
   registerSettingsRoutes(router);
   registerProjectPageRoutes(router);
@@ -159,7 +163,7 @@ export function validate(args: string[], opts?: LoadOptions,
     err(error!);
     return 1;
   }
-  if (settings.auth.provider === "cloudflare_access") err("not checked: default_organization exists");
+  if (settings.auth.provider === "cloudflare_access") err("not checked: organisations or super_admins permit sign-in");
   out(`ok: ${settings.path ?? "no file"}`);
   return 0;
 }

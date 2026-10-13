@@ -162,8 +162,7 @@ export class Router {
       }
       if (url.pathname.startsWith("/v1/")) {
         const principal = await this.authenticateRequest(request.headers.get("authorization"), request);
-        if (!principal) throw unauthorized();
-        checkAdmission(principal, request, url);
+        if (principal) checkAdmission(principal, request, url);
       }
       const fallback = await this.#fallback?.(request, url);
       if (fallback) return fallback;

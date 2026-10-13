@@ -124,17 +124,19 @@ export async function insertApiKey(
 export async function insertPerson(
   scope: OrgScope,
   person: { name: string; email: string; role?: "admin" | "member" | undefined; lastSeenWhere?: string | null },
-): Promise<{ personId: string; keyId: string; key: string } | null> {
+): Promise<{ personId: string } | null> {
   const taken = await scope.sql`SELECT 1 FROM people WHERE email = ${person.email} AND removed_at IS NULL`;
   if (taken.length > 0) return null;
   const personId = newId("person");
   const where = person.lastSeenWhere ?? null;
+  const [account] = await scope.sql`INSERT INTO accounts (id, email, name)
+    VALUES (${`acc_${crypto.randomUUID()}`}, ${person.email.trim().toLowerCase()}, ${person.name})
+    ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id, name, email`;
   await scope.sql`
-    INSERT INTO people (id, organization_id, name, email, role, last_seen_at, last_seen_where)
-    VALUES (${personId}, ${scope.organizationId}, ${person.name}, ${person.email}, ${person.role ?? "member"},
-            ${where ? new Date() : null}, ${where})`;
-  const { id, key } = await insertApiKey(scope, { name: person.name, personId });
-  return { personId, keyId: id, key };
+    INSERT INTO people (id, organization_id, account_id, name, email, role, last_seen_at, last_seen_where)
+    VALUES (${personId}, ${scope.organizationId}, ${account.id}, ${account.name}, ${account.email}, ${person.role ?? "member"},
+             ${where ? new Date() : null}, ${where})`;
+  return { personId };
 }
 
 /**

@@ -273,7 +273,7 @@ export function accessAuthenticator(config: AccessConfig, organizationId: string
     const requested = request.headers.get("x-dude-organization") ??
       (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
     const selected = requested ? admission.memberships.find((m) => m.organization_id === requested) :
-      admission.memberships.length === 1 ? admission.memberships[0] : undefined;
+      admission.memberships.length === 1 || (accountRoute && url.pathname !== "/v1/me") ? admission.memberships[0] : undefined;
     if (admission.gate === "member" && !accountRoute && !selected) {
       throw new HttpError(requested ? 403 : 400, requested ? "not_a_member" : "organization_required",
         requested ? "not_a_member" : "organization_required");

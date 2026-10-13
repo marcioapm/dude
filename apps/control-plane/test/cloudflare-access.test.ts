@@ -43,6 +43,57 @@ afterAll(async () => {
   await owner`DELETE FROM accounts WHERE id = ${account}`; await owner.end();
 });
 async function body(response: Response): Promise<any> { return response.json(); }
+async function post(email: string, path: string, data: unknown, method = "POST") {
+  return router().handle(new Request(origin+path, { method, headers: { cookie: `CF_Authorization=${await token(email)}`,
+    origin, "content-type": "application/json", "X-Dude-Organization": org }, body: JSON.stringify(data) }));
+}
+test("invitation batches, renewal, acceptance, removal and organisation keys", async () => {
+  const batch = await post("member@example.test", "/v1/organization/invitations", {
+    invitations: [{email:"join@example.test",name:"Join"},{email:"JOIN@example.test"},{email:"bad"},{email:"member@example.test"}],role:"member" });
+  expect(batch.status).toBe(200);
+  const results = (await body(batch)).results;
+  expect(results.map((r: {result: string})=>r.result)).toEqual(["created","duplicate","invalid","member"]);
+  const inv = results[0].invitation, path=`/v1/invitations/${inv.code}`;
+  expect((await call("wrong@example.test",path)).status).toBe(403);
+  expect(await body(await call("wrong@example.test",path))).toEqual({error:{code:"invitation_for_another_email",message:"invitation_for_another_email"}});
+  expect((await call("join@example.test",path)).status).toBe(200);
+  const existing=await body(await post("member@example.test","/v1/organization/invitations",{invitations:[{email:"join@example.test"}],role:"member"}));
+  expect(existing.results[0].result).toBe("existing");
+  await owner`UPDATE invitations SET expires_at=now() WHERE id=${inv.id}`;
+  expect((await call("join@example.test",path)).status).toBe(404);
+  const renewed=await body(await post("member@example.test","/v1/organization/invitations",{invitations:[{email:"join@example.test"}],role:"admin"}));
+  expect(renewed.results[0].result).toBe("renewed"); expect(renewed.results[0].invitation.code).toBe(inv.code);
+  const accepted=await post("join@example.test",path+"/accept",{name:"Joined"});
+  expect(accepted.status).toBe(200); const person=(await body(accepted)).person;
+  expect((await post("join@example.test",path+"/accept",{})).status).toBe(200);
+  const keyRes=await post("join@example.test","/v1/me/keys",{organizationId:org,name:"Laptop"});
+  expect(keyRes.status).toBe(201); const key=await body(keyRes);
+  expect((await post("member@example.test",`/v1/people/${person.id}`,{},"DELETE")).status).toBe(204);
+  const reinvite=await body(await post("member@example.test","/v1/organization/invitations",{invitations:[{email:"join@example.test"}],role:"member"}));
+  const back=await post("join@example.test",`/v1/invitations/${reinvite.results[0].invitation.code}/accept`,{});
+  expect(back.status).toBe(200); expect((await body(back)).person.id).toBe(person.id);
+  expect((await router().handle(new Request(origin+"/v1/me",{headers:{authorization:`Bearer ${key.key}`}}))).status).toBe(401);
+  const revoked=await body(await post("member@example.test","/v1/organization/invitations",{invitations:[{email:"revoke@example.test"}],role:"member"}));
+  const revokePath=`/v1/organization/invitations/${revoked.results[0].invitation.id}`;
+  expect((await post("member@example.test",revokePath,{},"DELETE")).status).toBe(204);
+  expect((await post("member@example.test",revokePath,{},"DELETE")).status).toBe(404);
+  const list=await call("member@example.test","/v1/organization/invitations?status=all",{"X-Dude-Organization":org});
+  expect(list.status).toBe(200); expect((await body(list)).invitations.length).toBeGreaterThan(1);
+});
+test("super-admin creates default tiers/sizes and a key cannot use admin routes", async () => {
+  const created=await post("operator@example.test","/v1/admin/organizations",{name:"Created",slug:`created-${suffix}`,email:"first@example.test"});
+  expect(created.status).toBe(201); const made=await body(created);
+  expect(made.link).toBe(`#/invite/${made.invitation.code}`);
+  expect((await owner`SELECT id FROM machine_sizes WHERE organization_id=${made.organization.id}`).length).toBeGreaterThan(0);
+  expect((await owner`SELECT id FROM model_tiers WHERE organization_id=${made.organization.id}`).length).toBeGreaterThan(0);
+  const key=await createApiKey({organizationId:org,personId:`per_${suffix}`,name:"Operator key"});
+  expect((await router().handle(new Request(origin+"/v1/admin/organizations",{headers:{authorization:`Bearer ${key.key}`}}))).status).toBe(403);
+  await owner`DELETE FROM organizations WHERE id=${made.organization.id}`;
+});
+test("last admin and self-demotion remain forbidden", async () => {
+  expect((await post("member@example.test",`/v1/people/per_${suffix}`,{role:"member"},"PATCH")).status).toBe(409);
+  expect((await post("operator@example.test",`/v1/admin/organizations/${org}/people/per_${suffix}`,{},"DELETE")).status).toBe(409);
+});
 const router = () => buildRouter(undefined, requestAuthenticator(accessAuthenticator({
   provider: "cloudflare_access", public_url: origin, super_admins: ["operator@example.test"],
   cloudflare_access: { team: "dudetest", aud: "aud" },
