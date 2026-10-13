@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, type MachineSizeWithUse, type PreviewSecret, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, PREVIEW_WAKE_TIMEOUT_MAX_MINUTES, type MachineSizeWithUse, type PreviewSecret, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
@@ -17,6 +17,8 @@ import { canRunContainers, ImageField, imageWords, type ImageChoices } from "../
 import { PreviewSecretsRow } from "./PreviewSecrets.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
+const WAKE_TIMEOUTS = Array.from({ length: PREVIEW_WAKE_TIMEOUT_MAX_MINUTES }, (_, i) =>
+  ({ value: String(i + 1), label: i === 0 ? "1 minute" : `${i + 1} minutes` }));
 
 export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount, images, onManageImages }: {
   client: ApiClient;
@@ -162,6 +164,16 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             onValueChange={(v) => savePreviews({ idleTimeoutMinutes: Number(v) }, "Idle timeout saved")}
             options={[...new Set([...IDLE_TIMEOUTS, previews.idleTimeoutMinutes])].sort((a, b) => a - b).map((m) => ({ value: String(m), label: m < 60 ? `${m} minutes` : m === 60 ? "1 hour" : `${m / 60} hours` }))} />
         </SettingRow>
+        {([
+          ["firstWakeTimeoutMinutes", "First wake timeout", "How long lux waits until this preview has served once. Its first start may build images; default 15 minutes."],
+          ["wakeTimeoutMinutes", "Wake timeout", "How long lux waits on every later wake from the preview’s snapshot; default 5 minutes. A shorter timeout waits until an open wake is over."],
+        ] as const).map(([field, label, help]) => (
+          <SettingRow key={field} label={label} help={help}>
+            <Select aria-label={label} value={String(previews[field])} disabled={!canEdit || previewSave.busy}
+              onValueChange={(v) => savePreviews({ [field]: Number(v) }, `${label} saved`)}
+              options={WAKE_TIMEOUTS} />
+          </SettingRow>
+        ))}
         <SettingRow label="Access" help="Who can open a preview.">
           <span className="previewAccess"><Icon name="human" size={14} />Visitors sign in the way they sign in to lux. Nothing is public.</span>
         </SettingRow>

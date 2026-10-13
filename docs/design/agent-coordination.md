@@ -899,7 +899,7 @@ those links as they are; they add nothing to them and order nothing.
 ## As built (part A: orchestrator, API, CLI)
 
 Built on `feat/agent-coordination`; migration
-`114_agent_coordination.sql`. Where the build chose differently from the
+`115_agent_coordination.sql`. Where the build chose differently from the
 sections above, or where they were silent:
 
 - **Peers are the epic only.** Task relations exist, but they do not make

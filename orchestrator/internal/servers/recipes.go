@@ -136,6 +136,11 @@ type PreviewSettings struct {
 	ImageID            *string  `json:"imageId"`
 	Egress             []string `json:"egress"`
 	IdleTimeoutMinutes float64  `json:"idleTimeoutMinutes"`
+	// lux's wake timeout of the preview's servers until it has served once
+	// (runs.preview_ready_at), and after; 0 (a row read without the
+	// function's defaults): 15 and 5.
+	FirstWakeTimeoutMinutes int `json:"firstWakeTimeoutMinutes"`
+	WakeTimeoutMinutes      int `json:"wakeTimeoutMinutes"`
 	// A machine size's id; nil: the organization's default (migration 064).
 	MachineSize *string `json:"machineSize"`
 }
