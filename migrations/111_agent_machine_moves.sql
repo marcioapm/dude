@@ -10,7 +10,10 @@
 --
 -- New columns are catalog-only: a constant default (or none) rewrites no
 -- row, so tasks' and sessions' ACCESS EXCLUSIVE locks are held for the
--- catalog update alone, as 109's.
+-- catalog update alone, as 109's. The widened checks on runs and
+-- run_resumes are NOT VALID, as 075's: each replaces a validated check it
+-- only adds a value to, so every existing row holds, and validating would
+-- scan the table under its exclusive lock.
 
 CREATE TABLE machine_moves (
   id              text PRIMARY KEY,
@@ -65,10 +68,10 @@ ALTER TABLE sessions ADD COLUMN agent_machine jsonb;
 -- machine: parked so the resume moves it to another size; resumed at once.
 ALTER TABLE runs DROP CONSTRAINT runs_dude_pause_check;
 ALTER TABLE runs ADD CONSTRAINT runs_dude_pause_check
-  CHECK (dude_pause IN ('repository', 'person', 'idle', 'unused', 'conductor', 'session', 'machine'));
+  CHECK (dude_pause IN ('repository', 'person', 'idle', 'unused', 'conductor', 'session', 'machine')) NOT VALID;
 ALTER TABLE run_resumes DROP CONSTRAINT run_resumes_cause_check;
 ALTER TABLE run_resumes ADD CONSTRAINT run_resumes_cause_check
-  CHECK (cause IN ('answer', 'repository', 'person', 'idle', 'conductor', 'session', 'machine'));
+  CHECK (cause IN ('answer', 'repository', 'person', 'idle', 'conductor', 'session', 'machine')) NOT VALID;
 
 -- The scripted agent's fake/machine (its implementer asks for a larger
 -- machine and ends its turn there) is a test model a tier may request.

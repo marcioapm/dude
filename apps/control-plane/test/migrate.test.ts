@@ -722,3 +722,26 @@ test("109 rewrites no organisation and leaves every one's brainstorms on its lis
     await sql.end();
   }
 }, 120_000);
+
+test("111 widens the pause and resume checks to a machine move without scanning runs: they bind new rows, unvalidated", async () => {
+  const { url, sql } = await migratedBefore("111");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_m', 'm', 'm')`;
+    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_m', 'org_m', 'm')`;
+    await sql`INSERT INTO runs (id, organization_id, session_id, attempt, role, status, dude_pause)
+      VALUES ('run_m', 'org_m', 'ssn_m', 1, 'brainstorm', 'paused', 'idle')`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_agent_machine_moves.sql"]);
+    await sql`UPDATE runs SET dude_pause = 'machine' WHERE id = 'run_m'`;
+    expect((await sql`SELECT dude_pause FROM runs WHERE id = 'run_m'`)[0].dude_pause).toBe("machine");
+    const refused = await sql`UPDATE runs SET dude_pause = 'elsewhere' WHERE id = 'run_m'`.then(() => "", (e: Error) => e.message);
+    expect(refused).toContain("runs_dude_pause_check");
+    const checks = await sql`SELECT conname, convalidated FROM pg_constraint
+      WHERE conname IN ('runs_dude_pause_check', 'run_resumes_cause_check') ORDER BY conname`;
+    expect([...checks]).toEqual([
+      { conname: "run_resumes_cause_check", convalidated: false },
+      { conname: "runs_dude_pause_check", convalidated: false },
+    ]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
