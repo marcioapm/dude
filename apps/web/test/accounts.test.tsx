@@ -36,6 +36,8 @@ afterEach(async () => {
   localStorage.clear();
   sessionStorage.clear();
   setPlaceOrganization(null);
+  // ThemeProvider stamps the root; later suites in this process read the root as unthemed.
+  for (const a of ["data-theme", "data-density", "data-reduced-motion"]) document.documentElement.removeAttribute(a);
 });
 
 /** The signed-in app at `hash`, as main.tsx mounts it: the gatekeeper, then the tenant app it chose. */
