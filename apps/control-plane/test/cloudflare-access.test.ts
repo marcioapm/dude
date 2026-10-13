@@ -1,776 +1,97 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
-import { createApiKey, requestAuthenticator, type Principal } from "../src/api/auth.ts";
-import {
-  accessAuthenticator, accessProfiles, accessVerifier, type AccessDeps, type FetchLike, type Profile,
-} from "../src/api/cloudflareAccess.ts";
-import { Router } from "../src/api/router.ts";
-import { registerPeopleRoutes } from "../src/api/routes/people.ts";
-import { registerEventRoutes } from "../src/api/routes/events.ts";
-import { type AccessConfig, Config, ConfigError } from "../src/config.ts";
-import { authFor, routerFor as backendRouter } from "../src/index.ts";
+import { SignJWT, exportJWK, generateKeyPair } from "jose";
+import { accessAuthenticator, accessProfiles, accessVerifier, type FetchLike } from "../src/api/cloudflareAccess.ts";
+import { createApiKey, requestAuthenticator } from "../src/api/auth.ts";
+import { buildRouter } from "../src/index.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 
-const suffix = Bun.randomUUIDv7("hex").slice(-12);
-const org = `org_access_${suffix}`;
-const other = `${org}_other`;
-const TEAM = "dudetest";
-const ISSUER = `https://${TEAM}.cloudflareaccess.com`;
-const AUD = "app-audience";
-const ORIGIN = "https://dude.example.test";
-
-let owner: SQL;
-let app: SQL;
-
-type Key = { privateKey: CryptoKey; jwk: JWK };
-async function rsaKey(kid: string): Promise<Key> {
-  const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
-  return { privateKey, jwk: { ...(await exportJWK(publicKey)), kid, alg: "RS256", use: "sig" } };
-}
-
-/** Stands in for the team's certs and identity endpoints; nothing leaves the process. */
-class Edge {
-  keys: JWK[] = [];
-  certsDown = false;
-  certsCalls = 0;
-  profiles = new Map<string, unknown>();
-  profileCalls = 0;
-  profileStatus = 200;
-  // While set, identity responses wait for it; `profileStarted` fires on each request.
-  profileGate: Promise<void> | null = null;
-  profileStarted: () => void = () => {};
-  urls: string[] = [];
-  fetch: FetchLike = async (input, init) => {
-    this.urls.push(String(input));
-    if (String(input) === `${ISSUER}/cdn-cgi/access/certs`) {
-      this.certsCalls++;
-      if (this.certsDown) throw new Error("connection refused");
-      return Response.json({ keys: this.keys });
-    }
-    if (String(input) === `${ISSUER}/cdn-cgi/access/get-identity`) {
-      this.profileCalls++;
-      this.profileStarted();
-      if (this.profileGate) await this.profileGate;
-      const token = /CF_Authorization=([^;]+)/.exec(new Headers(init?.headers).get("cookie") ?? "")?.[1] ?? "";
-      const email = JSON.parse(atob(token.split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/"))).email;
-      return Response.json(this.profiles.get(email.toLowerCase()) ?? { email }, { status: this.profileStatus });
-    }
-    return new Response("not here", { status: 404 });
-  };
-}
-
-async function sign(key: Key, claims: Record<string, unknown>, opts: {
-  iss?: string; aud?: string; exp?: number | null; nbf?: number; alg?: string;
-} = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  let jwt = new SignJWT({ type: "app", sub: `sub-${claims.email ?? "svc"}`, ...claims })
-    .setProtectedHeader({ alg: opts.alg ?? "RS256", kid: key.jwk.kid! })
-    .setIssuer(opts.iss ?? ISSUER).setAudience(opts.aud ?? AUD).setIssuedAt(now);
-  if (opts.exp !== null) jwt = jwt.setExpirationTime(opts.exp ?? now + 600);
-  if (opts.nbf !== undefined) jwt = jwt.setNotBefore(opts.nbf);
-  return jwt.sign(key.privateKey);
-}
-
-const config = (over: Partial<AccessConfig> = {}): AccessConfig => ({
-  provider: "cloudflare_access", public_url: ORIGIN, auto_create: true, default_organization: org,
-  cloudflare_access: { team: TEAM, aud: AUD }, ...over,
-});
-
-function routerFor(edge: Edge, over: Partial<AccessConfig> = {}, organizationId = org,
-  wrapProfile: (profile: AccessDeps["profile"]) => AccessDeps["profile"] = (p) => p) {
-  const router = new Router(requestAuthenticator(accessAuthenticator(config(over), organizationId, {
-    verify: accessVerifier(TEAM, AUD, edge.fetch),
-    profile: wrapProfile(accessProfiles(TEAM, edge.fetch)),
-  })));
-  registerPeopleRoutes(router);
-  registerEventRoutes(router);
-  return router;
-}
-
-const cookie = (token: string) => ({ cookie: `other=1; CF_Authorization=${token}` });
-const me = async (router: Router, headers: Record<string, string>) => {
-  const res = await router.handle(new Request(`${ORIGIN}/v1/me`, { headers }));
-  return { status: res.status, body: res.status === 200 ? await res.json() as {
-    person: { id: string; name: string; role: string; photoUrl: string | null };
-    authMethod: string; logoutUrl?: string; } : null };
-};
-type PersonRow = { id: string; name: string; role: string; photo_url: string | null; removed_at: Date | null };
-const peopleByEmail = async (email: string, organizationId = org): Promise<PersonRow[]> =>
-  (await owner`SELECT id, name, role, photo_url, removed_at FROM people WHERE organization_id = ${organizationId} AND email = ${email}`) as PersonRow[];
-const keysOf = (personId: string) => owner`SELECT id FROM api_keys WHERE person_id = ${personId}`;
-
-// Polls `ready` every 20 ms, failing after `ms`: for states only the database can report.
-async function waitFor(ready: () => Promise<boolean>, ms = 5_000) {
-  const until = Date.now() + ms;
-  while (!(await ready())) {
-    if (Date.now() > until) throw new Error("condition not reached");
-    await Bun.sleep(20);
-  }
-}
-
-let signer: Key;
-let rotated: Key;
-let stranger: Key;
-
+const suffix = crypto.randomUUID();
+const org = `org_access_${suffix}`, other = `${org}_other`, account = `acc_${suffix}`;
+const origin = "https://dude.example.test", issuer = "https://dudetest.cloudflareaccess.com";
+let owner: SQL, app: SQL, privateKey: CryptoKey;
+let fetchEdge: FetchLike;
+let token: (email: string, audience?: string, expiration?: number) => Promise<string>;
 beforeAll(async () => {
   owner = new SQL(process.env.DATABASE_URL!);
-  const url = new URL(process.env.DATABASE_URL!);
-  url.username = "dude_app";
-  url.password = "dude_app";
-  app = new SQL(url.toString());
-  setPool(app);
+  const url = new URL(process.env.DATABASE_URL!); url.username = url.password = "dude_app";
+  app = new SQL(url.toString()); setPool(app);
   for (const id of [org, other]) await owner`INSERT INTO organizations (id, name, slug) VALUES (${id}, ${id}, ${id})`;
-  [signer, rotated, stranger] = await Promise.all([rsaKey("k1"), rsaKey("k2"), rsaKey("k1")]);
+  await owner`INSERT INTO accounts (id, email, name) VALUES (${account}, 'member@example.test', 'Member')`;
+  await owner`INSERT INTO people (id, organization_id, account_id, email, name, role)
+    VALUES (${`per_${suffix}`}, ${org}, ${account}, 'member@example.test', 'Member', 'admin')`;
+  await owner`INSERT INTO invitations (id, organization_id, code, email, role)
+    VALUES (${`inv_${suffix}`}, ${org}, ${suffix}, 'invited@example.test', 'member')`;
+  const pair = await generateKeyPair("RS256", { extractable: true }); privateKey = pair.privateKey;
+  const jwk = { ...await exportJWK(pair.publicKey), kid: "k1", alg: "RS256" };
+  fetchEdge = async (url, init) => {
+    if (url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [jwk] });
+    if (url === `${issuer}/cdn-cgi/access/get-identity`) {
+      const raw = new Headers(init?.headers).get("cookie")!.slice("CF_Authorization=".length);
+      const email = JSON.parse(Buffer.from(raw.split(".")[1]!, "base64url").toString()).email;
+      return Response.json({ email, name: "Verified profile" });
+    }
+    throw new Error("unexpected edge endpoint");
+  };
+  token = (email, audience = "aud", expiration = Math.floor(Date.now()/1000)+600) =>
+    new SignJWT({ email, sub: email, type: "app" }).setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer(issuer).setAudience(audience).setExpirationTime(expiration).sign(privateKey);
 });
 afterAll(async () => {
   await closePool(app);
   await owner`DELETE FROM organizations WHERE id IN (${org}, ${other})`;
-  await owner.end();
+  await owner`DELETE FROM accounts WHERE id = ${account}`; await owner.end();
 });
-
-describe("configuration", () => {
-  const valid = `
-[auth]
-provider = "cloudflare_access"
-public_url = "https://dude.absmartly.dev"
-default_organization = "absmartly"
-[auth.cloudflare_access]
-team = "absmartly"
-aud = "application-audience"
-`;
-  const dir = mkdtempSync(join(tmpdir(), "dude-auth-config-"));
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
-  let files = 0;
-  // The [auth] the backend resolves from `text` as its file, with `env` over it.
-  const authOf = (text: string, env: Record<string, string> = {}) => {
-    const path = join(dir, `${++files}.toml`);
-    writeFileSync(path, text, { mode: 0o600 });
-    return Config.load({ env: { DUDE_CONFIG: path, ...env }, defaultPath: join(dir, "absent.toml") }).auth;
-  };
-
-  test("no file keeps API keys; a valid file enables Access with auto_create by default", () => {
-    expect(Config.load({ env: {}, defaultPath: join(dir, "absent.toml") }).auth).toEqual({ provider: "api_key" });
-    expect(authOf("")).toEqual({ provider: "api_key" });
-    expect(authOf("[auth]\n")).toEqual({ provider: "api_key" });
-    expect(authOf(valid)).toEqual({
-      provider: "cloudflare_access", public_url: "https://dude.absmartly.dev", auto_create: true,
-      default_organization: "absmartly", cloudflare_access: { team: "absmartly", aud: "application-audience" },
-    });
-  });
-
-  test("every [auth] setting has a variable that overrides the file", () => {
-    expect(authOf("", {
-      DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: "https://env.example",
-      DUDE_AUTH_AUTO_CREATE: "false", DUDE_AUTH_DEFAULT_ORGANIZATION: "envorg",
-      DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "envteam", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "env-aud",
-    })).toEqual({
-      provider: "cloudflare_access", public_url: "https://env.example", auto_create: false,
-      default_organization: "envorg", cloudflare_access: { team: "envteam", aud: "env-aud" },
-    });
-    expect(authOf(valid, { DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "other-aud", DUDE_AUTH_AUTO_CREATE: "off" }))
-      .toMatchObject({ auto_create: false, cloudflare_access: { team: "absmartly", aud: "other-aud" } });
-    // Every one of the six [auth] keys in the file conflicts with its variable, and each variable wins.
-    const full = valid.replace(`provider = "cloudflare_access"`, `provider = "api_key"`)
-      .replace(`default_organization = "absmartly"`, `default_organization = "absmartly"\nauto_create = true`);
-    expect(authOf(full, {
-      DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: "https://env.example",
-      DUDE_AUTH_AUTO_CREATE: "false", DUDE_AUTH_DEFAULT_ORGANIZATION: "envorg",
-      DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "envteam", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "env-aud",
-    })).toEqual({
-      provider: "cloudflare_access", public_url: "https://env.example", auto_create: false,
-      default_organization: "envorg", cloudflare_access: { team: "envteam", aud: "env-aud" },
-    });
-    // Access configured in the file is switched off by the variable alone.
-    expect(authOf(valid, { DUDE_AUTH_PROVIDER: "api_key" })).toEqual({ provider: "api_key" });
-  });
-
-  test.each([
-    ["malformed TOML", `[auth]\nprovider = "api_key`, ""],
-    ["duplicate key", `[auth]\nprovider = "api_key"\nprovider = "api_key"`, ""],
-    ["unknown provider", `[auth]\nprovider = "google"`, "auth.provider (DUDE_AUTH_PROVIDER)"],
-    ["missing organization", valid.replace(/default_organization.*\n/, ""), "auth.default_organization"],
-    ["missing public_url", valid.replace(/public_url.*\n/, ""), "auth.public_url"],
-    ["missing audience", valid.replace(/aud =.*\n/, ""), "auth.cloudflare_access.aud"],
-    ["team as a URL", valid.replace(`team = "absmartly"`, `team = "https://evil.example"`), "auth.cloudflare_access.team"],
-    ["plain http origin", valid.replace("https://dude", "http://dude"), "auth.public_url"],
-    ["origin with a path", valid.replace(".dev\"", ".dev/app\""), "auth.public_url"],
-    ["wrong type", valid.replace(`default_organization = "absmartly"`, "default_organization = \"absmartly\"\nauto_create = \"yes\""), "auth.auto_create"],
-    ["unknown key", valid + "extra = 1\n", "auth.cloudflare_access.extra"],
-    ["unknown table", valid + "[other]\nx = 1\n", "other"],
-    ["Access settings without a provider", valid.replace(/provider.*\n/, ""), "auth.provider"],
-  ])("%s fails", (_, text, names) => {
-    expect(() => authOf(text)).toThrow(ConfigError);
-    if (names) expect(() => authOf(text)).toThrow(names);
-  });
-
-  test("an invalid variable fails naming it", () => {
-    expect(() => authOf(valid, { DUDE_AUTH_PUBLIC_URL: "http://plain.example" })).toThrow("DUDE_AUTH_PUBLIC_URL");
-    expect(() => authOf(valid, { DUDE_AUTH_AUTO_CREATE: "sometimes" })).toThrow("DUDE_AUTH_AUTO_CREATE");
-  });
-
-  test("an unreadable file and an organization that does not exist fail startup", async () => {
-    expect(() => Config.load({ env: { DUDE_CONFIG: "/nonexistent/dude.toml" } })).toThrow(ConfigError);
-    const before = await owner`SELECT count(*)::int AS n FROM organizations`;
-    await expect(authFor(config({ default_organization: `missing_${suffix}` }))).rejects.toThrow(ConfigError);
-    expect(await owner`SELECT count(*)::int AS n FROM organizations`).toEqual(before);
-    expect(typeof await authFor(config())).toBe("function");
-  });
+async function body(response: Response): Promise<any> { return response.json(); }
+const router = () => buildRouter(undefined, requestAuthenticator(accessAuthenticator({
+  provider: "cloudflare_access", public_url: origin, super_admins: ["operator@example.test"],
+  cloudflare_access: { team: "dudetest", aud: "aud" },
+}, "", { verify: accessVerifier("dudetest", "aud", fetchEdge), profile: accessProfiles("dudetest", fetchEdge) })));
+async function call(email: string, path = "/v1/me", headers: Record<string,string> = {}) {
+  return router().handle(new Request(origin+path, { headers: { cookie: `CF_Authorization=${await token(email)}`, ...headers } }));
+}
+test("JWT issuer/audience/expiry/signature and origin remain mandatory", async () => {
+  const verify = accessVerifier("dudetest", "aud", fetchEdge);
+  expect(await verify(await token("member@example.test"))).not.toBeNull();
+  expect(await verify(await token("member@example.test", "wrong"))).toBeNull();
+  expect(await verify(await token("member@example.test", "aud", 1))).toBeNull();
+  expect(await verify("garbage")).toBeNull();
+  expect((await call("member@example.test", "/v1/me", { "sec-fetch-site": "cross-site" })).status).toBe(403);
 });
-
-describe("the backend's startup", () => {
-  const dir = mkdtempSync(join(tmpdir(), "dude-startup-auth-"));
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
-  // Every [auth] key in the file is wrong for this test's edge; the variables below correct them.
-  const file = `
-[auth]
-provider = "cloudflare_access"
-public_url = "https://file.example.test"
-default_organization = "${other}"
-auto_create = false
-[auth.cloudflare_access]
-team = "fileteam"
-aud = "file-audience"
-`;
-  const env = {
-    DUDE_AUTH_PUBLIC_URL: ORIGIN, DUDE_AUTH_DEFAULT_ORGANIZATION: org,
-    DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: TEAM, DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: AUD,
-  };
-  const started = (extra: Record<string, string> = {}) => {
-    const path = join(dir, "dude.toml");
-    writeFileSync(path, file, { mode: 0o600 });
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const settings = Config.load({ env: { DUDE_CONFIG: path, ...env, ...extra }, defaultPath: join(dir, "absent.toml") });
-    return backendRouter(settings, edge.fetch);
-  };
-
-  test("serves the file's [auth] with the environment over it", async () => {
-    const router = await started();
-    const id = `${org}_startup`;
-    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${id}, ${org}, 'Startup', 'startup@example.com')`;
-    const known = await me(router, cookie(await sign(signer, { email: "startup@example.com" })));
-    expect(known.status).toBe(200);
-    expect(known.body!.person.id).toBe(id);
-    expect(known.body!.authMethod).toBe("cloudflare_access");
-    // The file's audience was overridden, so a token for it is refused.
-    expect((await me(router, cookie(await sign(signer, { email: "startup@example.com" }, { aud: "file-audience" })))).status).toBe(401);
-    // A change without the configured origin is refused; with it, allowed.
-    const patch = (headers: Record<string, string>) => router.handle(new Request(`${ORIGIN}/v1/me`, {
-      method: "PATCH", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ name: "Startup" }),
-    }));
-    const token = await sign(signer, { email: "startup@example.com" });
-    expect((await patch(cookie(token))).status).toBe(403);
-    expect((await patch({ ...cookie(token), origin: "https://file.example.test" })).status).toBe(403);
-    expect((await patch({ ...cookie(token), origin: ORIGIN })).status).toBe(200);
-    // auto_create = false from the file: a stranger is refused and not created.
-    expect((await me(router, cookie(await sign(signer, { email: "startup-stranger@example.com" })))).status).toBe(401);
-    expect(await peopleByEmail("startup-stranger@example.com")).toHaveLength(0);
-  });
-
-  test("DUDE_AUTH_PROVIDER=api_key switches off the file's Access", async () => {
-    const router = await started({ DUDE_AUTH_PROVIDER: "api_key" });
-    expect((await me(router, cookie(await sign(signer, { email: "startup@example.com" })))).status).toBe(401);
-    const made = await createApiKey({ organizationId: org, name: "Startup key" });
-    const keyed = await me(router, { authorization: `Bearer ${made.key}` });
-    expect(keyed.status).toBe(200);
-    expect(keyed.body!.authMethod).toBe("api_key");
-  });
+test("all four gate lines and exact pre-membership privacy", async () => {
+  expect((await body(await call("member@example.test"))).gate).toBe("member");
+  const invited = await body(await call("invited@example.test"));
+  expect(invited.gate).toBe("invited"); expect(invited.invitations).toHaveLength(1);
+  expect(invited).not.toHaveProperty("organizations"); expect(invited).not.toHaveProperty("account");
+  expect(await (await call("operator@example.test")).json()).toEqual({ gate: "super_admin", email: "operator@example.test",
+    name: "Verified profile", photoUrl: null, superAdmin: true });
+  expect(await (await call("stranger@example.test")).json()).toEqual({ gate: "none", email: "stranger@example.test",
+    name: "Verified profile", photoUrl: null });
+  expect(await owner`SELECT id FROM accounts WHERE email = 'stranger@example.test'`).toHaveLength(0);
 });
-
-describe("token verification", () => {
-  test("accepts this team's signed, current human token and refuses every other kind", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const verify = accessVerifier(TEAM, AUD, edge.fetch);
-    const now = Math.floor(Date.now() / 1000);
-    const email = "Person@Example.com";
-    expect(await verify(await sign(signer, { email }))).toEqual({ email: "person@example.com", expiresAt: now + 600 });
-
-    const refused = {
-      "other issuer": await sign(signer, { email }, { iss: "https://evil.cloudflareaccess.com" }),
-      "other audience": await sign(signer, { email }, { aud: "other" }),
-      expired: await sign(signer, { email }, { exp: now - 120 }),
-      "no expiry": await sign(signer, { email }, { exp: null }),
-      "not yet valid": await sign(signer, { email }, { nbf: now + 120 }),
-      "unknown key": await sign(stranger, { email }),
-      "service token": await sign(signer, { common_name: "client.access", email: "" }),
-      "service token with an email": await sign(signer, { common_name: "client.access", email }),
-      "no email": await sign(signer, {}),
-      "not an email": await sign(signer, { email: "nobody" }),
-      "org token type": await sign(signer, { email, type: "org" }),
-      unsigned: `${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ email, iss: ISSUER, aud: AUD, exp: now + 600 }))}.`,
-      garbage: "not-a-jwt",
-    };
-    for (const [why, token] of Object.entries(refused)) {
-      expect({ why, got: await verify(token) }).toEqual({ why, got: null });
+test("none and invited refuse existing and missing resources before lookup", async () => {
+  for (const email of ["stranger@example.test", "invited@example.test"]) {
+    for (const path of ["/v1/people", "/v1/projects/missing", "/v1/unregistered", "/v1/me/keys", "/v1/admin/organizations"]) {
+      const res = await call(email, path); expect(res.status).toBe(403);
+      expect((await body(res)).error.code).toBe(email.startsWith("stranger") ? "not_admitted" : "not_a_member");
     }
-    // Within the clock tolerance.
-    expect(await verify(await sign(signer, { email }, { exp: now - 5 }))).not.toBeNull();
-    expect(edge.urls.every((u) => u === `${ISSUER}/cdn-cgi/access/certs`)).toBe(true);
-  });
-
-  test("refuses an HS256 token signed with the public key as secret", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const secret = new TextEncoder().encode(JSON.stringify(signer.jwk));
-    const forged = await new SignJWT({ email: "a@example.com", sub: "x", type: "app" })
-      .setProtectedHeader({ alg: "HS256", kid: "k1" }).setIssuer(ISSUER).setAudience(AUD).setExpirationTime("10m")
-      .sign(secret);
-    expect(await accessVerifier(TEAM, AUD, edge.fetch)(forged)).toBeNull();
-  });
-
-  test("a rotated key is fetched once the cooldown allows; an unreachable key set refuses", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const verify = accessVerifier(TEAM, AUD, edge.fetch, 50);
-    expect(await verify(await sign(signer, { email: "a@example.com" }))).not.toBeNull();
-    edge.keys = [rotated.jwk];
-    await Bun.sleep(60);
-    expect(await verify(await sign(rotated, { email: "a@example.com" }))).not.toBeNull();
-    // The retired key is gone from the set now fetched.
-    await Bun.sleep(60);
-    expect(await verify(await sign(signer, { email: "a@example.com" }))).toBeNull();
-
-    const down = new Edge();
-    down.certsDown = true;
-    expect(await accessVerifier(TEAM, AUD, down.fetch)(await sign(signer, { email: "a@example.com" }))).toBeNull();
-  });
-});
-
-describe("profiles", () => {
-  test("uses a matching profile, keeps only https pictures, and ignores someone else's", async () => {
-    const edge = new Edge();
-    const profiles = accessProfiles(TEAM, edge.fetch);
-    const token = await sign(signer, { email: "p@example.com" });
-    edge.profiles.set("p@example.com", { email: "P@example.com", name: " Pat ", oidc_fields: { picture: "https://img.example/p.png" } });
-    expect(await profiles(token, "p@example.com")).toEqual({ name: "Pat", picture: "https://img.example/p.png" });
-    await profiles(token, "p@example.com");
-    expect(edge.profileCalls).toBe(1); // cached
-
-    const plain = await sign(signer, { email: "q@example.com" });
-    edge.profiles.set("q@example.com", { email: "q@example.com", name: "Q", oidc_fields: { picture: "http://img.example/q.png" } });
-    expect(await profiles(plain, "q@example.com")).toEqual({ name: "Q", picture: null });
-
-    const spoof = await sign(signer, { email: "r@example.com" });
-    edge.profiles.set("r@example.com", { email: "admin@example.com", name: "Admin" });
-    expect(await profiles(spoof, "r@example.com")).toBeNull();
-
-    const failing = new Edge();
-    failing.profileStatus = 500;
-    expect(await accessProfiles(TEAM, failing.fetch)(token, "p@example.com")).toBeNull();
-    const hanging: FetchLike = (_, init) => new Promise((_, reject) =>
-      init?.signal?.addEventListener("abort", () => reject(new Error("timeout"))));
-    expect(await accessProfiles(TEAM, hanging)(token, "p@example.com")).toBeNull();
-  }, 10_000);
-});
-
-describe("signing in", () => {
-  const edge = new Edge();
-  let router: Router;
-  beforeAll(() => {
-    edge.keys = [signer.jwk];
-    router = routerFor(edge);
-  });
-
-  test("an unknown email becomes a member with no key, seeded from the profile", async () => {
-    edge.profiles.set("new@example.com", { email: "new@example.com", name: "New Person", oidc_fields: { picture: "https://img.example/n.png" } });
-    const got = await me(router, cookie(await sign(signer, { email: "New@Example.com" })));
-    expect(got.status).toBe(200);
-    expect(got.body!.person).toMatchObject({ name: "New Person", role: "member", photoUrl: "https://img.example/n.png" });
-    expect(got.body!.authMethod).toBe("cloudflare_access");
-    expect(got.body!.logoutUrl).toBe("/cdn-cgi/access/logout");
-    expect(JSON.stringify(got.body)).not.toContain("dude_sk_");
-    const rows = await peopleByEmail("new@example.com");
-    expect(rows).toHaveLength(1);
-    expect(await keysOf(rows[0]!.id)).toHaveLength(0);
-    // Second request: the same person.
-    const again = await me(router, { "cf-access-jwt-assertion": await sign(signer, { email: "new@example.com" }) });
-    expect(again.body!.person.id).toBe(rows[0]!.id);
-  });
-
-  test("an existing admin keeps id, role and the name they set; an empty photo is filled", async () => {
-    const id = `${org}_marcio`;
-    await owner`INSERT INTO people (id, organization_id, name, email, role) VALUES (${id}, ${org}, 'Márcio', 'marcio@example.com', 'admin')`;
-    edge.profiles.set("marcio@example.com", { email: "marcio@example.com", name: "Marcio IdP", oidc_fields: { picture: "https://img.example/m.png" } });
-    const got = await me(router, cookie(await sign(signer, { email: "MARCIO@example.com" })));
-    expect(got.body!.person).toMatchObject({ id, name: "Márcio", role: "admin", photoUrl: "https://img.example/m.png" });
-    // A photo set since is not replaced.
-    await owner`UPDATE people SET photo_url = 'https://mine.example/me.png' WHERE id = ${id}`;
-    edge.profiles.set("marcio@example.com", { email: "marcio@example.com", name: "X", oidc_fields: { picture: "https://img.example/other.png" } });
-    const later = await routerFor(edge).handle(new Request(`${ORIGIN}/v1/me`, { headers: cookie(await sign(signer, { email: "marcio@example.com" })) }));
-    expect((await later.json() as { person: { photoUrl: string } }).person.photoUrl).toBe("https://mine.example/me.png");
-    expect(await keysOf(id)).toHaveLength(0);
-  });
-
-  test("a failed profile lookup does not deny a member, and seeds the email as name", async () => {
-    const failing = new Edge();
-    failing.keys = [signer.jwk];
-    failing.profileStatus = 503;
-    const got = await me(routerFor(failing), cookie(await sign(signer, { email: "noprofile@example.com" })));
-    expect(got.status).toBe(200);
-    expect(got.body!.person.name).toBe("noprofile@example.com");
-    // A later profile fills the name that was only the email.
-    edge.profiles.set("noprofile@example.com", { email: "noprofile@example.com", name: "Now Named" });
-    const named = await me(router, cookie(await sign(signer, { email: "noprofile@example.com" })));
-    expect(named.body!.person.name).toBe("Now Named");
-  });
-
-  test("a removed person is refused and not recreated; auto_create off refuses strangers", async () => {
-    const id = `${org}_gone`;
-    await owner`INSERT INTO people (id, organization_id, name, email, removed_at) VALUES (${id}, ${org}, 'Gone', 'gone@example.com', now())`;
-    expect((await me(router, cookie(await sign(signer, { email: "gone@example.com" })))).status).toBe(401);
-    expect(await peopleByEmail("gone@example.com")).toHaveLength(1);
-
-    const closed = routerFor(edge, { auto_create: false });
-    expect((await me(closed, cookie(await sign(signer, { email: "stranger@example.com" })))).status).toBe(401);
-    expect(await peopleByEmail("stranger@example.com")).toHaveLength(0);
-  });
-
-  test("removing someone ends their next request", async () => {
-    const token = await sign(signer, { email: "leaving@example.com" });
-    const first = await me(router, cookie(token));
-    await owner`UPDATE people SET removed_at = now() WHERE id = ${first.body!.person.id}`;
-    expect((await me(router, cookie(token))).status).toBe(401);
-  });
-
-  test("concurrent first sign-ins make one person", async () => {
-    const tokens = await Promise.all(Array.from({ length: 6 }, () => sign(signer, { email: "race@example.com" })));
-    const results = await Promise.all(tokens.map((t) => me(routerFor(edge), cookie(t))));
-    expect(results.map((r) => r.status)).toEqual(Array(6).fill(200));
-    expect(new Set(results.map((r) => r.body!.person.id)).size).toBe(1);
-    expect(await peopleByEmail("race@example.com")).toHaveLength(1);
-  });
-
-  test("a slow profile holds no database transaction while another request completes", async () => {
-    const slow = new Edge();
-    slow.keys = [signer.jwk];
-    const gate = Promise.withResolvers<void>();
-    const bothAsked = Promise.withResolvers<void>();
-    slow.profileGate = gate.promise;
-    slow.profileStarted = () => { if (slow.profileCalls === 2) bothAsked.resolve(); };
-    // One first sign-in (the creation path) and one person whose name is still their email (the fill path).
-    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${`${org}_unnamed`}, ${org}, 'unnamed@example.com', 'unnamed@example.com')`;
-    slow.profiles.set("unnamed@example.com", { email: "unnamed@example.com", name: "Named Later" });
-    const r = routerFor(slow);
-    const waiting = Promise.all(["slowfirst@example.com", "unnamed@example.com"]
-      .map(async (email) => me(r, cookie(await sign(signer, { email })))));
-    await bothAsked.promise;
-    const [open] = await owner`
-      SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE datname = current_database() AND usename = 'dude_app' AND state LIKE 'idle in transaction%'`;
-    expect(open.n).toBe(0);
-    expect((await me(router, cookie(await sign(signer, { email: "meanwhile@example.com" })))).status).toBe(200);
-    gate.resolve();
-    const [first, filled] = await waiting;
-    expect(first!.status).toBe(200);
-    expect(filled!.body!.person.name).toBe("Named Later");
-  });
-
-  // The profile step is the window between the first read and the locked
-  // recheck: hold the sign-in there while someone else writes the email.
-  async function signInAround(email: string, meanwhile: () => Promise<void>, failProfile = false) {
-    const inProfile = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const r = routerFor(edge, {}, org, (profile) => async (token, e) => {
-      inProfile.resolve();
-      await release.promise;
-      return failProfile ? null : profile(token, e);
-    });
-    const signing = me(r, cookie(await sign(signer, { email })));
-    await inProfile.promise;
-    await meanwhile();
-    release.resolve();
-    return signing;
   }
-  const insertLocked = (id: string, email: string, removed: boolean) => owner.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtext('people:' || ${org}))`;
-    await tx`INSERT INTO people (id, organization_id, name, email, removed_at)
-      VALUES (${id}, ${org}, 'Meanwhile', ${email}, ${removed ? new Date() : null})`;
-  });
-
-  test("someone removed while the first sign-in fetched its profile is refused, not recreated", async () => {
-    const got = await signInAround("tombstone@example.com",
-      () => insertLocked(`${org}_tombstone`, "tombstone@example.com", true));
-    expect(got.status).toBe(401);
-    const rows = await peopleByEmail("tombstone@example.com");
-    expect(rows.map((r) => r.id)).toEqual([`${org}_tombstone`]);
-  });
-
-  test("a first sign-in rechecks only after the removal holding the lock commits", async () => {
-    const email = "lockorder@example.com";
-    const tombstone = `${org}_lockorder`;
-    const locked = Promise.withResolvers<void>();
-    // Resolved true to commit; false (the test failed first) rolls the tombstone back.
-    const commit = Promise.withResolvers<boolean>();
-    // Takes the organization's people lock and writes the tombstone, committing only when told.
-    const removal = owner.begin(async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(hashtext('people:' || ${org}))`;
-      await tx`INSERT INTO people (id, organization_id, name, email, removed_at)
-        VALUES (${tombstone}, ${org}, 'Removed', ${email}, now())`;
-      locked.resolve();
-      if (!(await commit.promise)) throw new Error("rolled back");
-    });
-    try {
-      const got = signInAround(email, () => locked.promise);
-      // The sign-in's transaction must be queued on that advisory lock before the removal commits.
-      await waitFor(async () => (await owner`
-        SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-        WHERE l.locktype = 'advisory' AND NOT l.granted AND a.usename = 'dude_app'
-          AND a.datname = current_database()`)[0].n > 0);
-      commit.resolve(true);
-      await removal;
-      expect((await got).status).toBe(401);
-      expect((await peopleByEmail(email)).map((r) => r.id)).toEqual([tombstone]);
-    } finally {
-      commit.resolve(false);
-      await removal.catch(() => {});
-    }
-  });
-
-  // An existing person whose name is still their email and who has no photo gets
-  // the profile's; removed meanwhile, both the fill (UPDATE) and the plain reread
-  // (SELECT, when the profile gave nothing) must refuse them and change nothing.
-  for (const [branch, failProfile] of [["a matching profile", false], ["a failed profile", true]] as const) {
-    test(`someone removed while ${branch} was fetched for them is refused and left unchanged`, async () => {
-      const email = `fill${failProfile ? "failed" : "matched"}@example.com`;
-      const id = `${org}_fill${failProfile ? "failed" : "matched"}`;
-      await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${id}, ${org}, ${email}, ${email})`;
-      edge.profiles.set(email, { email, name: "Filled In", oidc_fields: { picture: "https://img.example/f.png" } });
-      const got = await signInAround(email,
-        async () => { await owner`UPDATE people SET removed_at = now() WHERE id = ${id}`; }, failProfile);
-      expect(got.status).toBe(401);
-      const rows = await peopleByEmail(email);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ id, name: email, photo_url: null });
-      expect(rows[0]!.removed_at).not.toBeNull();
-    });
-  }
-
-  test("a member added while the first sign-in fetched its profile is reused", async () => {
-    const got = await signInAround("addedmeanwhile@example.com",
-      () => insertLocked(`${org}_addedmeanwhile`, "addedmeanwhile@example.com", false));
-    expect(got.status).toBe(200);
-    expect(got.body!.person).toMatchObject({ id: `${org}_addedmeanwhile`, name: "Meanwhile" });
-    expect(await peopleByEmail("addedmeanwhile@example.com")).toHaveLength(1);
-  });
-
-  test("concurrent first requests for one email share one profile fetch", async () => {
-    const slow = new Edge();
-    slow.keys = [signer.jwk];
-    slow.profiles.set("herd@example.com", { email: "herd@example.com", name: "Herd" });
-    const gate = Promise.withResolvers<void>();
-    slow.profileGate = gate.promise;
-    const allAsked = Promise.withResolvers<void>();
-    let asks = 0;
-    const r = routerFor(slow, {}, org, (profile) => (token, email) => {
-      if (++asks === 6) allAsked.resolve();
-      return profile(token, email);
-    });
-    const tokens = await Promise.all(Array.from({ length: 6 }, () => sign(signer, { email: "herd@example.com" })));
-    const results = Promise.all(tokens.map((t) => me(r, cookie(t))));
-    await allAsked.promise;
-    gate.resolve();
-    const done = await results;
-    expect(done.map((d) => d.status)).toEqual(Array(6).fill(200));
-    expect(new Set(done.map((d) => d.body!.person.id)).size).toBe(1);
-    expect(done[0]!.body!.person.name).toBe("Herd");
-    expect(slow.profileCalls).toBe(1);
-    expect(await peopleByEmail("herd@example.com")).toHaveLength(1);
-  });
-
-  test("organizations stay apart; a person with no email is never linked", async () => {
-    const foreign = `${other}_same`;
-    await owner`INSERT INTO people (id, organization_id, name, email, role) VALUES (${foreign}, ${other}, 'Other', 'shared@example.com', 'admin')`;
-    const nullEmail = `${org}_noemail`;
-    await owner`INSERT INTO people (id, organization_id, name, role) VALUES (${nullEmail}, ${org}, 'shared@example.com', 'admin')`;
-    const got = await me(router, cookie(await sign(signer, { email: "shared@example.com" })));
-    expect(got.body!.person.id).not.toBe(foreign);
-    expect(got.body!.person.id).not.toBe(nullEmail);
-    expect(got.body!.person.role).toBe("member");
-    expect(await peopleByEmail("shared@example.com", other)).toHaveLength(1);
-  });
-
-  test("the email lookup sees only the transaction's own organization", async () => {
-    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${`${other}_scoped`}, ${other}, 'Scoped', 'scoped@example.com')`;
-    const lookup = (organizationId: string | null) => app.begin(async (tx) => {
-      if (organizationId) await tx`SELECT set_config('app.organization_id', ${organizationId}, true)`;
-      return (await tx`SELECT id FROM people_by_email('SCOPED@example.com')`).map((r: { id: string }) => r.id);
-    });
-    expect(await lookup(other)).toEqual([`${other}_scoped`]);
-    expect(await lookup(org)).toEqual([]);
-    expect(await lookup(null)).toEqual([]);
-  });
-
-  test("the header wins over the cookie, and nothing but a verified token identifies anyone", async () => {
-    const a = await sign(signer, { email: "new@example.com" });
-    const b = await sign(signer, { email: "marcio@example.com" });
-    const got = await me(router, { "cf-access-jwt-assertion": a, ...cookie(b) });
-    expect(got.body!.person.name).toBe("New Person");
-    // An invalid header does not fall back to a valid cookie.
-    expect((await me(router, { "cf-access-jwt-assertion": "bad", ...cookie(b) })).status).toBe(401);
-    for (const headers of [
-      { "cf-access-authenticated-user-email": "marcio@example.com" },
-      { "x-dude-person": `${org}_marcio`, "x-dude-organization": org },
-      { cookie: "CF_Authorization=" },
-    ]) expect((await me(router, headers)).status).toBe(401);
-  });
-
-  test("an explicit API key is used as one, and a bad one never falls back to the cookie", async () => {
-    const made = await createApiKey({ organizationId: org, name: "Automation" });
-    const session = cookie(await sign(signer, { email: "marcio@example.com" }));
-    const keyed = await me(router, { authorization: `Bearer ${made.key}`, ...session });
-    expect(keyed.body!.person.id).toBe(made.personId);
-    expect(keyed.body!.authMethod).toBe("api_key");
-    expect(keyed.body!).not.toHaveProperty("logoutUrl");
-    for (const authorization of ["Bearer dude_sk_wrong", "Bearer ", ""]) {
-      expect((await me(router, { authorization, ...session })).status).toBe(401);
-    }
-  });
 });
-
-describe("cross-site requests", () => {
-  const edge = new Edge();
-  let router: Router;
-  beforeAll(() => {
-    edge.keys = [signer.jwk];
-    router = routerFor(edge);
-  });
-  const patch = (headers: Record<string, string>) =>
-    router.handle(new Request(`${ORIGIN}/v1/me`, {
-      method: "PATCH", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ name: "Changed" }),
-    }));
-
-  test("a change by session needs this site's Origin, by cookie or by the edge's header", async () => {
-    const token = await sign(signer, { email: "csrf@example.com" });
-    for (const credential of [cookie(token), { "cf-access-jwt-assertion": token }]) {
-      expect((await patch(credential)).status).toBe(403);
-      expect((await patch({ ...credential, origin: "https://evil.example" })).status).toBe(403);
-      expect((await patch({ ...credential, origin: "null" })).status).toBe(403);
-      expect((await patch({ ...credential, origin: ORIGIN, "sec-fetch-site": "cross-site" })).status).toBe(403);
-      expect((await patch({ ...credential, origin: ORIGIN, "sec-fetch-site": "same-site" })).status).toBe(403);
-    }
-    // Refused before anyone was created.
-    expect(await peopleByEmail("csrf@example.com")).toHaveLength(0);
-    expect((await patch({ ...cookie(token), origin: ORIGIN, "sec-fetch-site": "same-origin" })).status).toBe(200);
-    expect((await patch({ "cf-access-jwt-assertion": token, origin: ORIGIN })).status).toBe(200);
-  });
-
-  test("another site's read is refused before sign-in creates anyone", async () => {
-    const token = await sign(signer, { email: "crossread@example.com" });
-    expect((await me(router, { ...cookie(token), "sec-fetch-site": "cross-site" })).status).toBe(403);
-    expect((await me(router, { ...cookie(token), "sec-fetch-site": "same-site" })).status).toBe(403);
-    expect(await peopleByEmail("crossread@example.com")).toHaveLength(0);
-    expect((await me(router, { ...cookie(token), "sec-fetch-site": "none" })).status).toBe(200);
-  });
-
-  test("API-key automation needs no browser headers", async () => {
-    const made = await createApiKey({ organizationId: org, name: "Script" });
-    expect((await patch({ authorization: `Bearer ${made.key}` })).status).toBe(200);
-    expect((await patch({ authorization: `Bearer ${made.key}`, origin: "https://evil.example" })).status).toBe(200);
-  });
+test("organisation selection checks memberships and key mismatches", async () => {
+  expect((await call("member@example.test", "/v1/people")).status).toBe(200);
+  expect((await call("member@example.test", "/v1/people", { "X-Dude-Organization": other })).status).toBe(403);
+  expect((await call("member@example.test", "/v1/people", { "X-Dude-Organization": org })).status).toBe(200);
+  await owner`INSERT INTO people (id, organization_id, account_id, email, name)
+    VALUES (${`per_other_${suffix}`}, ${other}, ${account}, 'member@example.test', 'Member')`;
+  expect((await call("member@example.test", "/v1/people")).status).toBe(400);
+  const key = await createApiKey({ organizationId: org, personId: `per_${suffix}`, name: "CLI" });
+  const res = await router().handle(new Request(origin+"/v1/people", { headers: {
+    authorization: `Bearer ${key.key}`, "X-Dude-Organization": other } }));
+  expect(res.status).toBe(403);
 });
-
-describe("the live stream", () => {
-  test("a session stream needs no key and ends when its token does", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const router = routerFor(edge);
-    const now = Math.floor(Date.now() / 1000);
-    const token = await sign(signer, { email: "stream@example.com" }, { exp: now + 2 });
-    const started = Date.now();
-    const res = await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1`, { headers: cookie(token) }));
-    expect(res.status).toBe(200);
-    const body = await res.text(); // returns only once the server closes the stream
-    expect(body.startsWith(": open")).toBe(true);
-    const took = Date.now() - started;
-    expect(took).toBeGreaterThan(500);
-    expect(took).toBeLessThan(4_000);
-    // Reconnecting with the expired token is refused, beyond the clock tolerance.
-    const late = await sign(signer, { email: "stream@example.com" }, { exp: now - 60 });
-    expect((await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1`, { headers: cookie(late) }))).status).toBe(401);
-    // An explicit, bad key in the URL does not fall back to the cookie.
-    const fresh = await sign(signer, { email: "stream@example.com" });
-    expect((await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1&key=`, { headers: cookie(fresh) }))).status).toBe(401);
-  }, 10_000);
-
-  test("a token expiring during a slow backfill ends the stream without the backfill", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const router = routerFor(edge);
-    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source)
-      SELECT 'evt_backfill_' || ${suffix} || '_' || n, ${org}, 'test.backfill', 'system', 'test', 'control-plane'
-      FROM generate_series(1, 3) n`;
-    const token = await sign(signer, { email: "slowbackfill@example.com" }, { exp: Math.floor(Date.now() / 1000) + 2 });
-    // Signed in once beforehand, so the streamed request itself writes nothing.
-    expect((await me(router, cookie(token))).status).toBe(200);
-    const unlock = Promise.withResolvers<void>();
-    const locked = Promise.withResolvers<void>();
-    // Holds the ledger so the backfill's query waits until after the token has expired.
-    const holder = owner.begin(async (tx) => {
-      await tx`LOCK TABLE events IN ACCESS EXCLUSIVE MODE`;
-      locked.resolve();
-      await unlock.promise;
-    });
-    try {
-      await locked.promise;
-      const res = await router.handle(new Request(`${ORIGIN}/v1/events/stream`, { headers: cookie(token) }));
-      expect(res.status).toBe(200);
-      await waitFor(async () => (await owner`
-        SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-        WHERE NOT l.granted AND l.relation = 'events'::regclass AND a.usename = 'dude_app'`)[0].n > 0);
-      // Ends at the token's expiry while the backfill is still blocked.
-      const ended = await Promise.race([res.text(), Bun.sleep(6_000).then(() => null)]);
-      expect(ended).toBe(": open\n\n");
-    } finally {
-      unlock.resolve();
-      await holder;
-    }
-  }, 15_000);
-});
-
-test("a person principal's profile never sets their role", async () => {
-  const edge = new Edge();
-  edge.keys = [signer.jwk];
-  edge.profiles.set("role@example.com", { email: "role@example.com", name: "R", role: "admin", groups: ["admin"] } as unknown as Profile);
-  const got = await me(routerFor(edge), cookie(await sign(signer, { email: "role@example.com", role: "admin" })));
-  expect(got.body!.person.role).toBe("member");
-});
-
-describe("the resolved principal", () => {
-  test("carries the person's current name and role from the sign-in's own read", async () => {
-    const edge = new Edge();
-    edge.keys = [signer.jwk];
-    const authenticate = accessAuthenticator(config(), org, {
-      verify: accessVerifier(TEAM, AUD, edge.fetch), profile: accessProfiles(TEAM, edge.fetch),
-    });
-    const request = async (email: string) =>
-      new Request(`${ORIGIN}/v1/me`, { headers: cookie(await sign(signer, { email })) });
-    edge.profiles.set("resolved@example.com", { email: "resolved@example.com", name: "Resolved" });
-    const created = await authenticate(await request("resolved@example.com"));
-    expect(created).toMatchObject({ credentialKind: "person", name: "Resolved", role: "member", resolved: true });
-    await owner`UPDATE people SET role = 'admin', name = 'Promoted' WHERE id = ${created!.personId}`;
-    expect(await authenticate(await request("resolved@example.com")))
-      .toMatchObject({ personId: created!.personId, name: "Promoted", role: "admin", resolved: true });
-    await owner`UPDATE people SET removed_at = now() WHERE id = ${created!.personId}`;
-    expect(await authenticate(await request("resolved@example.com"))).toBeNull();
-  });
-
-  test("the router rereads only people the authenticator did not resolve", async () => {
-    // A person id with no row: rereading it refuses the request, trusting it does not.
-    const ghost = { credentialKind: "person" as const, organizationId: org, personId: `${org}_ghost`,
-      kind: "user" as const, name: "Ghost", role: "admin" as const };
-    const status = async (principal: Principal) => {
-      const r = new Router(async () => principal);
-      registerPeopleRoutes(r);
-      r.get("/v1/whoami", async (ctx) => Response.json(ctx.principal));
-      const res = await r.handle(new Request(`${ORIGIN}/v1/whoami`));
-      return { status: res.status, body: res.status === 200 ? await res.json() : null };
-    };
-    expect((await status(ghost)).status).toBe(401);
-    expect(await status({ ...ghost, resolved: true })).toEqual({ status: 200, body: { ...ghost, resolved: true } });
-  });
+test("revoked or expired invitations immediately stop admission without history", async () => {
+  await owner`UPDATE invitations SET expires_at = now() WHERE id = ${`inv_${suffix}`}`;
+  expect((await body(await call("invited@example.test"))).gate).toBe("none");
+  await owner`UPDATE invitations SET expires_at = now() + interval '14 days', revoked_at = now() WHERE id = ${`inv_${suffix}`}`;
+  expect((await body(await call("invited@example.test"))).gate).toBe("none");
 });

@@ -14,7 +14,7 @@
 
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 import { newId } from "@dude/domain";
-import { type OrgScope, withOrg } from "../db/client.ts";
+import { type OrgScope, withOrg, withoutTenant } from "../db/client.ts";
 import type { AccessConfig } from "../config.ts";
 import type { Principal } from "./auth.ts";
 import { HttpError } from "./http.ts";
@@ -215,7 +215,7 @@ const member = (row: { id: string; name: string; role: string }): Member =>
  * between transactions: a short read decides whether it is needed, and a
  * second short transaction rechecks membership before writing anything.
  */
-export async function memberFor(organizationId: string, email: string, autoCreate: boolean,
+export async function memberFor(organizationId: string, email: string, _autoCreate: boolean,
   profile: () => Promise<Profile | null>): Promise<Membership> {
   const rows = await withOrg(organizationId, (scope) => findByEmail(scope, email));
   const active = rows.find((r) => !r.removed);
@@ -242,23 +242,7 @@ export async function memberFor(organizationId: string, email: string, autoCreat
     });
   }
   if (rows.length > 0) return "removed";
-  if (!autoCreate) return "unknown";
-
-  const seed = await profile();
-  return withOrg(organizationId, async (scope) => {
-    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
-    const now = await findByEmail(scope, email);
-    const current = now.find((r) => !r.removed);
-    if (current) return member(current);
-    // Removed while the profile was fetched: stays removed, never recreated.
-    if (now.length > 0) return "removed";
-    const personId = newId("person");
-    const name = seed?.name ?? email;
-    await scope.sql`
-      INSERT INTO people (id, organization_id, name, email, role, photo_url)
-      VALUES (${personId}, ${scope.organizationId}, ${name}, ${email}, 'member', ${seed?.picture ?? null})`;
-    return { personId, name, role: "member" };
-  });
+  return "unknown";
 }
 
 /**
@@ -272,14 +256,45 @@ export function accessAuthenticator(config: AccessConfig, organizationId: string
     checkBrowserOrigin(request, config.public_url);
     const identity = await deps.verify(token);
     if (!identity) return null;
-    const membership = await memberFor(organizationId, identity.email, config.auto_create,
-      () => deps.profile(token, identity.email));
-    if (typeof membership === "string") return null;
-    // Name and role come from the membership just read or written, so the
-    // router need not resolve the person again.
-    return {
-      credentialKind: "person", organizationId, personId: membership.personId, kind: "user",
-      name: membership.name, role: membership.role, expiresAt: identity.expiresAt, resolved: true,
-    };
+    const admission = await withoutTenant(async ({ sql }) => {
+      const [account] = await sql`SELECT id, email::text, name, photo_url AS "photoUrl", photo_key AS "photoKey"
+        FROM accounts WHERE email = ${identity.email}::citext`;
+      const memberships = account ? await sql`SELECT * FROM account_memberships(${account.id})` : [];
+      const invitations = await sql`SELECT invitations_for_email(${identity.email}::citext) AS invitation`;
+      const superAdmin = (config.super_admins ?? []).includes(identity.email);
+      return { gate: memberships.length ? "member" : invitations.length ? "invited" : superAdmin ? "super_admin" : "none",
+        email: identity.email, superAdmin, account: account ?? null, memberships,
+        invitations: invitations.map((r: { invitation: unknown }) => r.invitation), profile: null } as import("./auth.ts").AccessAdmission;
+    });
+    const url = new URL(request.url);
+    const accountRoute = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/me/keys") ||
+      url.pathname.startsWith("/v1/invitations/") || url.pathname.startsWith("/v1/admin/") ||
+      url.pathname.startsWith("/v1/locate/");
+    const requested = request.headers.get("x-dude-organization") ??
+      (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
+    const selected = requested ? admission.memberships.find((m) => m.organization_id === requested) :
+      admission.memberships.length === 1 ? admission.memberships[0] : undefined;
+    if (admission.gate === "member" && !accountRoute && !selected) {
+      throw new HttpError(requested ? 403 : 400, requested ? "not_a_member" : "organization_required",
+        requested ? "not_a_member" : "organization_required");
+    }
+    if (requested && admission.gate === "member" && !selected && !url.pathname.startsWith("/v1/admin/")) {
+      throw new HttpError(403, "not_a_member", "not_a_member");
+    }
+    admission.profile = await deps.profile(token, identity.email);
+    if (admission.gate === "member" && admission.account) {
+      await withoutTenant(async ({ sql }) => {
+        await sql`UPDATE accounts SET signed_in_at = now(),
+          name = CASE WHEN btrim(name) = '' OR lower(name) = lower(email::text)
+            THEN COALESCE(${admission.profile?.name ?? null}, name) ELSE name END,
+          photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL
+            THEN ${admission.profile?.picture ?? null} ELSE photo_url END
+          WHERE id = ${admission.account!.id}
+            AND (signed_in_at IS NULL OR signed_in_at < now() - interval '1 hour')`;
+      });
+    }
+    return { credentialKind: "person", organizationId: selected?.organization_id ?? "",
+      personId: selected?.person_id ?? "", kind: "user", name: selected?.name ?? identity.email,
+      role: selected?.role ?? "member", expiresAt: identity.expiresAt, resolved: true, access: admission };
   };
 }

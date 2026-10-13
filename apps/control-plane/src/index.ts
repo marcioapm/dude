@@ -12,7 +12,7 @@
 import { Router } from "./api/router.ts";
 import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
 import { type FetchLike, accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
-import { type AuthConfig, Config, type LoadOptions, config, organizationBySlug, useConfig } from "./config.ts";
+import { type AuthConfig, Config, ConfigError, type LoadOptions, config, useConfig } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
@@ -92,9 +92,12 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
  */
 export async function authFor(auth: AuthConfig, fetchImpl: FetchLike = fetch): Promise<RequestAuthenticator> {
   if (auth.provider === "api_key") return authenticate;
-  const organizationId = await organizationBySlug(auth.default_organization);
+  const organizations = await getPool()`SELECT 1 FROM organizations LIMIT 1`;
+  if (!organizations.length && !auth.super_admins.length) {
+    throw new ConfigError("auth.super_admins is empty and there are no organisations: nobody could sign in");
+  }
   const { team, aud } = auth.cloudflare_access;
-  return requestAuthenticator(accessAuthenticator(auth, organizationId, {
+  return requestAuthenticator(accessAuthenticator(auth, "", {
     verify: accessVerifier(team, aud, fetchImpl),
     profile: accessProfiles(team, fetchImpl),
   }));

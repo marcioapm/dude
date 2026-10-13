@@ -23,7 +23,18 @@ interface PersonIdentity {
   role: "admin" | "member";
 }
 
-export type Principal = PersonIdentity & (
+export interface AccessAdmission {
+  gate: "member" | "invited" | "super_admin" | "none";
+  email: string;
+  superAdmin: boolean;
+  profile: { name: string | null; picture: string | null } | null;
+  account: { id: string; email: string; name: string; photoUrl: string | null; photoKey: string | null } | null;
+  memberships: Array<{ organization_id: string; organization_name: string; organization_slug: string;
+    person_id: string; name: string; role: "admin" | "member"; welcomed_at: Date | null }>;
+  invitations: unknown[];
+}
+
+export type Principal = PersonIdentity & { access?: AccessAdmission } & (
   | { credentialKind: "api_key"; apiKeyId: string }
   // expiresAt: when the credential that proved it lapses, seconds since the epoch.
   // resolved: name and role were read from the person's current, active row

@@ -158,6 +158,18 @@ export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string
 // ---------------------------------------------------------------------------
 
 async function getMe(ctx: RequestContext): Promise<Response> {
+  const access = ctx.principal.access;
+  if (access && access.gate !== "member") {
+    const identity = { email: access.email, name: access.profile?.name ?? null, photoUrl: access.profile?.picture ?? null };
+    if (access.gate === "none") return json({ gate: "none", ...identity });
+    return json({ gate: access.gate, ...identity, superAdmin: access.superAdmin,
+      ...(access.gate === "invited" ? { invitations: access.invitations } : {}) });
+  }
+  if (access && !ctx.principal.organizationId) {
+    return json({ gate: "member", account: access.account, organizations: access.memberships,
+      invitations: access.invitations, organization: null, superAdmin: access.superAdmin,
+      authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH });
+  }
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const person = await myDetail(scope, ctx.principal.personId);
     // organizations is not a tenant table; the row is the caller's own.
@@ -170,7 +182,8 @@ async function getMe(ctx: RequestContext): Promise<Response> {
   const auth = ctx.principal.credentialKind === "api_key"
     ? { authMethod: "api_key" }
     : { authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH };
-  return json({ ...out, ...auth });
+  return json({ ...out, ...auth, ...(access ? { gate: access.gate, account: access.account,
+    organizations: access.memberships, invitations: access.invitations, superAdmin: access.superAdmin } : { gate: "member" }) });
 }
 
 /** A photo someone keeps elsewhere: an https URL. Uploads go to PUT /v1/me/photo. */

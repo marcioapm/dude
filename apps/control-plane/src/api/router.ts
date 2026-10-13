@@ -7,7 +7,25 @@
 
 import { type Principal, type RequestAuthenticator, authenticate, personPrincipal } from "./auth.ts";
 import { touch } from "./presence.ts";
-import { errorResponse, notFound, unauthorized } from "./http.ts";
+import { HttpError, errorResponse, notFound, unauthorized } from "./http.ts";
+
+function checkAdmission(principal: Principal, request: Request, url: URL): void {
+  const access = principal.access;
+  const org = request.headers.get("x-dude-organization") ??
+    (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
+  if (principal.credentialKind === "api_key" && org !== null && org !== principal.organizationId) {
+    throw new HttpError(403, "not_a_member", "not_a_member");
+  }
+  if (!access) return;
+  const frontDoor = (request.method === "GET" && url.pathname === "/v1/me") ||
+    (request.method === "GET" && /^\/v1\/invitations\/[^/]+$/.test(url.pathname)) ||
+    (request.method === "POST" && /^\/v1\/invitations\/[^/]+\/accept$/.test(url.pathname));
+  if (frontDoor || (access.superAdmin && url.pathname.startsWith("/v1/admin/"))) return;
+  if (access.gate !== "member") {
+    const code = access.gate === "invited" ? "not_a_member" : "not_admitted";
+    throw new HttpError(403, code, code);
+  }
+}
 
 export interface RequestContext {
   request: Request;
@@ -135,11 +153,17 @@ export class Router {
           if (principal?.credentialKind === "person" && expiresAt !== undefined) principal.expiresAt = expiresAt;
         }
         if (!principal) throw unauthorized();
+        checkAdmission(principal, request, url);
         // Only person sessions from a tab in use establish presence; API keys never do.
-        const using = principal.credentialKind === "person" && request.headers.get("x-dude-active") === "1";
+        const using = principal.credentialKind === "person" && !!principal.personId && request.headers.get("x-dude-active") === "1";
         if (using) await touch(principal, request.headers.get("x-dude-where"), url.pathname);
 
         return await (route.handler as Handler)({ request, url, params, principal });
+      }
+      if (url.pathname.startsWith("/v1/")) {
+        const principal = await this.authenticateRequest(request.headers.get("authorization"), request);
+        if (!principal) throw unauthorized();
+        checkAdmission(principal, request, url);
       }
       const fallback = await this.#fallback?.(request, url);
       if (fallback) return fallback;

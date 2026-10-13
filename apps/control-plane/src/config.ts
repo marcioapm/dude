@@ -94,8 +94,7 @@ export const KEYS: readonly Key[] = [
   key("factory.logins", "DUDE_FACTORY_LOGINS", "list", "orchestrator"),
   key("auth.provider", "DUDE_AUTH_PROVIDER", "string", "backend", "api_key"),
   key("auth.public_url", "DUDE_AUTH_PUBLIC_URL", "string", "backend"),
-  key("auth.auto_create", "DUDE_AUTH_AUTO_CREATE", "bool", "backend", "true"),
-  key("auth.default_organization", "DUDE_AUTH_DEFAULT_ORGANIZATION", "string", "backend"),
+  key("auth.super_admins", "DUDE_AUTH_SUPER_ADMINS", "list", "backend"),
   key("auth.cloudflare_access.team", "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM", "string", "backend"),
   key("auth.cloudflare_access.aud", "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD", "string", "backend"),
 ];
@@ -117,10 +116,15 @@ export interface RetiredKey {
 }
 
 // tests/fixtures/config/keys.json's "retired" must match it, as the Go list must.
-export const RETIRED: readonly RetiredKey[] = [];
+export const RETIRED: readonly RetiredKey[] = [
+  { name: "auth.auto_create", env: "DUDE_AUTH_AUTO_CREATE" },
+  { name: "auth.default_organization", env: "DUDE_AUTH_DEFAULT_ORGANIZATION" },
+];
 
 /** The warning for a retired setting: its key or variable, never its value. */
-const retiredWarning = (name: string) => `retired: ${name}; remove it`;
+const retiredWarning = (name: string) => `retired: ${name}; remove it` +
+  (/^(auth\.(auto_create|default_organization)|DUDE_AUTH_(AUTO_CREATE|DEFAULT_ORGANIZATION))$/.test(name)
+    ? "; ignored: people join by invitation" : "");
 
 type Value = string | number | boolean | string[];
 
@@ -307,8 +311,7 @@ const publicUrl = z.string().transform((raw, ctx) => {
 const accessAuth = z.object({
   provider: z.literal("cloudflare_access"),
   public_url: publicUrl,
-  auto_create: z.boolean(),
-  default_organization: z.string().min(1),
+  super_admins: z.array(z.string().trim().email().transform((s) => s.toLowerCase())).default([]),
   cloudflare_access: z.object({ team: teamLabel, aud: z.string().min(1) }),
 });
 
@@ -481,8 +484,7 @@ export class Config {
     const parsed = accessAuth.safeParse({
       provider,
       public_url: this.string("DUDE_AUTH_PUBLIC_URL"),
-      auto_create: this.bool("DUDE_AUTH_AUTO_CREATE"),
-      default_organization: this.string("DUDE_AUTH_DEFAULT_ORGANIZATION"),
+      super_admins: (this.value("DUDE_AUTH_SUPER_ADMINS", "list") as string[] | undefined) ?? [],
       cloudflare_access: {
         team: this.string("DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM"),
         aud: this.string("DUDE_AUTH_CLOUDFLARE_ACCESS_AUD"),
