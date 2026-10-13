@@ -195,10 +195,8 @@ func (w *world) get(path, org string) (int, string) {
 	return res.StatusCode, string(b)
 }
 
-// seedRepo is a bare repository with one commit on main, made once per test
-// binary in seedRepo.dir and removed by TestMain. Every world copies it:
-// four git processes per repository, two repositories per world, were a
-// tenth of a second of every test.
+// Each world copies this seed into its own repository. TestMain removes
+// the seed directory after all tests finish.
 var seedRepo struct {
 	once sync.Once
 	dir  string
@@ -303,14 +301,14 @@ func (w *world) start(taskID string, policy delivery.Policy) string {
 // pump runs every loop once, as the orchestrator's main does continuously.
 func (w *world) pump() {
 	ctx := context.Background()
-	// Up to five steps of each workflow, stopping once a tick claims
-	// nothing: nothing is runnable right now. Work that becomes due later
-	// (a wake time, a lease, a signal) is the next pump's, and until keeps
-	// pumping to its same 20 s deadline.
+	// Stop when nothing is runnable now; later wakes, leases and signals
+	// are picked up by the next pump.
 	for range 5 {
-		if n, err := w.runtime.Tick(ctx, 10); err != nil {
+		n, err := w.runtime.Tick(ctx, 10)
+		if err != nil {
 			w.t.Fatal(err)
-		} else if n == 0 {
+		}
+		if n == 0 {
 			break
 		}
 	}
