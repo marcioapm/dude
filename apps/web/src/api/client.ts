@@ -787,6 +787,14 @@ export class ApiClient {
 
   // -- machines: the organization's sizes, lux's pools -----------------------
 
+  resetTaskMachine(id: string, role: string, note = ""): Promise<unknown> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(id)}/agent-machines/${encodeURIComponent(role)}`, note ? { note } : {});
+  }
+
+  resetSessionMachine(id: string, note = ""): Promise<unknown> {
+    return this.#request("DELETE", `/v1/sessions/${encodeURIComponent(id)}/agent-machine`, note ? { note } : {});
+  }
+
   machineSizes(): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
     return this.#request("GET", "/v1/machines/sizes");
   }

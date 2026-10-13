@@ -8,12 +8,90 @@
  * board offer the same things.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { MachineRaises } from "@dude/design-system/components";
+import type { MachineSize, SettingsResponse, SettingsRole } from "@dude/domain";
+import { raisedRows, taskRaisedMachines, type RaisedMachine } from "../machines.ts";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { Dialog, Button, Callout, Input, Textarea } from "@dude/design-system/primitives";
 import type { ApiClient, Epic } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+
+export function ResetMachineConfirm({ label, from, to, by, session, onConfirm, onClose }: {
+  label: string; from: string; to: string; by: string; session?: boolean;
+  onConfirm: (note: string) => Promise<unknown>; onClose: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const posting = useRef(false);
+  const submit = async () => {
+    if (posting.current || note.length > 2000) return;
+    posting.current = true;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await onConfirm(note);
+      onClose();
+    } catch (err) {
+      setProblem(errorText(err));
+    } finally {
+      posting.current = false;
+      setBusy(false);
+    }
+  };
+  const lead = `Moved back to ${to} by ${by}`;
+  return (
+    <Dialog open size="sm" onOpenChange={(open) => !open && !posting.current && onClose()}
+      title={`Move the ${label} back to ${to} now?`}
+      description={`It keeps its conversation and checkout; running processes stop.${session ? "" : ` Later ${label} Runs in this task run on ${to} too.`}`}
+      footer={<>
+        <Button variant="quiet" disabled={busy} onClick={onClose}>Keep {from}</Button>
+        <Button variant="primary" disabled={busy || note.length > 2000} onClick={() => void submit()} data-testid="confirm-reset">Move it to {to}</Button>
+      </>}>
+      <Textarea label={`Note to the ${label} (optional)`} rows={2} maxRows={6} maxLength={2000} autoFocus
+        value={note} disabled={busy} onChange={(e) => setNote(e.target.value)} data-testid="reset-note"
+        hint={note.trim() ? `It is told “${lead}:” and then your note.` : `It is told “${lead}.”`} />
+      {problem ? <Callout tone="danger" role="alert" data-testid="reset-error">{problem}</Callout> : null}
+    </Dialog>
+  );
+}
+
+export function TaskMachineRaises({ client, task, by, onChanged }: {
+  client: ApiClient; task: { id: string; projectId: string }; by: string; onChanged: () => void;
+}) {
+  const machines = taskRaisedMachines(task);
+  const hasRaises = Object.keys(machines).length > 0;
+  const [data, setData] = useState<{ settings: SettingsResponse; sizes: MachineSize[] } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [reset, setReset] = useState<{ role: SettingsRole; from: RaisedMachine; to: MachineSize } | null>(null);
+  useEffect(() => {
+    if (!hasRaises) return;
+    let current = true;
+    setData(null);
+    setProblem(null);
+    void Promise.all([client.projectSettings(task.projectId), client.machineSizes()]).then(
+      ([settings, sizes]) => current && setData({ settings, sizes: sizes.sizes }),
+      (err: unknown) => current && setProblem(errorText(err)),
+    );
+    return () => { current = false; };
+  }, [client, task.projectId, hasRaises]);
+  if (!hasRaises) return null;
+  const rows = data ? raisedRows(machines, data.settings, data.sizes, (role, from, to) => setReset({ role, from, to })) : [];
+  return <>
+    <MachineRaises where="raised in this task" raises={rows} loading={!data && !problem} error={problem} />
+    {reset ? <ResetMachineConfirm label={roleLabelForReset(reset.role)} from={reset.from.name} to={reset.to.name} by={by}
+      onClose={() => setReset(null)} onConfirm={async (note) => {
+        await client.resetTaskMachine(task.id, reset.role, note);
+        onChanged();
+      }} /> : null}
+  </>;
+}
+
+function roleLabelForReset(role: SettingsRole): string {
+  return role === "qa_browser" ? "tester" : role;
+}
 
 /** What an action asks the app to open; the app owns navigation and dialogs. */
 export type Intent =

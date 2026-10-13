@@ -21,6 +21,42 @@ import {
   type SettingsRole,
 } from "@dude/domain";
 
+import type { Run, SettingsResponse } from "@dude/domain";
+import type { MachineRaise } from "@dude/design-system/components";
+import { formatDuration } from "@dude/design-system";
+
+export type RaisedMachine = NonNullable<Run["machine"]> & {
+  raised?: { sizeId: string; moveId: string; askedBy: string; role?: string; reason: string; at: string };
+};
+
+// The task detail's resolved entries are isolated here until the backend contract lands.
+export function taskRaisedMachines(detail: unknown): Partial<Record<SettingsRole, RaisedMachine>> {
+  return (detail as { agentMachines?: Partial<Record<SettingsRole, RaisedMachine>> }).agentMachines ?? {};
+}
+
+export function raisedProvenance(machine: RaisedMachine, now = Date.now()): string | null {
+  const r = machine.raised;
+  if (!r) return null;
+  const at = Date.parse(r.at);
+  const when = Number.isFinite(at) ? `${formatDuration(Math.max(0, now - at), { style: "age" })} ago` : r.at;
+  return `Asked for by ${r.askedBy}${r.role ? ` (the ${roleLabel(r.role).toLowerCase()})` : ""}, ${when}: ${r.reason}`;
+}
+
+export function raisedRows(machines: Partial<Record<SettingsRole, RaisedMachine>>, settings: SettingsResponse, sizes: readonly MachineSize[],
+  reset: (role: SettingsRole, from: RaisedMachine, to: MachineSize) => void): MachineRaise[] {
+  return Object.entries(machines).flatMap(([key, machine]) => {
+    const role = key as SettingsRole;
+    if (!machine.raised) return [];
+    const field = settings.roles[role]?.machineSize;
+    const to = sizes.find((s) => s.id === field?.value) ?? sizes.find((s) => s.isDefault);
+    const follows = role === "fixer" && (machine.raised.role === "implementer" || (field?.followsImplementer && !machine.raised.role));
+    const avatar = role === "fixer" ? "implementer" : role;
+    return [{ role: avatar as MachineRaise["role"], label: roleLabel(role), size: machine, settings: { name: to?.name ?? "its settings' size" },
+      detail: raisedProvenance(machine), follows: follows ? "implementer" : undefined,
+      onReset: to && !follows ? () => reset(role, machine, to) : undefined }];
+  });
+}
+
 /** A pool's host, as a person reads it: "16 CPUs · 32 GiB · 180 GiB", disk "not reserved" when 0. */
 export function hostSpec(pool: MachinePool): string | null {
   const h = pool.hostSize;
