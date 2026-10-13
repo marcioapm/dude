@@ -6,12 +6,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { PersistedEvent, RunStatus } from "@dude/domain";
+import type { PersistedEvent, RunStatus, TaskServers } from "@dude/domain";
 import { act, mount, until } from "./dom.ts";
-import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
-import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
+import { RUN_ID, TASK_ID, run } from "../src/fixtures/data.ts";
+import { PeopleProvider } from "../src/people.tsx";
+import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
+import { runStatusShown } from "../src/runPresentation.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
 import { ApiError } from "../src/api/client.ts";
@@ -75,6 +79,89 @@ describe("the projection", () => {
     expect(up.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started")).map((t) => t.at)).toEqual([at(10_000)]);
   });
 
+  const takenBack = (events: PersistedEvent[]) => project(events, "running").turns
+    .flatMap((t) => t.kind === "notice" && t.text.startsWith("Taken back up") ? [t.text] : []);
+
+  test("a resume says 'Taken back up' only once the agent is up, timed; never while its start is live", () => {
+    const ran = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000)];
+    const resuming = [...ran, message("and now?", 29_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000),
+      stage("waiting", 30_000, 2), stage("volumes", 32_000, 2), stage("running", 40_000, 2)];
+    expect(takenBack(resuming)).toEqual([]);
+    const up = [...resuming, ev("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 60_000), ev("agent.message", { text: "back" }, 60_001)];
+    expect(takenBack(up)).toEqual(["Taken back up in 30s."]);
+    // It sits where the agent came back, before its first words.
+    const turns = project(up, "running").turns;
+    expect(turns.at(-2)).toMatchObject({ kind: "notice", text: "Taken back up in 30s.", at: at(60_000) });
+    // Parked again once back: the notice was placed when the agent came up, and is not placed a second time.
+    const parkedAgain = [...up, ev("run.parked", { reason: "session" }, 90_000)];
+    expect(takenBack(parkedAgain)).toEqual(["Taken back up in 30s."]);
+  });
+
+  test("a move says 'Taken back up' only once the agent is up; never while its start is live", () => {
+    const moving = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
+      stage("park", 20_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 25_000),
+      stage("waiting", 25_000, 2), stage("running", 30_000, 2)];
+    expect(project(moving, "running").start).toMatchObject({ kind: "move", stage: "running" });
+    expect(takenBack(moving)).toEqual([]);
+    expect(takenBack([...moving, ev("agent.message", { text: "on Large now" }, 41_000)])).toHaveLength(1);
+  });
+
+  test("a resume or a move that fails shows the failure, never 'Taken back up'", () => {
+    const resumeFailed = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000),
+      ev("run.unparked", { reason: "session", epoch: 2 }, 30_000), stage("waiting", 30_000, 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "terminated" }, 40_000)];
+    const moveFailed = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), stage("park", 20_000, 1, "migrate"),
+      ev("run.unparked", { reason: "migrate", epoch: 2 }, 25_000), stage("waiting", 25_000, 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "no capacity" }, 40_000)];
+    for (const [events, kind] of [[resumeFailed, "resume"], [moveFailed, "move"]] as const) {
+      const c = project(events, "failed");
+      expect(c.turns.some((t) => t.kind === "notice" && t.text.startsWith("Taken back up"))).toBe(false);
+      const ended = c.turns.find((t) => t.kind === "ended")!;
+      expect(ended.kind === "ended" && ended.start?.kind).toBe(kind);
+    }
+  });
+
+  // A harness taken back up can report a call it finished before the park again; that call keeps its time.
+  for (const how of ["resume", "move"] as const) {
+    // The agent stops at 5s and is handed back: a move's park, or a park and its unpark.
+    const handedBack = () => how === "move"
+      ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
+      : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+
+    test(`a tool call that finished before a ${how} keeps its duration through it and after`, () => {
+      const tool = (type: "agent.tool.called" | "agent.tool.completed", name: string, callId: string, ms: number) =>
+        ev(type, { tool: name, callId, ...(type === "agent.tool.completed" ? { status: "completed" } : { input: {} }) }, ms);
+      const first = how === "move" ? "request_machine" : "read";
+      const before = [created(), stage("waiting", 0), stage("running", 100),
+        tool("agent.tool.called", first, "call_1", 1_000), tool("agent.tool.completed", first, "call_1", 1_001)];
+      const parked = handedBack();
+      const back = [stage("waiting", 31_000, 2), stage("volumes", 33_000, 2), stage("running", 38_000, 2),
+        // The harness's replay of what it already did, then new work.
+        tool("agent.tool.called", first, "call_1", 40_000), tool("agent.tool.completed", first, "call_1", 41_000),
+        ev("agent.message", { text: "back" }, 42_000), tool("agent.tool.called", "bash", "call_2", 43_000), tool("agent.tool.completed", "bash", "call_2", 45_000)];
+      const tookMs = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) =>
+        t.kind === "tool" ? [[t.id, Date.parse(t.endedAt!) - Date.parse(t.startedAt)]] : []);
+      expect(tookMs(before)).toEqual([["call_1", 1]]);
+      expect(tookMs([...before, ...parked, ...back])).toEqual([["call_1", 1], ["call_2", 2_000]]);
+      expect(project([...before, ...parked, ...back], "running").toolCounts.get(first)).toBe(1);
+    });
+
+    test(`a tool call still running at a ${how} completes after it, timed over its whole span`, () => {
+      // A move's own call (request_machine) completes once the agent is back on its new machine.
+      const name = how === "move" ? "request_machine" : "bash";
+      const before = [created(), stage("waiting", 0), stage("running", 100),
+        ev("agent.tool.called", { tool: name, callId: "call_live", input: {} }, 2_000)];
+      const parked = handedBack();
+      const back = [stage("waiting", 31_000, 2), stage("running", 38_000, 2),
+        ev("agent.tool.completed", { tool: name, callId: "call_live", status: "completed" }, 42_000)];
+      const rows = project([...before, ...parked, ...back], "running").turns.filter((t) => t.kind === "tool");
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row.kind === "tool" && row.status).toBe("completed");
+      expect(row.kind === "tool" && Date.parse(row.endedAt!) - Date.parse(row.startedAt)).toBe(40_000);
+    });
+  }
+
   test("a move: park leads, and it reads as a move", () => {
     const events = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
       stage("park", 20_000, 1, "drain"), stage("waiting", 25_000, 1), stage("volumes", 27_000, 2)];
@@ -88,10 +175,13 @@ describe("the projection", () => {
     const c = project(events, "failed");
     expect(c.start).toBeNull();
     const ended = c.turns.find((t) => t.kind === "ended")!;
-    expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: "image", failed: { reason: "pull failed: manifest unknown" },
+    expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: "image", failed: { reason: "pull failed: manifest unknown", source: "lux" },
       done: [{ stage: "waiting", tookMs: 5_000 }] });
     const sent = c.turns.find((t) => t.kind === "human")!;
     expect(sent).toMatchObject({ deliveredAt: null, failed: NOT_STARTED });
+    // The header's failed state, until a next agent is created.
+    expect(c.startFailed).toMatchObject({ stage: "image", failed: { source: "lux" } });
+    expect(project([...events, created(60_000)], "pending").startFailed).toBeNull();
   });
 
   test("a drained Run whose resumePolicy (manual) fails it at the stop did not fail a start: no stopping-it failure", () => {
@@ -154,13 +244,18 @@ describe("the projection", () => {
   });
 });
 
-/** A Run whose ledger is the test's and whose detail is patched. */
+/** A Run whose ledger is the test's and whose detail is patched; lux's wait reason, when set. */
 class StartClient extends FixtureClient {
+  waitingReason: string | null = null;
   constructor(private readonly patch: Partial<RunDetail>, public ledger: PersistedEvent[]) {
     super("a");
   }
   override async getRun(id: string): Promise<RunDetail> {
     return { ...(await super.getRun(id)), ...this.patch };
+  }
+  override async runServers(runId = RUN_ID): Promise<TaskServers> {
+    const s = await super.runServers();
+    return { ...s, run: s.run ? { ...s.run, id: runId, waitingReason: this.waitingReason } : s.run };
   }
   protected override ledgerFor(q: LedgerQuery): PersistedEvent[] {
     if (q.runId !== RUN_ID) return super.ledgerFor(q);
@@ -169,8 +264,9 @@ class StartClient extends FixtureClient {
 }
 
 async function runPage(status: RunStatus, ledger: PersistedEvent[], chat = false, stopped?: Parameters<typeof RunScreen>[0]["stopped"],
-  retry?: () => Promise<unknown>) {
+  retry?: () => Promise<unknown>, waitingReason: string | null = null) {
   const client = new StartClient({ status, role: chat ? "conductor" : "implementer", phase: chat ? null : "implement" }, ledger);
+  client.waitingReason = waitingReason;
   const { container, unmount } = await mount(<RunScreen runId={RUN_ID} onBack={() => {}} client={client} stopped={stopped}
     {...(chat ? { chat: { head: null, send: () => Promise.resolve(), answer: () => Promise.resolve(), briefedWith: [], retry } } : {})} />);
   mounted.push(unmount);
@@ -190,6 +286,11 @@ describe("a task's Run page", () => {
       { ...ev("run.steered", { text: "Use the jobs table.", directiveId: "dir_1" }, 0, { type: "human", id: "per_ana" }), occurredAt: iso(16_000) },
     ];
   };
+  // A Run created `ms` ago and waiting for a machine since.
+  const waitingFor = (ms: number) => {
+    const since = new Date(recent(ms)).toISOString();
+    return [{ ...created(), occurredAt: since }, { ...stage("waiting", 0), payload: { stage: "waiting", since, epoch: 1 } }];
+  };
 
   test("the chip is the header's statusNote, bare; the row says the stage; the steer and the composer say when it is read", async () => {
     const page = await runPage("scheduled", live());
@@ -204,12 +305,95 @@ describe("a task's Run page", () => {
     expect(page.textContent).not.toContain("Lands when the agent starts");
   });
 
+  test("waiting for a host that can run containers: the pinned callout says it once; the row keeps its stage and clock, no slow note", async () => {
+    const NESTED = "waiting for capacity: 1 host in its pool does not support nested containers";
+    const page = await runPage("scheduled", waitingFor(100_000), false, undefined, undefined, NESTED);
+    await until(() => page.querySelector("[data-testid=waiting-for-host]"), "the pinned callout");
+    const row = page.querySelector("[data-testid=start-progress]")!;
+    expect(row.getAttribute("data-stage")).toBe("waiting");
+    expect(row.querySelector("[role=timer]")).not.toBeNull();
+    expect(page.querySelector("[data-testid=start-slow]")?.textContent ?? null).toBeNull();
+  });
+
+  test("waiting for capacity of another kind: no pinned callout; the row's slow note says it with lux's reason", async () => {
+    const page = await runPage("scheduled", waitingFor(100_000), false, undefined, undefined, "waiting for capacity: 2 hosts lack cpus");
+    const slow = await until(() => page.querySelector("[data-testid=start-slow]"), "the slow note");
+    expect(slow.textContent).toContain("lux: waiting for capacity: 2 hosts lack cpus");
+    expect(page.querySelector("[data-testid=waiting-for-host]")?.textContent ?? null).toBeNull();
+  });
+
+  test("the Run's own status: Scheduled while it waits for a machine, Starting once placed (any later stage), as lux moves it", async () => {
+    const page = await runPage("scheduled", waitingFor(20_000));
+    const status = () => page.querySelector("[data-testid=start-chip]")!.closest("header")!.querySelector("[data-status]")!;
+    await until(() => page.querySelector("[data-testid=start-chip]"), "the chip");
+    expect(status().getAttribute("data-status")).toBe("scheduled");
+    const placed = { ...stage("image", 0), payload: { stage: "image", since: new Date(Date.now() - 15_000).toISOString(), epoch: 1 } };
+    await act(async () => emit(placed));
+    await until(() => (status().getAttribute("data-status") === "starting" ? true : null), "Starting once placed");
+    expect(status().textContent).toContain("Starting");
+  });
+
+  test("the task's Runs read the same from the API's startStage", () => {
+    const run = { status: "scheduled" as const, startStage: { stage: "container", since: null, epoch: 1 } };
+    expect(runStatusShown(run)).toBe("starting");
+    expect(runStatusShown({ ...run, startStage: { stage: "waiting", since: null, epoch: 1 } })).toBe("scheduled");
+    expect(runStatusShown({ ...run, startStage: null })).toBe("scheduled");
+  });
+
+  /** The task page on `tab`, with a conductor and a phase Run it started that lux placed (stage container), not yet running. */
+  async function placedOnTaskPage(tab: "chat" | "sessions" | "overview") {
+    const client = new FixtureClient("a");
+    const placed = run({ id: "run_placed", phase: "implement", role: "implementer", status: "scheduled", startedAt: null,
+      conductorRunId: "run_conductor", startStage: { stage: "container", since: null, epoch: 1 } });
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...(await getTask(id)), decider: "conductor",
+      runs: [run({ id: "run_conductor", role: "conductor", phase: null, status: "running" }), placed] });
+    const getRun = client.getRun.bind(client);
+    client.getRun = async (id) => id === "run_conductor"
+      ? { ...(await getRun(RUN_ID)), id, role: "conductor", phase: null, status: "running", endedAt: null }
+      : getRun(id);
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} tab={tab} onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    return container;
+  }
+
+  test("the conductor's Chat line for a Run lux placed reads Starting", async () => {
+    const page = await placedOnTaskPage("chat");
+    const line = await until(() => page.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_placed]"), "the Chat Run line");
+    expect(line.getAttribute("data-status")).toBe("starting");
+  });
+
+  test("the task's Sessions list and pipeline step for a Run lux placed read Starting", async () => {
+    const sessions = await placedOnTaskPage("sessions");
+    const row = await until(() => sessions.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
+    expect(row.querySelector("[data-status]")!.getAttribute("data-status")).toBe("starting");
+    const overview = await placedOnTaskPage("overview");
+    const step = await until(() => overview.querySelector<HTMLElement>("[data-testid=phase][data-phase=implement]"), "the pipeline step");
+    expect(step.getAttribute("data-status")).toBe("starting");
+  });
+
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {
     const ledger = [created(), stage("waiting", 0), stage("image", 5_000),
       ev("run.failed", { status: "failed", error: "x", stage: "image", reason: "pull failed: manifest unknown" }, 50_000)];
     const page = await runPage("failed", ledger);
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toBe("Did not start: failed while getting the image ready: pull failed: manifest unknown. Nothing was spent on the model.");
+    expect(failed.querySelector("code")!.textContent).toBe("pull failed: manifest unknown");
+    // The header's statusNote names where it failed, bare beside the Run's own Failed status.
+    const chip = page.querySelector("[data-testid=start-chip]")!;
+    expect(chip.textContent).toBe("Failed while getting the image ready");
+  });
+
+  test("failed before lux named a stage: the Run's header has no stage words to add, and no stale wait badge", async () => {
+    const ledger = [created(), ev("run.failed", { status: "failed", error: "No model yet." }, 1_000)];
+    expect(project(ledger, "failed").startFailed).toMatchObject({ stage: null, failed: { source: "dude" } });
+    const page = await runPage("failed", ledger);
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-chip]")?.textContent ?? null).toBeNull();
   });
 
   test("a tier with no model fails before lux: its useful error is projected and shown, and Try again still opens restart", async () => {
@@ -218,11 +402,12 @@ describe("a task's Run page", () => {
       let picked: string | null = null;
       const ledger = [created(), ev("run.failed", { status: "failed", error, ...(reason === undefined ? {} : { reason }) }, 1_000)];
       const ended = project(ledger, "failed").turns.find((t) => t.kind === "ended")!;
-      expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error } });
+      expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error, source: "dude" } });
       const page = await runPage("failed", ledger, false, { onPickUp: (a) => { picked = a; }, keptUntil: null });
       const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure before lux");
-      expect(failed.textContent).toContain(error);
-      expect(failed.textContent).toContain("Nothing was spent on the model.");
+      // dude's own sentence, in body text: no "failed:" with no stage, no doubled full stop.
+      expect(failed.textContent).toBe(`Did not start: ${error} Nothing was spent on the model.`);
+      expect(failed.querySelector("code")?.textContent ?? null).toBeNull();
       const retry = page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!;
       await act(async () => retry.click());
       expect(picked).toBe("retry");

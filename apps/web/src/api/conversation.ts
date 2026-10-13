@@ -108,6 +108,8 @@ export interface PromptTurn {
   at: string;
   /** dude's briefing of a task's conductor, not a phase's task. */
   briefing?: true;
+  /** A briefing Try again repeated, word for word, to the fresh agent: shown folded, the first one already says it. */
+  again?: true;
   /** Images a person gave with the task. */
   attachments: AttachmentInfo[];
 }
@@ -303,8 +305,8 @@ export interface StartState {
   done: Array<{ stage: StartStage; tookMs: number }>;
   /** lux's reason with its latest stage (why it waits for a machine), when it gave one. */
   luxReason: string | null;
-  /** It failed in `stage`: lux's reason, when it gave one. */
-  failed: { reason: string | null } | null;
+  /** It failed in `stage`: lux's raw reason, or dude's own sentence (`run.failed`'s error) when lux gave none. */
+  failed: { reason: string | null; source: "lux" | "dude" } | null;
 }
 
 export type Turn =
@@ -485,6 +487,8 @@ export interface Conversation {
   lands: SteerLands | null;
   /** Where its agent is while it starts, resumes or moves; null once it runs (or ended). */
   start: StartState | null;
+  /** The current Run's start that failed, until a next Run (Try again, a next message) is created: the header says so. */
+  startFailed: StartState | null;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -551,6 +555,8 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /** A "Taken back up" notice whose start (a resume or a move) is still live: shown once the agent is up, never if it fails. */
+  heldUnpark: NoticeTurn | null;
   /**
    * The question a dude ask tool (`agent.tool.dude`) just asked, by the
    * tool's name, until the next harness tool event: dude records the call
@@ -559,6 +565,9 @@ export interface Projection {
   pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
+  /** The last briefing's text as shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
+  lastBriefing: string | null;
+  retryRun: boolean;
   /** Where the current Run's agent is while it starts; null once it runs. */
   start: StartState | null;
   /** The current start has had a `run.stage`: a lux that reports stages, so its end gets a summary line. */
@@ -580,7 +589,11 @@ export interface Projection {
   cursor: number;
 }
 
-export function emptyProjection(): Projection {
+/**
+ * `briefedBefore`: the briefing of the Run this ledger's first Run retries, when that Run's ledger is
+ * another (a task's conductors): Try again's briefing repeating it is then one line, as within one ledger.
+ */
+export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
@@ -601,8 +614,11 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    heldUnpark: null,
     pendingAsk: null,
     briefed: false,
+    lastBriefing: briefedBefore ? withoutMessage(briefedBefore) : null,
+    retryRun: false,
     start: null,
     startStaged: false,
     ran: false,
@@ -661,6 +677,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.start = newStart("start", event.occurredAt);
         state.startStaged = false;
         state.startWoken = false;
+        state.heldUnpark = null;
+        state.retryRun = typeof payload.retries === "string";
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
         state.retrying = new Set();
@@ -730,6 +748,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
         state.start = null;
         state.startMessages = [];
+        state.heldUnpark = null;
         break;
 
       case EventTypes.ConductorWoken:
@@ -820,8 +839,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ToolCalled: {
-        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const callId = String(payload.callId ?? event.eventId);
+        // A harness taken back up (a resume, a move, whatever parked it) can report a call it already finished
+        // again: that call keeps its row and its time.
+        if (toolsByCall.get(callId)?.endedAt) break;
+        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const turn: ToolTurn = {
           kind: "tool",
           id: callId,
@@ -856,9 +878,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             pool: existing.machine?.pool ?? outcome.pool, ...outcome.said };
         }
         if (existing) {
-          existing.status = outcome?.said.error !== undefined ? "failed" : status;
-          existing.endedAt = event.occurredAt;
-          existing.result = result;
+          // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
+          if (!existing.endedAt) {
+            existing.status = outcome?.said.error !== undefined ? "failed" : status;
+            existing.endedAt = event.occurredAt;
+            existing.result = result;
+          }
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
@@ -908,7 +933,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = typeof payload.text === "string" ? payload.text : "";
         state.briefed = true;
         if (!text.trim()) break;
-        turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] });
+        const briefing: PromptTurn = { kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] };
+        // Try again briefs the fresh agent with the failed one's briefing: the same words, said once in full.
+        if (state.retryRun && state.lastBriefing === briefing.text) briefing.again = true;
+        else state.lastBriefing = briefing.text;
+        turns.push(briefing);
         break;
       }
 
@@ -1152,7 +1181,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             break;
           }
         }
-        turns.push(turn);
+        // While its start is live the agent is not back yet: the notice waits for it (endStart).
+        if (notice === "parked") placeHeldUnpark(state, event.occurredAt);
+        if (notice === "unparked" && state.start && !state.start.failed) state.heldUnpark = turn;
+        else turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
@@ -1167,6 +1199,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunPaused:
+        placeHeldUnpark(state, event.occurredAt);
         state.untimedUnpark = null;
         // dude's stop for a machine move (run.paused, confirmed) is the move's park done; any other pause ends a start.
         if (state.start?.machine && payload.confirmed === true) {
@@ -1227,7 +1260,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
         if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage) enterStage(starting, stage, event.occurredAt);
-          starting.failed = { reason: typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : ended.why };
+          const luxReason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : null;
+          starting.failed = luxReason ? { reason: luxReason, source: "lux" } : { reason: ended.why, source: "dude" };
           ended.start = starting;
           // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
           // failed resuming for a person's message keeps Try again.
@@ -1237,6 +1271,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.startMessages = [];
         }
         state.start = null;
+        // A failed resume or move shows its failure, never "Taken back up".
+        state.heldUnpark = null;
         turns.push(ended);
         state.activity = null;
         state.activeTool = null;
@@ -1331,6 +1367,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       toolCounts: state.toolCounts,
       lands: state.lands,
       start: shownStart(state.start, runStatus),
+      startFailed: state.failedStart?.turn.start ?? null,
     };
   }
 
@@ -1362,6 +1399,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     toolCounts: state.toolCounts,
     lands: state.lands,
     start: null,
+    startFailed: state.failedStart?.turn.start ?? null,
   };
 }
 
@@ -1648,6 +1686,7 @@ function endStart(state: Projection, event: PersistedEvent): void {
   state.start = null;
   for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
   state.startMessages = [];
+  placeHeldUnpark(state, event.occurredAt);
   if (start.kind !== "start" || !state.startStaged) return;
   const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
   if (start.stage && start.stageSince) {
@@ -1657,6 +1696,17 @@ function endStart(state: Projection, event: PersistedEvent): void {
     kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
     text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
   });
+}
+
+/**
+ * A held "Taken back up" goes into the transcript at `at`: the agent is up, or was parked or paused again (dude
+ * parks only an agent that ran). A failed or ended start drops it instead.
+ */
+function placeHeldUnpark(state: Projection, at: string): void {
+  if (!state.heldUnpark) return;
+  state.heldUnpark.at = at;
+  state.turns.push(state.heldUnpark);
+  state.heldUnpark = null;
 }
 
 function newStart(kind: StartState["kind"], startedAt: string): StartState {

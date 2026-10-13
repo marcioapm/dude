@@ -22,7 +22,7 @@ import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
-import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
+import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 
 export interface ChatSectionProps {
@@ -137,17 +137,33 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const before = useMemo(() => earlier.length === 0 ? null
     : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />),
   [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids and whether each was retried
+  // The failed conductor this one retries: its briefing, which Try again repeats, is in its own ledger.
+  const retries = events.find((e) => e.eventType === EventTypes.RunCreated && e.runId === conductorId)?.payload.retries;
+  const retriedRun = typeof retries === "string" ? retries : null;
+  const [briefedBefore, setBriefedBefore] = useState<{ run: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!retriedRun) return;
+    let cancelled = false;
+    void Promise.resolve(ledgers.cached(retriedRun) ?? ledgers.read(retriedRun, () => cancelled)).then((read) => {
+      const text = read?.findLast((e) => e.eventType === EventTypes.ConductorBriefed)?.payload.text;
+      if (!cancelled && typeof text === "string") setBriefedBefore({ run: retriedRun, text });
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgers, retriedRun]);
+  const briefedAgain = briefedBefore && briefedBefore.run === retriedRun ? briefedBefore.text : undefined;
 
   // The Runs the conductor started, decisions waited on, dude's notices.
   const dude = dudeName(task.id);
   const conducted = useMemo(() => conductedLines(task, events), [task.decider, task.runs, events]); // eslint-disable-line react-hooks/exhaustive-deps -- what the lines are made of
   const linesKey = conducted.map((l) => l.kind === "run"
-    ? `${l.id}:${l.run.status}:${l.run.replacedBy}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
+    ? `${l.id}:${l.run.status}:${l.run.startStage?.stage}:${l.run.replacedBy}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
   const lines = useMemo(() => {
     function lineNode(l: ConductedLine): ReactNode {
       switch (l.kind) {
         case "run":
-          return <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
+          return <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={runStatusShown(l.run)}
             statusLabel={runStatusLabel(l.run)} replacement={<RunReplacement run={l.run} />}
             what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
             steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />;
@@ -191,8 +207,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       action={setAside ? undefined
         : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
   }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld,
+    briefedBefore: briefedAgain }),
+    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, briefedAgain]);
 
   if (conductorId) {
     return (

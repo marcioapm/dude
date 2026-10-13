@@ -71,7 +71,8 @@ export function startVerb(kind: StartKind = "start"): string {
   return kind === "start" ? "Starting" : "Resuming";
 }
 
-function didNot(kind: StartKind): string {
+/** What a failed start's mark says: "Did not start", or "Did not resume" for a resume or a move. */
+export function didNot(kind: StartKind): string {
   return kind === "start" ? "Did not start" : "Did not resume";
 }
 
@@ -99,8 +100,13 @@ export interface StartProgressProps {
   readonly slowNote?: ReactNode;
   /** lux's own reason under the slow line, in muted mono. */
   readonly slowReason?: string | null | undefined;
-  /** It did not start: lux's reason (may be null) and Try again. */
-  readonly failure?: { readonly reason: string | null; readonly onRetry?: (() => void) | undefined } | undefined;
+  /**
+   * It did not start: the reason (may be null) and Try again. The reason is the runtime's raw words, in mono,
+   * unless `plain`: a sentence of the app's own, in body text.
+   */
+  readonly failure?: {
+    readonly reason: string | null; readonly plain?: boolean | undefined; readonly onRetry?: (() => void) | undefined;
+  } | undefined;
   readonly defaultOpen?: boolean | undefined;
   readonly open?: boolean | undefined;
   readonly onOpenChange?: ((open: boolean) => void) | undefined;
@@ -158,13 +164,17 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
   );
 
   if (failed) {
-    const where = current ? ` ${whileWords(current.label)}` : "";
+    const reason = failure?.reason?.trim() || null;
+    // "Did not start: failed while <stage>: <reason>." or, with no stage, "Did not start: <reason>."
+    const said = reason ? (failure?.plain ? reason : <code className={styles["reason"]}>{reason}</code>) : null;
+    const where = current ? `: failed ${whileWords(current.label)}` : "";
+    const stop = reason && /[.!?]$/.test(reason) ? "" : ".";
     return (
       <section className={styles["failedRow"]} aria-label={didNot(kind)} data-testid={rest["data-testid"]} data-state="failed">
         <Callout tone="danger">
           <span className={styles["failedLine"]}>
             <span data-testid="start-failed">
-              <b>{didNot(kind)}</b>: failed{where}{failure?.reason ? <>: <code className={styles["reason"]}>{failure.reason}</code>.</> : "."}
+              <b>{didNot(kind)}</b>{where}{said ? ": " : ""}{said}{stop}
               {" "}Nothing was spent on the model.
             </span>
             {failure?.onRetry ? (

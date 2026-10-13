@@ -65,7 +65,7 @@ import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
-import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
+import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
@@ -683,7 +683,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                         {run.stalled ? (
                           <Badge tone="attention" size="sm" icon="warning" data-testid="session-stalled" title={run.stalled.text}>stalled</Badge>
                         ) : null}
-                        <StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
+                        <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
                       </>}><RunReplacement run={run} /></SessionItem>
                   );
                   // A tree over the attempt shown: each conductor (the
@@ -924,12 +924,12 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
     <StepRow
       data-testid="phase"
       data-phase={run.phase}
-      data-status={run.status}
+      data-status={runStatusShown(run)}
       onOpen={onOpen}
       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={running} />}
       label={runLabel(run)}
       note={note}
-      status={<StatusMark status={run.status} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />}
+      status={<StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />}
       meta={heads.length === 0 ? undefined : heads.length === 1 ? heads[0]![1].slice(0, 7) : `${heads.length} repos`}
       metaTitle={heads.length > 0 ? heads.map(([repo, sha]) => `${repo} ${sha}`).join("\n") : undefined}
       duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={running} tone="muted" /> : "—"}

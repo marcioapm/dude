@@ -294,6 +294,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       undefined, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
+  // The header: where the start is, or where it failed until a next agent is created.
+  const headerStart = starting ?? conversation.startFailed;
   const startHint = readWhen(starting);
   // A session's one raise (role brainstorm).
   const raised = detail.agentMachines?.[0] ?? null;
@@ -315,7 +317,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
-          {starting ? <StartHeaderChip start={starting} /> : null}
+          {headerStart ? <StartHeaderChip start={headerStart} /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>

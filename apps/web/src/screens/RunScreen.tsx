@@ -43,7 +43,7 @@ import {
   ImageViewer,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, waitsForContainerHost } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
 import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
@@ -122,6 +122,8 @@ export interface ChatVariant {
   above?: ReactNode;
   /** The conductor only reads and answers, though there is a line above (Deliver decides). */
   readOnly?: boolean;
+  /** The briefing of the failed conductor this one retries (Try again), from that Run's ledger. */
+  briefedBefore?: string | undefined;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -273,14 +275,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
    */
   const projection = useRef(emptyProjection());
   const projectedRun = useRef(runId);
+  const briefedBefore = chat?.briefedBefore;
+  const projectedBefore = useRef<string | undefined>(undefined);
   const conversation = useMemo(() => {
-    // The stream clears its buffer for a new Run; the fold must forget too.
-    if (projectedRun.current !== runId) {
-      projection.current = emptyProjection();
+    // The stream clears its buffer for a new Run; the fold must forget too. The retried Run's briefing,
+    // read apart from this Run's ledger, can arrive after the fold began: folded again from the start.
+    if (projectedRun.current !== runId || projectedBefore.current !== briefedBefore) {
+      projection.current = emptyProjection(briefedBefore);
       projectedRun.current = runId;
+      projectedBefore.current = briefedBefore;
     }
     return snapshot(apply(projection.current, events), run?.status);
-  }, [events, runId, run?.status]);
+  }, [events, runId, run?.status, briefedBefore]);
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
   // the same one, appended to and changed in place.
@@ -418,10 +424,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const session = {
     id: run.id,
     role,
-    status: run.status,
+    // Starting once lux has placed it (a stage past waiting), from the live ledger, else the API's last stage.
+    status: shownRunStatus(run.status, conversation.start ? conversation.start.stage : run.startStage?.stage),
     statusLabel: runStatusLabel(run),
-    // Starting: where (the chip, bare beside the status that already says so); else lux's wait for a host.
+    // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's wait for a host.
     ...(conversation.start && !conversation.start.failed ? { statusNote: <StartHeaderChip start={conversation.start} bare /> }
+      : conversation.startFailed ? { statusNote: <StartHeaderChip start={conversation.startFailed} bare /> }
       : waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
     ...(owner ? { owner } : {}),
     subtitle: (
@@ -489,7 +497,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
-  const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role} /> : null;
+  // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its
+  // stages and clock without saying the same wait again.
+  const pinnedWait = !run.preparingImage && Boolean(waitingReason) && (!conversation.start || waitsForContainerHost(waitingReason));
+  const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role}
+    quiet={pinnedWait} /> : null;
   const startHint = readWhen(conversation.start);
   // The agent waits on the reader's answer: the composer steps back to one line.
   const asked = conversation.openQuestion;
@@ -667,7 +679,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               pinned={
                 run.preparingImage ? (
                   <PreparingImage preparing={run.preparingImage} />
-                ) : waitingReason && (!conversation.start || waitsForContainerHost(waitingReason)) ? (
+                ) : pinnedWait && waitingReason ? (
                   // While the row says where the start is, lux's reason is its slow note; a pool that cannot run
                   // this Run at all stays pinned, since only an admin can change it.
                   <WaitingForHost reason={waitingReason} onRunPage />
@@ -1023,6 +1035,24 @@ function dropWhen(hint: string | null): string {
   return `It reads them ${hint.replace(/^Lands /, "")}.`;
 }
 
+/** A briefing Try again repeated to the fresh agent: one quiet line that opens to the full card. */
+function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; shown: ShownImages | undefined }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-testid="chat-briefed-again">
+      <Button size="sm" variant="quiet" leadingIcon="retry" aria-expanded={open} onClick={() => setOpen(!open)} data-testid="briefed-again-toggle">
+        {BRIEFED_AGAIN}
+      </Button>
+      {open ? (
+        <ChatMessage role="system" name={dude} avatar={<DudeMark size="fill" />} intent="briefing" content={turn.text} startedAt={turn.at}
+          data-testid="chat-briefing" {...turnImages(turn, shown)} />
+      ) : null}
+    </div>
+  );
+}
+
+export const BRIEFED_AGAIN = "Briefed again with the same message";
+
 /** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
 function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
   if (turn.attachments.length === 0 || !shown) return {};
@@ -1098,6 +1128,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       // A Run that ended on an unanswered question will never hear back.
       return <AskTurn key={turn.id} turn={turn} role={role} ended={ended} people={people} waitingOn={waitingOn} ask={ask} />;
     case "prompt":
+      // Try again's fresh agent, briefed with the failed one's words: one line, the briefing a click away.
+      if (turn.again) return <BriefedAgain key={turn.id} turn={turn} dude={dude} shown={shown} />;
       // Written by the factory, not a person: the avatar and name say so.
       // A conductor's is dude's briefing of it, tagged so.
       return (

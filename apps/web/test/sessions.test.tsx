@@ -1677,15 +1677,64 @@ describe("a session's agent starting", () => {
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toContain("Did not start: failed while checking out repositories: pull failed: manifest unknown.");
     expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Not delivered:");
-    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
+    // The header says it too: "✕ Did not start · Failed while …", until Try again starts the next agent.
+    const chip = page.querySelector("[data-testid=start-chip]")!;
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).toContain("Failed while checking out repositories");
     await click(page.querySelector("[data-testid=start-retry]")!);
     expect(client.retried).toBe(1);
     await act(async () => emit(client.ledger.at(-1)!));
     await until(() => (page.querySelector("[data-testid=start-retry]") === null ? true : null), "Try again gone once used");
+    expect(page.querySelector("[data-testid=start-chip] [data-status=starting]")).not.toBeNull();
     const sent = page.querySelector("[data-testid=human-turn]")!;
     expect(sent.textContent).not.toContain("Not delivered");
     expect(sent.textContent).toContain("Will be read when the agent starts.");
     expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
+  });
+
+  test("failed before lux named a stage: the header still says Did not start, with no stage words", async () => {
+    const created = { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(20_000) };
+    const msg = { ...ev("chat.message", { text: "plan the epic" }, { type: "person", id: YOU } as PersistedEvent["actor"]), occurredAt: ago(19_000) };
+    const page = await sessionPage(new SessionClient(detail("owner"), [created, msg, ev("run.failed", { status: "failed", error: "No model yet." })]));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    const chip = await until(() => page.querySelector("[data-testid=start-chip]"), "the header's mark");
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).not.toContain("Failed while");
+  });
+
+  test("Try again's fresh agent, briefed with the same words: one full briefing card, then one line that opens it; the message read once", async () => {
+    const BRIEF = "Brainstorm, you are working with Márcio on billing.\n\n## The first message\n\nMárcio: plan the epic";
+    const failedThenRetried = () => [
+      ...starting(() => [
+        ev("session.briefed", { text: BRIEF }),
+        ev("run.failed", { status: "failed", error: "x", stage: "repositories", reason: "clone failed" }),
+      ]),
+      { ...ev("run.created", { role: "brainstorm", retries: RUN }), runId: "run_brainstorm2" },
+      { ...ev("session.briefed", { text: BRIEF }), runId: "run_brainstorm2" },
+      { ...ev("agent.session.started", { role: "brainstorm" }), runId: "run_brainstorm2" },
+    ];
+    const c = project(failedThenRetried(), "running");
+    const briefings = c.turns.filter((t) => t.kind === "prompt");
+    expect(briefings.map((t) => t.kind === "prompt" && [t.briefing, t.again ?? false])).toEqual([[true, false], [true, true]]);
+    expect(c.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && [t.text, t.deliveredAt !== null, t.failed]))
+      .toEqual([["plan the epic", true, null]]);
+
+    const page = await sessionPage(new SessionClient(detail("owner"), failedThenRetried()));
+    await until(() => page.querySelector("[data-testid=chat-briefed-again]"), "the line");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(1);
+    expect(page.querySelectorAll("[data-testid=human-turn]").length).toBe(1);
+    const toggle = page.querySelector<HTMLButtonElement>("[data-testid=briefed-again-toggle]")!;
+    expect(toggle.textContent).toBe("Briefed again with the same message");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(2);
+  });
+
+  test("a later Run that is not Try again's keeps its briefing in full, even with the same words", () => {
+    const BRIEF = "Brainstorm, you are working with Márcio.";
+    const c = project([ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF }),
+      ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF })], "running");
+    expect(c.turns.filter((t) => t.kind === "prompt").map((t) => t.kind === "prompt" && (t.again ?? false))).toEqual([false, false]);
   });
 
   // A parked agent whose resume lux ended while it waited for a host: its message queued, never read.
@@ -1703,6 +1752,34 @@ describe("a session's agent starting", () => {
       e("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }, 9_000),
     ];
   }
+
+  test("a resume: no 'Taken back up' while its row still shows stages; once the agent is back, the timed line alone", async () => {
+    const at = (ms: number) => ago(60_000 - ms);
+    const e = (type: string, payload: Record<string, unknown>, ms: number, actor?: PersistedEvent["actor"]) =>
+      ({ ...ev(type, payload, actor), occurredAt: at(ms) });
+    const ledger = [
+      e("run.created", { role: "brainstorm" }, 0),
+      e("agent.message", { text: "Metering lives in billing." }, 1_000),
+      e("run.parked", { reason: "session", stopped: "stopped" }, 2_000),
+      e("chat.message", { text: "and the tests?", directiveId: "dir_2" }, 3_000, { type: "person", id: YOU } as PersistedEvent["actor"]),
+      e("run.unparked", { reason: "session", epoch: 2 }, 3_100),
+      e("run.stage", { stage: "waiting", since: at(3_100), epoch: 2 }, 3_200),
+      e("run.stage", { stage: "volumes", since: at(9_000), epoch: 2 }, 9_100),
+    ];
+    const client = new SessionClient(detail("owner"), ledger);
+    const page = await sessionPage(client);
+    const row = await until(() => page.querySelector("[data-testid=start-progress][data-state=starting]"), "the Resuming row");
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Resuming: Restoring its workspace.");
+    const said = () => [...page.querySelectorAll("[data-testid=chat-notice]")].map((n) => n.textContent ?? "");
+    expect(said().filter((t) => t.includes("Taken back up"))).toEqual([]);
+    const timed = e("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 33_100);
+    client.ledger.push(timed);
+    await act(async () => emit(timed));
+    await until(() => (page.querySelector("[data-testid=start-progress]") === null ? true : null), "the row gone");
+    const backs = said().filter((t) => t.includes("Taken back up"));
+    expect(backs).toHaveLength(1);
+    expect(backs[0]).toContain("Taken back up in 30s.");
+  });
 
   test("a resume that failed: Did not resume, with Try again, which hands its message to a fresh agent", async () => {
     class Retrying extends SessionClient {

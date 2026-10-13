@@ -346,7 +346,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   line in secondary ink says why it can take a while, with lux's reason in
   muted mono; never amber. A failed start is the transcript's danger
   `Callout` naming the stage and lux's reason, with Try again, the stages
-  folded under it, the failed one crossed. A polite live region says each
+  folded under it, the failed one crossed: "Did not start: failed while
+  getting the image ready: `pull failed`. Nothing was spent on the
+  model." With no stage it is "Did not start: <reason>", and a reason
+  that already ends in `.`, `!` or `?` gets no second stop. The reason is
+  the runtime's raw words, in mono; `failure.plain` (optional) sets it in
+  body text, for a sentence the app wrote itself. A polite live region says each
   stage once; the clocks are `Duration dot={false}` timers outside it. It
   is replaced by the agent's first turn, and the finished start is the
   resume line's tooltip, in the same words.

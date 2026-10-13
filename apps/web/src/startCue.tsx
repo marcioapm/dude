@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
-import { AgentAvatar, StartChip, StartProgress, startSteps, type StartStep } from "@dude/design-system/components";
+import { AgentAvatar, StartChip, StartProgress, StatusMark, didNot, startSteps, type StartStep } from "@dude/design-system/components";
 import type { StartState } from "./api/conversation.ts";
 import { ApiError } from "./api/client.ts";
 import { instant } from "./instant.ts";
@@ -76,11 +76,14 @@ function useSlowNote(start: StartState): string | null {
 /** A woken conductor's failed start: its reasons go back to dude, which wakes the next conductor with them. */
 export const WAKES_NEXT = "dude will wake a new conductor.";
 
-/** The row where the agent's first turn will be; failed, with Try again or why it is not offered. */
-export function StartRow({ start, role, onRetry, taken, woken }: {
+/** The row where the agent's first turn will be; failed, with Try again or why it is not offered. `quiet`: a pinned
+ * callout already says why it waits, so the row keeps its stages and clock and omits the slow note. */
+export function StartRow({ start, role, onRetry, taken, woken, quiet }: {
   start: StartState; role: AgentRole; onRetry?: (() => void) | undefined; taken?: boolean | undefined; woken?: boolean | undefined;
+  quiet?: boolean | undefined;
 }) {
   const slow = useSlowNote(start);
+  const shownSlow = quiet ? null : slow;
   return (
     <>
       <StartProgress
@@ -91,9 +94,9 @@ export function StartRow({ start, role, onRetry, taken, woken }: {
         steps={stepsOf(start)}
         startedAt={start.startedAt}
         avatar={<AgentAvatar role={role} size="chat" />}
-        slowNote={slow ?? undefined}
-        slowReason={slow ? start.luxReason : undefined}
-        failure={start.failed ? { reason: start.failed.reason, onRetry: taken || woken ? undefined : onRetry } : undefined}
+        slowNote={shownSlow ?? undefined}
+        slowReason={shownSlow ? start.luxReason : undefined}
+        failure={start.failed ? { reason: start.failed.reason, plain: start.failed.source === "dude", onRetry: taken || woken ? undefined : onRetry } : undefined}
         data-testid="start-progress"
       />
       {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p>
@@ -102,8 +105,14 @@ export function StartRow({ start, role, onRetry, taken, woken }: {
   );
 }
 
-/** The header's line: a session's meta, or bare as a Run's statusNote. */
+/** The header's line: a session's meta, or bare as a Run's statusNote. Failed: "✕ Did not start · Failed while …". */
 export function StartHeaderChip({ start, bare }: { start: StartState; bare?: boolean }): ReactNode {
   const step = stepsOf(start).find((s) => s.state === "current" || s.state === "failed");
+  if (start.failed && !step) {
+    // Failed before lux named a stage: StartChip's failed mark alone. A Run's status beside it already says Failed.
+    return bare ? null : (
+      <span data-testid="start-chip"><StatusMark status="failed" size="sm" label={didNot(start.kind)} /></span>
+    );
+  }
   return <StartChip kind={start.kind} verb={startVerbOf(start)} step={step} startedAt={start.startedAt} bare={bare} data-testid="start-chip" />;
 }
