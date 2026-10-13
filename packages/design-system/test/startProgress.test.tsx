@@ -242,7 +242,21 @@ test("PreviewStages reads lux's stages in the agents' words", () => {
 
 const FRAMES = ["comfortable dark", "comfortable light", "compact dark", "compact light"];
 
+/** An IntersectionObserver that reports every target as on screen at once, as a scrolled-to section is. */
+class OnScreen {
+  readonly #callback: IntersectionObserverCallback;
+  constructor(callback: IntersectionObserverCallback) { this.#callback = callback; }
+  observe(target: Element) { this.#callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return []; }
+}
+
+const realObserver = globalThis.IntersectionObserver;
+afterEach(() => { globalThis.IntersectionObserver = realObserver; });
+
 test("the gallery's Starting blocks render in dark and light, comfortable and compact, with a move", async () => {
+  globalThis.IntersectionObserver = OnScreen as unknown as typeof IntersectionObserver;
   const el = await mount(<PaneDensityContext.Provider value="both"><StartingSection mode="both" /></PaneDensityContext.Provider>);
   const blocks = [...el.querySelectorAll("section#starting [id^='st-']")];
   expect(blocks.map((b) => b.id)).toEqual(["st-play", "st-states", "st-failed", "st-move", "st-chip"]);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Block, Col, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { Board } from "../../components/Board.tsx";
 import { ProposalCard, type ProposalCardItem } from "../../components/Brainstorm.tsx";
@@ -137,8 +137,18 @@ const proposal: ProposalCardItem[] = [
  * gallery could take seconds to fade in. A gallery without IntersectionObserver
  * draws them at once.
  */
-function WhenNear({ children }: { readonly children: ReactNode }) {
-  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+export function WhenNear({ children, anchors = [] }: { readonly children: ReactNode; readonly anchors?: readonly string[] }) {
+  const target = () => anchors.includes(location.hash.slice(1)) ? location.hash.slice(1) : undefined;
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined" || !!target());
+  useEffect(() => {
+    const reveal = () => { if (target()) setNear(true); };
+    window.addEventListener("hashchange", reveal);
+    return () => window.removeEventListener("hashchange", reveal);
+  }, [anchors]);
+  useLayoutEffect(() => {
+    const id = target();
+    if (near && id) document.getElementById(id)?.scrollIntoView();
+  }, [near]);
   const placeholder = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (near || !placeholder.current) return undefined;

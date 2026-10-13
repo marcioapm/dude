@@ -40,6 +40,20 @@ def test_every_section_is_reachable_and_renders(gallery_page: Page, console_erro
         assert console_errors == [], f"console errors after opening {name!r}: {console_errors}"
 
 
+@pytest.mark.parametrize("anchor", ["st-play", "st-states", "st-failed", "st-move", "st-chip"])
+def test_starting_nav_reaches_an_unmounted_example(gallery_page: Page, anchor: str):
+    """A far-off section must mount and scroll when its example is selected."""
+    expect(gallery_page.locator("#st-play")).to_have_count(0)
+    gallery_page.locator(f'nav a[href="#{anchor}"]').click()
+    expect(gallery_page.locator(f"#{anchor}")).to_be_in_viewport()
+
+
+def test_starting_deep_link_mounts_and_scrolls(gallery_page: Page):
+    """Loading a bookmark must not leave its example permanently absent."""
+    gallery_page.goto(gallery_page.url.split("#")[0] + "#st-failed")
+    expect(gallery_page.locator("#st-failed")).to_be_in_viewport()
+
+
 def test_status_vocabulary_is_fully_rendered(gallery_page: Page):
     """Every domain status must have a visible treatment.
 
