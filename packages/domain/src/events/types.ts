@@ -417,6 +417,45 @@ export const EventTypes = {
    */
   NetworkRefused: "agent.network.refused",
 
+  // Child sessions: a subagent the Run's agent started from a tool call
+  // (docs/design/agent-tools.md, "Child sessions"). Every payload carries
+  // `{ childId, callId }`: the harness's id for the child (session, thread
+  // or task) and the `callId` of the parent's `agent.tool.called` that
+  // started it; a child of a child carries `parentChildId` too.
+  /**
+   * Payload: `{ childId, callId, parentChildId?, kind, title, agentType?,
+   * model? }`. `kind` is `task` (OpenCode, Claude Code) or `spawn` (Codex);
+   * `title` the description the parent gave.
+   */
+  ChildStarted: "agent.child.started",
+  /**
+   * A child's tool call, as `agent.tool.called` (`{ tool, callId, input,
+   * title }`, `callId` the child's own) plus `{ childId, parentCallId }`.
+   */
+  ChildToolCalled: "agent.child.tool.called",
+  /** A child's tool call ended, as `agent.tool.completed` plus `{ childId, parentCallId }`. */
+  ChildToolCompleted: "agent.child.tool.completed",
+  /**
+   * A child's completed message. Payload: `{ childId, callId, text,
+   * costUsd?, tokens? }`, text cut at 2 KB. A child's reasoning is not
+   * recorded.
+   */
+  ChildMessage: "agent.child.message",
+  /**
+   * A child waits on something nothing in the Run can answer. Payload:
+   * `{ childId, callId, on: "permission", permission, patterns, answered,
+   * held, childCallId? }`: `held` false for an ask lux answered or one for
+   * a call already over, which holds nothing. The child's next event ends
+   * the wait.
+   */
+  ChildWaiting: "agent.child.waiting",
+  /**
+   * Payload: `{ childId, callId, status, summary, costUsd?, tokens?,
+   * durationSecs }`, status `completed`, `failed` or `interrupted`. A
+   * child's cost is already in `run.cost.reported`: never add it.
+   */
+  ChildEnded: "agent.child.ended",
+
   // Human interaction
   /**
    * An agent asked a person (`kind` `agent`), or the workflow escalated

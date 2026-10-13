@@ -393,8 +393,16 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Harness == delivery.HarnessClaudeCode || in.Harness == delivery.HarnessCodex {
 			spec.Labels["dude.harness"] = in.Harness
 			spec.Workload.Adapter = in.Harness
+		} else if fakeagent.Subagents(in.Model) {
+			// lux relays a child session only from OpenCode's bus, which its
+			// opencode adapter starts (--port) and its acp adapter does not.
+			spec.Workload.Adapter = harnessOpenCode
 		}
 		spec.Workload.Command = []string{"lux-fake"}
+		if fakeagent.Subagents(in.Model) && spec.Workload.Adapter == harnessOpenCode {
+			// lux adds OpenCode's --port only to a command that says acp.
+			spec.Workload.Command = []string{"lux-fake", "acp"}
+		}
 		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)

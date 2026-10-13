@@ -51,6 +51,8 @@ type Stall struct {
 	// How long its agent has said and done nothing, for "silent".
 	SilentSecs int64      `json:"silentSecs,omitempty"`
 	Calls      []OpenCall `json:"calls"`
+	// The child session (subagent) each open call started, if any.
+	Children []ChildFact `json:"children,omitempty"`
 	// The container's processes as `ps` listed them, trimmed; or why they
 	// could not be read.
 	Processes []Process `json:"processes"`
@@ -79,6 +81,26 @@ type OpenCall struct {
 	// command, and only when the processes were read.
 	Command bool `json:"command"`
 	Alive   bool `json:"alive"`
+}
+
+// ChildFact is the child session an open call of a stalled Run started:
+// what it did last, how long ago, and a permission it waits on that
+// nothing in the Run can answer.
+type ChildFact struct {
+	CallID        string     `json:"callId"`
+	Tool          string     `json:"tool"`
+	Title         string     `json:"title"`
+	Kind          string     `json:"kind"`
+	ChildID       string     `json:"childId"`
+	LastEvent     string     `json:"lastEvent"`
+	LastEventSecs int64      `json:"lastEventSecs"`
+	WaitingOn     *WaitingOn `json:"waitingOn,omitempty"`
+}
+
+// WaitingOn is a permission a child asked for.
+type WaitingOn struct {
+	Permission string   `json:"permission"`
+	Patterns   []string `json:"patterns"`
 }
 
 // Process is one line of the container's `ps`.
@@ -121,6 +143,14 @@ func (s Stall) Text(options string) string {
 			fmt.Fprintf(&b, " `%s` %q, for %s%s", c.Tool, c.Input, duration(c.OpenSecs), sep)
 		}
 		b.WriteString(" " + s.callsLine())
+	}
+	for _, c := range s.Children {
+		fmt.Fprintf(&b, " Its `%s` call %q has a child (%s · %s) whose last event was %s ago: %s", c.Tool, c.Title, c.Kind,
+			cutID(c.ChildID, 12), duration(c.LastEventSecs), c.LastEvent)
+		if w := c.WaitingOn; w != nil {
+			fmt.Fprintf(&b, " — waiting on a permission nothing can answer: %s for %s", w.Permission, strings.Join(w.Patterns, ", "))
+		}
+		b.WriteString(".")
 	}
 	if s.PSError != "" {
 		fmt.Fprintf(&b, " Processes: could not be read (%s).", s.PSError)
@@ -175,6 +205,14 @@ func (s Stall) callsLine() string {
 
 // ConductorOptions is the conductor's options line; the owner's banner has buttons.
 const ConductorOptions = "Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier)."
+
+// cutID is an id's first n characters.
+func cutID(id string, n int) string {
+	if r := []rune(id); len(r) > n {
+		return string(r[:n])
+	}
+	return id
+}
 
 func duration(secs int64) string {
 	switch d := time.Duration(secs) * time.Second; {

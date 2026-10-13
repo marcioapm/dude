@@ -32,7 +32,6 @@ import {
   SessionRailBlock,
   ThinkingBlock,
   ToolUsage,
-  ToolCallCard,
   summarizeToolArgs,
   MachineChip,
   MachineTip,
@@ -56,6 +55,7 @@ import {
   NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
+import { ToolWithChildren } from "../childThreads.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
 import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -1198,20 +1198,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       );
     }
     case "tool":
-      return (
-        <ToolCallCard
-          key={turn.id}
-          name={turn.tool}
-          args={turn.args}
-          status={turn.status}
-          startedAt={turn.startedAt}
-          endedAt={turn.endedAt}
-          output={turn.result?.output ?? turn.result?.stdout}
-          stderr={turn.result?.stderr}
-          exitCode={turn.result?.exitCode}
-          note={toolNote?.(turn)}
-        />
-      );
+      // Its child sessions, if it started any, nest under it.
+      return <ToolWithChildren key={turn.id} turn={turn} depth={1} note={toolNote?.(turn)} />;
   }
 }
 

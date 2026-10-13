@@ -596,3 +596,25 @@ func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
 		t.Errorf("a setting added after one: %v", env)
 	}
 }
+
+// The scripted subagents on OpenCode run under lux's opencode adapter as
+// `lux-fake acp`: lux starts lux-fake's OpenCode server (--port, added only
+// to a command that says acp) and relays a child from its bus, which the
+// acp adapter does not. On Claude Code or Codex they keep that harness's
+// adapter and command.
+func TestTheScriptedSubagentsRunUnderLuxsOpenCodeAdapter(t *testing.T) {
+	for _, model := range []string{"fake/subagent", "fake/subagent-ask"} {
+		for harness, adapter := range map[string]string{"": "opencode", delivery.HarnessOpenCode: "opencode",
+			delivery.HarnessClaudeCode: "claude-code", delivery.HarnessCodex: "codex"} {
+			c, in := goldenInput(model)
+			in.Harness = harness
+			command := []string{"lux-fake"}
+			if adapter == "opencode" {
+				command = []string{"lux-fake", "acp"}
+			}
+			if spec := buildSpec(c, in); spec.Workload.Adapter != adapter || !slices.Equal(spec.Workload.Command, command) {
+				t.Errorf("%s on %q: adapter %s command %v, want %s %v", model, harness, spec.Workload.Adapter, spec.Workload.Command, adapter, command)
+			}
+		}
+	}
+}

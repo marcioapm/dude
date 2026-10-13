@@ -123,6 +123,9 @@ describe("role colours on the new surfaces", () => {
   test("the brainstorm wears the conductor's colour in both modes", () => {
     for (const mode of MODES) expect(roleColors[mode].brainstorm, mode).toEqual(roleColors[mode].conductor);
   });
+  test("the subagent wears the investigator's colour in both modes", () => {
+    for (const mode of MODES) expect(roleColors[mode].subagent, mode).toEqual(roleColors[mode].investigator);
+  });
   test("every role fg clears 4.5:1 on its theme's surface", () => {
     for (const mode of MODES) {
       const surface = themeColors[mode].surface;

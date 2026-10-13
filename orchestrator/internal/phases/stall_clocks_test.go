@@ -182,3 +182,23 @@ func TestBrainstormHostMoveDoesNotConsumeItsCallLimit(t *testing.T) {
 		t.Fatalf("host move queued %d interrupts for nine running minutes, want none", n)
 	}
 }
+
+// A child's last event is a clock on the Run's running time too: a move
+// between hosts moves it on by the time away, so the call it keeps busy
+// is not stalled by the move.
+func TestAChildsLastEventExcludesHostMoveTime(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status = 'running', lux_state = 'resuming', left_running_at = now() - interval '30 minutes',
+		open_tool_calls = ARRAY['c1'], open_tool_calls_at = jsonb_build_object('c1', now() - interval '60 minutes'),
+		children = jsonb_build_object('c1', jsonb_build_object('childId', 'ses_kid', 'lastEvent', 'grep x',
+			'lastEventAt', now() - interval '35 minutes'))
+		WHERE id = $1`, w.run.ID)
+	w.follow(running(2))
+	at := w.clock("(children->'c1'->>'lastEventAt')::timestamptz")
+	if at == nil || time.Since(*at) < 4*time.Minute || time.Since(*at) > 6*time.Minute {
+		t.Fatalf("the child's last event = %v, want 5 running minutes ago", at)
+	}
+	if got := w.clock("CASE WHEN children->'c1'->>'lastEvent' = 'grep x' THEN now() END"); got == nil {
+		t.Error("the move lost the child's last event")
+	}
+}
