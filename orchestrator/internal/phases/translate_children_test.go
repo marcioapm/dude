@@ -3,7 +3,9 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -51,6 +53,66 @@ func noChildCallAsTheParents(t *testing.T, events []harnessEvent) {
 	}
 }
 
+// ownCalls are the ids of the Run's own agent.tool.called, in order.
+func ownCalls(events []harnessEvent) []any {
+	var out []any
+	for _, e := range ofType(events, evToolCalled) {
+		out = append(out, e.Payload["callId"])
+	}
+	return out
+}
+
+// childLife is each agent.child.* event as the contract's linkage and
+// content: its type and, per type, the ids that tie it to its child and
+// its parent's call, and what it says. Absent keys are left out.
+func childLife(events []harnessEvent) []map[string]any {
+	keys := map[string][]string{
+		evChildStarted:       {"childId", "callId", "parentChildId", "kind", "title", "agentType", "model"},
+		evChildToolCalled:    {"childId", "callId", "parentCallId", "parentChildId", "tool", "input"},
+		evChildToolCompleted: {"childId", "callId", "parentCallId", "parentChildId", "tool", "status", "output"},
+		evChildMessage:       {"childId", "callId", "parentChildId", "text"},
+		evChildWaiting:       {"childId", "callId", "parentChildId", "permission", "patterns", "held", "childCallId"},
+		evChildEnded:         {"childId", "callId", "parentChildId", "status", "summary"},
+	}
+	var out []map[string]any
+	for _, e := range events {
+		ks, ok := keys[e.Type]
+		if !ok {
+			continue
+		}
+		p := map[string]any{"type": e.Type}
+		for _, k := range ks {
+			if v, ok := e.Payload[k]; ok {
+				if k == "output" {
+					v = headOf(e.Payload, k)
+				}
+				p[k] = v
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// sameLife fails with both lives, one event a line, when they differ.
+func sameLife(t *testing.T, got, want []map[string]any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		var b strings.Builder
+		for i := range max(len(got), len(want)) {
+			var g, w any
+			if i < len(got) {
+				g = got[i]
+			}
+			if i < len(want) {
+				w = want[i]
+			}
+			fmt.Fprintf(&b, "\n%d got  %v\n%d want %v", i, g, i, w)
+		}
+		t.Errorf("child events differ:%s", b.String())
+	}
+}
+
 // A real Claude Code turn whose Agent call ran an Explore subagent (Claude
 // Code 2.1.207): the subagent's Read is its own, nested under the parent's
 // call, and never the Run's; its end carries Claude Code's summary.
@@ -65,6 +127,20 @@ func TestAClaudeSubagentIsRecordedAsTheParentCallsChild(t *testing.T) {
 	}
 	noChildCallAsTheParents(t, events)
 	const parent, child = "toolu_01GJFr24BVyX5H76UdYzZuQa", "a2bf1288fc17cd1d3"
+	const read = "toolu_0127y2T6WAM5zKr2XbMTVHon"
+	if got := ownCalls(events); !slices.Equal(got, []any{parent}) {
+		t.Errorf("the Run's own calls %v", got)
+	}
+	sameLife(t, childLife(events), []map[string]any{
+		{"type": evChildStarted, "childId": child, "callId": parent, "kind": "task", "title": "Read /etc/hosts first line",
+			"agentType": "Explore"},
+		{"type": evChildToolCalled, "childId": child, "callId": read, "parentCallId": parent, "tool": "read",
+			"input": map[string]any{"file_path": "/etc/hosts", "limit": float64(1)}},
+		{"type": evChildToolCompleted, "childId": child, "callId": read, "parentCallId": parent, "tool": "read",
+			"status": "completed", "output": "1\t##"},
+		{"type": evChildEnded, "childId": child, "callId": parent, "status": "completed",
+			"summary": "The first line of `/etc/hosts` is:\n\n```\n##\n```"},
+	})
 	if p := ofType(events, evToolCalled)[0].Payload; p["tool"] != "task" || p["callId"] != parent {
 		t.Errorf("parent call %v", p)
 	}
@@ -178,6 +254,19 @@ func TestACodexSpawnedAgentIsRecordedAsTheParentCallsChild(t *testing.T) {
 	}
 	noChildCallAsTheParents(t, events)
 	const spawn, thread = "call_0f65b4f136284e79835158f965bcb10a", "01a133b0-0aa5-7b93-b598-a603ff0d58a5"
+	const exec = "exec-12614595-59ab-4e53-9e3b-f735c9e220a6"
+	if got := ownCalls(events); !slices.Equal(got, []any{spawn, "call_528e8eb33fb94d3b8b77e0181f9c0da6"}) {
+		t.Errorf("the Run's own calls %v", got)
+	}
+	sameLife(t, childLife(events), []map[string]any{
+		{"type": evChildStarted, "childId": thread, "callId": spawn, "kind": "spawn", "title": "/root/read_hosts"},
+		{"type": evChildToolCalled, "childId": thread, "callId": exec, "parentCallId": spawn, "tool": "bash",
+			"input": map[string]any{"command": "head -n 1 /etc/hosts"}},
+		{"type": evChildToolCompleted, "childId": thread, "callId": exec, "parentCallId": spawn, "tool": "bash",
+			"status": "completed", "output": "##\n"},
+		{"type": evChildMessage, "childId": thread, "callId": spawn, "text": "##"},
+		{"type": evChildEnded, "childId": thread, "callId": spawn, "status": "completed", "summary": "##"},
+	})
 	if p := ofType(events, evToolCalled)[0].Payload; p["tool"] != "task" || p["callId"] != spawn {
 		t.Errorf("spawn call %v", p)
 	}
@@ -266,30 +355,34 @@ func TestTwoConcurrentCodexAgentsAreEachTheirOwnCallsChild(t *testing.T) {
 	)
 	events := w.events()
 	noChildCallAsTheParents(t, events)
-	started := map[any]any{}
-	for _, e := range ofType(events, evChildStarted) {
-		started[e.Payload["childId"]] = e.Payload["callId"]
-		if e.Payload["childId"] == a && e.Payload["title"] != "Count the Go files" {
-			t.Errorf("a's title %v", e.Payload["title"])
-		}
+	// Each child's own life, in its order, its calls under its spawn.
+	lifeOf := func(child string) []map[string]any {
+		return slices.DeleteFunc(childLife(events), func(p map[string]any) bool { return p["childId"] != child })
 	}
-	if started[a] != "s1" || started[b] != "s2" || len(started) != 2 {
-		t.Errorf("children by call %v", started)
+	sameLife(t, lifeOf(a), []map[string]any{
+		{"type": evChildStarted, "childId": a, "callId": "s1", "kind": "spawn", "title": "Count the Go files",
+			"model": "gpt-6-sol"},
+		{"type": evChildToolCalled, "childId": a, "callId": "ca", "parentCallId": "s1", "tool": "bash",
+			"input": map[string]any{"command": "find . -name '*.go'"}},
+		{"type": evChildToolCompleted, "childId": a, "callId": "ca", "parentCallId": "s1", "tool": "bash",
+			"status": "completed", "output": "ok"},
+		{"type": evChildMessage, "childId": a, "callId": "s1", "text": "412"},
+		{"type": evChildEnded, "childId": a, "callId": "s1", "status": "failed", "summary": "412"},
+	})
+	sameLife(t, lifeOf(b), []map[string]any{
+		{"type": evChildStarted, "childId": b, "callId": "s2", "kind": "spawn", "title": "List the migrations",
+			"model": "gpt-6-sol"},
+		{"type": evChildToolCalled, "childId": b, "callId": "cb", "parentCallId": "s2", "tool": "bash",
+			"input": map[string]any{"command": "ls migrations"}},
+		{"type": evChildToolCompleted, "childId": b, "callId": "cb", "parentCallId": "s2", "tool": "bash",
+			"status": "completed", "output": "ok"},
+		{"type": evChildEnded, "childId": b, "callId": "s2", "status": "completed", "summary": ""},
+	})
+	if n := len(childLife(events)); n != 9 {
+		t.Errorf("%d child events, want each agent's 5 and 4", n)
 	}
-	for _, e := range ofType(events, evChildToolCompleted) {
-		if owner := map[any]any{"ca": a, "cb": b}[e.Payload["callId"]]; e.Payload["childId"] != owner {
-			t.Errorf("call %v recorded as %v's", e.Payload["callId"], e.Payload["childId"])
-		}
-	}
-	ends := map[any]any{}
-	for _, e := range ofType(events, evChildEnded) {
-		ends[e.Payload["childId"]] = e.Payload["status"]
-	}
-	if ends[a] != "failed" || ends[b] != "completed" {
-		t.Errorf("ends %v", ends)
-	}
-	if calls := ofType(events, evToolCalled); len(calls) != 3 {
-		t.Errorf("the Run's own calls %v, want the two spawns and the wait", calls)
+	if got := ownCalls(events); !slices.Equal(got, []any{"s1", "s2", "w1"}) {
+		t.Errorf("the Run's own calls %v, want the two spawns and the wait", got)
 	}
 	if len(w.children()) != 0 {
 		t.Errorf("children left: %v", w.children())
@@ -318,6 +411,21 @@ func TestAnOpenCodeSubagentIsRecordedAsTheParentCallsChild(t *testing.T) {
 		t.Fatalf("events = %v\nwant %v", got, want)
 	}
 	noChildCallAsTheParents(t, events)
+	const ocRead = "toolu_01G5mHt6xdXxdhhZ6uD19pUS"
+	if got := ownCalls(events); !slices.Equal(got, []any{ocCall}) {
+		t.Errorf("the Run's own calls %v", got)
+	}
+	sameLife(t, childLife(events), []map[string]any{
+		{"type": evChildStarted, "childId": ocChild, "callId": ocCall, "kind": "task", "title": "Read /etc/hosts first line",
+			"agentType": "general", "model": "llmproxy-anthropic/claude-haiku-4.5"},
+		{"type": evChildToolCalled, "childId": ocChild, "callId": ocRead, "parentCallId": ocCall, "tool": "read",
+			"input": map[string]any{"filePath": "/etc/hosts", "limit": float64(1)}},
+		{"type": evChildToolCompleted, "childId": ocChild, "callId": ocRead, "parentCallId": ocCall, "tool": "read",
+			"status": "completed", "output": "<path>/etc/hosts</path>\n<type>file</type>\n<content>\n1: ##\n\n" +
+				"(Showing lines 1-1 of 15. Use offset=2 to continue.)\n</content>"},
+		{"type": evChildMessage, "childId": ocChild, "callId": ocCall, "text": "##"},
+		{"type": evChildEnded, "childId": ocChild, "callId": ocCall, "status": "completed", "summary": "##"},
+	})
 	if p := ofType(events, evToolCalled)[0].Payload; p["tool"] != "task" || p["callId"] != ocCall {
 		t.Errorf("parent call %v", p)
 	}
@@ -466,6 +574,27 @@ func TestTheFakeLuxsChildIsTheSameOnEveryHarness(t *testing.T) {
 			if p := ofType(events, evChildStarted); len(p) == 1 && p[0].Payload["title"] != "Investigate UI artifact capture" {
 				t.Errorf("title %v", p[0].Payload)
 			}
+			// The same life on every harness, but for what each harness says of
+			// the child when it starts: OpenCode its model, Claude Code no
+			// model, Codex a spawn with its model and no agent type.
+			started := map[string]any{"type": evChildStarted, "childId": "kid_1", "callId": "call_1", "kind": "task",
+				"title": "Investigate UI artifact capture", "agentType": "explore"}
+			switch adapter {
+			case "opencode":
+				started["model"] = "llmproxy-anthropic/claude-haiku-4.5"
+			case "codex":
+				started = map[string]any{"type": evChildStarted, "childId": "kid_1", "callId": "call_1", "kind": "spawn",
+					"title": "Investigate UI artifact capture", "model": "gpt-6-sol"}
+			}
+			sameLife(t, childLife(events), []map[string]any{
+				started,
+				{"type": evChildToolCalled, "childId": "kid_1", "callId": "k1", "parentCallId": "call_1", "tool": "bash",
+					"input": map[string]any{"command": "ls /opt"}},
+				{"type": evChildToolCompleted, "childId": "kid_1", "callId": "k1", "parentCallId": "call_1", "tool": "bash",
+					"status": "completed", "output": "venv"},
+				{"type": evChildMessage, "childId": "kid_1", "callId": "call_1", "text": "Found the capture hook."},
+				{"type": evChildEnded, "childId": "kid_1", "callId": "call_1", "status": "completed", "summary": "Found the capture hook."},
+			})
 		})
 	}
 }
