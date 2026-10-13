@@ -46,7 +46,9 @@ class ProfileClient extends FixtureClient {
 
 async function open(client: ProfileClient, screen = <MySettingsScreen client={client} me={ME} onChanged={() => {}} />) {
   const { container, unmount } = await mount(
-    <ThemeProvider>
+    // Stamps theme and density on an element of its own, not the shared
+    // <html>: the gallery tests, in the same process, read its attributes.
+    <ThemeProvider target={document.createElement("div")}>
       <TooltipProvider>
         <ToastProvider>
           {screen}
