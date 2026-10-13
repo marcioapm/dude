@@ -130,10 +130,12 @@ const proposal: ProposalCardItem[] = [
     project: { key: "CP", name: "control-plane" }, canFile: true, relations: [{ kind: "blocked-by", item: 1 }, { kind: "related", task: { key: "CP-44", status: "received" } }] },
 ];
 
-type WhenNearProps = {
-  readonly children: ReactNode;
-  readonly anchors?: readonly string[];
-};
+const relationBlockIds: ReadonlySet<string> = new Set([
+  "rel-icons", "rel-chip", "rel-board", "rel-board-lit", "rel-board-filter", "rel-startmenu", "rel-gate",
+  "rel-auto", "rel-dialogs", "rel-list", "rel-picker", "rel-strip", "rel-proposal",
+]);
+
+const noAnchors: ReadonlySet<string> = new Set();
 
 /**
  * Mounts its children once they near the viewport. The section's blocks are
@@ -142,24 +144,29 @@ type WhenNearProps = {
  * gallery could take seconds to fade in. A gallery without IntersectionObserver
  * draws them at once.
  */
-export function WhenNear({ children, anchors = [] }: WhenNearProps): ReactNode {
-  function anchorTarget(): string | undefined {
-    const id = location.hash.slice(1);
-    return anchors.includes(id) ? id : undefined;
-  }
-  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined" || !!anchorTarget());
-  useEffect(() => {
-    function reveal(): void {
-      if (anchorTarget()) setNear(true);
-    }
-    window.addEventListener("hashchange", reveal);
-    return () => window.removeEventListener("hashchange", reveal);
-  }, [anchors]);
-  useLayoutEffect(() => {
-    const id = anchorTarget();
-    if (near && id) document.getElementById(id)?.scrollIntoView();
-  }, [near]);
+export function WhenNear({ children, anchors = noAnchors }: { readonly children: ReactNode; readonly anchors?: ReadonlySet<string> }) {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   const placeholder = useRef<HTMLDivElement>(null);
+  const pendingTarget = useRef<string | null>(null);
+  useEffect(() => {
+    if (near) return undefined;
+    const navigate = () => {
+      let id: string;
+      try { id = decodeURIComponent(window.location.hash.slice(1)); }
+      catch { pendingTarget.current = null; return; }
+      pendingTarget.current = anchors.has(id) ? id : null;
+      if (pendingTarget.current) setNear(true);
+    };
+    window.addEventListener("hashchange", navigate);
+    navigate();
+    return () => window.removeEventListener("hashchange", navigate);
+  }, [near, anchors]);
+  useLayoutEffect(() => {
+    if (!near || !pendingTarget.current) return;
+    // Native fragment navigation ran before the deferred target existed.
+    document.getElementById(pendingTarget.current)?.scrollIntoView();
+    pendingTarget.current = null;
+  }, [near]);
   useEffect(() => {
     if (near || !placeholder.current) return undefined;
     const seen = new IntersectionObserver((entries) => {
@@ -175,7 +182,7 @@ export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="relations" title="Task relations: blocked by, blocks, related"
       intro="A task that can't start until another is merged says so, in one verb pair everywhere — Blocked by, Blocks — and every way to start it refuses for the same reason. Blocked waits on work, not a person: neutral ink with a lock and words, never the attention wash, and never a triage bucket.">
-      <WhenNear>
+      <WhenNear anchors={relationBlockIds}>
       <Block id="rel-icons" title="Icons: lock, blocks, link"
         note="lock marks a task that can't start until another is merged, blocks one that holds another up, link a relation that gates nothing. They take the ink of their words, never a tone.">
         <Panes mode={mode}>

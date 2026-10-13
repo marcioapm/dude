@@ -113,9 +113,32 @@ ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json
 COPY bin/linux-${TARGETARCH}/dude /usr/local/bin/dude
 
 # Git identity for commits the agent makes, system-wide for the same reason.
+# A GitHub App's Runs override it with the App's bot (GIT_AUTHOR_* and
+# GIT_COMMITTER_* in the Run's env).
 RUN git config --system user.name "dude" \
     && git config --system user.email "dude@localhost" \
     && git config --system init.defaultBranch main
+
+# The commit hook that adds the task's people as Co-authored-by trailers,
+# under each client hook's name, and git-config, which points
+# core.hooksPath here. Every Run includes git-config in command scope
+# (include.path in its environment), over any core.hooksPath a repository,
+# worktree or the agent's global config sets; the hook then runs the hook
+# that setting names, so husky, lefthook and plain .git/hooks keep working
+# (see the script). git skips a missing include: an image without
+# git-config runs the repository's own hooks, and commits carry no
+# co-authors. The system setting is the fallback for a git started without
+# the Run's environment; the hook passes over it to .git/hooks. Not linked,
+# so a repository's own of these do not run: reference-transaction and
+# post-index-change, which git calls on every ref and index write.
+COPY --chmod=0644 git-config /usr/local/share/dude/git-config
+COPY --chmod=0755 git-hooks/dude-hook /usr/local/share/dude/git-hooks/dude-hook
+RUN cd /usr/local/share/dude/git-hooks \
+    && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \
+         commit-msg post-commit pre-rebase post-checkout post-merge pre-push post-rewrite pre-auto-gc \
+         sendemail-validate; do \
+         ln -s dude-hook "$h"; done \
+    && git config --system core.hooksPath /usr/local/share/dude/git-hooks
 
 USER agent
 WORKDIR /home/agent

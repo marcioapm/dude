@@ -21,8 +21,9 @@ func (r Resolver) For(ctx context.Context, org string) (*GitHub, error) {
 	var c Credential
 	var settings []byte
 	err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT auth::text, secret, api_base_url, settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).
-			Scan(&c.Auth, &c.Secret, &c.APIBaseURL, &settings)
+		return tx.QueryRow(ctx, `SELECT auth::text, secret, api_base_url, settings, COALESCE(app_id, ''), COALESCE(installation_id, '')
+			FROM forge_credentials WHERE forge = 'github' LIMIT 1`).
+			Scan(&c.Auth, &c.Secret, &c.APIBaseURL, &settings, &c.AppID, &c.InstallationID)
 	})
 	if db.IsNotFound(err) {
 		return nil, nil

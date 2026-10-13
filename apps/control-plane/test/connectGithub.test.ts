@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
@@ -39,6 +40,8 @@ let router: Router;
 let key: { key: string };
 let orchestrator: ReturnType<typeof Bun.serve>;
 const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+// How the stand-in orchestrator answers an App's verify.
+let verifyApp: () => Response = () => Response.json({ ok: true, repository: "acme/api", bot: "dude-acme[bot]" });
 
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
@@ -57,7 +60,9 @@ beforeAll(async () => {
   key = made;
   orchestrator = Bun.serve({ port: 0, async fetch(request) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    forwarded.push({ path: new URL(request.url).pathname, body });
+    const path = new URL(request.url).pathname;
+    if (path === "/internal/github/verify-app") return verifyApp();
+    forwarded.push({ path, body });
     // A registration that waits takes as long as forty repositories would.
     if (!body.background) await Bun.sleep(3_000);
     return Response.json(body.background ? { background: true } : { repositories: [] }, { status: body.background ? 202 : 200 });
@@ -89,4 +94,61 @@ test("connecting GitHub saves the token and asks for the hooks in the background
     body: { url: `https://dude.example.com/v1/webhooks/github/${ORG}`, background: true } }]);
   const [cred] = await owner`SELECT secret, public_url FROM forge_credentials WHERE organization_id = ${ORG}`;
   expect(cred).toEqual({ secret: "ghp_new", public_url: "https://dude.example.com" });
+});
+
+test("a GitHub App connects with its App ID alone; the installation is found per repository owner", async () => {
+  const post = (body: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/forge/credential", {
+    method: "POST",
+    headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+  const refused = await post({ auth: "github_app", secret: "-----BEGIN RSA PRIVATE KEY-----" });
+  expect(refused.status).toBe(400);
+  const res = await post({ auth: "github_app", secret: "-----BEGIN RSA PRIVATE KEY-----", appId: "9001" });
+  expect(res.status).toBe(200);
+  const [cred] = await owner`SELECT auth::text, app_id, installation_id FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(cred).toEqual({ auth: "github_app", app_id: "9001", installation_id: null });
+  // The key is write-only: no part of it comes back.
+  const shown = await router.handle(new Request("http://dude.test/v1/forge/credential", { headers: { authorization: `Bearer ${key.key}` } }));
+  const body = (await shown.json()) as Record<string, unknown>;
+  expect(body).toMatchObject({ connected: true, auth: "github_app", appId: "9001", installationId: null, secretHint: "" });
+  expect(JSON.stringify(body)).not.toContain("BEGIN");
+});
+
+test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {
+  const verify = async () => {
+    const res = await router.handle(new Request("http://dude.test/v1/forge/credential/verify", {
+      method: "POST", headers: { authorization: `Bearer ${key.key}` } }));
+    expect(res.status).toBe(200);
+    return res.json();
+  };
+  expect(await verify()).toEqual({ ok: true, app: true, bot: "dude-acme[bot]", repository: "acme/api" });
+  verifyApp = () => Response.json({ ok: false, repository: "acme/api", reason: "GitHub would not give the App a token for acme/api" });
+  expect(await verify()).toEqual({ ok: false, reason: "GitHub would not give the App a token for acme/api" });
+  verifyApp = () => Response.json({ error: { code: "conflict", message: "GitHub is connected with a token, not an App" } }, { status: 409 });
+  expect(await verify()).toEqual({ ok: false, reason: "GitHub is connected with a token, not an App" });
+});
+
+test("an App's deliveries are taken with the credential's secret; its installation events are answered and ignored", async () => {
+  const [{ secret }] = await owner`SELECT webhook_secret AS secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  const deliver = (event: string, payload: unknown, id: string) => {
+    const body = JSON.stringify(payload);
+    return router.handle(new Request(`http://dude.test/v1/webhooks/github/${ORG}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": event, "x-github-delivery": id,
+        "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}` },
+      body,
+    }));
+  };
+  const installation = { id: 71, account: { login: "acme" } };
+  for (const event of ["installation", "installation_repositories"]) {
+    const res = await deliver(event, { action: "created", installation }, `d-${event}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ignored: event });
+  }
+  const pr = await deliver("pull_request", { action: "opened", installation, number: 1, pull_request: { number: 1 },
+    repository: { full_name: "acme/api" } }, "d-pr");
+  expect(pr.status).toBe(202);
+  const stored = await owner`SELECT id, event FROM webhook_deliveries WHERE organization_id = ${ORG} ORDER BY id`;
+  expect([...stored]).toEqual([{ id: "d-pr", event: "pull_request" }]);
 });

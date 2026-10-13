@@ -454,7 +454,7 @@ The `go`, `ts` and `e2e` jobs each have their own
 
 | Job | Runs |
 | --- | --- |
-| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone takes about 14 minutes). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
+| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone takes about 14 minutes), then `go test -race -count=1 ./internal/forge` (forge's concurrency tests assert only under the race detector). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
 | `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
 | `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
 | `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |
@@ -549,8 +549,9 @@ In rough priority order.
 3. **Budgets as loop bounds** — a cost cap per Run and per task.
 4. **The tester phase** (browser QA with recorded evidence) and artifacts
    from lux. Design in [`phased-runs.md`](phased-runs.md).
-5. **GitHub App** in place of the PAT. (Webhooks are registered when a
-   project or repository is added, and on connecting in Settings.)
+5. **Merging as the GitHub App.** An organization can connect an App
+   ([github.md](github.md#github-app)); a merge it asks for goes through the
+   same client as everything else, and has not been tried against GitHub.
 6. **lux push with an expected base commit**, which would remove the
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any

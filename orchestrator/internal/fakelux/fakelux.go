@@ -162,6 +162,9 @@ type Run struct {
 	// Each resume's sync and each POST /sync's, as received.
 	ResumeSyncs [][]lux.SyncRef
 	Syncs       [][]lux.SyncRef
+	// The credentials each accepted push and POST /sync carried, in order:
+	// nil for none. lux names them by its repository names.
+	PushCredentials, SyncCredentials []map[string]string
 	// Where each checkout is, by repository: its clone, then its syncs.
 	at map[string]string
 	// A resume's sync, applied when its placement starts.
@@ -616,6 +619,14 @@ type Server struct {
 	// HoldSyncs is a lux that accepts a running Run's sync and never
 	// reports it: no git.sync or sync.done follows.
 	HoldSyncs bool
+	// NoOperationCredentials is a runner from before credentials on push
+	// and sync: one carrying them is refused, 409
+	// git_credentials_unsupported.
+	NoOperationCredentials bool
+	// HostUnreachable is how many credentialed pushes or syncs to refuse
+	// next, 503 host_unreachable, as a luxd with no connection to the Run's
+	// host answers when several luxds share no sticky routing.
+	HostUnreachable int
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -2076,11 +2087,16 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		RequestID string `json:"requestId"`
+		RequestID   string            `json:"requestId"`
+		Credentials map[string]string `json:"credentials"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
+	if msg, status, code := s.credentialsProblem(spec, in.Credentials); msg != "" {
+		writeErr(w, status, code, msg)
+		return
+	}
 	git, _ := spec["git"].(map[string]any)
 	push, _ := git["push"].(map[string]any)
 	branch, _ := push["branch"].(string)
@@ -2088,6 +2104,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "no_push", "the run's spec has no git.push branch")
 		return
 	}
+	s.mu.Lock()
+	run.PushCredentials = append(run.PushCredentials, in.Credentials)
+	s.mu.Unlock()
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 	go func() {
 		s.mu.Lock()
@@ -2197,6 +2216,38 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 type specRepo struct {
 	Name, URL, Ref string
 	Push           bool
+}
+
+// credentialsProblem refuses a push's or sync's credentials as lux does: a
+// runner from before them (NoOperationCredentials) refuses any, 409; a
+// luxd without the Run's host (HostUnreachable), 503; a name that is not
+// one of the Run's repositories, or an empty token, is invalid, 422.
+func (s *Server) credentialsProblem(spec map[string]any, creds map[string]string) (string, int, string) {
+	if len(creds) == 0 {
+		return "", 0, ""
+	}
+	s.mu.Lock()
+	old := s.NoOperationCredentials
+	elsewhere := s.HostUnreachable > 0
+	if elsewhere {
+		s.HostUnreachable--
+	}
+	s.mu.Unlock()
+	if old {
+		return "this runner cannot take credentials on a push or sync", 409, lux.CodeCredentialsUnsupported
+	}
+	if elsewhere {
+		return "this luxd has no connection to the run's host", 503, lux.CodeHostUnreachable
+	}
+	for name, token := range creds {
+		if !slices.ContainsFunc(specRepos(spec), func(r specRepo) bool { return r.Name == name }) {
+			return fmt.Sprintf("credentials: the run has no repository %q", name), 422, "invalid_request"
+		}
+		if token == "" {
+			return fmt.Sprintf("credentials: %q is empty", name), 422, "invalid_request"
+		}
+	}
+	return "", 0, ""
 }
 
 // workloadCredential refuses, as lux does, a repository credential that is

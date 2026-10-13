@@ -84,14 +84,14 @@ test("an unrelated hash leaves examples deferred; the matching hash reveals them
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   try {
-    await act(async () => root!.render(<WhenNear anchors={["example-anchor"]}><StatefulExample /></WhenNear>));
+    await act(async () => root!.render(<WhenNear anchors={new Set(["example-anchor"])}><StatefulExample /></WhenNear>));
     await act(async () => { window.history.replaceState(null, "", "#other"); window.dispatchEvent(new Event("hashchange")); });
     expect(host.querySelectorAll("button").length).toBe(0);
     await act(async () => { window.history.replaceState(null, "", "#example-anchor"); window.dispatchEvent(new Event("hashchange")); });
     expect(host.querySelectorAll("button").length).toBe(1);
     await act(async () => root!.unmount());
     root = createRoot(host);
-    await act(async () => root!.render(<WhenNear anchors={["different-anchor"]}><StatefulExample /></WhenNear>));
+    await act(async () => root!.render(<WhenNear anchors={new Set(["different-anchor"])}><StatefulExample /></WhenNear>));
     await act(async () => window.dispatchEvent(new Event("hashchange")));
     expect(host.querySelectorAll("button").length).toBe(0);
   } finally {
