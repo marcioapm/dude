@@ -106,16 +106,19 @@ test("after a save the form shows what was saved, and has nothing left to save",
 });
 
 // The shell has your name from the people list, which it reads again after a
-// save, later than /v1/me: here it arrives only once /v1/me already has. Its
-// own until (a separate act) lands the name in a render after /v1/me's; waiting
-// without act would flush both in one render and hide the order under test.
+// save, later than /v1/me: here it arrives only once /v1/me already has. It
+// waits on plain timers, not `until`: an act of its own would overlap the
+// test's, and an overlapped act leaves React's act queue set, so effects in
+// the files that run next never fire. The 60 ms after the re-read spans at
+// least one of the test's own 25 ms acts, so /v1/me's answer renders first.
 function Shell({ client }: { client: ProfileClient }) {
   const [me, setMe] = useState(ME);
   const onChanged = () => {
     void (async () => {
-      await until(() => client.reads >= 2 ? true : null, "the re-read of /v1/me");
+      for (let i = 0; i < 200 && client.reads < 2; i++) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 60));
       setMe({ ...ME, name: client.name });
-    })().catch(() => {}); // the test's own until reports a missing re-read
+    })();
   };
   return <MySettingsScreen client={client} me={me} onChanged={onChanged} />;
 }
