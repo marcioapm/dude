@@ -103,6 +103,9 @@ type Behaviour struct {
 	// Names the agent looks up in its first turn, before its tools: each
 	// distinct one is a dns event, as lux's resolver records it.
 	Lookups []Lookup
+	// Its first turn starts a task subagent, as lux-fake's script line
+	// says ("subagent", "subagent ask"; children.go playSubagent).
+	Subagent string
 }
 
 // Lookup is a name the agent looks up, and whether lux lets it resolve.
@@ -208,6 +211,8 @@ type Run struct {
 
 	busy  bool
 	woken bool
+	// Child sessions its agent started (children.go playSubagent).
+	children int
 	// How its agent speaks (dialect.go), and what it is saying meanwhile.
 	speaks  string
 	harness *harnessSay
@@ -779,7 +784,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
 		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
@@ -1240,6 +1245,8 @@ func (s *Server) Handler() http.Handler {
 		s.FinishTools(r.PathValue("id"))
 		writeJSON(w, 200, map[string]any{"finished": true})
 	})
+	// A child session of a Run's agent, one step at a time (children.go).
+	mux.HandleFunc("POST /fake/runs/{id}/child", s.childHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -1465,6 +1472,7 @@ func (s *Server) turn(run *Run) {
 	}
 	if len(run.Inputs) == 0 {
 		s.lookUp(run, b.Lookups)
+		s.playSubagent(run, b.Subagent)
 	}
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)

@@ -64,6 +64,14 @@
   --role-on-solid: var(--ds-role-brainstorm-on-solid);
   border-radius: var(--ds-radius-full);
 }
+/* A child session: a square face (not a conversation agent), the
+   investigator's colour in its own tokens, the fork glyph. */
+.subagent {
+  --role-fg: var(--ds-role-subagent-fg);
+  --role-bg: var(--ds-role-subagent-bg);
+  --role-solid: var(--ds-role-subagent-solid);
+  --role-on-solid: var(--ds-role-subagent-on-solid);
+}
 .investigator {
   --role-fg: var(--ds-role-investigator-fg);
   --role-bg: var(--ds-role-investigator-bg);

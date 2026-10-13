@@ -780,6 +780,100 @@ def _resumes_on_the_new_size(client: ApiClient, env, owner_dsn: str, project: di
 
 
 # ---------------------------------------------------------------------------
+# A child session (lux feat/opencode-children): lux-fake's `subagent` and
+# `subagent ask` lines, run under lux's opencode adapter, which relays the
+# child from lux-fake's OpenCode bus as opencode.* records.
+# ---------------------------------------------------------------------------
+
+
+def _lux_records(env, lux_run_id: str) -> list[dict]:
+    """Every record of a lux Run's output, {type, data}, as lux stored it."""
+    res = _lux(env, "GET", f"/v1/runs/{lux_run_id}/output")
+    assert res.status_code == 200, res.text
+    out, event = [], ""
+    for line in res.content.decode("utf-8").splitlines():
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:") and event == "record":
+            rec = json.loads(line[5:]).get("event") or {}
+            if rec.get("type"):
+                out.append({"type": rec["type"], "data": rec.get("data")})
+    return out
+
+
+@pytest.mark.parametrize("model", ["fake/subagent", "fake/subagent-ask"])
+def test_a_scripted_subagent_on_real_lux_is_recorded_as_the_task_calls_child(client: ApiClient, env, lux_project, model: str):
+    """What lux stores of the child is the shape dude reads (a part's input
+    a JSON string, a task's model {modelID, providerID}), and dude records
+    the child under lux-fake's task call, with lux-fake's ids, in order;
+    with ask, lux allows the bash ask itself and says so, and nothing holds."""
+    project, _ = lux_project
+    resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    assert resp.status_code == 200, resp.text
+    task = client.create_task(project["id"], f"Delegate on lux ({model})")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),
+                     timeout=120, interval=1, message="the implementer never started on lux")
+    try:
+        def ended():
+            child = [e for e in client.events(runId=run["id"], limit=1000) if e["eventType"].startswith("agent.child.")]
+            return child if any(e["eventType"] == "agent.child.ended" for e in child) else None
+
+        child = wait_until(ended, timeout=180, interval=1, message="the child never ended on lux")
+        lux_run_id = query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
+        records = _lux_records(env, lux_run_id)
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
+        client.post(f"/v1/runs/{run['id']}/abort", {})
+
+    # The wire: what lux stored.
+    session = next(r["data"]["sessionId"] for r in records if r["type"] == "lux.session")
+    kid = f"ses_{session}_child1"
+    relayed = [r for r in records if r["type"].startswith("opencode.")]
+    print("relayed:", json.dumps(relayed))
+    parts = [r["data"] for r in relayed if r["type"] == "opencode.part"]
+    assert [(p["callID"], p["status"]) for p in parts] == [
+        ("toolu_read1", "running"), ("toolu_read1", "completed"), ("toolu_bash1", "running"), ("toolu_bash1", "completed")], parts
+    assert all(isinstance(p["input"], str) and isinstance(json.loads(p["input"]), dict) for p in parts), parts
+    tasks = [r["data"] for r in relayed if r["type"] == "opencode.task"]
+    assert [(t["callID"], t["childSessionID"], t["status"]) for t in tasks] == [
+        ("toolu_task1", kid, "running"), ("toolu_task1", kid, "completed")], tasks
+    assert all(t["model"] == {"modelID": "lux-fake", "providerID": "lux-fake"} for t in tasks), tasks
+    asks = [r["data"] for r in relayed if r["type"] == "opencode.permission"]
+    if model == "fake/subagent-ask":
+        assert [(a["permission"], a["patterns"], a["callID"], a["answered"]) for a in asks] == [
+            ("bash", ["cat /etc/hostname"], "toolu_bash1", "allow")], asks
+    else:
+        assert asks == [], asks
+
+    # What dude recorded of it.
+    kinds = [e["eventType"] for e in child]
+    want = ["agent.child.started", "agent.child.tool.called", "agent.child.tool.completed", "agent.child.tool.called"]
+    if model == "fake/subagent-ask":
+        want.append("agent.child.waiting")
+    assert kinds == want + ["agent.child.tool.completed", "agent.child.message", "agent.child.ended"], kinds
+    assert all(e["payload"]["childId"] == kid for e in child), child
+    started = child[0]["payload"]
+    assert (started["callId"], started["kind"], started["model"]) == ("toolu_task1", "task", "lux-fake/lux-fake"), started
+    calls = [(e["payload"]["callId"], e["payload"]["parentCallId"], e["payload"]["tool"]) for e in child
+             if e["eventType"] == "agent.child.tool.called"]
+    assert calls == [("toolu_read1", "toolu_task1", "read"), ("toolu_bash1", "toolu_task1", "bash")], calls
+    assert child[3]["payload"]["input"] == {"command": "cat /etc/hostname", "description": "Read the hostname"}, child[3]
+    if model == "fake/subagent-ask":
+        p = child[4]["payload"]
+        assert (p["permission"], p["patterns"], p["answered"], p["held"], p["childCallId"]) == \
+            ("bash", ["cat /etc/hostname"], "allow", False, "toolu_bash1"), p
+        warnings = [e["payload"]["message"] for e in client.events(runId=run["id"], limit=1000) if e["eventType"] == "agent.warning"]
+        assert f"opencode: a subagent session {kid} asked for bash on cat /etc/hostname; lux allowed it" in warnings, warnings
+    assert child[-1]["payload"]["status"] == "completed", child[-1]
+    own = {e["payload"].get("callId") for e in client.events(runId=run["id"], limit=1000)
+           if e["eventType"] in ("agent.tool.called", "agent.tool.completed")}
+    assert not own & {"toolu_read1", "toolu_bash1"}, own
+    assert query(env.owner_dsn, "SELECT children FROM runs WHERE id = %s", (run["id"],))[0]["children"] == {}
+
+
+# ---------------------------------------------------------------------------
 # A Run's stage (lux#81): dude reads stage and stageSince from lux's Run and
 # hears each stage event as servers.changed.
 # ---------------------------------------------------------------------------
