@@ -3,7 +3,7 @@ import { newId } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { HttpError, json, noContent, parseBody, conflict } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { changeInvitation, invitationAdmin, inviteBatch, listInvitations, lockPeople } from "./invitations.ts";
+import { changeInvitation, inviteBatch, listInvitations, lockPeople } from "./invitations.ts";
 import { removePerson, updatePerson } from "./people.ts";
 function requireSuper(ctx: RequestContext) {
   if (ctx.principal.credentialKind !== "person" || !ctx.principal.access?.superAdmin) {

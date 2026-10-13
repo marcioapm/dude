@@ -17,10 +17,14 @@ export async function invitationAdmin(scope: OrgScope, ctx: RequestContext) {
   const [p] = await scope.sql`SELECT role FROM people WHERE id = ${ctx.principal.personId} AND removed_at IS NULL`;
   if (p?.role !== "admin") throw new HttpError(403, "not_admin", "not_admin");
 }
-function code() {
-  const n = BigInt(`0x${randomBytes(16).toString("hex")}`), alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  let value = n, result = "";
-  for (let i = 0; i < 22; i++) { result = alphabet[Number(value % 62n)] + result; value /= 62n; }
+function code(): string {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let value = BigInt(`0x${randomBytes(16).toString("hex")}`);
+  let result = "";
+  for (let i = 0; i < 22; i++) {
+    result = alphabet[Number(value % 62n)] + result;
+    value /= 62n;
+  }
   return result;
 }
 export async function inviteBatch(scope: OrgScope, input: { invitations: Array<{ email: string; name?: string | undefined }>; role?: "admin" | "member" | undefined }, actor: string | null) {

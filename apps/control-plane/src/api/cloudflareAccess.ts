@@ -244,8 +244,12 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
       url.pathname.startsWith("/v1/locate/");
     const requested = request.headers.get("x-dude-organization") ??
       (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
-    const selected = requested ? admission.memberships.find((m) => m.organization_id === requested) :
-      admission.memberships.length === 1 || (accountRoute && url.pathname !== "/v1/me") ? admission.memberships[0] : undefined;
+    let selected: AccessAdmission["memberships"][number] | undefined;
+    if (requested) {
+      selected = admission.memberships.find((m) => m.organization_id === requested);
+    } else if (admission.memberships.length === 1 || (accountRoute && url.pathname !== "/v1/me")) {
+      selected = admission.memberships[0];
+    }
     if (admission.gate === "member" && !selected && (requested ? !url.pathname.startsWith("/v1/admin/") : !accountRoute)) {
       throw requested ? new HttpError(403, "not_a_member", "not_a_member")
         : new HttpError(400, "organization_required", "organization_required");
