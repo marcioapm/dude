@@ -1034,7 +1034,6 @@ function dropWhen(hint: string | null): string {
   return `It reads them ${hint.replace(/^Lands /, "")}.`;
 }
 
-/** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
 /** A briefing Try again repeated to the fresh agent: one quiet line that opens to the full card. */
 function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; shown: ShownImages | undefined }) {
   const [open, setOpen] = useState(false);
@@ -1053,6 +1052,7 @@ function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; s
 
 export const BRIEFED_AGAIN = "Briefed again with the same message";
 
+/** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
 function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
   if (turn.attachments.length === 0 || !shown) return {};
   return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
