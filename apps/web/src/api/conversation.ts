@@ -800,12 +800,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
 
         const result = resultFrom(payload);
-        if (existing?.endedAt) {
-          // Finished already: a repeated completion (a harness taken back up re-reporting it) never re-times it.
-        } else if (existing) {
-          existing.status = status;
-          existing.endedAt = event.occurredAt;
-          existing.result = result;
+        if (existing) {
+          // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
+          if (!existing.endedAt) {
+            existing.status = status;
+            existing.endedAt = event.occurredAt;
+            existing.result = result;
+          }
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
