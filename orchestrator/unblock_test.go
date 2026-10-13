@@ -557,6 +557,22 @@ func (w *world) requestKept(task string, attempts int) {
 	}
 }
 
+func (w *world) futureRequestUntouched(task string, attempts int, worker *delivery.AutoStarts) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE task_auto_starts SET due_at = now() + interval '1 hour' WHERE task_id = $1`, task)
+	var before, after time.Time
+	if err := w.owner.QueryRow(context.Background(), `SELECT due_at FROM task_auto_starts WHERE task_id = $1`, task).Scan(&before); err != nil {
+		w.t.Fatal(err)
+	}
+	if n, err := worker.Sweep(context.Background()); err != nil || n != 0 {
+		w.t.Fatalf("future request selected: n=%d err=%v", n, err)
+	}
+	w.requestKept(task, attempts)
+	if err := w.owner.QueryRow(context.Background(), `SELECT due_at FROM task_auto_starts WHERE task_id = $1`, task).Scan(&after); err != nil || !after.Equal(before) {
+		w.t.Fatalf("future due time changed: %v -> %v, %v", before, after, err)
+	}
+}
+
 // dueNow makes the task's request due now, as the next sweep finds it.
 func (w *world) dueNow(task string) {
 	mustExec(w.t, w.owner, `UPDATE task_auto_starts SET due_at = now() WHERE task_id = $1`, task)
@@ -621,6 +637,9 @@ func (f failingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions
 // connection reset) never end a request, however many times they happen.
 func TestStartWhenUnblockedFailingTransientlyIsKept(t *testing.T) {
 	for _, cause := range []error{
+		fmt.Errorf("start: %w", &pgconn.PgError{Code: "40P01", Message: "deadlock detected"}),
+		fmt.Errorf("start: %w", &pgconn.PgError{Code: "40001", Message: "could not serialize access"}),
+		fmt.Errorf("start: %w", &pgconn.PgError{Code: "57014", Message: "statement timeout"}),
 		&pgconn.PgError{Code: "40001", Message: "could not serialize access"},
 		&pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"},
 		&pgconn.PgError{Code: "08006", Message: "connection failure"},
@@ -638,6 +657,7 @@ func TestStartWhenUnblockedFailingTransientlyIsKept(t *testing.T) {
 					t.Fatal(err)
 				}
 				w.requestKept(task, 0)
+				w.futureRequestUntouched(task, 0, &delivery.AutoStarts{DB: w.app, Starter: failingStarter{cause}})
 				w.dueNow(task)
 			}
 		})
@@ -661,6 +681,7 @@ func TestStartWhenUnblockedFailingUnknownlyEndsAfterItsBound(t *testing.T) {
 		if n := w.count(`SELECT count(*) FROM task_auto_starts WHERE task_id = $1 AND due_at > now()`, task); n != 1 {
 			t.Fatal("a retried request is due at once, not after a pause")
 		}
+		w.futureRequestUntouched(task, i, failing)
 		w.dueNow(task)
 	}
 	if _, err := failing.Sweep(context.Background()); err != nil {
