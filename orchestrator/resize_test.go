@@ -418,6 +418,35 @@ func TestASecondResetRacingTheFirstIsAConflict(t *testing.T) {
 	}
 }
 
+// A person's pause asked for and not yet taken (control pending, the Run
+// still running): a Reset then cannot park the Run for its move, so it is
+// a conflict, and the person's pause is not turned into dude's.
+func TestAResetDuringAPersonsPauseInFlightIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.raisedImplementer()
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control<>'none' AND dude_pause IS NULL`, runID) != 1 {
+		t.Fatalf("the pause is not in flight:\n%s", w.describeRuns())
+	}
+	control := w.str(`SELECT control::text FROM runs WHERE id=$1`, runID)
+	before := w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND dude_pause IS NULL AND control::text=$2`, runID, control) != 1 {
+		t.Fatalf("the person's pause was changed:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM machine_moves`); n != 0 {
+		t.Fatalf("moves recorded: %d", n)
+	}
+	if after := w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task); after != before {
+		t.Fatalf("layer %s, was %s", after, before)
+	}
+}
+
 // A Run lux has not started yet (scheduled) is not "nothing running": its
 // Reset is refused until it runs or pauses.
 func TestAResetOfAScheduledRunIsAConflict(t *testing.T) {
