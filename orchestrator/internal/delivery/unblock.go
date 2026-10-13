@@ -60,13 +60,7 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&key, &prNumber); err != nil {
 		return err
 	}
-	// The dependants' rows locked first, in id order, as RefuseBlockedTx
-	// locks them: two blockers of one task moving to done in overlapping
-	// transactions would each see the other still open and release nobody.
-	// The second waits here, and the next statement's snapshot sees the
-	// first's commit.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id IN (SELECT to_task_id FROM task_relations
-		WHERE from_task_id = $1 AND kind = 'blocks') ORDER BY id FOR NO KEY UPDATE`, taskID); err != nil {
+	if err := lockReleasesTx(ctx, tx, taskID); err != nil {
 		return err
 	}
 	rows, err := tx.Query(ctx, `SELECT t.id, t.project_id, p.key_prefix || '-' || t.number,
@@ -130,6 +124,32 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 			err = workflow.SignalTx(ctx, tx, org, wf, SignalRelationsUnblock, map[string]any{"by": key}, "unblocked:"+taskID)
 		}
 		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// lockReleasesTx serialises the releases of each task taskID blocks, so
+// two blockers of one task moving to done in overlapping transactions do
+// not each see the other still open and release nobody: the second waits
+// here, and the statement after it reads with a snapshot that sees the
+// first's commit. An advisory lock per dependant, taken one statement each
+// in id order, and taken by nothing else: a dependant's task row would put
+// the merge (task, then delivery or task_auto_starts) against every start
+// path (delivery or task_auto_starts, then task) and deadlock.
+func lockReleasesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	rows, err := tx.Query(ctx, `SELECT to_task_id FROM task_relations WHERE from_task_id = $1 AND kind = 'blocks'
+		ORDER BY to_task_id`, taskID)
+	if err != nil {
+		return err
+	}
+	deps, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, d := range deps {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('task_release:' || $1))`, d); err != nil {
 			return err
 		}
 	}

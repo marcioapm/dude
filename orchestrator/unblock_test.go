@@ -240,6 +240,82 @@ func (w *world) mergedPR(task string) {
 		task, w.org, w.project, w.repoID)
 }
 
+// orgTx is an open transaction as the app role in the world's
+// organisation, for tests that interleave two; rolled back at cleanup
+// unless committed.
+type orgTx struct {
+	pgx.Tx
+	w   *world
+	pid int64
+}
+
+func (w *world) openTx() *orgTx {
+	w.t.Helper()
+	ctx := context.Background()
+	tx, err := w.app.Pool.Begin(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
+		w.t.Fatal(err)
+	}
+	o := &orgTx{Tx: tx, w: w}
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&o.pid); err != nil {
+		w.t.Fatal(err)
+	}
+	return o
+}
+
+// async runs f, which uses this transaction, in a goroutine.
+func (o *orgTx) async(f func() error) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	return done
+}
+
+// finishedOrWaiting returns once f (from async) has returned, with its
+// error, or once this transaction's backend waits on a lock.
+func (o *orgTx) finishedOrWaiting(done <-chan error) (bool, error) {
+	o.w.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		select {
+		case err := <-done:
+			return true, err
+		default:
+		}
+		if o.w.count(`SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'`, o.pid) == 1 {
+			return false, nil
+		}
+		if time.Now().After(deadline) {
+			o.w.t.Fatal("the transaction neither finished nor waited on a lock")
+		}
+		select {
+		case err := <-done:
+			return true, err
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// result is f's error, once it returns.
+func (o *orgTx) result(done <-chan error) error {
+	o.w.t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		o.w.t.Fatal("the transaction did not finish")
+		return nil
+	}
+}
+
+// moveToDone is the merge step's move of task to done, in tx.
+func (w *world) moveToDone(tx pgx.Tx, task string) error {
+	_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, w.project, task, "", "done", "pull requests merged")
+	return err
+}
+
 // Both blockers of one task move to done in overlapping transactions: the
 // second waits on the first, sees it merged, and releases the task once.
 func TestTwoBlockersMergingTogetherReleaseTheTaskOnce(t *testing.T) {
@@ -251,58 +327,19 @@ func TestTwoBlockersMergingTogetherReleaseTheTaskOnce(t *testing.T) {
 	w.mergedPR(first)
 	w.mergedPR(second)
 	ctx := context.Background()
-	begin := func() pgx.Tx {
-		tx, err := w.app.Pool.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
-			t.Fatal(err)
-		}
-		return tx
-	}
-	done := func(tx pgx.Tx, task string) error {
-		_, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, task, "", "done", "pull requests merged")
-		return err
-	}
-	tx1, tx2 := begin(), begin()
-	defer tx1.Rollback(ctx)
-	defer tx2.Rollback(ctx)
-	var pid2 uint32
-	if err := tx2.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid2); err != nil {
+	tx1, tx2 := w.openTx(), w.openTx()
+	if err := w.moveToDone(tx1.Tx, first); err != nil {
 		t.Fatal(err)
 	}
-	if err := done(tx1, first); err != nil {
-		t.Fatal(err)
-	}
-	moved := make(chan error, 1)
-	go func() { moved <- done(tx2, second) }()
+	moved := tx2.async(func() error { return w.moveToDone(tx2.Tx, second) })
 	// tx2 either finishes its move, or waits on a lock tx1 holds; either
 	// way tx1 commits next, and tx2 after it.
-	waiting := func() bool {
-		return w.count(`SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'`, int64(pid2)) == 1
-	}
-	var err2 error
-	finished := false
-	for deadline := time.Now().Add(10 * time.Second); !finished && !waiting(); {
-		if time.Now().After(deadline) {
-			t.Fatal("tx2 neither finished nor waited on a lock")
-		}
-		select {
-		case err2 = <-moved:
-			finished = true
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	finished, err2 := tx2.finishedOrWaiting(moved)
 	if err := tx1.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if !finished {
-		select {
-		case err2 = <-moved:
-		case <-time.After(10 * time.Second):
-			t.Fatal("tx2 did not finish after tx1 committed")
-		}
+		err2 = tx2.result(moved)
 	}
 	if err2 != nil {
 		t.Fatal(err2)
@@ -318,6 +355,153 @@ func TestTwoBlockersMergingTogetherReleaseTheTaskOnce(t *testing.T) {
 	}
 	if w.fireAutoStarts() != 1 || w.fireAutoStarts() != 0 {
 		t.Fatal("the request did not fire exactly once")
+	}
+}
+
+// firstOf is the error of whichever of a and b returns first, and which.
+func (w *world) firstOf(a, b <-chan error) (aFirst bool, err error) {
+	w.t.Helper()
+	select {
+	case err := <-a:
+		return true, err
+	case err := <-b:
+		return false, err
+	case <-time.After(10 * time.Second):
+		w.t.Fatal("neither transaction finished")
+		return false, nil
+	}
+}
+
+// A person acts on a delivery parked on its blocker (Chat, Start anyway:
+// its delivery's row, then its task's, as LockEscalationTx takes them)
+// while the blocker merges: both commit, and the task is released once.
+func TestAMergeAndAPersonActingOnTheParkedDependantBothCommit(t *testing.T) {
+	w := newWorld(t)
+	blocker, task := w.task(), w.task()
+	w.deliver(task)
+	w.blocks(blocker, task)
+	w.until("the delivery to park", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'implementRun' AND status = 'waiting'`, task) == 1
+	})
+	w.mergedPR(blocker)
+	ctx := context.Background()
+	person, merge := w.openTx(), w.openTx()
+	if _, err := delivery.LoadDelivery(ctx, person, task); err != nil {
+		t.Fatal(err)
+	}
+	merged := merge.async(func() error { return w.moveToDone(merge.Tx, blocker) })
+	if finished, err := merge.finishedOrWaiting(merged); finished {
+		t.Fatalf("the merge signalled a delivery the person holds: %v", err)
+	}
+	acted := person.async(func() error { return delivery.LockTaskTx(ctx, person, task) })
+	if personFirst, err := w.firstOf(acted, merged); !personFirst || err != nil {
+		t.Fatalf("person first %v: %v", personFirst, err)
+	}
+	if err := person.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := merge.result(merged); err != nil {
+		t.Fatalf("the merge: %v", err)
+	}
+	if err := merge.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.events(task, "task.unblocked"); n != 1 {
+		t.Fatalf("%d task.unblocked", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1 AND s.name = 'relations.unblocked'`, task); n != 1 {
+		t.Fatalf("%d relations.unblocked signals", n)
+	}
+}
+
+// The worker fires a request (its task_auto_starts row, then the task's
+// guard) while a blocker added since merges: both commit, the fire is
+// refused on the blocker it saw open, and the merge marks the request due
+// again, so the next sweep starts the task.
+func TestAMergeAndTheWorkerFiringItsDependantBothCommit(t *testing.T) {
+	w := newWorld(t)
+	blocker, task := w.task(), w.task()
+	w.blocks(blocker, task)
+	w.autoStart(task, "deliver")
+	mustExec(t, w.owner, `UPDATE task_auto_starts SET due_at = now() WHERE task_id = $1`, task)
+	w.mergedPR(blocker)
+	ctx := context.Background()
+	fire, merge := w.openTx(), w.openTx()
+	if _, err := fire.Exec(ctx, `SELECT 1 FROM task_auto_starts WHERE task_id = $1 FOR UPDATE`, task); err != nil {
+		t.Fatal(err)
+	}
+	merged := merge.async(func() error { return w.moveToDone(merge.Tx, blocker) })
+	if finished, err := merge.finishedOrWaiting(merged); finished {
+		t.Fatalf("the merge marked due a request the worker holds: %v", err)
+	}
+	guarded := fire.async(func() error { return delivery.RefuseBlockedTx(ctx, fire, task) })
+	fireFirst, err := w.firstOf(guarded, merged)
+	if _, blocked := delivery.AsBlocked(err); !fireFirst || !blocked {
+		t.Fatalf("fire first %v: %v", fireFirst, err)
+	}
+	// As fire takes a refusal: the request waits, not due.
+	if _, err := fire.Exec(ctx, `UPDATE task_auto_starts SET due_at = NULL WHERE task_id = $1`, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := fire.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := merge.result(merged); err != nil {
+		t.Fatalf("the merge: %v", err)
+	}
+	if err := merge.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.fireAutoStarts() != 1 {
+		t.Fatal("the merge's release of the request was lost")
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 1 {
+		t.Fatalf("%d deliveries", n)
+	}
+}
+
+// Two merges whose dependants cross: B blocks A and D, A blocks D, and A
+// was started past B. A holds its own row while B's merge releases B's
+// dependants (D before A, by id), then A's merge releases D: both commit,
+// and D, free once both are, is released once.
+func TestTwoMergesWithCrossedDependantsBothCommit(t *testing.T) {
+	w := newWorld(t)
+	d := w.task()
+	a, b := w.task(), w.task()
+	w.blocks(b, a)
+	w.blocks(b, d)
+	w.blocks(a, d)
+	w.mergedPR(a)
+	w.mergedPR(b)
+	ctx := context.Background()
+	ta, tb := w.openTx(), w.openTx()
+	if _, err := ta.Exec(ctx, `UPDATE tasks SET updated_at = now() WHERE id = $1`, a); err != nil {
+		t.Fatal(err)
+	}
+	mergedB := tb.async(func() error { return w.moveToDone(tb.Tx, b) })
+	finishedB, errB := tb.finishedOrWaiting(mergedB)
+	mergedA := ta.async(func() error { return w.moveToDone(ta.Tx, a) })
+	if !finishedB {
+		var bFirst bool
+		if bFirst, errB = w.firstOf(mergedB, mergedA); !bFirst {
+			t.Fatalf("A's merge returned first, with B's waiting: %v", errB)
+		}
+	}
+	if errB != nil {
+		t.Fatalf("B's merge: %v", errB)
+	}
+	if err := tb.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := ta.result(mergedA); err != nil {
+		t.Fatalf("A's merge: %v", err)
+	}
+	if err := ta.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.events(d, "task.unblocked"); n != 1 {
+		t.Fatalf("%d task.unblocked on D", n)
 	}
 }
 
