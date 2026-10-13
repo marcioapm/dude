@@ -465,6 +465,16 @@ events, which is what makes the UI live. Point it at Postgres directly or at
 a session-mode pool; `LISTEN` does not work through PgBouncer in transaction
 mode.
 
+The orchestrator's database URL has the same requirement. When dude pushes
+a fix to an open pull request, it asks reviewers again under a session
+advisory lock that spans several transactions and the GitHub calls between
+them. Through transaction-mode pooling those statements land on different
+server sessions, so the lock serializes nothing. The orchestrator logs
+`re-request lock was not held by its own session at unlock` when it sees
+this. At most a quarter of the orchestrator's pool (8 connections at most,
+and 1 for a pool under 8) is held by these re-requests at once; a step
+past that waits and tries again.
+
 ## Upgrading
 
 1. Verify the tarball against `SHA256SUMS` and unpack it beside the running
