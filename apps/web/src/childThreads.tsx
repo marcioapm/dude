@@ -1,16 +1,44 @@
-/**
- * A tool call's child sessions under its card: one ChatThread each (role
- * subagent), with the child's own calls and messages inside, and while one
- * waits on a permission nothing in the Run can answer, that said three
- * times — the thread's header, a note on its stuck call, a notice.
- *
- * Every thread has an Open action showing the child alone in a dialog: a
- * child session has no route of its own, and at depth 3+ the thread is
- * header-only, so the dialog is the only way to read it there.
- */
+/** Folded child rows under their spawning calls, and the rail's quicklinks. */
 
-import { memo, type ReactNode } from "react";
-import { ToolCallCard } from "@dude/design-system/components";
+import { createContext, memo, useContext, type ReactNode } from "react";
+import { AgentAvatar, Duration, SessionRailBlock, ToolCallCard } from "@dude/design-system/components";
+import { childSummary } from "./childThreadView.tsx";
+import type { ChildTurn, Turn } from "./api/conversation.ts";
+
+export const ChildOpenContext = createContext<((id: string) => void) | undefined>(undefined);
+
+export function childEntries(turns: readonly (Turn | ChildTurn["turns"][number])[]): Array<{ child: ChildTurn; call: ToolTurn }> {
+  return turns.flatMap((turn) => turn.kind === "tool" ? turn.children.flatMap((child) => [
+    { child, call: turn }, ...childEntries(child.turns),
+  ]) : []);
+}
+
+export function ChildStatus({ child }: { child: ChildTurn }) {
+  const waiting = child.status === "running" ? child.waitingOn : null;
+  const tool = child.turns.findLast((turn) => turn.kind === "tool");
+  return <span style={{ color: waiting ? "var(--ds-tone-attention-fg)" : "var(--ds-color-text-muted)" }}>
+    {waiting ? <>waiting <Duration since={waiting.since} live /> on a permission</>
+      : child.status === "running" ? `running${tool?.kind === "tool" ? ` · ${tool.tool}` : " · thinking"}`
+      : `${child.status === "completed" ? "done" : child.status} · ${childSummary(child) ?? ""}`}
+  </span>;
+}
+
+export function SubagentsBlock({ turns, onOpen }: { turns: readonly Turn[]; onOpen: (id: string) => void }) {
+  const entries = childEntries(turns);
+  if (!entries.length) return null;
+  const children = entries.filter(({ child }) => child.parentChildId === null).map(({ child }) => child)
+    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  return <SessionRailBlock label={`Subagents · ${entries.length}`} live={entries.some(({ child }) => child.status === "running")} data-testid="rail-subagents">
+    {children.map((child) => <button key={child.id} type="button" data-child={child.id} onClick={() => onOpen(child.id)}
+      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 8px", border: 0, background: "transparent", textAlign: "left", color: "var(--ds-color-text-primary)" }}>
+      <AgentAvatar role="subagent" size="xs" live={child.status === "running"} />
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0, fontSize: "var(--ds-text-xs)" }}>
+        <span title={child.title} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{child.title}</span>
+        <ChildStatus child={child} />
+      </span>
+    </button>)}
+  </SessionRailBlock>;
+}
 import type { ToolTurn } from "./api/conversation.ts";
 import { ChildThreadView, type ChildThreadProps } from "./childThreadView.tsx";
 
@@ -43,5 +71,6 @@ function sameChild(a: ChildThreadProps, b: ChildThreadProps): boolean {
 }
 
 const ChildThread = memo(function ChildThread(props: ChildThreadProps) {
-  return <ChildThreadView {...props} />;
+  const onOpen = useContext(ChildOpenContext);
+  return <ChildThreadView {...props} onOpen={onOpen} />;
 }, sameChild);

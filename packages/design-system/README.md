@@ -746,8 +746,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   with `role="subagent"` directly under the call's `ToolCallCard`, one per
   child, side by side when one turn started several. Its title is the
   description the parent gave and the subagent type; inside, its tool calls
-  and messages (never its thinking). Live it stays open; done, it folds to
-  its summary, turns, cost and duration.
+  and messages (never its thinking). In dude it is always a folded row:
+  the rail's Subagents block opens its transcript in a side panel; its own
+  children are folded rows there, navigating that same panel.
 - **Waiting.** A live child blocked on something nothing in the Run can
   answer (a permission its harness never forwarded) is the thread's one
   attention area: `waiting` turns the rail and wash to the attention mark

@@ -41,7 +41,7 @@ import {
   CanRunContainersBadge,
   ImageViewer,
 } from "@dude/design-system/components";
-import { Badge, Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
+import { Badge, Button, Callout, Dialog, IconButton, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -54,7 +54,9 @@ import {
   PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
-import { ToolWithChildren } from "../childThreads.tsx";
+import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
+import { ChildBody } from "../childBody.tsx";
+import { childTitle } from "../childThreadView.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
 import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -277,6 +279,45 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     }
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
+  const [childPath, setChildPath] = useState<string[]>([]);
+  const openChild = useCallback((id: string) => setChildPath([id]), []);
+  const closeChild = useCallback(() => setChildPath([]), []);
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 959px)");
+    const change = () => setNarrow(media.matches);
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
+  useEffect(() => { setChildPath([]); }, [runId]);
+  useEffect(() => {
+    if (!childPath.length) return;
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") closeChild(); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [childPath.length, closeChild]);
+  const entries = childEntries(conversation.turns);
+  const openedChild = entries.find(({ child }) => child.id === childPath.at(-1));
+  const parentChild = entries.find(({ child }) => child.id === childPath.at(-2));
+  const navigateChild = useCallback((id: string) => setChildPath((path) => [...path, id]), []);
+  const childPanel = openedChild ? <ChildOpenContext.Provider value={navigateChild}>
+    <div data-testid="child-panel" data-child={openedChild.child.id} style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div style={{ padding: 12, background: "var(--ds-color-chrome)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span className="ds-label">Subagent</span>
+          <IconButton icon="close" label="Close subagent" size="sm" variant="quiet" onClick={closeChild} />
+        </div>
+        {parentChild ? <Button leadingIcon="chevron-left" size="sm" variant="quiet" onClick={() => setChildPath((path) => path.slice(0, -1))}>{parentChild.child.title}</Button> : null}
+        <h3>{childTitle(openedChild.child)}</h3>
+        <ChildStatus child={openedChild.child} />
+      </div>
+      <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+        <ChildPanelBody child={openedChild.child} revision={openedChild.child.revision} settled={openedChild.child.settled} briefing={childBriefing(openedChild.call.args)} />
+      </div>
+    </div>
+  </ChildOpenContext.Provider> : null;
+  const panelSlot = childPanel && !narrow ? <aside aria-label="Subagent" style={{ width: "clamp(480px, 38vw, 640px)", flexShrink: 0, minHeight: 0 }}>{childPanel}</aside> : null;
+  const childDialog = childPanel && narrow ? <Dialog open size="xl" context="Subagent" title={openedChild!.child.title} onOpenChange={(open) => { if (!open) closeChild(); }}>{childPanel}</Dialog> : null;
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
   // the same one, appended to and changed in place.
@@ -477,6 +518,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     // page around it is the context.
     const asking = conversation.openQuestion;
     return (
+      <ChildOpenContext.Provider value={openChild}>
       <div className="runScreen" data-view="chat" data-testid="chat-screen">
         <div className="runView">
           <div className="runChat">
@@ -527,7 +569,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 onDownload={(i, variant) => void images.download(viewing.turn.attachments[i]!, variant)}
               />
             ) : null}
-            <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
+            {panelSlot ?? <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
               <SessionRailBlock label="Briefed with">
                 <SessionFacts facts={chat.briefedWith} />
               </SessionRailBlock>
@@ -541,17 +583,20 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                     : <CostDisplay usd={modelCostShown(conversation.costUsd, conversation.costSource.from)} /> },
                 ]} />
               </SessionRailBlock>
+              <SubagentsBlock turns={conversation.turns} onOpen={openChild} />
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
                 </SessionRailBlock>
               ) : null}
-            </SessionRail>
+            </SessionRail>}
+            {childDialog}
           </div>
         </div>
         {notice ? <Callout tone="neutral" data-testid="conflict-notice">{notice.text}</Callout> : null}
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
+      </ChildOpenContext.Provider>
     );
   }
   // A checkout to show: a Run with one, or any Run that has reported a diff
@@ -609,6 +654,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   );
 
   return (
+    <ChildOpenContext.Provider value={openChild}>
     <div className="runScreen" data-view={view} data-testid="run-screen">
       {/* The whole session takes a dropped image, header and rail included, on the conversation:
           into the composer's tray, or, while several questions wait on you, their note's. */}
@@ -711,7 +757,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               />
             ) : null}
             {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
-            <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
+            {panelSlot ?? <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
               <SessionRailBlock label="Session">
                 <SessionFacts facts={[
                   ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
@@ -720,6 +766,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 ]} />
                 {terminal ? <div className="runRailTerminal"><TerminalLink href={terminal} /></div> : null}
               </SessionRailBlock>
+              <SubagentsBlock turns={conversation.turns} onOpen={openChild} />
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
@@ -733,7 +780,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   }} />
                 </SessionRailBlock>
               ) : null}
-            </SessionRail>
+            </SessionRail>}
+            {childDialog}
           </div>
         )}
       </div>
@@ -789,8 +837,25 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         </Dialog>
       ) : null}
     </div>
+    </ChildOpenContext.Provider>
   );
 });
+
+const ChildPanelBody = memo(function ChildPanelBody({ child, briefing }: {
+  child: import("../api/conversation.ts").ChildTurn;
+  revision: number;
+  settled: boolean;
+  briefing: string | undefined;
+}) {
+  return <ChildBody child={child} depth={0} briefing={briefing} />;
+}, (a, b) => a.child.id === b.child.id && a.revision === b.revision && a.settled === b.settled && a.briefing === b.briefing);
+
+function childBriefing(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const input = args as Record<string, unknown>;
+  const text = input["prompt"] ?? input["description"];
+  return typeof text === "string" ? text : undefined;
+}
 
 /**
  * The turns, with each run of what an agent does between its messages —

@@ -11,7 +11,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
-import { renderTurn } from "../src/screens/RunScreen.tsx";
+import { RunScreen, renderTurn } from "../src/screens/RunScreen.tsx";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { RUN_ID } from "../src/fixtures/data.ts";
+import { until } from "./dom.ts";
 import { apply, emptyProjection, project, snapshot } from "../src/api/conversation.ts";
 import * as viewModule from "../src/childThreadView.tsx";
 import * as bodyModule from "../src/childBody.tsx";
@@ -96,9 +99,8 @@ test("a live child is an open subagent thread under the call's card, with its ca
   expect(thread.getAttribute("aria-label")).toBe("Subagent subagent: Inspect test capture setup · explore");
   // Under the parent's card, not inside it.
   expect(threadsUnder(card(el, "Inspect test capture setup"))).toEqual(["ses_kid"]);
-  const body = thread.querySelector("[role='group']")!;
-  expect(body.textContent).toContain("grep");
-  expect(body.textContent).toContain("No viewport is set in the repo.");
+  expect(thread.querySelector("[role='group']")).toBeNull();
+  expect(el.querySelector("[data-tool='grep']")).toBeNull();
   expect(thread.getAttribute("data-waiting")).toBeNull();
 });
 
@@ -109,9 +111,8 @@ test("a child waiting on a permission says so in its header, on its stuck call a
   const thread = el.querySelector("[data-testid='child-thread']")!;
   expect(thread.getAttribute("data-waiting")).toBe("true");
   expect(thread.querySelector("[data-testid='chat-thread-waiting']")!.textContent).toMatch(/^waiting 1h 57m on a permission$/);
-  expect(thread.querySelector("[data-testid='child-waiting-notice']")!.textContent)
-    .toContain("Waiting on a permission: external_directory for /opt/venv/*. Nothing in this Run can answer it.");
-  expect(thread.textContent).toContain("nothing in this Run can allow or refuse it");
+  expect(thread.querySelector("[data-testid='child-waiting-notice']")).toBeNull();
+  expect(thread.textContent).not.toContain("nothing in this Run can allow or refuse it");
 });
 
 test("a done child folds to its summary, with its turns counted", async () => {
@@ -160,7 +161,7 @@ test("a child heard before its parent's call is drawn once, under that call's on
 test("a child watched while it works folds when it ends", async () => {
   const before = [...start(), ev(EventTypes.ChildMessage, { ...kid, text: "Reading." }, 3)];
   const el = await render(before);
-  expect(el.querySelector("[data-testid='child-thread'] [role='group']")).toBeTruthy();
+  expect(el.querySelector("[data-testid='child-thread'] [role='group']")).toBeNull();
   const { turns } = project([...before, ev(EventTypes.ChildEnded, { ...kid, status: "completed", summary: "Done: 1280×720." }, 1)]);
   await act(async () => root!.render(<>{turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
   const thread = el.querySelector("[data-testid='child-thread']")!;
@@ -180,35 +181,23 @@ const deep = () => [...start(),
 const threadOf = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-testid='child-thread'][data-child='${id}']`);
 const header = (thread: HTMLElement) => thread.querySelector<HTMLElement>(":scope > [role='button']")!;
 
-test("a live child starts open at depth 1 and collapsed at depth 2, as the design system's depth rule says", async () => {
+test("a live child starts folded and deeper children are not drawn inline", async () => {
   const el = await render(deep());
-  expect(threadOf(el, "ses_kid")!.querySelector(":scope > [role='group']")).toBeTruthy();
-  const grand = threadOf(el, "ses_grand")!;
-  expect(grand.getAttribute("data-status")).toBe("running");
-  expect(header(grand).getAttribute("aria-expanded")).toBe("false");
-  expect(grand.querySelector(":scope > [role='group']")).toBeNull();
+  expect(threadOf(el, "ses_kid")!.querySelector("[role='group']")).toBeNull();
+  expect(header(threadOf(el, "ses_kid")!).getAttribute("aria-expanded")).toBeNull();
+  expect(threadOf(el, "ses_grand")).toBeNull();
+  expect(threadOf(el, "ses_great")).toBeNull();
 });
 
-test("a depth-3 child is its header with an Open action, which shows the child's own calls and messages", async () => {
-  const el = await render(deep());
-  await act(async () => header(threadOf(el, "ses_grand")!).click());
-  const great = threadOf(el, "ses_great")!;
-  expect(great.getAttribute("data-depth")).toBe("3");
-  expect(great.querySelector("[role='group']")).toBeNull();
-  const open = great.querySelector<HTMLButtonElement>("button[aria-label='Open session']")!;
-  expect(open).toBeTruthy();
-  await act(async () => open.click());
-  const session = document.querySelector<HTMLElement>("[role='dialog'] [data-testid='child-session']")!;
-  expect(session.getAttribute("data-child")).toBe("ses_great");
-  expect(session.textContent).toContain("Found it at depth three.");
-  expect(document.querySelector("[role='dialog']")!.textContent).toContain("Deepest");
-});
-
-test("the header of a depth-3 child opens it too", async () => {
-  const el = await render(deep());
-  await act(async () => header(threadOf(el, "ses_grand")!).click());
-  await act(async () => header(threadOf(el, "ses_great")!).click());
-  expect(document.querySelector("[role='dialog'] [data-testid='child-session']")?.getAttribute("data-child")).toBe("ses_great");
+test("opening a row uses its screen callback without creating a per-thread dialog", async () => {
+  const { ChildOpenContext } = await import("../src/childThreads.tsx");
+  const events = deep();
+  const el = await render(events);
+  const opened: string[] = [];
+  await act(async () => root!.render(<ChildOpenContext.Provider value={(id) => opened.push(id)}>{project(events).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</ChildOpenContext.Provider>));
+  await act(async () => header(threadOf(el, "ses_kid")!).click());
+  expect(opened).toEqual(["ses_kid"]);
+  expect(document.querySelector("[role='dialog']")).toBeNull();
 });
 
 test("a child still running when its Run ended shows it settled, then how it ended once that is heard", async () => {
@@ -232,6 +221,64 @@ test("a child still running when its Run ended shows it settled, then how it end
   expect(thread.getAttribute("data-status")).toBe("completed");
   expect(thread.textContent).toContain("Done now");
   expect(thread.textContent).toContain("$0.37");
+});
+
+async function screen(events: PersistedEvent[]) {
+  class Client extends FixtureClient {
+    override async events() { return { events, nextCursor: events.at(-1)?.cursor ?? 0 }; }
+  }
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root!.render(<RunScreen client={new Client("a")} runId={RUN_ID} onBack={() => {}} />));
+  await until(() => host!.querySelector("[data-testid='session-rail']"), "session rail");
+  await act(async () => { for (const event of events) emit({ ...event, runId: RUN_ID }); });
+  return host;
+}
+
+test("the screen opens a child beside its transcript, navigates children and returns, then Escape closes", async () => {
+  const el = await screen(deep());
+  expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='child-thread']")).toHaveLength(1);
+  const rail = el.querySelector("[data-testid='rail-subagents']")!;
+  expect(rail.textContent).toContain("Subagents · 3");
+  expect(rail.querySelectorAll("button[data-child]")).toHaveLength(1);
+  expect(rail.textContent).toContain("running · task");
+  await act(async () => header(threadOf(el, "ses_kid")!).click());
+  const panel = () => el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
+  expect(panel().getAttribute("data-child")).toBe("ses_kid");
+  expect(panel().textContent).toContain("Inspect test capture setup");
+  expect(panel().querySelector("[data-tool='task']")).toBeTruthy();
+  expect(el.querySelector("[data-testid='session-rail']")).toBeNull();
+  expect(threadOf(panel(), "ses_grand")!.querySelector("[role='group']")).toBeNull();
+  await act(async () => header(threadOf(panel(), "ses_grand")!).click());
+  expect(panel().getAttribute("data-child")).toBe("ses_grand");
+  const back = [...panel().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Inspect test capture setup")!;
+  await act(async () => back.click());
+  expect(panel().getAttribute("data-child")).toBe("ses_kid");
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button")!.click());
+  expect(panel().getAttribute("data-child")).toBe("ses_kid");
+});
+
+test("permission waiting stays on the row and rail, with the notice and stuck call only in the panel", async () => {
+  const el = await screen([...start(),
+    ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k8", tool: "grep", input: { path: "/opt/venv" } }, 117),
+    ev(EventTypes.ChildWaiting, { ...kid, permission: "external_directory", patterns: ["/opt/venv/*"], answered: "none" }, 117)]);
+  expect(threadOf(el, "ses_kid")!.textContent).toContain("waiting 1h 57m on a permission");
+  expect(el.querySelector("[data-testid='rail-subagents']")!.textContent).toContain("waiting 1h 57m on a permission");
+  expect(el.querySelector("[data-testid='child-waiting-notice']")).toBeNull();
+  await act(async () => header(threadOf(el, "ses_kid")!).click());
+  const panel = el.querySelector("[data-testid='child-panel']")!;
+  expect(panel.querySelector("[data-testid='child-waiting-notice']")!.textContent).toContain("Nothing in this Run can answer it.");
+  expect(panel.textContent).toContain("nothing in this Run can allow or refuse it");
+  expect(panel.textContent).toContain("waiting 1h 57m on a permission");
+});
+
+test("a Run without children has no Subagents block", async () => {
+  const el = await screen([]);
+  expect(el.querySelector("[data-testid='rail-subagents']")).toBeNull();
 });
 
 describe("a child's thread is drawn again only when it or a child under it changed", () => {
@@ -280,8 +327,8 @@ describe("a child's thread is drawn again only when it or a child under it chang
     clear();
     await draw();
     // The spies are the ones rendering: every thread and every open body ran on mount.
-    expect(threadRuns).toEqual({ a: 1, b: 1, "a-grand": 1 });
-    expect(bodyRuns).toEqual({ a: 1, b: 1, "a-grand": 0 });
+    expect(threadRuns).toEqual({ a: 1, b: 1, "a-grand": 0 });
+    expect(bodyRuns).toEqual({ a: 0, b: 0, "a-grand": 0 });
     clear();
   });
 
@@ -289,7 +336,7 @@ describe("a child's thread is drawn again only when it or a child under it chang
     apply(state, [ev(EventTypes.ChildMessage, { childId: "a", callId: "s1", text: "Alpha speaks." })]);
     await draw();
     expect(threadRuns.a).toBeGreaterThan(0);
-    expect(bodyRuns.a).toBeGreaterThan(0);
+     expect(bodyRuns.a).toBe(0);
     expect(threadRuns.b).toBe(0);
     expect(bodyRuns.b).toBe(0);
     expect(threadOf(host!, "a")!.textContent).toContain("Alpha speaks.");
@@ -308,24 +355,20 @@ describe("a child's thread is drawn again only when it or a child under it chang
   test("an event on a's grandchild runs its thread and a's, and not b's", async () => {
     apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
     await draw();
-    expect(threadRuns["a-grand"]).toBeGreaterThan(0);
+    expect(threadRuns["a-grand"]).toBe(0);
     expect(threadRuns.a).toBeGreaterThan(0);
     expect(threadRuns.b).toBe(0);
     expect(bodyRuns.b).toBe(0);
-    // Depth 2 starts collapsed: the new message shows in its header's turn count.
-    expect(threadOf(host!, "a-grand")!.textContent).toContain("1 turns");
+    expect(threadOf(host!, "a-grand")).toBeNull();
   });
 
-  test("an event on a's expanded grandchild runs the grandchild's body too", async () => {
-    await act(async () => header(threadOf(host!, "a-grand")!).click());
-    clear();
+  test("a hidden grandchild's event does not mount a transcript body", async () => {
     apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
     await draw();
-    expect(bodyRuns["a-grand"]).toBeGreaterThan(0);
-    expect(threadRuns["a-grand"]).toBeGreaterThan(0);
+    expect(bodyRuns["a-grand"]).toBe(0);
+    expect(threadRuns.a).toBeGreaterThan(0);
     expect(threadRuns.b).toBe(0);
-    expect(bodyRuns.b).toBe(0);
-    expect(threadOf(host!, "a-grand")!.querySelector("[role='group']")!.textContent).toContain("Grandchild speaks.");
+    expect(host!.textContent).not.toContain("Grandchild speaks.");
   });
 
   test("a waiting on a permission, then its next call clearing it, runs a both times and never b", async () => {
