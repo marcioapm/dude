@@ -19,8 +19,9 @@
 
 import { z } from "zod";
 import {
-  EventTypes, NOT_STARTED_STATUSES, firstName, keyList, neverMergesRefusal, newId,
-  type AutoStartEnd, type AutoStartHow, type BlockerRef, type TaskRelationView, type TaskRelations, type TaskStatus,
+  AUTO_START_HOW_LABEL, EventTypes, NOT_STARTED_STATUSES, firstName, keyList, neverMergesRefusal, newId,
+  type AutoStartEnd, type AutoStartHow, type BlockerRef, type RelationSide, type TaskRelationKind, type TaskRelationView, type TaskRelations,
+  type TaskStatus,
 } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { HttpError, badRequest, json, noContent, notFound, parseBody } from "../http.ts";
@@ -57,7 +58,7 @@ async function findTask(scope: OrgScope, idOrKey: string): Promise<TaskRow | nul
 const ownerName = (name: string | null | undefined) => firstName(name, "its owner");
 
 /** Whether `person` may remove the edge `from → to` of `kind`, and if not, whose it is. */
-function removal(kind: "blocks" | "related", from: TaskRow, to: TaskRow, here: TaskRow, person: string): { can: boolean; by: string | null } {
+function removal(kind: TaskRelationKind, from: TaskRow, to: TaskRow, here: TaskRow, person: string): { can: boolean; by: string | null } {
   const owners = kind === "blocks" ? [to] : [from, to];
   if (owners.some((t) => t.ownerId === null || t.ownerId === person)) return { can: true, by: null };
   const holder = owners.find((t) => t.id === here.id) ?? owners[0]!;
@@ -68,6 +69,22 @@ function removal(kind: "blocks" | "related", from: TaskRow, to: TaskRow, here: T
 /** Tell open pages that relations changed (live only, not in the ledger). */
 async function relationsChanged(scope: OrgScope, taskIds: string[]): Promise<void> {
   await scope.sql`SELECT pg_notify('dude_events', ${JSON.stringify({ organizationId: scope.organizationId, relationsChanged: { taskIds } })})`;
+}
+
+/** The edge `side` names from `here`, as stored: a related pair in id order. */
+function storedEdge(side: RelationSide, here: TaskRow, other: TaskRow): { from: TaskRow; to: TaskRow; kind: TaskRelationKind } {
+  if (side === "blocked_by") return { from: other, to: here, kind: "blocks" };
+  if (side === "blocks") return { from: here, to: other, kind: "blocks" };
+  return here.id < other.id ? { from: here, to: other, kind: "related" } : { from: other, to: here, kind: "related" };
+}
+
+/**
+ * The organisation's relation lock, one writer at a time, as the
+ * orchestrator's lockRelations takes it: a loop check and the insert that
+ * would close it must see each other's edges.
+ */
+async function lockRelations(scope: OrgScope): Promise<void> {
+  await scope.sql`SELECT pg_advisory_xact_lock(hashtext('task_relations:' || ${scope.organizationId}))`;
 }
 
 async function getRelations(ctx: RequestContext): Promise<Response> {
@@ -137,8 +154,14 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
   return out;
 }
 
+const RELATION_SIDES = ["blocked_by", "blocks", "related"] as const satisfies readonly RelationSide[];
+
+function isRelationSide(s: string): s is RelationSide {
+  return (RELATION_SIDES as readonly string[]).includes(s);
+}
+
 const addInput = z.object({
-  kind: z.enum(["blocked_by", "blocks", "related"]),
+  kind: z.enum(RELATION_SIDES),
   /** The other task, by key (CP-41) or id. */
   task: z.string().min(1).max(200),
   why: z.string().max(2000).optional(),
@@ -152,12 +175,8 @@ async function addRelation(ctx: RequestContext): Promise<Response> {
     const other = await findTask(scope, input.task);
     if (!other) throw notFound(`no task ${input.task} in this organisation`);
     if (other.id === here.id) throw new HttpError(400, "a task can't be related to itself", "self");
-    let [from, to] = input.kind === "blocked_by" ? [other, here] : [here, other];
-    const kind = input.kind === "related" ? "related" : "blocks";
-    if (kind === "related" && from.id > to.id) [from, to] = [to, from];
-    // One writer at a time per organisation: the loop check and the insert
-    // must see each other's edges.
-    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('task_relations:' || ${scope.organizationId}))`;
+    const { from, to, kind } = storedEdge(input.kind, here, other);
+    await lockRelations(scope);
     const existing = (await scope.sql`
       SELECT kind FROM task_relations WHERE (from_task_id = ${here.id} AND to_task_id = ${other.id})
         OR (from_task_id = ${other.id} AND to_task_id = ${here.id})`) as Array<{ kind: string }>;
@@ -183,22 +202,20 @@ async function addRelation(ctx: RequestContext): Promise<Response> {
 
 async function removeRelation(ctx: RequestContext): Promise<Response> {
   const side = ctx.params.kind!;
-  if (!["blocked_by", "blocks", "related"].includes(side)) throw badRequest("kind is blocked_by, blocks or related");
+  if (!isRelationSide(side)) throw badRequest("kind is blocked_by, blocks or related");
   let freed = false;
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const here = await findTask(scope, ctx.params.id!);
     const other = await findTask(scope, ctx.params.other!);
     if (!here || !other) throw notFound("no such relation");
-    let [from, to] = side === "blocked_by" ? [other, here] : [here, other];
-    const kind = side === "related" ? "related" : "blocks";
-    if (kind === "related" && from.id > to.id) [from, to] = [to, from];
+    const { from, to, kind } = storedEdge(side, here, other);
     const may = removal(kind, from, to, here, ctx.principal.personId);
     if (!may.can) {
       const holder = kind === "blocks" ? to : here;
       const why = kind === "blocks" ? "it holds up their task" : "it's on their task";
       throw new HttpError(403, `only ${ownerName(holder.ownerName)} can remove this relation — ${why}`, "not_owner");
     }
-    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('task_relations:' || ${scope.organizationId}))`;
+    await lockRelations(scope);
     const gone = await scope.sql`
       DELETE FROM task_relations WHERE from_task_id = ${from.id} AND to_task_id = ${to.id} AND kind = ${kind}::task_relation_kind
       RETURNING 1`;
@@ -288,7 +305,7 @@ async function setAutoStart(ctx: RequestContext): Promise<Response> {
       VALUES (${task.id}, ${scope.organizationId}, ${input.how}, ${ctx.principal.personId})
       ON CONFLICT (task_id) DO UPDATE SET how = EXCLUDED.how, set_by_person = EXCLUDED.set_by_person, set_at = now(), generation = EXCLUDED.generation, due_at = NULL, fire_attempts = 0`;
     await recordAs(scope, ctx, EventTypes.TaskAutoStartSet, { how: input.how }, { projectId: task.projectId, taskId: task.id });
-    const how = input.how === "deliver" ? "Deliver" : "Talk it through";
+    const how = AUTO_START_HOW_LABEL[input.how];
     await recordAs(scope, ctx, EventTypes.ChatNotice, { about: "auto_start_set",
       text: `${ownerName(ctx.principal.name)} set this to start when it's unblocked, with ${how}. Nothing starts before ${keyList(blockers.map((b) => b.key))} ${blockers.length === 1 ? "merges" : "merge"}.` },
       { projectId: task.projectId, taskId: task.id });
