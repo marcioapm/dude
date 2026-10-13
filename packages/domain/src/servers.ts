@@ -126,6 +126,11 @@ export function egressAllows(list: readonly string[], name: string): boolean {
   });
 }
 
+// A preview's wake timeouts; migration 114's preview_settings() fills the same defaults.
+export const PREVIEW_FIRST_WAKE_TIMEOUT_DEFAULT_MINUTES = 15;
+export const PREVIEW_WAKE_TIMEOUT_DEFAULT_MINUTES = 5;
+export const PREVIEW_WAKE_TIMEOUT_MAX_MINUTES = 120;
+
 /** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
 export const previewSettingsSchema = z.object({
   /**
@@ -138,6 +143,14 @@ export const previewSettingsSchema = z.object({
   /** Hosts (or addresses, CIDR ranges, wildcards) a preview may reach; "*" for anywhere. */
   egress: egressEntries.default([]),
   idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(15),
+  /**
+   * How long lux's waking page waits for a preview before it says "no
+   * answer", until the preview has served once (its first start may build
+   * everything). lux takes up to 24 hours; dude bounds it to 2.
+   */
+  firstWakeTimeoutMinutes: z.number().int().min(1).max(PREVIEW_WAKE_TIMEOUT_MAX_MINUTES).default(PREVIEW_FIRST_WAKE_TIMEOUT_DEFAULT_MINUTES),
+  /** The same for every wake after it has served once (a resume from its snapshot). */
+  wakeTimeoutMinutes: z.number().int().min(1).max(PREVIEW_WAKE_TIMEOUT_MAX_MINUTES).default(PREVIEW_WAKE_TIMEOUT_DEFAULT_MINUTES),
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),
 });

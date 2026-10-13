@@ -129,7 +129,7 @@ describe("a project's servers", () => {
   test("start empty, with the default preview settings", async () => {
     const res = await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`);
     expect(res.status).toBe(200);
-    expect(await body(res)).toEqual({ servers: [], previews: { image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, machineSize: null } });
+    expect(await body(res)).toEqual({ servers: [], previews: { image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null } });
   });
 
   test("a maintainer saves one, and everyone reads it with who changed it", async () => {
@@ -211,12 +211,31 @@ describe("a project's servers", () => {
       imageId: null,
       egress: ["registry.npmjs.org", "proxy.golang.org"],
       idleTimeoutMinutes: 15,
+      firstWakeTimeoutMinutes: 15,
+      wakeTimeoutMinutes: 5,
       machineSize: null,
     });
     const reset = await body(await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {}));
-    expect(reset).toEqual({ image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, machineSize: null });
+    expect(reset).toEqual({ image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null });
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { idleTimeoutMinutes: 0 })).status).toBe(400);
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { image: "ghcr.io/acme/new:1" })).status).toBe(400);
+  });
+
+  test("wake timeouts survive PUT and GET, with integer bounds", async () => {
+    const path = `/v1/projects/${PROJECT}/preview-settings`;
+    const saved = await body(await call(adminKey, "PUT", path, { firstWakeTimeoutMinutes: 120, wakeTimeoutMinutes: 1 }));
+    expect(saved.firstWakeTimeoutMinutes).toBe(120);
+    expect(saved.wakeTimeoutMinutes).toBe(1);
+    const got = await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`));
+    expect(got.previews).toEqual(saved);
+    for (const field of ["firstWakeTimeoutMinutes", "wakeTimeoutMinutes"]) {
+      for (const value of [0, 121, 1.5, "15", null]) {
+        expect((await call(adminKey, "PUT", path, { [field]: value })).status).toBe(400);
+      }
+    }
+    const reset = await body(await call(adminKey, "PUT", path, {}));
+    expect(reset.firstWakeTimeoutMinutes).toBe(15);
+    expect(reset.wakeTimeoutMinutes).toBe(5);
   });
 
   test("egress lux would refuse is refused, saying why", async () => {

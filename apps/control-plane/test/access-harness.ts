@@ -1,6 +1,6 @@
 /**
  * What the Access suites share: a stand-in for the team's certs and identity
- * endpoints, token signing, and members made as migration 114 or an accepted
+ * endpoints, token signing, and members made as migration 115 or an accepted
  * invitation leaves them (an account, and an active person linked to it).
  */
 
@@ -121,7 +121,7 @@ export function databases() {
 }
 
 /**
- * A member of `organizationId` as an accepted invitation (or migration 114)
+ * A member of `organizationId` as an accepted invitation (or migration 115)
  * leaves one: the account for `email`, made if needed, and its active person.
  */
 export async function member(owner: SQL, organizationId: string, email: string,
