@@ -434,7 +434,7 @@ func TestTheFakeLuxsChildIsTheSameOnEveryHarness(t *testing.T) {
 			}
 			for _, st := range []fakelux.ChildStep{
 				{Op: "start", Title: "Investigate UI artifact capture", AgentType: "explore"},
-				{Op: "tool", ToolCallID: "k1", Tool: "bash", Input: map[string]any{"command": "ls /opt"}, Output: "venv"},
+				{Op: "tool", ToolCallID: "k1", Tool: "bash", Input: map[string]any{"command": "ls /opt"}, Done: true, Output: "venv"},
 				{Op: "message", Text: "Found the capture hook."},
 				{Op: "end", Text: "Found the capture hook."},
 			} {

@@ -50,7 +50,7 @@ def test_a_child_session_is_recorded_and_drawn_under_its_call(page: Page, web_ur
     lux_run = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
 
     _child(env, lux_run, "start")
-    _child(env, lux_run, "tool", toolCallId="k1", tool="bash", input={"command": "ls /opt/ui-tests"}, output="lib")
+    _child(env, lux_run, "tool", toolCallId="k1", tool="bash", input={"command": "ls /opt/ui-tests"}, done=True, output="lib")
     _child(env, lux_run, "message", text="No viewport is set in the repo.")
     waits = harness == "opencode"
     if waits:

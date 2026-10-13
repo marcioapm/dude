@@ -26,10 +26,12 @@ type ChildStep struct {
 	Title     string `json:"title,omitempty"`
 	AgentType string `json:"agentType,omitempty"`
 	// tool: the child's call, OpenCode's tool name (bash, read, grep…),
-	// its input and output. message: its text.
+	// its input, and with Done its completion and output (empty is an
+	// output). message: its text.
 	ToolCallID string         `json:"toolCallId,omitempty"`
 	Tool       string         `json:"tool,omitempty"`
 	Input      map[string]any `json:"input,omitempty"`
+	Done       bool           `json:"done,omitempty"`
 	Output     string         `json:"output,omitempty"`
 	Text       string         `json:"text,omitempty"`
 	// wait: the permission asked and its patterns; Claude Code and Codex
@@ -109,7 +111,7 @@ func (s *Server) opencodeChild(run *Run, st ChildStep) {
 			}
 		}
 		oc("part", part)
-		if st.Output != "" {
+		if st.Done {
 			done := map[string]any{}
 			for k, v := range part {
 				done[k] = v
@@ -189,7 +191,7 @@ func (s *Server) claudeChild(run *Run, st ChildStep) {
 		child("user", []any{map[string]any{"type": "text", "text": st.Title}})
 	case "tool":
 		child("assistant", []any{map[string]any{"type": "tool_use", "id": st.ToolCallID, "name": claudeName(st.Tool), "input": st.Input}})
-		if st.Output != "" {
+		if st.Done {
 			child("user", []any{map[string]any{"type": "tool_result", "tool_use_id": st.ToolCallID, "content": st.Output}})
 		}
 		line("system", map[string]any{"subtype": "task_progress", "task_id": st.ChildID, "tool_use_id": st.CallID,
@@ -235,7 +237,7 @@ func (s *Server) codexChild(run *Run, st ChildStep) {
 		item := map[string]any{"type": "commandExecution", "id": st.ToolCallID, "command": "/bin/zsh -lc '" + cmd + "'",
 			"commandActions": []any{map[string]any{"type": "unknown", "command": cmd}}, "status": "inProgress"}
 		on(st.ChildID, "item/started", map[string]any{"item": item})
-		if st.Output != "" {
+		if st.Done {
 			done := map[string]any{}
 			for k, v := range item {
 				done[k] = v
@@ -272,14 +274,14 @@ func (s *Server) playSubagent(run *Run, line string) {
 	}
 	step(ChildStep{Op: "start"})
 	step(ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_read%d", n), Tool: "read", Input: map[string]any{"filePath": "/etc/hostname"},
-		Output: "box"})
+		Done: true, Output: "box"})
 	bash := ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_bash%d", n), Tool: "bash", Input: map[string]any{"command": "cat /etc/hostname"}}
 	if line == "subagent ask" {
 		step(bash)
 		step(ChildStep{Op: "wait", ToolCallID: bash.ToolCallID, Permission: "bash", Patterns: []string{"cat /etc/hostname"}})
 		return
 	}
-	bash.Output = "box"
+	bash.Done, bash.Output = true, "box"
 	step(bash)
 	step(ChildStep{Op: "message", Text: "The hostname is box."})
 	step(ChildStep{Op: "end", Text: "The hostname is box."})
