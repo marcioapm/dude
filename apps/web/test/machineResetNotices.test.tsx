@@ -51,6 +51,11 @@ function reset(note: string, runId: string | null, s: number): PersistedEvent {
 
 const IMPL = run({ id: "run_impl_r" });
 const notices = (lines: ReturnType<typeof conductedLines>) => lines.flatMap((l) => (l.kind === "notice" ? [l.text] : []));
+/** A note-less Reset that moved the conductor's Run. */
+function conductorReset(runId: string, s: number): PersistedEvent {
+  const e = reset("", runId, s);
+  return { ...e, payload: { ...e.payload, role: "conductor" } };
+}
 
 describe("a Reset in the task's Chat", () => {
   test("a live Run's Reset and a layer-only one are notices, whoever decides", () => {
@@ -62,7 +67,7 @@ describe("a Reset in the task's Chat", () => {
 
   test("a Reset that moved a conductor, live or ended, is said only in that conductor's own transcript", () => {
     const conductor = run({ id: "run_cond_r", phase: null, role: "conductor" });
-    const moved: PersistedEvent = { ...reset("", conductor.id, 1), payload: { ...reset("", conductor.id, 1).payload, role: "conductor" } };
+    const moved = conductorReset(conductor.id, 1);
     expect(notices(conductedLines({ decider: "conductor", runs: [conductor] }, [moved]))).toEqual([]);
     expect(notices(conductedLines({ decider: "conductor", runs: [{ ...conductor, status: "completed" }] }, [moved]))).toEqual([]);
   });
@@ -140,10 +145,6 @@ test("a task Deliver runs, with no conductor, shows a layer-only Reset's notice 
 });
 
 describe("a Reset that moved the conductor, in the task's Chat", () => {
-  const conductorReset = (runId: string): PersistedEvent => {
-    const e = reset("", runId, 5);
-    return { ...e, payload: { ...e.payload, role: "conductor" } };
-  };
   const want = `${dudeName(TASK_ID)}: Márcio moved the conductor back to Standard.`;
   const cases: Array<[string, Run[]]> = [
     ["live", [run({ id: "run_cond_live", phase: null, role: "conductor" })]],
@@ -155,7 +156,7 @@ describe("a Reset that moved the conductor, in the task's Chat", () => {
   ];
   for (const [name, runs] of cases) {
     test(`is said once when it is ${name}`, async () => {
-      const client = new ResetClient({ status: "running", decider: "conductor", runs }, [conductorReset(runs[0]!.id)]);
+      const client = new ResetClient({ status: "running", decider: "conductor", runs }, [conductorReset(runs[0]!.id, 5)]);
       const chat = await chatOf(client);
       await until(() => (noticeTexts(chat).includes(want) ? true : null), "the Reset's notice");
       await settle();
