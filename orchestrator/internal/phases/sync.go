@@ -95,6 +95,10 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
+	// How long a turn lux's stop broke waits for lux's reason, and a
+	// move for lux to run the Run again (luxstop.go); zero takes heldWait
+	// and moveWait.
+	HeldWait, MoveWait time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -186,6 +190,10 @@ type phaseRun struct {
 	ImageBuildID string
 	// A machine move of the Run is not settled yet.
 	Moving bool
+	// A turn lux's stop broke, held for lux's reason or a move's end
+	// (luxstop.go), and how long it has been held; nil for none.
+	Broken    *brokenTurn
+	BrokenFor time.Duration
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -236,7 +244,8 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
-	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled
+	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
+	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0)`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -397,13 +406,18 @@ func (s *Syncer) limits() []any {
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
+	var broken []byte
+	var brokenSecs float64
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.SessionID, &r.Phase, &r.Status, &r.Control, &r.Role,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
-		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving)
-	return r, err
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs)
+	if err != nil {
+		return r, err
+	}
+	return r, r.scanBroken(broken, brokenSecs)
 }
 
 // sweepBatch is how many Runs one sweep takes up.
@@ -564,6 +578,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.end(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
+	case r.Status == statusRunning && r.Control == "none" && s.brokenOverdue(r):
+		return true, s.failBroken(ctx, r)
 	}
 	// Following comes first: a finishing Run still needs its stream, because
 	// that is where the push result arrives — including after a restart —
@@ -1930,6 +1946,13 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	if !lux.Terminal(r.LuxState) {
+		// A person's resume of a Run lux resumed itself (a move) has no
+		// stop to wait for: taken up as lux has it.
+		if r.Control == "resume" {
+			if taken, err := s.takeUpLive(ctx, r); taken || err != nil {
+				return true, err
+			}
+		}
 		// Still stopping: follow the stream, where lux will say so.
 		s.follow(r)
 		return false, nil
@@ -2005,7 +2028,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,
-			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
+			turn_done_at = NULL, agent_busy_at = NULL, harness_state = harness_state - 'brokenTurn'
+			WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
 		if err != nil {
 			return err
 		}

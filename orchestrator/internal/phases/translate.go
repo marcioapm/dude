@@ -99,6 +99,8 @@ type translator struct {
 	resumes map[int]bool
 	// A session's refused names said so far (refused).
 	sessionRefused map[string]bool
+	// The placement the last record came from: the one a turn failed in.
+	epoch int
 	// What a Claude Code or Codex turn needs remembered between batches,
 	// saved as runs.harness_state.
 	harnessState
@@ -130,6 +132,7 @@ type harnessState struct {
 	codexThread string
 	codexSpawns map[string][]codexSpawn
 	talkerState
+	stopState
 }
 
 // talkerState is the part of harness_state a conductor or session agent
@@ -167,12 +170,13 @@ type harnessStateJSON struct {
 	CodexThread    string                  `json:"codexThread,omitempty"`
 	CodexSpawns    map[string][]codexSpawn `json:"codexSpawns,omitempty"`
 	talkerState
+	stopState
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState}
+		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState, stopState: h.stopState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -186,7 +190,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		Children: j.Children, codexThread: j.CodexThread, codexSpawns: j.CodexSpawns, talkerState: j.talkerState}
+		Children: j.Children, codexThread: j.CodexThread, codexSpawns: j.CodexSpawns, talkerState: j.talkerState, stopState: j.stopState}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -317,6 +321,9 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 	case "lux":
 		return t.luxEvent(ctx, tx, s, f)
 	case "record":
+		if f.Epoch > 0 {
+			t.epoch = f.Epoch
+		}
 		if f.Event != nil {
 			return t.agentEvent(ctx, tx, s, f)
 		}
@@ -410,6 +417,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		}
 		if state == "running" && t.run.Status == statusScheduled {
 			t.run.Status = statusRunning
+			if err := t.stateSeen(ctx, tx, s, state, str("reason"), f.Epoch); err != nil {
+				return err
+			}
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
 		if lux.Terminal(state) {
@@ -418,7 +428,18 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			if err != nil {
 				return err
 			}
-			return t.ended(ctx, tx, s, state, str("reason"), stage)
+			return t.ended(ctx, tx, s, state, str("reason"), stage, f.Epoch)
+		}
+		if !t.run.talker() {
+			return t.stateSeen(ctx, tx, s, state, str("reason"), f.Epoch)
+		}
+	case evLuxDiskExceeded:
+		var d struct{ UsedBytes, LimitBytes int64 }
+		_ = json.Unmarshal(f.EventData, &d)
+		return t.stopSeen(ctx, tx, s, luxStop{Reason: "disk", Epoch: f.Epoch, UsedBytes: d.UsedBytes, LimitBytes: d.LimitBytes})
+	case "exited":
+		if str("reason") == "oom" {
+			return t.stopSeen(ctx, tx, s, luxStop{Reason: "oom", Epoch: f.Epoch})
 		}
 	case "stage":
 		return t.stage(ctx, tx, s, f)
@@ -543,8 +564,9 @@ const maxRefusedNames = 100
 // has failed. One lux stopped at its time limit is not kept: its running
 // time is spent, so a resume would be stopped again at once. A start that
 // failed before the agent ran says the stage it was in (stage, "" when
-// unknown) and lux's own reason.
-func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason, stage string) error {
+// unknown) and lux's own reason. A reason lux gave for stopping the Run
+// (luxStopWords) is said first, the agent's held failure after it.
+func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason, stage string, epoch int) error {
 	// A conductor or session agent lux can resume, with a session to
 	// reload, is parked by the sweep (betweenTurns), not failed.
 	if t.run.talker() && !lux.Terminated(state) && t.sessionEpoch > 0 {
@@ -554,21 +576,37 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		reason = state
 	}
 	why, event := "the agent's run ended before finishing its task: "+reason, reason
-	if reason == luxTimeout {
-		why = "lux stopped it at its time limit: " + cmp.Or(s.Agent.Timeout, DefaultTimeout) + " of running"
-		event = why
+	stop, broken := t.stopOf(state, reason, epoch), t.Broken
+	var more map[string]any
+	switch {
+	case stop != nil:
+		why = luxStopWords(*stop, s.timeout())
+		agentErr := ""
+		if broken != nil {
+			why += "; " + broken.Error
+			agentErr = broken.AgentError
+		}
+		event, more = why, stopPayload(*stop, agentErr)
+	case broken != nil:
+		why = broken.Error + "; then its run ended: " + reason
+		event, more = why, map[string]any{"agentError": broken.AgentError}
 	}
+	t.Broken = nil
+	keep := stop == nil || stop.Reason != luxTimeout
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
-		t.run.ID, why, reason != luxTimeout)
+		t.run.ID, why, keep)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	if stage != "" {
-		return s.failedTxWith(ctx, tx, t.run, event, map[string]any{"stage": stage, "reason": reason})
+		if more == nil {
+			more = map[string]any{}
+		}
+		more["stage"], more["reason"] = stage, reason
 	}
-	return s.failedTx(ctx, tx, t.run, event)
+	return s.failedTxWith(ctx, tx, t.run, event, more)
 }
 
 // luxTimeout is the reason lux gives a Run it failed past its spec's timeout.
@@ -949,6 +987,10 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// A new turn: an idle held for a Claude turn's end is past.
 		t.claudeIdle = false
 		t.LastFailed = false
+		// Working again in a later placement: a move that broke its turn is over.
+		if t.Broken != nil && epoch > t.Broken.Epoch {
+			t.Broken = nil
+		}
 		// Working again: no longer waiting, and whatever it was waiting on
 		// has been given to it. A new turn has nothing running yet, and its
 		// quiet is counted from its start — but only the model doing
@@ -1223,6 +1265,11 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
+	if !t.run.talker() {
+		if held, err := t.luxStoppedTurn(ctx, tx, s, agentErr, reason); held || err != nil {
+			return err
+		}
+	}
 	if t.run.talker() {
 		t.LastFailed = true
 		if t.FailedTurns < maxFailedTurnResumes {
