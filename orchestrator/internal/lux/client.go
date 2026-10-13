@@ -625,7 +625,10 @@ type Client interface {
 	Submit(ctx context.Context, spec Spec, idempotencyKey string) (Run, error)
 	// Input sends a Run's agent words, images or an interrupt.
 	Input(ctx context.Context, runID string, in InputRequest) error
-	Push(ctx context.Context, runID, requestID string) error
+	// Push asks lux to push the Run's checkouts. credentials, by repository
+	// name in the spec, are the tokens this push uses, and the runner keeps
+	// them for later operations; nil sends none.
+	Push(ctx context.Context, runID, requestID string, credentials map[string]string) error
 	Stop(ctx context.Context, runID string) error
 	Cancel(ctx context.Context, runID string) error
 	Resume(ctx context.Context, runID string, in ResumeInput) (Run, error)
@@ -782,8 +785,29 @@ func (c *HTTPClient) Input(ctx context.Context, runID string, in InputRequest) e
 	return c.do(ctx, "POST", "/v1/runs/"+runID+"/input", body, nil, nil)
 }
 
-func (c *HTTPClient) Push(ctx context.Context, runID, requestID string) error {
-	return c.do(ctx, "POST", "/v1/runs/"+runID+"/push", map[string]string{"requestId": requestID}, nil, nil)
+func (c *HTTPClient) Push(ctx context.Context, runID, requestID string, credentials map[string]string) error {
+	body := map[string]any{"requestId": requestID}
+	if len(credentials) > 0 {
+		body["credentials"] = credentials
+	}
+	return c.do(ctx, "POST", "/v1/runs/"+runID+"/push", body, nil, nil)
+}
+
+// CodeCredentialsUnsupported is an older runner's refusal (409) of a push
+// or sync carrying credentials. Asked again without them, it pushes with
+// the token its Run was started or last resumed with.
+const CodeCredentialsUnsupported = "git_credentials_unsupported"
+
+// CodeHostUnreachable is lux's 503 for a credentialed push or sync that
+// reached a luxd with no connection to the Run's host (several luxds
+// without sticky routing). Retryable, as every 5xx: asked again, it may
+// reach the luxd that has the host.
+const CodeHostUnreachable = "host_unreachable"
+
+// CredentialsUnsupported says lux refused an operation's credentials.
+func CredentialsUnsupported(err error) bool {
+	le, ok := AsError(err)
+	return ok && le.Status == http.StatusConflict && le.Code == CodeCredentialsUnsupported
 }
 
 func (c *HTTPClient) Stop(ctx context.Context, runID string) error {

@@ -115,7 +115,9 @@ async function getCredential(ctx: RequestContext): Promise<Response> {
   if (!cred) return json({ connected: false });
   const { secret, ...shown } = cred;
   const webhook = await webhookHealth(organizationId);
-  return json({ connected: true, ...shown, secretHint: secret.slice(-4), webhookPath: webhookPath(organizationId), webhook });
+  // A PEM ends in its armour: a key's last characters tell no key apart.
+  const secretHint = cred.auth === "github_app" ? "" : secret.slice(-4);
+  return json({ connected: true, ...shown, secretHint, webhookPath: webhookPath(organizationId), webhook });
 }
 
 const webhookPath = (organizationId: string) => `/v1/webhooks/github/${organizationId}`;
@@ -232,6 +234,17 @@ export async function registerRepositoryWebhook(ctx: RequestContext, repositoryI
 async function verifyCredential(ctx: RequestContext): Promise<Response> {
   const cred = await githubCredential(ctx.principal.organizationId);
   if (!cred) return json({ ok: false, reason: "not connected" });
+  if (cred.auth === "github_app") {
+    // The orchestrator holds the App's key and mints its tokens: it mints
+    // one for a linked repository and answers with GitHub's word.
+    const res = await orchestrator(ctx.principal.organizationId, "POST", "/internal/github/verify-app", "{}", ctx.principal);
+    const body = (await res.json()) as { ok?: boolean; reason?: string; bot?: string; repository?: string;
+      error?: { message?: string } };
+    if (!res.ok) return json({ ok: false, reason: body.error?.message ?? `the orchestrator answered ${res.status}` });
+    return json(body.ok
+      ? { ok: true, app: true, bot: body.bot ?? null, repository: body.repository ?? null }
+      : { ok: false, reason: body.reason ?? "GitHub refused the App" });
+  }
   if (cred.auth !== "pat") return json({ ok: false, reason: "only token connections can be verified yet" });
   const apiBaseUrl = (cred.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/, "");
   let res: Response;
@@ -271,8 +284,10 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, credentialInput);
   const { organizationId } = ctx.principal;
 
-  if (input.auth === "github_app" && !(input.appId && input.installationId)) {
-    throw badRequest("github_app authentication requires appId and installationId");
+  // An App's installation is found per repository owner; installationId is
+  // only the default for an owner GitHub names none for.
+  if (input.auth === "github_app" && !input.appId) {
+    throw badRequest("github_app authentication requires appId");
   }
 
   const saved = await withOrg(organizationId, async (scope) => {

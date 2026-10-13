@@ -17,18 +17,21 @@ import { ReviewerPicker } from "./ReviewerPicker.tsx";
 const ago = (iso: string) => formatTimestamp(iso, "relative");
 
 /** Webhook health in one line, as the mockup's: healthy, or what is wrong. */
-export function webhookSummary(h: WebhookHealth): { ok: boolean; text: string } {
+/** For a GitHub App (`app`), no repository has a hook of its own: only deliveries count. */
+export function webhookSummary(h: WebhookHealth, app = false): { ok: boolean; text: string } {
   const registered = h.repositories.filter((r) => r.registeredAt && !r.error).length;
-  const parts = [`${registered} of ${h.repositories.length} repositor${h.repositories.length === 1 ? "y" : "ies"} registered`];
+  const parts = app ? ["the GitHub App's webhook"]
+    : [`${registered} of ${h.repositories.length} repositor${h.repositories.length === 1 ? "y" : "ies"} registered`];
   parts.push(h.lastDeliveryAt ? `last delivery ${ago(h.lastDeliveryAt)}` : "nothing delivered yet");
   parts.push(`${h.failedToday} failed today`);
-  const ok = registered === h.repositories.length && h.lastDeliveryAt !== null && h.failedToday === 0 && h.retrying === 0;
+  const ok = (app || registered === h.repositories.length) && h.lastDeliveryAt !== null && h.failedToday === 0 && h.retrying === 0;
   return { ok, text: parts.join(" · ") };
 }
 
 /** Verify's verdict in one line: who the token is, and whether delivery has what it needs. */
 export function verificationSummary(v: ForgeVerification): { ok: boolean; text: string } {
   if ("reason" in v) return { ok: false, text: v.reason };
+  if ("app" in v) return { ok: true, text: `The App has a token for ${v.repository ?? "the repository"}; it commits as ${v.bot ?? "its bot"}` };
   const who = `Connected as ${v.login ?? "an unnamed account"}${v.scopes ? ` · scopes: ${v.scopes}` : ""}`;
   if (v.ok) return { ok: true, text: who };
   const repos = v.repositories.filter((r) => r.permissions.some((p) => p.level === "required" && p.outcome === "missing")).length;
@@ -41,7 +44,7 @@ export function verificationSummary(v: ForgeVerification): { ok: boolean; text: 
  * with everything granted is one line.
  */
 export function ForgePermissionList({ verification }: { verification: ForgeVerification }) {
-  if ("reason" in verification || verification.repositories.length === 0) return null;
+  if ("reason" in verification || "app" in verification || verification.repositories.length === 0) return null;
   const rank = (p: ForgePermission) => (p.outcome === "missing" ? (p.level === "required" ? 0 : 1) : 2);
   return (
     <ul className="webhookRepos forgePermissions" data-testid="forge-permissions">
@@ -84,20 +87,35 @@ export function ForgePermissionList({ verification }: { verification: ForgeVerif
   );
 }
 
-export function WebhookCard({ client, health, onChanged, admin }: { client: ApiClient; health: WebhookHealth; onChanged: () => void; admin: boolean }) {
+export function WebhookCard({ client, health, onChanged, admin, app = false, webhookUrl }: {
+  client: ApiClient;
+  health: WebhookHealth;
+  onChanged: () => void;
+  admin: boolean;
+  /** Connected as a GitHub App: its one webhook, set in the App's settings, delivers for every repository. */
+  app?: boolean;
+  webhookUrl?: string | null;
+}) {
   const { busy, problem, save } = useSave();
   const [secret, setSecret] = useState<string | null>(null);
-  const summary = webhookSummary(health);
+  const summary = webhookSummary(health, app);
   const origin = health.publicUrl ?? window.location.origin;
   return (
     <SettingsSection title="Webhooks" data-testid="webhooks"
       actions={<Badge tone={summary.ok ? "success" : "attention"} icon={summary.ok ? "check" : "warning"}>{summary.ok ? "Healthy" : "Needs a look"}</Badge>}>
       <Callout tone={summary.ok ? "success" : "neutral"} data-testid="webhook-summary">{summary.text}</Callout>
+      {app ? (
+        <p className="muted" data-testid="webhook-app">
+          Deliveries come from the GitHub App, for every repository it is installed on: dude registers no repository hooks.
+          In the App's settings, set the webhook URL to <span className="ds-mono">{webhookUrl ?? `${origin}/v1/webhooks/github/…`}</span>,
+          the content type to application/json, and the secret to the one shown here.
+        </p>
+      ) : null}
       {health.lastFailure ? (
         <Callout tone="danger">Last failure{health.lastFailureAt ? ` ${ago(health.lastFailureAt)}` : ""}: {health.lastFailure}</Callout>
       ) : null}
       {health.retrying > 0 ? <Callout tone="attention">{health.retrying} deliveries are being retried: {health.lastError}</Callout> : null}
-      <ul className="webhookRepos">
+      {app ? null : <ul className="webhookRepos">
         {health.repositories.map((r) => (
           <li key={r.id} data-testid="webhook-repo">
             <Badge size="sm" tone={r.error ? "danger" : r.registeredAt ? "success" : "neutral"} icon={r.error ? "cross" : r.registeredAt ? "check" : "circle"}>
@@ -107,20 +125,25 @@ export function WebhookCard({ client, health, onChanged, admin }: { client: ApiC
             {r.error ? <span className="muted">{r.error}</span> : null}
           </li>
         ))}
-      </ul>
+      </ul>}
+      {app && webhookUrl ? <Input label="Webhook URL" mono readOnly value={webhookUrl} data-testid="webhook-url" /> : null}
       {secret ? <Input label="Webhook secret" mono readOnly value={secret} data-testid="webhook-secret"
-        hint="For a hook added by hand on GitHub: content type application/json." /> : null}
+        hint={app ? "The GitHub App's webhook secret." : "For a hook added by hand on GitHub: content type application/json."} /> : null}
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {admin ? <div className="webhookActions">
-        <Button variant="secondary" disabled={busy} data-testid="webhook-register"
-          onClick={() => void save(() => client.registerWebhooks(origin), onChanged, "Webhooks registered")}>
-          Register on every repository
-        </Button>
-        <Button variant="quiet" disabled={busy} onClick={() => void save(async () => setSecret((await client.revealWebhookSecret()).secret))}>
+        {app ? null : (
+          <Button variant="secondary" disabled={busy} data-testid="webhook-register"
+            onClick={() => void save(() => client.registerWebhooks(origin), onChanged, "Webhooks registered")}>
+            Register on every repository
+          </Button>
+        )}
+        <Button variant="quiet" disabled={busy} data-testid="webhook-show-secret"
+          onClick={() => void save(async () => setSecret((await client.revealWebhookSecret()).secret))}>
           Show secret
         </Button>
         <Button variant="quiet" disabled={busy} data-testid="webhook-rotate"
-          onClick={() => void save(async () => setSecret((await client.rotateWebhookSecret(origin)).secret), onChanged, "Secret rotated; the old one works for a day")}>
+          onClick={() => void save(async () => setSecret((await client.rotateWebhookSecret(origin)).secret), onChanged,
+            app ? "Secret rotated: set it in the App's settings; the old one works for a day" : "Secret rotated; the old one works for a day")}>
           Rotate secret
         </Button>
       </div> : null}

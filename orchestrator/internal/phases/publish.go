@@ -245,7 +245,14 @@ func (s *Syncer) askPush(ctx context.Context, p publishRow) error {
 	if p.LuxRunID == "" || p.LuxState != "running" {
 		return s.refusePublish(ctx, p, "your container is not running; publish again once you are")
 	}
-	if err := s.Lux.Push(ctx, p.LuxRunID, p.RequestID); err != nil {
+	creds, err := s.runCredentials(ctx, p.Org, p.RunID)
+	if forge.Refused(err) {
+		return s.refusePublish(ctx, p, "GitHub would not give dude a token to push: "+err.Error())
+	}
+	if err != nil {
+		return errPublishTransient{err}
+	}
+	if err := Push(ctx, s.Lux, s.Log, p.LuxRunID, p.RequestID, creds); err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			return s.refusePublish(ctx, p, "lux would not push: "+le.Message)
 		}
