@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,16 @@ func (w *world) setWakeTimeout(id, timeout string) {
 // patchesOf is the PATCHes lux saw to one server, from call index from on.
 func (w *world) patchesOf(id string, from int) []string {
 	return slices.DeleteFunc(w.tenantCallsOf(id, from), func(c string) bool { return !strings.HasPrefix(c, "patch ") })
+}
+
+type timeoutLists struct {
+	lux.Client
+	lists atomic.Int64
+}
+
+func (c *timeoutLists) ListServers(ctx context.Context, hostname string, labels ...string) ([]lux.TenantServer, error) {
+	c.lists.Add(1)
+	return c.Client.ListServers(ctx, hostname, labels...)
 }
 
 func TestPreviewWakeTimeoutStartsLongAndChangesAfterReady(t *testing.T) {
@@ -138,9 +149,14 @@ func TestADeletedServersWakeTimeoutDoesNotKeepThePreviewDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustExec(t, w.owner, `UPDATE runs SET wake_timeouts_checked_at = NULL WHERE id = $1`, runID)
+	client := &timeoutLists{Client: w.previews.Lux}
+	w.previews.Lux = client
 	from := len(w.lux.TenantCalls())
 	for range 5 {
 		w.pump()
+	}
+	if n := client.lists.Load(); n != 0 {
+		t.Fatalf("the deleted server caused %d ListServers calls", n)
 	}
 	if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_timeouts_checked_at IS NULL`, runID) != 1 {
 		t.Fatal("the deleted server made the preview's wake timeouts due, or the preview ended")

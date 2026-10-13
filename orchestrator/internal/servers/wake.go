@@ -134,8 +134,8 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 		FROM runs r JOIN tasks t ON t.id = r.task_id
 		-- Each project's two wake timeouts in seconds, read once per
 		-- project: the first-wake one until the preview has served, then
-		-- the later one. Its run filter must match the outer WHERE, or a
-		-- run it leaves out has no want and every sweep finds it due.
+		-- the later one.
+		-- The want eligibility filter must match the outer WHERE.
 		LEFT JOIN (SELECT p.id, (s->>'firstWakeTimeoutMinutes')::int * 60 AS first_s, (s->>'wakeTimeoutMinutes')::int * 60 AS later_s
 			FROM projects p CROSS JOIN LATERAL preview_settings(p) s
 			WHERE p.id IN (SELECT project_id FROM runs WHERE kind = 'preview' AND wakeable
