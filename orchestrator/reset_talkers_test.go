@@ -59,9 +59,10 @@ func TestResetMovesALiveSessionAgentBackDown(t *testing.T) {
 	if s.previewLux(run) != live || s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id) != 1 {
 		t.Fatal("the session's agent was replaced, not moved")
 	}
-	if s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'machine.reset' AND payload->>'moveId' <> ''
-		AND payload->'by'->>'id' = $2`, id, s.ana) != 1 {
-		t.Fatal("machine.reset not recorded with its move")
+	// On the Run it moves, too: the Run's own transcript shows the move.
+	if s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND run_id = $3 AND event_type = 'machine.reset' AND payload->>'moveId' <> ''
+		AND payload->'by'->>'id' = $2`, id, s.ana, run) != 1 {
+		t.Fatal("machine.reset not recorded with its move, on the Run it moved")
 	}
 }
 

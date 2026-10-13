@@ -37,8 +37,8 @@ func TestMachineResetWithoutActiveRun(t *testing.T) {
 			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
 				t.Fatal("layer not cleared")
 			}
-			if w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.reset' AND payload->>'note'=$2`, task, note) != 1 {
-				t.Fatal("missing reset note event")
+			if w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.reset' AND payload->>'note'=$2 AND run_id IS NULL`, task, note) != 1 {
+				t.Fatal("missing reset note event, on the task alone")
 			}
 			if w.count(`SELECT count(*) FROM machine_moves WHERE task_id=$1`, task) != 0 {
 				t.Fatal("inactive Reset created a move")
