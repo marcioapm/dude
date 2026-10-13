@@ -9,8 +9,9 @@
  * Reading directives stays here: it changes nothing.
  */
 
+import { z } from "zod";
 import { withOrg } from "../../db/client.ts";
-import { json } from "../http.ts";
+import { json, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
@@ -100,7 +101,22 @@ async function decideRepositoryRequest(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
+// A Reset's note to the agent, at most 2000 code points as the orchestrator counts them.
+const machineReset = z.object({
+  note: z.string().refine((s) => [...s].length <= 2000, "at most 2000 characters").optional(),
+}).strict();
+
+async function resetMachine(ctx: RequestContext): Promise<Response> {
+  const body = await parseBody(ctx.request, machineReset);
+  return orchestrator(ctx.principal.organizationId, "POST", "/internal/agent-machines/reset",
+    JSON.stringify({ ...body, ...(ctx.params.role
+      ? { taskId: ctx.params.id, role: ctx.params.role }
+      : { sessionId: ctx.params.id }) }), ctx.principal);
+}
+
 export function registerInterventionRoutes(router: Router): void {
+  router.delete("/v1/tasks/:id/agent-machines/:role", resetMachine);
+  router.delete("/v1/sessions/:id/agent-machine", resetMachine);
   router.get("/v1/questions", listQuestions);
   router.post("/v1/questions/:id/answer", answerQuestion);
   router.get("/v1/repository-requests", listRepositoryRequests);

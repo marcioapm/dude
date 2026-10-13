@@ -2025,6 +2025,35 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var note, person string
+		err := tx.QueryRow(ctx, `SELECT COALESCE(reason,''), COALESCE(by_person,'') FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NULL`, r.ID).Scan(&note, &person)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name, err := delivery.PersonName(ctx, tx, person)
+		if err != nil {
+			return err
+		}
+		if sizes.Now != nil {
+			told := "Moved back to " + sizes.Now.Name + " by " + name
+			if note != "" {
+				told += ": " + note
+			} else {
+				told += "."
+			}
+			if input != "" {
+				told += "\n\n" + input
+			}
+			input = told
+		}
+		return nil
+	}); err != nil {
+		return lux.Run{}, 0, err
+	}
 	secrets, err := s.resumeSecrets(ctx, r, lr.Spec, spec.Secrets)
 	if err != nil {
 		return lux.Run{}, 0, err

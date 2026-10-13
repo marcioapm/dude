@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -18,6 +19,192 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestMachineResetWithoutActiveRun(t *testing.T) {
+	for _, note := range []string{"", "Use fewer workers"} {
+		t.Run(note, func(t *testing.T) {
+			w := newWorld(t)
+			task := w.task()
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_standard","moveId":"mmv_old","askedBy":"run_old","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+			person := w.person("Resetter")
+			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": note})
+			if status != 200 {
+				t.Fatalf("reset: %d %v", status, out)
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+				t.Fatal("layer not cleared")
+			}
+			if w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.reset' AND payload->>'note'=$2`, task, note) != 1 {
+				t.Fatal("missing reset note event")
+			}
+			if w.count(`SELECT count(*) FROM machine_moves WHERE task_id=$1`, task) != 0 {
+				t.Fatal("inactive Reset created a move")
+			}
+			if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+				t.Fatalf("empty reset=%d", status)
+			}
+		})
+	}
+}
+
+func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
+	for _, tc := range []struct {
+		name, note string
+		refuse     bool
+	}{{"accepted without note", "", false}, {"accepted with note", "Use two workers", false}, {"refused", "x", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.Decide = hang
+			task := w.task()
+			w.deliver(task)
+			w.until("live", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
+			runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, task)
+			w.until("recorded running", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+			})
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+			mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+			if tc.refuse {
+				mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_missing' WHERE organization_id=$1 AND is_default`, w.org)
+			}
+			live := w.lux.Runs()[0].ID
+			person := w.person("Resetter")
+			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": tc.note})
+			if tc.refuse {
+				e, _ := out["error"].(map[string]any)
+				if status != 422 || e["code"] != "unknown_pool" || e["message"] == "" {
+					t.Fatalf("refusal: %d %v", status, out)
+				}
+				if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 ||
+					w.count(`SELECT count(*) FROM runs WHERE id=$1 AND control='none'`, runID) != 1 || w.count(`SELECT count(*) FROM machine_moves`) != 0 {
+					t.Fatal("refused Reset changed state")
+				}
+				return
+			}
+			if status != 200 {
+				t.Fatalf("reset: %d %v", status, out)
+			}
+			w.until("reset settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, runID) == 1
+			})
+			want := "Moved back to Standard by Resetter."
+			if tc.note != "" {
+				want = "Moved back to Standard by Resetter: " + tc.note
+			}
+			if inputs := w.lux.ResumeInputs(live); len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], want+"\n\n") {
+				t.Fatalf("resume inputs %q", inputs)
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 || len(w.lux.Runs()) != 1 {
+				t.Fatal("Reset did not clear layer on the same Run")
+			}
+			if got := w.machineOf(runID); got["name"] != "Standard" {
+				t.Fatalf("machine=%v", got)
+			}
+			if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+				t.Fatalf("second reset=%d", status)
+			}
+			if tc.note == "" {
+				return
+			}
+			// Three raises already used: the Reset gives none back.
+			for i := range 3 {
+				mustExec(t, w.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, settled_at) VALUES ($1, $2, $3, $4, 'implementer', 'raise', '{}', 'msz_big', 'resize', now())`, fmt.Sprintf("mmv_used%d", i), w.org, task, runID)
+			}
+			w.until("running again", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+			})
+			srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error { return nil }}).Handler())
+			defer srv.Close()
+			token, hash := agenttools.NewToken()
+			mustExec(t, w.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
+			req, _ := http.NewRequest("POST", srv.URL+"/tools/request_machine", strings.NewReader(`{"size":"Bigger","reason":"oom again"}`))
+			req.Header.Set("Authorization", "Bearer "+token)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(res.Body)
+			res.Body.Close()
+			if res.StatusCode != 422 || !strings.Contains(string(body), "a Reset does not give a move back") {
+				t.Fatalf("quota after Reset: %d %s", res.StatusCode, body)
+			}
+		})
+	}
+}
+
+func TestMachineResetKeepsPersonPause(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = hang
+	task := w.task()
+	w.deliver(task)
+	w.until("live", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
+	runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, task)
+	w.until("recorded running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+	})
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("person paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	live := w.lux.Runs()[0].ID
+	resumes := w.luxCalls(live, "resume")
+	person := w.person("Resetter")
+	if status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": "smaller"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.sweep()
+	time.Sleep(150 * time.Millisecond)
+	w.sweep()
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause IS NULL`, runID) != 1 || w.luxCalls(live, "resume") != resumes {
+		t.Fatal("Reset resumed a person's pause")
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NULL`, runID) != 1 {
+		t.Fatal("pending Reset move missing")
+	}
+	if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+		t.Fatalf("cleared layer reset=%d", status)
+	}
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_new","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	if status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 409 || out["error"].(map[string]any)["code"] != "pending" {
+		t.Fatalf("pending reset=%d %v", status, out)
+	}
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{}' WHERE id=$1`, task)
+	w.resumeAgent(runID, w.lux.Runs()[0])
+	w.until("settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+	})
+	if inputs := w.lux.ResumeInputs(live); len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], "Moved back to Standard by Resetter: smaller") {
+		t.Fatalf("inputs %q", inputs)
+	}
+}
+
+func TestSessionMachineResetIsForMembers(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "read")
+	mustExec(t, s.owner, `UPDATE sessions SET agent_machine='{"sizeId":"msz_standard","moveId":"mmv_s","askedBy":"run_s","reason":"oom","at":"2026-10-13T00:00:00Z"}' WHERE id=$1`, id)
+	if status, _ := s.as(s.outsider, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id}); status != 404 {
+		t.Fatalf("outsider=%d", status)
+	}
+	if status, out := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id, "note": "fits"}); status != 200 {
+		t.Fatalf("member: %d %v", status, out)
+	}
+	if s.count(`SELECT count(*) FROM sessions WHERE id=$1 AND agent_machine IS NULL`, id) != 1 ||
+		s.count(`SELECT count(*) FROM events WHERE session_id=$1 AND event_type='machine.reset' AND payload->>'note'='fits' AND payload->'by'->>'id'=$2`, id, s.ana) != 1 {
+		t.Fatal("session reset not recorded")
+	}
+	if status, _ := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id}); status != 404 {
+		t.Fatalf("again=%d", status)
+	}
+	long := strings.Repeat("é", 2001)
+	if status, _ := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id, "note": long}); status != 400 {
+		t.Fatalf("long note=%d", status)
+	}
+}
 
 func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
 	w := newWorld(t)

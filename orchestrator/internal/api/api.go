@@ -27,6 +27,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -80,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.Handle("POST /internal/agent-machines/reset", s.auth(s.resetMachine))
 	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
 	mux.Handle("POST /internal/tasks/{id}/chat", s.auth(s.chat))
 	mux.Handle("POST /internal/tasks/{id}/talk", s.auth(s.talk))
@@ -196,6 +198,133 @@ func (s *Server) resolvePrincipal(r *http.Request, org string) (principal, error
 		return nil
 	})
 	return p, err
+}
+
+func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string) error {
+	var body struct {
+		TaskID    string `json:"taskId"`
+		SessionID string `json:"sessionId"`
+		Role      string `json:"role"`
+		Note      string `json:"note"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	if (body.TaskID == "") == (body.SessionID == "") || len([]rune(body.Note)) > 2000 {
+		return fail(400, "bad_request", "name one task or session; note must be at most 2000 characters")
+	}
+	p := principalOf(r)
+	if p.Person == "" {
+		return errNoPerson
+	}
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		ctx := r.Context()
+		var raise *delivery.Raise
+		var projectID string
+		var project, organization json.RawMessage
+		if body.SessionID != "" {
+			if _, err := member(ctx, tx, body.SessionID, p.Person); err != nil {
+				return err
+			}
+			body.Role = "brainstorm"
+			if err := tx.QueryRow(ctx, `SELECT agent_machine FROM sessions WHERE id=$1`, body.SessionID).Scan(&raise); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.QueryRow(ctx, `SELECT t.agent_machines->$2, t.project_id, p.agent_models FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, body.TaskID, body.Role).Scan(&raise, &projectID, &project); err != nil {
+				if db.IsNotFound(err) {
+					return fail(404, "not_found", "task not found")
+				}
+				return err
+			}
+		}
+		if raise == nil {
+			return fail(404, "not_found", "nothing is raised")
+		}
+		if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id=$1`, org).Scan(&organization); err != nil {
+			return err
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		target, ok := sizes.ForRole(body.Role, nil, project, organization)
+		if !ok {
+			return fail(409, "no_size", "no settings machine size is available")
+		}
+		var runID, live, status, pause, control string
+		var current *delivery.Machine
+		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, COALESCE(dude_pause,''), control, machine FROM runs WHERE (task_id=$1 OR session_id=$2) AND role=$3 AND kind='agent' AND status IN ('running','paused','pending','starting') ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role).Scan(&runID, &live, &status, &pause, &control, &current)
+		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		active := err == nil && live != "" && current != nil
+		if active {
+			var pending bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL)`, runID).Scan(&pending); err != nil {
+				return err
+			}
+			if pending {
+				return fail(409, "pending", "a machine move is under way")
+			}
+			before, err := s.Lux.Get(ctx, live)
+			if err != nil {
+				return err
+			}
+			if err := phases.ValidateResize(ctx, s.Lux, live, phases.PlanResize(ctx, s.Lux, current, &target, before)); err != nil {
+				if le, ok := lux.AsError(err); ok {
+					return fail(le.Status, le.Code, "%s", le.Message)
+				}
+				return err
+			}
+			// A paused Run keeps its pause, person's or dude's: the move
+			// applies at whichever resume comes next.
+			switch {
+			case status == "running" && control == "none":
+				tag, err := tx.Exec(ctx, `UPDATE runs SET control='pause_graceful', control_requested_at=now(), control_reason='machine reset', dude_pause='machine' WHERE id=$1 AND status='running' AND control='none'`, runID)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() == 0 {
+					return fail(409, "pending", "Run is no longer available for a machine move")
+				}
+			case status != "paused":
+				return fail(409, "pending", "the Run is %s; reset once it runs or pauses", status)
+			}
+		}
+		id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
+		from := sizes.ByID[raise.SizeID]
+		if current != nil {
+			from = *current
+		}
+		if active {
+			if _, err := tx.Exec(ctx, `INSERT INTO machine_moves(id,organization_id,task_id,session_id,run_id,role,kind,from_size,to_size_id,apply,reason,by_person) VALUES($1,$2,$3,$4,$5,$6,'reset',$7,$8,'resize',$9,$10)`, id, org, db.Nullable(body.TaskID), db.Nullable(body.SessionID), runID, body.Role, from, target.SizeID, db.Nullable(body.Note), p.Person); err != nil {
+				return err
+			}
+		}
+		if body.SessionID != "" {
+			_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine=NULL WHERE id=$1 AND agent_machine->>'moveId'=$2`, body.SessionID, raise.MoveID)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines=agent_machines-$2 WHERE id=$1 AND agent_machines->$2->>'moveId'=$3`, body.TaskID, body.Role, raise.MoveID)
+		}
+		if err != nil {
+			return err
+		}
+		name, err := delivery.PersonName(ctx, tx, p.Person)
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{"moveId": id, "role": body.Role, "from": from, "to": target, "by": map[string]string{"id": p.Person, "name": name}, "note": body.Note}
+		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: body.TaskID, SessionID: body.SessionID}
+		_, err = ledger.Append(ctx, tx, ref.Event("machine.reset", p.ActorType, payload))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, 200, map[string]bool{"ok": true})
+	return nil
 }
 
 // split reads a comma-separated query value.
