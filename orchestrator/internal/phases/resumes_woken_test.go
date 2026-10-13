@@ -134,6 +134,44 @@ func TestAMoveResumeWakesFromTheMoveNotThePeerMail(t *testing.T) {
 	}
 }
 
+// A Run parked as 'person' on a peer's reply, with a move pending: peer
+// mail queued during the park makes its resume an answer, woken by the
+// mail; without mail it is resumed for the move.
+func TestAPeerParkedRunWithAMoveIsWokenByItsMailIfItHasAny(t *testing.T) {
+	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	sec := func(n int) time.Time { return base.Add(time.Duration(n) * time.Second) }
+	world := func(t *testing.T) (*resumeWorld, phaseRun) {
+		w := wokenWorld(t, base)
+		w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi2_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`, w.run.Org)
+		w.exec(`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text, created_at)
+			VALUES ('pm_'||$1, $1, $2, $3, 'wi2_'||$1, 'Which body?', $4)`, w.run.Org, w.run.TaskID, w.run.ID, sec(-10))
+		w.exec(`INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, since) VALUES ('pw_'||$1, $1, $2, 'pm_'||$1, 'wait', $3)`,
+			w.run.Org, w.run.ID, sec(-10))
+		w.exec(`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, apply, created_at)
+			VALUES ('mmv_'||$1, $1, $2, $3, 'implementer', 'reset', '{"sizeId":"old"}', 'resize', $4)`, w.run.Org, w.run.TaskID, w.run.ID, sec(2))
+		r := w.run
+		r.DudePause, r.Waiting, r.Moving = "person", true, true
+		return w, r
+	}
+
+	t.Run("with peer mail", func(t *testing.T) {
+		w, r := world(t)
+		w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at) VALUES ('dir_'||$1, $1, $2, $3, 'From P-2: hello', $4)`,
+			w.run.Org, w.run.TaskID, w.run.ID, sec(5))
+		r.HasDirectives = true
+		if cause, got := w.wokenAt(r); cause != causeAnswer || !got.Equal(sec(5)) {
+			t.Errorf("%s at %v, want answer at the mail's %v (the move was at %v)", cause, got, sec(5), sec(2))
+		}
+	})
+
+	t.Run("without mail", func(t *testing.T) {
+		w, r := world(t)
+		if cause, got := w.wokenAt(r); cause != causeMachine || !got.Equal(sec(2)) {
+			t.Errorf("%s at %v, want machine at the move's %v", cause, got, sec(2))
+		}
+	})
+}
+
 func TestAPersonsResumeOfAParkWakesFromTheirResume(t *testing.T) {
 	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	w := wokenWorld(t, base)
