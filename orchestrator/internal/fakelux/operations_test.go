@@ -132,7 +132,7 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 			moveOn(t, repo)
 			before := gitIn(t, work, "rev-parse", "HEAD")
 			for _, mode := range []string{lux.SyncFastForward, lux.SyncFetch} {
-				if err := cl.SyncRun(ctx, runID, "s-"+mode, []lux.SyncRef{{Repo: "app", Ref: "work", Mode: mode}}); err != nil {
+				if err := cl.SyncRun(ctx, runID, "s-"+mode, []lux.SyncRef{{Repo: "app", Ref: "work", Mode: mode}}, nil); err != nil {
 					t.Fatal(err)
 				}
 				var ev lux.SyncResult
@@ -149,7 +149,7 @@ func TestACheckoutMidOperationIsKeptNamingItAndItsPushIsRefused(t *testing.T) {
 			if gitIn(t, work, "rev-parse", "HEAD") != before {
 				t.Error("the sync moved the checkout")
 			}
-			if err := cl.Push(ctx, runID, "p1"); err != nil {
+			if err := cl.Push(ctx, runID, "p1", nil); err != nil {
 				t.Fatal(err)
 			}
 			push := lastPush(t, cl, runID)
@@ -182,7 +182,7 @@ func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := cl.Push(ctx, runID, "p1"); err != nil {
+	if err := cl.Push(ctx, runID, "p1", nil); err != nil {
 		t.Fatal(err)
 	}
 	push := lastPush(t, cl, runID)
@@ -193,7 +193,7 @@ func TestAnOperationThatCannotBeDetectedFailsThePushAndTheSync(t *testing.T) {
 	if out, err := exec.Command(real, "-C", repo, "rev-parse", "--verify", "-q", "refs/heads/pub").CombinedOutput(); err == nil {
 		t.Errorf("pushed anyway: %s", out)
 	}
-	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ev := lastSync(t, cl, runID); ev["status"] != "failed" ||
@@ -219,7 +219,7 @@ func TestALiveSequenceAloneKeepsACleanCheckout(t *testing.T) {
 	// fast-forward but for the sequence.
 	gitIn(t, repo, "fetch", "-q", work, "+HEAD:refs/heads/work")
 	moveOn(t, repo)
-	if err := cl.SyncRun(context.Background(), runID, "alone", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+	if err := cl.SyncRun(context.Background(), runID, "alone", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	ev := lastSync(t, cl, runID)
@@ -239,13 +239,13 @@ func TestAStaleEmptySequencerIsNoOperation(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(work, gitIn(t, work, "rev-parse", "--git-path", "sequencer")), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ev := lastSync(t, cl, runID); ev["operation"] != nil || ev["status"] != lux.SyncKept {
 		t.Errorf("git.sync %v", ev)
 	}
-	if err := cl.Push(ctx, runID, "p1"); err != nil {
+	if err := cl.Push(ctx, runID, "p1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if push := lastPush(t, cl, runID); len(push.Results) != 1 || push.Results[0].Status != "pushed" ||
@@ -269,13 +269,13 @@ func TestAFinishedRebaseSyncsAndPushes(t *testing.T) {
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("rebase --continue: %v %s", err, out)
 	}
-	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}); err != nil {
+	if err := cl.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ev := lastSync(t, cl, runID); ev["operation"] != nil || ev["status"] != lux.SyncAhead {
 		t.Errorf("git.sync %v", ev)
 	}
-	if err := cl.Push(ctx, runID, "p1"); err != nil {
+	if err := cl.Push(ctx, runID, "p1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if push := lastPush(t, cl, runID); len(push.Results) != 1 || push.Results[0].Status != "pushed" ||

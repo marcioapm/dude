@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Block, Col, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { Board } from "../../components/Board.tsx";
 import { ProposalCard, type ProposalCardItem } from "../../components/Brainstorm.tsx";
@@ -130,6 +130,11 @@ const proposal: ProposalCardItem[] = [
     project: { key: "CP", name: "control-plane" }, canFile: true, relations: [{ kind: "blocked-by", item: 1 }, { kind: "related", task: { key: "CP-44", status: "received" } }] },
 ];
 
+const relationBlockIds = new Set([
+  "rel-icons", "rel-chip", "rel-board", "rel-board-lit", "rel-board-filter", "rel-startmenu", "rel-gate",
+  "rel-auto", "rel-dialogs", "rel-list", "rel-picker", "rel-strip", "rel-proposal",
+]);
+
 /**
  * Mounts its children once they near the viewport. The section's blocks are
  * about 8,000 elements and 190 running animations: drawn from the start they
@@ -140,6 +145,26 @@ const proposal: ProposalCardItem[] = [
 function WhenNear({ children }: { readonly children: ReactNode }) {
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   const placeholder = useRef<HTMLDivElement>(null);
+  const pendingTarget = useRef<string | null>(null);
+  useEffect(() => {
+    if (near) return undefined;
+    const navigate = () => {
+      let id: string;
+      try { id = decodeURIComponent(window.location.hash.slice(1)); }
+      catch { pendingTarget.current = null; return; }
+      pendingTarget.current = relationBlockIds.has(id) ? id : null;
+      if (pendingTarget.current) setNear(true);
+    };
+    window.addEventListener("hashchange", navigate);
+    navigate();
+    return () => window.removeEventListener("hashchange", navigate);
+  }, [near]);
+  useLayoutEffect(() => {
+    if (!near || !pendingTarget.current) return;
+    // Native fragment navigation ran before the deferred target existed.
+    document.getElementById(pendingTarget.current)?.scrollIntoView();
+    pendingTarget.current = null;
+  }, [near]);
   useEffect(() => {
     if (near || !placeholder.current) return undefined;
     const seen = new IntersectionObserver((entries) => {

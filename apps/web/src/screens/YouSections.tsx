@@ -25,13 +25,20 @@ import {
   THead,
   Tr,
 } from "@dude/design-system/primitives";
-import type { ApiClient, ApiKeyInfo, Member } from "../api/client.ts";
+import type { ApiClient, ApiKeyInfo, Me } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 
-export function ProfileSection({ client, me, onChanged }: { client: ApiClient; me: Member; onChanged: () => void }) {
+export function ProfileSection({ client, me, onChanged }: { client: ApiClient; me: Me; onChanged: () => void }) {
   const [name, setName] = useState(me.name);
+  const [githubLogin, setGithubLogin] = useState(me.githubLogin ?? "");
+  const [commitEmail, setCommitEmail] = useState(me.commitEmail ?? "");
   const { busy, problem, save } = useSave();
+  const changes = {
+    ...(name.trim() !== me.name ? { name: name.trim() } : {}),
+    ...(githubLogin.trim() !== (me.githubLogin ?? "") ? { githubLogin: githubLogin.trim() } : {}),
+    ...(commitEmail.trim() !== (me.commitEmail ?? "") ? { commitEmail: commitEmail.trim() } : {}),
+  };
 
   return (
     <Card data-testid="profile">
@@ -48,6 +55,14 @@ export function ProfileSection({ client, me, onChanged }: { client: ApiClient; m
             onRemove={() => void save(() => client.updateMe({ photoUrl: null }), onChanged, "Photo removed")}
           />
           <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} data-testid="profile-name" />
+          <Input label="GitHub username (optional)" value={githubLogin} onChange={(e) => setGithubLogin(e.target.value)}
+            placeholder="octocat" autoComplete="off" spellCheck={false} data-testid="profile-github-login" />
+          <Input label="Commit email (optional)" type="email" value={commitEmail} onChange={(e) => setCommitEmail(e.target.value)}
+            placeholder={me.email ?? "you@example.com"} data-testid="profile-commit-email" />
+          <p className="muted" data-testid="profile-github-hint">
+            Agents' commits on your tasks name you as a co-author by these: the commit email if set, else your GitHub noreply
+            address, else your sign-in email.
+          </p>
           <KeyValueList items={[
             { label: "Email", value: me.email ?? "—" },
             { label: "Role", value: me.role === "admin" ? "Organization admin" : "Member" },
@@ -56,8 +71,8 @@ export function ProfileSection({ client, me, onChanged }: { client: ApiClient; m
         </FormStack>
       </CardBody>
       <CardFooter>
-        <Button variant="primary" disabled={busy || !name.trim() || name.trim() === me.name} data-testid="profile-save"
-          onClick={() => void save(() => client.updateMe({ name: name.trim() }), onChanged, "Profile saved")}>
+        <Button variant="primary" disabled={busy || !name.trim() || Object.keys(changes).length === 0} data-testid="profile-save"
+          onClick={() => void save(() => client.updateMe(changes), onChanged, "Profile saved")}>
           Save
         </Button>
       </CardFooter>
