@@ -260,6 +260,8 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     task = _task(access, person, northwind, "Header overlaps the menu")
 
     sent: list[tuple[str, str | None]] = []
+    refused: list[tuple[int, str]] = []
+    page.on("response", lambda r: refused.append((r.status, r.url.split("?")[0].removeprefix(access.url))) if r.status >= 400 else None)
     page.on("request", lambda r: sent.append((r.url, r.headers.get("x-dude-organization"))) if "/v1/navigation" in r.url or "/v1/events/stream" in r.url else None)
     access.sign_in(page, person, "Ana Ribeiro", at=f"/#/o/{initech['slug']}/")
     switcher = page.get_by_test_id("switcher")
@@ -297,7 +299,9 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     assert 200 <= uploaded.value.status < 300, uploaded.value.text()
     assert uploaded.value.request.headers.get("x-dude-organization") == northwind["id"]
     expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"attachment:att_(?!local)"), timeout=20_000)
-    assert console_errors == []
+    # The task dialog asks for the forge's settings; Northwind has no forge connected, so that one is refused.
+    assert set(refused) <= {(409, "/v1/forge/settings")}, refused
+    assert _not_loading_errors(console_errors) == []
 
 
 def test_keys_are_made_per_organisation(page: Page, access, console_errors: list):
