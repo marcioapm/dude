@@ -236,7 +236,8 @@ func wakeTimeoutPatch(cur lux.TenantServer, want time.Duration, now time.Time) *
 }
 
 // recordWakeTimeout keeps the wake timeout lux reports for a preview
-// server, so the sweep (wakeTimeoutsDue) knows which servers to patch.
+// server, so the sweep (wakeableSelect's timeouts_due) knows which servers
+// to patch.
 func (p *Previews) recordWakeTimeout(ctx context.Context, r wakeRun, sv lux.TenantServer) error {
 	secs := int(sv.WakeTimeoutDuration() / time.Second)
 	if secs <= 0 {
@@ -266,8 +267,9 @@ func (p *Previews) applyWakeTimeouts(ctx context.Context, r wakeRun) error {
 	if err != nil {
 		return err
 	}
+	want := wakeTimeout(settings, servedOnce)
 	for _, cur := range list {
-		if timeout := wakeTimeoutPatch(cur, wakeTimeout(settings, servedOnce), time.Now()); timeout != nil {
+		if timeout := wakeTimeoutPatch(cur, want, time.Now()); timeout != nil {
 			got, err := p.Lux.PatchServer(ctx, cur.ID, lux.PatchServer{WakeTimeout: timeout})
 			if lux.IsNotFound(err) {
 				continue

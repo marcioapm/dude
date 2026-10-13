@@ -38,6 +38,13 @@ func (w *world) tenantCallsOf(id string, from int) []string {
 	return out
 }
 
+// luxsWakeTimeout pins both of the project's wake timeouts to the fake
+// lux's 5m, so a recipe test sees only recipe PATCHes.
+func (w *world) luxsWakeTimeout() {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+}
+
 // patchedBeforeStart: lux saw exactly one PATCH of these fields to the
 // server, and it came before the server's next start.
 func patchedBeforeStart(t *testing.T, calls []string, id, fields string) {
@@ -63,7 +70,7 @@ func TestARecipeEditReachesTheNextWakeOnEveryPath(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			var runID, web string
 			if path == "first submit" {
 				w.recipe("web", 3000, "npm run dev", "", nil, true)
@@ -121,7 +128,7 @@ func TestAnUnchangedRecipeIsNotPatched(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			setup := "npm ci"
 			w.recipe("web", 3000, "npm run dev", "apps/web", &setup, true)
 			var runID string
@@ -216,7 +223,7 @@ func TestEachRecipeFieldReachesLux(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			logs := &lockedBuffer{}
 			w.previews.Log = slog.New(slog.NewTextHandler(logs, nil))
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
@@ -246,7 +253,7 @@ func TestRecipesRemovedAndAddedReachTheNextWake(t *testing.T) {
 		t.Run(gone, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			w.recipe("api", 4000, "go run .", "api", nil, true)
 			_, runID := w.declare()
@@ -294,7 +301,7 @@ func TestRecipesRemovedAndAddedReachTheNextWake(t *testing.T) {
 func TestAPreviewWhoseLastRecipeIsRemovedEnds(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	w.luxsWakeTimeout()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
@@ -345,7 +352,7 @@ func (w *world) adoptedAtTheNewRecipe(runID string, old lux.TenantServer) {
 func TestAnAdoptedServerTakesTheCurrentRecipe(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	w.luxsWakeTimeout()
 	runID, old := w.staleWebServer()
 	w.untilAsleep(runID)
 	w.adoptedAtTheNewRecipe(runID, old)
@@ -452,7 +459,7 @@ func TestWhatLuxAnswersAPatchDecidesTheWake(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			w.recipe("api", 4000, "go run .", "", nil, true)
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			_, runID := w.declare()
@@ -509,7 +516,7 @@ func TestWhatLuxAnswersAPatchDecidesTheWake(t *testing.T) {
 func TestAConflictPatchingAnAdoptedServerIsTriedAgain(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	w.luxsWakeTimeout()
 	c := w.refusing()
 	c.patches = []error{&lux.Error{Status: 409, Code: "conflict", Message: "the server changed meanwhile"}}
 	runID, old := w.staleWebServer()
@@ -526,7 +533,7 @@ func TestADroppedServerLuxDidNotDeleteIsDeletedLater(t *testing.T) {
 		t.Run(then, func(t *testing.T) {
 			w := newWorld(t)
 			w.wakeable()
-			mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+			w.luxsWakeTimeout()
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			w.recipe("api", 4000, "go run .", "", nil, true)
 			task, runID := w.declare()
@@ -584,7 +591,7 @@ func (c *listedAfter) ListServers(ctx context.Context, hostname string, labels .
 func TestADeclareLeavesLeftoversToTheNextWake(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"firstWakeTimeoutMinutes":5,"wakeTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	w.luxsWakeTimeout()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")

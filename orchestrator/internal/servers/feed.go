@@ -236,7 +236,7 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 				return err
 			}
 			// Its first ready: the preview has served once, and its servers
-			// take the later wake timeout (the sweep's wake_timeouts_due).
+			// take the later wake timeout (the sweep's timeouts_due).
 			tag, err := tx.Exec(ctx, `UPDATE runs SET preview_ready_at = now() WHERE id = $1 AND preview_ready_at IS NULL`, runID)
 			kick = err == nil && tag.RowsAffected() > 0
 			return err

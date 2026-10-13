@@ -93,8 +93,9 @@ type wakeRun struct {
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
 // age, $2 parkCheckEvery, $3 wakeClaimFor, $5 parkSweepEvery and $6
-// timeoutCheckEvery, in seconds; $4 the page size. The inner query computes each row's flags once
-// (its servers' counts in one lateral aggregate); the outer one keeps the
+// timeoutCheckEvery, in seconds; $4 the page size. The inner query
+// computes each row's flags once (its servers' counts in one lateral
+// aggregate); the outer one keeps the
 // rows with something to do and sorts them: a wake, a sync or an end due
 // first (someone may be waiting on it), then a park check due, then the
 // running previews that are only re-followed.
