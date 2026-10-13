@@ -123,19 +123,51 @@ describe("a child's own turns", () => {
 });
 
 describe("agent.child.waiting", () => {
-  test("sets what it waits on; its next event clears it", () => {
+  const held = () => ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "external_directory", patterns: ["/opt/*"], answered: "none" });
+
+  test("sets what it waits on", () => {
     const before = [parentCall(), started()];
-    const waiting = ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "external_directory", patterns: ["/opt/*"], answered: "none" });
-    const state = apply(emptyProjection(), [...before, waiting]);
-    expect(childOf(snapshot(state).turns).waitingOn).toEqual({ permission: "external_directory", patterns: ["/opt/*"], since: waiting.occurredAt });
-    apply(state, [ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k9", tool: "read" })]);
-    expect(childOf(snapshot(state).turns).waitingOn).toBeNull();
+    const waiting = held();
+    const { turns } = project([...before, waiting]);
+    expect(childOf(turns).waitingOn).toEqual({ permission: "external_directory", patterns: ["/opt/*"], since: waiting.occurredAt });
   });
 
-  test("one for a call already over holds nothing, and leaves an earlier wait as it was", () => {
+  // The Run is still running: only the child's own event may clear the wait.
+  const next: Array<[string, () => PersistedEvent]> = [
+    ["a call", () => ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k9", tool: "read" })],
+    ["a call's completion", () => ev(EventTypes.ChildToolCompleted, { ...kid, parentCallId: "c1", callId: "k9", tool: "read", status: "completed" })],
+    ["a message", () => ev(EventTypes.ChildMessage, { ...kid, text: "Resumed." })],
+    ["its end", () => ev(EventTypes.ChildEnded, { ...kid, status: "completed" })],
+  ];
+  for (const [what, event] of next) {
+    test(`its next event, ${what}, clears it`, () => {
+      const state = apply(emptyProjection(), [parentCall(), started(), held()]);
+      expect(childOf(snapshot(state).turns).waitingOn).not.toBeNull();
+      apply(state, [event()]);
+      expect(childOf(snapshot(state).turns).waitingOn).toBeNull();
+    });
+  }
+
+  test("another child's event leaves it waiting", () => {
+    const state = apply(emptyProjection(), [parentCall(), started(), held(),
+      ev(EventTypes.ToolCalled, { tool: "task", callId: "c2" }),
+      ev(EventTypes.ChildStarted, { childId: "ses_other", callId: "c2", kind: "task", title: "Other" }),
+      ev(EventTypes.ChildMessage, { childId: "ses_other", callId: "c2", text: "Other speaks." })]);
+    expect(state.childrenById.get("ses_kid")!.waitingOn).toMatchObject({ permission: "external_directory" });
+  });
+
+  test("one for a call already over holds nothing", () => {
     const { turns } = project([parentCall(), started(),
       ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "bash", patterns: ["cat /etc/hostname"], answered: "none", held: false })]);
     expect(childOf(turns).waitingOn).toBeNull();
+  });
+
+  test("one for a call already over leaves an earlier wait as it was", () => {
+    const before = [parentCall(), started()];
+    const first = held();
+    const { turns } = project([...before, first,
+      ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "bash", patterns: ["cat /etc/hostname"], answered: "none", held: false })]);
+    expect(childOf(turns).waitingOn).toEqual({ permission: "external_directory", patterns: ["/opt/*"], since: first.occurredAt });
   });
 
   test("one its harness answered holds nothing", () => {
