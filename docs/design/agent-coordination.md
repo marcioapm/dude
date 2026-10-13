@@ -934,9 +934,9 @@ sections above, or where they were silent:
   reply yet" under the lock, so a reply can never commit between that check
   and the wait's insert and leave the wait open.
 - **A Run parked on a peer's reply still hears its peers.** One parked
-  (`dude_pause = 'person'`) with no person's ask open is resumed when a
-   any unsent directive is queued on it, including a person's steer and a
-   note announcement; it reads it, and at its next idle the
+  (`dude_pause = 'person'`) with no person's ask open is resumed when
+  any unsent directive is queued on it, including a person's steer and a
+  note announcement; it reads it, and at its next idle the
   wait (still open) holds the turn again. Two agents waiting on each other
   therefore each read the other's question. The resume's `woken_at` is
   that message's queueing.
