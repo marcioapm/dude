@@ -537,7 +537,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Deliver finish it.
 - **Starting is a choice.** **`StartChoice`** lays the ways to start side
   by side, equal cards on the raised shade, each its own button: no
-  primary, nothing preselected. Narrow, they stack.
+  primary, nothing preselected. Narrow, they stack. Where the cards show
+  (a task's Overview), its header does not repeat them; on any other tab
+  the header carries the same two, equal.
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —

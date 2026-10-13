@@ -36,7 +36,7 @@ def test_the_board_shows_projects_and_opens_tasks(
 
     card.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
-    expect(page.get_by_test_id("deliver")).to_be_visible()
+    expect(page.get_by_test_id("start-deliver")).to_be_visible()
     assert console_errors == []
 
 

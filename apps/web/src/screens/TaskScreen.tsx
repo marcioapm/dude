@@ -439,6 +439,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     if (how === "talk") pickTab("chat");
     void load();
   };
+  // Overview's StartChoice cards offer both then; the header's buttons are for every other tab.
+  const startInHeader = startable && tab !== "overview";
   const stopped = item.status === "aborted" || item.status === "failed";
   // The pick-up is the current attempt's: an earlier one is only to read.
   const stop = stopped && !earlier ? stopOfTask : null;
@@ -471,7 +473,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {blocked && relations ? (
             <TaskStartGate client={client} taskId={taskId} taskKey={item.key ?? "This task"} relations={relations} you={people.you}
               onStarted={onStartedAnyway} onChanged={reloadRelations} />
-          ) : startable ? (
+          ) : startInHeader ? (
             <>
               {/* Two equal ways to start, chosen each time: neither is the default. */}
               <Button variant={START_VARIANT} leadingIcon="message" onClick={() => void talk()} disabled={delivering} data-testid="talk" data-variant={START_VARIANT}>
