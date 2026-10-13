@@ -112,6 +112,87 @@ def test_peer_message_emitted_wash_hover_and_role_rails(gallery_page: Page):
                 expect(control).to_have_css("background-color", "rgba(0, 0, 0, 0)")
 
 
+RELATION_BLOCK_IDS = (
+    "rel-icons", "rel-chip", "rel-board", "rel-board-lit", "rel-board-filter",
+    "rel-startmenu", "rel-gate", "rel-auto", "rel-dialogs", "rel-list",
+    "rel-picker", "rel-strip", "rel-proposal",
+)
+
+
+def _expect_fragment_at_top(page: Page, target: str):
+    expect(page.locator(f"#{target}")).to_have_count(1)
+    page.wait_for_function(
+        "id => { const el = document.getElementById(id); "
+        "return el && Math.abs(el.getBoundingClientRect().top) <= 32; }",
+        arg=target, timeout=5000,
+    )
+
+
+@pytest.mark.parametrize("target", RELATION_BLOCK_IDS)
+def test_relation_fragment_navigation(gallery_page: Page, console_errors: list, target: str):
+    """A fresh fragment must mount its deferred target and explicitly land on it."""
+    url = gallery_page.url.split("#")[0]
+    gallery_page.goto("about:blank")
+    gallery_page.goto(f"{url}#{target}", wait_until="networkidle")
+    _expect_fragment_at_top(gallery_page, target)
+    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(0)
+    # Once mounted, later fragments use ordinary native navigation.
+    for later in ("rel-picker", "rel-board", target):
+        gallery_page.evaluate("id => { location.hash = id; }", later)
+        _expect_fragment_at_top(gallery_page, later)
+    assert console_errors == []
+
+
+def test_relation_sidebar_navigation(gallery_page: Page, console_errors: list):
+    """The sidebar must work before intersection ever mounts the relation blocks."""
+    url = gallery_page.url.split("#")[0]
+    gallery_page.goto("about:blank")
+    gallery_page.goto(url, wait_until="networkidle")
+    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
+    gallery_page.locator('nav a[href="#rel-board"]').click()
+    _expect_fragment_at_top(gallery_page, "rel-board")
+    assert console_errors == []
+
+
+def test_unrelated_fragment_keeps_relations_deferred(gallery_page: Page, console_errors: list):
+    """Unrelated, unknown and malformed fragments must not request the costly mount."""
+    url = gallery_page.url.split("#")[0]
+    for fragment in ("p-markdown-editor", "rel-unknown", "rel-%ZZ"):
+        gallery_page.goto("about:blank")
+        gallery_page.goto(f"{url}#{fragment}", wait_until="networkidle")
+        expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
+        expect(gallery_page.locator("#rel-picker")).to_have_count(0)
+    gallery_page.goto("about:blank")
+    gallery_page.goto(f"{url}#%72el-picker", wait_until="networkidle")
+    _expect_fragment_at_top(gallery_page, "rel-picker")
+    gallery_page.goto("about:blank")
+    gallery_page.goto(f"{url}#relations", wait_until="networkidle")
+    gallery_page.locator("#relations").evaluate("el => el.scrollIntoView()")
+    expect(gallery_page.locator("#rel-picker")).to_have_count(1)
+    _expect_fragment_at_top(gallery_page, "relations")
+    assert console_errors == []
+
+
+def test_relation_intersection_preserves_scroll_with_old_fragment(
+    gallery_page: Page, console_errors: list,
+) -> None:
+    url = gallery_page.url.split("#")[0]
+    gallery_page.goto("about:blank")
+    gallery_page.goto(f"{url}#p-markdown-editor", wait_until="networkidle")
+    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
+    intended_y = gallery_page.evaluate("""() => {
+        const y = document.getElementById('relations').getBoundingClientRect().top
+            + window.scrollY - 1000;
+        window.scrollTo(0, y);
+        return y;
+    }""")
+    expect(gallery_page.locator("#rel-picker")).to_have_count(1)
+    gallery_page.wait_for_function(
+        "y => Math.abs(window.scrollY - y) <= 2", arg=intended_y, timeout=5000,
+    )
+    assert console_errors == []
+
+
 def test_gallery_renders_without_console_errors(gallery_page: Page, console_errors: list):
     """A component that throws on render fails here and nowhere else."""
     expect(gallery_page.get_by_role("heading", name="Tokens", exact=True)).to_be_visible()
