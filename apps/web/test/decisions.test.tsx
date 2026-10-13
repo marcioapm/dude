@@ -154,8 +154,20 @@ describe("starting a task", () => {
     expect(p.querySelector("[data-testid=deliver]")).toBeNull();
   });
 
-  test("a task already started offers neither", async () => {
+  test("from the header on another tab, Talk it through starts the conductor and opens Chat on it", async () => {
+    const client = new DecisionsClient({ status: "received", runs: [], decider: "policy" });
+    const p = await page(client);
+    await toTab(p, "Findings");
+    await click(p.querySelector<HTMLButtonElement>("[data-testid=talk]")!);
+    expect(client.talked).toBe(1);
+    await until(() => selected(p) === "Chat" ? true : null, "Chat");
+  });
+
+  test("a task already started offers neither, on the Overview or in the header", async () => {
     const p = await page(new DecisionsClient({ status: "running", decider: "policy" }));
+    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    await toTab(p, "Findings");
+    expect(selected(p)).toStartWith("Findings");
     expect(p.querySelector("[data-testid=talk]")).toBeNull();
     expect(p.querySelector("[data-testid=deliver]")).toBeNull();
   });
