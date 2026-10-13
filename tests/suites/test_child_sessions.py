@@ -145,15 +145,20 @@ def test_the_scripted_subagents_ask_is_answered_by_lux_and_its_child_ends(page: 
     assert query(owner_dsn, "SELECT children FROM runs WHERE id = %s", (run["id"],))[0]["children"] == {}
 
     sign_in(page, web_url, org["api_key"])
+    # Wide enough for the session rail: under 820px of session width the
+    # rail, and its Subagents quicklinks, are hidden (app.css).
+    page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(f"{web_url}#/session/{run['id']}")
     thread = page.get_by_test_id("child-thread")
     expect(thread).to_have_attribute("data-status", "completed", timeout=30_000)
     expect(thread).not_to_have_attribute("data-waiting", "true")
     expect(thread).to_contain_text("the child read a.txt: hello")
     expect(thread.locator("[data-tool]")).to_have_count(0)
-    page.get_by_test_id("rail-subagents").get_by_role("button").filter(
+    quicklink = page.get_by_test_id("rail-subagents").get_by_role("button").filter(
         has=page.get_by_text("fake subagent (@general subagent)", exact=True)
-    ).click()
+    )
+    expect(quicklink).to_be_visible()
+    quicklink.click()
     panel = page.get_by_test_id("child-panel")
     expect(panel.locator("[data-tool=bash]")).to_be_visible()
     expect(panel).to_contain_text("the child read a.txt: hello")
