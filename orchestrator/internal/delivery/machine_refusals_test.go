@@ -45,6 +45,8 @@ func TestEachLuxRefusalIsSaidInDudesWords(t *testing.T) {
 			"lux was already resuming this Run, so it could not move it to XL"},
 		{"older lux, another pool", lux.Error{Status: http.StatusBadRequest, Code: "bad_request", Message: `invalid JSON body: json: unknown field "placement"`}, run,
 			"this lux cannot move a Run between pools yet. Ask for a size in your own pool.", "this lux cannot move a Run between pools yet"},
+		{"unmapped", lux.Error{Status: 422, Code: "quota_exceeded", Message: "tenant ten_9 over quota in pool_high"}, run,
+			"lux would not move this agent to XL. Ask for another size.", "lux would not move this agent to XL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := RefusalOf(&tc.le, xl, pools, tc.run)
