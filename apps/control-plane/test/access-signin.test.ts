@@ -58,7 +58,7 @@ describe("signing in", () => {
   });
 
   test("an existing admin keeps id, role and the name they set; an empty photo is filled", async () => {
-    // Migration 114 made the account from the person the org already had.
+    // Migration 115 made the account from the person the org already had.
     const id = await member(owner, org, at("marcio"), { name: "Márcio", role: "admin" });
     edge.profiles.set(at("marcio"), { email: at("marcio"), name: "Marcio IdP", oidc_fields: { picture: "https://img.example/m.png" } });
     const got = await me(router, cookie(await sign(signer, { email: at("MARCIO") })));
