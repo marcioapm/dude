@@ -312,7 +312,7 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
     const switchingApp = oauth && (oauth.auth !== input.auth || oauth.app_id !== input.appId);
     const changingIdentity = switchingApp || (oauth && clientId !== oauth.oauth_client_id);
     if (keepsOAuth && changingIdentity && (clientId || oauth?.oauth_client_secret)
-      && (!input.oauthClientId || !input.oauthClientSecret?.trim())) {
+      && (!input.oauthClientId || !input.oauthClientSecret)) {
       throw badRequest("Changing the App or OAuth Client ID requires a freshly supplied Client ID and Client secret, or explicit clear");
     }
     const rows = (await scope.sql`
