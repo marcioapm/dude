@@ -12,6 +12,48 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+func TestWakeTimeoutChoiceAndOpenWakeProtection(t *testing.T) {
+	settings := PreviewSettings{FirstWakeTimeoutMinutes: 25, WakeTimeoutMinutes: 7}
+	for _, tc := range []struct {
+		settings PreviewSettings
+		ready    bool
+		want     time.Duration
+	}{
+		{PreviewSettings{}, false, 15 * time.Minute}, {PreviewSettings{}, true, 5 * time.Minute},
+		{settings, false, 25 * time.Minute}, {settings, true, 7 * time.Minute},
+	} {
+		if got := wakeTimeout(tc.settings, tc.ready); got != tc.want {
+			t.Fatalf("wakeTimeout(%+v, %v) = %v", tc.settings, tc.ready, got)
+		}
+	}
+	now := time.Now()
+	for _, tc := range []struct {
+		state     string
+		requested *time.Time
+		want      time.Duration
+		patch     bool
+	}{
+		{lux.SrvAsleep, nil, 5 * time.Minute, true},
+		{lux.SrvReady, nil, 5 * time.Minute, true},
+		{lux.SrvWaking, &now, 5 * time.Minute, false},
+		{lux.SrvWaking, &now, 25 * time.Minute, true},
+		{lux.SrvNoAnswer, &now, 5 * time.Minute, false},
+		{lux.SrvAsleep, nil, 15 * time.Minute, false},
+	} {
+		cur := lux.TenantServer{State: tc.state, WakeTimeout: json.RawMessage(`"15m"`), WakeRequestedAt: tc.requested}
+		got := wakeTimeoutPatch(cur, tc.want)
+		if (got != nil) != tc.patch {
+			t.Fatalf("patch state %s requested %v want %v = %v", tc.state, tc.requested, tc.want, got)
+		}
+		if got != nil {
+			d, err := time.ParseDuration(*got)
+			if err != nil || d != tc.want {
+				t.Fatal(got, err)
+			}
+		}
+	}
+}
+
 func TestARecipeRunsThroughAShellAfterItsSetup(t *testing.T) {
 	setup := "npm ci"
 	for _, c := range []struct {
