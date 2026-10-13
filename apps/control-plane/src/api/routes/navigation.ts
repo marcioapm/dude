@@ -175,7 +175,7 @@ function groupBy<T, K extends string | number | null>(rows: T[], key: (row: T) =
   return out;
 }
 
-async function getNavigation(ctx: RequestContext): Promise<Response> {
+export async function getNavigation(ctx: RequestContext): Promise<Response> {
   const tree = await withOrg(ctx.principal.organizationId, async (scope) => {
     const { sql } = scope;
 

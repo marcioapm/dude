@@ -21,6 +21,8 @@ import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
+import { getNavigation } from "./navigation.ts";
+import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
@@ -158,6 +160,25 @@ export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string
 // You
 // ---------------------------------------------------------------------------
 
+async function membershipOrganizations(ctx: RequestContext) {
+  const organizations = [];
+  for (const m of ctx.principal.access?.memberships ?? []) {
+    const navigation = await getNavigation({ ...ctx, principal: { ...ctx.principal, organizationId:m.organization_id,personId:m.person_id } });
+    const tree = await navigation.json() as { projects: NavProject[] };
+    const taskCount = waitingSplit(attentionItems(tree.projects),m.person_id).yours.length;
+    const waitingOnYou = await withOrg(m.organization_id, async ({ sql }) => {
+      const [sessions] = await sql`SELECT count(*)::int AS n FROM session_people WHERE person_id=${m.person_id} AND accepted_at IS NULL`;
+      const [questions] = await sql`SELECT count(*)::int AS n FROM questions q JOIN runs r ON r.id=q.run_id
+        JOIN sessions s ON s.id=r.session_id WHERE q.status='open' AND session_role(s.id,${m.person_id}) IN ('owner','chat')
+          AND (q.to_person=${m.person_id} OR (q.to_person IS NULL AND session_role(s.id,${m.person_id})='owner'))`;
+      return taskCount + sessions.n + questions.n;
+    });
+    organizations.push({ id:m.organization_id,name:m.organization_name,slug:m.organization_slug,
+      role:m.role,personId:m.person_id,welcomedAt:m.welcomed_at,waitingOnYou });
+  }
+  return organizations;
+}
+
 async function getMe(ctx: RequestContext): Promise<Response> {
   const access = ctx.principal.access;
   if (access && access.gate !== "member") {
@@ -167,7 +188,7 @@ async function getMe(ctx: RequestContext): Promise<Response> {
       ...(access.gate === "invited" ? { invitations: access.invitations } : {}) });
   }
   if (access && !ctx.principal.organizationId) {
-    return json({ gate: "member", account: access.account, organizations: access.memberships,
+    return json({ gate: "member", account: access.account, organizations: await membershipOrganizations(ctx),
       invitations: access.invitations, organization: null, superAdmin: access.superAdmin,
       authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH });
   }
@@ -184,7 +205,7 @@ async function getMe(ctx: RequestContext): Promise<Response> {
     ? { authMethod: "api_key" }
     : { authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH };
   return json({ ...out, ...auth, ...(access ? { gate: access.gate, account: access.account,
-    organizations: access.memberships, invitations: access.invitations, superAdmin: access.superAdmin } : { gate: "member" }) });
+    organizations: await membershipOrganizations(ctx), invitations: access.invitations, superAdmin: access.superAdmin } : { gate: "member" }) });
 }
 
 /** A photo someone keeps elsewhere: an https URL. Uploads go to PUT /v1/me/photo. */
@@ -493,7 +514,28 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
   return noContent();
 }
 
+async function locate(ctx: RequestContext): Promise<Response> {
+  const memberships = ctx.principal.access?.memberships ?? [{ organization_id:ctx.principal.organizationId }];
+  for (const m of memberships) {
+    const found = await withOrg(m.organization_id, async ({ sql }) => {
+      const [row] = await sql`SELECT 'task' AS kind FROM tasks WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'project' FROM projects WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'epic' FROM epics WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'run' FROM runs WHERE id=${ctx.params.id!}
+          AND (session_id IS NULL OR session_role(session_id,${ctx.principal.personId}) IS NOT NULL)
+        UNION ALL SELECT 'brainstorm' FROM sessions WHERE id=${ctx.params.id!}
+          AND session_role(id,${ctx.principal.personId}) IS NOT NULL LIMIT 1`;
+      if (!row) return null;
+      const [organization] = await sql`SELECT id,name,slug FROM organizations WHERE id=${m.organization_id}`;
+      return { organization,kind:row.kind,id:ctx.params.id };
+    });
+    if (found) return json(found);
+  }
+  throw notFound("not found");
+}
+
 export function registerPeopleRoutes(router: Router): void {
+  router.get("/v1/locate/:id", locate);
   router.get("/v1/me", getMe);
   router.patch("/v1/me", updateMe);
   router.put("/v1/me/photo", uploadMyPhoto);

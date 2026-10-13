@@ -25,16 +25,13 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, execute, query, sign_in, wait_until
+from helpers import provision_person, ApiClient, execute, query, sign_in, wait_until
 from playwright.sync_api import Page, expect
 
 
 def _person(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
     email = name.split()[0].lower().encode("ascii", "ignore").decode()
-    resp = admin.post("/v1/people", {"name": name, "email": f"{email}@acme.dev", "role": role})
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    return body["person"], ApiClient(env.control_plane_url, body["key"])
+    return provision_person(admin, env, name, f"{email}@acme.dev", role)
 
 
 def _scripted_brainstorm(client: ApiClient) -> None:

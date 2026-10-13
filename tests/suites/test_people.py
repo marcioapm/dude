@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from env import REPO_ROOT, find_free_port
-from helpers import ApiClient, create_api_key, execute, query, sign_in, wait_until
+from helpers import provision_person, ApiClient, create_api_key, execute, query, sign_in, wait_until
 
 
 @pytest.fixture
@@ -80,11 +80,7 @@ def _healthy(url, proc):
 
 
 def _invite(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
-    resp = admin.post("/v1/people", {"name": name, "email": f"{name.lower()}@acme.dev", "role": role})
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["key"].startswith("dude_sk_")
-    return body["person"], ApiClient(env.control_plane_url, body["key"])
+    return provision_person(admin, env, name, f"{name.lower()}@acme.dev", role)
 
 
 def _from_a_tab(who: ApiClient, path: str, where: str | None = None, active: str | None = "1") -> requests.Response:
@@ -121,15 +117,15 @@ def test_an_admin_invites_and_the_key_is_shown_once(client: ApiClient, env):
     # Once: her key list shows its prefix, never the key.
     keys = ana_client.get("/v1/me/keys").json()["keys"]
     assert len(keys) == 1 and "key" not in keys[0] and keys[0]["current"] is True
-    # The same address twice is one person.
+    # Key-mode invitation is retired: people join by invitation link.
     again = client.post("/v1/people", {"name": "Ana again", "email": "ANA@acme.dev"})
-    assert again.status_code == 409, again.text
+    assert again.status_code == 410, again.text
 
 
 def test_only_admins_manage_members(client: ApiClient, env):
     bo, bo_client = _invite(client, env, "Bo")
     for resp in (
-        bo_client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}),
+        bo_client.post("/v1/organization/invitations", {"invitations": [{"email": "cy@acme.dev"}], "role": "member"}),
         bo_client.patch(f"/v1/people/{bo['id']}", {"role": "admin"}),
         bo_client.delete(f"/v1/people/{client.get('/v1/me').json()['person']['id']}"),
     ):
@@ -138,7 +134,7 @@ def test_only_admins_manage_members(client: ApiClient, env):
 
     # Made an admin, Bo can.
     assert client.patch(f"/v1/people/{bo['id']}", {"role": "admin"}).json()["person"]["role"] == "admin"
-    assert bo_client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}).status_code == 201
+    assert bo_client.post("/v1/organization/invitations", {"invitations": [{"email": "cy@acme.dev"}], "role": "member"}).status_code == 200
 
 
 def test_the_last_admin_stays_and_nobody_removes_themselves(client: ApiClient, env):
@@ -456,7 +452,7 @@ def test_waiting_on_you_is_split_by_whose_it_is(
 @pytest.mark.ui
 def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient, env, console_errors: list, presence_session):
     _invite(client, env, "Ana")
-    ana_client = ApiClient(env.control_plane_url, client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}).json()["key"])
+    _, ana_client = _invite(client, env, "Cy")
     presence_session.get(ana_client, "/v1/me")  # Cy's designated person session is active.
     presence_session.browser(page, client)
     online = page.get_by_test_id("online")
