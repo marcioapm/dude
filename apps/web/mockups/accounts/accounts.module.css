@@ -287,6 +287,13 @@
 }
 
 /* -- Members -- */
+.roleSelect {
+  min-width: max-content;
+  width: fit-content;
+}
+.roleSelect [role="combobox"] {
+  min-width: calc(8ch + var(--ds-space-8) + var(--ds-space-6) + var(--ds-space-8) + 14px);
+}
 .envelope {
   display: grid;
   place-items: center;

@@ -107,15 +107,6 @@ export const CHLOE_INVITES: readonly Invitation[] = [
   { id: "inv_3", code: "Gc8wQ3eR6tY9uI2oP5aS1d", org: GLOBEX, role: "member", by: P.lin, sent: "12 October", expires: "in 13 days" },
 ];
 
-/**
- * `auth.super_admins`: who the No organisation page names. A super-admin
- * with no account yet is shown by email only.
- */
-export const SUPER_ADMINS: readonly { person: Person | null; email: string }[] = [
-  { person: P.marcio, email: "marcio@acme.dev" },
-  { person: null, email: "ops@acme.dev" },
-];
-
 export interface Member {
   readonly person: Person;
   readonly email: string | null;

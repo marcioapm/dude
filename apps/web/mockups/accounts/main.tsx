@@ -28,7 +28,7 @@ type Screen = "first" | "none" | "switcher" | "settings" | "members" | "invitati
 
 const VARIANTS: Record<Screen, readonly { value: string; label: string }[]> = {
   first: [{ value: "one", label: "Joined from a link" }, { value: "two", label: "Two links waiting" }],
-  none: [{ value: "plain", label: "No invitation" }, { value: "expired", label: "Expired invitation" }],
+  none: [{ value: "plain", label: "No invitation" }],
   switcher: [{ value: "before", label: "In Acme" }, { value: "after", label: "After switching" }],
   settings: [{ value: "keys", label: "Profile and keys" }, { value: "reveal", label: "New key, shown once" }],
   members: [{ value: "list", label: "Members" }, { value: "invite", label: "Invite: chips" }, { value: "links", label: "Invite: links" }, { value: "remove", label: "Remove" }],
@@ -53,7 +53,7 @@ const SCREENS: readonly { value: Screen; label: string }[] = [
 
 const NOTES: Record<Screen, string> = {
   first: "Chloé signs in for the first time, in no organisation, holding invitations: dude lets her in only to answer them. From Gus's link she joins Northwind and its welcome opens; at the bare address, every invitation waiting for her email is listed.",
-  none: "Access proved who they are, but they are in no organisation, hold no pending invitation and are not a super-admin. dude lets them in nowhere and records nothing: who to ask, Sign out.",
+  none: "Access proved who they are, but they are in no organisation, hold no pending invitation and are not a super-admin. dude lets them in nowhere and records nothing: generic invitation guidance, Check again and Sign out.",
   switcher: "Your face at the bottom of the sidebar opens the menu (click, or Tab to it and press Enter; arrows move, Escape closes). Each organisation shows what waits on you there. Pick Northwind: the URL, the sidebar and Waiting on you change.",
   settings: "Your profile is the same in every organisation; email comes from Access. Keys are grouped by organisation: New key for Acme.",
   members: "People join by invitation only. Invite people: type or paste emails; each chip says what will happen to it. Invite gives a link per person to send them yourself.",
@@ -144,7 +144,7 @@ function Mock() {
   const orgPage = (id: string) => (id === "members" ? go("members") : id === "invitations" ? go("invitations") : undefined);
 
   let body;
-  if (screen === "none") body = <NoOrg expired={variant === "expired"} />;
+  if (screen === "none") body = <NoOrg />;
   else if (screen === "admin") body = <AdminPage view={variant as AdminView} onView={(v) => setVariant(v)} onBack={() => go("switcher")} />;
   else if (acceptOutside) body = <AcceptPage key={variant} state={variant as AcceptState} onJoin={(o) => setJoined(o)} onOpen={(o) => setJoined(o)} />;
   else if (screen === "first" && variant === "two" && !joined) body = <FirstTwo onJoin={(o) => setJoined(o)} />;

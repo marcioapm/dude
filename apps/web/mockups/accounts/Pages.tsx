@@ -18,7 +18,7 @@ import { projectCounts } from "../../../../packages/design-system/src/util/navMo
 import type { Person } from "../../../../packages/design-system/src/components/PersonAvatar.tsx";
 import {
   ACME, ACME_INVITATIONS, ACME_MEMBERS, ALL_ORGS, CHIP_EXAMPLE, CHLOE_EMAIL, CHLOE_INVITES, CHLOE_OTHER, HOST, HOW, MEMBERSHIPS, MY_INVITATIONS, MY_KEYS, NEW_CODES,
-  NEW_KEY, NORTHWIND, NORTHWIND_INVITATIONS, NORTHWIND_MEMBERS, P, SUPER_ADMINS, chipStates, inviteUrl, parsePaste, pendingOf,
+  NEW_KEY, NORTHWIND, NORTHWIND_INVITATIONS, NORTHWIND_MEMBERS, P, chipStates, inviteUrl, parsePaste, pendingOf,
   type ChipState, type Entry, type Invitation, type InvitationRow, type InvitationStatus, type MadeLink, type Member, type Org, type Role,
 } from "./data.ts";
 import { Mark, OrgFace, roleWord } from "./Shell.tsx";
@@ -159,7 +159,6 @@ function InviteCard({ i, state, onJoin, onLater }: { i: Invitation; state?: "joi
           <div className={s.inviteText}>
             <b className={s.inviteName}>{i.org.name}</b>
             <span className="muted">{roleWord(i.role)} · {i.by?.name ?? "The operator"} sent you this link on {i.sent} · expires {i.expires}</span>
-            <span className="muted">{i.org.projects.length ? `${i.org.projects.length} projects` : "New: no projects yet"}</span>
           </div>
           <div className={s.inviteActions}>
             {state === "later" ? <span className="muted">In your menu for later</span> : (
@@ -179,31 +178,18 @@ function InviteCard({ i, state, onJoin, onLater }: { i: Invitation; state?: "joi
  * Screen 2: Access proved the email, and the gate found no membership, no
  * pending invitation and no super-admin. Nothing is recorded.
  */
-export function NoOrg({ expired }: { expired: boolean }) {
+export function NoOrg() {
   return (
     <Outside testId="no-org">
       <header className={s.hero}>
         <h1 className={s.heroTitle}>Your email isn't in any organisation on this dude</h1>
-        <p className={s.heroLine}>You signed in as <b>{CHLOE_EMAIL}</b>. dude lets people in by invitation: an admin of the organisation you work with invites you and sends you a link.</p>
+        <p className={s.heroLine}>You signed in as <b>{CHLOE_EMAIL}</b>. dude lets people in by invitation.</p>
       </header>
-      {expired ? (
-        <Callout tone="attention">Your invitation to Northwind expired on 2 October. Ask Gus Lindqvist for a new link.</Callout>
-      ) : null}
       <Card>
-        <CardHeader title="Who to ask" />
         <CardBody>
           <FormStack>
-            <p className="muted">If you don't know who the organisation's admins are, ask this dude's super-admins. They make the organisations and can invite you to one.</p>
-            <ul className={s.rows} data-testid="super-admins">
-              {SUPER_ADMINS.map((a) => (
-                <li key={a.email} className={s.row}>
-                  {a.person
-                    ? <EntityLine lead={<PersonAvatar person={a.person} size={32} />} name={a.person.name} detail={a.email} />
-                    : <EntityLine lead={<span className={s.envelope}><Icon name="human" size={14} /></span>} name={a.email} detail="Super-admin" />}
-                </li>
-              ))}
-            </ul>
-            <p className="muted">Signed in with the wrong address? Sign out, then sign in with the one you were invited with.</p>
+            <p className="muted">If someone invited you, open the link they sent you. Links expire after 14 days; ask them for a new one.</p>
+            <p className="muted">Signed in with the wrong address? Sign out and sign in with the one you were invited with.</p>
           </FormStack>
         </CardBody>
         <CardFooter>
@@ -262,14 +248,13 @@ export function AcceptPage({ state, onJoin, onOpen }: { state: AcceptState; onJo
         <Card>
           <CardBody>
             <div className={s.accept}>
-              <OrgFace org={NORTHWIND} size={48} />
-              <h1 className={s.acceptTitle}>This invitation is for another address</h1>
-              <p className={s.acceptLine}>Gus Lindqvist invited <b>{CHLOE_EMAIL}</b> to Northwind. You're signed in as <b>{CHLOE_OTHER}</b>.</p>
-              <p className={s.acceptLine}>If both are yours, sign out and sign in again with the invited one. If not, ask Gus for a link for {CHLOE_OTHER}.</p>
+              <span className={s.acceptIcon}><Icon name="link" size={20} /></span>
+              <h1 className={s.acceptTitle}>This invitation is for a different email address.</h1>
+              <p className={s.acceptLine}>or ask whoever sent it for a new link.</p>
             </div>
           </CardBody>
           <CardFooter>
-            <Button variant="primary" leadingIcon="arrow-right" data-testid="switch-account">Sign out and use another account</Button>
+            <Button variant="primary" leadingIcon="arrow-right" data-testid="switch-account">Sign in with the address it was sent to</Button>
           </CardFooter>
         </Card>
         <SignedInAs email={CHLOE_OTHER} />
@@ -445,7 +430,7 @@ function MembersTable({ members, you, admin, onRemove, keyOnly }: { members: rea
               <Td><EntityLine lead={<PersonAvatar person={m.person} size={32} aria-hidden title="" />} name={m.person.name}
                 detail={[me ? "you" : null, m.email ?? "no email: signs in only with a key", m.seen].filter(Boolean).join(" · ")} /></Td>
               <Td wrap muted>{m.joined ?? "—"}</Td>
-              <Td>{admin && !me ? <Select size="sm" aria-label={`Role of ${m.person.name}`} value={m.role} options={ROLES} /> : m.role === "admin" ? <Badge>Admin</Badge> : <span className="muted">Member</span>}</Td>
+              <Td>{admin && !me ? <Select className={s.roleSelect} size="sm" aria-label={`Role of ${m.person.name}`} value={m.role} options={ROLES} /> : m.role === "admin" ? <Badge>Admin</Badge> : <span className="muted">Member</span>}</Td>
               <Td align="right" fit>
                 <span className={s.rowActions}>
                   {keyOnly && !m.email ? <Button size="sm" variant="secondary">Set email…</Button> : null}

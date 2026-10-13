@@ -1,7 +1,7 @@
 # Accounts across organisations
 
-Status: design v3, 2026-10-13, revised to Márcio's answers of 12:45 the same
-day: membership decides who gets in.
+Status: design v4, 2026-10-13, revised to Márcio's answers of 13:14 the same
+day: membership decides who gets in; nothing disclosed to people dude doesn't let in.
 Mockup: `mockups/accounts/index.html`.
 
 Source in `apps/web/mockups/accounts`, built with
@@ -97,6 +97,21 @@ Third round, 12:45, answers to v2's open questions:
 15. **Each organisation's waiting count stays in the switcher**, beside its
     name and your role.
 
+Fourth round, Márcio, 2026-10-13 13:14:
+
+> "We don't want to disclose who the super-admins are, and which organisations
+> are using dude. Can we change that screen to say something generic instead?"
+
+**Nothing disclosed to people dude doesn't let in.** They learn nothing about
+this deployment's super-admins or admins, which organisations exist, or who
+invited whom. This applies to every reachable screen and public or
+pre-membership endpoint, including errors, not just *No organisation*.
+Their own verified identity is safe to show. A matching, pending invitation
+lets them in narrowly: Access proved its address, so only that invitation's
+organisation and inviter may be shown. A code alone is not that proof.
+The deployment's operator tells people who to ask **out of band**; dude
+publishes no directory at the front door.
+
 Recommended here, for Márcio to overrule:
 
 16. **No open links** (invitations without an email). See *Open links*.
@@ -116,7 +131,7 @@ JWT and gives the email; dude looks up the account by that email; then:
 | an active membership | in, to their organisations | the organisation in the URL, else the last one |
 | no membership, a pending unexpired invitation | in **only to accept**: `GET /v1/me` and the invitation routes | *You're invited* (screen 1, second variant), or the link's accept page |
 | no membership, no invitation, and is in `auth.super_admins` | in **to the super-admin page** only | `#/admin` |
-| none of these | nowhere | *No organisation* (screen 2), which records nothing |
+| none of these | nowhere; their own identity and generic guidance only | *No organisation* (screen 2), which records nothing; a link may show only the generic mismatch or unusable state |
 
 - **Which rows answer it.** "Active membership": a `people` row with that
   account and `removed_at IS NULL`. "Pending invitation":
@@ -138,11 +153,14 @@ JWT and gives the email; dude looks up the account by that email; then:
   they are not in.
 - **The fourth line writes nothing.** No account, no `signed_in_at`, no row
   of any table keyed by the email.
-  `GET /v1/me` answers 200 `gate: "none"` with what the page needs and
-  nothing else: the expired invitations for that email (organisation,
-  inviter, date: the *none-expired* variant), and the super-admins (name if
-  they have an account, else the email). Every other route answers 403
-  `not_admitted`, with one recommended exception: open question 1.
+  `GET /v1/me` answers 200 `gate: "none"` with their own Access identity
+  only. No expired invitation history, organisation names or super-admin list.
+  `GET /v1/invitations/:code` is readable by any verified email, writes
+  nothing, and returns only a mismatch state for a pending code for another
+  address: no organisation, inviter or invited address. Unusable codes return
+  the same generic 404. `POST …/accept` rechecks the code and email and gives
+  the same generic 404 or 403 mismatch without details. Every other route
+  answers 403 `not_admitted`, whether or not the requested resource exists.
 - **A key is not gated by this.** A key already is a person of one
   organisation, and removing that person revokes it (`removePerson`).
 
@@ -183,11 +201,11 @@ a new row in another), as the same account.
 
 ### Holding only an expired invitation
 
-An expired invitation lets nobody in. They see *No organisation* with
-the expired one named: "Your invitation to Northwind expired on 2 October.
-Ask Gus Lindqvist for a new link." It is their own email's history, so no
-code is involved and nothing is disclosed to anyone else. Renewing it (same
-link, 14 more days) lets them in at their next request.
+An expired invitation lets nobody in. They see the same generic *No
+organisation* page as someone never invited, even for their own verified
+email. No organisation, inviter or past invitation is disclosed. Opening
+its code shows the generic *can't be used* page. Renewing it (same link,
+14 more days) lets them in at their next request.
 
 ## The records
 
@@ -291,9 +309,10 @@ again from the Invitations page, so it cannot be a hash. A code alone grants
 nothing: it works only for its email, which Access proves on every request.
 
 `invitations_for_email(email)` (`SECURITY DEFINER`) returns the invitations
-of every organisation for one email, with organisation name and slug,
-inviter, code and derived status: the gate's second line, the menu's
-**Join…**, the first-sign-in page and *No organisation*'s expired line.
+of every organisation for one verified email, restricted to pending,
+unexpired invitations, with organisation name and slug, inviter, role,
+code and expiry: the gate's second line, the menu's **Join…** and the
+first-sign-in page. It never supplies expired history to *No organisation*.
 `invitation_for_code(code, email)` (`SECURITY DEFINER`) returns what the
 accept page may show to that email (below).
 
@@ -388,8 +407,9 @@ account in step 1, and pass the gate's first line: nothing changes for
 them. Removed people stay removed, as today. What changes is for people who
 have never signed in: Access letting them through no longer makes them
 members. They need an invitation from an admin of the organisation; until
-then they see *No organisation*, naming the super-admins to ask. The
-release note says so, and the operator who wants a group in at once pastes
+then they see the generic *No organisation* page. The deployment's operator
+tells them who to ask out of band. The release note says so, and the
+operator who wants a group in at once pastes
 its addresses into one invite dialog.
 
 ## How a request knows its organisation
@@ -444,14 +464,14 @@ what dude does:
 |---|---|---|
 | **A signed-in user with no organisation has no session at all.** A session is a (user, organisation) pair: `create_user_session(db, user_id, org_id)`, and every handler takes `UserSession.org_id`, not an option. Its suites give an invitee "their own org to have a session" before they can accept anything (`test_invites.py:243`, `test_org_invite_flow.py:68`). The OAuth callback that would make that organisation is not in the reference copy, so whether sign-up makes one is not visible | **Different: no session, and no organisation made for them** | dude has no session behind Access and makes no organisation for anyone (decision 4). The gate answers per request: a member is let in; an invitee only to accept; a super-admin to `#/admin`; anyone else sees *No organisation*, and nothing is written |
 | Signed in holding only a pending invitation: `find_pending_invite_for_email` returns the newest one's code, one at most; login carries `mode=invite` and a redirect to that link | **Different: every invitation, and nothing else** | The gate's second line lets them reach only `/v1/me` and the invitation routes, and *You're invited* lists every pending invitation for their email, so a lost link or a second organisation is not a dead end |
-| Signed in holding only an expired invitation: `find_pending_invite_for_email` skips it (`expires_at > now()`), so it is as if there were none | **Same gate, a better page** | It lets nobody in. *No organisation* names it and its inviter ("ask Gus Lindqvist for a new link"), from their own email's history |
+| Signed in holding only an expired invitation: `find_pending_invite_for_email` skips it (`expires_at > now()`), so it is as if there were none | **Same gate, generic page** | It lets nobody in. *No organisation* discloses no expired history, organisation or inviter; the operator tells people who to ask out of band |
 | Super-admin: `is_super_admin(db, config, session.user_id)` takes a session, so a super-admin is a user who is a member somewhere (the suites' `super_admin_org`) | **Different: no membership needed** | `auth.super_admins` is the third line of the gate; a fresh deployment with no organisations has a way in |
 | An uninvited email that signs in | **No row** | Not a `users` row, not an account: dude keeps no table of everyone Access let in. See *When an account is made* |
 | Removed from their only organisation: the `sessions` row for that organisation is deleted with the membership (`org_members.rs:673`), and the next request with the still-valid JWT is a 401 (`test_removed_member_jwt_rejected_immediately`) | **Same moment, a page instead of a 401** | The next request finds no active membership and lands on *No organisation*. The account and the removed `people` row stay, and an invitation brings them back as the same person |
 | Emails are trimmed and lower-cased | **Same** | `citext` plus a trim on write; the chip editor shows the lower-cased address |
 | Inviting the same email again returns the existing pending invitation and its link | **Same**, and **different for an expired one** | The chip says "already invited" and offers **Copy their link**; the API returns the existing invitation. llm-proxy reuses only an *unexpired* pending row, but its unique index (`WHERE status = 'pending'`) still counts the expired one, so the insert fails with a 500. dude renews the expired row instead: same link, 14 more days, the chip saying so |
 | Inviting an existing member: 409 | **Same**, per address | One dialog invites many. The chip says "already in Acme" and the address is left out; the API reports `member` for that address and creates the rest, not a 409 for the batch |
-| Accepting with a different email: 403 "sent to a different email address" | **Same** | The accept page names both addresses, offers **Sign out and use another account**, and never offers Join. `POST …/accept` answers 403 `invitation_for_another_email`. See open question 1 for whom the page is shown to |
+| Public invite-info for a valid code returns the invited email, role and organisation; accepting with a different email returns 403 "sent to a different email address" | **Different on read: wrong email learns nothing; same 403 on accept** | dude's GET requires an Access-verified email. A pending code for another email returns only `invitation_for_another_email`, never the organisation, inviter, role or invited address. The page offers sign-in with the address it was sent to, or asking whoever sent it for a new link. Matching email may read that invitation's details because Access proved the invited address |
 | Accepting when already a member: marked accepted, switched to the organisation, no error | **Same** | *You're already in Northwind*, **Open Northwind**. Switching is navigation in dude, so nothing is re-issued. Without auto-joining this is mostly someone opening their accepted link again |
 | Expired, revoked or unknown code: the same "not found" on the public info endpoint | **Same, and on accept too** | llm-proxy's accept route then tells them apart ("no longer pending", "has expired"). dude answers both routes with the same 404, and the page says one thing: *This invitation can't be used. Ask whoever sent it for a new link.* A code is a bearer handle: telling expired from revoked from never-existed tells whoever holds one which codes are real and what happened to them, and the reader's next step is the same in all three. An *accepted* code opened by anyone but its member reads the same way |
 | Revoking a revoked invitation: 404 | **Same** | Also for an accepted one. An expired invitation can be revoked (it would otherwise be renewable) |
@@ -486,14 +506,14 @@ front of dude, and every dude page, the accept page included, is behind it.
 2. The gate finds no account, no invitation for their email, and the email
    is not a super-admin's. Nothing is written.
 3. **No organisation** (screen 2): "Your email isn't in any organisation on
-   this dude", the email they signed in with, and "dude lets people in by
-   invitation: an admin of the organisation you work with invites you and
-   sends you a link." **Who to ask**: this dude's super-admins, by name and
-   email where they have an account, by email where they don't. **Check
-   again** and **Sign out**. No key field. "dude keeps no record of this
-   visit."
-4. With an invitation that has expired, the page says so: "Your invitation
-   to Northwind expired on 2 October. Ask Gus Lindqvist for a new link."
+   this dude", their own email, and "dude lets people in by invitation."
+   "If someone invited you, open the link they sent you. Links expire after
+   14 days; ask them for a new one." "Signed in with the wrong address? Sign
+   out and sign in with the one you were invited with." **Check again** and
+   **Sign out**. No key field or directory. "dude keeps no record of this
+   visit." The deployment's operator tells people who to ask out of band.
+4. An expired or revoked invitation makes no difference: the same generic
+   page, no organisation or inviter named. The expired variant is dropped.
 
 ### First sign-in from a link
 
@@ -539,9 +559,13 @@ email, in this order:
 |---|---|
 | unknown, revoked, or expired | *This invitation can't be used. Ask whoever sent it for a new link.* **Open dude** |
 | accepted, and you are not its active member | the same *can't be used* page |
-| pending, for another email | *This invitation is for another address*: "Gus Lindqvist invited chloe.durand@hey.com to Northwind. You're signed in as chloe.d@gmail.com." **Sign out and use another account** (Access logout, `/cdn-cgi/access/logout`; they open the link again after signing in with the other address), and ask Gus for a link for the other address. Never Join |
-| pending or accepted, and you are its active member | *You're already in Northwind*: marked accepted if pending; **Open Northwind** |
+| pending, for another email | *This invitation is for a different email address.* **Sign in with the address it was sent to** (Access logout, `/cdn-cgi/access/logout`; reopen the link after signing in), "or ask whoever sent it for a new link." Their own signed-in email only; no organisation, inviter or invited address. Never Join |
+| pending or accepted, for your email, and you are its active member | *You're already in Northwind*: marked accepted if pending; **Open Northwind** |
 | pending, for you | *Join Northwind as member · invited by Gus*; for, role, expiry; **Join** and **Not now**. With no account yet, the note that Join makes it |
+
+A matching pending email may see the organisation and inviter: they were
+invited, and Access proved that address. No invitation details are sent
+before the email check; the client cannot merely hide them.
 
 Join is `POST /v1/invitations/:code/accept {name?}`, which re-runs the same
 checks in one transaction (the same 404 and 403), makes the account if there
@@ -698,13 +722,15 @@ for it.
 - **`X-Dude-Organization`** (and `org=` on `/v1/events/stream`) for an Access
   request; checked against the key's organisation when both are given.
 - **`GET /v1/me`** answers every email Access verified, with the gate's
-  answer: `gate` (`member` \| `invited` \| `super_admin` \| `none`), and
-  `superAdmin` (boolean). A member gets `account` (id, email, name, photo),
+  answer: `gate` (`member` | `invited` | `super_admin` | `none`), and
+  `superAdmin` (their own boolean, omitted for `none`). A member gets `account` (id, email, name, photo),
   `organizations` (id, name, slug, your role, your person id, waiting on
   you), `invitations` (pending for your email, with their codes) and
   `organization`, the request's. An invitee gets `invitations` and the
-  profile Access gave. `none` gets `expiredInvitations` and `superAdmins`.
-  It joins nobody to anything.
+  profile Access gave. `none` gets only `gate: "none"` and their own
+  verified identity (email, name and photo from Access), even if an old
+  account exists. No `expiredInvitations`, `superAdmins`, organisation
+  names or inviter details. It joins nobody to anything.
 - **New**: `PATCH /v1/me` writes the account; `GET /v1/me/keys` across
   memberships (one `withOrg` per membership, so row-level security holds);
   `POST /v1/me/keys {organizationId, name}`; `GET /v1/locate/:id`.
@@ -732,6 +758,29 @@ for it.
   test suites, which have no Cloudflare in front: there the browser key
   prompt remains, labelled as a developer sign-in. Production runs Access and
   never shows it.
+
+### Pre-membership and public response contract
+
+These are the only browser API routes available before membership (aside
+from a configured super-admin's authorised admin routes). Access verification
+is required for all three. Unverified requests get only 401, no deployment
+identity or invitation information. There is no public invite-info endpoint.
+Static sign-in/generic pages and public health responses contain no people,
+organisation directory or invitation metadata. All rejected routes check
+admission before resource lookup: their errors contain no names, addresses,
+counts or existence hints about other people or organisations.
+
+| endpoint / caller | returns |
+|---|---|
+| `GET /v1/me`, `gate: "none"` | 200: `gate: "none"` and only their own Access identity (email, name, photo). No account history, organisations, invitations or super-admin list |
+| `GET /v1/me`, `gate: "invited"` | 200: their own Access profile, gate, own super-admin boolean, and only pending unexpired invitations for their verified email: code, organisation id/name/slug, role, inviter display name (or "the operator"), sent time and expiry. No expired/revoked history, members or projects |
+| `GET /v1/me`, `gate: "super_admin"` | 200: their own Access identity, gate and own super-admin boolean; no account required. Other people and organisations only through the authorised admin routes |
+| `GET /v1/invitations/:code`, pending wrong email | 403: `invitation_for_another_email` only; no organisation, inviter, invited address, role or dates. Available even with gate `none`; read-only |
+| `GET /v1/invitations/:code`, pending matching email | 200: that invitation's code, organisation id/name/slug, role, inviter display name (or "the operator"), sent time, expiry and their own invited email. They were invited and Access proved the address |
+| `GET /v1/invitations/:code`, unknown/expired/revoked, or accepted without its active membership | Identical 404 `invitation_unusable`, no metadata. An accepted code is readable only by its matching active member, not a pre-membership caller |
+| `POST /v1/invitations/:code/accept`, matching pending email | Creates/reinstates their account and membership atomically; returns their own membership and its organisation id/name/slug for navigation. At this point they are a member |
+| `POST /v1/invitations/:code/accept`, wrong email or unusable code | Same detail-free 403 mismatch or generic 404 as GET; no writes. Matching active-member repeat acceptance returns their own existing membership without changing its role |
+| All other routes, `gate: "none"` / `"invited"` | 403 `not_admitted` / `not_a_member`, respectively, regardless of the named resource's existence. No directory, keys, profile writes, locator results, project counts or invitation history |
 
 ## Later: other ways to sign in
 
@@ -795,15 +844,9 @@ existing components, and wanted as components when this is built:
 
 ## Open questions
 
-1. **Who sees "This invitation is for another address".** The gate lets a
-   stranger reach nothing, but the most common stranger holding a link is
-   an invitee signed in with their other address (Chloé's gmail). Strictly,
-   the gate's fourth line would show them *No organisation* and never say
-   which address the link wants. *Recommend: `GET /v1/invitations/:code` is
-   open to any email Access verified, read-only. It writes nothing, Join
-   stays a 403, and it shows only what the link's holder was sent already
-   (the organisation, the inviter, the invited address). Unknown, revoked or
-   expired codes still read "can't be used". The mockup shows this.*
+None remaining from v3. The wrong-email read exception is decided: any
+Access-verified email may read the generic mismatch state, never the
+organisation, inviter or invited address.
 
 ## Screens
 
@@ -814,8 +857,7 @@ unless marked mobile (390×844):
 |---|---|
 | `<Theme>-first-one.png` | first sign-in, joined Northwind from Gus's link: Welcome to Northwind |
 | `<Theme>-first-two.png` | first sign-in at the bare address: two invitations, and nothing else let in |
-| `<Theme>-none.png` | no organisation: by invitation, the super-admins to ask |
-| `<Theme>-none-expired.png` | no organisation, an expired invitation |
+| `<Theme>-none.png` | no organisation: own email and generic invitation guidance only |
 | `<Theme>-switcher.png` | the menu from the profile band, sidebar expanded, waiting counts |
 | `<Theme>-switcher-rail.png` | the menu from the collapsed rail |
 | `<Theme>-switcher-after.png` | after switching to Northwind |
