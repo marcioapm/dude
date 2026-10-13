@@ -20,6 +20,7 @@ import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
+import { installActivity } from "./activity.ts";
 import { Reconnecting } from "./Reconnecting.tsx";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
@@ -127,6 +128,7 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
+  useEffect(installActivity, []);
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
   const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");

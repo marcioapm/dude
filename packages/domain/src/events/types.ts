@@ -132,7 +132,7 @@ export const EventTypes = {
   /** Their keys were revoked with them. Payload: `{ personId }`. */
   PersonRemoved: "person.removed",
   /**
-   * Someone was seen (any request of theirs, at most once a minute). Live
+   * An active-tab person-session request was seen, at most once a minute. Live
    * only, never in the ledger: no cursor. Payload: `{ person: PersonRef }`.
    */
   PersonSeen: "person.seen",
