@@ -41,8 +41,9 @@ func retryRefusal(status int, out map[string]any) string {
 const taken = "409 retry_taken: a new agent already took the later messages"
 
 // failedResume is a session whose agent ran, was parked, and whose resume
-// for "and the tests?" lux ended for good while it waited for a host.
-func failedResume(t *testing.T) (s *sessionWorld, id, run string) {
+// for "and the tests?" lux ended for good while it waited for a host; each
+// of later is sent while the resume waits, unread too.
+func failedResume(t *testing.T, later ...string) (s *sessionWorld, id, run string) {
 	s = newSessionWorld(t)
 	s.syncer.ConductorWarm = time.Hour
 	// Only the resume's wait for a host is held; every other start runs on.
@@ -76,6 +77,9 @@ func failedResume(t *testing.T) (s *sessionWorld, id, run string) {
 	s.until("the resume followed", func() bool {
 		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.stage' AND payload->>'stage' = 'waiting'`, run) == 2
 	})
+	for _, text := range later {
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": text})
+	}
 	s.lux.CancelInLux(s.luxRunOf(run))
 	close(release)
 	s.settled("the resume to fail", func() bool {
@@ -127,6 +131,20 @@ func TestTryAgainOnASessionWhoseResumeFailedHandsTheMessageToAFreshAgentOnce(t *
 	// Used: the latest agent is live, the failed one's messages taken.
 	if status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/retry", nil); retryRefusal(status, out) != taken {
 		t.Errorf("a second Try again: %s, want %s", retryRefusal(status, out), taken)
+	}
+}
+
+func TestTryAgainOnASessionQueuesEachLaterUnreadMessageNamingTheDirectiveItReplaces(t *testing.T) {
+	s, id, run := failedResume(t, "and the docs?")
+	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/retry", nil)
+	next, _ := out["runId"].(string)
+	if status != 201 || next == "" || next == run {
+		t.Fatalf("Try again: %d %v, want a fresh agent", status, out)
+	}
+	old := s.str(`SELECT id FROM directives WHERE run_id = $1 AND text LIKE '%and the docs?'`, run)
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'
+		AND payload ? 'directiveId' AND payload->>'supersedes' = $2`, next, old); n != 1 {
+		t.Errorf("the fresh agent's queued copy names the directive it replaces %d times, want 1:\n%s", n, s.describeRuns())
 	}
 }
 
