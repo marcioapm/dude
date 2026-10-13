@@ -10,7 +10,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { FrontDoor, FrontDoorLink, FrontDoorMessage, OrgFace, PersonAvatar } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardFooter, CardHeader, FormStack, Input, KeyValueList, Spinner } from "@dude/design-system/primitives";
 import { firstName } from "@dude/design-system";
-import { ApiError, type ApiClient, type InvitationView, type MembershipInfo, type MyInvitation } from "../api/client.ts";
+import { ApiError, type ApiClient, type InvitationView, type MembershipInfo, type InvitationInfo } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { DudeMark } from "../DudeMark.tsx";
 import { dayWords, roleWord, untilWords } from "./words.ts";
@@ -77,9 +77,9 @@ export interface InvitedProps {
   email: string;
   name: string | null;
   photoUrl: string | null;
-  invitations: readonly MyInvitation[];
+  invitations: readonly InvitationInfo[];
   superAdmin: boolean;
-  onJoin: (invitation: MyInvitation, name: string) => Promise<void>;
+  onJoin: (invitation: InvitationInfo, name: string) => Promise<void>;
   onAdmin: () => void;
   onSignOut: () => void;
 }

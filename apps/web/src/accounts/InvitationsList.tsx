@@ -13,7 +13,7 @@ import { Icon } from "@dude/design-system";
 import type { InvitationRow, InvitationStatus } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { inviteLink, useCopy, type InvitationsApi } from "./InviteDialog.tsx";
-import { agoWords, untilWords } from "./words.ts";
+import { agoWords, roleWord, untilWords } from "./words.ts";
 
 export type Filter = InvitationStatus | "all";
 const FILTERS: readonly Filter[] = ["pending", "expired", "accepted", "revoked", "all"];
@@ -24,7 +24,15 @@ const STATUS: Record<InvitationStatus, { label: string; tone: "info" | "attentio
   revoked: { label: "Revoked", tone: "neutral" },
 };
 const LABEL: Record<Filter, string> = { pending: "Pending", expired: "Expired", accepted: "Accepted", revoked: "Revoked", all: "All" };
-const PAGE = 50;
+/** The rows the API returns per page; a `cursor` says there are more. */
+export const INVITATIONS_PAGE = 50;
+
+/** How many one page says there are: past a page, one more than a page, which `countWord` reads as "50+". */
+export const countOf = (r: { invitations: readonly unknown[]; cursor: string | null }) =>
+  r.cursor ? INVITATIONS_PAGE + 1 : r.invitations.length;
+
+/** A count as the tabs and the menu say it: "50+" past one page. */
+export const countWord = (n: number) => (n > INVITATIONS_PAGE ? `${INVITATIONS_PAGE}+` : String(n));
 
 export interface InvitationsListProps {
   api: InvitationsApi;
@@ -68,7 +76,7 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
   onCountsRef.current = onCounts;
   useEffect(() => {
     let current = true;
-    void Promise.all(FILTERS.map((s) => api.list({ status: s }).then((r) => [s, r.cursor ? PAGE + 1 : r.invitations.length] as const))).then(
+    void Promise.all(FILTERS.map((s) => api.list({ status: s }).then((r) => [s, countOf(r)] as const))).then(
       (pairs) => {
         if (!current) return;
         const next = Object.fromEntries(pairs) as Record<Filter, number>;
@@ -88,12 +96,12 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
   }, [toast]);
 
   // A count past one page reads "50+": the API pages by 50 and says only that there are more.
-  const countWord = (f: Filter) => (counts ? ` ${counts[f] > PAGE ? `${PAGE}+` : counts[f]}` : "");
+  const tabCount = (f: Filter) => (counts ? ` ${countWord(counts[f])}` : "");
   return (
     <>
       <div className="invitationFilters">
         <Segmented size="sm" label="Status" value={filter} onChange={setFilter} data-testid="status-filter"
-          options={FILTERS.map((f) => ({ value: f, label: `${LABEL[f]}${countWord(f)}` }))} />
+          options={FILTERS.map((f) => ({ value: f, label: `${LABEL[f]}${tabCount(f)}` }))} />
         <Input size="sm" aria-label="Search invitations" placeholder="Search email or name" value={query} onChange={(e) => setQuery(e.target.value)}
           leading={<Icon name="search" size={14} />} className="invitationSearch" data-testid="invite-search" />
       </div>
@@ -114,7 +122,7 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
                       : r.status === "revoked" && r.revokedAt ? <span className="muted">{agoWords(r.revokedAt)}</span> : null}
                   </span>
                 </Td>
-                <Td fit hideWhenNarrow>{r.role === "admin" ? <Badge>Admin</Badge> : <span className="muted">Member</span>}</Td>
+                <Td fit hideWhenNarrow>{r.role === "admin" ? <Badge>{roleWord(r.role)}</Badge> : <span className="muted">{roleWord(r.role)}</span>}</Td>
                 <Td fit muted hideWhenNarrow>{r.status === "pending" ? untilWords(r.expiresAt) : r.status === "expired" ? `expired ${agoWords(r.expiresAt)}` : "—"}</Td>
                 <Td align="right" fit>
                   <span className="rowActions">

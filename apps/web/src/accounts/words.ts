@@ -1,7 +1,5 @@
 /** Times and roles as the accounts screens say them: "in 12 days", "2 days ago", "11 October". */
 
-import type { PersonRole } from "@dude/domain";
-
 const DAY = 86_400_000;
 
 /** How far ahead an instant is, in whole days or hours: "in 12 days", "in 3 hours", "today". */
@@ -34,12 +32,9 @@ export function monthWords(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 }
 
-export const roleWord = (role: PersonRole) => (role === "admin" ? "Admin" : "Member");
+export { roleWord } from "@dude/design-system/components";
 
 /** An absolute link to a place in this dude, for copying: `https://dude.acme.dev/#/invite/…`. */
 export function absolute(hash: string, origin = window.location.origin): string {
   return `${origin}/${hash.startsWith("#") ? hash : `#${hash}`}`;
 }
-
-/** The host, as the CLI line names it: `dude login https://dude.acme.dev`. */
-export const hereOrigin = () => window.location.origin;

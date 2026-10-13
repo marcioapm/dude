@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { EntityLine, FrontDoor, HowList, OrgFace, PersonAvatar, ProjectAvatar } from "@dude/design-system/components";
-import { Button, Card, CardBody, CardFooter, CardHeader, Input, KeyValueList } from "@dude/design-system/primitives";
+import { Button, Callout, Card, CardBody, CardFooter, CardHeader, Input, KeyValueList } from "@dude/design-system/primitives";
 import { firstName, projectCounts, type NavProject } from "@dude/design-system";
 import type { ApiClient, Member, MembershipInfo } from "../api/client.ts";
 import { useSave } from "../hooks/useSave.tsx";
@@ -63,7 +63,7 @@ export function JoinedScreen({ client, organization, projects, people, me, onCha
               </div>
             </div>
           </CardBody>
-          {problem ? <CardBody><p className="muted">{problem}</p></CardBody> : null}
+          {problem ? <CardBody><Callout tone="danger">{problem}</Callout></CardBody> : null}
           <CardFooter>
             <Button variant="secondary" disabled={busy || !name.trim() || name.trim() === me?.name} data-testid="welcome-save"
               onClick={() => void save(() => client.updateMe({ name: name.trim() }), () => { onChanged(); account?.refresh(); }, "Name saved")}>Save</Button>

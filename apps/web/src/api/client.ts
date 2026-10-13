@@ -394,7 +394,7 @@ export interface MeResponse {
   superAdmin?: boolean;
   account?: AccountInfo | null;
   organizations?: MembershipInfo[];
-  invitations?: MyInvitation[];
+  invitations?: InvitationInfo[];
 }
 
 export type Gate = "member" | "invited" | "super_admin" | "none";
@@ -402,10 +402,10 @@ export type Gate = "member" | "invited" | "super_admin" | "none";
 /** `GET /v1/me` before any organisation is named: one of the gate's four answers. */
 export type MeAnswer =
   | (MeResponse & { gate?: "member" })
-  | { gate: "member"; account: AccountInfo | null; organizations: MembershipInfo[]; invitations: MyInvitation[];
+  | { gate: "member"; account: AccountInfo | null; organizations: MembershipInfo[]; invitations: InvitationInfo[];
       organization: null; superAdmin: boolean; authMethod: "cloudflare_access"; person?: undefined }
   | { gate: "invited" | "super_admin"; email: string; name: string | null; photoUrl: string | null; superAdmin: boolean;
-      invitations?: MyInvitation[]; person?: undefined }
+      invitations?: InvitationInfo[]; person?: undefined }
   | { gate: "none"; email: string; name: string | null; photoUrl: string | null; superAdmin?: undefined; person?: undefined };
 
 export interface AccountInfo {
@@ -422,7 +422,6 @@ export interface MembershipInfo {
   slug: string;
   role: PersonRole;
   personId: string;
-  welcomedAt: string | null;
   waitingOnYou: number;
 }
 
@@ -439,8 +438,6 @@ export interface InvitationInfo {
   createdAt: string;
   expiresAt: string;
 }
-
-export type MyInvitation = InvitationInfo;
 
 export type InvitationStatus = "pending" | "expired" | "accepted" | "revoked";
 
@@ -790,11 +787,6 @@ export class ApiClient {
     return this.#request("GET", "/v1/me");
   }
 
-  /** Your account's name or photo, in every organisation at once; no organisation named. */
-  updateAccount(changes: { name?: string; photoUrl?: string | null }): Promise<{ account: AccountInfo }> {
-    return this.#request("PATCH", "/v1/me", changes);
-  }
-
   /** Which of your organisations an id is in, for a link made before URLs named one. */
   locate(id: string): Promise<Located> {
     return this.#request("GET", `/v1/locate/${encodeURIComponent(id)}`);
@@ -847,7 +839,7 @@ export class ApiClient {
     return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}${qs({ ...params, q: params.q || undefined })}`);
   }
 
-  adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string } = {}): Promise<{ invitations: InvitationRow[]; cursor: string | null }> {
+  adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}): Promise<{ invitations: InvitationRow[]; cursor: string | null }> {
     return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations${qs({ ...params, q: params.q || undefined })}`);
   }
 

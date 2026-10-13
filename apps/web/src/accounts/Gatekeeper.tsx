@@ -15,10 +15,10 @@
  * tabs can be in two organisations at once.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { FrontDoor, FrontDoorMessage } from "@dude/design-system/components";
 import { Button, Card, CardBody, CardFooter, Spinner } from "@dude/design-system/primitives";
-import type { ApiClient, MeAnswer, MembershipInfo, MyInvitation } from "../api/client.ts";
+import type { ApiClient, InvitationInfo, MeAnswer, MembershipInfo } from "../api/client.ts";
 import { DudeMark } from "../DudeMark.tsx";
 import { inOrganization, setPlaceOrganization } from "../place.ts";
 import { AdminPage } from "./AdminPage.tsx";
@@ -45,7 +45,7 @@ export function membershipsOf(me: MeAnswer): MembershipInfo[] {
   if ("organizations" in me && me.organizations?.length) return me.organizations;
   if (me.person && me.organization) {
     return [{ id: me.organization.id, name: me.organization.name, slug: me.organization.slug ?? me.organization.id,
-      role: me.person.role, personId: me.person.id, welcomedAt: null, waitingOnYou: 0 }];
+      role: me.person.role, personId: me.person.id, waitingOnYou: 0 }];
   }
   return [];
 }
@@ -91,7 +91,7 @@ export function Gatekeeper({ client, me, authMethod, reread, onSignOut, children
   const hash = useHash();
   const route = useMemo<Route>(() => parseRoute(hash), [hash]);
   const memberships = useMemo(() => membershipsOf(me), [me]);
-  const invitations: readonly MyInvitation[] = ("invitations" in me ? me.invitations : undefined) ?? [];
+  const invitations: readonly InvitationInfo[] = ("invitations" in me ? me.invitations : undefined) ?? [];
   const superAdmin = me.superAdmin === true;
   const email = emailOf(me) ?? "";
   const gate = me.gate ?? "member";
@@ -156,12 +156,18 @@ export function Gatekeeper({ client, me, authMethod, reread, onSignOut, children
 
   const membership = route.kind === "tenant" ? memberships.find((m) => m.slug === route.slug)
     : keyMode && gate === "member" && (route.kind === "home" || route.kind === "legacy") ? memberships[0] : undefined;
-  // The tab's places name its organisation from here on (over Access; a key's stay bare).
-  setPlaceOrganization(gate === "member" && membership && !keyMode ? membership.slug : null);
+  // The tab's places name its organisation from here on (over Access; a key's stay bare). A layout
+  // effect: before the tenant app's effects and handlers write a place.
+  const placeSlug = gate === "member" && membership && !keyMode ? membership.slug : null;
+  useLayoutEffect(() => setPlaceOrganization(placeSlug), [placeSlug]);
+  const membershipId = membership?.id;
+  const membershipSlug = membership?.slug;
   useEffect(() => {
-    if (membership) localStorage.setItem(LAST_ORGANIZATION, membership.slug);
-  }, [membership]);
-  const scoped = useMemo(() => (membership ? client.inOrganization(membership.id) : null), [client, membership]);
+    if (membershipSlug) localStorage.setItem(LAST_ORGANIZATION, membershipSlug);
+  }, [membershipSlug]);
+  // Keyed on the id, not the object: re-reading `/v1/me` (a profile save) makes new membership
+  // objects, and a new client would re-read the tenant app and reopen its stream.
+  const scoped = useMemo(() => (membershipId ? client.inOrganization(membershipId) : null), [client, membershipId]);
   const account = useMemo<Account | null>(() => membership ? {
     base: client, email, authMethod, memberships, invitations, current: membership, superAdmin,
     switchTo, join, admin: toAdmin, refresh: () => void reread(),
@@ -214,14 +220,10 @@ export function Gatekeeper({ client, me, authMethod, reread, onSignOut, children
   }
   return (
     <AccountContext.Provider value={account}>
-      <TenantKey id={membership.id}>{children(scoped, membership)}</TenantKey>
+      {/* Keyed by the organisation: a switch remounts the tenant app, so nothing read for one shows in another. */}
+      <Fragment key={membership.id}>{children(scoped, membership)}</Fragment>
     </AccountContext.Provider>
   );
-}
-
-/** Remounts what is inside when the organisation changes, so nothing read for one shows in another. */
-function TenantKey({ id, children }: { id: string; children: ReactNode }) {
-  return <Fragment key={id}>{children}</Fragment>;
 }
 
 function Waiting() {

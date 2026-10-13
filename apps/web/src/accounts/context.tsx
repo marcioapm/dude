@@ -9,7 +9,7 @@
 
 import { createContext, useContext } from "react";
 import type { OrgInvitation, OrgMembership, Organisation } from "@dude/design-system/components";
-import type { ApiClient, MembershipInfo, MyInvitation } from "../api/client.ts";
+import type { ApiClient, MembershipInfo, InvitationInfo } from "../api/client.ts";
 import { untilWords } from "./words.ts";
 
 export interface Account {
@@ -18,7 +18,7 @@ export interface Account {
   email: string | null;
   authMethod: "api_key" | "cloudflare_access";
   memberships: readonly MembershipInfo[];
-  invitations: readonly MyInvitation[];
+  invitations: readonly InvitationInfo[];
   current: MembershipInfo;
   superAdmin: boolean;
   /** Go to another organisation's home. */
@@ -43,6 +43,6 @@ export function switcherMemberships(memberships: readonly MembershipInfo[]): Org
   return memberships.map((m) => ({ org: orgOf(m), role: m.role, waiting: m.waitingOnYou }));
 }
 
-export function switcherInvitations(invitations: readonly MyInvitation[], now = Date.now()): OrgInvitation[] {
+export function switcherInvitations(invitations: readonly InvitationInfo[], now = Date.now()): OrgInvitation[] {
   return invitations.map((i) => ({ code: i.code, org: orgOf(i.organization), inviter: i.inviter, expires: untilWords(i.expiresAt, now) }));
 }

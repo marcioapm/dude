@@ -18,7 +18,7 @@ import { absolute, agoWords, roleWord } from "./words.ts";
 
 /** The routes an invitations screen goes through: an organisation's own, or the super-admin's for it. */
 export interface InvitationsApi {
-  list: (params: { status?: InvitationStatus | "all"; q?: string }) => Promise<{ invitations: InvitationRow[]; cursor: string | null }>;
+  list: (params: { status?: InvitationStatus | "all"; q?: string; cursor?: string }) => Promise<{ invitations: InvitationRow[]; cursor: string | null }>;
   invite: (invitations: Array<{ email: string; name?: string }>, role: PersonRole) => Promise<{ results: InviteResult[] }>;
   renew: (id: string) => Promise<unknown>;
   revoke: (id: string) => Promise<unknown>;

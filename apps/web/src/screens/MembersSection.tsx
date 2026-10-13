@@ -8,10 +8,12 @@ import { useEffect, useMemo, useState } from "react";
 import { EntityLine, PersonAvatar, SettingsHeader, SettingsSection } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, Select, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/primitives";
 import type { PersonRole } from "@dude/domain";
-import type { ApiClient, Member } from "../api/client.ts";
+import type { ApiClient, InvitationRow, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { whereWords } from "../people.tsx";
 import { InviteDialog, type InvitationsApi } from "../accounts/InviteDialog.tsx";
+import { useAccount } from "../accounts/context.tsx";
+import { roleWord } from "../accounts/words.ts";
 
 const ROLES = [
   { value: "member", label: "Member" },
@@ -28,6 +30,18 @@ export function organizationInvitations(client: ApiClient): InvitationsApi {
   };
 }
 
+/** Every accepted invitation, following the cursor page by page: who joined by whose link. */
+async function acceptedInvitations(api: InvitationsApi): Promise<InvitationRow[]> {
+  const all: InvitationRow[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.list({ status: "accepted", ...(cursor ? { cursor } : {}) });
+    all.push(...page.invitations);
+    cursor = page.cursor ?? undefined;
+  } while (cursor);
+  return all;
+}
+
 /** `me`, `people` and `onChanged` are the shell's (`usePeople`), so this list is as live as the sidebar's. */
 export function MembersSection({ client, me, people, onChanged, orgName, onInvited }: {
   client: ApiClient;
@@ -41,21 +55,24 @@ export function MembersSection({ client, me, people, onChanged, orgName, onInvit
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Member | null>(null);
   const [inviting, setInviting] = useState(false);
-  const [joined, setJoined] = useState<ReadonlyMap<string, string>>(new Map());
+  const [joined, setJoined] = useState<ReadonlyMap<string, string> | null>(null);
   const admin = me?.role === "admin";
   const api = useMemo(() => organizationInvitations(client), [client]);
+  // Invitations are how people join over Cloudflare Access; with keys (api_key), people are added through the API.
+  const account = useAccount();
+  const byInvitation = account?.authMethod === "cloudflare_access";
 
   // How each joined, read from the invitation accepted into their row: an admin's to read.
   useEffect(() => {
-    if (!admin) return;
+    if (!admin || !byInvitation) return;
     let current = true;
-    void api.list({ status: "accepted" }).then((r) => current && setJoined(new Map(r.invitations
+    void acceptedInvitations(api).then((rows) => current && setJoined(new Map(rows
       .filter((i) => i.acceptedPersonId).map((i) => [i.acceptedPersonId!, `invited by ${i.inviter === "the operator" ? "the operator" : i.inviter.split(" ")[0]}`]))),
     () => undefined);
     return () => {
       current = false;
     };
-  }, [admin, api, people.length]);
+  }, [admin, byInvitation, api, people.length]);
 
   const setRole = (person: Member, role: PersonRole) => {
     setProblem(null);
@@ -65,8 +82,10 @@ export function MembersSection({ client, me, people, onChanged, orgName, onInvit
   return (
     <div data-testid="members" className="settingsPage">
       <SettingsHeader title="Members"
-        description={`Who is in ${orgName}. People join ${orgName} by invitation. Cloudflare Access must also let them in; dude doesn't manage that.`}
-        actions={admin ? <Button variant="primary" leadingIcon="plus" onClick={() => setInviting(true)} data-testid="invite">Invite people</Button> : undefined} />
+        description={byInvitation
+          ? `Who is in ${orgName}. People join ${orgName} by invitation. Cloudflare Access must also let them in; dude doesn't manage that.`
+          : `Who is in ${orgName}.`}
+        actions={admin && byInvitation ? <Button variant="primary" leadingIcon="plus" onClick={() => setInviting(true)} data-testid="invite">Invite people</Button> : undefined} />
       {problem ? <Callout tone="danger" data-testid="members-problem">{problem}</Callout> : null}
       <SettingsSection title={`Members · ${people.length}`}>
         <Table density="comfortable">
@@ -91,12 +110,12 @@ export function MembersSection({ client, me, people, onChanged, orgName, onInvit
                         p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"].filter(Boolean).join(" · ")}
                     />
                   </Td>
-                  <Td wrap muted hideWhenNarrow>{joined.get(p.id) ?? (admin ? "joined before invitations" : "—")}</Td>
+                  <Td wrap muted hideWhenNarrow>{joined?.get(p.id) ?? (joined ? "joined before invitations" : "—")}</Td>
                   <Td>
                     {admin && !you ? (
                       <Select size="sm" aria-label={`Role of ${p.name}`} value={p.role} options={ROLES}
                         onValueChange={(role) => setRole(p, role as PersonRole)} />
-                    ) : p.role === "admin" ? <Badge>Admin</Badge> : <span className="muted">Member</span>}
+                    ) : p.role === "admin" ? <Badge>{roleWord(p.role)}</Badge> : <span className="muted">{roleWord(p.role)}</span>}
                   </Td>
                   <Td align="right" fit>
                     {admin && !you ? (
