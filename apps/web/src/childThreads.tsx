@@ -44,6 +44,8 @@ function ChildThread({ child, depth }: { child: ChildTurn; depth: number }) {
   const stuck = waiting ? [...child.turns].reverse().find((t) => t.kind === "tool" && t.status === "running")?.id : undefined;
   return (
     <ChatThread
+      // Its end folds it, as a child already done is drawn: keyed on it.
+      key={ended ? "ended" : "live"}
       data-testid="child-thread"
       data-child={child.id}
       sessionId={child.id}

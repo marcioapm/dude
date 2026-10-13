@@ -99,3 +99,14 @@ test("two children of one turn are two threads, each under its own call", async 
     ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "spawn", title: "Find the chart fixture dataset" })]);
   expect([...el.querySelectorAll("[data-testid='child-thread']")].map((t) => t.getAttribute("data-child"))).toEqual(["a", "b"]);
 });
+
+test("a child watched while it works folds when it ends", async () => {
+  const before = [...start(), ev(EventTypes.ChildMessage, { ...kid, text: "Reading." }, 3)];
+  const el = await render(before);
+  expect(el.querySelector("[data-testid='child-thread'] [role='group']")).toBeTruthy();
+  const { turns } = project([...before, ev(EventTypes.ChildEnded, { ...kid, status: "completed", summary: "Done: 1280×720." }, 1)]);
+  await act(async () => root!.render(<>{turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
+  const thread = el.querySelector("[data-testid='child-thread']")!;
+  expect(thread.querySelector("[role='group']")).toBeNull();
+  expect(thread.textContent).toContain("Done: 1280×720.");
+});
