@@ -57,6 +57,11 @@
       "timeout": "10s"
     }
   },
+  "env": {
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "include.path",
+    "GIT_CONFIG_VALUE_0": "/usr/local/share/dude/git-config"
+  },
   "secrets": [
     {
       "name": "GIT_TOKEN",

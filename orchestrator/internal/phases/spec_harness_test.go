@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -557,8 +559,62 @@ func TestTheScriptedAgentSpeaksItsRolesHarness(t *testing.T) {
 		c, in := goldenInput("fake/scripted")
 		in.Harness = harness
 		spec := buildSpec(c, in)
-		if spec.Workload.Adapter != adapter || !reflect.DeepEqual(spec.Workload.Command, []string{"lux-fake"}) || len(spec.Env) != 0 {
+		gitOnly := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "include.path", "GIT_CONFIG_VALUE_0": DudeGitConfig}
+		if spec.Workload.Adapter != adapter || !reflect.DeepEqual(spec.Workload.Command, []string{"lux-fake"}) || !reflect.DeepEqual(spec.Env, gitOnly) {
 			t.Errorf("%q: adapter %s command %v env %v", harness, spec.Workload.Adapter, spec.Workload.Command, spec.Env)
+		}
+	}
+}
+
+// Every Run's git includes dude's config file in command scope, whose
+// core.hooksPath outranks any a repository sets, on every harness and the
+// scripted agent; a harness Run keeps color.ui beside it, each setting at
+// its own index.
+func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
+	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
+		for _, harness := range []string{"", delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
+			c, in := goldenInput(model)
+			in.Harness = harness
+			env := buildSpec(c, in).Env
+			n, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+			got := map[string]string{}
+			for i := range n {
+				got[env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)]] = env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)]
+			}
+			want := map[string]string{"color.ui": "always", "include.path": DudeGitConfig}
+			if fakeagent.Is(model) {
+				want = map[string]string{"include.path": DudeGitConfig}
+			}
+			if !reflect.DeepEqual(got, want) || len(got) != n {
+				t.Errorf("%s/%q: git settings %v (count %d), want %v", model, harness, got, n, want)
+			}
+		}
+	}
+	env := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "x"}
+	GitConfig(env, "c.d", "y")
+	if env["GIT_CONFIG_COUNT"] != "2" || env["GIT_CONFIG_KEY_0"] != "a.b" || env["GIT_CONFIG_KEY_1"] != "c.d" || env["GIT_CONFIG_VALUE_1"] != "y" {
+		t.Errorf("a setting added after one: %v", env)
+	}
+}
+
+// The scripted subagents on OpenCode run under lux's opencode adapter as
+// `lux-fake acp`: lux starts lux-fake's OpenCode server (--port, added only
+// to a command that says acp) and relays a child from its bus, which the
+// acp adapter does not. On Claude Code or Codex they keep that harness's
+// adapter and command.
+func TestTheScriptedSubagentsRunUnderLuxsOpenCodeAdapter(t *testing.T) {
+	for _, model := range []string{"fake/subagent", "fake/subagent-ask"} {
+		for harness, adapter := range map[string]string{"": "opencode", delivery.HarnessOpenCode: "opencode",
+			delivery.HarnessClaudeCode: "claude-code", delivery.HarnessCodex: "codex"} {
+			c, in := goldenInput(model)
+			in.Harness = harness
+			command := []string{"lux-fake"}
+			if adapter == "opencode" {
+				command = []string{"lux-fake", "acp"}
+			}
+			if spec := buildSpec(c, in); spec.Workload.Adapter != adapter || !slices.Equal(spec.Workload.Command, command) {
+				t.Errorf("%s on %q: adapter %s command %v, want %s %v", model, harness, spec.Workload.Adapter, spec.Workload.Command, adapter, command)
+			}
 		}
 	}
 }

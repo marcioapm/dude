@@ -16,6 +16,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -397,21 +398,21 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	if len(repos) > 0 {
 		primary, branch = repos[0].Name, repos[0].Ref
 		spec.Workload.Workdir = phases.RepoPath(primary)
-		token, err := p.forgeToken(ctx, r.Org)
+		gh, err := p.forge(ctx, r.Org)
+		if err != nil {
+			return lux.Spec{}, "", nil, nil, err
+		}
+		names, tokens, err := phases.RepoCredentials(ctx, gh, credentialRepos(repos))
 		if err != nil {
 			return lux.Spec{}, "", nil, nil, err
 		}
 		spec.Git = &lux.Git{}
 		for _, rp := range repos {
 			lr := lux.Repository{Name: lux.SpecName(rp.Name), URL: rp.URL, Ref: rp.Ref, Path: phases.RepoPath(rp.Name), Push: new(bool)}
-			if token != "" {
-				lr.Credential = "GIT_TOKEN"
-			}
+			lr.Credential = names[lr.Name]
 			spec.Git.Repositories = append(spec.Git.Repositories, lr)
 		}
-		if token != "" {
-			spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
-		}
+		spec.Secrets = tokens
 	}
 	spec.Secrets = append(spec.Secrets, secrets...)
 	for _, rc := range recipes {
@@ -448,15 +449,54 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	return spec, branch, machine, got, nil
 }
 
-func (p *Previews) forgeToken(ctx context.Context, org string) (string, error) {
+func (p *Previews) forge(ctx context.Context, org string) (*forge.GitHub, error) {
 	if p.Forges == nil {
-		return "", nil
+		return nil, nil
 	}
-	gh, err := p.Forges.For(ctx, org)
+	return p.Forges.For(ctx, org)
+}
+
+func credentialRepos(refs []previewRef) []phases.CredentialRepo {
+	out := make([]phases.CredentialRepo, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, phases.CredentialRepo{Name: r.Name, URL: r.URL})
+	}
+	return out
+}
+
+// resumeCredentials are fresh forge tokens for every token secret the
+// preview's lux Run declares: minted now, as an installation token from
+// the submit has expired by the next wake.
+func (p *Previews) resumeCredentials(ctx context.Context, r previewRun, stored lux.StoredSpec) ([]lux.Secret, error) {
+	gh, err := p.forge(ctx, r.Org)
 	if err != nil || gh == nil {
-		return "", err
+		return nil, err
 	}
-	return gh.Token()
+	refs, err := p.refs(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return phases.ResumeCredentials(ctx, gh, stored, credentialRepos(refs))
+}
+
+// operationCredentials are fresh tokens for a sync of a running preview,
+// by lux's name for each repository it holds.
+func (p *Previews) operationCredentials(ctx context.Context, r wakeRun) (map[string]string, error) {
+	gh, err := p.forge(ctx, r.Org)
+	if err != nil || gh == nil {
+		return nil, err
+	}
+	refs, err := p.refs(ctx, r.previewRun)
+	if err != nil {
+		return nil, err
+	}
+	have := r.Repos
+	if len(have) == 0 {
+		for _, rf := range refs {
+			have = append(have, lux.SpecName(rf.Name))
+		}
+	}
+	return phases.OperationCredentials(ctx, gh, have, credentialRepos(refs))
 }
 
 // Egress is a preview's network: the hosts (or addresses, or ranges) its
@@ -759,14 +799,11 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		return err
 	}
 	var spec lux.Spec
-	token, err := p.forgeToken(ctx, r.Org)
+	tokens, err := p.resumeCredentials(ctx, r, lr.Spec)
 	if err != nil {
 		return err
 	}
-	if token != "" {
-		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
-	}
-	spec.Secrets = append(spec.Secrets, projectSecrets...)
+	spec.Secrets = append(tokens, projectSecrets...)
 	login.Apply(&spec)
 	// Resumed only while the preview is parked on this lux Run, with the
 	// row reserved (operation.go) until the resume is recorded: a

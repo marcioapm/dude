@@ -127,6 +127,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /tools", s.listJSON)
 	mux.HandleFunc("POST /tools/{name}", s.callJSON)
+	mux.HandleFunc("GET /git/coauthors", s.coauthors)
 	mux.Handle("/", mcpHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")

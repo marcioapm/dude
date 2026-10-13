@@ -216,6 +216,7 @@ describe("a project's secrets", () => {
       { name: "LUX_TOKEN", value: VALUE },
       { name: "lux_token", value: VALUE },
       { name: "GIT_TOKEN", value: VALUE },
+      { name: "GIT_TOKEN_X", value: VALUE },
       { name: "DUDE_TOOLS_AUTH", value: VALUE },
       { name: "L".repeat(64), value: VALUE },
       { name: "EMPTY", value: "" },

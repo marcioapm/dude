@@ -290,10 +290,11 @@ var stallWindow = fmt.Sprintf(`(CASE WHEN lc.conducted THEN $1::float8 ELSE 60 *
 // window; for a Run that changes code, no change to its files (no new diff,
 // no commit) in it; or, with no tool call open, its agent silent for the
 // whole window (silentSince). An open call is stalledCall's, measured from
-// the call, however long the agent has been silent.
+// the call or its child's last event (callSince), however long the agent
+// has been silent.
 var (
 	stalledCall = `EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
-		WHERE oc.value::timestamptz <= now() - make_interval(secs => ` + stallWindow + `))`
+		WHERE ` + callSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 	stalledFiles  = `(` + changesCode + ` AND r.files_changed_at <= now() - make_interval(secs => ` + stallWindow + `))`
 	stalledSilent = `(r.open_tool_calls_at = '{}' AND ` + silentSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 )
@@ -303,8 +304,14 @@ var (
 // any, files_changed_at. Both are moved on by any time the Run spent not
 // running (luxEvent), so now() minus this is running time alone. A
 // person's resume clears agent_active_at and dates the files then.
-// run_stalled (migration 085) repeats it.
+// run_stalled (migration 090) repeats it.
 const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
+
+// callSince (SQL, over runs r and an open call oc of jsonb_each_text(
+// r.open_tool_calls_at)): when the call last made progress — when it
+// opened, or its child's last event (runs.children), whichever is later.
+// run_stalled (migration 111) repeats it.
+const callSince = `GREATEST(oc.value::timestamptz, (r.children->oc.key->>'lastEventAt')::timestamptz)`
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
 // for its window. One waiting on a person, or whose turn is over, is not
@@ -327,10 +334,12 @@ const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.sessio
 const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
 
 // stallFacts (SQL, over stallFrom) identifies what a report said: the calls
-// open, the diff's checksum and, while it is silent, when its silence began.
-// A Run reported only for its files is busy, and its activity is not a
-// change of facts.
-var stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
+// open and what each one's child did last, the diff's checksum and, while
+// it is silent, when its silence began. A Run reported only for its files
+// is busy, and its activity is not a change of facts; a child that moves
+// on to something else is.
+var stallFacts = `(COALESCE((SELECT string_agg(k || COALESCE('=' || (r.children->k->>'lastEvent'), ''), ',' ORDER BY k)
+		FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
 	|| '|' || COALESCE((SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id), '')
 	|| '|' || CASE WHEN ` + stalledSilent + ` THEN COALESCE(extract(epoch FROM ` + silentSince + `)::text, '') ELSE '' END)`
 
@@ -1035,6 +1044,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var settings delivery.RoleSettings
 	var orgEgress, projectEgress []string
 	var egressMode string
+	// A resumed Run's repositories as lux holds them, in submit's order
+	// (forgeTokens).
+	var firstRepo []string
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -1067,8 +1079,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine, lux_repositories FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded, &firstRepo); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
@@ -1192,8 +1204,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, runSizes{}, nil, errForge{err}
 	}
 	if gh != nil {
-		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, runSizes{}, nil, errForge{err}
+		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, firstRepo); err != nil {
+			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
+		}
+		if in.Bot, err = botOf(ctx, gh); err != nil {
+			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -1510,7 +1525,14 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return false, nil
 		}
 		reqID := pushRequest(r)
-		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
+		creds, err := s.runCredentials(ctx, r.Org, r.ID)
+		if forge.Refused(err) {
+			return true, s.failKept(ctx, r, "GitHub would not give dude a token to push the agent's work: "+err.Error())
+		}
+		if err != nil {
+			return true, s.retryLater(ctx, r, err)
+		}
+		if err := Push(ctx, s.Lux, s.Log, r.LuxRunID, reqID, creds); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
 				return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
 			}
@@ -2049,6 +2071,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	} else if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
 		return lux.Run{}, 0, err
 	}
+	in.Secrets = declaredTokens(in.Secrets, lr.Spec, in.AddRepositories)
 	if r.conductor() {
 		if in.Sync, err = s.currentRefs(ctx, r); err != nil {
 			return lux.Run{}, 0, err
@@ -2102,15 +2125,16 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // declares, as lux requires a value for each at every resume. lux keeps an
 // added repository's credential declared even after its failed clone
 // dropped the repository, so the fresh spec, naming no repository, lacks
-// GIT_TOKEN: it is supplied from the forge. Any other declared secret
-// fails the resume, naming it.
+// GIT_TOKEN (or an owner's GIT_TOKEN_<OWNER>): it is minted from the forge
+// now, never reused. Any other declared secret fails the resume, naming it.
 func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
 	out := fresh
 	for _, sec := range stored.Secrets {
 		if slices.ContainsFunc(out, func(f lux.Secret) bool { return f.Name == sec.Name }) {
 			continue
 		}
-		if sec.Name != gitTokenSecret {
+		owner := ownerOfSecret(sec.Name)
+		if sec.Name != gitTokenSecret && owner == "" {
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s, which dude cannot supply on a resume", sec.Name)}
 		}
 		gh, err := s.Forges.For(ctx, r.Org)
@@ -2120,11 +2144,14 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 		if gh == nil {
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s and the organisation has no forge credentials to supply it", sec.Name)}
 		}
-		token, err := gh.Token()
+		token, err := gh.Token(ctx, owner)
+		if forge.Refused(err) {
+			return nil, errCannotResume{err}
+		}
 		if err != nil {
 			return nil, errForge{err}
 		}
-		out = append(slices.Clone(out), lux.Secret{Name: gitTokenSecret, Value: token})
+		out = append(slices.Clone(out), lux.Secret{Name: sec.Name, Value: token})
 	}
 	return out, nil
 }
@@ -2636,6 +2663,17 @@ type errForge struct{ err error }
 
 func (e errForge) Error() string { return "reading the forge's credentials: " + e.err.Error() }
 func (e errForge) Unwrap() error { return e.err }
+
+// forgeFailure is err from minting a Run's forge token or reading its bot:
+// GitHub's refusal (the App not installed on the owner, a key not the
+// App's) as it is, which fails the submit or resume with GitHub's reason;
+// anything else errForge, asked again.
+func forgeFailure(err error) error {
+	if forge.Refused(err) {
+		return err
+	}
+	return errForge{err}
+}
 
 // errRegistry: no registry login could be had now (ECR unreachable, the
 // role's credentials expiring). Passing, like errForge.

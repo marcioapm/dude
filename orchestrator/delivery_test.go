@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +64,7 @@ type world struct {
 	repoID    string
 	gh        *fakegithub.Server
 	web       *fakegithub.Server
+	marcioWeb *fakegithub.Server
 	lux       *fakelux.Server
 	runtime   *workflow.Runtime
 	syncer    *phases.Syncer
@@ -76,6 +78,10 @@ type world struct {
 	api string
 	// pump leaves conductors' publishes to a worker of the test's own.
 	noPublishes bool
+	// The fake GitHub's App, once a test connects one (asApp), and where
+	// the fake GitHub is.
+	ghApp atomic.Pointer[fakegithub.App]
+	ghURL string
 }
 
 func newWorld(t *testing.T) *world {
@@ -90,14 +96,26 @@ func newWorld(t *testing.T) *world {
 	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
 	w.gh = fakegithub.New(bare, "acme/target")
 	w.web = fakegithub.New(webBare, "acme/web")
+	// The same repository as another owner's, for an App installed on two.
+	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
+	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
 	mux.Handle("/acme/target.git/", w.gh.Handler())
 	mux.Handle("/acme/web.git/", w.web.Handler())
-	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web))
-	ghSrv := httptest.NewServer(mux)
+	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
+	// A GitHub App's endpoints, once a test connects one (asApp).
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if app := w.ghApp.Load(); app != nil && fakegithub.AppPath(r.URL.Path) {
+			app.Handler().ServeHTTP(rw, r)
+			return
+		}
+		mux.ServeHTTP(rw, r)
+	}))
 	t.Cleanup(ghSrv.Close)
+	w.ghURL = ghSrv.URL
 
 	// dude's scripted agent (internal/fakeagent), played by the fake lux.
 	w.lux = fakelux.New(bare, "lux-key", nil)

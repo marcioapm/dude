@@ -14,7 +14,7 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent, Run, RunStatus, StartStage } from "@dude/domain";
+import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent, Run, RunStatus, SessionStatus, StartStage } from "@dude/domain";
 import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStartStage, itemAnswers } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
@@ -50,6 +50,47 @@ export interface ToolTurn {
    * refusal's exact words and code (`not_larger`, `not_live`, lux's).
    */
   machine?: { from: string | null; to: string; pool: string | null; answer?: string; error?: string; code?: string };
+  /** The child sessions (subagents) this call started, in the order they started. */
+  children: ChildTurn[];
+}
+
+/**
+ * A child session a tool call started (a task or spawn call's subagent),
+ * nested under that call: its own tool calls and messages, how it ended,
+ * and a permission it waits on that nothing in the Run can answer.
+ */
+export interface ChildTurn {
+  kind: "child";
+  id: string;
+  /** The parent's call that started it. */
+  callId: string;
+  /** `task` (OpenCode, Claude Code) or `spawn` (Codex). */
+  childKind: string;
+  title: string;
+  agentType: string | null;
+  model: string | null;
+  status: SessionStatus;
+  startedAt: string;
+  endedAt: string | null;
+  /** What its harness said it spent: already in the Run's cost, never added to it. */
+  costUsd: number | null;
+  /** How it ended, in its harness's words. */
+  summary: string | null;
+  turns: Array<ToolTurn | MessageTurn>;
+  waitingOn: { permission: string; patterns: string[]; since: string } | null;
+  /** The child whose call started this one; null under one of the Run's own calls. */
+  parentChildId: string | null;
+  /**
+   * Bumped whenever this child or any child under it changes. The
+   * projection mutates children in place, so a renderer compares this,
+   * not the object, to skip a child that did not change.
+   */
+  revision: number;
+  /**
+   * A terminal Run's settled copy, which may show a status the live child
+   * has not reached at the same revision: a renderer compares this too.
+   */
+  settled: boolean;
 }
 
 export interface MessageTurn {
@@ -513,6 +554,14 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
+  /** Child sessions by their id, and each child's tool calls by theirs. */
+  childrenById: Map<string, ChildTurn>;
+  childToolsByCall: Map<string, ToolTurn>;
+  /**
+   * Calls made for a child whose parent's call was not heard yet: that
+   * call's own event fills one in rather than adding a second turn.
+   */
+  placeholderCalls: Set<ToolTurn>;
   /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
   questionsById: Map<string, QuestionTurn>;
@@ -597,6 +646,9 @@ export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
+    childrenById: new Map(),
+    childToolsByCall: new Map(),
+    placeholderCalls: new Set(),
     steersByDirective: new Map(),
     questionsById: new Map(),
     repoRequestsById: new Map(),
@@ -840,22 +892,19 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ToolCalled: {
         const callId = String(payload.callId ?? event.eventId);
-        // A harness taken back up (a resume, a move, whatever parked it) can report a call it already finished
-        // again: that call keeps its row and its time.
-        if (toolsByCall.get(callId)?.endedAt) break;
+        // A replay after resume/move must preserve the completed call and its children. A replay is the same
+        // call reported again; an id reused for another tool is a new call.
+        const prior = toolsByCall.get(callId);
+        if (prior?.endedAt && prior.tool === tool) break;
         state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
-        const turn: ToolTurn = {
-          kind: "tool",
-          id: callId,
-          tool,
-          args: payload.input ?? null,
-          status: "running",
-          startedAt: event.occurredAt,
-          endedAt: null,
-          result: null,
-        };
-        toolsByCall.set(callId, turn);
-        addToolTurn(state, turn, ask);
+        const placeholder = toolsByCall.get(callId);
+        if (placeholder && state.placeholderCalls.has(placeholder)) {
+          claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
+        } else {
+          const turn = toolTurn(callId, tool, payload, event.occurredAt);
+          toolsByCall.set(callId, turn);
+          addToolTurn(state, turn, ask);
+        }
 
         state.activity = "tool";
         state.activeTool = { name: tool, since: event.occurredAt };
@@ -865,10 +914,6 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
         const existing = toolsByCall.get(callId);
-        // The harness reports "error"; the design system's vocabulary calls
-        // it "failed".
-        const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
-
         const result = resultFrom(payload);
         const machineCall = dudeToolName(existing?.tool ?? tool) === "request_machine";
         const outcome = machineCall ? machineOutcome(result, payload.status === "error") : null;
@@ -880,24 +925,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (existing) {
           // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
           if (!existing.endedAt) {
-            existing.status = outcome?.said.error !== undefined ? "failed" : status;
-            existing.endedAt = event.occurredAt;
-            existing.result = result;
+            claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
+            endTool(existing, payload, event.occurredAt);
+            // request_machine's refusal fails its call even when the harness reported it completed.
+            if (outcome?.said.error !== undefined) existing.status = "failed";
           }
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
           // than a gap in the record.
-          const turn: ToolTurn = {
-            kind: "tool",
-            id: callId || event.eventId,
-            tool,
-            args: payload.input ?? null,
-            status,
-            startedAt: event.occurredAt,
-            endedAt: event.occurredAt,
-            result,
-          };
+          const turn = toolTurn(callId || event.eventId, tool, payload, event.occurredAt);
+          endTool(turn, payload, event.occurredAt);
           toolsByCall.set(turn.id, turn);
           addToolTurn(state, turn, ask);
         }
@@ -906,6 +944,78 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = "thinking";
           state.activeTool = null;
         }
+        break;
+      }
+
+      case EventTypes.ChildStarted: {
+        touch(state, childOf(state, payload, event));
+        break;
+      }
+
+      case EventTypes.ChildToolCalled:
+      case EventTypes.ChildToolCompleted: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        const callId = String(payload.callId ?? event.eventId);
+        const childTool = String(payload.tool ?? "tool");
+        let turn = state.childToolsByCall.get(`${child.id}/${callId}`);
+        if (!turn) {
+          turn = toolTurn(callId, childTool, payload, event.occurredAt);
+          state.childToolsByCall.set(`${child.id}/${callId}`, turn);
+          child.turns.push(turn);
+        } else {
+          claimPlaceholder(state, turn, childTool, payload, event.occurredAt, event.eventType === EventTypes.ChildToolCalled);
+        }
+        if (event.eventType === EventTypes.ChildToolCompleted) endTool(turn, payload, event.occurredAt);
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildMessage: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (text.trim()) child.turns.push({ kind: "message", id: event.eventId, text, at: event.occurredAt, contextTokens: null, outputTokens: null });
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildWaiting: {
+        const child = childOf(state, payload, event);
+        // One answered for it, or for a call already over, holds nothing.
+        if (payload.answered === "allow" || payload.held === false) break;
+        child.waitingOn = {
+          permission: String(payload.permission ?? payload.on ?? "a permission"),
+          patterns: Array.isArray(payload.patterns) ? payload.patterns.map(String) : [],
+          since: event.occurredAt,
+        };
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildEnded: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        switch (payload.status) {
+          case "failed":
+            child.status = "failed";
+            break;
+          case "interrupted":
+            child.status = "aborted";
+            break;
+          default:
+            child.status = "completed";
+        }
+        child.endedAt = event.occurredAt;
+        if (typeof payload.costUsd === "number") child.costUsd = payload.costUsd;
+        if (typeof payload.summary === "string" && payload.summary.trim()) child.summary = payload.summary;
+        for (const turn of child.turns) {
+          if (turn.kind === "tool" && turn.status === "running") {
+            turn.status = child.status;
+            turn.endedAt = event.occurredAt;
+          }
+        }
+        touch(state, child);
         break;
       }
 
@@ -1380,12 +1490,28 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
    * error.
    */
   const unfinished: ToolCallStatus = runStatus === "aborted" ? "aborted" : "failed";
+  // Settles a call and every child under it, to any depth: an ended child
+  // keeps its status but its descendants are settled too. Every call, child,
+  // turns and children array is copied, because `apply` keeps writing the
+  // live ones (a late event pushes into them or ends a call); a child's
+  // message turn is never written after it is pushed, so it is shared (the
+  // Run's own last message does take its tokens later, but that is not
+  // under a call).
+  const settleChild = (child: ChildTurn): ChildTurn => ({
+    ...child,
+    settled: true,
+    status: child.status === "running" ? unfinished : child.status,
+    waitingOn: null,
+    endedAt: child.endedAt ?? child.startedAt,
+    turns: child.turns.map((t) => (t.kind === "tool" ? settle(t) : t)),
+  });
+  const settle = (turn: ToolTurn): ToolTurn => ({
+    ...turn,
+    ...(turn.status === "running" ? { status: unfinished, endedAt: turn.endedAt ?? turn.startedAt } : {}),
+    children: turn.children.map(settleChild),
+  });
   return {
-    turns: state.turns.map((turn) =>
-      turn.kind === "tool" && turn.status === "running"
-        ? { ...turn, status: unfinished, endedAt: turn.endedAt ?? turn.startedAt }
-        : turn,
-    ),
+    turns: state.turns.map((turn) => (turn.kind === "tool" ? settle(turn) : turn)),
     plan: state.plan,
     ...modelCost(state),
     tokens: state.tokens,
@@ -1503,6 +1629,89 @@ function laterRuns(role: string, size: string, inTask: boolean): string {
   if (role === "conductor") return ` Later conductors in this task run on ${size} too.`;
   if (role === "implementer") return ` Later implementer and fixer Runs in this task run on ${size} too.`;
   return ` Later ${roleLabel(role).toLowerCase()} Runs in this task run on ${size} too.`;
+}
+
+/** A tool call's turn as its call reports it, running. */
+function toolTurn(id: string, tool: string, payload: Record<string, unknown>, at: string): ToolTurn {
+  return { kind: "tool", id, tool, args: payload.input ?? null, status: "running", startedAt: at, endedAt: null, result: null, children: [] };
+}
+
+/** A tool call's end as its completion reports it. The harness's "error" is the design system's "failed". */
+function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): void {
+  turn.status = payload.status === "error" ? "failed" : "completed";
+  turn.endedAt = at;
+  turn.result = resultFrom(payload);
+}
+
+/**
+ * A call made for a child before its own call event, filled in by that
+ * call's first event — its call, or its completion from a harness that
+ * reports a call only once finished — in place: the same object keeps its
+ * id, its place and its children. A completion carries no start, so the
+ * child's start stays the call's; args it omits keep what the call had.
+ */
+function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, payload: Record<string, unknown>, at: string, called: boolean): void {
+  if (!state.placeholderCalls.delete(turn)) return;
+  turn.tool = tool;
+  turn.args = payload.input ?? turn.args;
+  if (called) turn.startedAt = at;
+}
+
+/** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
+function touch(state: Projection, child: ChildTurn): void {
+  for (let c: ChildTurn | undefined = child; c; c = c.parentChildId ? state.childrenById.get(c.parentChildId) : undefined) c.revision += 1;
+}
+
+/**
+ * The child an `agent.child.*` event is about, made from it when it is the
+ * first heard of the child, and hung under the parent's call. A child of a
+ * child hangs under its parent child's call; one whose call is unknown (a
+ * harness that reports only once finished) under a call made for it, as a
+ * completion with no matching call is.
+ */
+function childOf(state: Projection, payload: Record<string, unknown>, event: PersistedEvent): ChildTurn {
+  const id = String(payload.childId ?? event.eventId);
+  const known = state.childrenById.get(id);
+  if (known) return known;
+  const callId = String(payload.parentCallId ?? payload.callId ?? "");
+  const child: ChildTurn = {
+    kind: "child",
+    id,
+    callId,
+    childKind: typeof payload.kind === "string" ? payload.kind : "task",
+    title: typeof payload.title === "string" ? payload.title : "",
+    agentType: typeof payload.agentType === "string" ? payload.agentType : null,
+    model: typeof payload.model === "string" ? payload.model : null,
+    status: "running",
+    startedAt: event.occurredAt,
+    endedAt: null,
+    costUsd: null,
+    summary: null,
+    turns: [],
+    waitingOn: null,
+    parentChildId: null,
+    revision: 0,
+    settled: false,
+  };
+  state.childrenById.set(id, child);
+  // A child never hangs under itself: that would loop every walk up the tree.
+  const parentChild = typeof payload.parentChildId === "string" && payload.parentChildId !== id
+    ? state.childrenById.get(payload.parentChildId) : undefined;
+  child.parentChildId = parentChild?.id ?? null;
+  let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
+  if (!call) {
+    call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
+    state.placeholderCalls.add(call);
+    if (parentChild) {
+      state.childToolsByCall.set(`${parentChild.id}/${call.id}`, call);
+      parentChild.turns.push(call);
+    } else {
+      state.toolsByCall.set(call.id, call);
+      state.turns.push(call);
+    }
+  }
+  call.children.push(child);
+  return child;
 }
 
 /** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */

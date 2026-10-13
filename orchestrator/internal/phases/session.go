@@ -56,6 +56,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var prompt, orgName string
+	// A resumed Run's repositories as lux holds them (forgeTokens).
+	var submitted []string
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -78,8 +80,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		settings = chosen.Over(delivery.ResolveRole(role, orgModels))
 		if stored != nil {
 			var ranOn string
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine FROM runs WHERE id = $1`, r.ID).
-				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine, lux_repositories FROM runs WHERE id = $1`, r.ID).
+				Scan(&tier.Model, &tier.Name, &tier.Effort, &ranOn, &recorded, &submitted); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
 			settings.Harness = submittedHarness(ranOn, settings.Harness)
@@ -140,8 +142,11 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		return lux.Spec{}, runSizes{}, errForge{err}
 	}
 	if gh != nil {
-		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, runSizes{}, errForge{err}
+		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, submitted); err != nil {
+			return lux.Spec{}, runSizes{}, forgeFailure(err)
+		}
+		if in.Bot, err = botOf(ctx, gh); err != nil {
+			return lux.Spec{}, runSizes{}, forgeFailure(err)
 		}
 	}
 	if s.Agent.ToolsURL != "" {

@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
 import { Breadcrumb } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
-import type { ApiClient, Member } from "../api/client.ts";
+import type { ApiClient, Me, Member } from "../api/client.ts";
 import { KeysSection, ProfileSection } from "./YouSections.tsx";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
@@ -29,10 +29,17 @@ export function MySettingsScreen({ client, me, onChanged }: {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
   const { busy, problem, save } = useSave();
+  // Who you are on GitHub is only on your own /v1/me, not the people list.
+  const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
+  const [read, setRead] = useState(0);
 
   useEffect(() => {
     void pushState().then(setPush);
   }, []);
+  useEffect(() => {
+    void client.me().then((r) => setGithub({ githubLogin: r.person.githubLogin ?? null, commitEmail: r.person.commitEmail ?? null }),
+      () => setGithub({ githubLogin: null, commitEmail: null }));
+  }, [client, read]);
 
   const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
 
@@ -40,7 +47,13 @@ export function MySettingsScreen({ client, me, onChanged }: {
     <Page data-testid="my-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
-      {me ? <ProfileSection key={me.id} client={client} me={me} onChanged={onChanged} /> : null}
+      {me && github ? (
+        // Keyed by what is saved (your name from the shell, your GitHub fields
+        // from /v1/me): after a save the form starts again as each read lands,
+        // so it ends on the saved values whichever lands first.
+        <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
+          onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
+      ) : null}
       <KeysSection client={client} />
       <Card>
         <CardHeader title="Appearance" />
