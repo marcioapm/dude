@@ -168,9 +168,9 @@ export function PeerTurnView({ turn, ctx }: { turn: PeerTurn; ctx: PeerContext }
 }
 
 /** Where this Run stopped to wait on a peer's reply, and how the wait ended. */
-export function PeerWaitView({ turn }: { turn: PeerWaitTurn }) {
+export function PeerWaitView({ turn, now }: { turn: PeerWaitTurn; now?: number | undefined }) {
   return (
-    <PeerWaitLine on={turn.on} msg={turn.message} how={turn.how === "turn_ended" ? "turn-ended" : "wait"} since={turn.since} parksAt={turn.parksAt}
+    <PeerWaitLine on={turn.on} msg={turn.message} how={turn.how === "turn_ended" ? "turn-ended" : "wait"} since={turn.since} parksAt={turn.parksAt} now={now}
       ended={turn.ended ? (turn.ended.by === "peer_ended" ? { at: turn.ended.at, by: "peer_ended", status: turn.ended.status ?? undefined, line: turn.ended.line ?? undefined }
         : { at: turn.ended.at, by: turn.ended.by }) : undefined} />
   );

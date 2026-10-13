@@ -123,8 +123,8 @@ export function PeersSection({ mode }: { readonly mode: PaneMode }) {
         note="Where a Run stopped to wait on a peer, in its own transcript: one quiet line on the text column with a clock. Waiting by `dude wait`, by a turn that ended with its question unanswered, answered, and the peer ending without a reply — next to an EpicNoteNotice and a ChatNotice, so the three read apart.">
         <Panes mode={mode} surface>
           <Col>
-            <PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={at("13:47:02")} parksAt={at("13:57:02")} />
-            <PeerWaitLine on="ABS-2" msg="pm_1" how="turn-ended" since={at("13:47:02")} parksAt={at("13:57:02")} />
+            <PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={at("13:47:02")} parksAt={at("13:57:02")} now={at("13:53:02")} />
+            <PeerWaitLine on="ABS-2" msg="pm_1" how="turn-ended" since={at("13:47:02")} parksAt={at("13:57:02")} now={at("13:53:02")} />
             <PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={at("13:47:02")} parksAt={at("13:57:02")} ended={{ at: at("13:49:06"), by: "reply" }} />
             <PeerWaitLine on="ABS-2" msg="pm_1" how="wait" since={at("13:47:02")} ended={{ at: at("13:52:00"), by: "peer_ended", status: "aborted" }} />
             <EpicNoteNotice change="added" note={N3} read={{ at: at("13:49:06") }} />

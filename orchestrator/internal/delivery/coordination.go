@@ -386,12 +386,12 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE`, message); err != nil {
 		return w, err
 	}
-	var answered bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM peer_messages WHERE reply_to = $1)`, message).Scan(&answered); err != nil {
+	var reply string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT id FROM peer_messages WHERE reply_to = $1 ORDER BY created_at LIMIT 1), '')`, message).Scan(&reply); err != nil {
 		return w, err
 	}
-	if answered {
-		w.Notice = "The message has already been answered: carry on with the reply."
+	if reply != "" {
+		w.Notice = fmt.Sprintf("The message has already been answered: carry on with the reply (%s).", reply)
 		return w, nil
 	}
 	var current string

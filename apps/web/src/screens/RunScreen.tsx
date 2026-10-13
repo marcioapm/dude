@@ -308,6 +308,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
   // the same one, appended to and changed in place.
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!conversation.openWait) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [conversation.openWait]);
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // A branch preview is a run with no agent: nothing to steer, pause or abort
@@ -440,7 +446,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const role: AgentRole = run.role ?? DEFAULT_RUN_ROLE;
   // Waiting on a peer's reply: said beside the status, never in a tone.
   const openWait = conversation.openWait;
-  const peerWait = openWait ? waitWords(openWait.on, openWait.parksAt, run.status === "paused") : null;
+  const peerWait = openWait ? waitWords(openWait.on, openWait.parksAt, run.status === "paused", now) : null;
 
   const session = {
     id: run.id,
@@ -496,7 +502,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // The question's form, while the Run can still hear it.
   const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
-    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask, peerContext);
+    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask, peerContext, now);
   // The agent waits on the reader's answer: the composer steps back to one line.
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
@@ -1048,12 +1054,12 @@ function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: st
 
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
-  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions, peer?: PeerContext) {
+  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions, peer?: PeerContext, now?: number) {
   switch (turn.kind) {
     case "peer":
       return <PeerTurnView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
     case "peerWait":
-      return <PeerWaitView key={turn.id} turn={turn} />;
+      return <PeerWaitView key={turn.id} turn={turn} now={now} />;
     case "noteTold":
       return <NoteToldView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
     case "digest":

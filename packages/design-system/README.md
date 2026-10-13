@@ -501,7 +501,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   header carries `Badge icon="clock"` "Waiting on ABS-2 · parks in 10 min"
   (`statusNote`), the tree and board say it as activity, the epic card
   carries **`PeerWaitMark`** in `EpicCard waiting`. None takes a tone or
-  counts in Waiting on you.
+  counts in Waiting on you. `PeerWaitLine.now` accepts a Date, ISO string
+  or epoch milliseconds (defaults to `Date.now()` at render); pass a ticking
+  value with the header, and a fixed value in specimens/tests.
 - **`TaskChip`** names a task inline wherever peers are named: status mark,
   mono key, role face; a button that says what it opens ("Open ABS-2, …:
   its implementer"), or an image with that name. A peer by link carries a
