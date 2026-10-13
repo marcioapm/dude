@@ -37,6 +37,14 @@ const (
 	evDirectiveAccepted  = "run.directive.accepted"
 	evDirectiveFailed    = "run.directive.failed"
 	evNetworkRefused     = "agent.network.refused"
+	// A child session's (subagent's) life, nested under the parent's call
+	// that started it (translate_children.go).
+	evChildStarted       = "agent.child.started"
+	evChildToolCalled    = "agent.child.tool.called"
+	evChildToolCompleted = "agent.child.tool.completed"
+	evChildMessage       = "agent.child.message"
+	evChildWaiting       = "agent.child.waiting"
+	evChildEnded         = "agent.child.ended"
 	// inputConsumed: directiveReceipt's name for a lux.input.consumed.
 	inputConsumed = "consumed"
 )
@@ -76,6 +84,10 @@ type translator struct {
 	// Tool calls started and not yet finished, by id, written with the
 	// cursor: an agent in a long command is working, however quiet.
 	openCalls map[string]bool
+	// The Run's own Codex wait calls, by id, with the child ids each waits
+	// on (receiverThreadIds); empty is all its spawned agents, as Codex
+	// 0.144.1 sends it. Rebuilt by load from the calls' recorded input.
+	waitsOn map[string][]string
 	// The epochs whose first busy and first output were looked for and
 	// settled, so each is looked for once per placement and not on every
 	// chunk; and those looked for in this batch and not settled yet, looked
@@ -90,6 +102,8 @@ type translator struct {
 	// What a Claude Code or Codex turn needs remembered between batches,
 	// saved as runs.harness_state.
 	harnessState
+	// What this batch did to runs.children, written by save.
+	facts childFacts
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
@@ -109,6 +123,12 @@ type harnessState struct {
 	claudeIdle     bool
 	codexTurn      codexTokens
 	turnError      string
+	// The child sessions seen (translate_children.go), by child id; the
+	// Run's own Codex thread; and, per Codex thread, its spawn calls whose
+	// agent has not said which thread it is yet.
+	Children    map[string]*childState
+	codexThread string
+	codexSpawns map[string][]codexSpawn
 	talkerState
 }
 
@@ -134,22 +154,25 @@ type codexTokens struct {
 }
 
 type harnessStateJSON struct {
-	ClaudeCost     float64          `json:"claudeCost,omitempty"`
-	ClaudeCostSeen float64          `json:"claudeCostSeen,omitempty"`
-	ClaudeTasks    []map[string]any `json:"claudeTasks,omitempty"`
-	ClaudeTaskNext int              `json:"claudeTaskNext,omitempty"`
-	ClaudeHalf     string           `json:"claudeHalf,omitempty"`
-	ClaudeUsage    *claudeUsage     `json:"claudeUsage,omitempty"`
-	ClaudeIdle     bool             `json:"claudeIdle,omitempty"`
-	CodexTurn      *codexTokens     `json:"codexTurn,omitempty"`
-	TurnError      string           `json:"turnError,omitempty"`
+	ClaudeCost     float64                 `json:"claudeCost,omitempty"`
+	ClaudeCostSeen float64                 `json:"claudeCostSeen,omitempty"`
+	ClaudeTasks    []map[string]any        `json:"claudeTasks,omitempty"`
+	ClaudeTaskNext int                     `json:"claudeTaskNext,omitempty"`
+	ClaudeHalf     string                  `json:"claudeHalf,omitempty"`
+	ClaudeUsage    *claudeUsage            `json:"claudeUsage,omitempty"`
+	ClaudeIdle     bool                    `json:"claudeIdle,omitempty"`
+	CodexTurn      *codexTokens            `json:"codexTurn,omitempty"`
+	TurnError      string                  `json:"turnError,omitempty"`
+	Children       map[string]*childState  `json:"children,omitempty"`
+	CodexThread    string                  `json:"codexThread,omitempty"`
+	CodexSpawns    map[string][]codexSpawn `json:"codexSpawns,omitempty"`
 	talkerState
 }
 
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		talkerState: h.talkerState}
+		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -163,7 +186,7 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		talkerState: j.talkerState}
+		Children: j.Children, codexThread: j.CodexThread, codexSpawns: j.CodexSpawns, talkerState: j.talkerState}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -225,17 +248,25 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	for _, id := range open {
 		t.openCalls[id] = true
 	}
-	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'callId', ''), COALESCE(payload->>'tool', '')
+	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'callId', ''), COALESCE(payload->>'tool', ''),
+		COALESCE(payload->'input'->'agents', '[]')
 		FROM events WHERE run_id = $1 AND event_type IN ($2, $3, $4)`, t.run.ID, evToolCalled, evPlanUpdated, evPromptDelivered)
 	if err != nil {
 		return err
 	}
-	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, ID, Tool string }])
+	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Type, ID, Tool string
+		Agents         []string
+	}])
 	t.seenCalls = make(map[string]string, len(seen))
+	t.waitsOn = map[string][]string{}
 	for _, e := range seen {
 		switch e.Type {
 		case evToolCalled:
 			t.seenCalls[e.ID] = e.Tool
+			if e.Tool == "wait" && t.openCalls[e.ID] {
+				t.waitsOn[e.ID] = e.Agents
+			}
 		case evPlanUpdated:
 			t.seenCalls[e.ID] = planCall
 		case evPromptDelivered:
@@ -256,8 +287,10 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 	if err != nil {
 		return err
 	}
+	touched, dropped, allGone := t.facts.args()
 	// Each open call keeps the time it was first seen open
-	// (open_tool_calls_at): what "open for how long" is measured from.
+	// (open_tool_calls_at): what "open for how long" is measured from. A
+	// child's line (runs.children) is stamped when its event was saved.
 	_, err = tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
@@ -266,11 +299,15 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
-		harness_state = $14::jsonb
+		harness_state = $14::jsonb,
+		children = (CASE WHEN $17 THEN '{}'::jsonb ELSE children - $16::text[] END)
+			|| COALESCE((SELECT jsonb_object_agg(key, value || jsonb_build_object('lastEventAt', now()))
+				FROM jsonb_each($15::jsonb)), '{}')
 		WHERE id = $1`,
 		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
-		db.NonNil(open), t.active, cursor, afterEvent, state)
+		db.NonNil(open), t.active, cursor, afterEvent, state, touched, dropped, allGone)
 	t.active = false
+	t.facts = childFacts{}
 	t.unsettled = nil
 	return err
 }
@@ -319,7 +356,8 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// the running time before it and drops its wait. The clocks: no
 		// change in files (files_changed_at), the agent's last activity
 		// (agent_active_at), and the last report (stall_reported_at, so
-		// run_stalled still compares like with like), and each open call.
+		// run_stalled still compares like with like), and each open call
+		// and its child's last event.
 		// A first start, never away, dates its files now.
 		// A silent report's facts end in its silence's start (stallFacts):
 		// when that is the silence the clocks move on, it moves with them,
@@ -344,6 +382,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			open_tool_calls_at = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
 				THEN COALESCE((SELECT jsonb_object_agg(key, to_jsonb(`+backFromAway("value::timestamptz")+`))
 					FROM jsonb_each_text(open_tool_calls_at)), '{}') ELSE open_tool_calls_at END,
+			children = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
+				THEN COALESCE((SELECT jsonb_object_agg(key, value || jsonb_build_object('lastEventAt',
+					`+backFromAway("(value->>'lastEventAt')::timestamptz")+`)) FROM jsonb_each(children)), '{}') ELSE children END,
 			left_running_at = CASE WHEN $2 = 'running' THEN NULL
 				WHEN lux_state = 'running' THEN now() ELSE left_running_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
@@ -372,8 +413,15 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
 		if lux.Terminal(state) {
-			return t.ended(ctx, tx, s, state, str("reason"))
+			// A start that failed names the stage it failed in.
+			stage, err := t.failedStage(ctx, tx, f.Epoch, was)
+			if err != nil {
+				return err
+			}
+			return t.ended(ctx, tx, s, state, str("reason"), stage)
 		}
+	case "stage":
+		return t.stage(ctx, tx, s, f)
 	case "git.clone":
 		if err := s.event(ctx, tx, t.run, "git.clone", ledger.ActorSystem, d); err != nil {
 			return err
@@ -493,8 +541,10 @@ const maxRefusedNames = 100
 // timed out, or its host died. A phase whose turn was already done is
 // finished by the sweep, and one dude stopped is dude's business; any other
 // has failed. One lux stopped at its time limit is not kept: its running
-// time is spent, so a resume would be stopped again at once.
-func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
+// time is spent, so a resume would be stopped again at once. A start that
+// failed before the agent ran says the stage it was in (stage, "" when
+// unknown) and lux's own reason.
+func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason, stage string) error {
 	// A conductor or session agent lux can resume, with a session to
 	// reload, is parked by the sweep (betweenTurns), not failed.
 	if t.run.talker() && !lux.Terminated(state) && t.sessionEpoch > 0 {
@@ -514,6 +564,9 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		t.run.ID, why, reason != luxTimeout)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
+	}
+	if stage != "" {
+		return s.failedTxWith(ctx, tx, t.run, event, map[string]any{"stage": stage, "reason": reason})
 	}
 	return s.failedTx(ctx, tx, t.run, event)
 }
@@ -897,6 +950,8 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// quiet is counted from its start — but only the model doing
 		// something answers a nudge, not a turn the nudge itself started.
 		clear(t.openCalls)
+		clear(t.waitsOn)
+		t.facts = childFacts{clear: true}
 		t.resumeBusy(ctx, tx, s, epoch)
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL,
 			waiting_since = NULL, agent_active_at = now() WHERE id = $1`, t.run.ID)
@@ -918,6 +973,8 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 		return err
 	}
 	clear(t.openCalls)
+	clear(t.waitsOn)
+	t.facts = childFacts{clear: true}
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
 	// A failed turn's idle: the turn is over, not done (turnFailed).
@@ -1026,9 +1083,9 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 
 // agentEvent translates the agent's own protocol messages: ACP (OpenCode
 // and the scripted agent), Claude Code's stream-json (claude.*,
-// translate_claude.go) and Codex's app-server (codex.*,
-// translate_codex.go). An unknown event type is ignored rather than
-// guessed at.
+// translate_claude.go), Codex's app-server (codex.*, translate_codex.go)
+// and OpenCode's child sessions (opencode.*, translate_opencode.go). An
+// unknown event type is ignored rather than guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
@@ -1040,6 +1097,9 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	}
 	if typ, ok := strings.CutPrefix(f.Event.Type, "codex."); ok {
 		return t.codexEvent(ctx, tx, s, typ, f)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "opencode."); ok {
+		return t.opencodeEvent(ctx, tx, s, typ, f)
 	}
 	typ, ok := strings.CutPrefix(f.Event.Type, "acp.")
 	if !ok {
@@ -1105,32 +1165,18 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			t.openCalls[callID] = true
 		case "in_progress":
 			t.openCalls[callID] = true
-			if _, seen := t.seenCalls[callID]; seen {
-				return nil
-			}
-			name := toolName(u)
-			t.seenCalls[callID] = name
-			return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
-				map[string]any{"tool": name, "callId": callID, "input": input, "title": title})
+			return t.callStarted(ctx, tx, s, nil, map[string]any{"tool": toolName(u), "callId": callID, "input": input, "title": title})
 		case "completed", "failed":
-			delete(t.openCalls, callID)
 			st := "completed"
 			if status == "failed" {
 				st = "error"
 			}
 			// A tool some agents report only once it has finished has no
-			// recorded start; its completion is the whole call.
-			name, seen := t.seenCalls[callID]
-			if !seen {
-				name = toolName(u)
-			}
-			payload := map[string]any{"tool": name, "callId": callID, "status": st, "title": title}
+			// recorded start; its completion is the whole call, under the
+			// name it would have had.
+			payload := map[string]any{"tool": toolName(u), "callId": callID, "status": st, "title": title}
 			maps.Copy(payload, toolResult(u))
-			// It changed files: the live diff is read shortly.
-			if isEdit(name) {
-				s.pokeDiff(t.run.ID)
-			}
-			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
+			return t.callEnded(ctx, tx, s, nil, payload)
 		}
 
 	case "usage_update":
@@ -1319,6 +1365,10 @@ func number(v any) float64 {
 // OpenCode starts as the tool's own name. The title is what a person
 // recognises, so it is the name when it is a single word.
 func toolName(u map[string]any) string {
+	// OpenCode's task tool: kind think, the description as title.
+	if in, _ := u["rawInput"].(map[string]any); u["kind"] == "think" && in["subagent_type"] != nil {
+		return "task"
+	}
 	title, _ := u["title"].(string)
 	if title != "" && !strings.ContainsAny(title, " /.") {
 		return title

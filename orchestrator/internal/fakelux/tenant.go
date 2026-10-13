@@ -488,10 +488,11 @@ func (s *Server) removeTenantServer(t *tenantServer, typ, why string) {
 // lux's patchServer. Only the fields dude sends are taken.
 func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Port    *int               `json:"port"`
-		Command *[]string          `json:"command"`
-		Workdir *string            `json:"workdir"`
-		Env     *map[string]string `json:"env"`
+		Port        *int               `json:"port"`
+		Command     *[]string          `json:"command"`
+		Workdir     *string            `json:"workdir"`
+		Env         *map[string]string `json:"env"`
+		WakeTimeout json.RawMessage    `json:"wakeTimeout"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
@@ -508,6 +509,15 @@ func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var changed []string
+	if len(in.WakeTimeout) > 0 && string(in.WakeTimeout) != "null" {
+		timeout, err := parseDur(in.WakeTimeout, 0)
+		if err != nil || timeout < time.Second || timeout > 24*time.Hour {
+			writeErr(w, 422, "invalid_server", "wakeTimeout: must be between 1s and 24h0m0s")
+			return
+		}
+		t.WakeTimeout = timeout
+		changed = append(changed, "wakeTimeout")
+	}
 	if in.Port != nil {
 		t.Port, changed = *in.Port, append(changed, "port")
 	}

@@ -327,10 +327,14 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     pinned = page.get_by_test_id("waiting-for-host")
     expect(pinned).to_contain_text("Waiting for a host that can run containers.")
     expect(pinned).to_contain_text("Nothing is spent meanwhile.")
-    expect(page.get_by_test_id("run-waiting")).to_have_text("Waiting for a host")
-    expect(page.get_by_test_id("run-image")).to_contain_text("abs-preview")
-    # Nothing in the header is cut short by the badge: the title and each chip show all of their text.
-    header = page.locator("header").filter(has=page.get_by_test_id("run-waiting"))
+    chip = page.get_by_test_id("start-chip")
+    expect(chip).to_contain_text("Waiting for a machine")
+    header = page.locator("header").filter(has=chip)
+    # The Run's own status: with lux and still waiting for a machine it is Scheduled; it reads Starting only once
+    # lux places it (a stage past waiting), which no host here can do.
+    expect(header.locator('[data-status]').first).to_have_attribute("data-status", "scheduled")
+    expect(header.get_by_test_id("run-image")).to_contain_text("abs-preview")
+    # Nothing in the header is cut short by the cue: the title and each chip show all of their text.
     for width in (1024, 1440):
         page.set_viewport_size({"width": width, "height": 1000})
         clipped = header.evaluate("""h => [...h.querySelectorAll('*')]
@@ -341,6 +345,13 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     _shoot(page, "09b-waiting-run")
     _shoot(page, "09b-waiting-run-narrow", width=1024)
     _shoot(page, "09b-waiting-run-wide", width=1920)
+    # The wait is said once, by the pinned callout: past the waiting stage's 60s threshold the row keeps its stage
+    # and clock and adds no slow note. 01:03 or later: the slow note's timer (threshold + 50 ms) has fired by then.
+    row = page.get_by_test_id("start-progress")
+    expect(row).to_have_attribute("data-stage", "waiting")
+    expect(row.locator("[role=timer]").first).to_have_text(re.compile(r"^(01:(0[3-9]|[1-5]\d)|0[2-9]:\d\d)$"), timeout=80_000)
+    expect(page.get_by_test_id("start-slow")).to_have_count(0)
+    expect(pinned).to_have_count(1)
     assert all("409" in e for e in console_errors), console_errors
 
 

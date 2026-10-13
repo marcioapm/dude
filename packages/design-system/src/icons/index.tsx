@@ -36,6 +36,7 @@ export type IconName =
   | "simplifier"
   | "qa_browser"
   | "brainstorm"
+  | "subagent"
   // ui
   | "shared"
   | "chevron-down"
@@ -154,6 +155,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   qa_browser: { d: "M2.5 4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V4ZM2.5 6h11M4.5 4.5h.01M6.25 4.5h.01M7.5 8l3.5 1.4-1.5.6-.6 1.5Z" },
   /* A light bulb: thinking out loud. */
   brainstorm: { d: "M6 12.5h4M6.5 14h3M8 2.25a4 4 0 0 0-2.4 7.2c.55.42.9.98.9 1.55v.5h3v-.5c0-.57.35-1.13.9-1.55A4 4 0 0 0 8 2.25Z" },
+  /* A fork: a conversation that split off from its parent's call. */
+  subagent: { d: "M8 13.5V9M8 9 4.5 5M8 9l3.5-4M4.5 5a1.25 1.25 0 1 0 0-2.5a1.25 1.25 0 0 0 0 2.5ZM11.5 5a1.25 1.25 0 1 0 0-2.5a1.25 1.25 0 0 0 0 2.5ZM8 14.5a1 1 0 1 0 0-2a1 1 0 0 0 0 2Z" },
   /* Two people: a session someone else is in too. */
   shared: { d: "M6 7.25a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM2.5 13c0-1.93 1.57-3.5 3.5-3.5s3.5 1.57 3.5 3.5M10.5 7a1.75 1.75 0 1 0 0-3.5M11.5 9.6c1.2.4 2 1.6 2 3.4" },
 

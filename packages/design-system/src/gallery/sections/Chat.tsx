@@ -536,6 +536,8 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       >
         <Panes mode={mode} surface>
           <Col>
+            <Label>open-only row — opens a separate transcript, never expands</Label>
+            <ChatThread sessionId="row-child" role="subagent" status="running" task="Inspect test capture setup" openOnly collapsed onOpen={() => undefined} summary="Reading the browser fixtures" turnCount={3} costUsd={0.08} startedAt={Date.now() - 90_000} />
             <ChatThread sessionId="ses_01J9K3" role="investigator" status="completed" model="claude-sonnet-4" task="Map webhook handler and existing retry patterns" startedAt={at(2_101)} endedAt={at(19_002)} costUsd={0.084} turnCount={3} summary="3 findings, 1 risk · no retry layer exists today">
               <ChatMessage role="investigator" model="claude-sonnet-4" content="Found the call site. No retry anywhere in the integration layer." startedAt={at(2_101)} endedAt={at(19_002)} costUsd={0.084} activity="completed" />
             </ChatThread>
@@ -551,6 +553,27 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatThread sessionId="ses_01J9K5b" role="qa_browser" status="failed" model="claude-sonnet-4" task="Verify the webhook settings page still renders" startedAt={at(100_000)} endedAt={at(140_000)} costUsd={0.044} turnCount={4} summary="Timed out waiting for #save-webhook" />
           </Col>
         </Panes>
+      </Block>
+
+      <Block
+        id="ch-children"
+        title="ChatThread — a tool call's child session"
+        note="A child session (a subagent the agent started from a task or spawn call) nests under the call's ToolCallCard, as role subagent: the investigator's colour, a square face with a fork. Its title is the description the parent gave and the subagent type; inside are its tool calls and messages, never its thinking. A live child stays open; a done one folds to one line (its summary), turns, cost and duration. Several children of one turn are threads side by side, each its own rail. Waiting: a live child blocked on something nothing in the Run can answer (a permission its harness asked for and never forwarded) turns its rail and wash to attention and says in its header what it waits on and for how long; the stuck call carries a note naming the permission, and a notice says nothing in this Run can answer it. It is not an activity: the thread is still live."
+      >
+        <ChildExamplesWhenNear>
+          <Panes mode={mode} surface>
+            <Col>
+              <Label>live child</Label>
+              <ChildLive />
+              <Label>child waiting on a permission</Label>
+              <ChildWaiting />
+              <Label>done child, folded</Label>
+              <ChildDone />
+              <Label>two children of one turn</Label>
+              <ChildrenSideBySide />
+            </Col>
+          </Panes>
+        </ChildExamplesWhenNear>
       </Block>
 
       <Block
@@ -1065,4 +1088,85 @@ function activityPropsFor(t: ScenarioTurn) {
     slowAfterMs: SLOW_DEMO_MS,
     detail: t.activity === "retrying" ? "429 from upstream" : undefined,
   };
+}
+
+// Offscreen live child examples add animation load to unrelated gallery tooltips.
+function ChildExamplesWhenNear({ children }: { readonly children: ReactNode }): ReactNode {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  const placeholder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (near || !placeholder.current) return undefined;
+    const seen = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setNear(true);
+    }, { rootMargin: "1500px 0px" });
+    seen.observe(placeholder.current);
+    return () => seen.disconnect();
+  }, [near]);
+  return near ? <>{children}</> : <div ref={placeholder} data-testid="child-examples-pending" style={{ minHeight: 1200 }} />;
+}
+
+/** The child sessions block's world: a fix Run that delegated to an explore subagent. */
+const CHILD_TASK = { description: "Inspect test capture setup", subagent_type: "explore", prompt: "Research only. Determine how the Python UI tests create Playwright contexts…" };
+const PERMISSION = { permission: "external_directory", patterns: "/opt/ui-tests/lib/python3.14/site-packages/pytest_playwright/*" };
+
+function ChildLive() {
+  return (
+    <>
+      <ToolCallCard name="task" status="running" args={CHILD_TASK} startedAt={Date.now() - 140_000} summary="Inspect test capture setup · explore" />
+      <ChatThread sessionId="ses_ecd119ab1ffe" role="subagent" status="running" model="claude-haiku-4.5" task="Inspect test capture setup · explore"
+        startedAt={Date.now() - 140_000} costUsd={0.37} activity="tool" activityProps={{ tool: "read", since: Date.now() - 8_000 }}
+        summary="reading the installed pytest-playwright plugin" onOpen={() => undefined}>
+        <ToolCallCard name="glob" status="completed" args={{ pattern: "**/conftest.py" }} startedAt={Date.now() - 133_000} durationMs={310} result="tests/conftest.py\ntests/suites/ui_previewer/conftest.py" />
+        <ChatMessage role="subagent" model="claude-haiku-4.5" content="Two conftests; `ui_previewer/conftest.py` overrides `browser_context_args`. Checking where the viewport comes from." startedAt={Date.now() - 100_000} endedAt={Date.now() - 92_000} costUsd={0.04} />
+        <ToolCallCard name="read" status="running" args={{ filePath: "/opt/ui-tests/lib/python3.14/site-packages/pytest_playwright/pytest_playwright.py" }} startedAt={Date.now() - 8_000} />
+      </ChatThread>
+    </>
+  );
+}
+
+function ChildWaiting() {
+  const since = Date.now() - 117 * 60_000;
+  return (
+    <>
+      <ToolCallCard name="task" status="running" args={CHILD_TASK} startedAt={since - 70_000} summary="Inspect test capture setup · explore" />
+      <ChatThread sessionId="ses_ecd119ab1ffe" role="subagent" status="running" model="claude-haiku-4.5" task="Inspect test capture setup · explore"
+        startedAt={since - 70_000} costUsd={0.37} waiting={{ on: "a permission", since }} onOpen={() => undefined}>
+        <ChatMessage role="subagent" model="claude-haiku-4.5" content="No viewport is set in the repo. Reading the installed plugin to confirm." startedAt={since - 7_000} endedAt={since} costUsd={0.03} />
+        <ToolCallCard name="grep" status="running" args={{ pattern: "record_video|viewport", path: "/opt/ui-tests/lib/python3.14/site-packages/pytest_playwright" }}
+          startedAt={since} defaultExpanded note={<>Waiting on <code>{PERMISSION.permission}</code> for <code>{PERMISSION.patterns}</code>: its harness never forwarded the ask, so no one can allow or refuse it.</>} />
+        <ChatNotice kind="notice" at={since} text={`Waiting on a permission: ${PERMISSION.permission} for ${PERMISSION.patterns}. Nothing in this Run can answer it.`} />
+      </ChatThread>
+    </>
+  );
+}
+
+function ChildDone() {
+  return (
+    <>
+      <ToolCallCard name="task" status="completed" args={CHILD_TASK} startedAt={at(2_000)} endedAt={at(156_000)} summary="Inspect test capture setup · explore"
+        result="No viewport is set anywhere, so Playwright's 1280×720 default applies." />
+      <ChatThread sessionId="ses_ecd119ab1ffe" role="subagent" status="completed" model="claude-haiku-4.5" task="Inspect test capture setup · explore"
+        startedAt={at(2_000)} endedAt={at(156_000)} costUsd={0.37} turnCount={9} onOpen={() => undefined}
+        summary="No viewport is set anywhere, so Playwright's 1280×720 default applies; set it in the ui_previewer fixture.">
+        <ChatMessage role="subagent" model="claude-haiku-4.5" content="No viewport is set anywhere, so Playwright's 1280×720 default applies." startedAt={at(150_000)} endedAt={at(156_000)} costUsd={0.06} activity="completed" />
+      </ChatThread>
+    </>
+  );
+}
+
+function ChildrenSideBySide() {
+  return (
+    <>
+      <ToolCallCard name="task" status="completed" args={{ prompt: "Inspect test capture setup" }} startedAt={Date.now() - 250_000} durationMs={600} summary="Inspect test capture setup · spawn" />
+      <ToolCallCard name="task" status="completed" args={{ prompt: "Find the chart fixture dataset" }} startedAt={Date.now() - 240_000} durationMs={500} summary="Find the chart fixture dataset · spawn" />
+      <ChatThread sessionId="01a133b0-0aa5" role="subagent" status="running" model="gpt-5.6-sol" task="Inspect test capture setup" startedAt={Date.now() - 250_000}
+        costUsd={0.21} activity="tool" activityProps={{ tool: "bash", since: Date.now() - 42_000 }} onOpen={() => undefined}>
+        <ToolCallCard name="bash" status="completed" args={{ command: "find tests -name conftest.py" }} startedAt={Date.now() - 210_000} durationMs={320} result="tests/conftest.py" />
+        <ToolCallCard name="bash" status="running" args={{ command: "rg -n 'record_video|viewport' tests/" }} startedAt={Date.now() - 42_000} />
+      </ChatThread>
+      <ChatThread sessionId="01a133b0-1c22" role="subagent" status="completed" model="gpt-5.6-sol" task="Find the chart fixture dataset" startedAt={Date.now() - 240_000}
+        endedAt={Date.now() - 108_000} costUsd={0.09} turnCount={4} onOpen={() => undefined} summary="tests/data/pull.sh fetches the sandbox test-data bucket; not git LFS." />
+      <ToolCallCard name="wait" status="running" args={{ agents: ["01a133b0-0aa5", "01a133b0-1c22"] }} startedAt={Date.now() - 24_000} summary="waiting for 1 of 2 agents" />
+    </>
+  );
 }

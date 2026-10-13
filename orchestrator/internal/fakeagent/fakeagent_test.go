@@ -52,3 +52,13 @@ func TestTheScriptedReplyKnowsEverySessionsBriefing(t *testing.T) {
 		}
 	}
 }
+
+// On a real lux the subagent models are lux-fake's own script lines, then
+// a hang: lux plays the subagent's records.
+func TestTheSubagentModelsAreLuxFakesSubagentLines(t *testing.T) {
+	for model, want := range map[string]string{SubagentModel: "subagent\nsleep 3600", SubagentAskModel: "subagent ask\nsleep 3600"} {
+		if got := Script("implement", model, "run_1"); got != want {
+			t.Errorf("%s: %q, want %q", model, got, want)
+		}
+	}
+}

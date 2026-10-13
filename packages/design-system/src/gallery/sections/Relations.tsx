@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Block, Col, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { Board } from "../../components/Board.tsx";
 import { ProposalCard, type ProposalCardItem } from "../../components/Brainstorm.tsx";
@@ -130,6 +130,13 @@ const proposal: ProposalCardItem[] = [
     project: { key: "CP", name: "control-plane" }, canFile: true, relations: [{ kind: "blocked-by", item: 1 }, { kind: "related", task: { key: "CP-44", status: "received" } }] },
 ];
 
+const relationBlockIds: ReadonlySet<string> = new Set([
+  "rel-icons", "rel-chip", "rel-board", "rel-board-lit", "rel-board-filter", "rel-startmenu", "rel-gate",
+  "rel-auto", "rel-dialogs", "rel-list", "rel-picker", "rel-strip", "rel-proposal",
+]);
+
+const noAnchors: ReadonlySet<string> = new Set();
+
 /**
  * Mounts its children once they near the viewport. The section's blocks are
  * about 8,000 elements and 190 running animations: drawn from the start they
@@ -137,9 +144,34 @@ const proposal: ProposalCardItem[] = [
  * gallery could take seconds to fade in. A gallery without IntersectionObserver
  * draws them at once.
  */
-function WhenNear({ children }: { readonly children: ReactNode }) {
+export function WhenNear({ children, anchors = noAnchors, pendingTestId = "relations-pending" }: {
+  readonly children: ReactNode;
+  readonly anchors?: ReadonlySet<string>;
+  /** Each deferred section's placeholder needs its own id: tests count them. */
+  readonly pendingTestId?: string;
+}) {
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   const placeholder = useRef<HTMLDivElement>(null);
+  const pendingTarget = useRef<string | null>(null);
+  useEffect(() => {
+    if (near) return undefined;
+    const navigate = () => {
+      let id: string;
+      try { id = decodeURIComponent(window.location.hash.slice(1)); }
+      catch { pendingTarget.current = null; return; }
+      pendingTarget.current = anchors.has(id) ? id : null;
+      if (pendingTarget.current) setNear(true);
+    };
+    window.addEventListener("hashchange", navigate);
+    navigate();
+    return () => window.removeEventListener("hashchange", navigate);
+  }, [near, anchors]);
+  useLayoutEffect(() => {
+    if (!near || !pendingTarget.current) return;
+    // Native fragment navigation ran before the deferred target existed.
+    document.getElementById(pendingTarget.current)?.scrollIntoView();
+    pendingTarget.current = null;
+  }, [near]);
   useEffect(() => {
     if (near || !placeholder.current) return undefined;
     const seen = new IntersectionObserver((entries) => {
@@ -148,14 +180,14 @@ function WhenNear({ children }: { readonly children: ReactNode }) {
     seen.observe(placeholder.current);
     return () => seen.disconnect();
   }, [near]);
-  return near ? <>{children}</> : <div ref={placeholder} data-testid="relations-pending" style={{ minHeight: 6000 }} />;
+  return near ? <>{children}</> : <div ref={placeholder} data-testid={pendingTestId} style={{ minHeight: 6000 }} />;
 }
 
 export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="relations" title="Task relations: blocked by, blocks, related"
       intro="A task that can't start until another is merged says so, in one verb pair everywhere — Blocked by, Blocks — and every way to start it refuses for the same reason. Blocked waits on work, not a person: neutral ink with a lock and words, never the attention wash, and never a triage bucket.">
-      <WhenNear>
+      <WhenNear anchors={relationBlockIds}>
       <Block id="rel-icons" title="Icons: lock, blocks, link"
         note="lock marks a task that can't start until another is merged, blocks one that holds another up, link a relation that gates nothing. They take the ink of their words, never a tone.">
         <Panes mode={mode}>

@@ -882,7 +882,7 @@ describe("how long a resume took", () => {
     const notices = turns.filter((t) => t.kind === "notice");
     expect(notices.map((t) => t.text)).toEqual([expect.stringContaining("Parked"), "Taken back up in 6.4s."]);
     expect(notices[1]!.title).toBe([
-      "dude asked lux 120ms", "lux placed it 300ms", "image ready 1.0s", "restored 1.2s", "started 800ms",
+      "dude asked lux 120ms", "Machine found 300ms", "Image ready 1.0s", "Workspace restored 1.2s", "Container started 800ms",
       "agent reloaded 2.1s", "took its input 400ms", "first words 1.6s",
     ].join("\n"));
   });

@@ -22,6 +22,7 @@ import { ServersSection } from "./sections/Servers.tsx";
 import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
+import { StartingSection } from "./sections/Starting.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -124,6 +125,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-images", "Images"],
       ["ch-realistic", "A real session (static)"],
       ["ch-transcript", "ChatTranscript (live)"],
+    ],
+  ],
+  [
+    "Starting",
+    [
+      ["st-play", "A fresh start"],
+      ["st-states", "Resumed, slow, older lux"],
+      ["st-failed", "Failed"],
+      ["st-move", "A move"],
+      ["st-chip", "StartChip"],
     ],
   ],
   [
@@ -315,6 +326,7 @@ function Shell() {
           <CalmerSection mode={panes} />
           <ComponentsSection mode={panes} />
           <ChatSection mode={panes} />
+          <StartingSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
           <RelationsSection mode={panes} />

@@ -244,6 +244,13 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   time it was read, even when the click came after the read.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
+- **A starting agent says where it is.** lux's `stage` events on an agent
+  Run's stream become `run.stage` `{stage, since, epoch, reason?}`, one per
+  change while it starts (`phases/stage.go`); a move's stop is `park`; a
+  start that fails puts its stage and lux's reason in `run.failed`. The
+  web's projection folds them into `Conversation.start`, which the chat's
+  row, the header's chip and the composer read. Design:
+  [`design/agent-startup.md`](design/agent-startup.md).
 - **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one
   waiting on a person holds no host. The syncer resumes it on its own when
   the reason is over:
@@ -300,6 +307,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   Its Run is servers-only (no `workload.servers`), resumed with `sync` on
   every wake, or replaced by a new one when its last start failed before it
   ran (`runs.start_failures`, bounded). See [operations](operations.md#branch-previews).
+  Its first wake waits up to `firstWakeTimeoutMinutes` (default 15); after
+  a server has been ready once, `wakeTimeoutMinutes` (default 5). Both are
+  project settings, whole minutes 1..120. `runs.preview_ready_at` preserves
+  that fact across sleeps and replacement lux Runs; the sweep patches lux
+  servers' timeouts, never shortening an open wake.
 - **An old-style preview** (`wakeable = false`: before lux#41, or a lux with
   no preview domain) serves the recipes as the spec's `workload.servers`.
   It is parked (`dude_pause = 'unused'`) after the project's idle timeout
