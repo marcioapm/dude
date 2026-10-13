@@ -13,13 +13,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
-import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { boardScope, type BoardCard, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
+import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
+import { installActivity } from "./activity.ts";
 import { Reconnecting } from "./Reconnecting.tsx";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
@@ -42,6 +43,7 @@ import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
 import { forgetModelOptions } from "./sessionModel.ts";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
+import { LitEpicOrder, useCardStarts, useLitCard } from "./screens/Relations.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 export interface AppProps {
@@ -127,6 +129,7 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
+  useEffect(installActivity, []);
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
   const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");
@@ -282,6 +285,25 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const sessionTask = sessionId ? (inTreeTask ?? runTasks.get(sessionId) ?? null) : null;
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
+  // A related task, named by its key: open it where the tree has it.
+  const openByKey = useCallback((key: string) => {
+    for (const p of projects ?? []) {
+      const t = [...(p.epics ?? []).flatMap((e) => e.tasks), ...(p.tasks ?? [])].find((x) => x.key === key);
+      if (t) return go(inTree({ kind: "task", id: t.id }));
+    }
+  }, [go, projects]);
+  // The board's All · Can start · Blocked, and the card under the pointer,
+  // whose relations the epic's order lights too: held outside App's state,
+  // so a hover re-renders the order, not the sidebar and header.
+  const [boardFilter, setBoardFilter] = useState<BoardFilter>("all");
+  const litCard = useLitCard();
+  const cardStarts = useCardStarts(client, people.you, (taskId, how) => {
+    void load();
+    if (how === "talk") go(inTree({ kind: "task", id: taskId }, "chat"));
+  }, () => void load());
+  // Stable, as the board's memoised cards need: an App render redraws none.
+  const startCard = cardStarts.start;
+  const cardStart = useCallback((card: BoardCard, focus: BoardCardStartFocus) => startCard(card.task, focus), [startCard]);
 
   // The tab says where you are: "TEXT-14 · Implement — dude"; teammates
   // see the same beside your face.
@@ -425,14 +447,23 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     const project = scope.project;
     flush = true;
     main = (
+      <>
       <Board
         project={project}
         you={people.you}
         epic={scope.epic}
-        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
-          : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
+        overview={scope.epic ? (
+          <>
+            <LitEpicOrder lit={litCard} project={project} epic={scope.epic} onOpen={openByKey} />
+            <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
+          </>
+        ) : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
+        filter={boardFilter}
+        onFilterChange={setBoardFilter}
+        onHighlightChange={litCard.set}
+        cardStart={cardStart}
         groupBy={groupByEpic ? "epic" : null}
         laneMenu={(lane) => {
           if (!lane.epic) return null;
@@ -473,6 +504,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           </>
         }
       />
+      {cardStarts.dialogs}
+      {cardStarts.problem ? <Callout tone="danger" data-testid="card-start-problem">{cardStarts.problem}</Callout> : null}
+      </>
     );
   } else if (selected?.kind === "task" || sessionTask) {
     // A session opens on its task's page, beside the task's other sessions.
@@ -490,6 +524,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onNavigate={(tab, attempt, replace) => go(inTree({ kind: "task", id: taskId }, tab, attempt), replace)}
         onBack={toBoard}
         breadcrumb={trail(taskId)}
+        tree={projects ?? []}
+        onOpenTask={openByKey}
       />
     );
   } else if (sessionId && !runTasks.has(sessionId) && !lookupFailed) {

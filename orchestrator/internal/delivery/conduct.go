@@ -22,11 +22,16 @@ import (
 // with a Refusal the conductor can act on.
 
 // Refusal is a conductor's request declined, with what to do instead.
-type Refusal struct{ Msg string }
+type Refusal struct {
+	Msg string
+	// A start refused as blocked (path 4): the caller records it
+	// (task.start_refused) after the refused call rolls back.
+	Blocked *BlockedError
+}
 
 func (r Refusal) Error() string { return r.Msg }
 
-func refusef(format string, a ...any) error { return Refusal{fmt.Sprintf(format, a...)} }
+func refusef(format string, a ...any) error { return Refusal{Msg: fmt.Sprintf(format, a...)} }
 
 // Delivery is a task's latest delivery; LoadDelivery locks it for a decision.
 type Delivery struct {
@@ -191,6 +196,11 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	if !slices.Contains(p.Phases(), in.Phase) {
 		return "", refusef("%s cannot start at this decision (%s); it can start %s", in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
+	if p.Point == PointStart {
+		if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
+			return "", err
+		}
+	}
 	if Publishes[in.Phase] {
 		if err := RefuseWhileMovingTx(ctx, tx, ref.TaskID); errors.Is(err, ErrPublishMoving) {
 			return "", refusef("your publish is moving the task branch now; start %s again in a moment", in.Phase)
@@ -347,6 +357,11 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 	case "ask_person":
 		return ask(ctx, tx, ref, d, note)
 	case "next":
+		if p.Point == PointStart {
+			if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
+				return nil, err
+			}
+		}
 		switch p.Policy {
 		case "review":
 			if err := reviewBound(st); err != nil {

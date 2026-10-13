@@ -176,7 +176,5 @@ function trimZeros(s: string): string {
 /** "1 fix", "3 fixes": a count and its noun. */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "Ana" from "Ana Ribeiro": what a sentence calls someone. */
-export function firstName(name: string): string {
-  return name.split(/\s+/)[0] || name;
-}
+/** "Ana" from "Ana Ribeiro": what a sentence calls someone (one rule, the domain's). */
+export { firstName } from "@dude/domain";

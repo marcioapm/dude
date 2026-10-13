@@ -9,11 +9,11 @@
  * the orchestrator wakes, or replaces once it ended.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
-import { DECISION_POINT_LABEL, EventTypes, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
+import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
 import { steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
@@ -102,7 +102,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   }, [client, task.id, version]);
   const conductorCost = conductorId ? runCosts.get(conductorId) ?? null : null;
 
-  const line = taskHistory(task, findings, pullRequests, costUsd, formatUsd);
+  const line = taskHistory(task, findings, pullRequests, costUsd, formatUsd, events);
   const lineKey = [line.lead, ...line.steps, "|", ...line.facts].join("\u0000");
   const head = useMemo(() => (
     <TaskHistory data-testid="chat-history" lead={line.lead} steps={line.steps} facts={line.facts} />
@@ -260,18 +260,18 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
               to={first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>}
             />
           }
-        />
+        >
+          {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+        </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
     </div>
   );
 }
 
-const NOT_STARTED = ["received", "intake", "awaiting_confirmation", "queued"];
-
 /** What a first message in Chat does, in the words the empty Chat says it with. */
 export function firstMessage(task: Pick<TaskDetail, "status" | "decider" | "runs"> & { handedBack?: boolean | undefined }, inProgress: boolean): { empty: string; readOnly: boolean } {
-  if (NOT_STARTED.includes(task.status) && !task.runs.some((r) => r.phase)) {
+  if (NOT_STARTED_STATUSES.includes(task.status) && !task.runs.some((r) => r.phase)) {
     return { readOnly: false, empty: "Nobody has written here yet. Your message starts planning this task with its conductor (Talk it through): it reads the code and asks what it needs, and nothing is built until it decides to." };
   }
   if (inProgress && task.decider !== "conductor" && !task.handedBack) {

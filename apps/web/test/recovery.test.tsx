@@ -12,7 +12,7 @@ import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
-import type { RecoverAction, Run, TaskDetail } from "../src/api/client.ts";
+import { ApiError, type RecoverAction, type Run, type TaskDetail } from "../src/api/client.ts";
 import type { PersistedEvent } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -115,6 +115,29 @@ describe("a stopped task", () => {
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
     expect(notice.textContent).toContain("The implement failed");
     expect(notice.textContent).toContain("host lost");
+  });
+
+  test("Start over refused as blocked says why, and Start over anyway sends the override", async () => {
+    const client = stoppedAs("aborted");
+    const sent: Array<[RecoverAction, unknown]> = [];
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1, keptUntil: null });
+    client.recover = async (_id, action, _note, start = {}) => {
+      sent.push([action, start]);
+      if (!("override" in start)) {
+        throw new ApiError(409, "blocked", "refused", { blockers: [{ key: "CP-41", status: "review" }] });
+      }
+      return { action };
+    };
+    const page = await taskPage(client);
+    await click(await until(() => page.querySelector("[data-testid=recover-restart]"), "Start over…"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    // Offered only once the start is refused: a start that may go ahead needs no override.
+    expect(dialog.querySelector("[data-testid=recover-anyway]")).toBeNull();
+    await click(dialog.querySelector("[data-testid=recover-confirm]")!);
+    await until(() => dialog.textContent?.includes("is blocked by CP-41 (in review): it can start once that's merged.") || null, "the refusal");
+    await click(await until(() => dialog.querySelector("[data-testid=recover-anyway]"), "Start over anyway"));
+    await until(() => !document.querySelector("[role=dialog]"), "the dialog to close");
+    expect(sent).toEqual([["restart", {}], ["restart", { override: true }]]);
   });
 
   test("each way opens the one dialog on it, and what it keeps follows the choice", async () => {

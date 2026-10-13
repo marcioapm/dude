@@ -20,6 +20,7 @@ import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody }
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
+import { endAutoStart } from "./relations.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -83,6 +84,8 @@ export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId
   if (owner !== (was[0] ?? null)) {
     await scope.sql`UPDATE tasks SET owner_key_id = ${owner ? await keyOf(scope, owner) : null} WHERE id = ${taskId}`;
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: was[0] ?? null, to: owner }, { projectId, taskId });
+    // The new owner did not ask for it to start when unblocked.
+    await endAutoStart(scope, ctx, taskId, projectId, "owner_changed");
   }
   await recordAs(scope, ctx, EventTypes.TaskPeopleChanged, { people: next }, { projectId, taskId });
 }
@@ -355,6 +358,7 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
     const to = next[0]?.id ?? null;
     await scope.sql`UPDATE tasks SET owner_key_id = ${to ? await keyOf(scope, to) : null} WHERE id = ${taskId}`;
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: personId, to }, { projectId, taskId });
+    await endAutoStart(scope, ctx, taskId, projectId, "owner_changed");
   }
 }
 

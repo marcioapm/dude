@@ -47,7 +47,7 @@ import {
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -76,6 +76,9 @@ import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
+import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
+import { refusedBlockers } from "../api/client.ts";
+import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptStatus, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 
@@ -99,6 +102,10 @@ export interface TaskScreenProps {
   breadcrumb?: ReactNode;
   /** Leave for somewhere that exists, when this task does not. */
   onBack: () => void;
+  /** The navigation tree: what the relation picker searches. */
+  tree?: ReadonlyArray<NavProject> | undefined;
+  /** Open a related task by its key. */
+  onOpenTask?: ((key: string) => void) | undefined;
 }
 
 /** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
@@ -125,7 +132,7 @@ const phasesOf = (runs: readonly Run[], attempt: number) =>
   runs.filter((r) => r.phase && r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
 
-export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack }: TaskScreenProps) {
+export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack, tree, onOpenTask }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open, on its attempt; the
   // task's URL names the tab and the attempt when it is not the current
   // one. A tab or attempt picked here is written back. A URL naming no tab
@@ -237,10 +244,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // stream that comes back replays nothing, so its return re-reads the
   // servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
+  const [relationsVersion, setRelationsVersion] = useState(0);
   const stream = useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => {
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return !changesRun(e.payload);
+    }
+    // Relations are read on their own: a change to them re-reads only them.
+    if (e.eventType === EventTypes.RelationsChanged) {
+      setRelationsVersion((v) => v + 1);
+      return true;
     }
     return AGENT_CHATTER.has(e.eventType);
   });
@@ -255,6 +268,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A stopped task's ways back, read again whenever the page is.
   const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
+  // What it waits on and what waits on it: with the page's reads, and on relations.changed.
+  const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
 
   const deliver = async () => {
     setDelivering(true);
@@ -263,7 +278,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       await client.deliver(taskId);
       await load();
     } catch (err) {
-      setProblem(err instanceof ApiError ? err.message : "Could not start delivery.");
+      setProblem(refusedWords(err, item?.key ?? "This task") ?? (err instanceof ApiError ? err.message : "Could not start delivery."));
+      if (refusedBlockers(err)) reloadRelations();
     } finally {
       setDelivering(false);
     }
@@ -279,7 +295,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       latest.current.pickTab("chat");
       await load();
     } catch (err) {
-      setProblem(err instanceof ApiError ? err.message : "Could not start the conductor.");
+      setProblem(refusedWords(err, item?.key ?? "This task") ?? (err instanceof ApiError ? err.message : "Could not start the conductor."));
+      if (refusedBlockers(err)) reloadRelations();
     } finally {
       setDelivering(false);
     }
@@ -415,7 +432,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Where Deliver is offered, Talk it through is beside it: a task nothing
   // has started, neither delivered nor talked through, on its current
   // attempt (an earlier one is only to read).
-  const startable = !earlier && !started && item.decider === "policy" && ["received", "intake", "awaiting_confirmation", "queued"].includes(item.status);
+  const startable = !earlier && !started && item.decider === "policy" && NOT_STARTED_STATUSES.includes(item.status);
+  // Startable but waiting on unmerged work: the ways are refused, with the reason.
+  const blocked = startable && openBlockers(relations).length > 0;
+  const onStartedAnyway = (how: "deliver" | "talk") => {
+    if (how === "talk") pickTab("chat");
+    void load();
+  };
   const stopped = item.status === "aborted" || item.status === "failed";
   // The pick-up is the current attempt's: an earlier one is only to read.
   const stop = stopped && !earlier ? stopOfTask : null;
@@ -445,7 +468,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
-          {startable ? (
+          {blocked && relations ? (
+            <TaskStartGate client={client} taskId={taskId} taskKey={item.key ?? "This task"} relations={relations} you={people.you}
+              onStarted={onStartedAnyway} onChanged={reloadRelations} />
+          ) : startable ? (
             <>
               {/* Two equal ways to start, chosen each time: neither is the default. */}
               <Button variant={START_VARIANT} leadingIcon="message" onClick={() => void talk()} disabled={delivering} data-testid="talk" data-variant={START_VARIANT}>
@@ -496,9 +522,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
-      {item.escalation || stop || aside || problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
+          {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               onOpenRun={onOpenRun} onDecided={() => void load()} />
@@ -578,6 +605,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               ) : null}
               {taskImages.viewer}
 
+              {relations && item.key ? (
+                <TaskRelationsSection client={client} taskId={taskId} taskKey={item.key} relations={relations} tree={tree ?? []}
+                  here={{ projectId: item.projectId, epicId: item.epicId ?? null }} onChanged={reloadRelations} onOpen={onOpenTask} />
+              ) : null}
               <section className="taskBlock" aria-label="Pipeline">
                 <h2 className="ds-label">Pipeline{many ? ` · attempt ${shown}` : ""}</h2>
                 {phases.length > 0 ? (
@@ -590,6 +621,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
                     ))}
                   </StepList>
+                ) : blocked ? (
+                  <div data-testid="pipeline-blocked">
+                    <EmptyState compact icon="lock" title="Waiting on its blockers"
+                      description="Nothing starts until what it waits on is merged. A person can start it anyway; an agent can't." />
+                  </div>
                 ) : startable ? (
                   <StartChoice data-testid="start-choice" options={[
                     { id: "talk", icon: "message", title: "Talk it through",
@@ -728,7 +764,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="activity" className="taskPane">
-          <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown}
+          <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>
@@ -984,15 +1020,15 @@ function resolvedIn(item: TaskDetail, reviewId: string, onOpenRun: (id: string) 
  * attempt's, each line marked with its attempt once there are several.
  * A line's way to what it names opens it on that line's attempt.
  */
-function Activity({ events, people, runs, prs, current, many, shown, onOpenRun, onShow }: {
+function Activity({ events, people, runs, prs, current, many, shown, taskKey, onOpenRun, onShow }: {
   events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
-  many: boolean; shown: number; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
+  many: boolean; shown: number; taskKey: string | null; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
 }) {
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
-    const all = activityLines(events, people, runs, prs, current);
+    const all = activityLines(events, people, runs, prs, current, taskKey);
     return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
-  }, [events, people, runs, prs, current, many]);
+  }, [events, people, runs, prs, current, many, taskKey]);
   if (lines.length === 0) return <EmptyState compact icon="list" title="Nothing yet" description="Who did what to the task shows here: deliveries, steers, answers, pull requests." />;
   const now = Date.now();
   return (
@@ -1032,7 +1068,7 @@ interface ActivityLine {
 }
 
 /** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
-export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number): ActivityLine[] {
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number, key?: string | null): ActivityLine[] {
   const out: ActivityLine[] = [];
   const attemptOf = eventAttempts(runs, prs, current);
   // A task with pull requests in several repositories names each by its repository.
@@ -1088,6 +1124,44 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case "task.decided":
         out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;
+      case EventTypes.TaskRelationAdded:
+      case EventTypes.TaskRelationRemoved: {
+        const line = relationLine(e, key, runs);
+        if (line) out.push({ ...base, who: by ? face : line.who, text: <>{by ? person : <b>{line.agent}</b>} {line.text}</>, quote: line.why });
+        break;
+      }
+      case EventTypes.TaskAutoStartSet:
+        out.push({ ...base, who: face, text: <>{person} set it to start when unblocked — {HOW[String(p.how)] ?? String(p.how ?? "")}</> });
+        break;
+      case EventTypes.TaskAutoStartCancelled:
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: p.why === "failed"
+          ? <>Start when unblocked could not start it{typeof p.error === "string" ? `: ${p.error}` : ""}. It is no longer set: start it from here.</>
+          : <>{by ? person : <b>{dude}</b>} {AUTO_END[String(p.why)] ?? "cancelled start when unblocked"}</> });
+        break;
+      case EventTypes.TaskAutoStarted: {
+        const setBy = typeof p.setByName === "string" ? p.setByName : "its owner";
+        const setter = typeof p.setBy === "string" ? people.byId.get(p.setBy) : undefined;
+        out.push({ ...base, who: <PersonAvatar person={{ ...(setter ?? {}), id: typeof p.setBy === "string" ? p.setBy : "owner", name: setBy }} size={32} />,
+          text: <><b>{String(p.by ?? "")}</b> merged{typeof p.pr === "number" ? ` (#${p.pr})` : ""} — it started ({HOW[String(p.how)] ?? String(p.how ?? "")}), as <b>{firstName(setBy)}</b> asked. Every blocker was checked again: none open.</> });
+        break;
+      }
+      case EventTypes.TaskAutoStartRefused:
+        out.push({ ...base, who: <DudeMark size={32} />, text: typeof p.error === "string"
+          ? <>Start when unblocked could not start it: {p.error}</>
+          : <><b>{String(p.by ?? "")}</b> merged, but it is still blocked by {blockerKeys(p.blockers)}: it starts when they merge</> });
+        break;
+      case EventTypes.TaskUnblocked:
+        out.push({ ...base, who: <DudeMark size={32} />, text: <><b>{String(p.by ?? "")}</b> merged{typeof p.pr === "number" ? ` (#${p.pr})` : ""} — it can start</> });
+        break;
+      case EventTypes.TaskBlockerUnmerged: {
+        const marker = typeof p.person === "string" ? people.names.get(p.person) : undefined;
+        out.push({ ...base, who: <DudeMark size={32} />, text: <><b>{String(p.by ?? "")}</b> was marked done{marker ? <> by <b>{marker}</b></> : null} with nothing merged. It still blocks this: only merged work releases what waits on it.</> });
+        break;
+      }
+      case EventTypes.TaskStartOverridden:
+        out.push({ ...base, who: face, quote: p.note ? String(p.note) : undefined,
+          text: <>{person} started it anyway, past {blockerKeys(p.blockers, true)} — {HOW[String(p.how)] ?? String(p.how ?? "")}</> });
+        break;
       case "question.asked":
         if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
         break;
@@ -1119,4 +1193,39 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
     if (out.length > lines) out[lines]!.attempt = attemptOf(e);
   }
   return out.reverse();
+}
+
+const HOW: Record<string, string> = { deliver: "Deliver", talk: "Talk it through" };
+
+/** How a start when unblocked ended without firing, after who ended it. */
+const AUTO_END: Record<string, string> = {
+  owner: "cancelled start when unblocked",
+  started: "started it, which ends start when unblocked",
+  owner_changed: "handed it to someone else, which ends start when unblocked: it was the old owner's to set",
+  unblocked_by_removal: "removed its last open blocker, which ends start when unblocked: it can start now",
+};
+
+/** "CP-41 and CP-43", or with their states: "CP-38 (failed)". */
+function blockerKeys(raw: unknown, states = false): string {
+  const list = Array.isArray(raw) ? raw.filter((b): b is { key: string; status: TaskStatus } => typeof b?.key === "string") : [];
+  if (list.length === 0) return "its blockers";
+  return states ? blockerList(list) : keyList(list.map((b) => b.key));
+}
+
+/**
+ * A relation added or removed, said from this task's side: "added blocked
+ * by CP-40", "removed related WEB-9". An agent's names it as its owner's
+ * agent, on the owner's face with the agent's tile.
+ */
+function relationLine(e: PersistedEvent, here: string | null | undefined, runs: readonly Run[]): { text: ReactNode; why?: string | undefined; who: ReactNode; agent: string } | null {
+  const p = e.payload as { kind?: string; from?: string; to?: string; why?: string };
+  if (!p.from || !p.to) return null;
+  const mine = here ?? p.to;
+  const other = p.from === mine ? p.to : p.from;
+  const side = p.kind === "related" ? "related" : p.to === mine ? "blocked by" : "blocks";
+  const verb = e.eventType === EventTypes.TaskRelationAdded ? "added" : "removed";
+  const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
+  const role = run?.role ?? "conductor";
+  return { text: <>{verb} {side} <b>{other}</b></>, why: p.why, who: <AgentAvatar role={role} size="lg" />,
+    agent: run ? `The ${runLabel(run).toLowerCase()}` : "An agent" };
 }

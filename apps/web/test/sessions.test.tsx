@@ -359,6 +359,28 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelector("[data-testid=proposal-problem]")!.textContent).toContain("already filed");
   });
 
+  test("ticking an item ticks what it waits on, and File sends both", async () => {
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
+        { kind: "task", project: "BL", title: "Line items", goal: "g" },
+        { kind: "task", project: "BL", title: "Invoice page", goal: "g" },
+        { kind: "task", project: "BL", title: "Invoice email", goal: "g", blockedBy: [{ item: 1 }] },
+      ], status: [{ canFile: true }, { canFile: true }, { canFile: true, filesWith: [0] }] }],
+    }));
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    const box = (n: number) => card.querySelector<HTMLElement>(`[data-item="${n}"] [role=checkbox]`)!;
+    const ticked = () => [1, 2, 3].filter((n) => box(n).getAttribute("aria-checked") === "true");
+    // Everything starts ticked: untick items 3 and 1, and 2 too.
+    for (const n of [3, 1, 2]) await click(box(n));
+    expect(ticked()).toEqual([]);
+    await click(box(3));
+    expect(ticked()).toEqual([1, 3]);
+    await click(card.querySelector("[data-testid=file-proposal]")!);
+    await settle();
+    expect(client.filed).toEqual([[0, 2]]);
+  });
+
   test("an item another member filed while it was ticked here is not sent again", async () => {
     const proposal = (filed: boolean) => ({ id: "prp_1", runId: RUN, createdAt: at(30), items: [
       { kind: "task" as const, project: "BL", title: "Dedupe on run id", goal: "g" },

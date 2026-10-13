@@ -97,7 +97,10 @@ export function useImages(client: ApiClient) {
   useReloadOnEvents({ client, all: true }, load, 1000, notAnImageEvent);
   const busy = Boolean(data?.queue.length);
   useEffect(() => {
-    const t = setInterval(load, busy ? 4000 : LIVENESS_EVERY);
+    // Not while the page is hidden: nobody is looking, and the events still reload it.
+    const t = setInterval(() => {
+      if (!document.hidden) load();
+    }, busy ? 4000 : LIVENESS_EVERY);
     return () => clearInterval(t);
   }, [busy, load]);
   return { data, problem, load, setData };
@@ -298,7 +301,9 @@ function useImage(client: ApiClient, id: string) {
   const live = detail?.builds.some((b) => b.state === "queued" || b.state === "running");
   useEffect(() => {
     if (!live) return;
-    const t = setInterval(load, 4000);
+    const t = setInterval(() => {
+      if (!document.hidden) load();
+    }, 4000);
     return () => clearInterval(t);
   }, [live, load]);
   return { detail, problem, load, setDetail };
@@ -694,7 +699,9 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
   const live = build?.state === "queued" || build?.state === "running";
   useEffect(() => {
     if (!live) return;
-    const t = setInterval(load, 2000);
+    const t = setInterval(() => {
+      if (!document.hidden) load();
+    }, 2000);
     return () => clearInterval(t);
   }, [live, load]);
   const lines = useMemo<LogLine[]>(() => (build?.log ?? "").replace(/\n$/, "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((text, seq) => ({ seq, text, level: logLevel(text) })), [build?.log]);
