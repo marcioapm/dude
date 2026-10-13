@@ -167,14 +167,14 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
     const reason = failure?.reason?.trim() || null;
     // "Did not start: failed while <stage>: <reason>." or, with no stage, "Did not start: <reason>."
     const said = reason ? (failure?.plain ? reason : <code className={styles["reason"]}>{reason}</code>) : null;
-    const lead = current ? <>: failed {whileWords(current.label)}{said ? ": " : ""}</> : said ? ": " : "";
+    const where = current ? `: failed ${whileWords(current.label)}` : "";
     const stop = reason && /[.!?]$/.test(reason) ? "" : ".";
     return (
       <section className={styles["failedRow"]} aria-label={didNot(kind)} data-testid={rest["data-testid"]} data-state="failed">
         <Callout tone="danger">
           <span className={styles["failedLine"]}>
             <span data-testid="start-failed">
-              <b>{didNot(kind)}</b>{lead}{said}{stop}
+              <b>{didNot(kind)}</b>{where}{said ? ": " : ""}{said}{stop}
               {" "}Nothing was spent on the model.
             </span>
             {failure?.onRetry ? (
