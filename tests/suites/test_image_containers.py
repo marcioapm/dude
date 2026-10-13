@@ -327,10 +327,12 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     pinned = page.get_by_test_id("waiting-for-host")
     expect(pinned).to_contain_text("Waiting for a host that can run containers.")
     expect(pinned).to_contain_text("Nothing is spent meanwhile.")
-    expect(page.get_by_test_id("run-waiting")).to_have_text("Waiting for a host")
-    expect(page.get_by_test_id("run-image")).to_contain_text("abs-preview")
-    # Nothing in the header is cut short by the badge: the title and each chip show all of their text.
-    header = page.locator("header").filter(has=page.get_by_test_id("run-waiting"))
+    chip = page.get_by_test_id("start-chip")
+    expect(chip).to_contain_text("Waiting for a machine")
+    header = page.locator("header").filter(has=chip)
+    expect(header.locator('[data-status="starting"]')).to_contain_text("Starting")
+    expect(header.get_by_test_id("run-image")).to_contain_text("abs-preview")
+    # Nothing in the header is cut short by the cue: the title and each chip show all of their text.
     for width in (1024, 1440):
         page.set_viewport_size({"width": width, "height": 1000})
         clipped = header.evaluate("""h => [...h.querySelectorAll('*')]
