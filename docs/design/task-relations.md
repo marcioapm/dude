@@ -215,7 +215,7 @@ are the same on every path:
 | 8 | **`POST /v1/tasks/:id/runs`** (a bare Run, status `queued`) | backend `createRun` `work.ts:301`, task set `queued` at `work.ts:326`; used by tests (`tests/helpers.py:145`) and `ApiClient.createRun` `apps/web/src/api/client.ts:641` (no screen calls it) | refused with the same 409 in the backend, in the `withOrg` transaction before the insert, by a SQL function `task_blocked_by(task_id)` that both processes call, so the backend need not reimplement the rule. Raw SQL is needed for this: neither `Bun.sql` nor pgx has a query builder for a recursive CTE here, and the repo writes its SQL raw by convention (CONTRIBUTING, *Decisions*) |
 | 9 | **Filing a proposal** | `fileProposal` `orchestrator/internal/api/sessions.go:664` → `fileItem` `sessions.go:785` → `delivery.CreateTaskTx` `delivery/filing.go:57` | filing never starts work ("Nothing starts", `ProposalCard`), so there is nothing to gate. Filing does **write** the proposal's relations (see *Propose work*) |
 | 10 | **`create_task`** by an agent | `createTask` `agenttools/tools.go:219`, status `received` (`tools.go:256`) | creates, never starts. It may write relations, and nothing is gated |
-| 11 | **Start when unblocked** *(new)*: the owner's standing request, released by the merge of the task's last blocker | the merge (`RecordStatusTx` → `releaseDependantsTx`) only marks the request due (`due_at`); **after it commits**, the auto-start worker (`delivery.AutoStarts.Sweep`, `delivery/unblock.go`) takes each due request `FOR UPDATE SKIP LOCKED`, in a transaction of its own, and starts it through `delivery.StartTx`, the same start as path 1 (Deliver) or path 2 (Talk it through), as dude for the person who set it | `RefuseBlockedTx` again, **at fire time**, re-reading every blocker: an edge added since it was set, or a second blocker still open, means nothing starts and the request stays set, no longer due. `StartTx`'s own guard follows. A start that fails for any other reason ends the request (`task.auto_start_cancelled {why: "failed", error}`) and says so in Chat. Never in the merge's transaction: a failed start must not roll a merge back |
+| 11 | **Start when unblocked** *(new)*: the owner's standing request, released by the merge of the task's last blocker | the merge (`RecordStatusTx` → `releaseDependantsTx`) only marks the request due (`due_at`); **after it commits**, the auto-start worker (`delivery.AutoStarts.Sweep`, `delivery/unblock.go`) takes each due request `FOR UPDATE SKIP LOCKED`, in a transaction of its own, and starts it through `delivery.StartTx`, the same start as path 1 (Deliver) or path 2 (Talk it through), as dude for the person who set it | `RefuseBlockedTx` again, **at fire time**, re-reading every blocker: an edge added since it was set, or a second blocker still open, means nothing starts and the request stays set, no longer due. `StartTx`'s own guard follows. A start that refuses for a reason of its own ends the request (`task.auto_start_cancelled {why: "failed", error}`) and says so in Chat; a database or connection failure leaves it due for the next sweep, and any other error does too, up to five fires. Never in the merge's transaction: a failed start must not roll a merge back |
 
 Path 11 is the opt-in auto-start added by this build. Confirming a plan
 (`awaiting_confirmation`) has no route of its own; any future route must
@@ -364,9 +364,12 @@ would help says so in Chat, and the owner sets it.
 **When it fires** (path 11).
 
 1. The merge's transaction (`RecordStatusTx` → `releaseDependantsTx`)
-   first locks the dependants' task rows in id order (`FOR NO KEY UPDATE`,
-   the lock `RefuseBlockedTx` takes), so two blockers merging in
-   overlapping transactions are serialised and the second sees the first;
+   first takes an advisory lock per dependant, in id order
+   (`pg_advisory_xact_lock(hashtext('task_release:' || id))`), so two
+   blockers merging in overlapping transactions are serialised and the
+   second sees the first. No start path takes it: the dependants' task rows
+   would be taken before their deliveries and auto-start rows, the reverse
+   of every start (`LockEscalationTx`, the worker), and deadlock with them;
    then it appends `task.unblocked` on a released task and, if the task has
    a row in `task_auto_starts`, marks it due (`due_at = now()`). **Nothing
    starts in that transaction**: a start that fails must never roll back a
@@ -388,12 +391,18 @@ would help says so in Chat, and the owner sets it.
    a person makes, with the same guard at its top. The writer is the system
    actor, and the person who set it is carried in the payload. The row is
    deleted.
-5. If the start fails for any other reason than a blocker (a policy that
-   does not decode, for one), nothing retries it: the request ends
-   (`task.auto_start_cancelled {why: "failed", error}`), and Chat says "CP-41
-   merged, but CP-42 could not start: <error>. Start it from its page."
-   Kept standing, hidden behind a task that shows as startable, it would
-   fire on some unrelated later merge.
+5. If the start refuses for a reason of its own (the task gone, a policy
+   that does not decode, a write the data refuses), firing again would meet
+   it again: the request ends (`task.auto_start_cancelled {why: "failed",
+   error}`), and Chat says "CP-41 merged, but CP-42 could not start:
+   <error>. Start it from its page." Kept standing, hidden behind a task
+   that shows as startable, it would fire on some unrelated later merge.
+   A failure of the database or the connection (a deadlock, a serialisation
+   failure, a statement timeout, a dropped connection) is not the start's:
+   the request stays due and a later sweep fires it, saying nothing. Any
+   other error is retried the same way, counted on the row
+   (`fire_attempts`, each wait 5 s longer), and at the fifth the request
+   ends as failed with that error.
 
 **What it says when it fires** (screens *history-chat*, *history*):
 
@@ -416,7 +425,8 @@ through, Start anyway: the request is consumed); the task changing owner (the
 new owner didn't ask for it; Activity says it was dropped); removing the
 task's last open blocker relation (the owner is present and acting, so the
 task becomes startable and the request ends, saying so); and a start that
-failed at fire time for a reason other than a blocker.
+refused at fire time for a reason of its own, or failed five times for one
+not known to be transient.
 
 ### With agent comms
 
