@@ -24,14 +24,19 @@ const ME = { ...PEOPLE[0]!, lastSeenWhere: null };
 
 class ProfileClient extends FixtureClient {
   saved: Array<Record<string, unknown>> = [];
+  reads = 0;
   constructor(private github: Pick<Me, "githubLogin" | "commitEmail">) {
     super("a");
   }
   override me(): Promise<MeResponse> {
+    this.reads++;
     return Promise.resolve({ person: { ...ME, ...this.github }, organization: { id: "org", name: "Org" } });
   }
+  // Stores what it is sent, as the API does: an empty value clears.
   override updateMe(changes: Record<string, unknown>): Promise<{ person: Me }> {
     this.saved.push(changes);
+    if ("githubLogin" in changes) this.github = { ...this.github, githubLogin: (changes.githubLogin as string) || null };
+    if ("commitEmail" in changes) this.github = { ...this.github, commitEmail: (changes.commitEmail as string) || null };
     return Promise.resolve({ person: { ...ME, ...this.github } });
   }
 }
@@ -74,4 +79,21 @@ test("emptying the username clears it", async () => {
   await click(save);
   await until(() => client.saved.length === 1 ? true : null, "the save");
   expect(client.saved).toEqual([{ githubLogin: "" }]);
+});
+
+test("after a save the form shows what was saved, and has nothing left to save", async () => {
+  const client = new ProfileClient({ githubLogin: null, commitEmail: null });
+  const { container, login } = await open(client);
+  await type(login, "octocat");
+  await click(container.querySelector<HTMLButtonElement>("[data-testid=profile-save]")!);
+  await until(() => client.saved.length === 1 ? true : null, "the save");
+  // Only once the save's re-read has landed: before it, the typed value is
+  // still in the first form and proves nothing.
+  await until(() => {
+    if (client.reads < 2) return null;
+    const input = container.querySelector<HTMLInputElement>("[data-testid=profile-github-login]");
+    const button = container.querySelector<HTMLButtonElement>("[data-testid=profile-save]");
+    return input?.value === "octocat" && button?.disabled ? true : null;
+  }, "the saved username shown, with Save off");
+  expect(client.saved).toEqual([{ githubLogin: "octocat" }]);
 });
