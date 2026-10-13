@@ -110,6 +110,19 @@ export function ChatThread({
   const act: ActivityKind | null = activity ?? ACTIVITY_FOR_SESSION_STATUS[status];
   const live = spec.live;
   const isWaiting = waiting !== undefined && live;
+  let headerStatus: ReactNode;
+  if (isWaiting) {
+    headerStatus = (
+      <span className={styles["waitingOn"]} data-testid="chat-thread-waiting">
+        <Icon name="pause" size={12} />
+        waiting <Duration since={waiting.since} live /> on {waiting.on}
+      </span>
+    );
+  } else if (isCollapsed && live && act !== null && act !== "completed") {
+    headerStatus = <ActivityIndicator kind={act} variant="badge" size="sm" {...activityProps} />;
+  } else {
+    headerStatus = <StatusBadge status={status} size="sm" variant={finished ? "dot" : "badge"} />;
+  }
 
   // Header-only depth cannot open in place; its header opens the session instead.
   const toggle = pinnedClosed ? () => onOpen?.(sessionId) : disclosure.toggle;
@@ -135,16 +148,7 @@ export function ChatThread({
         </span>
         {model ? <code className={styles["model"]}>{model}</code> : null}
         <span className={styles["meta"]}>
-          {isWaiting ? (
-            <span className={styles["waitingOn"]} data-testid="chat-thread-waiting">
-              <Icon name="pause" size={12} />
-              waiting <Duration since={waiting.since} live /> on {waiting.on}
-            </span>
-          ) : isCollapsed && live && act !== null && act !== "completed" ? (
-            <ActivityIndicator kind={act} variant="badge" size="sm" {...activityProps} />
-          ) : (
-            <StatusBadge status={status} size="sm" variant={finished ? "dot" : "badge"} />
-          )}
+          {headerStatus}
           {isCollapsed && turnCount !== undefined ? <span className={styles["turns"]}>{turnCount} turns</span> : null}
           {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="muted" /> : null}
           {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}

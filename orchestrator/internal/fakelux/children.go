@@ -114,10 +114,7 @@ func (s *Server) opencodeChild(run *Run, st ChildStep) {
 		}
 		oc("part", part)
 		if st.Done {
-			done := map[string]any{}
-			for k, v := range part {
-				done[k] = v
-			}
+			done := maps.Clone(part)
 			done["status"], done["output"] = "completed", st.Output
 			oc("part", done)
 		}
@@ -240,10 +237,7 @@ func (s *Server) codexChild(run *Run, st ChildStep) {
 			"commandActions": []any{map[string]any{"type": "unknown", "command": cmd}}, "status": "inProgress"}
 		on(st.ChildID, "item/started", map[string]any{"item": item})
 		if st.Done {
-			done := map[string]any{}
-			for k, v := range item {
-				done[k] = v
-			}
+			done := maps.Clone(item)
 			done["status"], done["aggregatedOutput"], done["exitCode"] = "completed", st.Output, 0
 			on(st.ChildID, "item/completed", map[string]any{"item": done})
 		}

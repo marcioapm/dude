@@ -732,13 +732,22 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ChildEnded: {
         const child = childOf(state, payload, event);
         child.waitingOn = null;
-        child.status = payload.status === "failed" ? "failed" : payload.status === "interrupted" ? "aborted" : "completed";
+        switch (payload.status) {
+          case "failed":
+            child.status = "failed";
+            break;
+          case "interrupted":
+            child.status = "aborted";
+            break;
+          default:
+            child.status = "completed";
+        }
         child.endedAt = event.occurredAt;
         if (typeof payload.costUsd === "number") child.costUsd = payload.costUsd;
         if (typeof payload.summary === "string" && payload.summary.trim()) child.summary = payload.summary;
         for (const turn of child.turns) {
           if (turn.kind === "tool" && turn.status === "running") {
-            turn.status = child.status === "completed" ? "completed" : child.status === "failed" ? "failed" : "aborted";
+            turn.status = child.status;
             turn.endedAt = event.occurredAt;
           }
         }

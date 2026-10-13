@@ -37,17 +37,22 @@ def _events(client: ApiClient, run_id: str, prefix: str = "agent.") -> list[dict
     return [e for e in client.events(runId=run_id, limit=1000) if e["eventType"].startswith(prefix)]
 
 
+def _deliver_implementer(client: ApiClient, project: dict, title: str, model: str | dict) -> dict:
+    models = {**project["agentModels"], **client.on_models({"implementer": model})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(project["id"], title)
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    return wait_until(
+        lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
+        timeout=60, message="the implementer never ran")
+
+
 @pytest.mark.parametrize("harness", ["opencode", "claude-code", "codex"])
 def test_a_child_session_is_recorded_and_drawn_under_its_call(page: Page, web_url: str, env, client: ApiClient, org: dict,
                                                               forge_project: dict, owner_dsn: str, console_errors: list,
                                                               harness: str):
     role = {"model": "fake/hang"} if harness == "opencode" else {"model": "fake/hang", "harness": harness}
-    models = {**forge_project["agentModels"], **client.on_models({"implementer": role})}
-    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], f"Delegate on {harness}")
-    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
-                     timeout=60, message="the implementer never ran")
+    run = _deliver_implementer(client, forge_project, f"Delegate on {harness}", role)
     wait_until(lambda: any(e["eventType"] == "agent.session.started" for e in _events(client, run["id"])),
                timeout=30, message="the implementer's session never started")
     lux_run = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run["id"],))[0]["lux_run_id"]
@@ -110,12 +115,7 @@ def test_the_scripted_subagents_ask_is_answered_by_lux_and_its_child_ends(page: 
     child with lux-fake's ids reads a file, its bash call asks permission
     bash for "cat /etc/hostname", lux allows it and warns, and the child
     runs the command and ends. The ask holds nothing; the thread folds."""
-    models = {**forge_project["agentModels"], **client.on_models({"implementer": "fake/subagent-ask"})}
-    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], "Delegate and ask")
-    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
-                     timeout=60, message="the implementer never ran")
+    run = _deliver_implementer(client, forge_project, "Delegate and ask", "fake/subagent-ask")
     def ended():
         events = _events(client, run["id"], "agent.child.")
         return events if any(e["eventType"] == "agent.child.ended" for e in events) else None
