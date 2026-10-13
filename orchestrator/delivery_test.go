@@ -303,9 +303,13 @@ func (w *world) start(taskID string, policy delivery.Policy) string {
 // pump runs every loop once, as the orchestrator's main does continuously.
 func (w *world) pump() {
 	ctx := context.Background()
+	// Up to five steps of each workflow; a tick that claims nothing leaves
+	// nothing for the next to claim.
 	for range 5 {
-		if _, err := w.runtime.Tick(ctx, 10); err != nil {
+		if n, err := w.runtime.Tick(ctx, 10); err != nil {
 			w.t.Fatal(err)
+		} else if n == 0 {
+			break
 		}
 	}
 	if _, err := w.syncer.Sweep(ctx); err != nil {
