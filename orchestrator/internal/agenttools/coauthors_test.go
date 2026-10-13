@@ -398,6 +398,9 @@ func TestTheRunsIncludeOfDudesGitConfig(t *testing.T) {
 	if err := os.Remove(r.include); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.RemoveAll(r.hooks); err != nil {
+		t.Fatal(err)
+	}
 	_ = os.Remove(log)
 	r.git("commit", "-q", "--allow-empty", "-m", "No layer")
 	if got := readLog(t, log); !slices.Equal(got, []string{"husky"}) || r.message() != "No layer" {
