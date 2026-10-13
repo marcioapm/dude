@@ -559,16 +559,17 @@ func TestTheScriptedAgentSpeaksItsRolesHarness(t *testing.T) {
 		c, in := goldenInput("fake/scripted")
 		in.Harness = harness
 		spec := buildSpec(c, in)
-		gitOnly := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": DudeHooksDir}
+		gitOnly := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "include.path", "GIT_CONFIG_VALUE_0": DudeGitConfig}
 		if spec.Workload.Adapter != adapter || !reflect.DeepEqual(spec.Workload.Command, []string{"lux-fake"}) || !reflect.DeepEqual(spec.Env, gitOnly) {
 			t.Errorf("%q: adapter %s command %v env %v", harness, spec.Workload.Adapter, spec.Workload.Command, spec.Env)
 		}
 	}
 }
 
-// Every Run's git takes dude's hooks directory in command scope, over any a
-// repository sets, on every harness and the scripted agent; a harness Run
-// keeps color.ui beside it, each setting at its own index.
+// Every Run's git includes dude's config file in command scope, whose
+// core.hooksPath outranks any a repository sets, on every harness and the
+// scripted agent; a harness Run keeps color.ui beside it, each setting at
+// its own index.
 func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
 	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
 		for _, harness := range []string{"", delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
@@ -580,9 +581,9 @@ func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
 			for i := range n {
 				got[env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)]] = env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)]
 			}
-			want := map[string]string{"color.ui": "always", "core.hooksPath": DudeHooksDir}
+			want := map[string]string{"color.ui": "always", "include.path": DudeGitConfig}
 			if fakeagent.Is(model) {
-				want = map[string]string{"core.hooksPath": DudeHooksDir}
+				want = map[string]string{"include.path": DudeGitConfig}
 			}
 			if !reflect.DeepEqual(got, want) || len(got) != n {
 				t.Errorf("%s/%q: git settings %v (count %d), want %v", model, harness, got, n, want)

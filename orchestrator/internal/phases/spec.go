@@ -886,9 +886,10 @@ var colourEnv = map[string]string{
 	"PY_COLORS":      "1", // pytest
 }
 
-// DudeHooksDir is where the runtime image keeps dude's commit hook
-// (images/runtime/git-hooks/dude-hook) under each hook's name.
-const DudeHooksDir = "/usr/local/share/dude/git-hooks"
+// DudeGitConfig is the image's git config file (images/runtime/git-config)
+// setting core.hooksPath to /usr/local/share/dude/git-hooks, where the
+// image keeps dude's commit hook under each hook's name.
+const DudeGitConfig = "/usr/local/share/dude/git-config"
 
 // GitConfig adds key=value to env as a git setting of command scope
 // (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>), after any
@@ -901,15 +902,18 @@ func GitConfig(env map[string]string, key, value string) {
 }
 
 // workloadGitConfig is every Run's git configuration, through its
-// environment rather than a file in the image. core.hooksPath at dude's
-// hooks, in command scope, outranks any a repository (husky, lefthook),
-// worktree or the agent's global config sets: dude's hook adds the
-// co-authors, then runs the hook that setting names.
+// environment rather than a file in the image. include.path names
+// DudeGitConfig in command scope, so its core.hooksPath outranks any a
+// repository (husky, lefthook), worktree or the agent's global config
+// sets: dude's hook adds the co-authors, then runs the hook that setting
+// names. git skips an include whose file is missing, so an image without
+// dude's layer runs the repository's hooks as git would, without
+// co-authors.
 func workloadGitConfig(env map[string]string, colour bool) {
 	if colour {
 		GitConfig(env, "color.ui", "always")
 	}
-	GitConfig(env, "core.hooksPath", DudeHooksDir)
+	GitConfig(env, "include.path", DudeGitConfig)
 }
 
 // egress is a Run's network: the operator's floor (agent.egress), the

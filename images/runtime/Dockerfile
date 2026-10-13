@@ -120,14 +120,18 @@ RUN git config --system user.name "dude" \
     && git config --system init.defaultBranch main
 
 # The commit hook that adds the task's people as Co-authored-by trailers,
-# under each client hook's name. Every Run points core.hooksPath here in
-# command scope (its environment), over any a repository, worktree or the
-# agent's global config sets; the hook then runs the hook that setting
-# names, so husky, lefthook and plain .git/hooks keep working (see the
-# script). The system setting is the fallback for a git started without
-# the Run's environment. Not linked, so a repository's own of these do not
-# run: reference-transaction and post-index-change, which git calls on
-# every ref and index write.
+# under each client hook's name, and git-config, which points
+# core.hooksPath here. Every Run includes git-config in command scope
+# (include.path in its environment), over any core.hooksPath a repository,
+# worktree or the agent's global config sets; the hook then runs the hook
+# that setting names, so husky, lefthook and plain .git/hooks keep working
+# (see the script). git skips a missing include: an image without
+# git-config runs the repository's own hooks, and commits carry no
+# co-authors. The system setting is the fallback for a git started without
+# the Run's environment; the hook passes over it to .git/hooks. Not linked,
+# so a repository's own of these do not run: reference-transaction and
+# post-index-change, which git calls on every ref and index write.
+COPY --chmod=0644 git-config /usr/local/share/dude/git-config
 COPY --chmod=0755 git-hooks/dude-hook /usr/local/share/dude/git-hooks/dude-hook
 RUN cd /usr/local/share/dude/git-hooks \
     && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \

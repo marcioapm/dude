@@ -181,18 +181,20 @@ func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
 	}
 }
 
-// hookRepo is a repository whose hooks are dude's image's (core.hooksPath
-// at a copy of its hook directory, in command scope as a Run sets it),
-// committing with the dude CLI on PATH reaching the tools as lux's socket
-// would, or reaching nothing. HOME and the global config are its own; the
-// system config is none, or, under asImage, the runtime image's (its
-// core.hooksPath naming dude's directory too).
+// hookRepo is a repository whose hooks are dude's image's (its git-config,
+// setting core.hooksPath at a copy of its hook directory, included in
+// command scope as a Run includes it), committing with the dude CLI on
+// PATH reaching the tools as lux's socket would, or reaching nothing. HOME
+// and the global config are its own; the system config is none, or, under
+// asImage, the runtime image's (its core.hooksPath naming dude's directory
+// too).
 type hookRepo struct {
-	t     *testing.T
-	dir   string
-	env   []string
-	hooks string // dude's hook directory
-	home  string
+	t       *testing.T
+	dir     string
+	env     []string
+	hooks   string // dude's hook directory
+	include string // the image's git-config
+	home    string
 }
 
 // asImage gives a hookRepo the runtime image's system config.
@@ -223,10 +225,15 @@ func newHookRepo(t *testing.T, service string, bin string, image ...bool) *hookR
 		}
 		system = "GIT_CONFIG_SYSTEM=" + file
 	}
+	// The image's git-config, which the Run includes in command scope.
+	r.include = filepath.Join(t.TempDir(), "git-config")
+	if err := os.WriteFile(r.include, []byte("[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Dir(bin) + string(os.PathListSeparator) + os.Getenv("PATH")
 	r.env = append(os.Environ(), "PATH="+path, "LUX_SERVICE_DUDE="+service, "DUDE_TOOLS_URL=", "DUDE_TOOLS_TOKEN=",
 		"HOME="+r.home, "GIT_CONFIG_NOSYSTEM=", system, "GIT_CONFIG_GLOBAL="+global, "GIT_EDITOR=true",
-		"GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+hooks,
+		"GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=include.path", "GIT_CONFIG_VALUE_0="+r.include,
 		"GIT_CONFIG_KEY_1=user.name", "GIT_CONFIG_VALUE_1=dude", "GIT_CONFIG_KEY_2=user.email", "GIT_CONFIG_VALUE_2=dude@localhost")
 	r.git("init", "-q", "-b", "main")
 	return r
@@ -328,6 +335,47 @@ func huskyRunsAfterDude(t *testing.T, image bool) {
 	cmd.Dir, cmd.Env = r.dir, r.env
 	if err := cmd.Run(); cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 7 {
 		t.Errorf("dude's pre-commit exited %v, want husky's 7", err)
+	}
+}
+
+// The Run's command-scope include.path of the image's git-config outranks
+// a repository's husky core.hooksPath: dude's hook runs, then husky's, and
+// git reports the included value under command scope, which dude's hook
+// passes over. Without the file, as in an image without dude's layer, git
+// skips the include and runs the repository's hooks itself, with no
+// co-authors.
+func TestTheRunsIncludeOfDudesGitConfig(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_include", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	log := filepath.Join(t.TempDir(), "log")
+	writeHook(t, filepath.Join(r.dir, ".husky", "_"), "commit-msg", ran(log, "husky"))
+	r.git("config", "core.hooksPath", ".husky/_")
+
+	if got, want := r.git("config", "--show-scope", "--get-all", "core.hooksPath"),
+		"local\t.husky/_\ncommand\t"+r.hooks; got != want {
+		t.Errorf("core.hooksPath by scope:\n%s\nwant\n%s", got, want)
+	}
+	r.git("commit", "-q", "--allow-empty", "-m", "Included")
+	if got := readLog(t, log); !slices.Equal(got, []string{"husky"}) || !strings.Contains(r.message(), "Co-authored-by: Ana Lima") {
+		t.Errorf("with dude's git-config: ran %v, message\n%s", got, r.message())
+	}
+
+	if err := os.Remove(r.include); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(log)
+	r.git("commit", "-q", "--allow-empty", "-m", "No layer")
+	if got := readLog(t, log); !slices.Equal(got, []string{"husky"}) || r.message() != "No layer" {
+		t.Errorf("without dude's git-config: ran %v, message\n%s", got, r.message())
+	}
+	r.git("config", "--unset", "core.hooksPath")
+	r.repoHook("commit-msg", ran(log, "dot-git"))
+	_ = os.Remove(log)
+	r.git("commit", "-q", "--allow-empty", "-m", "No layer, no husky")
+	if got := readLog(t, log); !slices.Equal(got, []string{"dot-git"}) || r.message() != "No layer, no husky" {
+		t.Errorf("without dude's git-config or husky: ran %v, message\n%s", got, r.message())
 	}
 }
 

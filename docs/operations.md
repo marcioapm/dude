@@ -674,16 +674,18 @@ cannot list processes and report that they could not be read.
 
 It should carry dude's commit hook (`images/runtime/git-hooks/dude-hook`,
 linked under every client hook's name in `/usr/local/share/dude/git-hooks`,
-also the system `core.hooksPath`), which adds a `Co-authored-by:` trailer
-for each person on the task to every commit, read from `dude git
-coauthors`, and then runs the hook git would otherwise have run: the
-directory a repository's, worktree's or global `core.hooksPath` names
-(husky, lefthook), else `.git/hooks`. Every Run sets `core.hooksPath` to
-that directory in command scope (`GIT_CONFIG_COUNT`/`KEY`/`VALUE` in its
-environment), which outranks the others, so an image must keep the hook at
-that path. Without it commits carry no co-authors. A GitHub App's Runs set
-`GIT_AUTHOR_*` and `GIT_COMMITTER_*` to the App's bot, over the image's git
-identity.
+also the system `core.hooksPath`) and `/usr/local/share/dude/git-config`
+(`images/runtime/git-config`, setting `core.hooksPath` to that directory).
+The hook adds a `Co-authored-by:` trailer for each person on the task to
+every commit, read from `dude git coauthors`, and then runs the hook git
+would otherwise have run: the directory a repository's, worktree's or
+global `core.hooksPath` names (husky, lefthook), else `.git/hooks`. Every
+Run includes the config file in command scope (`include.path` through
+`GIT_CONFIG_COUNT`/`KEY`/`VALUE` in its environment), which outranks the
+others, so an image must keep both at those paths. git skips a missing
+include: without the file, commits carry no co-authors, and the
+repository's own hooks still run. A GitHub App's Runs set `GIT_AUTHOR_*`
+and `GIT_COMMITTER_*` to the App's bot, over the image's git identity.
 
 It carries the three harnesses a role can run on (Agents › role ›
 Harness), each installed system-wide, outside the agent's home volume, with
