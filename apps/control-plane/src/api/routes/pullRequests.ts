@@ -401,7 +401,7 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
   await noteDelivery(organizationId, signed ? null : "signature did not match: the secret GitHub has is not dude's");
   if (!signed) throw unauthorized("webhook signature does not match");
   if (event === "ping") return json({ ok: true });
-  if (event === "github_app_authorization") return revokeAuthorization(ctx, organizationId, body);
+  if (event === "github_app_authorization") return revokeAuthorization(ctx, organizationId, deliveryId, body);
   if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
 
   let payload: unknown;
@@ -437,10 +437,14 @@ async function noteDelivery(organizationId: string, failure: string | null): Pro
  * headers are not covered by the signature; trusting them assumes the
  * delivery reached dude over GitHub's TLS transport unmodified. An event that
  * names no App, names two different ones, or names another App changes
- * nothing.
+ * nothing. The delivery id is claimed in the same transaction as the delete
+ * and stored as already processed, so a redelivery after the person
+ * reconnects does not remove the new authorization and the pull-request
+ * worker never reads it.
  */
-async function revokeAuthorization(ctx: PublicContext, organizationId: string, body: string): Promise<Response> {
+async function revokeAuthorization(ctx: PublicContext, organizationId: string, deliveryId: string, body: string): Promise<Response> {
   const ignored = json({ ok: true, ignored: "github_app_authorization" });
+  if (!deliveryId) return ignored;
   let revoked: { action?: unknown; sender?: { id?: unknown }; installation?: { app_id?: unknown } };
   try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
   const userId = revoked.sender?.id;
@@ -455,6 +459,11 @@ async function revokeAuthorization(ctx: PublicContext, organizationId: string, b
   if (named.size !== 1) return ignored;
   const [appId] = named;
   await withOrg(organizationId, async ({ sql }) => {
+    const claimed = await sql`INSERT INTO webhook_deliveries (id, organization_id, event, payload, processed_at)
+      VALUES (${deliveryId}, ${organizationId}, 'github_app_authorization',
+        ${{ action: "revoked", sender: { id: userId }, appId }}::jsonb, now())
+      ON CONFLICT (id) DO NOTHING RETURNING id`;
+    if (claimed.length === 0) return;
     await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
       WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
         AND c.auth = 'github_app' AND c.app_id = ${appId!} AND a.github_user_id = ${userId as number}`;

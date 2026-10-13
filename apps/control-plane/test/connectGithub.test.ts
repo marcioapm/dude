@@ -161,7 +161,7 @@ test("OAuth identity switches need a fresh pair; API base invalidates but same-A
   expect((await post({ clearOauthClientSecret: true })).status).toBe(200);
 });
 
-test("signed authorization revocation needs the current App's identity and is isolated by organization", async () => {
+test("signed authorization revocation needs the current App's identity, is isolated by organization, and is claimed once per delivery", async () => {
   const [credential] = await owner`SELECT id,app_id,webhook_secret FROM forge_credentials WHERE organization_id=${ORG}`;
   expect(credential.app_id).toBe("9001");
   const [{ id: personId }] = await owner`SELECT id FROM people WHERE organization_id=${ORG} LIMIT 1`;
@@ -188,6 +188,7 @@ test("signed authorization revocation needs the current App's identity and is is
     [{ ...revoked, installation: { app_id: 9001 } }, app("9002"), "r-contradiction"],
     [revoked, { "x-github-hook-installation-target-type": "repository", "x-github-hook-installation-target-id": "9001" }, "r-repository-hook"],
     [revoked, {}, "r-no-app"],
+    [revoked, app("9001"), ""],
   ] as Array<[unknown, Record<string, string>, string]>) {
     expect((await deliver(payload, delivery, headers)).status).toBe(200); expect(await count()).toBe(1);
   }
@@ -200,7 +201,11 @@ test("signed authorization revocation needs the current App's identity and is is
   expect(await count()).toBe(1);
 
   expect((await deliver(revoked, "r-1", app("9001"))).status).toBe(200); expect(await count()).toBe(0);
+  const [claimed] = await owner`SELECT event,payload,processed_at IS NOT NULL AS processed FROM webhook_deliveries WHERE id='r-1'`;
+  expect(claimed).toEqual({ event: "github_app_authorization", payload: { action: "revoked", sender: { id: 123 }, appId: "9001" }, processed: true });
+  // Reconnected after the revocation: GitHub's redelivery of it changes nothing.
   await connect();
+  expect((await deliver(revoked, "r-1", app("9001"))).status).toBe(200); expect(await count()).toBe(1);
   expect((await deliver({ ...revoked, installation: { app_id: 9001 } }, "r-2")).status).toBe(200); expect(await count()).toBe(0);
 
   // Replacing the App keeps the webhook secret; the old App's revocation does not reach the new App's connection.
@@ -214,6 +219,8 @@ test("signed authorization revocation needs the current App's identity and is is
   await connect();
   expect((await deliver(revoked, "r-old-app", app("9001"))).status).toBe(200); expect(await count()).toBe(1);
   expect((await deliver(revoked, "r-new-app", app("9002"))).status).toBe(200); expect(await count()).toBe(0);
+  const stored = await owner`SELECT payload::text AS p FROM webhook_deliveries WHERE event='github_app_authorization'`;
+  for (const { p } of stored) for (const secret of ["hidden-access", "hidden-refresh", "fresh-2"]) expect(p).not.toContain(secret);
 });
 
 test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {
@@ -250,6 +257,6 @@ test("an App's deliveries are taken with the credential's secret; its installati
   const pr = await deliver("pull_request", { action: "opened", installation, number: 1, pull_request: { number: 1 },
     repository: { full_name: "acme/api" } }, "d-pr");
   expect(pr.status).toBe(202);
-  const stored = await owner`SELECT id, event FROM webhook_deliveries WHERE organization_id = ${ORG} ORDER BY id`;
+  const stored = await owner`SELECT id, event FROM webhook_deliveries WHERE organization_id = ${ORG} AND processed_at IS NULL ORDER BY id`;
   expect([...stored]).toEqual([{ id: "d-pr", event: "pull_request" }]);
 });
