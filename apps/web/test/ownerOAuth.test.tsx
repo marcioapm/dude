@@ -6,14 +6,28 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE } from "../src/fixtures/data.ts";
 import { MySettingsScreen } from "../src/screens/MySettingsScreen.tsx";
 
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
 let cleanup: (() => Promise<void>) | undefined;
-afterEach(async () => { await cleanup?.(); document.body.innerHTML = ""; });
+afterEach(async () => {
+  await cleanup?.();
+  cleanup = undefined;
+  document.body.innerHTML = "";
+  window.history.replaceState(null, "", "/");
+});
+
 class AuthorizationClient extends FixtureClient {
   connected = true;
+  reconnectRequired = false;
   disconnects = 0;
+  // Half a day past the 150-day mark, so the coarse age reads 150d however long the test takes.
+  refreshExpiresAt = new Date(Date.now() + 150 * DAY + 12 * HOUR).toISOString();
+  expiresAt = new Date(Date.now() + 8 * HOUR - 60_000).toISOString();
   override githubAuthorization() {
     return Promise.resolve({ available: true, connection: this.connected ? {
-      login: "CanonicalOwner", expiresAt: "2026-10-13T12:00:00Z", refreshExpiresAt: "2027-01-01T00:00:00Z", reconnectRequired: false,
+      login: "CanonicalOwner", expiresAt: this.expiresAt, refreshExpiresAt: this.refreshExpiresAt, reconnectRequired: this.reconnectRequired,
     } : null });
   }
   connectUrl = "https://github.com/login/oauth/authorize?client_id=client&state=opaque";
@@ -23,38 +37,77 @@ class AuthorizationClient extends FixtureClient {
     return Promise.resolve();
   }
 }
-test("an unknown callback outcome is shown as the fixed failure text, not echoed", async () => {
-  window.history.replaceState(null, "", "/?github=%3Cb%3Ecode%3Dsecret%3C%2Fb%3E#/me/settings");
-  const target = document.createElement("div");
-  try {
-    const { container, unmount } = await mount(<ThemeProvider target={target}>
-      <TooltipProvider><ToastProvider><MySettingsScreen client={new AuthorizationClient("a")} me={{ ...PEOPLE[0]!, lastSeenWhere: null }} onChanged={() => {}} /></ToastProvider></TooltipProvider>
-    </ThemeProvider>);
-    cleanup = unmount;
-    const card = await until(() => container.querySelector("[data-testid=github-authorization]"), "authorization card");
-    expect(card.textContent).toContain("GitHub authorization failed. Connect again.");
-    expect(card.textContent).not.toContain("secret");
-    expect(document.documentElement.getAttribute("data-theme")).toBeNull();
-  } finally { window.history.replaceState(null, "", "/"); }
-});
 
-test("GitHub authorization shows its canonical status and disconnects without exposing credentials", async () => {
-  const client = new AuthorizationClient("a");
+async function openSettings(client: AuthorizationClient, search = "") {
+  window.history.replaceState(null, "", `/${search}#/me/settings`);
   const { container, unmount } = await mount(<ThemeProvider target={document.createElement("div")}>
     <TooltipProvider><ToastProvider><MySettingsScreen client={client} me={{ ...PEOPLE[0]!, lastSeenWhere: null }} onChanged={() => {}} /></ToastProvider></TooltipProvider>
   </ThemeProvider>);
   cleanup = unmount;
-  const status = await until(() => container.querySelector("[data-testid=github-authorization-status]"), "authorization status");
-  expect(status.textContent).toBe("Connected as CanonicalOwner");
+  return until(() => container.querySelector<HTMLElement>("[data-testid=github-authorization]"), "authorization card");
+}
 
-  expect(container.querySelector("[data-testid=github-connect]")?.textContent).toBe("Connect GitHub");
+test("an unknown callback outcome is shown as the fixed failure text in danger, not echoed", async () => {
+  const card = await openSettings(new AuthorizationClient("a"), "?github=%3Cb%3Ecode%3Dsecret%3C%2Fb%3E");
+  const outcome = card.querySelector("[data-testid=github-outcome]")!;
+  expect(outcome.textContent).toBe("GitHub authorization failed. Connect again.");
+  expect(outcome.getAttribute("data-tone")).toBe("danger");
+  expect(card.textContent).not.toContain("secret");
+  expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+});
+
+test("each callback outcome takes its own words and a tone by what it means", async () => {
+  const cases: Array<[string, string, string]> = [
+    ["connected", "GitHub connected.", "success"],
+    ["authorization_denied", "GitHub authorization was denied. Connect again when ready.", "attention"],
+    ["invalid_or_expired", "This GitHub connection request expired or was already used. Connect again.", "danger"],
+    ["enable_expiring_tokens", "Ask an administrator to enable expiring user authorization tokens in the GitHub App.", "attention"],
+    ["identity_failed", "GitHub could not verify your account. Connect again.", "danger"],
+    ["app_changed", "The GitHub App changed. Connect again.", "danger"],
+    ["superseded", "This connection request was replaced by a newer one or by Disconnect.", "attention"],
+  ];
+  for (const [outcome, text, tone] of cases) {
+    const card = await openSettings(new AuthorizationClient("a"), `?github=${outcome}`);
+    const shown = card.querySelector("[data-testid=github-outcome]")!;
+    expect([outcome, shown.textContent, shown.getAttribute("data-tone")]).toEqual([outcome, text, tone]);
+    await cleanup?.();
+    cleanup = undefined;
+  }
+});
+
+test("GitHub authorization shows its canonical status and a human reconnect time, and disconnects only once confirmed", async () => {
+  const client = new AuthorizationClient("a");
+  const card = await openSettings(client);
+  expect(card.querySelector("[data-testid=github-authorization-status]")?.textContent).toBe("Connected as CanonicalOwner");
+  // The refresh token's end, in the design system's coarse age; never an ISO stamp, and no access-token expiry while it refreshes itself.
+  expect(card.querySelector("[data-testid=github-authorization-reconnect]")?.textContent).toBe("Needed in 150d");
+  expect(card.textContent).not.toMatch(ISO);
+  expect(card.textContent).not.toContain("Access");
+  expect(card.textContent).not.toContain("state=opaque");
+
+  expect(card.querySelector("[data-testid=github-connect]")?.textContent).toBe("Connect GitHub");
   const navigate = spyOn(window.location, "assign").mockImplementation(() => {});
   try {
-    await click(container.querySelector<HTMLButtonElement>("[data-testid=github-connect]")!);
+    await click(card.querySelector<HTMLButtonElement>("[data-testid=github-connect]")!);
     await until(() => navigate.mock.calls.length ? true : null, "full-page OAuth navigation");
     expect(navigate.mock.calls).toEqual([[client.connectUrl]]);
   } finally { navigate.mockRestore(); }
-  await click(container.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
-  await until(() => client.disconnects === 1 && container.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null,
+
+  await click(card.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
+  const confirm = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=github-disconnect-confirm]"), "the confirmation");
+  expect(client.disconnects).toBe(0);
+  await click(confirm);
+  await until(() => client.disconnects === 1 && card.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null,
     "disconnected status");
+  expect(card.querySelector("[data-testid=github-disconnect]")).toBeNull();
+});
+
+test("a connection that needs reconnecting says so, with the access token's end in words", async () => {
+  const client = new AuthorizationClient("a");
+  client.reconnectRequired = true;
+  client.expiresAt = new Date(Date.now() - 3 * HOUR - 60_000).toISOString();
+  const card = await openSettings(client);
+  expect(card.querySelector("[data-testid=github-authorization-reconnect]")?.textContent).toBe("Needed now: pull requests wait until you connect again");
+  expect(card.textContent).toContain("Ended 3h ago");
+  expect(card.textContent).not.toMatch(ISO);
 });
