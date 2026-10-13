@@ -766,6 +766,11 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	}
 }
 
+// OpenCode v1.18.21's ACP bridge drops subagent permission asks, hanging the
+// parent's task call. Runs are unattended; the user "*" rule overrides
+// OpenCode's built-in asks so neither parent nor subagent waits for approval.
+var openCodePermissions = map[string]any{"*": "allow"}
+
 // openCodeConfig is a Run's model and its tier's settings as OpenCode
 // config.
 //
@@ -788,8 +793,9 @@ func openCodeConfig(model, effort string, options map[string]any, headers map[st
 		entry["headers"] = headers
 	}
 	config := map[string]any{
-		"model":    provider + "/" + model,
-		"provider": map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
+		"model":      provider + "/" + model,
+		"permission": openCodePermissions,
+		"provider":   map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
 	}
 	b, _ := json.Marshal(config)
 	return string(b)
