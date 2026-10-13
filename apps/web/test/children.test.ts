@@ -156,6 +156,32 @@ test("a Run that ended settles a child still running and its open calls, and wha
   expect(childOf(snapshot(state).turns).status).toBe("running");
 });
 
+test("a Run that ended settles a grandchild still waiting under a child that already ended", () => {
+  const events = [parentCall(), started(),
+    ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "inner", tool: "task" }),
+    ev(EventTypes.ChildStarted, { childId: "grand", callId: "inner", parentChildId: "ses_kid", kind: "task", title: "Deeper" }),
+    ev(EventTypes.ChildWaiting, { childId: "grand", callId: "inner", parentChildId: "ses_kid", on: "permission", permission: "bash",
+      patterns: [], answered: "none", held: true }),
+    ev(EventTypes.ChildEnded, { ...kid, status: "completed" }),
+    ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })];
+  const state = apply(emptyProjection(), events);
+  const grandOf = (turns: readonly unknown[]) => {
+    const child = childOf(turns);
+    return { child, grand: only((only(child.turns) as ToolTurn).children) };
+  };
+  const live = snapshot(state);
+  const { child, grand } = grandOf(project(events, "aborted").turns);
+  expect(child.status).toBe("completed");
+  expect(grand).toMatchObject({ id: "grand", status: "aborted", waitingOn: null });
+  // The live projection is untouched, and what needed no settling is the same object.
+  expect(grandOf(live.turns).grand).toMatchObject({ status: "running", waitingOn: { permission: "bash" } });
+  const settledAgain = snapshot(state, "aborted");
+  expect(settledAgain.turns[0]).not.toBe(live.turns[0]);
+  const done = apply(emptyProjection(), [parentCall(), started(), ev(EventTypes.ChildEnded, { ...kid, status: "completed" }),
+    ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })]);
+  expect(snapshot(done, "aborted").turns[0]).toBe(snapshot(done).turns[0]);
+});
+
 test("folding one event at a time is folding them all at once", () => {
   const events = [parentCall(), started(),
     ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k1", tool: "read" }),

@@ -1135,14 +1135,31 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
    * error.
    */
   const unfinished: ToolCallStatus = runStatus === "aborted" ? "aborted" : "failed";
+  // Settles a call and every child under it, to any depth: an ended child
+  // keeps its status but its descendants are settled too. Only what changes
+  // is cloned; the live projection is never written.
+  const settleChild = (child: ChildTurn): ChildTurn => {
+    const turns = child.turns.map((t) => (t.kind === "tool" ? settle(t) : t));
+    const turnsChanged = turns.some((t, i) => t !== child.turns[i]);
+    const live = child.status === "running";
+    if (!live && !turnsChanged && child.waitingOn === null) return child;
+    return {
+      ...child,
+      status: live ? unfinished : child.status,
+      waitingOn: null,
+      endedAt: child.endedAt ?? child.startedAt,
+      turns: turnsChanged ? turns : child.turns,
+    };
+  };
   const settle = (turn: ToolTurn): ToolTurn => {
-    const children = turn.children.map((child) => child.status !== "running" && !child.turns.some((t) => t.kind === "tool" && t.status === "running")
-      ? child
-      : { ...child, status: child.status === "running" ? unfinished : child.status, waitingOn: null, endedAt: child.endedAt ?? child.startedAt,
-          turns: child.turns.map((t) => (t.kind === "tool" ? settle(t) : t)) });
-    return turn.status === "running"
-      ? { ...turn, status: unfinished, endedAt: turn.endedAt ?? turn.startedAt, children }
-      : children.some((c, i) => c !== turn.children[i]) ? { ...turn, children } : turn;
+    const children = turn.children.map(settleChild);
+    const childrenChanged = children.some((c, i) => c !== turn.children[i]);
+    if (turn.status !== "running" && !childrenChanged) return turn;
+    return {
+      ...turn,
+      ...(turn.status === "running" ? { status: unfinished, endedAt: turn.endedAt ?? turn.startedAt } : {}),
+      children: childrenChanged ? children : turn.children,
+    };
   };
   return {
     turns: state.turns.map((turn) => (turn.kind === "tool" ? settle(turn) : turn)),
