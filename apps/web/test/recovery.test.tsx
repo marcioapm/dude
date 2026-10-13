@@ -68,7 +68,7 @@ describe("a stopped task", () => {
     const page = await taskPage(client);
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
     expect(notice.textContent).toContain("Delivery stopped");
-    expect(notice.textContent).not.toContain("Someone aborted the implementer");
+    expect(notice.textContent).not.toContain("Someone aborted");
   });
 
   for (const status of ["aborted", "failed"] as const) {
