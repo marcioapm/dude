@@ -628,24 +628,22 @@ branch.
 
 ### Colour
 
-No new colour and no new tone. A peer is identified by **who** — the
-sender's role colour on a 2px rail (the thread rule `ChatThread` and
-`ChatRunLine` already use) and its role face — never by a tone:
+A message between agents wears the semantic **peer wash**, a teal-cyan
+background distinct from the accent (a person's steer) and attention
+(needs you). It is not a tone. The sender is still identified by **who** —
+its role colour on a 2px rail (`ChatThread` and `ChatRunLine`'s rule) and
+its role face, never a person's face or tint. The wash supplements that
+rail, face and Peer/Reply label; it does not guarantee background-only
+recognition under CVD. Waiting on a peer and note notices stay neutral ink.
 
-- not the accent: that is a person's steer (`intent="steer"`);
-- not attention: that is needs-you; a peer wait is neutral ink with a clock;
-- not a person's face or tint: a peer message has the agent's square tile and
-  no wash.
-
-The role colours already clear the palette's bars: every role `fg` ≥ 4.5:1
+The role colours clear the palette's bars: every role `fg` ≥ 4.5:1
 on the surface in both modes, six slots ΔE ≥ 8 under protan/deutan
 simulation and ≥ 15 in normal vision, and every role colour more than ΔE 3
 from the attention fg, mark and solid (`test/paletteDistance.test.ts`). The
 rail uses `--ds-role-*-solid`, as `ChatRunLine` does; text stays text tokens.
-In grayscale a peer message is told from an agent turn by the rail, the
-"Peer"/"Reply" tag and the "→ ABS-2" header; from a steer by the absence of
-a wash and the tag's word. A note change has none of these: the pin glyph
-and its words, in secondary and muted ink.
+In grayscale a peer message is told from an agent turn and a steer by the
+rail, "Peer"/"Reply" tag and "→ ABS-2" header. A note change has none of
+these: the pin glyph and its words, in secondary and muted ink, with no wash.
 
 ### New components
 

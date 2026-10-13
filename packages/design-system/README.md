@@ -214,15 +214,17 @@ near h 192 (between the implementer and the investigator) beat
 violet-magenta near h 320 (between the conductor and the QA pink): at its
 best tuning the violet wash lands ΔE 0.4 from the steer wash for protans
 (teal's worst is 1.1), and it sits on the merged and conductor violets.
-Teal-cyan is far from success's green (ΔE ≥ 9.8). The solid is held to
-normal ≥ 9, protan/deutan ≥ 7 against every tone solid, the accent and
-every role — below the roles' own 15 / 8 / 8, because it is never a mark of
-identity, only a wash under a role-coloured rail; and the wash (8% over the
-surface or the raised thread, 10% hovered, `tints.peer`/`peerHover`)
-stands ≥ ΔE 1 from the steer wash, the question wash and the failed fill in
-all three visions, and ≥ 2.5 off the surface. The highlight's 9 / 12% was
-too strong: at 12% the dark "Not sent" danger ink and the tag's secondary
-ink on the raised thread fall under 4.5:1.
+Teal-cyan's solid is ΔE ≥ 9.8 from success's solid in normal vision. The
+solid is held to normal ≥ 9, protan/deutan ≥ 7 against every tone solid,
+the accent and every role — below the roles' own 15 / 8 / 8, because it is
+never a mark of identity. The wash is 8% over the surface or raised thread,
+10% hovered (`tints.peer`/`peerHover`). The resting 8% wash composited on
+surface measures ≥ ΔE 1 from the resting steer wash, question wash and
+failed fill in all three simulations, and ≥ 2.5 off the surface in normal
+vision. The background supplements the role rail, face and Peer/Reply
+label; this floor does not guarantee background-only recognition under
+CVD. The highlight's 9 / 12% was too strong: at 12% the dark "Not sent"
+danger ink and the tag's secondary ink on the raised thread fall under 4.5:1.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
 faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close

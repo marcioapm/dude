@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, peer, roleColourSlot, roleColors, tones, type AgentRoleName } from "../src/tokens/palette.ts";
-import { themeColors } from "../src/tokens/themes.ts";
+import { flattenTheme, themeColors } from "../src/tokens/themes.ts";
 import { tints } from "../src/tokens/tints.ts";
 
 type Vec3 = readonly [number, number, number];
@@ -180,7 +180,10 @@ describe("the peer colour (OKLab ΔE×100, Machado 2009 at severity 1.0)", () =>
 
     test(`${mode}: the peer wash stands ≥ ${PEER_WASH_BAR} from the steer wash, the question wash and the failed fill, and ≥ ${PEER_WASH_FROM_SURFACE} off the surface`, () => {
       const surface = themeColors[mode].surface;
-      const wash = mix(peer[mode].solid, surface, tints.peer);
+      const emitted = flattenTheme(mode);
+      const rgba = emitted["peer-wash"]!.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/)!;
+      const [r, g, b, a] = rgba.slice(1).map(Number) as [number, number, number, number];
+      const wash = mix(`#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`, surface, a);
       const others: Array<[string, string]> = [
         ["steer", mix(accent[mode].base, surface, tints.highlight)],
         ["question", mix(tones[mode].attention.solid, surface, tints.highlight)],

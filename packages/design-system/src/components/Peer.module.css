@@ -60,6 +60,11 @@ button.taskChip:focus-visible {
 .peer:hover {
   background: var(--ds-peer-wash-hover);
 }
+/* A chip's role word inside a message: muted ink on the active wash over the
+   peer wash falls under 4.5:1 in dark; secondary clears it. */
+.peer .taskChipRole {
+  color: var(--ds-color-text-secondary);
+}
 /* Not read yet: the rail is dashed, as a queued steer's bar. */
 .peer[data-unread="true"] {
   box-shadow: none;

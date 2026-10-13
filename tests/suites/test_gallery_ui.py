@@ -20,6 +20,98 @@ from playwright.sync_api import Page, expect
 pytestmark = pytest.mark.ui
 
 
+def test_peer_message_emitted_wash_hover_and_role_rails(gallery_page: Page):
+    gallery_page.evaluate("""() => {
+      localStorage.setItem('dude.gallery.panes', 'both');
+      localStorage.setItem('dude.gallery.paneDensity', 'both');
+    }""")
+    gallery_page.reload(wait_until="networkidle")
+    gallery_page.get_by_role("link", name="PeerMessage", exact=True).click()
+    expected = {
+        "dark": ("rgba(19, 147, 143, 0.08)", "rgba(19, 147, 143, 0.1)"),
+        "light": ("rgba(22, 167, 163, 0.08)", "rgba(22, 167, 163, 0.1)"),
+    }
+    for theme, (rest, hover) in expected.items():
+        for density in ("comfortable", "compact"):
+            pane = f'[data-theme="{theme}"][data-density="{density}"]'
+            full = gallery_page.locator("#pe-message").locator(pane)
+            thread = gallery_page.locator("#pe-thread").locator(pane)
+            # Full transcript and compact thread each have read and queued messages.
+            for container in (full, thread):
+                messages = container.locator('[data-kind="peer"]')
+                assert messages.count() >= 2
+                queued = container.locator('[data-kind="peer"][data-unread="true"]').first
+                read = container.locator('[data-kind="peer"]:not([data-unread="true"])').first
+                unread_seen = read_seen = False
+                for message in (read, queued):
+                    gallery_page.mouse.move(0, 0)
+                    style = message.evaluate("""el => {
+                      const s = getComputedStyle(el);
+                      const rgb = token => {
+                        const probe = document.createElement('span');
+                        probe.style.color = s.getPropertyValue(token);
+                        el.append(probe);
+                        const value = getComputedStyle(probe).color;
+                        probe.remove();
+                        return value;
+                      };
+                      const background = token => {
+                        const probe = document.createElement('span');
+                        probe.style.backgroundColor = s.getPropertyValue(token);
+                        el.append(probe);
+                        const value = getComputedStyle(probe).backgroundColor;
+                        probe.remove();
+                        return value;
+                      };
+                      return {background: s.backgroundColor,
+                        wash: background('--ds-peer-wash'),
+                        hover: background('--ds-peer-wash-hover'),
+                        rail: rgb('--ds-role-implementer-solid'), shadow: s.boxShadow,
+                        gradient: getComputedStyle(el, '::before').backgroundImage,
+                        unread: el.dataset.unread === 'true'};
+                    }""")
+                    assert style["wash"] == rest
+                    assert style["hover"] == hover and rest != hover
+                    assert style["background"] == rest
+                    # Every specimen in this block is sent by an implementer.
+                    if style["unread"]:
+                        unread_seen = True
+                        assert style["shadow"] == "none"
+                        assert style["rail"] in style["gradient"]
+                        assert "repeating-linear-gradient" in style["gradient"]
+                    else:
+                        read_seen = True
+                        assert style["rail"] in style["shadow"]
+                        assert "inset" in style["shadow"]
+                    message.hover()
+                    expect(message).to_have_css("background-color", hover)
+                assert read_seen and unread_seen
+
+            role_word = thread.get_by_test_id("peer-waiting").get_by_text("Implementer", exact=True)
+            assert role_word.count() == 1
+            message = role_word.locator('xpath=ancestor::article[@data-kind="peer"]')
+            message.hover()
+            role_colors = role_word.evaluate("""el => {
+              const s = getComputedStyle(el);
+              const probe = document.createElement('span');
+              probe.style.color = s.getPropertyValue('--ds-color-text-secondary');
+              el.append(probe);
+              const expected = getComputedStyle(probe).color;
+              probe.remove();
+              return [s.color, expected];
+            }""")
+            assert role_colors[0] == role_colors[1]
+
+            controls = gallery_page.locator("#peers").locator(pane).locator(
+                '[data-testid="peer-wait-line"], [data-testid="epic-note-notice"]'
+            )
+            assert controls.count() > 0
+            for control in controls.all():
+                expect(control).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+                control.hover()
+                expect(control).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+
+
 def test_gallery_renders_without_console_errors(gallery_page: Page, console_errors: list):
     """A component that throws on render fails here and nowhere else."""
     expect(gallery_page.get_by_role("heading", name="Tokens", exact=True)).to_be_visible()

@@ -95,7 +95,7 @@ export function PeersSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="pe-message" title="PeerMessage"
-        note="A message between two tasks' agents, as a turn on the peer wash (hover it for the hover step): the sender's face and a 2px rail in its role colour, dashed until it is read; 'ABS-4 Implementer → ABS-2'; a neutral Peer or Reply tag; its delivery in a steer's words. Between an implementer's own turn and a person's steer, so the three read apart by background alone.">
+        note="A message between two tasks' agents, as a turn on the peer wash (hover it for the hover step): the sender's face and a 2px rail in its role colour, dashed until it is read; 'ABS-4 Implementer → ABS-2'; a neutral Peer or Reply tag; its delivery in a steer's words. Between an implementer's own turn and a person's steer: the backgrounds add a cue alongside the rail, face and tags, not a guarantee of background-only recognition under CVD.">
         <Panes mode={mode} surface>
           <Col>
             <Label>an implementer's own turn, a peer message read where the agent read it, a person's steer</Label>
@@ -183,7 +183,8 @@ export function PeersSection({ mode }: { readonly mode: PaneMode }) {
           <Col>
             <PeerThread a={T["ABS-4"]!} b={T["ABS-2"]!} subject="Preview API body and response" foot={FOOT}
               state={{ kind: "waiting", on: "ABS-2", since: at("13:47:02") }}>
-              <PeerMessage compact msg={ASK} waiting={{ since: at("13:47:02"), note: "Asked at 13:43 and carried on. Parks at 13:57 if no reply." }} />
+              <PeerMessage compact msg={ASK} waiting={{ since: at("13:47:02"), note: <TaskChip task={T["ABS-2"]!} showRole /> }} />
+              <PeerMessage compact msg={{ ...PATH_Q, delivery: { kind: "queued" } }} />
             </PeerThread>
             <PeerThread a={T["ABS-2"]!} b={T["ABS-1"]!} subject="Engine path for the estimate histogram" state={{ kind: "open", on: "ABS-1" }}
               foot="Between ABS-2's and ABS-1's agents. Everyone on the epic can read it; only the two agents write in it.">
