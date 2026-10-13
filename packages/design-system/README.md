@@ -640,7 +640,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   payload. Its members' alone: anyone else is told the session does not
   exist.
 - **A session starts untitled and names itself.** Until it is named it
-  reads **"New session"** everywhere it is listed or headed (`sessionTitle`
+  reads **"Untitled session"** everywhere it is listed or headed (`sessionTitle`
   in `@dude/domain`). Its agent names it once the subject is clear
   (`name_session`, one line of at most 60 characters), and again only if
   the subject clearly changes.
@@ -705,7 +705,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shared session's marker, model and Share cannot squeeze it to nothing.
   The wash behind a nameable title sits past
   its edge by a translate, not a negative margin, which would lay the
-  button out narrower than its words and cut even "New session". The Chat says who named it, a
+  button out narrower than its words and cut even "Untitled session". The Chat says who named it, a
   `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
   unsigned, "Ana renamed it “…”".
 - **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
@@ -790,7 +790,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   "Waiting on you" count, so one number answers "what needs me".
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
-  title — named or "New session" — because a private session's name must
+  title — named or "Untitled session" — because a private session's name must
   not reach people outside it. The same words stand for where a question
   waits in the inbox.
 
@@ -2187,7 +2187,7 @@ sessions*):
   the card read only (`defaultOpen` starts it open). An item nobody can
   file keeps the card open. An epic item's `notes` are drawn under it,
   pinned when it is filed; a `note` item adds or replaces one.
-- **SessionTitle** — the session's name in its header: "New session"
+- **SessionTitle** — the session's name in its header: "Untitled session"
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.

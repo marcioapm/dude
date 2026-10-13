@@ -671,7 +671,7 @@ def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page:
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
     pane = gallery_page.locator("#bs-title [data-theme]").first
     titles = pane.get_by_test_id("session-title")
-    expect(titles.nth(0)).to_have_text("New session")
+    expect(titles.nth(0)).to_have_text("Untitled session")
     titles.nth(1).click()
     field = pane.get_by_test_id("session-title-input")
     expect(field).to_be_focused()
@@ -770,7 +770,7 @@ def _title_fits(title) -> dict:
 
 
 def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(gallery_page: Page, console_errors: list):
-    """In a screen's header at desktop width, a short title and "New session" are never cut, shown or
+    """In a screen's header at desktop width, a short title and "Untitled session" are never cut, shown or
     edited; a title longer than the line is cut with an ellipsis, all of it in the tooltip."""
     gallery_page.set_viewport_size({"width": 1440, "height": 1000})
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
@@ -778,7 +778,7 @@ def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(
     titles = headers.get_by_test_id("session-title")
     short, untitled, long = (_title_fits(titles.nth(i)) for i in range(3))
     assert (short["text"], short["cut"]) == ("Billing v2", False), short
-    assert (untitled["text"], untitled["cut"]) == ("New session", False), untitled
+    assert (untitled["text"], untitled["cut"]) == ("Untitled session", False), untitled
     assert long["cut"] and long["tip"] == long["text"], long
     # Cut only for want of room: the long title takes the header's line.
     assert long["words"] > long["header"] * 0.6, long
@@ -794,7 +794,7 @@ def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(
 
 def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_page: Page, console_errors: list):
     """At 375px a shared header's marker, model and Share do not shrink; they wrap under the title,
-    which keeps the first line, with room for at least "New session"."""
+    which keeps the first line, with room for at least "Untitled session"."""
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
     gallery_page.set_viewport_size({"width": 375, "height": 900})
     pane = gallery_page.locator("#bs-title [data-theme]").first
@@ -806,7 +806,7 @@ def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_p
         el.parentElement.append(h);
         const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
         const probe = words.cloneNode(false);
-        probe.textContent = 'New session';
+        probe.textContent = 'Untitled session';
         probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
         h.append(probe);
         const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,

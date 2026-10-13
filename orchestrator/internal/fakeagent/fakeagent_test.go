@@ -41,7 +41,7 @@ func TestTheScriptedReplyKnowsEverySessionsBriefing(t *testing.T) {
 	for lead, want := range map[string]string{
 		`Brainstorm, this is the session "Billing", as you named it.`:                         `In the session "Billing". You asked: "Márcio: where?"`,
 		`Brainstorm, this is the session "Billing v2", as a member named it: keep that name.`: `In the session "Billing v2". You asked: "Márcio: where?"`,
-		`Brainstorm, this is a new session, not named yet.`:                                   `In the session "New session". You asked: "Márcio: where?"`,
+		`Brainstorm, this is a new session, not named yet.`:                                   `In the session "Untitled session". You asked: "Márcio: where?"`,
 	} {
 		script := ConductorScript(lead + rest)
 		if !strings.Contains(script, "echo "+want) || strings.Contains(script, "Briefed on") {

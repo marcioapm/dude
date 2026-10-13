@@ -605,11 +605,11 @@ describe("a session's name", () => {
     return { ...d, session: { ...d.session, title: null, titledBy: null, messages: 0 } };
   };
 
-  test("untitled, its header says New session, muted, and a new one opens with the composer focused", async () => {
+  test("untitled, its header says Untitled session, muted, and a new one opens with the composer focused", async () => {
     const client = new SessionClient(untitled("owner"));
     const page = await sessionPage(client);
     const title = page.querySelector("[data-testid=session-title]")!;
-    expect(title.textContent).toBe("New session");
+    expect(title.textContent).toBe("Untitled session");
     expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
     const composer = page.querySelector("[data-testid=session-screen] textarea");
     expect(composer).not.toBeNull();
@@ -642,7 +642,7 @@ describe("a session's name", () => {
     const page = await sessionPage(client);
     const title = page.querySelector("[data-testid=session-title]")!;
     expect(title.tagName).not.toBe("BUTTON");
-    expect(title.textContent).toBe("New session");
+    expect(title.textContent).toBe("Untitled session");
     await click(title);
     expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
     expect(document.activeElement === page.querySelector("[data-testid=session-screen] textarea")).toBe(false);
@@ -662,14 +662,14 @@ describe("a session's name", () => {
     expect(notices[1]!.textContent).toContain(`${ANA.name.split(" ")[0]} renamed it “Billing v2”`);
   });
 
-  test("untitled in the list, the sidebar's list and the inbox: New session", async () => {
+  test("untitled in the list, the sidebar's list and the inbox: Untitled session", async () => {
     const summary = { id: SESSION, title: null, role: "owner" as const, createdAt: at(0), owner: ref(ME), shared: false, projects: [],
       runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0), archived: false };
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
     const client = new SessionClient(detail("owner"));
     const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} onNew={() => {}} /></ToastProvider>);
     mounted.push(list.unmount);
-    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
+    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("Untitled session");
 
     const inbox = await mount(
       <PeopleProvider client={client}>
@@ -684,8 +684,8 @@ describe("a session's name", () => {
       </PeopleProvider>,
     );
     mounted.push(inbox.unmount);
-    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: New session");
-    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in New session");
+    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: Untitled session");
+    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in Untitled session");
   });
 
   test("New session goes to the welcome and makes nothing", async () => {

@@ -257,7 +257,7 @@ const (
 
 // UntitledSession is what the scripted reply calls a session not named yet,
 // as people see it (delivery.UntitledSession).
-const UntitledSession = "New session"
+const UntitledSession = "Untitled session"
 
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
@@ -308,7 +308,7 @@ func ConductorScript(briefing string) string {
 }
 
 // sessionTitle is the session's title a session agent's briefing opens
-// with, "New session" for one not named yet, and whether it is one.
+// with, "Untitled session" for one not named yet, and whether it is one.
 func sessionTitle(briefing string) (string, bool) {
 	if strings.HasPrefix(briefing, brainstormUntitled) {
 		return UntitledSession, true
