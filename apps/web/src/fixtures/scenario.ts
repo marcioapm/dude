@@ -8,7 +8,7 @@ export const SCENARIOS = ["a", "b", "c", "d", "e"] as const;
 export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";
-/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused. */
+/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused, raised. */
 export const RUN_KEY = `${KEY}.run`;
 
 /**

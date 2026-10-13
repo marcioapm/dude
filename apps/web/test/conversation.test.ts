@@ -59,6 +59,7 @@ describe("machine moves", () => {
       expect(steps[1]!.doneLabel).toBe("Machine found");
       const tool = c.turns.find((t) => t.kind === "tool");
       expect(tool?.kind === "tool" && tool.machine?.answer).toBe("End your turn now; your work is kept.");
+      expect(c.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.notice)).toEqual(["notice"]);
       const refused = project([...events, ev("machine.refused", { moveId: "m1", role, message: "XL requires arm64; this image only supports amd64." })], "running");
       expect(refused.start).toBeNull();
       expect(refused.turns.at(-1)?.kind === "notice" && refused.turns.at(-1)?.text).toBe("XL requires arm64; this image only supports amd64.");

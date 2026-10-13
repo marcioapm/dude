@@ -1128,7 +1128,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             break;
           }
         }
-        turns.push(turn);
+        // A machine park is already said by the move's notice and its moving row.
+        const machinePark = event.eventType === "run.parked" && payload.reason === "machine" && state.start?.machine;
+        if (!machinePark) turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
