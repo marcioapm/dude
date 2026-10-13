@@ -133,6 +133,8 @@ async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
       ...(input.image ? { image: input.image } : {}),
       egress: [...new Set(input.egress)],
       idleTimeoutMinutes: input.idleTimeoutMinutes,
+      firstWakeTimeoutMinutes: input.firstWakeTimeoutMinutes,
+      wakeTimeoutMinutes: input.wakeTimeoutMinutes,
       ...(input.machineSize ? { machineSize: input.machineSize } : {}),
     };
     if (input.machineSize) await requireSize(scope, input.machineSize);

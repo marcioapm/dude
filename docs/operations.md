@@ -339,7 +339,7 @@ added keep their old labels until they are replaced.
   whoever is on the waking page gets the new Run: up to 3 starts in a row
   for one request. After the third, dude stops. The preview shows asleep,
   with the error (`the preview's Run failed to start (<lux's reason>) 3
-  times in a row`), and lux's page says "no answer" once its 5-minute wake
+  times in a row`), and lux's page says "no answer" once its configured wake
   timeout passes. From then on each new request, a person starting a server
   or a URL opened after "no answer", tries one more new Run. The count
   resets once a start runs. A Run that ran and then crashed or lost its
@@ -371,6 +371,24 @@ added keep their old labels until they are replaced.
   aborted has its lux servers deleted — their URLs then say "This preview
   is gone" — and then its Run cancelled. lux's own 30-day expiry is the
   safety net; a server lux expires or someone deletes ends its preview.
+
+**Wake timeouts (Project settings → Servers → Branch previews).**
+`firstWakeTimeoutMinutes` defaults to **15** until any server of the preview
+has been ready once; `wakeTimeoutMinutes` defaults to **5** for later wakes.
+Both take whole minutes from **1 to 120** (lux accepts 1 second to 24 hours).
+Older saved settings read these defaults. PUT replaces the whole settings
+object; omitted fields reset to their defaults. GET project servers includes
+both fields. These control lux's waking page, not the Run's lifetime or the
+idle timeout. In lux, a starting Run or process keeps the page waking even
+past the wake window; "no answer" means no Run came up.
+
+The first ready is stored durably on the preview (`runs.preview_ready_at`),
+not inferred from a Run becoming running or lux's `readySince` (cleared on
+stop). The sweep patches existing servers after ready and after settings
+changes, including sleeping previews. It never shortens an open wake:
+lux applies a timeout change immediately against the original wake time,
+so shortening waits until the wake is over. A preview from before this
+setting gets the longer timeout until it next becomes ready.
 
 **When a recipe change reaches a preview.** A preview's servers are made
 what the project's recipes say at each wake, before lux starts them, and

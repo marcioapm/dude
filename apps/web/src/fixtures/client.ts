@@ -102,7 +102,7 @@ export class FixtureClient extends ApiClient {
     this.#servers = serversFor(scenario);
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
-    this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
+    this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null };
     this.#secrets = [
       { name: "DATABASE_SEED_URL", hint: "8a1c", updatedAt: new Date(Date.now() - 14 * 864e5).toISOString(), updatedBy: { id: PEOPLE[1]?.id ?? YOU, name: PEOPLE[1]?.name ?? PEOPLE[0]!.name } },
       { name: "SEED_LLM_KEY", hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } },
