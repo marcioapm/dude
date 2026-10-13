@@ -193,13 +193,13 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 			return out, err
 		}
 	}
-	fromFields := map[string]any{}
-	encoded, _ := json.Marshal(current)
-	_ = json.Unmarshal(encoded, &fromFields)
-	fromFields["previousRaise"] = previous
+	from := struct {
+		delivery.Machine
+		PreviousRaise *delivery.Raise `json:"previousRaise"`
+	}{*current, previous}
 	layer, _ := json.Marshal(raise)
 	err = delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: c.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.RunID,
-		Role: role, Kind: "raise", ToSizeID: target.SizeID, From: fromFields, Reason: reason}, true)
+		Role: role, Kind: "raise", ToSizeID: target.SizeID, From: from, Reason: reason}, true)
 	if errors.Is(err, delivery.ErrMoveUnavailable) {
 		return out, refuse("this Run is no longer available for a machine move")
 	}

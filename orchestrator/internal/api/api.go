@@ -355,14 +355,11 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		}
 		payload := delivery.MovePayload("", body.Role, from, target, names)
 		payload["moveId"], payload["by"], payload["note"] = "", map[string]string{"id": p.Person, "name": name}, body.Note
-		if active {
-			payload["moveId"] = id
-		}
 		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: body.TaskID, SessionID: body.SessionID}
 		ev := ref.Event(delivery.EvMachineReset, p.ActorType, payload)
 		// The Run it moves is named too, so that Run's transcript shows its move.
 		if active {
-			ev.RunID = runID
+			payload["moveId"], ev.RunID = id, runID
 		}
 		_, err = ledger.Append(ctx, tx, ev)
 		return err
