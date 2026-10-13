@@ -32,7 +32,6 @@ import {
   SessionRailBlock,
   ThinkingBlock,
   ToolUsage,
-  ToolCallCard,
   summarizeToolArgs,
   MachineChip,
   MachineTip,

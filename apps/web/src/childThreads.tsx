@@ -10,7 +10,7 @@ import { ChatMessage, ChatNotice, ChatThread, ToolCallCard } from "@dude/design-
 import type { ChildTurn, ToolTurn } from "./api/conversation.ts";
 
 /** The permission a child waits on, as its notice says it. */
-export function waitingText(waitingOn: NonNullable<ChildTurn["waitingOn"]>): string {
+function waitingText(waitingOn: NonNullable<ChildTurn["waitingOn"]>): string {
   const patterns = waitingOn.patterns.length > 0 ? ` for ${waitingOn.patterns.join(", ")}` : "";
   return `Waiting on a permission: ${waitingOn.permission}${patterns}. Nothing in this Run can answer it.`;
 }
