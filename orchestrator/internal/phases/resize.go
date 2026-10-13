@@ -360,6 +360,11 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	}); err != nil || move == nil {
 		return err
 	}
+	if plan.unknown {
+		// The move's size cannot be planned without lux's pools, and an
+		// unsized resume would never settle it: the resume is retried.
+		return fmt.Errorf("machine move %s: lux's pools could not be read", move.ID)
+	}
 	if plan.moveTo == "" && plan.Target != nil {
 		plan.moveTo = plan.Target.Name
 	}

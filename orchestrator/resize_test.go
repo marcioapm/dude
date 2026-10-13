@@ -613,6 +613,47 @@ func TestASuccessfulMachineRequestEndsTheTurnAndARefusedOneDoesNot(t *testing.T)
 	}
 }
 
+// lux's pool list failing at the move's resume: the Run is not resumed
+// unsized (that would leave the move unsettled and the phase waiting for
+// good); the resume is retried, and once the pools answer the Run resumes
+// on the size and the phase finishes.
+func TestAMoveWhosePoolsCannotBeReadAtTheResumeIsRetried(t *testing.T) {
+	w := newWorld(t)
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	w.withTools()
+	w.onModel("implementer", fakeagent.MachineModel)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+		w.org, fakeagent.MachineSize)
+	task := w.task()
+	w.deliver(task)
+	runID := ""
+	w.until("the move asked for", func() bool {
+		runID = w.str(`SELECT COALESCE((SELECT run_id FROM machine_moves WHERE task_id=$1), '')`, task)
+		return runID != ""
+	})
+	pools.fail.Store(true)
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id=$1`, runID)
+	w.until("parked", func() bool { return w.lux.State(live) == "stopped" })
+	for range 10 {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		w.pump()
+	}
+	if w.luxCalls(live, "resume") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='machine'`, runID) != 1 ||
+		w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL`, runID) != 1 {
+		t.Fatalf("resumed without lux's pools: resumes %d\n%s", w.luxCalls(live, "resume"), w.describeRuns())
+	}
+	pools.fail.Store(false)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("the move settled and the implementer finished", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL AND refused_message IS NULL`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
+		t.Fatalf("machine=%v", got)
+	}
+}
+
 // lux's dry run refuses the agent's move (its size's pool is gone): the
 // agent gets lux's words and code at once, and nothing stops or changes.
 func TestADryRunRefusalStopsNothing(t *testing.T) {
