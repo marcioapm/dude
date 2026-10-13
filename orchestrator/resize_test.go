@@ -1365,6 +1365,11 @@ func TestALuxThatCannotResizeResumesTheRunAsItIs(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
 		t.Errorf("the Run did not resume:\n%s", w.describeRuns())
 	}
+	// No move was asked for: the agent gets its usual nudge, not lux's error.
+	nudge := "You were paused and have been resumed. Continue the task where you left off."
+	if in := w.lux.ResumeInputs(r.ID); len(in) != 1 || in[0] != nudge {
+		t.Errorf("resume inputs %q, want the nudge", in)
+	}
 }
 
 // ignoresResources is a lux that takes a resume and drops its resources

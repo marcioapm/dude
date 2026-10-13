@@ -64,10 +64,10 @@ func (p *ResizePlan) movedInput(input string) string {
 
 // keptInput is what the agent is told when lux refused the move for good:
 // the size asked for, the one it kept, and why, in place of input's claim
-// that it moved. A plan with no move says lux's words alone, as before.
+// that it moved. A plan with no move, or a 409, keeps input as it was.
 func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
 	if p.moveKind == "" || le.Status == http.StatusConflict {
-		return le.Message
+		return input
 	}
 	why := le.Message
 	if le.Status == http.StatusBadRequest {
