@@ -568,16 +568,14 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
-    # Until the web app has invitation links, the old key dialog says why it cannot invite.
-    page.get_by_test_id("invite").click()
-    page.get_by_test_id("invite-name").fill("Nope")
-    page.get_by_test_id("invite-email").fill("nope@acme.dev")
-    page.get_by_test_id("invite-submit").click()
-    expect(page.get_by_role("dialog")).to_contain_text("people now join by invitation link")
-    page.keyboard.press("Escape")
+    # Invitation management is deferred to phase 2, not a dead key-issuing form.
+    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("email-bound invitation links, not shared keys")
+    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("Cloudflare Access must also let them in")
+    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("unavailable until the phase 2 web UI")
+    expect(page.get_by_test_id("invite")).to_have_count(0)
+    expect(page.get_by_test_id("invite-submit")).to_have_count(0)
     assert len(client.get("/v1/people").json()["people"]) == 1
-    # The browser's 410 is reported as a failed resource load; it is the expected refusal here.
-    console_errors[:] = [e for e in console_errors if "410" not in e]
+    assert console_errors == []
 
     _, dee = _invite(client, env, "Dee")
     page.reload()
