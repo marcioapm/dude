@@ -225,9 +225,14 @@ test("a child still running when its Run ended shows it settled, then how it end
   expect(thread.textContent).toContain("$0.37");
 });
 
+// The Run's status as the screen reads it again; `aborted` settles the conversation.
+let runStatus: "running" | "aborted" = "running";
+afterEach(() => { runStatus = "running"; });
+
 async function screen(events: PersistedEvent[]) {
   class Client extends FixtureClient {
     override async events() { return { events, nextCursor: events.at(-1)?.cursor ?? 0 }; }
+    override async getRun(id: string) { return { ...await super.getRun(id), status: runStatus }; }
   }
   host = document.createElement("div");
   document.body.append(host);
@@ -237,6 +242,57 @@ async function screen(events: PersistedEvent[]) {
   await act(async () => { for (const event of events) emit({ ...event, runId: RUN_ID }); });
   return host;
 }
+
+const send = (event: PersistedEvent) => act(async () => emit({ ...event, runId: RUN_ID }));
+const openPanel = async (el: HTMLElement, id: string) => {
+  await act(async () => header(threadOf(el, id)!).click());
+  return el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
+};
+
+describe("the selected child's transcript follows it while open", () => {
+  test("a new message appears in the open panel", async () => {
+    const el = await screen([...start(), ev(EventTypes.ChildMessage, { ...kid, text: "Initial child message." })]);
+    const panel = await openPanel(el, "ses_kid");
+    expect(panel.textContent).toContain("Initial child message.");
+    await send(ev(EventTypes.ChildMessage, { ...kid, text: "Live child message." }));
+    expect(panel.isConnected).toBe(true);
+    expect(panel.textContent).toContain("Live child message.");
+  });
+
+  test("a call completing with output updates its card in the open panel", async () => {
+    const el = await screen([...start(),
+      ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep", input: { pattern: "viewport" } })]);
+    const panel = await openPanel(el, "ses_kid");
+    expect(panel.querySelector("[data-tool='grep']")!.getAttribute("data-status")).toBe("running");
+    await send(ev(EventTypes.ChildToolCompleted, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep", status: "completed", output: { head: "tests/conftest.py:12 viewport" } }));
+    const card = panel.querySelector<HTMLElement>("[data-tool='grep']")!;
+    expect(card.getAttribute("data-status")).toBe("completed");
+    await act(async () => card.querySelector<HTMLElement>("[aria-expanded]")!.click());
+    expect(panel.querySelector("[data-tool='grep']")!.textContent).toContain("tests/conftest.py:12 viewport");
+  });
+
+  test("waiting on a permission clears in the open panel when the next call comes", async () => {
+    const el = await screen([...start(),
+      ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k8", tool: "grep", input: { path: "/opt/venv" } }, 117),
+      ev(EventTypes.ChildWaiting, { ...kid, permission: "external_directory", patterns: ["/opt/venv/*"], answered: "none" }, 117)]);
+    const panel = await openPanel(el, "ses_kid");
+    expect(panel.querySelector("[data-testid='child-waiting-notice']")).toBeTruthy();
+    await send(ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k9", tool: "bash", input: { command: "ls /opt/venv" } }));
+    expect(panel.querySelector("[data-testid='child-waiting-notice']") === null).toBe(true);
+    expect(panel.textContent).not.toContain("nothing in this Run can allow or refuse it");
+    expect(panel.querySelector("[data-tool='bash']")).toBeTruthy();
+  });
+
+  test("the Run ending settles the open panel's body, not only its header", async () => {
+    const el = await screen([...start(),
+      ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep", input: { pattern: "viewport" } })]);
+    const panel = await openPanel(el, "ses_kid");
+    expect(panel.querySelector("[data-tool='grep']")!.getAttribute("data-status")).toBe("running");
+    runStatus = "aborted";
+    await send(ev(EventTypes.RunAborted, {}));
+    await until(() => panel.querySelector("[data-tool='grep'][data-status='aborted']"), "the settled call in the panel");
+  });
+});
 
 test("the screen opens a child beside its transcript, navigates children and returns, then Escape closes", async () => {
   const el = await screen(deep());
