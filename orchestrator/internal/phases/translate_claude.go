@@ -493,7 +493,7 @@ func (t *translator) claudeChildLine(ctx context.Context, tx pgx.Tx, s *Syncer, 
 		if u := line.Message.Usage; u != nil {
 			tokens = map[string]any{"input": u.InputTokens, "output": u.OutputTokens, "cacheRead": u.CacheRead, "cacheWrite": u.CacheWrite}
 		}
-		return t.childMessage(ctx, tx, s, c, text.String(), 0, tokens)
+		return t.childMessage(ctx, tx, s, c, text.String(), 0, tokens, false)
 	case "user":
 		for _, b := range line.Message.Content {
 			if _, open := c.Calls[b.ToolUseID]; b.Type != "tool_result" || !open {

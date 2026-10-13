@@ -282,7 +282,7 @@ func TestAnOpenCodeSubagentIsRecordedAsTheParentCallsChild(t *testing.T) {
 		t.Errorf("parent call %v", p)
 	}
 	if p := ofType(events, evChildStarted)[0].Payload; p["childId"] != ocChild || p["callId"] != ocCall || p["kind"] != "task" ||
-		p["title"] != "Read /etc/hosts first line" || p["agentType"] != "general" || p["model"] != "claude-haiku-4.5" {
+		p["title"] != "Read /etc/hosts first line" || p["agentType"] != "general" || p["model"] != "llmproxy-anthropic/claude-haiku-4.5" {
 		t.Errorf("started %v", p)
 	}
 	if p := ofType(events, evChildToolCompleted)[0].Payload; p["tool"] != "read" || p["parentCallId"] != ocCall ||
@@ -330,9 +330,10 @@ func TestAnOpenCodeChildWaitingOnAPermissionIsSaid(t *testing.T) {
 		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "kind": "think",
 			"title": "Investigate UI artifact capture", "rawInput": map[string]any{"subagent_type": "explore", "description": "Investigate UI artifact capture"}}},
 		oc("session", map[string]any{"id": "ses_kid", "parentID": "ses_run", "title": "Investigate (@explore subagent)"}),
-		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid", "model": "claude-haiku-4.5", "status": "running"}),
+		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid",
+			"model": map[string]any{"modelID": "claude-haiku-4.5", "providerID": "llmproxy-anthropic"}, "status": "running"}),
 		oc("part", map[string]any{"sessionID": "ses_kid", "callID": "k1", "tool": "grep", "status": "running", "title": "grep",
-			"input": map[string]any{"pattern": "capture", "path": "/opt/venv/lib/python3.12/site-packages"}}),
+			"input": `{"pattern":"capture","path":"/opt/venv/lib/python3.12/site-packages"}`}),
 		oc("permission", map[string]any{"sessionID": "ses_kid", "permissionID": "per_1", "permission": "external_directory",
 			"patterns": []any{"/opt/venv/lib/python3.12/site-packages/*"}, "callID": "k1", "answered": "none"}),
 	)
@@ -352,7 +353,7 @@ func TestAnOpenCodeChildWaitingOnAPermissionIsSaid(t *testing.T) {
 		oc("session", map[string]any{"id": "ses_grandkid", "parentID": "ses_kid", "title": "Deeper"}),
 		oc("task", map[string]any{"sessionID": "ses_kid", "callID": "k2", "childSessionID": "ses_grandkid", "status": "running"}),
 		oc("part", map[string]any{"sessionID": "ses_grandkid", "callID": "g1", "tool": "bash", "status": "completed",
-			"input": map[string]any{"command": "ls"}, "output": "a\nb"}),
+			"input": `{"command":"ls"}`, "output": "a\nb"}),
 	)
 	got = w.children()["c1"]
 	if got["waitingOn"] != nil || !strings.HasPrefix(got["lastEvent"].(string), "bash completed") {
@@ -442,7 +443,7 @@ func TestAChildsActivityIsTheAgents(t *testing.T) {
 		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid", "status": "running"}))
 	mustExecH(t, w, `UPDATE runs SET agent_active_at = now() - interval '40 minutes' WHERE id = $1`)
 	w.feed(oc("part", map[string]any{"sessionID": "ses_kid", "callID": "k1", "tool": "read", "status": "running",
-		"input": map[string]any{"filePath": "/w/a.go"}}))
+		"input": `{"filePath":"/w/a.go"}`}))
 	var since time.Duration
 	if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM now() - agent_active_at)::float8 * interval '1 second'
 		FROM runs WHERE id = $1`, w.run.ID).Scan(&since); err != nil {
@@ -457,5 +458,102 @@ func mustExecH(t *testing.T, w *harnessWorld, sql string) {
 	t.Helper()
 	if _, err := w.owner.Exec(context.Background(), sql, w.run.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// lux relays OpenCode's ask with a lux.warning, after the child records
+// that may already follow it: an ask for a call already completed is
+// recorded and holds nothing; an ask for an open call holds the child
+// until its next record; an input lux cut short (not JSON any more) is
+// kept as the string it is.
+func TestAnOpenCodeAskThatArrivesLateHoldsNothing(t *testing.T) {
+	oc := func(typ string, data map[string]any) map[string]any {
+		return map[string]any{"type": "opencode." + typ, "data": data}
+	}
+	ask := func(call string) []map[string]any {
+		return []map[string]any{
+			oc("permission", map[string]any{"sessionID": "ses_kid", "permissionID": "per_" + call, "permission": "bash",
+				"patterns": []any{"cat /etc/hostname"}, "callID": call, "answered": "none"}),
+			{"type": "lux.warning", "data": map[string]any{"message": "an OpenCode subagent asked for permission bash; nothing can answer it"}},
+		}
+	}
+	w := newHarnessWorld(t)
+	w.feed(append([]map[string]any{{"type": "lux.session", "data": map[string]any{"sessionId": "ses_run"}},
+		{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "kind": "think",
+			"title": "Look", "rawInput": map[string]any{"subagent_type": "general", "description": "Look"}}},
+		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid", "status": "running"}),
+		oc("part", map[string]any{"sessionID": "ses_kid", "callID": "b1", "tool": "bash", "status": "running", "input": `{"command":"cat /etc/hostname"}`}),
+		oc("part", map[string]any{"sessionID": "ses_kid", "callID": "b1", "tool": "bash", "status": "completed",
+			"input": `{"command":"cat /etc/hostname"}`, "output": "box"}),
+	}, ask("b1")...)...)
+	if got := w.children()["c1"]; got["waitingOn"] != nil || !strings.HasPrefix(got["lastEvent"].(string), "bash completed") {
+		t.Errorf("a late ask re-opened the wait: %v", got)
+	}
+	waiting := ofType(w.events(), evChildWaiting)
+	if len(waiting) != 1 || waiting[0].Payload["held"] != false || waiting[0].Payload["childCallId"] != "b1" {
+		t.Fatalf("late ask %v", waiting)
+	}
+	long := `{"command":"` + strings.Repeat("x", 300)
+	w.feed(append([]map[string]any{oc("part", map[string]any{"sessionID": "ses_kid", "callID": "b2", "tool": "bash", "status": "running",
+		"input": long[:300], "truncated": true})}, ask("b2")...)...)
+	if on, _ := w.children()["c1"]["waitingOn"].(map[string]any); on["permission"] != "bash" {
+		t.Errorf("an ask for an open call does not hold it: %v", w.children())
+	}
+	events := w.events()
+	if p := ofType(events, evChildToolCalled)[0].Payload; p["input"] != long[:300] || p["truncated"] != true {
+		t.Errorf("a cut input %v", p)
+	}
+	if p := ofType(events, evChildWaiting)[0].Payload; p["held"] != true {
+		t.Errorf("ask %v", p)
+	}
+	w.feed(oc("part", map[string]any{"sessionID": "ses_kid", "callID": "b2", "tool": "bash", "status": "error", "error": "denied"}))
+	if got := w.children()["c1"]; got["waitingOn"] != nil {
+		t.Errorf("the child's next record did not end the wait: %v", got)
+	}
+}
+
+// The scripted subagent-ask implementer on the fake lux (lux-fake's
+// `subagent ask`, as lux plays it on OpenCode): a child with lux's ids, its
+// read done, its bash call held on an ask nothing answers.
+func TestTheScriptedSubagentAskWaitsOnBash(t *testing.T) {
+	fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Subagent: "subagent ask"}
+	})
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(func() { srv.Close(); fake.Close() })
+	lr, err := lux.New(srv.URL, "k").Submit(context.Background(), lux.Spec{Name: "t", Image: lux.Image{Ref: "img"},
+		Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "subagent-ask")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recs []map[string]any
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		recs = fake.Records(lr.ID)
+		if slices.ContainsFunc(recs, func(r map[string]any) bool { return r["type"] == "opencode.permission" }) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the subagent never asked")
+		}
+	}
+	w := newHarnessWorld(t)
+	w.feed(recs...)
+	var session string
+	for _, r := range recs {
+		if r["type"] == "lux.session" {
+			session = r["data"].(map[string]any)["sessionId"].(string)
+		}
+	}
+	got := w.children()["toolu_task1"]
+	on, _ := got["waitingOn"].(map[string]any)
+	if got["childId"] != session+"_child1" || on["permission"] != "bash" || on["patterns"].([]any)[0] != "cat /etc/hostname" {
+		t.Errorf("children %v", w.children())
+	}
+	events := w.events()
+	if calls := ofType(events, evChildToolCompleted); len(calls) != 1 || calls[0].Payload["callId"] != "toolu_read1" {
+		t.Errorf("child calls done %v", calls)
+	}
+	if ofType(events, evAgentWarning) == nil || len(ofType(events, evChildEnded)) != 0 {
+		t.Errorf("events %v", types(events))
 	}
 }

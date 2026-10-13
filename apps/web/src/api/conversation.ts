@@ -689,8 +689,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ChildWaiting: {
         const child = childOf(state, payload, event);
-        // One its harness answered for it holds nothing.
-        child.waitingOn = payload.answered === "allow" ? null : {
+        // One answered for it, or for a call already over, holds nothing.
+        if (payload.answered === "allow" || payload.held === false) break;
+        child.waitingOn = {
           permission: String(payload.permission ?? payload.on ?? "a permission"),
           patterns: Array.isArray(payload.patterns) ? payload.patterns.map(String) : [],
           since: event.occurredAt,

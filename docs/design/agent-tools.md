@@ -131,7 +131,7 @@ Codex's thread, Claude Code's task) and `callId` (the parent's
 | `agent.child.tool.called` | as `agent.tool.called` (`tool`, `callId` — the child's own call —, `input`, `title`) plus `childId`, `parentCallId` | a child's tool call starts |
 | `agent.child.tool.completed` | as `agent.tool.completed` (`tool`, `callId`, `status`, the result) plus `childId`, `parentCallId` | it ends |
 | `agent.child.message` | `{childId, callId, text, costUsd?, tokens?}` | a child's assistant message completes |
-| `agent.child.waiting` | `{childId, callId, on: "permission", permission, patterns, answered}` | the harness asked a permission for the child; the child's next event ends the wait |
+| `agent.child.waiting` | `{childId, callId, on: "permission", permission, patterns, answered, held, childCallId?}` — `held` false when lux answered it or the call it was for is already over | the harness asked a permission for the child; the child's next event ends the wait |
 | `agent.child.ended` | `{childId, callId, status, summary, costUsd?, tokens?, durationSecs}` — status `completed`, `failed` or `interrupted` | the child is done |
 
 Only completed things are recorded: no deltas, no reasoning, one
@@ -165,7 +165,13 @@ it again.
   completed message, `opencode.permission` an ask on its session. ACP
   reports the task tool with kind `think` and the description as title:
   a `think` call whose input names a `subagent_type` is recorded as tool
-  `task`.
+  `task`. A part's `input` is its JSON cut at 300 bytes: recorded as the
+  object when it still parses, else as the string, with `truncated`. A
+  task's `model` is OpenCode's `{modelID, providerID}`, recorded as
+  `providerID/modelID`. lux relays an ask nothing answered with a
+  `lux.warning`, after child records that may already follow it: an ask
+  for a call already over is recorded (`held: false`) and holds nothing,
+  and any later record of the child ends a wait.
 
 ### The stall detector
 

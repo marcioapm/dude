@@ -383,8 +383,10 @@ export const EventTypes = {
   ChildMessage: "agent.child.message",
   /**
    * A child waits on something nothing in the Run can answer. Payload:
-   * `{ childId, callId, on: "permission", permission, patterns, answered }`.
-   * The child's next event ends the wait.
+   * `{ childId, callId, on: "permission", permission, patterns, answered,
+   * held, childCallId? }`: `held` false for an ask lux answered or one for
+   * a call already over, which holds nothing. The child's next event ends
+   * the wait.
    */
   ChildWaiting: "agent.child.waiting",
   /**

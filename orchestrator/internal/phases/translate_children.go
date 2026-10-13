@@ -294,7 +294,7 @@ func (t *translator) parentCallEnded(ctx context.Context, tx pgx.Tx, s *Syncer, 
 
 // childMessage records a child's completed message; empty text is none.
 func (t *translator) childMessage(ctx context.Context, tx pgx.Tx, s *Syncer, c *childState, text string, cost float64,
-	tokens map[string]any) error {
+	tokens map[string]any, truncated bool) error {
 	if err := t.startChild(ctx, tx, s, c); err != nil {
 		return err
 	}
@@ -313,26 +313,37 @@ func (t *translator) childMessage(ctx context.Context, tx pgx.Tx, s *Syncer, c *
 	if tokens != nil {
 		p["tokens"] = tokens
 	}
+	if truncated {
+		p["truncated"] = true
+	}
 	return s.event(ctx, tx, t.run, evChildMessage, ledger.ActorAgent, childPayload(c, p))
 }
 
-// childWaiting records a permission the harness asked for a child. One
-// lux answered (answered "allow") is said, and does not hold it.
-func (t *translator) childWaiting(ctx context.Context, tx pgx.Tx, s *Syncer, c *childState, permission string, patterns []string,
-	answered string) error {
+// childWaiting records a permission the harness asked for a child, on its
+// call callID. It holds the child only while nothing answered it (lux's
+// answered "allow" did) and the call is still open: lux relays the ask
+// with a lux.warning, after child records that may follow it, so an ask
+// for a call already over (or a child already ended) is said and holds
+// nothing. Any later event of the child ends the wait.
+func (t *translator) childWaiting(ctx context.Context, tx pgx.Tx, s *Syncer, c *childState, callID, permission string,
+	patterns []string, answered string) error {
 	if err := t.startChild(ctx, tx, s, c); err != nil {
 		return err
 	}
 	if patterns == nil {
 		patterns = []string{}
 	}
-	var on map[string]any
-	if answered != "allow" {
-		on = map[string]any{"permission": permission, "patterns": patterns}
+	_, open := c.Calls[callID]
+	held := answered != "allow" && !c.Ended && (callID == "" || open)
+	p := map[string]any{"on": "permission", "permission": permission, "patterns": patterns, "answered": answered, "held": held}
+	if callID != "" {
+		p["childCallId"] = callID
 	}
-	t.touchChild(c, "asked permission "+permission+" for "+strings.Join(patterns, ", "), on)
-	return s.event(ctx, tx, t.run, evChildWaiting, ledger.ActorAgent, childPayload(c, map[string]any{
-		"on": "permission", "permission": permission, "patterns": patterns, "answered": answered}))
+	if held {
+		t.touchChild(c, "asked permission "+permission+" for "+strings.Join(patterns, ", "),
+			map[string]any{"permission": permission, "patterns": patterns})
+	}
+	return s.event(ctx, tx, t.run, evChildWaiting, ledger.ActorAgent, childPayload(c, p))
 }
 
 // endChild records agent.child.ended once. durationSecs 0 is measured from

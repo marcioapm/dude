@@ -274,7 +274,7 @@ func (t *translator) codexCall(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 func (t *translator) codexItemDone(ctx context.Context, tx pgx.Tx, s *Syncer, c *childState, it codexItem, epoch int) error {
 	switch {
 	case c != nil && it.Type == "agentMessage":
-		return t.childMessage(ctx, tx, s, c, it.Text, 0, nil)
+		return t.childMessage(ctx, tx, s, c, it.Text, 0, nil, false)
 	case c != nil && it.Type == "reasoning":
 		t.touchChild(c, "thinking", nil)
 		return nil

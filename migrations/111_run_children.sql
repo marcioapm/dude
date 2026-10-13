@@ -22,3 +22,12 @@ CREATE OR REPLACE FUNCTION run_stalled(r runs) RETURNS boolean LANGUAGE sql STAB
     OR ('silent' = ANY (r.stall_reasons)
       AND COALESCE(r.agent_active_at, r.files_changed_at, r.started_at) <= r.stall_reported_at))
 $$;
+
+-- The scripted agent's fake/subagent and fake/subagent-ask (its
+-- implementer starts a task subagent, which with -ask waits on a
+-- permission nothing answers) are test models a tier may request.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',
+                   'fake/command', 'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup', 'fake/subagent', 'fake/subagent-ask')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

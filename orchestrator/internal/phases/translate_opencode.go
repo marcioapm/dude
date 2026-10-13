@@ -43,7 +43,7 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 			return nil
 		}
 		c := t.opencodeChild(e.ChildSessionID)
-		c.CallID, c.Model = e.CallID, cmp.Or(c.Model, e.Model)
+		c.CallID, c.Model = e.CallID, cmp.Or(c.Model, e.Model.String())
 		if e.SessionID != t.SessionID && t.child(e.SessionID) != nil {
 			c.ParentChildID = e.SessionID
 		}
@@ -64,12 +64,15 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 		if c == nil || e.CallID == "" {
 			return nil
 		}
+		called := map[string]any{"tool": e.Tool, "callId": e.CallID, "input": opencodeInput(e.Input), "title": e.Title}
+		if e.Truncated {
+			called["truncated"] = true
+		}
 		switch e.Status {
 		case "running":
-			return t.callStarted(ctx, tx, s, c, map[string]any{"tool": e.Tool, "callId": e.CallID, "input": e.Input, "title": e.Title})
+			return t.callStarted(ctx, tx, s, c, called)
 		case "completed", "error":
-			if err := t.callStarted(ctx, tx, s, c, map[string]any{"tool": e.Tool, "callId": e.CallID, "input": e.Input,
-				"title": e.Title}); err != nil {
+			if err := t.callStarted(ctx, tx, s, c, called); err != nil {
 				return err
 			}
 			st, out := "completed", e.Output
@@ -79,6 +82,9 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 			payload := map[string]any{"tool": e.Tool, "callId": e.CallID, "status": st, "title": e.Title}
 			if out != "" {
 				payload["output"] = capOutput(out)
+			}
+			if e.Truncated {
+				payload["truncated"] = true
 			}
 			return t.callEnded(ctx, tx, s, c, payload)
 		default:
@@ -97,13 +103,13 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 			c.Tokens.Cached += tk.Cache.Read
 			c.Tokens.Output += tk.Output
 		}
-		return t.childMessage(ctx, tx, s, c, e.Text, e.Cost, tokens)
+		return t.childMessage(ctx, tx, s, c, e.Text, e.Cost, tokens, e.Truncated)
 	case "permission":
 		c := t.child(e.SessionID)
 		if c == nil {
 			return nil
 		}
-		return t.childWaiting(ctx, tx, s, c, e.Permission, e.Patterns, e.Answered)
+		return t.childWaiting(ctx, tx, s, c, e.CallID, e.Permission, e.Patterns, e.Answered)
 	}
 	return nil
 }
@@ -111,20 +117,21 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 // opencodeRecord is every field of the opencode.* records the translator
 // reads; each type uses its own.
 type opencodeRecord struct {
-	ID             string  `json:"id"`
-	ParentID       string  `json:"parentID"`
-	Title          string  `json:"title"`
-	SessionID      string  `json:"sessionID"`
-	CallID         string  `json:"callID"`
-	ChildSessionID string  `json:"childSessionID"`
-	Model          string  `json:"model"`
-	Status         string  `json:"status"`
-	Tool           string  `json:"tool"`
-	Input          any     `json:"input"`
-	Output         string  `json:"output"`
-	Error          string  `json:"error"`
-	Text           string  `json:"text"`
-	Cost           float64 `json:"cost"`
+	ID             string        `json:"id"`
+	ParentID       string        `json:"parentID"`
+	Title          string        `json:"title"`
+	SessionID      string        `json:"sessionID"`
+	CallID         string        `json:"callID"`
+	ChildSessionID string        `json:"childSessionID"`
+	Model          opencodeModel `json:"model"`
+	Status         string        `json:"status"`
+	Tool           string        `json:"tool"`
+	Input          string        `json:"input"` // its JSON, cut by lux at 300 bytes
+	Truncated      bool          `json:"truncated"`
+	Output         string        `json:"output"`
+	Error          string        `json:"error"`
+	Text           string        `json:"text"`
+	Cost           float64       `json:"cost"`
 	Tokens         *struct {
 		Input  int64 `json:"input"`
 		Output int64 `json:"output"`
@@ -162,4 +169,46 @@ func (t *translator) opencodeTaskInput(ctx context.Context, tx pgx.Tx, c *childS
 	if json.Unmarshal(raw, &input) == nil {
 		c.Title, c.AgentType = cmp.Or(input.Description, c.Title), cmp.Or(c.AgentType, input.SubagentType)
 	}
+}
+
+// opencodeModel is OpenCode's model, {modelID, providerID}; a plain string
+// is taken as it is.
+type opencodeModel struct{ ModelID, ProviderID, Name string }
+
+func (m *opencodeModel) UnmarshalJSON(b []byte) error {
+	if json.Unmarshal(b, &m.Name) == nil {
+		return nil
+	}
+	var o struct {
+		ModelID    string `json:"modelID"`
+		ProviderID string `json:"providerID"`
+	}
+	if json.Unmarshal(b, &o) == nil {
+		m.ModelID, m.ProviderID = o.ModelID, o.ProviderID
+	}
+	return nil
+}
+
+// String is the model as providerID/modelID.
+func (m opencodeModel) String() string {
+	switch {
+	case m.Name != "":
+		return m.Name
+	case m.ProviderID != "" && m.ModelID != "":
+		return m.ProviderID + "/" + m.ModelID
+	}
+	return m.ModelID
+}
+
+// opencodeInput is a part's input for the ledger: the object its JSON
+// says, or, cut short by lux and no longer JSON, the string as it came.
+func opencodeInput(in string) any {
+	if in == "" {
+		return nil
+	}
+	var v any
+	if json.Unmarshal([]byte(in), &v) == nil {
+		return v
+	}
+	return in
 }

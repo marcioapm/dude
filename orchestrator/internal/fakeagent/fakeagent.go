@@ -129,6 +129,16 @@ const Question = `{"question":"Should FACTORY.md be in English?","choices":["yes
 // ConductorQuestion is what AskModel's conductor asks, in its first turn.
 const ConductorQuestion = `{"question":"Make it a follow-up task?","choices":["Yes","No"]}`
 
+// SubagentModel's implementer starts a task subagent (lux-fake's
+// `subagent`: it reads a file and runs a command, then ends), and keeps
+// working; SubagentAskModel's subagent asks a permission nothing answers
+// (`subagent ask`: bash for "cat /etc/hostname") before its command, and
+// never ends. Both hang: a Run whose child a test watches.
+const (
+	SubagentModel    = "fake/subagent"
+	SubagentAskModel = "fake/subagent-ask"
+)
+
 // AskSeveralModel is AskModel asking Questions: several in one ask_person.
 const AskSeveralModel = "fake/ask-several"
 
@@ -194,6 +204,9 @@ type Step struct {
 	// What it thinks before it acts, streamed as thought chunks (the fake
 	// lux only: lux-fake has no thoughts).
 	Thought string
+	// It starts a task subagent first ("subagent" or "subagent ask", as
+	// lux-fake's script line says it), then hangs.
+	Subagent string
 }
 
 // ToolsThought is what ToolsModel's implementer thinks before it acts.
@@ -376,6 +389,13 @@ func For(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
 	}
+	if (model == SubagentModel || model == SubagentAskModel) && phase == "implement" {
+		line := "subagent"
+		if model == SubagentAskModel {
+			line = "subagent ask"
+		}
+		return Step{Hang: true, Subagent: line}
+	}
 	if model == CommandModel && phase == "implement" {
 		return Step{Hang: true, LongCommand: true}
 	}
@@ -453,6 +473,9 @@ func For(phase, model, runID string, fixed bool) Step {
 func Script(phase, model, runID string) string {
 	if model == HangModel || model == CommandModel && phase == "implement" {
 		return "sleep 3600"
+	}
+	if step := For(phase, model, runID, false); step.Subagent != "" {
+		return step.Subagent + "\nsleep 3600"
 	}
 	if model == LiveModel && phase == "implement" {
 		var b strings.Builder

@@ -109,6 +109,12 @@ describe("agent.child.waiting", () => {
     expect(childOf(snapshot(state).turns).waitingOn).toBeNull();
   });
 
+  test("one for a call already over holds nothing, and leaves an earlier wait as it was", () => {
+    const { turns } = project([parentCall(), started(),
+      ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "bash", patterns: ["cat /etc/hostname"], answered: "none", held: false })]);
+    expect(childOf(turns).waitingOn).toBeNull();
+  });
+
   test("one its harness answered holds nothing", () => {
     const { turns } = project([parentCall(), started(),
       ev(EventTypes.ChildWaiting, { ...kid, on: "permission", permission: "read", patterns: [], answered: "allow" })]);

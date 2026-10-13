@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 )
 
 // A child session (a subagent) of the Run's agent, said as each harness
@@ -47,6 +48,13 @@ func (s *Server) Child(id string, step ChildStep) error {
 	if run == nil {
 		return fmt.Errorf("no such run")
 	}
+	s.childStep(run, step)
+	return nil
+}
+
+// childStep says one step of a child in the Run's harness's shapes.
+// Callers hold s.mu.
+func (s *Server) childStep(run *Run, step ChildStep) {
 	switch run.dialect() {
 	case dialectClaude:
 		s.claudeChild(run, step)
@@ -55,7 +63,6 @@ func (s *Server) Child(id string, step ChildStep) error {
 	default:
 		s.opencodeChild(run, step)
 	}
-	return nil
 }
 
 func (s *Server) childHandler(w http.ResponseWriter, r *http.Request) {
@@ -91,10 +98,16 @@ func (s *Server) opencodeChild(run *Run, st ChildStep) {
 			"status": "in_progress", "kind": "think", "title": st.Title, "rawInput": input})
 		oc("session", map[string]any{"id": st.ChildID, "parentID": run.SessionID, "title": st.Title + " (@" + st.AgentType + " subagent)"})
 		oc("task", map[string]any{"sessionID": run.SessionID, "callID": st.CallID, "childSessionID": st.ChildID,
-			"model": "claude-haiku-4.5", "status": "running"})
+			"model": opencodeModel, "status": "running"})
 	case "tool":
 		part := map[string]any{"sessionID": st.ChildID, "messageID": "msg_" + st.ToolCallID, "callID": st.ToolCallID, "tool": st.Tool,
-			"status": "running", "title": st.Tool, "input": st.Input}
+			"status": "running", "title": st.Tool}
+		if in, truncated := clippedInput(st.Input); in != "" {
+			part["input"] = in
+			if truncated {
+				part["truncated"] = true
+			}
+		}
 		oc("part", part)
 		if st.Output != "" {
 			done := map[string]any{}
@@ -108,19 +121,43 @@ func (s *Server) opencodeChild(run *Run, st ChildStep) {
 		oc("message", map[string]any{"sessionID": st.ChildID, "messageID": "msg_" + st.ChildID, "role": "assistant", "text": st.Text,
 			"cost": 0.002, "tokens": map[string]any{"input": 5, "output": 4, "cache": map[string]any{"read": 7979, "write": 137}}})
 	case "wait":
+		// lux says an ask nothing answered twice, together: the record, and
+		// a warning for a person.
 		oc("permission", map[string]any{"sessionID": st.ChildID, "permissionID": "per_" + st.ChildID, "permission": st.Permission,
 			"patterns": st.Patterns, "callID": st.ToolCallID, "answered": "none"})
+		s.recordEvent(run, "lux.warning", map[string]any{"message": fmt.Sprintf(
+			"an OpenCode subagent (%s) asked for permission %s; nothing can answer it", st.ChildID, st.Permission)})
 	case "end":
 		status := "completed"
 		if st.status() != "completed" {
 			status = "error"
 		}
 		oc("task", map[string]any{"sessionID": run.SessionID, "callID": st.CallID, "childSessionID": st.ChildID,
-			"model": "claude-haiku-4.5", "status": status})
+			"model": opencodeModel, "status": status})
 		s.recordEvent(run, "acp.tool_call_update", map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": st.CallID,
 			"status": "completed", "title": st.Title, "content": []any{map[string]any{"type": "content", "content": map[string]any{
 				"type": "text", "text": fmt.Sprintf("<task id=%q state=%q>\n<task_result>\n%s\n</task_result>\n</task>", st.ChildID, status, st.Text)}}}})
 	}
+}
+
+// opencodeModel is a child's model as lux relays it: OpenCode's object.
+var opencodeModel = map[string]any{"modelID": "claude-haiku-4.5", "providerID": "llmproxy-anthropic"}
+
+// clippedInput is a part's input as lux relays it: its JSON, cut at 300
+// bytes on a character boundary, and whether it was cut; "" for none.
+func clippedInput(in map[string]any) (string, bool) {
+	if len(in) == 0 {
+		return "", false
+	}
+	b, _ := json.Marshal(in)
+	if len(b) <= 300 {
+		return string(b), false
+	}
+	cut := 300
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	return string(b[:cut]), true
 }
 
 // claudeTools are OpenCode's tool names as Claude Code's.
@@ -215,4 +252,35 @@ func (s *Server) codexChild(run *Run, st ChildStep) {
 		on(st.ChildID, "turn/completed", map[string]any{"turn": map[string]any{"id": "turn-" + st.ChildID, "status": st.status()}})
 		on(run.SessionID, "item/completed", map[string]any{"turnId": turn, "item": collab(wait, "wait", "completed", []any{st.ChildID})})
 	}
+}
+
+// playSubagent is lux-fake's script line `subagent` or `subagent ask`, as
+// lux plays it: a task subagent, ids as lux's (ses_<parent>_child<n>,
+// toolu_task<n>, toolu_read<n>, toolu_bash<n>), that reads a file and runs
+// a command, then ends; with ask, it asks permission bash for "cat
+// /etc/hostname" before its command and waits for good. Callers hold s.mu.
+func (s *Server) playSubagent(run *Run, line string) {
+	if line == "" {
+		return
+	}
+	run.children++
+	n := run.children
+	step := func(st ChildStep) {
+		st.CallID, st.ChildID = fmt.Sprintf("toolu_task%d", n), fmt.Sprintf("%s_child%d", run.SessionID, n)
+		st.Title, st.AgentType = "Read the hostname", "general"
+		s.childStep(run, st)
+	}
+	step(ChildStep{Op: "start"})
+	step(ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_read%d", n), Tool: "read", Input: map[string]any{"filePath": "/etc/hostname"},
+		Output: "box"})
+	bash := ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_bash%d", n), Tool: "bash", Input: map[string]any{"command": "cat /etc/hostname"}}
+	if line == "subagent ask" {
+		step(bash)
+		step(ChildStep{Op: "wait", ToolCallID: bash.ToolCallID, Permission: "bash", Patterns: []string{"cat /etc/hostname"}})
+		return
+	}
+	bash.Output = "box"
+	step(bash)
+	step(ChildStep{Op: "message", Text: "The hostname is box."})
+	step(ChildStep{Op: "end", Text: "The hostname is box."})
 }
