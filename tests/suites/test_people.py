@@ -568,10 +568,12 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
-    # Invitation management is deferred to phase 2, not a dead key-issuing form.
-    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("email-bound invitation links, not shared keys")
-    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("Cloudflare Access must also let them in")
-    expect(members.get_by_test_id("invitation-guidance")).to_contain_text("unavailable until the phase 2 web UI")
+    # Members says how people join and that inviting here is not available, with no key-issuing form.
+    guidance = members.get_by_text("People join this organisation by invitation.")
+    expect(guidance).to_have_text(
+        "People join this organisation by invitation. Cloudflare Access must also let them in; dude doesn't manage that."
+        " Inviting people from this screen is not available yet."
+    )
     expect(page.get_by_test_id("invite")).to_have_count(0)
     expect(page.get_by_test_id("invite-submit")).to_have_count(0)
     assert len(client.get("/v1/people").json()["people"]) == 1

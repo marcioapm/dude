@@ -10,7 +10,6 @@ import {
   CardBody,
   CardHeader,
   Dialog,
-
   Select,
   Table,
   TBody,
@@ -53,9 +52,9 @@ export function MembersSection({ client, me, people, onChanged }: {
         <p className="muted">
           Everyone here can create, deliver and steer tasks. Admins manage the organization: its members and its settings.
         </p>
-        <p className="muted" data-testid="invitation-guidance">
-          People join by email-bound invitation links, not shared keys. Cloudflare Access must also let them in;
-          dude does not manage Access. Invitation management in this screen is unavailable until the phase 2 web UI.
+        <p className="muted">
+          People join this organisation by invitation. Cloudflare Access must also let them in; dude doesn't manage that.
+          Inviting people from this screen is not available yet.
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {people.length > 0 ? (
