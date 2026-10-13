@@ -301,7 +301,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const parentChild = entries.find(({ child }) => child.id === childPath.at(-2));
   const navigateChild = useCallback((id: string) => setChildPath((path) => [...path, id]), []);
   const childPanel = openedChild ? <ChildOpenContext.Provider value={navigateChild}>
-    <div data-testid="child-panel" data-child={openedChild.child.id} style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div data-testid="child-panel" data-child={openedChild.child.id} style={{ display: "flex", flexDirection: "column", height: narrow ? "min(65vh, 720px)" : "100%", minHeight: 0 }}>
       <div style={{ padding: 12, background: "var(--ds-color-chrome)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span className="ds-label">Subagent</span>

@@ -80,6 +80,8 @@ test("an open-only thread stays folded and opens by click, Enter and Space", asy
   for (const key of ["Enter", " "]) await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
   expect(opened).toEqual(["row", "row", "row"]);
   expect(host.querySelector("[role='group']")).toBeNull();
+  await act(async () => host!.querySelector<HTMLElement>("section")!.click());
+  expect(opened).toHaveLength(4);
 });
 
 const start = () => [
@@ -87,7 +89,7 @@ const start = () => [
   ev(EventTypes.ChildStarted, { ...kid, kind: "task", title: "Inspect test capture setup", agentType: "explore", model: "claude-haiku-4.5" }, 120),
 ];
 
-test("a live child is an open subagent thread under the call's card, with its call and message inside", async () => {
+test("a live child is a folded subagent row under the call's card, without its transcript body", async () => {
   const el = await render([...start(),
     ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep", input: { pattern: "viewport", path: "tests" } }, 119),
     ev(EventTypes.ChildToolCompleted, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep", status: "completed", output: { head: "tests/conftest.py:12" } }, 119),
@@ -274,6 +276,21 @@ test("permission waiting stays on the row and rail, with the notice and stuck ca
   expect(panel.querySelector("[data-testid='child-waiting-notice']")!.textContent).toContain("Nothing in this Run can answer it.");
   expect(panel.textContent).toContain("nothing in this Run can allow or refuse it");
   expect(panel.textContent).toContain("waiting 1h 57m on a permission");
+});
+
+test("below 960px the screen uses the xl dialog fallback", async () => {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: query.includes("959px"), addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia;
+  try {
+    const el = await screen(start());
+    await act(async () => header(threadOf(el, "ses_kid")!).click());
+    expect(document.querySelector("[role='dialog'] [data-testid='child-panel']")?.getAttribute("data-child")).toBe("ses_kid");
+    expect(el.querySelector("[data-testid='session-rail']")).toBeTruthy();
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector("[data-testid='child-panel']")).toBeNull();
+  } finally {
+    window.matchMedia = original;
+  }
 });
 
 test("a Run without children has no Subagents block", async () => {

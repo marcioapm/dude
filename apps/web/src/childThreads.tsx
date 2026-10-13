@@ -2,8 +2,8 @@
 
 import { createContext, memo, useContext, type ReactNode } from "react";
 import { AgentAvatar, Duration, SessionRailBlock, ToolCallCard } from "@dude/design-system/components";
-import { childSummary } from "./childThreadView.tsx";
-import type { ChildTurn, Turn } from "./api/conversation.ts";
+import { childSummary, ChildThreadView, type ChildThreadProps } from "./childThreadView.tsx";
+import type { ChildTurn, ToolTurn, Turn } from "./api/conversation.ts";
 
 export const ChildOpenContext = createContext<((id: string) => void) | undefined>(undefined);
 
@@ -39,8 +39,6 @@ export function SubagentsBlock({ turns, onOpen }: { turns: readonly Turn[]; onOp
     </button>)}
   </SessionRailBlock>;
 }
-import type { ToolTurn } from "./api/conversation.ts";
-import { ChildThreadView, type ChildThreadProps } from "./childThreadView.tsx";
 
 /** A tool call's card, and under it the threads of the children it started, at depth. */
 export function ToolWithChildren({ turn, depth, note }: { turn: ToolTurn; depth: number; note?: ReactNode }) {

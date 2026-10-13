@@ -139,9 +139,10 @@ export function ChatThread({
       data-depth={depth}
       data-waiting={isWaiting ? "true" : undefined}
       aria-label={`${ROLE_LABEL[role]} subagent: ${task}`}
+      onClick={openOnly ? () => onOpen?.(sessionId) : undefined}
       {...rest}
     >
-      <div className={styles["header"]} role="button" tabIndex={0} aria-expanded={pinnedClosed ? undefined : !isCollapsed} onClick={toggle} onKeyDown={onKey}>
+      <div className={styles["header"]} role="button" tabIndex={0} aria-expanded={pinnedClosed ? undefined : !isCollapsed} onClick={(event) => { event.stopPropagation(); toggle(); }} onKeyDown={onKey}>
         <Icon name="chevron-right" size={12} className={styles["chevron"]} />
         <AgentAvatar role={role} size="xs" live={status === "running"} />
         <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span>
