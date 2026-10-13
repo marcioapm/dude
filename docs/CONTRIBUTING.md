@@ -300,6 +300,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   Its Run is servers-only (no `workload.servers`), resumed with `sync` on
   every wake, or replaced by a new one when its last start failed before it
   ran (`runs.start_failures`, bounded). See [operations](operations.md#branch-previews).
+  Its first wake waits up to `firstWakeTimeoutMinutes` (default 15); after
+  a server has been ready once, `wakeTimeoutMinutes` (default 5). Both are
+  project settings, whole minutes 1..120. `runs.preview_ready_at` preserves
+  that fact across sleeps and replacement lux Runs; the sweep patches lux
+  servers' timeouts, never shortening an open wake.
 - **An old-style preview** (`wakeable = false`: before lux#41, or a lux with
   no preview domain) serves the recipes as the spec's `workload.servers`.
   It is parked (`dude_pause = 'unused'`) after the project's idle timeout

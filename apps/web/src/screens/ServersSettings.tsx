@@ -162,6 +162,16 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             onValueChange={(v) => savePreviews({ idleTimeoutMinutes: Number(v) }, "Idle timeout saved")}
             options={[...new Set([...IDLE_TIMEOUTS, previews.idleTimeoutMinutes])].sort((a, b) => a - b).map((m) => ({ value: String(m), label: m < 60 ? `${m} minutes` : m === 60 ? "1 hour" : `${m / 60} hours` }))} />
         </SettingRow>
+        {([
+          ["firstWakeTimeoutMinutes", "First wake timeout", "How long lux waits until this preview has served once. Its first start may build images; default 15 minutes."],
+          ["wakeTimeoutMinutes", "Wake timeout", "How long lux waits on every later wake from the preview’s snapshot; default 5 minutes. A shorter timeout waits until an open wake is over."],
+        ] as const).map(([field, label, help]) => (
+          <SettingRow key={field} label={label} help={help}>
+            <Select aria-label={label} value={String(previews[field])} disabled={!canEdit || previewSave.busy}
+              onValueChange={(v) => savePreviews({ [field]: Number(v) }, `${label} saved`)}
+              options={Array.from({ length: 120 }, (_, i) => ({ value: String(i + 1), label: `${i + 1} minutes` }))} />
+          </SettingRow>
+        ))}
         <SettingRow label="Access" help="Who can open a preview.">
           <span className="previewAccess"><Icon name="human" size={14} />Visitors sign in the way they sign in to lux. Nothing is public.</span>
         </SettingRow>
