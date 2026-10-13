@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { newId } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { config } from "../../config.ts";
 import { badRequest, json, noContent } from "../http.ts";
@@ -103,6 +104,15 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
             expires_at = EXCLUDED.expires_at, refresh_expires_at = EXCLUDED.refresh_expires_at,
             reconnect_required = false, refresh_claim = NULL, refresh_claim_until = NULL`;
         await sql`UPDATE people SET github_login = ${user.login!}, github_user_id = ${user.id!} WHERE id = ${personId}`;
+        // The workflow signal mirrors workflow.SignalTx: only deliveries frozen to this person are woken.
+        const parked = await sql`SELECT DISTINCT r.id FROM workflow_runs r JOIN pr_publications p ON p.task_id = r.task_id
+          WHERE p.owner_person_id = ${personId} AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'`;
+        for (const { id } of parked) {
+          await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+            VALUES (${newId("workflowSignal")}, ${organizationId}, ${id}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
+          await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${id}
+            AND status = 'waiting' AND awaiting_signals ? 'github.authorized'`;
+        }
         return true;
       });
       return landing(stored ? "connected" : "app_changed");

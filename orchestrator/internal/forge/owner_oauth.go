@@ -13,9 +13,16 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
+// OwnerAuthorizationError means the frozen task owner must connect GitHub.
+type OwnerAuthorizationError struct{}
+
+func (OwnerAuthorizationError) Error() string {
+	return "The task owner needs Connect GitHub in their profile before this pull request can be opened"
+}
+
 // OwnerToken never changes installation credentials or the shared App cache.
 func OwnerToken(ctx context.Context, database *db.DB, org, person string) (string, error) {
-	reconnect := &Error{Status: http.StatusUnauthorized, Message: "The task owner needs Connect GitHub in their profile before this pull request can be opened"}
+	reconnect := OwnerAuthorizationError{}
 	for {
 		var token, refresh, clientID, clientSecret, credential, claim string
 		var version int64

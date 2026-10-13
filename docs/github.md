@@ -40,7 +40,7 @@ Do not confuse the classic `workflow` scope with the fine-grained Workflows perm
 
 ## GitHub App
 
-An organization can connect dude as a GitHub App instead of with a token (Organization settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
+An organization can connect dude as a GitHub App instead of with a token (Organization settings → GitHub → Connect GitHub → **GitHub App**). The App installation clones, fetches, pushes, monitors pull requests, runs GitHub actions, and commits as `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. Creating a pull request uses the task owner's GitHub App user authorization. A token connection keeps the earlier behaviour; the choice is per organization.
 
 ### Creating the App
 
@@ -61,7 +61,7 @@ Enable only for the operations you want, as for a token:
 - **Actions: Read and write** (in place of Read) — required if dude's CI recovery policy reruns failed GitHub Actions jobs. Read access alone does not permit reruns.
 - Organization **Members: Read** — required to check private organization membership when the feedback policy lets organization members wake dude, rather than only repository writers.
 
-Subscribe to the events **pull_request**, **pull_request_review**, **pull_request_review_comment**, **pull_request_review_thread**, **issue_comment**, **check_run**, **check_suite** and **status**. A resolved review thread changes whether a pull request is ready to merge, and `status` is how CI that reports commit statuses arrives; without them dude learns of either only when its reconciler next reads the pull request (about every 15 minutes). The App's webhook URL and secret are the ones the Webhooks card shows once the App is connected (**Show secret**); content type `application/json`. An App has one webhook for every repository it is installed on, so dude registers no repository hooks for it.
+Subscribe to the events **pull_request**, **pull_request_review**, **pull_request_review_comment**, **pull_request_review_thread**, **issue_comment**, **check_run**, **check_suite**, **status** and **github_app_authorization**. A resolved review thread changes whether a pull request is ready to merge, and `status` is how CI that reports commit statuses arrives; without them dude learns of either only when its reconciler next reads the pull request (about every 15 minutes). The App's webhook URL and secret are the ones the Webhooks card shows once the App is connected (**Show secret**); content type `application/json`. An App has one webhook for every repository it is installed on, so dude registers no repository hooks for it.
 
 An App that is **public** ("Any account" can install it) can be installed by link on more than one account; a private one only on the account that owns it. To have dude work on a personal account's repositories and an organization's, make it public and install it on each, giving it access to the repositories dude works on. One credential serves every installation: dude finds the installation of each repository's owner (`GET /repos/{owner}/{repo}/installation`) and keeps it.
 
@@ -72,6 +72,22 @@ An App that is **public** ("Any account" can install it) can be installed by lin
 3. **Installation ID** is optional: leave it empty and dude finds each owner's installation. When set, it is used for an owner GitHub names no installation for, and for requests about no repository.
 4. Set the App's webhook URL and secret from the Webhooks card.
 5. **Verify** mints an installation token for one linked repository and reads the App's bot, and says GitHub's reason when it cannot (the App not installed on that owner, a key that is not the App's).
+
+### Pull requests as the task owner
+
+Setup checklist:
+
+1. In the GitHub App, copy the **Client ID** and generate a **client secret**. These are separate from the App ID and private key.
+2. Enable **Expire user authorization tokens** in the App's optional features.
+3. Add callback URL `<auth.public_url>/v1/me/github/callback`, with `auth.public_url` exactly as configured. Connect GitHub requires Cloudflare Access sign-in.
+4. In dude, add the Client ID and client secret to the GitHub App connection. Leaving the secret blank keeps the saved value; **Clear saved OAuth Client secret** removes it. Changing the App or OAuth client invalidates existing user authorizations.
+5. Each person opens Settings → You → **Connect GitHub**.
+
+dude requests `offline_access`, uses PKCE `S256`, and identifies the account by its numeric id from `GET /user`. A connection updates the person's GitHub login and id but keeps an explicit commit email. Tokens never reach the browser.
+
+A pull request uses the permissions shared by the App installation and the GitHub user. The primary owner, the task person in the lowest position, is recorded when pull request publication starts. If that authorization is missing, revoked, expired, or needs reconnecting, dude refuses to create the pull request. It does not use the App bot or another task member. The pushed branch remains available, and publication can retry after the owner reconnects. GitHub's repository refusals are shown as returned.
+
+Access-token and refresh-token lifetimes come from GitHub's responses. Refreshes rotate both tokens. An invalid grant requires the owner to connect again. A revocation webhook or Disconnect removes the connection. Existing pull request authors are not changed. dude does not promise that GitHub will display "via dude".
 
 dude signs a short-lived JWT with the key, exchanges it for an installation token (one hour), and mints a fresh one before every clone, push and sync it asks lux for, so a Run that outlives a token keeps pushing.
 

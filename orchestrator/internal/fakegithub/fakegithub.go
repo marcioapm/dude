@@ -92,12 +92,15 @@ type Server struct {
 	// When set, the check-runs listing answers 403 with this message and
 	// no rate-limit headers, as GitHub's abuse-detection limit does.
 	CheckRunsForbiddenMessage string
-	ReceiveStatus             int
-	ReceiveBody               string
-	ReceiveHeaders            http.Header
-	ReceiveToken              string
-	ReceiveRequests           []string
-	ReceiveDisconnect         bool
+	// Authorization headers on POST /pulls, and an optional refusal by token.
+	OpenAuth          []string
+	OpenRefuse        map[string]int
+	ReceiveStatus     int
+	ReceiveBody       string
+	ReceiveHeaders    http.Header
+	ReceiveToken      string
+	ReceiveRequests   []string
+	ReceiveDisconnect bool
 	// Intercept, when set, sees each API request before the fake answers
 	// it, without the fake's lock: it may block (a slow GitHub), or return
 	// a status to fail the request with (0 answers it as usual).
@@ -317,6 +320,19 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
+	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
+		owner, _, _ := strings.Cut(s.Slug, "/")
+		head := strings.TrimPrefix(r.URL.Query().Get("head"), owner+":")
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		out := []map[string]any{}
+		for _, p := range s.pulls {
+			if p.State == "open" && p.Head == head && (r.URL.Query().Get("base") == "" || p.Base == r.URL.Query().Get("base")) {
+				out = append(out, s.pullJSON(p))
+			}
+		}
+		write(w, 200, out)
+	})
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}", s.getPull)
 	mux.HandleFunc("PATCH "+prefix+"/pulls/{n}", func(w http.ResponseWriter, r *http.Request) {
 		p := s.number(w, r)
@@ -494,6 +510,15 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 		Draft                   bool
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
+	s.mu.Lock()
+	auth := r.Header.Get("Authorization")
+	s.OpenAuth = append(s.OpenAuth, auth)
+	refused := s.OpenRefuse[strings.TrimPrefix(auth, "Bearer ")]
+	s.mu.Unlock()
+	if refused != 0 {
+		fail(w, refused, "Resource not accessible by integration")
+		return
+	}
 	if s.SHA(in.Head) == "" {
 		fail(w, 422, "head branch does not exist")
 		return

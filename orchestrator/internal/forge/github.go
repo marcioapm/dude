@@ -505,7 +505,7 @@ func (g *GitHub) UsesApp() bool { return g.cred.Auth == "github_app" }
 
 func (g *GitHub) OpenPullRequestAs(ctx context.Context, in OpenPullRequest, token string) (PullRequestRef, error) {
 	if token == "" {
-		return PullRequestRef{}, &Error{Status: 401, Message: "The task owner needs Connect GitHub"}
+		return PullRequestRef{}, OwnerAuthorizationError{}
 	}
 	creation := NewGitHub(Credential{Auth: "pat", Secret: token, APIBaseURL: g.cred.APIBaseURL})
 	creation.http = g.http

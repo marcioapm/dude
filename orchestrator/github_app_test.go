@@ -70,6 +70,9 @@ func TestEveryPushCarriesAFreshAppToken(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
 	wi := w.task()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	pushes := 0
@@ -209,6 +212,9 @@ func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing
 		return scripted(spec)
 	}
 	wi := w.task()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 0 {
@@ -379,6 +385,9 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 	}
 	wi := w.task()
 	app := w.twoOwners(wi)
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.start(wi, delivery.DefaultPolicy())
 	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.marcioWeb.Pulls()) == 1 })
 	pushes := 0
