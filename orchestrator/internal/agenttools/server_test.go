@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -120,10 +121,21 @@ func setupWith(t *testing.T, srv *agenttools.Server) *fixture {
 	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
 		VALUES ($1, $2, $3, 1, 'Truncate long words', 'running')`, f.item, org, f.project)
 	srv.DB = app
+	if srv.Log == nil {
+		srv.Log = slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	}
 	hs := httptest.NewServer(srv.Handler())
 	t.Cleanup(hs.Close)
 	f.url = hs.URL
 	return f
+}
+
+// testWriter logs the tool server's errors in the test's output.
+type testWriter struct{ t *testing.T }
+
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Log(strings.TrimSpace(string(p)))
+	return len(p), nil
 }
 
 // run makes a phase Run with a role and status, and returns its token.

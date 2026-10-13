@@ -40,6 +40,9 @@ export const ID_PREFIXES = {
   brainstorm: "ssn",
   proposal: "prp",
   machineMove: "mmv",
+  peerMessage: "pm",
+  peerWait: "pw",
+  epicNote: "epn",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

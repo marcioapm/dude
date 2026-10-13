@@ -13,8 +13,9 @@ export type Place =
   // The welcome (`#/`): what dude opens on, and where New session goes.
   | { view: "welcome" }
   // A task's page may name the tab it opens on, and the attempt it shows
-  // when that is not the current one (`?attempt=1`).
-  | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number }
+  // when that is not the current one (`?attempt=1`). An epic's page, its
+  // Coordination view (`#/epic/<id>/coordination`) in place of its board.
+  | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number; epicView?: EpicView }
   | { view: "projectSettings"; projectId: string; page?: string }
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
@@ -28,6 +29,9 @@ export type Place =
 /** The task tabs a URL can name; Overview is the task's own URL. */
 export type TaskTab = "chat" | "findings" | "sessions" | "files" | "servers" | "activity";
 const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "files", "servers", "activity"];
+
+/** An epic's page shows its board, or how its tasks' agents coordinate. */
+export type EpicView = "board" | "coordination";
 
 /** Tabs whose content is one attempt's: the others show the whole task, whatever attempt is picked. */
 export const attemptScoped = (tab: TaskTab | undefined): boolean => tab !== "servers" && tab !== "activity" && tab !== "chat";
@@ -57,6 +61,7 @@ export function parsePlace(hash: string): Place | null {
     return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
   }
   const ref = { kind: kind as NavRef["kind"], id: decoded };
+  if (kind === "epic" && view === "coordination") return { view: "tree", ref, epicView: "coordination" };
   if (kind !== "task") return { view: "tree", ref };
   const tab = TASK_TABS.find((t) => t === view);
   const asked = new URLSearchParams(query).get("attempt");
@@ -84,6 +89,7 @@ export function formatPlace(place: Place | null): string {
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
     case "tree":
+      if (place.ref.kind === "epic" && place.epicView === "coordination") return `#/epic/${encodeURIComponent(place.ref.id)}/coordination`;
       return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}${place.tab ? `/${place.tab}` : ""}${place.attempt ? `?attempt=${place.attempt}` : ""}`;
   }
 }

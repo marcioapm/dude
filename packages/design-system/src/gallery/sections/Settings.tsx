@@ -4,6 +4,7 @@ import { MarkdownDocument } from "../../components/MarkdownDocument.tsx";
 import { PromptHistory, type PromptHistoryVersion } from "../../components/PromptHistory.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.tsx";
+import { PeerWaitMark } from "../../components/Peer.tsx";
 import { Segmented } from "../../components/ScreenHeader.tsx";
 import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsMeta, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
@@ -365,10 +366,14 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           <PromptHistory versions={VERSIONS} onRestore={() => {}} />
         </Panes>
       </Block>
-      <Block id="s-epics" title="EpicCard / EpicRow" note="In progress as cards: progress by lane (each with a word), pull requests, cost and people. Planned and done as quiet rows.">
+      <Block id="s-epics" title="EpicCard / EpicRow" note="In progress as cards: progress by lane (each with a word), pull requests, cost and people. Planned and done as quiet rows. A card whose agents wait on each other carries a PeerWaitMark after its title (`waiting`), neutral: it waits on an agent, not on you.">
         <Panes mode={mode}>
           <Col>
             <EpicCard epic={EPIC} />
+            <EpicCard epic={{ ...EPIC, id: "e1w", title: "Metric preview" }} waiting={<PeerWaitMark pairs={[["ABS-4", "ABS-2"]]} />}
+              actions={<Button size="sm" variant="quiet">State</Button>} />
+            <EpicCard epic={{ ...EPIC, id: "e1n", title: "Metric preview, two waits", needsYou: 1 }}
+              waiting={<PeerWaitMark pairs={[["ABS-4", "ABS-2"], ["ABS-2", "ABS-1"]]} />} />
             <EpicRow epic={{ ...EPIC, id: "e2", title: "Exports", prs: {}, when: "not started" }} detail="4 tasks" />
             <EpicRow epic={{ ...EPIC, id: "e3", title: "Dark mode", prs: { merged: 3 }, when: "finished Sep 14" }} detail="3 tasks · $2.70" />
           </Col>

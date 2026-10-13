@@ -15,8 +15,10 @@ import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRe
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
-import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
+import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, EPIC_NOTES_MAX, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
+import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
+import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, type RefusedMachineView } from "./data.ts";
@@ -122,7 +124,11 @@ export class FixtureClient extends ApiClient {
     if (as === "stalled") this.#stall();
     if (as === "refused") this.#refuse();
     if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
+    if (as === "peers") this.#coordinate();
     this.#nav = navigationFor(scenario);
+    // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
+    if (this.#peers) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id !== TASK_ID ? t : {
+      ...t, runs: t.runs?.map((a) => ({ ...a, sessions: a.sessions.map((s) => (s.id === RUN_ID ? { ...s, activity: "Waiting on WC-212" } : s)) })) })) })) }));
     // The tree and the board say what the task's page does.
     if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
       epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, status: this.#task.status, runs: undefined } : t)) })) }));
@@ -280,6 +286,63 @@ export class FixtureClient extends ApiClient {
         payload: { tool: "bash", callId: "c_uv", status: "completed", exitCode: 1, output: { head:
           "error: Failed to download idna==3.19\n  cause: Failed to fetch: https://files.pythonhosted.org/packages/57/b0/idna-3.19-py3-none-any.whl\n  cause: dns error\n" } } },
     ];
+  }
+
+  /**
+   * `dude.fixtures.run` = peers: the epic's tasks' agents coordinate
+   * (peers.ts). The implementer's ledger gains its peer events, in time
+   * order, and ends waiting on WC-212; an ended conductor on the task
+   * carries the epic's digest in its briefing.
+   */
+  #coordinate() {
+    this.#peers = true;
+    this.#task = { ...this.#task, runs: [...this.#task.runs, CONDUCTOR_RUN] };
+    const all = [...this.#events.filter((e) => e.runId !== RUN_ID || e.eventType !== "agent.tool.completed" || e.payload?.callId !== "c5"),
+      ...implementerPeerEvents(), ...conductorEvents()];
+    // One ledger, by time, numbered as the backend numbers it.
+    this.#events = all.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.cursor - b.cursor)
+      .map((e, i) => ({ ...e, cursor: i + 1, eventId: `evt_${(i + 1).toString().padStart(4, "0")}` }));
+  }
+
+  #peers = false;
+  #notes: EpicNotes = PEER_NOTES;
+
+  override epicNotes(epicId: string): Promise<EpicNotes> {
+    return Promise.resolve(this.#peers && epicId === EPIC.id ? this.#notes : { epicId, limit: EPIC_NOTES_MAX, current: [], history: [], live: 0 });
+  }
+  override epicThreads(epicId: string): Promise<EpicThreads> {
+    return Promise.resolve(this.#peers && epicId === EPIC.id ? PEER_THREADS : { epicId, threads: [], waiting: 0 });
+  }
+  override epicWaiting(epicId: string): Promise<{ epicId: string; waiting: number }> {
+    return Promise.resolve({ epicId, waiting: this.#peers && epicId === EPIC.id ? PEER_THREADS.waiting : 0 });
+  }
+  override epicPeers(epicId: string): Promise<EpicPeers> {
+    return Promise.resolve(this.#peers && epicId === EPIC.id ? PEER_STATES : { epicId, tasks: [] });
+  }
+  /** A person's pin, as the orchestrator answers it: past the limit refused, a replace retiring the note it names. */
+  override async pinEpicNote(epicId: string, input: PinNoteInput): Promise<PinnedNote> {
+    await wait(120);
+    const notes = this.#notes;
+    if (!input.replaces && notes.current.length >= notes.limit) throw new ApiError(409, "note_limit", `The epic has ${notes.limit} notes; replace or retire one first.`);
+    const old = input.replaces ? notes.current.find((n) => n.n === input.replaces) : undefined;
+    if (input.replaces && !old) throw new ApiError(409, "note_not_current", `Note ${input.replaces} is no longer current.`);
+    const now = new Date().toISOString();
+    const n = Math.max(0, ...[...notes.current, ...notes.history].map((x) => x.n)) + 1;
+    const pinned: EpicNote = { id: `en_fx_${n}`, n, text: input.text, createdAt: now, replaces: old?.n ?? null, replacedBy: null, retired: null, readBy: 0,
+      by: { kind: "person", label: PEOPLE[0]!.name, runId: null, task: null, personId: YOU, fromSessionId: null } };
+    this.#notes = { ...notes,
+      current: [...notes.current.filter((x) => x !== old), pinned],
+      history: old ? [{ ...old, replacedBy: { n, at: now } }, ...notes.history] : notes.history };
+    return { id: pinned.id, n, ...(old ? { replaces: old.n } : {}), told: notes.live, current: [] };
+  }
+  override async retireEpicNote(_epicId: string, n: number): Promise<NoteRecord> {
+    await wait(100);
+    const old = this.#notes.current.find((x) => x.n === n);
+    if (!old) throw new ApiError(409, "note_not_current", `Note ${n} is no longer current.`);
+    const now = new Date().toISOString();
+    this.#notes = { ...this.#notes, current: this.#notes.current.filter((x) => x !== old),
+      history: [{ ...old, retired: { by: { personId: YOU, name: PEOPLE[0]!.name }, at: now } }, ...this.#notes.history] };
+    return { id: old.id, n, text: old.text, by: old.by.label, at: old.createdAt, retiredAt: now, retiredBy: PEOPLE[0]!.name };
   }
 
   override async restart(runId: string, note: string): Promise<{ runId: string; replaced: string }> {
@@ -473,7 +536,7 @@ export class FixtureClient extends ApiClient {
     return this.#patch(true, { network: { egress: [...this.#projectEgress, ...names] } });
   }
   override projectOverview() {
-    return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });
+    return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, ...(this.#peers ? { waiting: [["WC-214", "WC-212"] as [string, string]] } : {}), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });
   }
   override pushKey() {
     return Promise.reject(new ApiError(404, "not_found", "No push in the fixtures."));

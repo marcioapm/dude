@@ -67,7 +67,7 @@ func TestTheConductorsToolsFromTheShell(t *testing.T) {
 }
 
 // The conductor's tools: the read ones every role has, ask_person,
-// create_task, and its own findings and pull_requests.
+// create_task, the peer tools, and its own findings and pull_requests.
 func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	f := setup(t)
 	cs, err := f.connect(t, f.conductor(t))
@@ -84,8 +84,8 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,findings,get_memory,"+
-		"list_epics,list_machine_sizes,list_repositories,list_tasks,publish,pull_requests,remember,reply_on_pull_request,request_machine,request_repository,restart_run,run_diff,"+
-		"search_memory,start_phase,steer,update_task" {
+		"list_epics,list_machine_sizes,list_repositories,list_tasks,message,note,publish,pull_requests,remember,reply_on_pull_request,request_machine,request_repository,"+
+		"restart_run,run_diff,search_memory,start_phase,steer,update_task,wait_for_reply" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.

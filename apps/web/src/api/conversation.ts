@@ -50,6 +50,8 @@ export interface ToolTurn {
    * refusal's exact words and code (`not_larger`, `not_live`, lux's).
    */
   machine?: { from: string | null; to: string; pool: string | null; answer?: string; error?: string; code?: string };
+  /** dude refused the call (a message over the rate, to no peer): why, in its words. */
+  refusal?: string;
   /** The child sessions (subagents) this call started, in the order they started. */
   children: ChildTurn[];
 }
@@ -352,7 +354,74 @@ export interface StartState {
 
 export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
-  | RepositoryRequestTurn | NoticeTurn | EndedTurn;
+  | RepositoryRequestTurn | NoticeTurn | EndedTurn | PeerTurn | PeerWaitTurn | NoteToldTurn | DigestTurn;
+
+/**
+ * A message between this Run's task and a peer's (agent.message.sent on
+ * the sender's Run, agent.message.received on the reader's): where it was
+ * sent, or where it was read. The ledger carries the text of a sent one;
+ * a received one's words are the thread's, read with the epic's threads.
+ */
+export interface PeerTurn {
+  kind: "peer";
+  id: string;
+  message: string;
+  /** This Run sent it, or read it. */
+  direction: "sent" | "received";
+  /** The peer, by key: the recipient of a sent message, the sender of a received one. */
+  peer: string;
+  /** The message it answers. */
+  replyTo: string | null;
+  /** A sent message's words; null for a received one (the thread has them). */
+  text: string | null;
+  at: string;
+  /** A sent message: at the peer's next step, or held for its next Run (`notice` says so). */
+  lands: "next_step" | "next_run" | null;
+  notice: string | null;
+  /** A received message: the tool the agent had just finished, or "briefing" when it was in its first prompt. */
+  after: string | null;
+  via: "step" | "briefing";
+}
+
+/** This Run waiting on a peer's reply (agent.peer.waiting), and how the wait ended. */
+export interface PeerWaitTurn {
+  kind: "peerWait";
+  id: string;
+  message: string;
+  on: string;
+  how: "wait" | "turn_ended";
+  since: string;
+  parksAt: string | null;
+  ended: { at: string; by: "reply" | "self" | "run_ended" | "peer_ended"; status: string | null; line?: string | null } | null;
+}
+
+/** A note change this Run was told at its step (agent.note.told): the EpicNoteNotice. */
+export interface NoteToldTurn {
+  kind: "noteTold";
+  id: string;
+  note: string;
+  n: number;
+  change: "added" | "replaced" | "retired";
+  /** The number of the note it replaced. */
+  was: number | null;
+  /** The tool the agent had just finished. */
+  after: string | null;
+  at: string;
+}
+
+/** What a conductor's digest told it of its epic (conductor.digest), just before the briefing or wake note that carried it. */
+export interface DigestTurn {
+  kind: "digest";
+  id: string;
+  since: string;
+  through: string;
+  where: "briefing" | "wake";
+  task: string;
+  messages: Array<{ message: string; at: string; from: string; to: string; text: string; replyTo: string | null; answeredAt: string | null }>;
+  more: number;
+  notes: Array<{ at: string; n: number; change: "added" | "replaced" | "retired"; was: number | null; line: string }>;
+  peers: Array<{ task: string; status: string; at: string }>;
+}
 
 /** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
 export type DudePause = NonNullable<Run["dudePause"]>;
@@ -514,6 +583,8 @@ export interface Conversation {
   openQuestion: QuestionTurn | null;
   /** The repository request waiting on a person's decision, if one is. */
   openRequest: RepositoryRequestTurn | null;
+  /** The wait on a peer's reply this Run is in, if it is. */
+  openWait: PeerWaitTurn | null;
   /** What the agent is doing right now, or null when it is not working. */
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
@@ -614,6 +685,12 @@ export interface Projection {
   pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
+  /** This Run's waits on peers, by the message waited on, so their end finds them. */
+  peerWaits: Map<string, PeerWaitTurn>;
+  /** A message refusal recorded before the harness reported its call: given to that call's row. */
+  pendingRefusal: string | null;
+  /** Message calls whose message was sent: a later refusal is another call's. */
+  sentCalls: WeakSet<ToolTurn>;
   /** The last briefing's text as shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
   lastBriefing: string | null;
   retryRun: boolean;
@@ -669,6 +746,9 @@ export function emptyProjection(briefedBefore?: string): Projection {
     heldUnpark: null,
     pendingAsk: null,
     briefed: false,
+    peerWaits: new Map(),
+    pendingRefusal: null,
+    sentCalls: new WeakSet(),
     lastBriefing: briefedBefore ? withoutMessage(briefedBefore) : null,
     retryRun: false,
     start: null,
@@ -900,10 +980,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const placeholder = toolsByCall.get(callId);
         if (placeholder && state.placeholderCalls.has(placeholder)) {
           claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
+          takeRefusal(state, placeholder);
         } else {
           const turn = toolTurn(callId, tool, payload, event.occurredAt);
           toolsByCall.set(callId, turn);
           addToolTurn(state, turn, ask);
+          takeRefusal(state, turn);
         }
 
         state.activity = "tool";
@@ -929,6 +1011,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             endTool(existing, payload, event.occurredAt);
             // request_machine's refusal fails its call even when the harness reported it completed.
             if (outcome?.said.error !== undefined) existing.status = "failed";
+            takeRefusal(state, existing);
           }
         } else {
           // The harness buffers some tools and only reports them once
@@ -938,6 +1021,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           endTool(turn, payload, event.occurredAt);
           toolsByCall.set(turn.id, turn);
           addToolTurn(state, turn, ask);
+          takeRefusal(state, turn);
         }
 
         if (state.activeTool?.name === tool) {
@@ -1043,6 +1127,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = typeof payload.text === "string" ? payload.text : "";
         state.briefed = true;
         if (!text.trim()) break;
+        // The digest written for this briefing goes just before it, after the message that asked for it.
+        const digest = turns.findLast((t): t is DigestTurn => t.kind === "digest");
+        if (digest && digest.where === "briefing" && !turns.slice(turns.indexOf(digest)).some((t) => t.kind === "prompt")) moveToEnd(state, digest);
         const briefing: PromptTurn = { kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] };
         // Try again briefs the fresh agent with the failed one's briefing: the same words, said once in full.
         if (state.retryRun && state.lastBriefing === briefing.text) briefing.again = true;
@@ -1424,6 +1511,89 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case EventTypes.AgentMessageSent: {
+        const lands = payload.lands === "next_run" ? "next_run" : "next_step";
+        const call = [...turns].reverse().find((t): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "message");
+        if (call && call.refusal === undefined) state.sentCalls.add(call);
+        turns.push({
+          kind: "peer", id: event.eventId, message: String(payload.message ?? ""), direction: "sent", peer: String(payload.to ?? ""),
+          replyTo: stringOrNull(payload.reply_to), text: typeof payload.text === "string" ? payload.text : null, at: event.occurredAt,
+          lands, notice: stringOrNull(payload.notice), after: null, via: "step",
+        });
+        break;
+      }
+
+      case EventTypes.AgentMessageReceived: {
+        const briefed = payload.via === "briefing";
+        turns.push({
+          kind: "peer", id: event.eventId, message: String(payload.message ?? ""), direction: "received", peer: String(payload.from ?? ""),
+          replyTo: null, text: null, at: event.occurredAt, lands: null, notice: null,
+          after: briefed ? null : stringOrNull(payload.after), via: briefed ? "briefing" : "step",
+        });
+        break;
+      }
+
+      case EventTypes.AgentMessageRefused: {
+        // The refused call is the failed tool call the harness reports: its
+        // words are the refusal, said as the failed-tool rendering says one.
+        // dude records it while handling the call, so the harness's report
+        // of the call may come after it.
+        const words = refusalWords(payload);
+        const last = [...turns].reverse().find((t): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "message");
+        if (last && last.refusal === undefined && !state.sentCalls.has(last)) refuse(last, words);
+        else state.pendingRefusal = words;
+        break;
+      }
+
+      case EventTypes.AgentPeerWaiting: {
+        const turn: PeerWaitTurn = {
+          kind: "peerWait", id: event.eventId, message: String(payload.message ?? ""), on: String(payload.on ?? ""),
+          how: payload.how === "turn_ended" ? "turn_ended" : "wait", since: event.occurredAt, parksAt: stringOrNull(payload.parks_at), ended: null,
+        };
+        state.peerWaits.set(turn.message, turn);
+        turns.push(turn);
+        // The turn is over: it waits on a peer, not on a tool.
+        state.activity = null;
+        state.activeTool = null;
+        break;
+      }
+
+      case EventTypes.AgentPeerWaitEnded: {
+        const wait = state.peerWaits.get(String(payload.message ?? ""));
+        const by = payload.by;
+        if (wait && wait.ended === null && (by === "reply" || by === "self" || by === "run_ended" || by === "peer_ended")) {
+          wait.ended = { at: event.occurredAt, by, status: stringOrNull(payload.status), line: stringOrNull(payload.line) };
+        }
+        break;
+      }
+
+      case EventTypes.AgentNoteTold: {
+        const change = payload.change === "replaced" || payload.change === "retired" ? payload.change : "added";
+        turns.push({
+          kind: "noteTold", id: event.eventId, note: String(payload.note ?? ""), n: numberOf(payload.n), change,
+          was: typeof payload.was === "number" ? payload.was : null, after: stringOrNull(payload.after), at: event.occurredAt,
+        });
+        break;
+      }
+
+      case EventTypes.ConductorDigest: {
+        const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null) : []);
+        turns.push({
+          kind: "digest", id: event.eventId, since: String(payload.since ?? event.occurredAt), through: String(payload.through ?? event.occurredAt),
+          where: payload.where === "wake" ? "wake" : "briefing", task: String(payload.task ?? ""), more: numberOf(payload.more),
+          messages: list(payload.messages).map((m) => ({
+            message: String(m.message ?? ""), at: String(m.at ?? ""), from: String(m.from ?? ""), to: String(m.to ?? ""), text: String(m.text ?? ""),
+            replyTo: stringOrNull(m.replyTo), answeredAt: stringOrNull(m.answeredAt),
+          })),
+          notes: list(payload.notes).map((n) => ({
+            at: String(n.at ?? ""), n: numberOf(n.n), change: n.change === "replaced" || n.change === "retired" ? n.change : "added",
+            was: typeof n.was === "number" ? n.was : null, line: String(n.line ?? ""),
+          })),
+          peers: list(payload.peers).map((p) => ({ task: String(p.task ?? ""), status: String(p.status ?? ""), at: String(p.at ?? "") })),
+        });
+        break;
+      }
+
       default: {
         if (!event.eventType.startsWith(CUSTOM_EVENT_PREFIX)) break;
         const type = event.eventType.slice(CUSTOM_EVENT_PREFIX.length);
@@ -1472,6 +1642,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       contextWindow: state.contextWindow,
       openQuestion: openQuestion(state),
       openRequest: openRequest(state),
+      openWait: [...state.peerWaits.values()].findLast((w) => w.ended === null) ?? null,
       activity: state.activity,
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
@@ -1520,6 +1691,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     // A finished Run asks nothing, whatever it asked before it ended.
     openQuestion: null,
     openRequest: null,
+    openWait: null,
     activity: null,
     activeTool: null,
     toolCounts: state.toolCounts,
@@ -1636,9 +1808,12 @@ function toolTurn(id: string, tool: string, payload: Record<string, unknown>, at
   return { kind: "tool", id, tool, args: payload.input ?? null, status: "running", startedAt: at, endedAt: null, result: null, children: [] };
 }
 
-/** A tool call's end as its completion reports it. The harness's "error" is the design system's "failed". */
+/**
+ * A tool call's end as its completion reports it. The harness's "error" is the design system's "failed"; a refusal
+ * dude recorded is the outcome, whatever the harness says of the call.
+ */
 function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): void {
-  turn.status = payload.status === "error" ? "failed" : "completed";
+  turn.status = turn.refusal !== undefined || payload.status === "error" ? "failed" : "completed";
   turn.endedAt = at;
   turn.result = resultFrom(payload);
 }
@@ -1789,7 +1964,7 @@ function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pending
 
 // Translators record dude's tools by their bare name; a `mcp__dude__` or
 // `dude_` prefix is tolerated for a harness that passes the server's name through.
-function dudeToolName(name: string): string {
+export function dudeToolName(name: string): string {
   return name.replace(/^(?:mcp__dude__|dude_)/, "");
 }
 
@@ -1852,6 +2027,40 @@ export function actorName(by: ActorRef | null, people: ReadonlyMap<string, strin
 
 function numberOf(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** Why dude refused a message (agent.message.refused), in words. */
+function refusalWords(payload: Record<string, unknown>): string {
+  switch (payload.reason) {
+    case "rate": {
+      const at = typeof payload.retry_at === "string" ? new Date(payload.retry_at) : null;
+      const when = at && !Number.isNaN(at.getTime())
+        ? ` The next is allowed at ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}.` : "";
+      return `Refused: this Run has sent 5 messages in the last hour, the most a Run may send.${when}`;
+    }
+    case "not_a_peer": return `Refused: ${String(payload.to ?? "that task")} is not one of your peers.`;
+    case "too_long": return "Refused: a message is at most a steer's length. Say less, or pin a note.";
+    case "empty": return "Refused: the message was empty.";
+    case "reply": return "Refused: a reply goes to the other task of its thread.";
+    default: return "Refused.";
+  }
+}
+
+/** A message call dude refused: failed, with the refusal as its error. */
+function refuse(turn: ToolTurn, words: string): void {
+  turn.status = "failed";
+  turn.refusal = words;
+}
+
+/** The refusal recorded before this message call's row, if one is waiting for it. */
+function takeRefusal(state: Projection, turn: ToolTurn): void {
+  if (state.pendingRefusal === null || dudeToolName(turn.tool) !== "message") return;
+  refuse(turn, state.pendingRefusal);
+  state.pendingRefusal = null;
 }
 
 /**

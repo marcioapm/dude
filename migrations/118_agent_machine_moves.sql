@@ -1,4 +1,4 @@
--- 115_agent_machine_moves.sql — an agent moves itself to a larger machine
+-- 118_agent_machine_moves.sql — an agent moves itself to a larger machine
 -- (docs/design/agent-machine-request.md).
 --
 -- An agent's request_machine, and a person's Reset, are each a move: the
@@ -77,10 +77,11 @@ ALTER TABLE run_resumes ADD CONSTRAINT run_resumes_cause_check
 
 -- The scripted agent's fake/machine (its implementer asks for a larger
 -- machine and ends its turn there) is a test model a tier may request,
--- beside 113's fake/subagent and fake/subagent-ask.
+-- beside 113's fake/subagent and fake/subagent-ask and 116's fake/peer:
+-- this check replaces 116's whole.
 ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
 ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
   CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',
                    'fake/command', 'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup', 'fake/subagent', 'fake/subagent-ask',
-                   'fake/machine')
+                   'fake/peer', 'fake/machine')
          OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

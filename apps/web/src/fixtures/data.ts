@@ -358,7 +358,7 @@ export function runDetailFor(scenario: ServerScenario): RunDetail {
 // -- The implementer's conversation, as the ledger has it -------------------
 
 let cursor = 0;
-function event(agoMs: number, eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"] = { type: "agent", id: "implementer" }, runId: string | null = RUN_ID): PersistedEvent {
+export function event(agoMs: number, eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"] = { type: "agent", id: "implementer" }, runId: string | null = RUN_ID): PersistedEvent {
   cursor += 1;
   return {
     eventId: `evt_${cursor.toString().padStart(4, "0")}`,

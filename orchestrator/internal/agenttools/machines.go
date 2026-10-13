@@ -149,8 +149,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	refusedAs := func(msg, code, recorded string) error {
 		payload := delivery.MovePayload("", role, *current, target, names)
 		payload["reason"], payload["refused"], payload["message"] = reason, recorded, msg
-		ev := c.event(delivery.EvMachineRequested, payload)
-		return refusal{msg: msg, code: code, record: &ev}
+		return refusal{msg: msg, code: code, event: &refusedEvent{delivery.EvMachineRequested, payload}}
 	}
 	if !delivery.Larger(target, *current) {
 		msg := fmt.Sprintf("you run on %s (%s); ask for one larger: %s", current.Name, current.Spec(), choices.Names())
