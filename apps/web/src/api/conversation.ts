@@ -757,8 +757,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ToolCalled: {
-        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const callId = String(payload.callId ?? event.eventId);
+        // A harness taken back up (a resume, a move, whatever parked it) can report a call it already finished
+        // again: that call keeps its row and its time.
+        if (toolsByCall.get(callId)?.endedAt) break;
+        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const turn: ToolTurn = {
           kind: "tool",
           id: callId,
@@ -785,7 +788,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
 
         const result = resultFrom(payload);
-        if (existing) {
+        if (existing?.endedAt) {
+          // Finished already: a repeated completion (a harness taken back up re-reporting it) never re-times it.
+        } else if (existing) {
           existing.status = status;
           existing.endedAt = event.occurredAt;
           existing.result = result;

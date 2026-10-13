@@ -113,6 +113,29 @@ describe("the projection", () => {
     }
   });
 
+  // A harness taken back up can report a call it finished before the park again; that call keeps its time.
+  for (const how of ["resume", "move"] as const) {
+    test(`a tool call that finished before a ${how} keeps its duration through it and after`, () => {
+      const tool = (type: "agent.tool.called" | "agent.tool.completed", name: string, callId: string, ms: number) =>
+        ev(type, { tool: name, callId, ...(type === "agent.tool.completed" ? { status: "completed" } : { input: {} }) }, ms);
+      const first = how === "move" ? "request_machine" : "read";
+      const before = [created(), stage("waiting", 0), stage("running", 100),
+        tool("agent.tool.called", first, "call_1", 1_000), tool("agent.tool.completed", first, "call_1", 1_001)];
+      const park = how === "move"
+        ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
+        : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+      const back = [stage("waiting", 31_000, 2), stage("volumes", 33_000, 2), stage("running", 38_000, 2),
+        // The harness's replay of what it already did, then new work.
+        tool("agent.tool.called", first, "call_1", 40_000), tool("agent.tool.completed", first, "call_1", 41_000),
+        ev("agent.message", { text: "back" }, 42_000), tool("agent.tool.called", "bash", "call_2", 43_000), tool("agent.tool.completed", "bash", "call_2", 45_000)];
+      const tookMs = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) =>
+        t.kind === "tool" ? [[t.id, Date.parse(t.endedAt!) - Date.parse(t.startedAt)]] : []);
+      expect(tookMs(before)).toEqual([["call_1", 1]]);
+      expect(tookMs([...before, ...park, ...back])).toEqual([["call_1", 1], ["call_2", 2_000]]);
+      expect(project([...before, ...park, ...back], "running").toolCounts.get(first)).toBe(1);
+    });
+  }
+
   test("a move: park leads, and it reads as a move", () => {
     const events = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
       stage("park", 20_000, 1, "drain"), stage("waiting", 25_000, 1), stage("volumes", 27_000, 2)];
