@@ -1,8 +1,10 @@
 /*
- * Agents on an epic. A peer is told by who — its role colour on a rail and
- * its role face — never by a tone: nothing here takes the accent (a
- * person's steer) or attention (needs you). Waiting on a peer is neutral
- * ink with a clock. Tokens only; both themes and densities follow them.
+ * Agents on an epic. A peer message wears the peer wash (`--ds-peer-wash`,
+ * a hue no other message background uses); who sent it is its role colour
+ * on the rail and its role face. Never a tone: nothing here takes the
+ * accent (a person's steer) or attention (needs you). Waiting on a peer
+ * and a note's notice are neutral ink. Tokens only; both themes and
+ * densities follow them.
  */
 
 /* --- TaskChip --------------------------------------------------------------- */
@@ -48,13 +50,15 @@ button.taskChip:focus-visible {
   margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
   padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
   min-width: 0;
-  /* The thread's rail in the sender's role colour, as ChatRunLine draws one. */
+  /* The wash says "between agents"; the rail, in the sender's role colour as
+     ChatRunLine draws one, says who. */
+  background: var(--ds-peer-wash);
   box-shadow: inset 2px 0 0 var(--rail);
   font-size: var(--ds-text-prose);
   line-height: var(--ds-leading-chat);
 }
 .peer:hover {
-  background: var(--ds-color-row-hover);
+  background: var(--ds-peer-wash-hover);
 }
 /* Not read yet: the rail is dashed, as a queued steer's bar. */
 .peer[data-unread="true"] {

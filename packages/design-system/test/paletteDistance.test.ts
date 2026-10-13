@@ -10,7 +10,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { AGENT_ROLE_NAMES, roleColourSlot, roleColors, tones, type AgentRoleName } from "../src/tokens/palette.ts";
+import { AGENT_ROLE_NAMES, TONE_NAMES, accent, peer, roleColourSlot, roleColors, tones, type AgentRoleName } from "../src/tokens/palette.ts";
+import { themeColors } from "../src/tokens/themes.ts";
+import { tints } from "../src/tokens/tints.ts";
 
 type Vec3 = readonly [number, number, number];
 type Mat3 = readonly [Vec3, Vec3, Vec3];
@@ -139,6 +141,58 @@ describe("role colour pair distance (OKLab ΔE×100, Machado 2009 at severity 1.
         }
       }
       expect(failures).toEqual([]);
+    });
+  }
+});
+
+/** `color-mix(in srgb, top p, bottom)` flattened to a hex, as the browser composites a wash. */
+function mix(top: string, bottom: string, p: number): string {
+  const ch = (h: string, i: number) => Number.parseInt(h.slice(i, i + 2), 16);
+  return `#${[1, 3, 5].map((i) => Math.round(ch(top, i) * p + ch(bottom, i) * (1 - p)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+// The peer colour is never a mark of identity: it arrives only as a wash
+// under a role-coloured rail, so its solid is held to a lower bar than the
+// roles' 15 / 8 / 8. No hue in the free bands (near 192 or 320) clears that
+// against all twelve neighbours at the roles' lightness.
+const PEER_SOLID_BAR: Record<Vision, number> = { normal: 9, protan: 7, deutan: 7 };
+// The closest two existing message washes stand 1.42 apart (light steer vs
+// failed fill, protan); a peer wash keeps about that distance from each.
+const PEER_WASH_BAR = 1;
+// And reads as a wash at all: the steer wash stands 2.85 off the dark surface.
+const PEER_WASH_FROM_SURFACE = 2.5;
+
+describe("the peer colour (OKLab ΔE×100, Machado 2009 at severity 1.0)", () => {
+  for (const mode of MODES) {
+    test(`${mode}: the peer solid clears normal ≥ 9, protan ≥ 7, deutan ≥ 7 from every tone solid, the accent and every role`, () => {
+      const others: Array<[string, string]> = [
+        ...TONE_NAMES.map((t): [string, string] => [`tone ${t}`, tones[mode][t].solid]),
+        ["accent", accent[mode].base],
+        ...roleSlots(mode).map((s): [string, string] => [`role ${s.name}`, s.fg]),
+      ];
+      const failures: string[] = [];
+      for (const [name, hex] of others) {
+        const d = VISIONS.map((v) => deltaE(peer[mode].solid, hex, v));
+        if (VISIONS.some((v, k) => d[k]! < PEER_SOLID_BAR[v])) failures.push(`${mode} peer ${peer[mode].solid} vs ${name} ${hex}: ${d.map(fmt).join(" / ")}`);
+      }
+      expect(failures).toEqual([]);
+    });
+
+    test(`${mode}: the peer wash stands ≥ ${PEER_WASH_BAR} from the steer wash, the question wash and the failed fill, and ≥ ${PEER_WASH_FROM_SURFACE} off the surface`, () => {
+      const surface = themeColors[mode].surface;
+      const wash = mix(peer[mode].solid, surface, tints.peer);
+      const others: Array<[string, string]> = [
+        ["steer", mix(accent[mode].base, surface, tints.highlight)],
+        ["question", mix(tones[mode].attention.solid, surface, tints.highlight)],
+        ["failed", mix(tones[mode].danger.bg, surface, tints.failedFill)],
+      ];
+      const failures: string[] = [];
+      for (const [name, hex] of others) {
+        const d = VISIONS.map((v) => deltaE(wash, hex, v));
+        if (d.some((x) => x < PEER_WASH_BAR)) failures.push(`${mode} peer wash ${wash} vs ${name} ${hex}: ${d.map(fmt).join(" / ")}`);
+      }
+      expect(failures).toEqual([]);
+      expect(deltaE(wash, surface, "normal"), `${mode} peer wash off the surface`).toBeGreaterThanOrEqual(PEER_WASH_FROM_SURFACE);
     });
   }
 });

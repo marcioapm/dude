@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
-import { AGENT_ROLE_NAMES, TONE_NAMES, accent, diff, neutral, roleColors, themeColors, tones } from "../../tokens/palette-and-themes.ts";
+import { AGENT_ROLE_NAMES, TONE_NAMES, accent, diff, neutral, peer, roleColors, themeColors, tones } from "../../tokens/palette-and-themes.ts";
+import { tints } from "../../tokens/tints.ts";
 import { duration, easing, faceRadius, fontSize, radius, space, zIndex } from "../../tokens/scale.ts";
 import { densityTokens, type Density, type DensityToken } from "../../tokens/density.ts";
 import { ALL_STATUSES, STATUS_SPECS } from "../../tokens/status.ts";
@@ -149,6 +150,35 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
               </div>
             </Col>
           )}
+        </Panes>
+      </Block>
+
+      <Block id="tokens-peer" title="Peer" note="A message between agents, and nothing else: teal-cyan at OKLCH h 192, between the implementer and the investigator, drawn only as a wash (8%, 10% hovered) beside the other message washes it must not read as. Its solid clears ΔE 9 (normal) / 7 (protan, deutan) from every tone, the accent and every role; its wash ΔE 1 from each of the others.">
+        <Panes mode={mode}>
+          {(theme) => {
+            const s = themeColors[theme].surface;
+            const washes: Array<[string, string]> = [
+              ["peer wash", `color-mix(in srgb, ${peer[theme].solid} ${tints.peer * 100}%, ${s})`],
+              ["peer hover", `color-mix(in srgb, ${peer[theme].solid} ${tints.peerHover * 100}%, ${s})`],
+              ["steer wash", `color-mix(in srgb, ${accent[theme].base} ${tints.highlight * 100}%, ${s})`],
+              ["question wash", `color-mix(in srgb, ${tones[theme].attention.solid} ${tints.highlight * 100}%, ${s})`],
+              ["failed fill", `color-mix(in srgb, ${tones[theme].danger.bg} ${tints.failedFill * 100}%, ${s})`],
+            ];
+            return (
+              <Col>
+                <div className={styles["swatches"]}>
+                  <Swatch name="peer.solid" hex={peer[theme].solid} />
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {washes.map(([name, bg]) => (
+                    <div key={name} className={styles["toneCell"]} style={{ background: bg, color: themeColors[theme].textPrimary, minWidth: 140 }}>
+                      {name}
+                    </div>
+                  ))}
+                </div>
+              </Col>
+            );
+          }}
         </Panes>
       </Block>
 

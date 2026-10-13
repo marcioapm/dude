@@ -173,6 +173,7 @@ gallery for every value.
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
+| Peer | `--ds-peer-solid`, `--ds-peer-wash`, `--ds-peer-wash-hover`, `--ds-tint-peer{,-hover}` | Teal-cyan (OKLCH h 192) for a message between agents, drawn only as its wash (8%, 10% hovered). Not a tone, not a role. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
 | Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels, badges and key caps only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
 | Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
@@ -203,6 +204,25 @@ Machado 2009 protan and deutan at severity 1.0, slots that share a colour
 counted once) and keeps every role colour more than ΔE 3 from the attention
 fg, mark and solid (every way needs-you is drawn) in normal vision. `test/palette.test.ts` holds the WCAG half: the text
 ladder, tone and role foregrounds, link, focus ring and button label.
+
+The **peer** slot (`peer` in `palette.ts`) is the background of a message
+between agents, and nothing else. The other message backgrounds were
+taken: accent (a person's steer), attention (a waiting question, the
+needs-you block), danger (a failed tool call) and the neutral row hover.
+The free bands sit between the role hues; of the two candidates, teal-cyan
+near h 192 (between the implementer and the investigator) beat
+violet-magenta near h 320 (between the conductor and the QA pink): at its
+best tuning the violet wash lands ΔE 0.4 from the steer wash for protans
+(teal's worst is 1.1), and it sits on the merged and conductor violets.
+Teal-cyan is far from success's green (ΔE ≥ 9.8). The solid is held to
+normal ≥ 9, protan/deutan ≥ 7 against every tone solid, the accent and
+every role — below the roles' own 15 / 8 / 8, because it is never a mark of
+identity, only a wash under a role-coloured rail; and the wash (8% over the
+surface or the raised thread, 10% hovered, `tints.peer`/`peerHover`)
+stands ≥ ΔE 1 from the steer wash, the question wash and the failed fill in
+all three visions, and ≥ 2.5 off the surface. The highlight's 9 / 12% was
+too strong: at 12% the dark "Not sent" danger ink and the tag's secondary
+ink on the raised thread fall under 4.5:1.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
 faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close
@@ -480,16 +500,21 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 - A task's agent can read and write to its peers: the other tasks on its
   epic (and, once links exist, tasks linked to it by "depends on"). A
-  **`PeerMessage`** is the turn for it: the sender's role face and a 2px
-  rail in the sender's role colour (the thread rule, as `ChatRunLine`),
+  **`PeerMessage`** is the turn for it: on the **peer wash**
+  (`--ds-peer-wash`, `--ds-peer-wash-hover` hovered), the sender's role
+  face and a 2px rail in the sender's role colour (the thread rule, as
+  `ChatRunLine`): the wash says "between agents", the rail says who. In
+  the transcript and in a Coordination thread alike, so a peer message
+  never reads as the implementer's own turn.
   "ABS-4 Implementer → ABS-2", a neutral **Peer** or **Reply** tag, and its
   delivery in a steer's words ("sent 13:43 · read 13:43:52, after Bash";
   queued, "Lands at ABS-2's next step. Nothing is interrupted.", the rail
   dashed; no Run going, "ABS-3 has no Run going; it will see this when its
   next Run starts."). In the sender's transcript it says "Sent · carrying
   on": sending never blocks. A refused one says "Not sent: …" in danger
-  ink where the delivery line would be. Never the accent (a person's
-  steer), never attention (needs you), never a person's face.
+  ink where the delivery line would be. A peer message wears the peer
+  wash; its rail stays its sender's role colour; never accent or
+  attention, never a person's face.
 - **A thread between agents is read only for people.** `PeerThread` has no
   composer and no Reply; its head says the pair (`TaskChip showRole`) and
   its state (waiting, "No reply from ABS-1 yet · nobody waits", answered),
@@ -501,11 +526,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   header carries `Badge icon="clock"` "Waiting on ABS-2 · parks in 10 min"
   (`statusNote`), the tree and board say it as activity, the epic card
   carries **`PeerWaitMark`** in `EpicCard waiting`. None takes a tone or
+  the peer wash (it is a line about a message, not the message), or
   counts in Waiting on you. `PeerWaitLine.now` accepts a Date, ISO string
   or epoch milliseconds (defaults to `Date.now()` at render); pass a ticking
   value with the header, and a fixed value in specimens/tests.
 - **`TaskChip`** names a task inline wherever peers are named: status mark,
-  mono key, role face; a button that says what it opens ("Open ABS-2, …:
+  mono key, role face, on the neutral active wash (also inside a peer
+  message: it names a task, it is not one); a button that says what it opens ("Open ABS-2, …:
   its implementer"), or an image with that name. A peer by link carries a
   neutral "depends on ABS-2 · project jervasion" chip in `PeerList`.
 - **`PeerList`** is what `list_tasks --peers` returns, as rows: `tool` (a
@@ -526,8 +553,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   `note` call in its aside. The `pin` glyph is theirs alone.
 - **A note added, replaced or retired is an `EpicNoteNotice`** in every
   transcript on the epic, where the agent was told: one quiet line on the
-  text column with the pin, never a face, a rail or a tag, so it never reads
-  as someone speaking. A replace shows the words that changed and what they
+  text column with the pin, never a face, a rail, a tag or the peer wash,
+  so it never reads as someone speaking. A replace shows the words that changed and what they
   were (`noteWordChange` finds them from the two texts); a retire, "no
   longer in force:" in muted ink.
 - **A conductor's digest** is **`SinceDigest`**, folded, just before the

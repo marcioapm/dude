@@ -118,6 +118,8 @@
   --ds-tint-highlight-hover: 12%;
   --ds-tint-needs-you: 8%;
   --ds-tint-failed-fill: 70%;
+  --ds-tint-peer: 8%;
+  --ds-tint-peer-hover: 10%;
   --ds-size-code-line: 20px;
   --ds-md-gap: 0.75em;
   --ds-focus-ring-width: 2px;
@@ -247,6 +249,9 @@
   --ds-diff-hunk-fg: #7ca9d5;
   --ds-merged-fg: #c3a5f9;
   --ds-merged-bg: #332647;
+  --ds-peer-solid: #13938f;
+  --ds-peer-wash: rgba(19, 147, 143, 0.08);
+  --ds-peer-wash-hover: rgba(19, 147, 143, 0.1);
   --ds-ansi-black: #919294;
   --ds-ansi-red: #fe8b83;
   --ds-ansi-green: #68ca80;
@@ -388,6 +393,9 @@
   --ds-diff-hunk-fg: #286193;
   --ds-merged-fg: #6e3ead;
   --ds-merged-bg: #f1ebff;
+  --ds-peer-solid: #16a7a3;
+  --ds-peer-wash: rgba(22, 167, 163, 0.08);
+  --ds-peer-wash-hover: rgba(22, 167, 163, 0.1);
   --ds-ansi-black: #1e1f21;
   --ds-ansi-red: #a83634;
   --ds-ansi-green: #0e7737;
@@ -530,6 +538,9 @@
     --ds-diff-hunk-fg: #286193;
     --ds-merged-fg: #6e3ead;
     --ds-merged-bg: #f1ebff;
+    --ds-peer-solid: #16a7a3;
+    --ds-peer-wash: rgba(22, 167, 163, 0.08);
+    --ds-peer-wash-hover: rgba(22, 167, 163, 0.1);
     --ds-ansi-black: #1e1f21;
     --ds-ansi-red: #a83634;
     --ds-ansi-green: #0e7737;

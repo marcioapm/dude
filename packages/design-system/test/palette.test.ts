@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { AGENT_ROLE_NAMES, TONE_NAMES, accent, roleColors, tones } from "../src/tokens/palette.ts";
+import { AGENT_ROLE_NAMES, TONE_NAMES, accent, peer, roleColors, tones } from "../src/tokens/palette.ts";
 import { themeColors, type ThemeMode } from "../src/tokens/themes.ts";
 import { tints } from "../src/tokens/tints.ts";
 
@@ -227,6 +227,53 @@ describe("text on tints", () => {
     for (const mode of MODES) {
       const c = themeColors[mode];
       expect(contrast(c.textMuted, c.fieldRaised), `${mode} placeholder`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // A peer message sits on the surface in a transcript and on the raised
+  // shade in a Coordination thread, at rest and hovered. The `--ds-peer-wash`
+  // tokens are rgba(peer-solid, tint): composited as `over` does.
+  const peerWashes = (mode: ThemeMode) => {
+    const c = themeColors[mode];
+    const out: Record<string, string> = {};
+    for (const bg of ["surface", "raised"] as const) {
+      out[`${bg} + peer wash`] = mix(peer[mode].solid, c[bg], tints.peer);
+      out[`${bg} + peer hover`] = mix(peer[mode].solid, c[bg], tints.peerHover);
+    }
+    return out;
+  };
+
+  test("a peer message's body (primary), delivery line (secondary) and times and arrow (muted) clear 4.5:1 on its wash and hover", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const [state, bg] of Object.entries(peerWashes(mode))) {
+        for (const [ink, hex] of [["primary", c.textPrimary], ["secondary", c.textSecondary], ["muted", c.textMuted]] as const) {
+          expect(contrast(hex, bg), `${mode} ${ink} on ${state}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+
+  // A refused message is never sent, so it is only ever in its sender's
+  // transcript, on the surface; a thread holds sent messages alone.
+  test("a refused peer message's Not sent line (danger fg) clears 4.5:1 on the wash and hover over the surface", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const t of [tints.peer, tints.peerHover]) {
+        expect(contrast(tones[mode].danger.fg, mix(peer[mode].solid, c.surface, t)), `${mode} at ${t}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  test("a peer message's Peer/Reply tag (secondary) and TaskChip key (primary) clear 4.5:1, and the chip's status mark 3:1, on the active wash over its wash", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const [state, bg] of Object.entries(peerWashes(mode))) {
+        const chip = over(c.activeWash, bg);
+        expect(contrast(c.textSecondary, chip), `${mode} tag on ${state}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(c.textPrimary, chip), `${mode} chip key on ${state}`).toBeGreaterThanOrEqual(4.5);
+        for (const t of TONE_NAMES) expect(contrast(tones[mode][t].fg, chip), `${mode} ${t} mark on ${state}`).toBeGreaterThanOrEqual(3);
+      }
     }
   });
 });

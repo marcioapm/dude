@@ -80,7 +80,7 @@ const FOOT = "Between ABS-4's and ABS-2's agents. Everyone on the epic can read 
 export function PeersSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="peers" title="Peers"
-      intro="Agents on an epic read, ask and brief each other. A peer is told by who — its role colour on a rail and its role face — never by the accent (a person's steer), never by attention (needs you), never with a person's face. Waiting on a peer is neutral ink with a clock.">
+      intro="Agents on an epic read, ask and brief each other. A peer message wears the peer wash, a teal-cyan no other message background uses; its rail stays its sender's role colour and its face is its role face. Never the accent (a person's steer), never attention (needs you), never a person's face. Waiting on a peer and a note's notice are neutral ink.">
       <Block id="pe-chip" title="TaskChip"
         note="A task named inline: status mark, mono key, its live agent's face. A button that says what it opens, or an image with the same name. In every status and role.">
         <Panes mode={mode}>
@@ -95,10 +95,10 @@ export function PeersSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="pe-message" title="PeerMessage"
-        note="A message between two tasks' agents, as a turn: the sender's face and a 2px rail in its role colour, dashed until it is read; 'ABS-4 Implementer → ABS-2'; a neutral Peer or Reply tag; its delivery in a steer's words. Between an agent turn and a person's steer, so the three read apart.">
+        note="A message between two tasks' agents, as a turn on the peer wash (hover it for the hover step): the sender's face and a 2px rail in its role colour, dashed until it is read; 'ABS-4 Implementer → ABS-2'; a neutral Peer or Reply tag; its delivery in a steer's words. Between an implementer's own turn and a person's steer, so the three read apart by background alone.">
         <Panes mode={mode} surface>
           <Col>
-            <Label>an agent turn, a peer message read where the agent read it, a person's steer</Label>
+            <Label>an implementer's own turn, a peer message read where the agent read it, a person's steer</Label>
             <ChatMessage role="implementer" content="Note 2 has the paths, not the body. Asking ABS-2 now." startedAt={at("13:43:12")} />
             <PeerMessage msg={ASK} viewer="ABS-2" />
             <ChatMessage role="human" name="Márcio" intent="steer" content="Keep the client in one file." startedAt={at("13:44:00")} deliveredAt={at("13:44:10")} read />

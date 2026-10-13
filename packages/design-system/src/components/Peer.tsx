@@ -8,9 +8,10 @@
  * each other (PeerWaitMark), and what `list_tasks --peers` returns
  * (PeerList).
  *
- * A peer is told by who: its role colour on a rail and its role face.
- * Nothing here takes the accent (a person's steer) or the attention tone
- * (needs you), and no peer wears a person's face.
+ * A peer message wears the peer wash; who sent it is told by its role
+ * colour on a rail and its role face. Nothing here takes the accent (a
+ * person's steer) or the attention tone (needs you), and no peer wears a
+ * person's face.
  */
 
 import { useId, useState, type ReactNode } from "react";
@@ -119,10 +120,10 @@ const RAIL: Record<AgentRoleName, string> = {
 };
 
 /**
- * A message from one task's agent to another's, as a turn: the sender's
- * role face and a 2px rail in its role colour (dashed while it is not
- * read), "ABS-4 Implementer → ABS-2", a neutral Peer or Reply tag, and its
- * delivery in a steer's words.
+ * A message from one task's agent to another's, as a turn on the peer
+ * wash: the sender's role face and a 2px rail in its role colour (dashed
+ * while it is not read), "ABS-4 Implementer → ABS-2", a neutral Peer or
+ * Reply tag, and its delivery in a steer's words.
  */
 export function PeerMessage({ msg, viewer, compact, replyToText, waiting, carryingOn, refused }: PeerMessageProps) {
   const role = msg.from.role ?? "implementer";
