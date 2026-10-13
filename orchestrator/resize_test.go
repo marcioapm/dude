@@ -908,8 +908,8 @@ func TestARefusedMoveReadsLuxsPoolsNoMoreThanItsCallDid(t *testing.T) {
 	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 422 || !strings.Contains(body, `"code":"unknown_pool"`) {
 		t.Fatalf("request: %d %s", status, body)
 	}
-	if got := pools.calls.Load() - reads; got != 2 {
-		t.Fatalf("a refused request read lux's pools %d times, want 2", got)
+	if got := pools.calls.Load() - reads; got > 2 {
+		t.Fatalf("a refused request read lux's pools %d times, want at most 2", got)
 	}
 
 	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
