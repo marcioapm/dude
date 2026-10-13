@@ -184,7 +184,7 @@ test("a pasted OAuth Client secret is sent without its trailing line break", asy
 
 test("a whitespace-only OAuth Client secret is not sent, so the saved one stays", async () => {
   const { sent } = await saveWithSecret((field) => paste(field, "  \n"));
-  expect("oauthClientSecret" in sent).toBe(false);
+  expect(sent).toEqual({ privateKey: "-----BEGIN KEY-----\nK\n-----END KEY-----", appId: "9001", installationId: "", oauthClientId: "saved-client" });
 });
 
 test("a connected App shows its App ID, and Verify reports the token it minted", async () => {

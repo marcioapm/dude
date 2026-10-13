@@ -152,10 +152,13 @@ test("a failed disconnect keeps the dialog open with the reason, and the connect
   expect(card.querySelector("[data-testid=github-disconnect]")).not.toBeNull();
 });
 
-test("Cancel closes the danger confirmation without disconnecting", async () => {
+test("Cancel closes the danger confirmation without disconnecting, and gives focus back to Disconnect", async () => {
   const client = new AuthorizationClient("a");
   const card = await openSettings(client);
-  await click(card.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
+  const trigger = card.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!;
+  // happy-dom's click does not focus, so the keyboard is put on the trigger as a real press would.
+  trigger.focus();
+  await click(trigger);
   const dialog = await until(() => document.querySelector("[role=dialog]"), "the confirmation");
   // The danger Dialog's only exposed mark is its tone icon.
   expect(dialog.querySelector("[data-icon=alert]")).not.toBeNull();
@@ -163,17 +166,18 @@ test("Cancel closes the danger confirmation without disconnecting", async () => 
   await until(() => document.querySelector("[role=dialog]") === null ? true : null, "dialog closed");
   expect(client.disconnects).toBe(0);
   expect(card.querySelector("[data-testid=github-authorization-status]")?.textContent).toBe("Connected as CanonicalOwner");
+  await until(() => document.activeElement === trigger ? true : null, "focus back on Disconnect");
 });
 
 test("the callback's outcome leaves the address once read, and a later Disconnect does not keep it showing", async () => {
   const client = new AuthorizationClient("a");
-  const card = await openSettings(client, "?github=connected");
+  const card = await openSettings(client, "?keep=1&github=connected");
   expect(card.querySelector("[data-testid=github-outcome]")?.textContent).toBe("GitHub connected.");
-  expect([window.location.pathname, window.location.search, window.location.hash]).toEqual(["/", "", "#/me/settings"]);
+  expect([window.location.pathname, window.location.search, window.location.hash]).toEqual(["/", "?keep=1", "#/me/settings"]);
   await click(card.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
   await click(await until(() => document.querySelector<HTMLButtonElement>("[data-testid=github-disconnect-confirm]"), "the confirmation"));
   await until(() => card.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null, "disconnected status");
   expect(card.querySelector("[data-testid=github-outcome]")).toBeNull();
   expect(card.querySelector("[data-tone=success]")).toBeNull();
-  expect(window.location.search).toBe("");
+  expect(window.location.search).toBe("?keep=1");
 });

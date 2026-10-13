@@ -38,9 +38,10 @@ type GithubAuthorization = NonNullable<Awaited<ReturnType<ApiClient["githubAutho
 
 /**
  * Your own GitHub authorization, which opens your tasks' pull requests as
- * you. Both tokens renew each time dude uses them, so the refresh token's
- * end is shown only as how long it may sit unused; the access token's
- * appears only once it has ended and a reconnect is needed.
+ * you. dude refreshes it only when it needs the token and the access token
+ * has ended, and a refresh renews the refresh token too; so the refresh
+ * token's end is shown as how long the authorization may sit unused. The
+ * access token's end appears only once it has ended and a reconnect is needed.
  */
 function GithubAuthorizationCard({ client, connection, outcome, onChanged, onDisconnected }: {
   client: ApiClient;
