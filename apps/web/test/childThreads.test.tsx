@@ -364,6 +364,16 @@ test("a rail opener moves focus into the panel, then restores the newly mounted 
   expect(document.activeElement === restored).toBe(true);
 });
 
+test("Escape dismisses Abort above the panel without closing the panel", async () => {
+  const el = await screen(start());
+  await openPanel(el, "ses_kid");
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='abort']")!.click());
+  await until(() => document.querySelector("[role='dialog']"), "Abort dialog");
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector("[role='dialog']") === null).toBe(true);
+  expect(el.querySelector("[data-testid='child-panel']") !== null).toBe(true);
+});
+
 test("permission waiting stays on the row and rail, with the notice and stuck call only in the panel", async () => {
   const el = await screen([...start(),
     ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k8", tool: "grep", input: { path: "/opt/venv" } }, 117),

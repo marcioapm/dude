@@ -312,11 +312,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   }, [childPath, narrow]);
   useEffect(() => { setChildPath([]); }, [runId]);
   useEffect(() => {
-    if (!childPath.length) return;
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") closeChild(); };
+    if (!childPath.length || narrow) return;
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[role="dialog"][data-state="open"]')) return;
+      closeChild();
+    };
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
-  }, [childPath.length, closeChild]);
+  }, [childPath.length, closeChild, narrow]);
   const entries = childEntries(conversation.turns);
   const openedChild = entries.find(({ child }) => child.id === childPath.at(-1));
   const parentChild = entries.find(({ child }) => child.id === childPath.at(-2));
