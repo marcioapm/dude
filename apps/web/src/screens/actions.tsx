@@ -73,7 +73,7 @@ export function SessionMachineBlock({ client, id, machine, by, onChanged }: {
     <MachineChip name={size.name} spec={`${size.cpus} CPUs · ${gib(size.memoryMiB * MIB)} GiB`} raised="for this session"
       tooltip={<MachineTip name={size.name}>{raisedProvenance(machine.raise, machine.askedBy.role ?? machine.raise.role)}.
         {settings ? ` Its settings name ${settings.name}.` : ""}</MachineTip>} />
-    <SessionFacts facts={[{ label: "Pool", value: size.pool ?? "Default pool" }, { label: "Settings' size", value: settings?.name ?? "None" }]} />
+    <SessionFacts facts={[{ label: "Pool", value: size.pool ?? size.poolId ?? "Default pool" }, { label: "Settings' size", value: settings?.name ?? "None" }]} />
     {settings ? <Button size="sm" variant="quiet" onClick={() => setConfirm(true)} data-testid="session-machine-reset">Reset</Button> : null}
     {confirm && settings ? <ResetMachineConfirm label="brainstorm" from={size.name} to={settings.name} by={by} session
       onClose={() => setConfirm(false)} onConfirm={async (note) => { await client.resetSessionMachine(id, note); onChanged(); }} /> : null}

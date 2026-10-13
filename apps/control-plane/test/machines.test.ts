@@ -67,6 +67,8 @@ const FRESH = "pool_fresh0id";
 let luxPools: MachinePool[] | null = POOLS();
 /** When set, how the orchestrator answers GET /internal/lux/pools instead. */
 let poolsReply: (() => Response) | null = null;
+/** How many times the orchestrator was asked for lux's pools. */
+let poolReads = 0;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const body = async (res: Response): Promise<Json> => res.json();
@@ -99,6 +101,7 @@ beforeAll(async () => {
     fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === "/internal/lux/pools") {
+        poolReads += 1;
         if (poolsReply) return poolsReply();
         return luxPools === null
           ? Response.json({ pools: [], readAt: new Date().toISOString(), problem: "lux is unreachable" })
@@ -485,9 +488,10 @@ describe("raised machines", () => {
     const large = (await byName("Large")).id;
     const [{ id: person }] = await owner`SELECT person_id AS id FROM api_keys WHERE organization_id = ${ORG} LIMIT 1`;
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${TASK}, ${ORG}, ${PROJECT}, 90, 'Raised')`;
-    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
-      VALUES ('run_raised_impl', ${ORG}, ${PROJECT}, ${TASK}, 1, 'running', 'implement', 'implementer'),
-             ('run_raised_cond', ${ORG}, ${PROJECT}, ${TASK}, 2, 'running', 'implement', 'conductor')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, machine)
+      VALUES ('run_raised_impl', ${ORG}, ${PROJECT}, ${TASK}, 1, 'running', 'implement', 'implementer',
+                ${{ sizeId: large, name: "Large", poolId: null, pool: "default" }}::jsonb),
+             ('run_raised_cond', ${ORG}, ${PROJECT}, ${TASK}, 2, 'running', 'implement', 'conductor', NULL)`;
     await owner`UPDATE tasks SET agent_machines = ${{ implementer: raise(large, "mmv_impl", "run_raised_impl"),
       conductor: raise(large, "mmv_cond", "run_raised_cond") }}::jsonb WHERE id = ${TASK}`;
     await owner`INSERT INTO sessions (id, organization_id, title, created_by, agent_machine)
@@ -505,9 +509,12 @@ describe("raised machines", () => {
 
   test("the task's detail carries agentMachines with names, pools and who asked; the fixer follows the implementer", async () => {
     luxPools = POOLS();
+    const reads = poolReads;
     const res = await call(adminKey, "GET", `/v1/tasks/${TASK}`);
     expect(res.status).toBe(200);
     const machines = (await body(res)).agentMachines as Json[];
+    // The screens re-read the detail on each event: its pool names come from the task's Runs, not from lux.
+    expect(poolReads - reads).toBe(0);
     expect(machines.map((m) => m.role)).toEqual(["conductor", "implementer"]);
     const impl = machines[1];
     expect(impl.size).toMatchObject({ name: "Large", cpus: 8, memoryMiB: 16384, pool: "default", from: "task", raised: { moveId: "mmv_impl" } });
@@ -519,8 +526,10 @@ describe("raised machines", () => {
   });
 
   test("a session's detail carries its raise, for its members", async () => {
+    const reads = poolReads;
     const res = await call(adminKey, "GET", `/v1/brainstorms/${SESSION}`);
     expect(res.status).toBe(200);
+    expect(poolReads - reads).toBe(0);
     const machines = (await body(res)).agentMachines as Json[];
     expect(machines).toHaveLength(1);
     expect(machines[0]).toMatchObject({ role: "brainstorm", size: { name: "Large", from: "session" }, settings: { name: "Small" }, followedBy: [] });

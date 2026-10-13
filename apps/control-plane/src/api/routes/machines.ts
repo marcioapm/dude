@@ -268,8 +268,10 @@ async function requireSizeFound(scope: OrgScope, id: string): Promise<{ isDefaul
  * The machines agents raised in a task, or in a session, with names
  * resolved: the raised size, the size the role runs on without it, which
  * Run asked, and which roles follow it (the fixer the implementer's, when
- * it names no size of its own). lux's pool names are read once; without
- * lux a pool's name is null.
+ * it names no size of its own). A pool's name is the one its Runs here
+ * recorded (runs.machine.pool), newest first, so a detail read, which the
+ * screens repeat on each event, never asks lux; a pool no Run here recorded
+ * has a null name.
  */
 export async function agentMachines(
   ctx: RequestContext,
@@ -292,19 +294,24 @@ export async function agentMachines(
     const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels }>;
     const askers = (await scope.sql`
       SELECT id, role::text AS role FROM runs WHERE id = ANY(${scope.sql.array(Object.values(raises).map((r) => r.askedBy), "text")}::text[])`) as Array<{ id: string; role: string | null }>;
-    return { raises, project, organization: org?.models ?? null, sizes: await listSizes(scope), askers };
+    const taskId = "taskId" in of ? of.taskId : null;
+    const sessionId = "sessionId" in of ? of.sessionId : null;
+    // "" is the default pool: a size naming none.
+    const poolNames = (await scope.sql`
+      SELECT DISTINCT ON (COALESCE(machine->>'poolId', '')) COALESCE(machine->>'poolId', '') AS "poolId", machine->>'pool' AS name
+      FROM runs WHERE (task_id = ${taskId} OR session_id = ${sessionId}) AND machine->>'pool' IS NOT NULL
+      ORDER BY COALESCE(machine->>'poolId', ''), created_at DESC`) as Array<{ poolId: string; name: string }>;
+    return { raises, project, organization: org?.models ?? null, sizes: await listSizes(scope), askers, poolNames };
   });
   if (!facts) return [];
-  const { raises, sizes, askers } = facts;
-  // lux's pool names, read outside the transaction.
-  const luxPools = (await pools(ctx)).pools;
+  const { raises, sizes, askers, poolNames } = facts;
   const from = "taskId" in of ? "task" : "session";
   const machine = (id: string | null, source: Machine["from"], raised?: Raise): Machine | null => {
     const s = sizes.find((x) => x.id === id);
     if (!s) return null;
     return {
       sizeId: s.id, name: s.name, cpus: s.cpus, memoryMiB: s.memoryMiB, diskGiB: s.diskGiB, poolId: s.poolId,
-      pool: sizePool(s.poolId, luxPools)?.name ?? null, from: source, ...(raised ? { raised } : {}),
+      pool: poolNames.find((p) => p.poolId === (s.poolId ?? ""))?.name ?? null, from: source, ...(raised ? { raised } : {}),
     };
   };
   const layers = { project: facts.project, organization: facts.organization };
