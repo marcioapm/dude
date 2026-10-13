@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -428,6 +429,78 @@ func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
 	want := "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on.\n\n"
 	if inputs := w.lux.ResumeInputs(liveID); len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) {
 		t.Fatalf("resume inputs %q", inputs)
+	}
+}
+
+// The scripted implementer asks for a larger machine in its first turn.
+// Accepted, that turn ends without the work being done or the phase
+// finishing: the Run is parked, resumed on the size, and its work is the
+// resumed turn's. Refused (nothing larger by that name), the turn is not
+// held: it carries on and the phase finishes on its size.
+func TestASuccessfulMachineRequestEndsTheTurnAndARefusedOneDoesNot(t *testing.T) {
+	for _, accepted := range []bool{true, false} {
+		t.Run(fmt.Sprint(accepted), func(t *testing.T) {
+			w := newWorld(t)
+			w.withTools()
+			w.onModel("implementer", fakeagent.MachineModel)
+			if accepted {
+				mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+					w.org, fakeagent.MachineSize)
+			}
+			task := w.task()
+			w.deliver(task)
+			runID := ""
+			w.until("the implementer to end its first turn", func() bool {
+				runID = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='implement'), '')`, task)
+				return runID != "" && len(w.lux.Runs()) > 0 && w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='agent.message'`, runID) > 0
+			})
+			live := w.lux.Runs()[0].ID
+			if !accepted {
+				w.until("the implementer to finish", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+				})
+				if w.count(`SELECT count(*) FROM machine_moves`) != 0 || w.lux.Runs()[0].Resumed != 0 ||
+					w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.requested' AND payload->>'refused' IS NULL`, runID) != 0 {
+					t.Fatal("a refused request moved the Run")
+				}
+				if said := strings.Join(w.said(runID), "\n"); !strings.Contains(said, "Implemented it.") || strings.Contains(said, fakeagent.MachineEndedTurn) {
+					t.Fatalf("a refused request ended the turn: %q", said)
+				}
+				return
+			}
+			w.until("the move settled and the implementer finished", func() bool {
+				if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1 &&
+					w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, runID) == 0 {
+					t.Fatalf("finished without moving; said %q, requested %s", w.said(runID),
+						w.str(`SELECT COALESCE(string_agg(payload::text, ' | '), '') FROM events WHERE run_id=$1 AND event_type IN ('machine.requested', 'agent.tool.dude')`, runID))
+				}
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1 &&
+					w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+			})
+			// The turn the move was accepted in ended without the work: the
+			// first agent message is the move's, and the work came after the
+			// resume on the larger machine.
+			said := w.said(runID)
+			if len(said) < 2 || said[0] != fakeagent.MachineEndedTurn || !strings.Contains(strings.Join(said[1:], "\n"), "Implemented it.") {
+				t.Fatalf("said %q", said)
+			}
+			if r := w.lux.Runs()[0]; r.ID != live || r.Resumed != 1 || len(w.lux.Runs()) != 1 {
+				t.Fatalf("resumed %d times, %d lux Runs", r.Resumed, len(w.lux.Runs()))
+			}
+			if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
+				t.Fatalf("machine=%v", got)
+			}
+			if in := w.lux.ResumeInputs(live); len(in) != 1 || !strings.HasPrefix(in[0], "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB).") {
+				t.Fatalf("resume input %q", in)
+			}
+			// The turn that ended on the move was not taken as the work's end:
+			// one turn_complete before the resume would have completed the
+			// phase on Standard with nothing committed.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'
+				AND cursor < (SELECT min(cursor) FROM events WHERE run_id=$1 AND event_type='run.paused')`, runID); n != 0 {
+				t.Fatalf("%d turn ends before the machine park", n)
+			}
+		})
 	}
 }
 

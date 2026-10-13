@@ -1182,7 +1182,10 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // withTools serves dude's tools to the world's agents, as the orchestrator
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
+			return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
+		}}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.syncer.Agent.ToolsService = true

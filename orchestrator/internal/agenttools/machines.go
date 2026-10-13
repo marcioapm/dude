@@ -116,7 +116,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 			"Carry on on %s, or say in your work what did not fit.", machineMovesPerRun, on)
 	}
 	if current == nil || live == "" || status != "running" || control != "none" {
-		return out, refuse("this Run is not live and available for a machine move")
+		return out, refusal{msg: "this Run is not live and available for a machine move", code: "not_live"}
 	}
 	choices, sizes, _, err := machineChoices(ctx, tx, c)
 	if err != nil {

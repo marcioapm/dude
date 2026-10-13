@@ -61,6 +61,10 @@ type Behaviour struct {
 	// arguments) and end the first turn there; do the rest (Reply, Commit)
 	// in the turn the answer starts.
 	Ask string
+	// Ask to move machine with dude's request_machine (these are its JSON
+	// arguments) in the first turn; accepted, the turn ends there and the
+	// rest is done in the turn the resume starts. Refused, it carries on.
+	Machine string
 	// Tools start and do not finish: a long command.
 	KeepToolsOpen bool
 	// Files the agent publishes as it finishes its turn, name → content
@@ -792,7 +796,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+	return Behaviour{Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
@@ -1513,6 +1517,11 @@ func (s *Server) turn(run *Run) {
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
 	}
+	if b.Machine != "" && first && !asking {
+		// Its move accepted, it ends its turn as the tool's answer says,
+		// its work left for the turn the resume starts.
+		asking = s.requestMachine(run, b.Machine) == http.StatusOK
+	}
 	if b.Conductor {
 		// The tools the input asks the scripted conductor for: its first
 		// prompt's (its script), then each later input's.
@@ -1555,6 +1564,9 @@ func (s *Server) turn(run *Run) {
 	}
 	if asking {
 		reply = "I asked; waiting for the answer."
+		if b.Machine != "" {
+			reply = fakeagent.MachineEndedTurn
+		}
 	}
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
@@ -1613,16 +1625,60 @@ func conductorAsked(input string, first bool) string {
 	return strings.Join(lines, "\n")
 }
 
+// requestMachine calls request_machine as the agent would, once dude has
+// recorded the Run live: a real agent's first call comes after its
+// container is up, which dude knows by then, while the fake plays the turn
+// the moment the submit is accepted. Waits up to 5 s, without s.mu, while
+// dude answers not_live. Callers hold s.mu.
+func (s *Server) requestMachine(run *Run, args string) int {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		status, body, err := s.toolRequest(run, "request_machine", args)
+		var refused struct{ Code string }
+		_ = json.Unmarshal(body, &refused)
+		if refused.Code != "not_live" || time.Now().After(deadline) {
+			s.saidOfTool(run, "request_machine", status, err)
+			return status
+		}
+		s.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		s.mu.Lock()
+	}
+}
+
 // callTool calls one of dude's tools as the agent's container would through
 // lux's service proxy: the spec's "dude" service, its header filled in from
 // the spec's secret. (The CLI's own path through a socket is tested in
 // agenttools.) Callers hold s.mu; the call is made without it, since dude
-// may be slow. A failure is said in the agent's reply.
-func (s *Server) callTool(run *Run, tool, args string) {
+// may be slow. A failure is said in the agent's reply. Its HTTP status,
+// 0 when it never got one.
+func (s *Server) callTool(run *Run, tool, args string) int {
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
-		return
+		return http.StatusOK
 	}
+	status, _, err := s.toolRequest(run, tool, args)
+	s.saidOfTool(run, tool, status, err)
+	return status
+}
+
+// saidOfTool says a failed call in the agent's reply, as an agent would
+// report a tool it ran. Callers hold s.mu.
+func (s *Server) saidOfTool(run *Run, tool string, status int, err error) {
+	switch {
+	case err != nil:
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": "dude " + tool + " failed: " + err.Error() + "\n"}})
+	case status >= 300:
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, status)}})
+	}
+}
+
+// toolRequest is one call of a dude tool through the spec's "dude"
+// service: its status and body. Callers hold s.mu; it is released for
+// the call. Status 0 with no error: the spec has no such service.
+func (s *Server) toolRequest(run *Run, tool, args string) (int, []byte, error) {
 	var spec struct {
 		Secrets  []lux.Secret `json:"secrets"`
 		Workload struct {
@@ -1636,7 +1692,7 @@ func (s *Server) callTool(run *Run, tool, args string) {
 		}
 		req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
 		if err != nil {
-			return
+			return 0, nil, err
 		}
 		for _, h := range svc.Headers {
 			for _, sec := range spec.Secrets {
@@ -1647,20 +1703,18 @@ func (s *Server) callTool(run *Run, tool, args string) {
 		}
 		s.mu.Unlock()
 		res, err := http.DefaultClient.Do(req)
-		s.mu.Lock()
-		// Said in the agent's reply, as an agent would report a tool it ran.
-		switch {
-		case err != nil:
-			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-				"content": map[string]any{"type": "text", "text": "dude " + tool + " failed: " + err.Error() + "\n"}})
-		case res.StatusCode >= 300:
-			res.Body.Close()
-			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-				"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, res.StatusCode)}})
-		default:
+		var body []byte
+		if err == nil {
+			body, _ = io.ReadAll(res.Body)
 			res.Body.Close()
 		}
+		s.mu.Lock()
+		if err != nil {
+			return 0, nil, err
+		}
+		return res.StatusCode, body, nil
 	}
+	return 0, nil, nil
 }
 
 // Prompt is what the Run's agent was told.
