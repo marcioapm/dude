@@ -14,7 +14,7 @@ import {
 import { Callout } from "@dude/design-system/primitives";
 import { dependencySteps, firstName, formatDuration, neighbourKeys, scopeTasks, type NavEpic, type NavProject, type NavTask } from "@dude/design-system";
 import { blockedRefusal, blockerList, neverMergesRefusal, type AutoStartHow, type TaskRelations, type TaskRelationView } from "@dude/domain";
-import { ApiError, refusedBlockers, type ApiClient } from "../api/client.ts";
+import { ApiError, refusedBlockers, type ApiClient, type StartAnyway } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
 const NONE: TaskRelations = { blockedBy: [], blocks: [], related: [], autoStart: null, owner: null };
@@ -51,6 +51,18 @@ export function neverMerges(blockers: ReadonlyArray<{ key: string; unmerged?: bo
 
 const ago = (at: string | number | Date) => formatDuration(Math.max(0, Date.now() - new Date(at).getTime()), { style: "age" });
 
+/** Who set a start when unblocked, as its mark names them. */
+const setter = (by: { id?: string | undefined; name: string }, you: string | null) => (by.id === you ? "You" : firstName(by.name));
+
+function startAs(client: ApiClient, taskId: string, how: AutoStartHow, start: StartAnyway = {}): Promise<unknown> {
+  return how === "deliver" ? client.deliver(taskId, start) : client.talk(taskId, start);
+}
+
+/** A person's start anyway, with their note when they gave one. */
+function startAnyway(client: ApiClient, taskId: string, how: AutoStartHow, note: string): Promise<unknown> {
+  return startAs(client, taskId, how, { override: true, ...(note ? { note } : {}) });
+}
+
 /**
  * Where Deliver and Talk it through sit on a blocked task: refused for the
  * reason, then Start when unblocked (its owner) and Start anyway (a person),
@@ -82,9 +94,7 @@ export function TaskStartGate({ client, taskId, taskKey, relations, you, onStart
     setBusy(true);
     setProblem(null);
     try {
-      const start = { override: true as const, ...(note ? { note } : {}) };
-      if (how === "deliver") await client.deliver(taskId, start);
-      else await client.talk(taskId, start);
+      await startAnyway(client, taskId, how, note);
       setDialog(null);
       onStarted(how);
     } catch (err) {
@@ -149,7 +159,7 @@ export function BlockedNotice({ client, taskId, relations, you, onChanged }: {
       <b>Blocked by {blockerList(words)}.</b>{" "}
       {auto ? null : <>It can start once {words.length === 1 ? "that's" : "they're"} merged; nothing starts it on its own then.</>}
       {auto ? (
-        <AutoStartMark blockers={words} auto={{ how: auto.how, by: auto.by.id === you ? "You" : firstName(auto.by.name), ago: ago(auto.at),
+        <AutoStartMark blockers={words} auto={{ how: auto.how, by: setter(auto.by, you), ago: ago(auto.at),
           onCancel: owner ? cancel : undefined }} />
       ) : null}
       {failed.length > 0 ? (
@@ -290,7 +300,7 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
     const auto = task.autoStart;
     const startNow = (how: AutoStartHow) => {
       setBoardProblem(null);
-      void run(() => (how === "deliver" ? client.deliver(task.id) : client.talk(task.id)), () => latest.current.onStarted(task.id, how), setBoardProblem);
+      void run(() => startAs(client, task.id, how), () => latest.current.onStarted(task.id, how), setBoardProblem);
     };
     return (
       <StartMenu taskKey={task.key} blockers={blockers} ownerName={owner ? firstName(owner.name) : "its owner"} tabIndex={focus.tabIndex}
@@ -298,7 +308,7 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
         onStartAnyway={blockers.length > 0 ? () => setDialog({ kind: "anyway", task: ct }) : undefined}
         onStartWhenUnblocked={mine ? () => setDialog({ kind: "auto", task: ct }) : undefined}
         startWhenUnblockedRefused={neverMerges(blockers)}
-        auto={auto ? { how: auto.how, by: auto.by.id === you ? "You" : firstName(auto.by.name), ago: ago(auto.at),
+        auto={auto ? { how: auto.how, by: setter(auto.by, you), ago: ago(auto.at),
           onCancel: mine ? () => void run(() => client.cancelAutoStart(task.id), () => latest.current.onChanged(), setBoardProblem) : undefined } : undefined} />
     );
   }, [client, you, run]);
@@ -313,10 +323,7 @@ export function useCardStarts(client: ApiClient, you: string | null, onStarted: 
   const dialogs = t ? (
     <>
       <StartAnywayDialog open={dialog.kind === "anyway"} onOpenChange={close} taskKey={t.key} blockers={blockers} busy={busy} problem={problem}
-        onConfirm={(how, note) => run(() => {
-          const s = { override: true as const, ...(note ? { note } : {}) };
-          return how === "deliver" ? client.deliver(t.id, s) : client.talk(t.id, s);
-        }, () => {
+        onConfirm={(how, note) => run(() => startAnyway(client, t.id, how, note), () => {
           setDialog(null);
           onStarted(t.id, how);
         }, setProblem)} />
