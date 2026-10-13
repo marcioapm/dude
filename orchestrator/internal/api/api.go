@@ -261,6 +261,7 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		// implementer's, so the implementer's Reset covers the fix Run too.
 		// Only the newest live Run of the role is moved; any other (a second
 		// reviewer) takes the settings' size at its next resume.
+		// Non-nil: a nil slice is NULL to pgx, and cardinality(NULL) selects no Run.
 		wantPhases := []string{}
 		if phase := delivery.PhaseForPromptRole(body.Role); phase != "" {
 			wantPhases = append(wantPhases, phase)
