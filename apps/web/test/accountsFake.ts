@@ -11,14 +11,14 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, YOU } from "../src/fixtures/data.ts";
 import {
   ApiError, type AdminOrganization, type AdminPerson, type ApiClient, type ApiKeyInfo, type InvitationRow, type InvitationStatus,
-  type InvitationView, type InviteResult, type Located, type MeAnswer, type MembershipInfo, type MyInvitation,
+  type InvitationView, type InviteResult, type Located, type MeAnswer, type Member, type MembershipInfo, type InvitationInfo,
 } from "../src/api/client.ts";
 
 const DAY = 86_400_000;
 const iso = (offsetDays: number) => new Date(Date.now() + offsetDays * DAY).toISOString();
 
-export const ACME: MembershipInfo = { id: ORG.id, name: "Acme", slug: "acme", role: "admin", personId: YOU, welcomedAt: null, waitingOnYou: 2 };
-export const NORTHWIND: MembershipInfo = { id: "org_northwind", name: "Northwind", slug: "northwind", role: "member", personId: "per_nw_marcio", welcomedAt: null, waitingOnYou: 1 };
+export const ACME: MembershipInfo = { id: ORG.id, name: "Acme", slug: "acme", role: "admin", personId: YOU, waitingOnYou: 2 };
+export const NORTHWIND: MembershipInfo = { id: "org_northwind", name: "Northwind", slug: "northwind", role: "member", personId: "per_nw_marcio", waitingOnYou: 1 };
 export const GLOBEX = { id: "org_globex", name: "Globex", slug: "globex" };
 
 export function invitation(over: Partial<InvitationRow> & Pick<InvitationRow, "id" | "code" | "email">): InvitationRow {
@@ -34,7 +34,7 @@ export const ACME_INVITATIONS: InvitationRow[] = [
   invitation({ id: "inv_priya", code: "Pr00000000000000000000", email: "priya.raman@gmail.com", name: "Priya Raman", status: "revoked", revokedAt: iso(-5) }),
 ];
 
-export const GLOBEX_INVITE: MyInvitation = {
+export const GLOBEX_INVITE: InvitationInfo = {
   id: "inv_gx", code: "Gx4tR8mQ2vLp9sKd3wNb7a", email: "marcio@example.com", name: null, organization: GLOBEX, role: "member",
   inviter: "Lin Zhao", createdAt: iso(-4), expiresAt: iso(9),
 };
@@ -58,9 +58,15 @@ export interface World {
   calls: Call[];
   /** What Join answers: the organisation it made you a member of. */
   onAccept?: (code: string) => void;
+  /** Rows per page of an invitations list (the API's is 50); a shorter page answers with a cursor. */
+  pageSize?: number;
+  /** Addresses already pending on the server but not in `invitations`: inviting one answers `existing`. */
+  pendingUnlisted?: Set<string>;
+  /** An organisation's people, where it differs from the fixtures'; a promise holds the read until it settles. */
+  people?: Map<string, { people: Member[]; you: string } | Promise<{ people: Member[]; you: string }>>;
 }
 
-export function memberMe(over: Partial<{ organizations: MembershipInfo[]; invitations: MyInvitation[]; superAdmin: boolean }> = {}): MeAnswer {
+export function memberMe(over: Partial<{ organizations: MembershipInfo[]; invitations: InvitationInfo[]; superAdmin: boolean }> = {}): MeAnswer {
   return { gate: "member", account: { id: "acc_m", email: "marcio@example.com", name: "Márcio Martins", photoUrl: null },
     organizations: over.organizations ?? [ACME, NORTHWIND], invitations: over.invitations ?? [GLOBEX_INVITE], organization: null,
     superAdmin: over.superAdmin ?? true, authMethod: "cloudflare_access" };
@@ -97,13 +103,27 @@ export class AccountsClient extends FixtureClient {
     this.#log("inOrganization", organizationId);
     return new AccountsClient(this.w, organizationId);
   }
+  // A new answer each time, as the server's is: a re-read never hands back the objects already held.
   override gate(): Promise<MeAnswer> {
     this.#log("gate");
-    return Promise.resolve(this.w.me);
+    return Promise.resolve(structuredClone(this.w.me));
+  }
+  override subscribePush(subscription: PushSubscriptionJSON) {
+    this.#log("subscribePush", subscription.endpoint);
+    return Promise.resolve({ subscribed: true });
+  }
+  override unsubscribePush(endpoint: string) {
+    this.#log("unsubscribePush", endpoint);
+    return Promise.resolve();
+  }
+  override pushKey() {
+    this.#log("pushKey");
+    return Promise.resolve({ publicKey: "BPk" });
   }
   override listPeople() {
     this.#log("listPeople");
-    return super.listPeople();
+    const own = this.org ? this.w.people?.get(this.org) : undefined;
+    return own ? Promise.resolve(own) : super.listPeople();
   }
   override navigation() {
     this.#log("navigation");
@@ -126,17 +146,24 @@ export class AccountsClient extends FixtureClient {
     this.w.onAccept?.(code);
     return Promise.resolve({ person: { id: "per_new", role: v.role, name: name ?? "Chloé" }, organization: v.organization });
   }
-  override listInvitations(params: { status?: InvitationStatus | "all"; q?: string } = {}) {
+  override listInvitations(params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}) {
     this.#log("listInvitations", params);
     const want = params.status ?? "pending";
     const q = (params.q ?? "").toLowerCase();
     const rows = this.w.invitations.filter((r) => (want === "all" || status(r) === want)
       && (!q || r.email.includes(q) || (r.name ?? "").toLowerCase().includes(q)));
-    return Promise.resolve({ invitations: rows, cursor: null });
+    const start = params.cursor ? rows.findIndex((r) => r.id === params.cursor) + 1 : 0;
+    const size = this.w.pageSize ?? 50;
+    const page = rows.slice(start, start + size);
+    return Promise.resolve({ invitations: page, cursor: start + size < rows.length ? page.at(-1)!.id : null });
   }
   override invite(invitations: Array<{ email: string; name?: string }>, role: PersonRole) {
     this.#log("invite", invitations, role);
     const results: InviteResult[] = invitations.map((e, i) => {
+      if (this.w.pendingUnlisted?.has(e.email)) {
+        const code = `Old${i}`.padEnd(22, "0");
+        return { email: e.email, result: "existing", invitation: { id: `inv_old${i}`, code, role, expiresAt: iso(9) }, link: `#/invite/${code}` };
+      }
       const old = this.w.invitations.find((r) => r.email === e.email && (r.status === "pending" || r.status === "expired"));
       if (old?.status === "expired") {
         old.status = "pending";
@@ -170,7 +197,8 @@ export class AccountsClient extends FixtureClient {
   override createMyKey(name: string, organizationId = this.org ?? undefined) {
     this.#log("createMyKey", name, organizationId);
     const key = `dude_sk_new${this.w.keys.length}`;
-    this.w.keys.push({ id: `key_${this.w.keys.length + 1}`, name, prefix: key.slice(0, 14), createdAt: iso(0), lastUsedAt: null, current: false, organizationId });
+    this.w.keys.push({ id: `key_${this.w.keys.length + 1}`, name, prefix: key.slice(0, 14), createdAt: iso(0), lastUsedAt: null, current: false,
+      ...(organizationId ? { organizationId } : {}) });
     return Promise.resolve({ id: "key_new", name, prefix: key.slice(0, 14), key });
   }
   override adminOrganizations() {
@@ -190,7 +218,7 @@ export class AccountsClient extends FixtureClient {
     const people = this.w.orgPeople.get(id) ?? PEOPLE.slice(0, 2).map((p) => ({ ...p, accountId: "acc", email: p.email }));
     return Promise.resolve({ organization: { id, name: o.name, slug: o.slug }, people: people as AdminPerson[], invitations: [], cursor: null });
   }
-  override adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string } = {}) {
+  override adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}) {
     this.#log("adminInvitations", id, params);
     return this.listInvitations(params);
   }

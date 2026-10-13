@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { ApiClient, ApiError, type MeResponse } from "../src/api/client.ts";
+import { ApiClient, ApiError, type MeAnswer, type MeResponse } from "../src/api/client.ts";
 import { ACCESS_LOGOUT, AuthSession, KEY_STORAGE } from "../src/auth.ts";
 
 const originalFetch = globalThis.fetch;
@@ -21,7 +21,7 @@ function setup(key: string | null, responses: Array<MeResponse | Error | Promise
       const response = responses.shift();
       if (response instanceof Error) throw response;
       if (!response) throw new Error("Unexpected probe");
-      return response;
+      return response as MeAnswer;
     };
     clients.push(client);
     return client;
@@ -108,6 +108,16 @@ describe("session-first authentication", () => {
     expect(values.has(KEY_STORAGE)).toBe(false);
     session.refused(clients[1]!);
     expect(session.snapshot()).toEqual({ kind: "key-prompt", refused: true });
+    expect(keys).toEqual(["valid", undefined]);
+  });
+
+  test("a refusal from an organisation's client re-probes as the session's own (its root)", async () => {
+    const { session, keys, clients } = setup("valid", [me, { ...me, authMethod: "cloudflare_access" }]);
+    await session.check();
+    session.refused(clients[0]!.inOrganization("org_x"));
+    expect(session.snapshot().kind).toBe("checking");
+    await session.check();
+    expect(session.snapshot()).toMatchObject({ kind: "authenticated", client: clients[1], authMethod: "cloudflare_access" });
     expect(keys).toEqual(["valid", undefined]);
   });
 

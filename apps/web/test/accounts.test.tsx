@@ -15,10 +15,12 @@ import { act, click, mount, settle, type, until } from "./dom.ts";
 import { ApiClient, ApiError, type MeAnswer } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { Gatekeeper } from "../src/accounts/Gatekeeper.tsx";
+import { useAccount, type Account } from "../src/accounts/context.tsx";
+import { PUSH_ORGANIZATION, turnPushOff } from "../src/push.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
 import { LAST_ORGANIZATION } from "../src/accounts/route.ts";
-import { ACME, AccountsClient, GLOBEX, GLOBEX_INVITE, NORTHWIND, invitationView, memberMe, world, type World } from "./accountsFake.ts";
+import { ACME, AccountsClient, GLOBEX, GLOBEX_INVITE, NORTHWIND, invitation, invitationView, memberMe, world, type World } from "./accountsFake.ts";
 import { ORG, PEOPLE, TASK_ID } from "../src/fixtures/data.ts";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -36,14 +38,19 @@ afterEach(async () => {
   localStorage.clear();
   sessionStorage.clear();
   setPlaceOrganization(null);
-  // ThemeProvider stamps the root; later suites in this process read the root as unthemed.
-  for (const a of ["data-theme", "data-density", "data-reduced-motion"]) document.documentElement.removeAttribute(a);
 });
 
 /** The signed-in app at `hash`, as main.tsx mounts it: the gatekeeper, then the tenant app it chose. */
 async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_access" = "cloudflare_access") {
   window.history.replaceState(null, "", hash);
   const client = new AccountsClient(w);
+  // Every organisation client the gatekeeper handed the tenant app, and the account it provided.
+  const scopedClients = new Set<ApiClient>();
+  const seen: { account: Account | null } = { account: null };
+  function AccountProbe() {
+    seen.account = useAccount();
+    return null;
+  }
   function Root() {
     const [me, setMe] = useState(w.me);
     const reread = async () => {
@@ -52,15 +59,19 @@ async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_
       return next;
     };
     return (
-      <ThemeProvider storageKey={null} densityStorageKey={null}>
+      <ThemeProvider storageKey={null} densityStorageKey={null} target={themeTarget}>
       <TooltipProvider>
         <ToastProvider>
           <Gatekeeper client={client} me={me} authMethod={authMethod} reread={reread} onSignOut={() => void signedOut++}>
-            {(scoped) => (
-              <PeopleProvider client={scoped}>
-                <App client={scoped} onKeyRefused={() => {}} onSignOut={() => void signedOut++} />
-              </PeopleProvider>
-            )}
+            {(scoped) => {
+              scopedClients.add(scoped);
+              return (
+                <PeopleProvider client={scoped}>
+                  <AccountProbe />
+                  <App client={scoped} onKeyRefused={keyRefused} onSignOut={() => void signedOut++} />
+                </PeopleProvider>
+              );
+            }}
           </Gatekeeper>
         </ToastProvider>
       </TooltipProvider>
@@ -69,8 +80,13 @@ async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_
   }
   const { container, unmount } = await mount(<Root />);
   mounted.push(unmount);
-  return { page: container, client };
+  return { page: container, client, scopedClients, seen };
 }
+
+// The theme is stamped here, not on the shared document root later suites read.
+const themeTarget = document.createElement("div");
+// Stable, as main.tsx's `session.refused` is: the tenant app's reads are keyed on it.
+const keyRefused = () => {};
 
 const byTestId = (root: ParentNode, id: string) => root.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 const text = (el: Element | null) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -78,6 +94,9 @@ const button = (root: ParentNode, name: string) => [...root.querySelectorAll<HTM
 async function pointer(el: Element) {
   await act(async () => void el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
 }
+
+/** What only the tenant app asks for: none of it may run before a membership is mounted. */
+const TENANT_METHODS = ["inOrganization", "navigation", "listPeople", "subscribePush", "listInvitations", "listMyKeys"];
 
 describe("the gate decides the first screen before any organisation mounts", () => {
   test("a member at the bare address opens their last organisation's home, and the shell reads it naming that organisation", async () => {
@@ -102,6 +121,9 @@ describe("the gate decides the first screen before any organisation mounts", () 
     expect(text(invited.querySelector("h1"))).toBe("You're invited, Chloé");
     expect([...page.querySelectorAll("[data-testid=invitation-card]")].map((c) => c.getAttribute("data-org"))).toEqual(["northwind", "globex"]);
     expect(text(invited)).toContain("Two organisations on this dude sent you an invitation link.");
+    // A late mount would read the tenant app even with the client naming no organisation.
+    await settle();
+    expect(w.calls.filter((c) => TENANT_METHODS.includes(c.method))).toEqual([]);
     expect(w.calls.some((c) => c.org !== null)).toBe(false);
   });
 
@@ -152,6 +174,8 @@ describe("the gate decides the first screen before any organisation mounts", () 
     expect(w.calls.filter((c) => c.method === "gate").length).toBe(asked + 1);
     await click(byTestId(page, "no-org-sign-out")!);
     expect(signedOut).toBe(1);
+    await settle();
+    expect(w.calls.filter((c) => TENANT_METHODS.includes(c.method))).toEqual([]);
     expect(w.calls.every((c) => c.org === null)).toBe(true);
   });
 });
@@ -173,6 +197,34 @@ describe("every tenant request names its organisation", () => {
     await scoped.listMyKeys();
     expect(seen).toEqual([null, "org_northwind", "org_northwind"]);
     expect(scoped.root).toBe(base);
+  });
+
+  test("an attachment upload names the organisation too", async () => {
+    const headers: Record<string, string> = {};
+    class FakeXHR {
+      upload = {};
+      withCredentials = false;
+      status = 201;
+      responseText = JSON.stringify({ id: "att_1", name: "a.png" });
+      onload: (() => void) | null = null;
+      open() {}
+      setRequestHeader(k: string, v: string) {
+        headers[k.toLowerCase()] = v;
+      }
+      send() {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    const original = globalThis.XMLHttpRequest;
+    globalThis.XMLHttpRequest = FakeXHR as never;
+    try {
+      const img = new Blob(["x"], { type: "image/png" });
+      const uploaded = await new ApiClient({}).inOrganization("org_northwind").uploadAttachment("t", { name: "a.png", original: img, delivered: img });
+      expect(uploaded.id).toBe("att_1");
+      expect(headers["x-dude-organization"]).toBe("org_northwind");
+    } finally {
+      globalThis.XMLHttpRequest = original;
+    }
   });
 
   test("org= on the event stream, beside the key", () => {
@@ -220,6 +272,25 @@ describe("switching organisation", () => {
     expect(window.location.hash).toBe("#/o/northwind/org/settings");
   });
 
+  test("after a switch nothing read for Acme shows under Northwind: Acme's members are gone before Northwind's arrive", async () => {
+    const w = world();
+    const person = (id: string, name: string, role: "admin" | "member") =>
+      ({ id, name, photoUrl: null, online: false, email: `${id}@northwind.io`, role, lastSeenAt: null, lastSeenWhere: null });
+    let release!: () => void;
+    w.people = new Map([[NORTHWIND.id, new Promise((done) => {
+      release = () => done({ people: [person("per_nw_marcio", "Márcio Martins", "member"), person("per_gus", "Gus Lindqvist", "admin")], you: "per_nw_marcio" });
+    })]]);
+    const { page } = await open("#/o/acme/org/settings/members", w);
+    await until(() => page.querySelector("[data-member='Ana Ribeiro']"), "Acme's members");
+    window.location.hash = "#/o/northwind/org/settings/members";
+    await until(() => w.calls.some((c) => c.method === "listPeople" && c.org === NORTHWIND.id) ? true : null, "Northwind's people asked for");
+    await settle();
+    expect(page.querySelectorAll("[data-testid=member]").length).toBe(0);
+    release();
+    await until(() => page.querySelector("[data-member='Gus Lindqvist']"), "Northwind's members");
+    expect([...page.querySelectorAll("[data-testid=member]")].map((r) => r.getAttribute("data-member"))).toEqual(["Márcio Martins", "Gus Lindqvist"]);
+  });
+
   test("Join… opens that invitation's page; All organisations the super-admin's", async () => {
     const w = world();
     const { page } = await open("#/o/acme/", w);
@@ -257,6 +328,14 @@ describe("links from before addresses named an organisation", () => {
     await until(() => (window.location.hash === `#/o/northwind/task/${TASK_ID}/servers` ? true : null), "the rewritten address");
     expect(w.calls.find((c) => c.method === "locate")?.args).toEqual([TASK_ID]);
     await until(() => byTestId(page, "shell"), "the shell");
+  });
+
+  test("an old link locate can't place opens in your home organisation", async () => {
+    const w = world();
+    localStorage.setItem(LAST_ORGANIZATION, "northwind");
+    await open(`#/task/${TASK_ID}`, w);
+    await until(() => (window.location.hash === `#/o/northwind/task/${TASK_ID}` ? true : null), `home's address, not ${window.location.hash}`);
+    expect(w.calls.find((c) => c.method === "locate")?.args).toEqual([TASK_ID]);
   });
 
   test("with one organisation there is nothing to ask: the link opens in it", async () => {
@@ -339,6 +418,24 @@ describe("inviting with the chip editor", () => {
     await settle();
     expect(copied).toEqual([`${location.origin}/#/invite/New0000000000000000000`,
       `Priya Raman, priya@acme.dev, ${location.origin}/#/invite/New0000000000000000000\nkai.nakamura@acme.dev, ${location.origin}/#/invite/Ka00000000000000000000`]);
+  });
+});
+
+describe("inviting someone already invited on the server", () => {
+  test("an address the dialog didn't know was pending still gets its link, and Copy all names it", async () => {
+    const w = world();
+    w.pendingUnlisted = new Set(["noah.berg@acme.dev"]);
+    const { dialog } = await inviteDialog(w);
+    const input = dialog.querySelector<HTMLInputElement>("input[autocomplete=off]")!;
+    await paste(input, "Noah Berg <noah.berg@acme.dev>\npriya@acme.dev");
+    await click(byTestId(dialog, "invite-submit")!);
+    const links = await until(() => document.querySelector<HTMLElement>("[data-testid=invite-links]"), "the links");
+    const noah = `${location.origin}/#/invite/${"Old0".padEnd(22, "0")}`;
+    const priya = `${location.origin}/#/invite/${"New1".padEnd(22, "0")}`;
+    expect([...links.querySelectorAll("code")].map((c) => c.textContent)).toEqual([noah, priya]);
+    await click(byTestId(document.querySelector("[role=dialog]")!, "copy-all")!);
+    await settle();
+    expect(copied).toEqual([`Noah Berg, noah.berg@acme.dev, ${noah}\npriya@acme.dev, ${priya}`]);
   });
 });
 
@@ -460,7 +557,7 @@ describe("an invitation link, every state", () => {
 });
 
 describe("your settings: keys by organisation", () => {
-  test("keys are grouped under each organisation; New key for Northwind makes it there and shows it once with the CLI line", async () => {
+  test("keys are grouped under each organisation; New key for Northwind makes it there and shows it once with a request that uses it", async () => {
     const w = world();
     const { page } = await open("#/o/acme/me/settings", w);
     const keys = await until(() => byTestId(page, "keys"), "Keys");
@@ -477,7 +574,9 @@ describe("your settings: keys by organisation", () => {
     await click(byTestId(dialog, "key-create")!);
     const shown = await until(() => byTestId(document, "key-usage"), "the key, shown once");
     expect(w.calls.find((c) => c.method === "createMyKey")!.args).toEqual(["Laptop", NORTHWIND.id]);
-    expect(shown.textContent).toBe(`dude login ${location.origin}\n# paste the key; the CLI keeps it as "northwind"\ndude whoami\n# Márcio Martins · Northwind · Member`);
+    expect(shown.textContent).toBe(`curl -H "authorization: Bearer dude_sk_new2" ${location.origin}/v1/me\n# acts as you in Northwind; its answer names the organisation and your role`);
+    expect(text(shown.parentElement!.querySelector(".ds-label"))).toBe("How to use it");
+    expect(text(document.querySelector("[role=dialog]"))).not.toContain("--org");
     expect(text(document.querySelector("[role=dialog] h2"))).toBe("Key “Laptop” for Northwind");
   });
 
@@ -486,6 +585,114 @@ describe("your settings: keys by organisation", () => {
     const profile = await until(() => byTestId(page, "profile"), "the profile");
     expect(text(byTestId(profile, "profile-scope"))).toBe("The same in every organisation you're in: Acme and Northwind see this name and photo.");
     expect(text(byTestId(profile, "profile-facts"))).toContain("from Cloudflare Access, can't be changed here");
+  });
+});
+
+describe("Members", () => {
+  test("an admin's Joined column follows every page of accepted invitations", async () => {
+    const w = world();
+    w.pageSize = 1;
+    w.invitations.push(invitation({ id: "inv_kai2", code: "Kb00000000000000000000", email: "kai@example.com", name: "Kai Nakamura", inviter: "Tom Okafor",
+      status: "accepted", acceptedAt: "2026-09-01T00:00:00Z", acceptedPersonId: "u_kai" }));
+    const { page } = await open("#/o/acme/org/settings/members", w);
+    const row = (name: string) => text(page.querySelector(`[data-member='${name}']`));
+    await until(() => row("Kai Nakamura").includes("invited by Tom") ? true : null, "the second page's invitee");
+    expect(row("Lin Zhao")).toContain("invited by Ana");
+    expect(row("Sam.delgado".toLowerCase())).toContain("joined before invitations");
+    expect(w.calls.filter((c) => c.method === "listInvitations" && (c.args[0] as { status: string }).status === "accepted").map((c) => c.args[0]))
+      .toEqual([{ status: "accepted" }, { status: "accepted", cursor: "inv_lin" }]);
+  });
+});
+
+describe("re-reading /v1/me", () => {
+  test("a refresh (a profile save) keeps the organisation's client: the tenant app reads nothing again", async () => {
+    const w = world();
+    const { page, scopedClients, seen } = await open("#/o/acme/", w);
+    await until(() => byTestId(page, "shell"), "the shell");
+    await until(() => w.calls.some((c) => c.method === "listPeople") && w.calls.some((c) => c.method === "navigation") ? true : null, "the first reads");
+    await settle();
+    const count = (method: string) => w.calls.filter((c) => c.method === method).length;
+    const before = { gate: count("gate"), navigation: count("navigation"), listPeople: count("listPeople"), inOrganization: count("inOrganization") };
+    const [first] = [...scopedClients];
+    await act(async () => seen.account!.refresh());
+    await until(() => (count("gate") > before.gate ? true : null), "the re-read");
+    await settle();
+    expect([...scopedClients]).toEqual([first!]);
+    expect({ navigation: count("navigation"), listPeople: count("listPeople"), inOrganization: count("inOrganization") })
+      .toEqual({ navigation: before.navigation, listPeople: before.listPeople, inOrganization: before.inOrganization });
+  });
+});
+
+/** A browser that can push and is subscribed at `endpoint`, until the returned undo. */
+function fakePush(endpoint: string): () => void {
+  const sub = { endpoint, toJSON: () => ({ endpoint, keys: { p256dh: "p", auth: "a" } }), unsubscribe: async () => true };
+  const registration = { pushManager: { getSubscription: async () => sub, subscribe: async () => sub } };
+  const worker = { register: async () => registration, ready: Promise.resolve(registration), getRegistration: async () => registration,
+    addEventListener() {}, removeEventListener() {} };
+  const notification = { permission: "granted", requestPermission: async () => "granted" };
+  const undo: Array<() => void> = [];
+  const define = (target: object, key: string, value: unknown) => {
+    const before = Object.getOwnPropertyDescriptor(target, key);
+    Object.defineProperty(target, key, { configurable: true, writable: true, value });
+    undo.push(() => (before ? Object.defineProperty(target, key, before) : delete (target as Record<string, unknown>)[key]));
+  };
+  for (const scope of new Set<object>([window, globalThis])) {
+    define(scope, "isSecureContext", true);
+    define(scope, "PushManager", function PushManager() {});
+    define(scope, "Notification", notification);
+  }
+  for (const nav of new Set<object>([navigator, window.navigator])) define(nav, "serviceWorker", worker);
+  return () => {
+    for (const step of undo.reverse()) step();
+  };
+}
+
+describe("this browser's notifications", () => {
+  const endpoint = "https://push.example/sub-1";
+  let restore: () => void = () => {};
+  beforeEach(() => {
+    restore = fakePush(endpoint);
+  });
+  // Unmounted while the browser can still push: the app's cleanup reads the service worker.
+  afterEach(async () => {
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    restore();
+  });
+
+  test("claimed in Acme, opening Northwind claims nothing, and Northwind's card says it is on for Acme", async () => {
+    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme" }));
+    const w = world();
+    const { page } = await open("#/o/northwind/me/settings", w);
+    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
+    await settle();
+    expect(w.calls.filter((c) => c.method === "subscribePush")).toEqual([]);
+    expect(text(byTestId(page, "push-state"))).toBe("On in this browser, for Acme: a question or a request from an agent there shows as a notification, even with dude closed.");
+    // Moving it is the card's own action, for the organisation this tab is in.
+    await click(byTestId(page, "push-here")!);
+    await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
+    expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint)!)).toEqual({ id: NORTHWIND.id, name: "Northwind" });
+    await until(() => text(byTestId(page, "push-state")).startsWith("On in this browser, for Northwind:") ? true : null, "on for Northwind");
+  });
+
+  test("in one organisation, opening it claims the subscription again, as before", async () => {
+    const w = world(memberMe({ organizations: [ACME], invitations: [] }));
+    await open("#/o/acme/", w);
+    await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
+    expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([ACME.id]);
+  });
+
+  test("turning off (and signing out) removes it through the organisation it was claimed for, else the mounted one", async () => {
+    const w = world();
+    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme" }));
+    expect(await turnPushOff(new AccountsClient(w).inOrganization(NORTHWIND.id))).toBe("off");
+    expect(localStorage.getItem(PUSH_ORGANIZATION + endpoint)).toBeNull();
+    expect(await turnPushOff(new AccountsClient(w).inOrganization(NORTHWIND.id))).toBe("off");
+    expect(w.calls.filter((c) => c.method === "unsubscribePush")).toEqual([
+      { method: "unsubscribePush", org: ACME.id, args: [endpoint] },
+      { method: "unsubscribePush", org: NORTHWIND.id, args: [endpoint] },
+    ]);
   });
 });
 
@@ -547,10 +754,23 @@ describe("api_key mode", () => {
     await until(() => byTestId(page, "shell"), "the shell");
     expect(window.location.hash).toBe(`#/task/${TASK_ID}`);
     expect(w.calls.some((c) => c.method === "locate")).toBe(false);
+    // Places written from here stay bare too.
+    await click(await until(() => byTestId(page, "org-settings-button"), "Organisation settings"));
+    expect(window.location.hash).toBe("#/org/settings");
     await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
     expect([...document.querySelectorAll("[role=menuitemradio]")].map(text)).toEqual(["EXExampleAdmin"]);
     expect(text(document.querySelector("[role=menu]"))).not.toContain("All organisations");
     expect(text(document.querySelector("[data-testid=rowmenu-signout]"))).toContain("Forget this browser's key");
+  });
+
+  test("Members says nothing of Cloudflare Access and offers no Invite people: a key's people are added through the API", async () => {
+    const w = world({ person: { ...PEOPLE[0]!, githubLogin: null }, organization: { id: ORG.id, name: "Example", slug: "example" }, authMethod: "api_key", gate: "member" });
+    const { page } = await open("#/org/settings/members", w, "api_key");
+    const members = await until(() => byTestId(page, "members"), "Members");
+    await until(() => members.querySelectorAll("[data-testid=member]").length ? true : null, "its rows");
+    expect(text(members)).not.toContain("Cloudflare");
+    expect(byTestId(page, "invite")).toBeNull();
+    expect(w.calls.some((c) => c.method === "listInvitations" && (c.args[0] as { status: string }).status === "accepted")).toBe(false);
   });
 });
 
