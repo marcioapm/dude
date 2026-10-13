@@ -16,6 +16,7 @@ import {
   CardBody,
   CardFooter,
   CardHeader,
+  Checkbox,
   Input,
   KeyValueList,
   SecretField,
@@ -322,13 +323,13 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           <SecretField label="Private key" value={privateKey} onChange={setPrivateKey}
             placeholder="Paste the whole .pem file" hint="The whole .pem file GitHub generated for the App."
             data-testid="forge-private-key" />
-          <Input label="OAuth Client ID" data-testid="forge-oauth-client-id" value={oauthClientId} autoComplete="off"
+          <Input label="OAuth Client ID" mono data-testid="forge-oauth-client-id" value={oauthClientId} autoComplete="off"
             onChange={(e) => setOauthClientId(e.target.value)} />
-          <Input label="OAuth Client secret" data-testid="forge-oauth-client-secret" type="password" value={oauthClientSecret} autoComplete="off"
+          <SecretField label="OAuth Client secret" value={oauthClientSecret} onChange={setOauthClientSecret}
             hint="Blank keeps the saved secret. This is not the App's private key."
-            onChange={(e) => setOauthClientSecret(e.target.value)} />
-          <label><input type="checkbox" checked={clearOauthClientSecret}
-            onChange={(e) => setClearOauthClientSecret(e.target.checked)} /> Clear saved OAuth Client secret</label>
+            data-testid="forge-oauth-client-secret" />
+          <Checkbox checked={clearOauthClientSecret} onCheckedChange={(c) => setClearOauthClientSecret(c === true)}
+            label="Clear saved OAuth Client secret" />
         </>
       ) : (
         <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}

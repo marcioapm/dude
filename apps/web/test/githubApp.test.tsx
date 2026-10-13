@@ -128,14 +128,33 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
 test("reopening App settings prefills canonical Client ID but no secrets", async () => {
   const client = new AppClient({ ...APP, connected: true, auth: "github_app", oauthClientId: "saved-client", oauthClientSecretConfigured: true });
   const container = await openGithub(client);
-  for (let n=0;n<2;n++) {
+  for (let n = 0; n < 2; n++) {
     await click(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=forge-connect]"), "Replace credentials"));
     const id = await until(() => document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-id]"), "Client ID");
     expect(id.value).toBe("saved-client");
-    expect(document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-secret]")!.value).toBe("");
+    // The design system's secret field, masked and empty.
+    const secret = document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-secret]")!;
+    expect(secret.type).toBe("password");
+    expect(secret.value).toBe("");
     expect(document.querySelector<HTMLInputElement>("[data-testid=forge-private-key]")!.value).toBe("");
-    await click([...document.querySelectorAll("button")].find(b=>b.textContent==="Cancel")!);
+    await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
   }
+});
+
+test("a blank OAuth Client secret is not sent, and ticking Clear sends only the clear", async () => {
+  const client = new AppClient({ ...APP, connected: true, auth: "github_app", oauthClientId: "saved-client", oauthClientSecretConfigured: true });
+  const container = await openGithub(client);
+  await click(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=forge-connect]"), "Replace credentials"));
+  await paste(await until(() => document.querySelector<HTMLElement>("[data-testid=forge-private-key]"), "the key"), "-----BEGIN KEY-----\nK\n-----END KEY-----");
+  const clear = [...document.querySelectorAll<HTMLButtonElement>("[role=checkbox]")]
+    .find((b) => document.getElementById(b.getAttribute("aria-labelledby") ?? "")?.textContent === "Clear saved OAuth Client secret")!;
+  expect(clear.getAttribute("aria-checked")).toBe("false");
+  await click(clear);
+  expect(clear.getAttribute("aria-checked")).toBe("true");
+  await click(document.querySelector<HTMLButtonElement>("[data-testid=forge-save]")!);
+  await until(() => client.connectedApps.length === 1 ? true : null, "the App sent");
+  expect(client.connectedApps).toEqual([[{ privateKey: "-----BEGIN KEY-----\nK\n-----END KEY-----", appId: "9001", installationId: "",
+    oauthClientId: "saved-client", clearOauthClientSecret: true }, undefined]]);
 });
 
 test("a connected App shows its App ID, and Verify reports the token it minted", async () => {
