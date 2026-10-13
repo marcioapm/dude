@@ -1,24 +1,19 @@
 /*
  * What the design system does not lay out yet, for the accounts mockup:
- * the switcher's two triggers, the first-sign-in pages, the parsed invite
- * list and the key groups. Tokens only; regions by shade, no new borders.
+ * the switcher in the profile band, the first-sign-in and accept pages, the
+ * email chips, the invitation links and the key groups. Tokens only;
+ * regions by shade, no new borders.
  * docs/design/accounts.md names which of these should become components.
  */
 
-/* -- The switcher -- */
-.top {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-width: 0;
-}
-.orgTrigger,
+/* -- The switcher, in the profile band -- */
 .bandTrigger {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-12);
   flex: 1;
   min-width: 0;
+  margin-top: var(--ds-space-6);
   padding: var(--ds-space-4) var(--ds-space-8);
   border: 0;
   border-radius: var(--ds-radius-control);
@@ -27,17 +22,10 @@
   font: inherit;
   text-align: left;
 }
-.bandTrigger {
-  gap: var(--ds-space-12);
-  margin-top: var(--ds-space-6);
-}
-.orgTrigger:hover,
 .bandTrigger:hover,
-.orgTrigger[data-state="open"],
 .bandTrigger[data-state="open"] {
   background: var(--ds-color-hover-wash);
 }
-.orgTrigger:focus-visible,
 .bandTrigger:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
@@ -49,18 +37,32 @@
   min-width: 0;
   line-height: var(--ds-leading-tight);
 }
-.orgName,
 .bandName {
   color: var(--ds-color-text-strong);
-  font-weight: var(--ds-weight-semibold);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bandName {
-  font-weight: var(--ds-weight-regular);
+/* An invitation waits in the menu. */
+.bandDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-info-fg);
 }
-.orgRole,
+/* The rail's face carries the organisation's in its corner. */
+.railFace {
+  position: relative;
+}
+.railOrg {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  border-radius: var(--ds-radius-face-project);
+  box-shadow: 0 0 0 2px var(--ds-color-chrome);
+}
 .bandOrg {
   display: inline-flex;
   align-items: center;
@@ -294,38 +296,218 @@
   background: var(--ds-color-active-wash);
   color: var(--ds-color-text-muted);
 }
-.parsed {
-  list-style: none;
-  margin: 0;
-  padding: var(--ds-space-8) var(--ds-space-12);
-  border-radius: var(--ds-radius-control);
-  background: var(--ds-color-sunken);
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-4);
+.statusCell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
   font-size: var(--ds-text-sm);
 }
-.parsedRow {
+.filters {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+  gap: var(--ds-space-12);
 }
-.parsedRow[data-problem] .parsedName {
+.search {
+  width: 260px;
+}
+
+/* -- The email chips: a field as an Input's, holding chips and a bare input -- */
+.chipField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.chipBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: 88px;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--ds-space-6);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  cursor: text;
+}
+.chipBox:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.chipInput {
+  flex: 1;
+  min-width: 180px;
+  height: var(--ds-size-chip);
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  max-width: 100%;
+  min-height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-2) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+}
+.chip[data-tone="bad"] {
+  background: var(--ds-tone-danger-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-danger-border);
+}
+.chip[data-tone="info"] {
+  background: var(--ds-tone-info-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+}
+.chip[data-tone="skip"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
   color: var(--ds-color-text-muted);
 }
-.parsedName {
+.chip[data-tone="skip"] .chipMail {
+  text-decoration: line-through;
+}
+.chipIcon {
+  flex: none;
+}
+.chip[data-tone="ok"] .chipIcon {
+  color: var(--ds-tone-success-fg);
+}
+.chip[data-tone="bad"] .chipIcon {
+  color: var(--ds-tone-danger-fg);
+}
+.chip[data-tone="info"] .chipIcon {
+  color: var(--ds-tone-info-fg);
+}
+.chipText {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.parsedOk {
-  color: var(--ds-tone-success-fg);
-  flex: none;
+.chipText b {
+  font-weight: var(--ds-weight-semibold);
 }
-.parsedSkip {
-  color: var(--ds-tone-attention-fg);
-  flex: none;
+.chipMail {
+  color: inherit;
+}
+.chipText b + .chipMail {
+  color: var(--ds-color-text-muted);
+}
+.chipWhy {
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+.chipWhy::before {
+  content: "· ";
+}
+.chip[data-tone="bad"] .chipWhy {
+  color: var(--ds-tone-danger-fg);
+}
+.chipAction {
+  padding: 0 var(--ds-space-4);
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent-text);
+  font: inherit;
+  font-weight: var(--ds-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chipX {
+  --btn-h: 18px;
+  width: 18px;
+  --btn-fg: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-full);
+}
+.chipSummary {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+/* -- Each invitee's link -- */
+.linkList {
+  list-style: none;
+  margin: 0 0 var(--ds-space-12);
+  padding: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+}
+.linkRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12);
+}
+.linkRow + .linkRow {
+  box-shadow: inset 0 1px 0 var(--ds-color-border-subtle);
+}
+.linkWho {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+.linkWho > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.linkUrl {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-secondary);
+}
+
+/* -- The accept page -- */
+.accept {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-16) 0 var(--ds-space-8);
+  text-align: center;
+}
+.acceptIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-sunken);
+  color: var(--ds-color-text-muted);
+}
+.acceptTitle {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-2xl);
+  line-height: var(--ds-leading-tight);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.acceptLine {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--ds-color-text-secondary);
+}
+.acceptFacts {
+  margin-top: var(--ds-space-8);
+  text-align: left;
 }
 
 /* -- Super-admin: outside every organisation, on the canvas shade -- */
@@ -379,5 +561,15 @@
   .inviteActions {
     width: 100%;
     justify-content: flex-end;
+  }
+  .acceptTitle {
+    font-size: var(--ds-text-xl);
+  }
+  .linkRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .linkUrl {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 }

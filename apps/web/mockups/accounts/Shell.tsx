@@ -1,13 +1,10 @@
 /*
  * The app shell for this mockup: the design system's Sidebar (drawer under
  * 1000px), a rail drawn here when collapsed (the welcome mockup's rail
- * styles, with the switcher in it), and the organisation switcher in one of
- * its two proposed places:
- *
- *   A  the sidebar's top, where "El Duderino" is: dude's face stays the way
- *      home, the organisation's name beside it opens the menu.
- *   B  the profile band: your face, your name and the organisation under it
- *      open one menu for you (organisations, your settings, sign out).
+ * styles), dude's brand at the top as today, and the organisation switcher
+ * in the profile band: your face, your name and the organisation under it
+ * open one menu for you: your organisations, invitations to join, your
+ * settings, All organisations for a super-admin, and Sign out.
  *
  * The menu is RowMenu (Radix: arrows, Enter, Escape, the current one
  * ticked). Its radio items take no face, so each organisation's role is its
@@ -23,10 +20,8 @@ import { globalCounts, projectCounts } from "../../../../packages/design-system/
 import rail from "../welcome/rail.module.css";
 import dudeSvg from "../../public/dude.svg?url";
 import dudeOutlinedSvg from "../../public/dude-outlined.svg?url";
-import type { MY_INVITATIONS, Org, Role } from "./data.ts";
+import type { Invitation, Org, Role } from "./data.ts";
 import s from "./accounts.module.css";
-
-export type SwitcherPlace = "A" | "B";
 
 export function Mark({ size }: { size: number | "fill" }) {
   const box = size === "fill" ? { width: "100%", height: "100%" } : { width: size, height: size };
@@ -50,19 +45,20 @@ export interface SwitchProps {
   onSwitch: (org: Org) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Each organisation's waiting count beside it (open question 4). */
+  /** Each organisation's waiting count beside it. */
   counts: boolean;
   onAdmin: () => void;
   onSettings: () => void;
+  onJoin: (i: Invitation) => void;
   memberships: readonly Membership[];
-  invitations: typeof MY_INVITATIONS;
-  /** A super-admin's menu ends with All organisations. */
+  invitations: readonly Invitation[];
+  /** A super-admin's menu has All organisations. */
   superAdmin: boolean;
 }
 
 export interface Membership { readonly org: Org; readonly role: Role; readonly waiting: number }
 
-function menuItems(p: SwitchProps, place: SwitcherPlace): RowMenuItem[] {
+function menuItems(p: SwitchProps): RowMenuItem[] {
   const items: RowMenuItem[] = [
     {
       kind: "radio", id: "orgs", label: "Your organisations", value: p.current.id,
@@ -74,15 +70,14 @@ function menuItems(p: SwitchProps, place: SwitcherPlace): RowMenuItem[] {
     },
     { kind: "separator" },
     ...p.invitations.map((i): RowMenuItem => ({
-      id: i.id, label: `Join ${i.org.name}`, leading: <OrgFace org={i.org} size={16} />,
-      description: `Invited by ${i.by.name} · expires ${i.expires}`,
+      id: i.id, label: `Join ${i.org.name}…`, leading: <OrgFace org={i.org} size={16} />,
+      description: `Invited by ${i.by?.name ?? "the operator"} · expires ${i.expires}`, onSelect: () => p.onJoin(i),
     })),
     ...(p.invitations.length ? [{ kind: "separator" } as const] : []),
+    { id: "settings", label: "Your settings", icon: "settings", onSelect: p.onSettings },
   ];
-  if (place === "B") items.push({ id: "settings", label: "Your settings", icon: "settings", onSelect: p.onSettings });
   if (p.superAdmin) items.push({ id: "admin", label: "All organisations", icon: "building", description: "Super-admin: this dude's organisations", onSelect: p.onAdmin });
-  if (place === "B") items.push({ id: "signout", label: "Sign out", icon: "arrow-right" });
-  while (items.at(-1)?.kind === "separator") items.pop();
+  items.push({ kind: "separator" }, { id: "signout", label: "Sign out", icon: "arrow-right", description: "Of Cloudflare Access, on this browser" });
   return items;
 }
 
@@ -91,31 +86,11 @@ const Trigger = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonEle
   return <button ref={ref} type="button" {...props} />;
 });
 
-/** A: the organisation's name in the sidebar's top, beside dude's face. */
-export function SwitcherTop(p: SwitchProps & { onHome: () => void }) {
+/** You, in the band, with the organisation under your name. */
+export function SwitcherBand(p: SwitchProps & { you: Person }) {
   const m = p.memberships.find((x) => x.org.id === p.current.id);
   return (
-    <span className={s.top}>
-      <button type="button" className="brandHome" aria-label="Home" onClick={p.onHome}><Mark size={30} /></button>
-      <RowMenu items={menuItems(p, "A")} open={p.open} onOpenChange={p.onOpenChange} align="start" label="Switch organisation"
-        trigger={
-          <Trigger className={s.orgTrigger} aria-label={`${p.current.name}, switch organisation`} data-testid="switcher">
-            <span className={s.orgText}>
-              <span className={s.orgName}>{p.current.name}</span>
-              {m ? <span className={s.orgRole}>{roleWord(m.role)}</span> : null}
-            </span>
-            <Icon name="chevron-down" size={14} className={s.chev} />
-          </Trigger>
-        } />
-    </span>
-  );
-}
-
-/** B: you, in the band, with the organisation under your name. */
-export function SwitcherBand(p: SwitchProps & { you: Person; email: string }) {
-  const m = p.memberships.find((x) => x.org.id === p.current.id);
-  return (
-    <RowMenu items={menuItems(p, "B")} open={p.open} onOpenChange={p.onOpenChange} align="start" side="top" label="You and your organisations"
+    <RowMenu items={menuItems(p)} open={p.open} onOpenChange={p.onOpenChange} align="start" side="top" label="You and your organisations"
       trigger={
         <Trigger className={s.bandTrigger} aria-label={`${p.you.name}, ${p.current.name}: switch organisation, your settings, sign out`} data-testid="switcher">
           <PersonAvatar person={p.you} size={40} aria-hidden title="" />
@@ -123,6 +98,7 @@ export function SwitcherBand(p: SwitchProps & { you: Person; email: string }) {
             <span className={s.bandName}>{p.you.name}</span>
             <span className={s.bandOrg}><OrgFace org={p.current} size={16} />{p.current.name}{m ? ` · ${roleWord(m.role)}` : ""}</span>
           </span>
+          {p.invitations.length ? <span className={s.bandDot} aria-label={`${p.invitations.length} invitation`} /> : null}
           <Icon name="sort" size={14} className={s.chev} />
         </Trigger>
       } />
@@ -140,9 +116,8 @@ function RailButton({ label, current, onClick, children }: { label: ReactNode; c
   );
 }
 
-/** The sidebar folded to a rail, with the switcher where its place puts it. */
-export function Rail({ place, org, you, home, onHome, onExpand, sw }: {
-  place: SwitcherPlace;
+/** The sidebar folded to a rail: your face at the bottom opens the same menu. */
+export function Rail({ org, you, home, onHome, onExpand, sw }: {
   org: Org;
   you: Person;
   home: boolean;
@@ -151,15 +126,10 @@ export function Rail({ place, org, you, home, onHome, onExpand, sw }: {
   sw: SwitchProps;
 }) {
   const waiting = globalCounts(org.projects, you.id).needs_you;
-  const railTrigger = (children: ReactNode, label: string) => (
-    <RowMenu items={menuItems(sw, place)} open={sw.open} onOpenChange={sw.onOpenChange} side="right" align={place === "A" ? "start" : "end"} label={label}
-      trigger={<Trigger className={rail.item} aria-label={label} data-testid="switcher">{children}</Trigger>} />
-  );
   return (
     <nav className={rail.rail} aria-label="Navigation" data-testid="sidebar-rail">
       <div className={rail.top}>
         <RailButton label="Home" current={home} onClick={onHome}><Mark size={28} /></RailButton>
-        {place === "A" ? railTrigger(<OrgFace org={org} size={24} />, `${org.name}: switch organisation`) : null}
         <RailButton label="Expand sidebar" onClick={onExpand}><Icon name="chevron-right" size={16} /></RailButton>
       </div>
       <div className={rail.group}>
@@ -180,8 +150,13 @@ export function Rail({ place, org, you, home, onHome, onExpand, sw }: {
       </div>
       <div className={rail.band}>
         <RailButton label="Organisation settings"><Icon name="building" size={16} /></RailButton>
-        {place === "B" ? railTrigger(<PersonAvatar person={you} size={28} aria-hidden title="" />, `${you.name}, ${org.name}: switch organisation`)
-          : <RailButton label={`${you.name} · your settings`} onClick={sw.onSettings}><PersonAvatar person={you} size={28} /></RailButton>}
+        <RowMenu items={menuItems(sw)} open={sw.open} onOpenChange={sw.onOpenChange} side="right" align="end" label={`${you.name}, ${org.name}: switch organisation`}
+          trigger={
+            <Trigger className={`${rail.item} ${s.railFace}`} aria-label={`${you.name}, ${org.name}: switch organisation`} data-testid="switcher">
+              <PersonAvatar person={you} size={28} aria-hidden title="" />
+              <span className={s.railOrg}><OrgFace org={org} size={14} /></span>
+            </Trigger>
+          } />
       </div>
     </nav>
   );
@@ -203,8 +178,6 @@ function useWide(): boolean {
 export interface ShellProps {
   org: Org;
   you: Person;
-  email: string;
-  place: SwitcherPlace;
   collapsed: boolean;
   onCollapsedChange: (c: boolean) => void;
   navOpen: boolean;
@@ -229,18 +202,18 @@ export function Shell(p: ShellProps) {
     <div className="shell" style={{ flex: 1, minHeight: 0 }}>
       {p.collapsed ? (
         <div className="railSlot">
-          <Rail place={p.place} org={p.org} you={p.you} home={p.home} onHome={p.onHome} onExpand={() => p.onCollapsedChange(false)} sw={railSw} />
+          <Rail org={p.org} you={p.you} home={p.home} onHome={p.onHome} onExpand={() => p.onCollapsedChange(false)} sw={railSw} />
         </div>
       ) : null}
       <div className={p.collapsed ? "sidebarSlot isCollapsed" : "sidebarSlot"}>
         <Sidebar
           projects={p.org.projects}
           you={p.you.id}
-          title={p.place === "A" ? <SwitcherTop {...sideSw} onHome={p.onHome} /> : (
+          title={
             <button type="button" className="brandHome" aria-label="El Duderino, home" onClick={p.onHome}>
               <span className="brand"><Mark size={30} />El Duderino</span>
             </button>
-          )}
+          }
           headerActions={
             <Tooltip content="Collapse sidebar" shortcut="[" side="right">
               <IconButton icon="chevron-left" label="Collapse sidebar" size="sm" className="collapseButton" onClick={() => p.onCollapsedChange(true)} />
@@ -255,16 +228,7 @@ export function Shell(p: ShellProps) {
           footer={
             <>
               <SidebarLink icon="building" current={p.orgSettings} onClick={p.onOrgSettings}>Organisation settings</SidebarLink>
-              {p.place === "B" ? <SwitcherBand {...sideSw} you={p.you} email={p.email} /> : (
-                <button type="button" className={s.bandTrigger} onClick={p.sw.onSettings} aria-label="Your settings">
-                  <PersonAvatar person={p.you} size={40} aria-hidden title="" />
-                  <span className={s.orgText}>
-                    <span className={s.bandName}>{p.you.name}</span>
-                    <span className={s.bandOrg}>{p.email}</span>
-                  </span>
-                  <Icon name="settings" size={14} className={s.chev} />
-                </button>
-              )}
+              <SwitcherBand {...sideSw} you={p.you} />
             </>
           }
         />

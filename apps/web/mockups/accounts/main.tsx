@@ -1,11 +1,12 @@
 /*
- * Accounts across organisations, as a mockup: first sign-in (one
- * invitation, two), no organisation, the organisation switcher in its two
- * places, your settings with keys by organisation, an organisation's
- * members with invitations, and the super-admin's organisations. The bar
- * above switches screen, variant, switcher place, sidebar, theme and
- * density; it is not part of the proposal. Every choice is also a URL
- * parameter, for the screenshots: ?screen=switcher&place=B&rail=1&menu=1.
+ * Accounts across organisations, as a mockup: first sign-in, no
+ * organisation, the organisation switcher in the profile band, your
+ * settings with keys by organisation, an organisation's members with the
+ * email-chip invite and its links, the Invitations page, the accept page of
+ * an invitation link in every state, and the super-admin's organisations.
+ * The bar above switches screen, variant, sidebar, theme and density; it is
+ * not part of the proposal. Every choice is also a URL parameter, for the
+ * screenshots: ?screen=switcher&rail=1&menu=1.
  */
 
 import { StrictMode, useEffect, useState } from "react";
@@ -16,19 +17,27 @@ import "../../src/app.css";
 import { ThemeProvider, useTheme, type ThemePreference } from "@dude/design-system";
 import { Segmented } from "@dude/design-system/components";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { ACME, CHLOE_EMAIL, HOST, MEMBERSHIPS, MY_INVITATIONS, NORTHWIND, P, type Org } from "./data.ts";
-import { AdminPage, FirstOne, FirstTwo, MembersPage, NoOrg, OrgWelcome, YourSettings } from "./Pages.tsx";
-import { Shell, type SwitcherPlace, type SwitchProps } from "./Shell.tsx";
+import { ACME, ANA_TO_CHLOE, CHLOE_INVITES, HOST, MEMBERSHIPS, MY_INVITATIONS, NORTHWIND, P, type Org } from "./data.ts";
+import {
+  AcceptPage, AdminPage, FirstOne, FirstTwo, InvitationsPage, MembersPage, NoOrg, OrgWelcome, YourSettings,
+  type AcceptState, type AdminView, type InvitationsView, type MembersDialog,
+} from "./Pages.tsx";
+import { Shell, type SwitchProps } from "./Shell.tsx";
 
-type Screen = "first" | "none" | "switcher" | "settings" | "members" | "admin";
+type Screen = "first" | "none" | "switcher" | "settings" | "members" | "invitations" | "accept" | "admin";
 
 const VARIANTS: Record<Screen, readonly { value: string; label: string }[]> = {
-  first: [{ value: "one", label: "One invitation" }, { value: "two", label: "Two invitations" }],
+  first: [{ value: "one", label: "Joined from a link" }, { value: "two", label: "Two links waiting" }],
   none: [{ value: "plain", label: "No invitation" }, { value: "expired", label: "Expired invitation" }],
   switcher: [{ value: "before", label: "In Acme" }, { value: "after", label: "After switching" }],
   settings: [{ value: "keys", label: "Profile and keys" }, { value: "reveal", label: "New key, shown once" }],
-  members: [{ value: "list", label: "Members" }, { value: "invite", label: "Invite (bulk paste)" }, { value: "remove", label: "Remove" }],
-  admin: [{ value: "list", label: "Organisations" }, { value: "create", label: "Create" }, { value: "org", label: "One organisation" }],
+  members: [{ value: "list", label: "Members" }, { value: "invite", label: "Invite: chips" }, { value: "links", label: "Invite: links" }, { value: "remove", label: "Remove" }],
+  invitations: [{ value: "pending", label: "Pending" }, { value: "all", label: "All" }, { value: "search", label: "Search" }, { value: "revoke", label: "Revoke" }],
+  accept: [
+    { value: "join", label: "Join" }, { value: "first", label: "First sign-in" }, { value: "wrong", label: "Other email" },
+    { value: "member", label: "Already in" }, { value: "invalid", label: "Can't be used" },
+  ],
+  admin: [{ value: "list", label: "Organisations" }, { value: "create", label: "Create" }, { value: "org", label: "One organisation" }, { value: "open", label: "Open to everyone" }],
 };
 
 const SCREENS: readonly { value: Screen; label: string }[] = [
@@ -37,16 +46,20 @@ const SCREENS: readonly { value: Screen; label: string }[] = [
   { value: "switcher", label: "3 Switcher" },
   { value: "settings", label: "4 Your settings" },
   { value: "members", label: "5 Members" },
-  { value: "admin", label: "6 Super-admin" },
+  { value: "invitations", label: "6 Invitations" },
+  { value: "accept", label: "7 Accept" },
+  { value: "admin", label: "8 Super-admin" },
 ];
 
 const NOTES: Record<Screen, string> = {
-  first: "Chloé signs in with Cloudflare Access for the first time. One invitation: signing in accepts it and she lands in Acme. Two: she chooses.",
-  none: "Access let them in, but no organisation on this dude has their email. No key prompt: an honest page, who to ask, Sign out.",
-  switcher: "Open the switcher (click, or Tab to it and press Enter; arrows move, Escape closes). Pick Northwind: the URL, the sidebar and Waiting on you change; another tab stays where it was.",
+  first: "Chloé signs in for the first time. Acme lets anyone who signs in join, so she is in Acme already. From Gus's link she joins Northwind and its welcome opens; at the bare address, the invitations waiting for her email are listed.",
+  none: "Access let them in, but no organisation is open to everyone and no invitation waits for their email. No key prompt: an honest page, who to ask, Sign out.",
+  switcher: "Your face at the bottom of the sidebar opens the menu (click, or Tab to it and press Enter; arrows move, Escape closes). Pick Northwind: the URL, the sidebar and Waiting on you change.",
   settings: "Your profile is the same in every organisation; email comes from Access. Keys are grouped by organisation: New key for Acme.",
-  members: "Invite by email, many at once; no secret is shown. Pending invitations expire, can be resent or revoked.",
-  admin: "Outside every organisation: Márcio's email is in auth.super_admins. Reached from the switcher's All organisations, or #/admin.",
+  members: "Invite people: type or paste emails; each chip says what will happen to it. Invite gives a link per person to send them yourself.",
+  invitations: "Every invitation and what became of it. Filtering by status and search run on the server, so a pending one never hides past a page.",
+  accept: "What #/invite/<code> shows. A link works only for the email it was made for, which Cloudflare Access has proved.",
+  admin: "Outside every organisation: Márcio's email is in auth.super_admins. Reached from your menu's All organisations, or #/admin.",
 };
 
 const params = new URLSearchParams(location.search);
@@ -55,14 +68,13 @@ const param = <T extends string>(k: string, ok: readonly T[], d: T): T => (ok.in
 function Mock() {
   const theme = useTheme();
   const [screen, setScreen] = useState<Screen>(() => param("screen", SCREENS.map((x) => x.value), "first"));
-  const [variant, setVariant] = useState<string>(() => params.get("v") ?? VARIANTS[screen][0]!.value);
-  const [place, setPlace] = useState<SwitcherPlace>(() => param("place", ["A", "B"] as const, "A"));
+  const [variant, setVariant] = useState<string>(() => param("v", VARIANTS[screen].map((x) => x.value), VARIANTS[screen][0]!.value));
   const [collapsed, setCollapsed] = useState(params.get("rail") === "1");
   const [menu, setMenu] = useState(params.get("menu") === "1");
   const [counts, setCounts] = useState(params.get("counts") !== "0");
   const [navOpen, setNavOpen] = useState(params.get("drawer") === "1");
   const [org, setOrg] = useState<Org>(variant === "after" ? NORTHWIND : ACME);
-  // Chloé, after joining from the two-invitations page.
+  // Chloé, after Join on a link or on the two-invitations page; null: still deciding.
   const [joined, setJoined] = useState<Org | null>(null);
 
   useEffect(() => {
@@ -85,10 +97,20 @@ function Mock() {
     setJoined(null);
     setOrg(sc === "switcher" && nv === "after" ? NORTHWIND : ACME);
   };
+  const pick = (v: string) => {
+    setVariant(v);
+    setJoined(null);
+    setMenu(false);
+    if (screen === "switcher") setOrg(v === "after" ? NORTHWIND : ACME);
+  };
 
-  const chloe = screen === "first";
+  // Chloé on the first-sign-in and accept screens, Márcio everywhere else.
+  const chloe = screen === "first" || screen === "accept";
+  const gus = CHLOE_INVITES[0]!;
+  const chloeOrgs = [{ org: ACME, role: "member" as const, waiting: 0 }, ...(joined && joined.id !== ACME.id ? [{ org: joined, role: "member" as const, waiting: 0 }] : [])];
+  const chloeCurrent = joined ?? (screen === "first" && variant === "one" ? NORTHWIND : ACME);
   const sw: SwitchProps = {
-    current: chloe ? (joined ?? ACME) : org,
+    current: chloe ? chloeCurrent : org,
     onSwitch: (o) => {
       setOrg(o);
       setMenu(false);
@@ -99,31 +121,43 @@ function Mock() {
     counts,
     onAdmin: () => go("admin"),
     onSettings: () => go("settings"),
-    memberships: chloe ? [{ org: joined ?? ACME, role: "member", waiting: 0 }] : MEMBERSHIPS,
-    invitations: chloe ? [] : MY_INVITATIONS,
+    onJoin: () => go("accept", "join"),
+    memberships: chloe
+      ? (screen === "first" && variant === "one" ? [{ org: ACME, role: "member", waiting: 0 }, { org: NORTHWIND, role: "member", waiting: 0 }] : chloeOrgs)
+      : MEMBERSHIPS,
+    invitations: chloe ? CHLOE_INVITES.filter((i) => i.org.id !== chloeCurrent.id && !(screen === "first" && variant === "one" && i.org.id === NORTHWIND.id)) : MY_INVITATIONS,
     superAdmin: !chloe,
   };
 
-  const outside = (screen === "first" && variant === "two" && !joined) || screen === "none" || screen === "admin";
+  const acceptOutside = screen === "accept" && !joined;
+  const outside = (screen === "first" && variant === "two" && !joined) || screen === "none" || screen === "admin" || acceptOutside;
   const current = sw.current;
   let hash: string;
   if (screen === "none") hash = "#/";
-  else if (screen === "admin") hash = variant === "org" ? "#/admin/o/northwind" : "#/admin";
+  else if (screen === "admin") hash = variant === "list" || variant === "create" ? "#/admin" : "#/admin/o/northwind";
+  else if (acceptOutside) hash = `#/invite/${variant === "member" ? ANA_TO_CHLOE.code : variant === "invalid" ? "Zr0bQ9xW1eC4vT7yN2mK5p" : gus.code}`;
   else if (screen === "first" && variant === "two" && !joined) hash = "#/invitations";
   else if (screen === "settings") hash = "#/me/settings";
   else if (screen === "members") hash = `#/o/${current.slug}/settings/members`;
-  else if (screen === "first") hash = `#/o/${current.slug}/welcome`;
+  else if (screen === "invitations") hash = `#/o/${current.slug}/settings/invitations`;
+  else if (chloe && current.id !== ACME.id) hash = `#/o/${current.slug}/welcome`;
   else hash = `#/o/${current.slug}/`;
+
+  const orgPage = (id: string) => (id === "members" ? go("members") : id === "invitations" ? go("invitations") : undefined);
 
   let body;
   if (screen === "none") body = <NoOrg expired={variant === "expired"} />;
-  else if (screen === "admin") body = <AdminPage view={variant as "list" | "create" | "org"} onView={(v) => setVariant(v)} onBack={() => go("switcher")} />;
-  else if (screen === "first" && variant === "two" && !joined) body = <FirstTwo onJoin={(o) => setJoined(o)} />;
+  else if (screen === "admin") body = <AdminPage view={variant as AdminView} onView={(v) => setVariant(v)} onBack={() => go("switcher")} />;
+  else if (acceptOutside) body = <AcceptPage key={variant} state={variant as AcceptState} onJoin={(o) => setJoined(o)} onOpen={(o) => setJoined(o)} />;
+  else if (screen === "first" && variant === "two" && !joined) body = <FirstTwo onJoin={(o) => setJoined(o)} onContinue={() => setJoined(ACME)} />;
 
-  const shellChild = screen === "first"
-    ? (joined && joined.id !== ACME.id ? <OrgWelcome org={joined} /> : <FirstOne onStart={() => go("switcher")} />)
+  const shellChild = screen === "first" || screen === "accept"
+    ? (joined && joined.id === NORTHWIND.id) || (screen === "first" && variant === "one" && !joined)
+      ? <FirstOne invitation={gus} onStart={() => go("switcher")} />
+      : <OrgWelcome org={joined ?? ACME} greeting="Afternoon, Chloé" />
     : screen === "settings" ? <YourSettings reveal={variant === "reveal" ? ACME : null} onReveal={(o) => setVariant(o ? "reveal" : "keys")} />
-    : screen === "members" ? <MembersPage dialog={variant === "invite" ? "invite" : variant === "remove" ? "remove" : "none"} onDialog={(d) => setVariant(d === "none" ? "list" : d)} />
+    : screen === "members" ? <MembersPage dialog={variant === "list" ? "none" : variant as MembersDialog} onDialog={(d) => setVariant(d === "none" ? "list" : d)} onPage={orgPage} />
+    : screen === "invitations" ? <InvitationsPage key={variant === "revoke" ? "pending" : variant} view={variant as InvitationsView} onView={(v) => setVariant(v)} onPage={orgPage} />
     : <OrgWelcome org={org} />;
 
   return (
@@ -131,13 +165,7 @@ function Mock() {
       <div className="mockbar">
         <b>dude · Accounts across organisations (mockup)</b>
         <Segmented size="sm" label="Screen" value={screen} onChange={(v) => go(v)} options={SCREENS} />
-        <Segmented size="sm" label="Variant" value={variant} onChange={(v) => {
-          setVariant(v);
-          setJoined(null);
-          if (screen === "switcher") setOrg(v === "after" ? NORTHWIND : ACME);
-        }} options={VARIANTS[screen]} />
-        <Segmented size="sm" label="Switcher" value={place} onChange={setPlace}
-          options={[{ value: "A", label: "A · Sidebar top" }, { value: "B", label: "B · Profile band" }]} />
+        <Segmented size="sm" label="Variant" value={variant} onChange={pick} options={VARIANTS[screen]} />
         <Segmented size="sm" label="Sidebar" value={collapsed ? "rail" : "full"} onChange={(v) => setCollapsed(v === "rail")}
           options={[{ value: "full", label: "Expanded" }, { value: "rail", label: "Collapsed" }]} />
         <Segmented size="sm" label="Counts in menu" value={counts ? "on" : "off"} onChange={(v) => setCounts(v === "on")}
@@ -152,12 +180,12 @@ function Mock() {
         <span>{NOTES[screen]}</span>
       </div>
       {outside ? <div style={{ flex: 1, minHeight: 0, display: "flex" }}>{body}</div> : (
-        <Shell org={current} you={chloe ? P.chloe : P.marcio} email={chloe ? CHLOE_EMAIL : "marcio@acme.dev"} place={place} collapsed={collapsed}
+        <Shell org={current} you={chloe ? P.chloe : P.marcio} collapsed={collapsed}
           onCollapsedChange={setCollapsed} navOpen={navOpen} onNavOpenChange={setNavOpen} sw={sw}
           home={screen === "switcher"} onHome={() => go("switcher", org.id === NORTHWIND.id ? "after" : "before")}
-          orgSettings={screen === "members"} onOrgSettings={() => go("members")}
+          orgSettings={screen === "members" || screen === "invitations"} onOrgSettings={() => go("members")}
           sessions={chloe ? [] : current.id === ACME.id ? [{ id: "s1", title: "Usage-based billing" }, { id: "s2", title: "Q4 cleanup ideas" }] : [{ id: "n1", title: "Portal invoice VAT" }]}
-          flush={screen === "first" || screen === "switcher"}>
+          flush={screen === "first" || screen === "switcher" || screen === "accept"}>
           {shellChild}
         </Shell>
       )}
