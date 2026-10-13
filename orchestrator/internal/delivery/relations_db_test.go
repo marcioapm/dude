@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // relWorld is an organisation with one project (key CP) and tasks CP-1…CP-n,
@@ -182,6 +183,116 @@ func TestTaskRelationWouldCycleIsLinearOnADiamondLadder(t *testing.T) {
 		if len(got) != layers+1 || got[0] != "CP-1" || got[len(got)-1] != "CP-1" || got[len(got)-2] != "CP-"+strconv.Itoa(bottom) {
 			t.Fatalf("%d-wide ladder: loop %v, want CP-1 down %d layers to CP-%d and back", width, got, layers, bottom)
 		}
+	}
+}
+
+type requestFailingStarter struct{ cause error }
+
+func (s requestFailingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {
+	return "", false, s.cause
+}
+
+func TestStaleAutoStartSettlementLeavesReplacementUntouched(t *testing.T) {
+	for _, cause := range []error{errors.New("unknown start failure"), PolicyError{errors.New("invalid policy")}, &pgconn.PgError{Code: "40001"}} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			w, in := newRelWorld(t, 2)
+			ctx := context.Background()
+			w.exec(`INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person, due_at)
+				VALUES ($1||'_2', $1, 'deliver', 'per_'||$1, now())`)
+			a := &AutoStarts{Starter: requestFailingStarter{cause}}
+			var generation string
+			if err := in(func(tx pgx.Tx) error { return a.fire(ctx, tx, w.org, w.id(2), &generation) }); !errors.Is(err, cause) {
+				t.Fatalf("fire error: %v", err)
+			}
+			if generation == "" {
+				t.Fatal("fire did not claim the request")
+			}
+			// The fire transaction has rolled back. A new blocker permits the owner's reset.
+			w.blocks(1, 2)
+			w.exec(`UPDATE task_auto_starts SET how = 'talk', generation = gen_random_uuid(),
+				set_at = now(), due_at = NULL, fire_attempts = 0 WHERE task_id = $1||'_2'`)
+			w.pr(1, "merged")
+			if err := in(func(tx pgx.Tx) error {
+				_, err := SetTaskStatusTx(ctx, tx, w.org, "prj_"+w.org, w.id(1), "received", "done", "merged")
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			type request struct {
+				how, generation string
+				setAt, dueAt    time.Time
+				attempts        int
+			}
+			read := func() request {
+				var r request
+				if err := w.owner.QueryRow(ctx, `SELECT how, generation::text, set_at, due_at, fire_attempts
+					FROM task_auto_starts WHERE task_id = $1`, w.id(2)).Scan(&r.how, &r.generation, &r.setAt, &r.dueAt, &r.attempts); err != nil {
+					t.Fatal(err)
+				}
+				return r
+			}
+			before := read()
+			if before.generation == generation || before.how != "talk" || before.attempts != 0 {
+				t.Fatalf("replacement: %+v", before)
+			}
+			if err := in(func(tx pgx.Tx) error { return a.notFired(ctx, tx, w.org, w.id(2), generation, cause) }); err != nil {
+				t.Fatal(err)
+			}
+			if after := read(); after != before {
+				t.Fatalf("stale settlement changed replacement: before %+v after %+v", before, after)
+			}
+			if err := in(func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `DELETE FROM task_auto_starts WHERE task_id = $1`, w.id(2))
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := in(func(tx pgx.Tx) error { return a.notFired(ctx, tx, w.org, w.id(2), generation, cause) }); err != nil {
+				t.Fatalf("deleted request settlement: %v", err)
+			}
+			var notices int
+			if err := w.owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE task_id = $1
+				AND (event_type = 'task.auto_start_cancelled' OR payload->>'about' = 'auto_start_failed')`, w.id(2)).Scan(&notices); err != nil || notices != 0 {
+				t.Fatalf("failure events: %d, %v", notices, err)
+			}
+		})
+	}
+}
+
+func TestAutoStartFireBeforeClaimDoesNotSettle(t *testing.T) {
+	w, in := newRelWorld(t, 1)
+	ctx := context.Background()
+	w.exec(`INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person, due_at)
+		VALUES ($1||'_1', $1, 'deliver', 'per_'||$1, now())`)
+	a := &AutoStarts{}
+	generation := ""
+	if err := in(func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT 1 / 0`); err == nil {
+			t.Fatal("expected transaction error")
+		}
+		return a.fire(ctx, tx, w.org, w.id(1), &generation)
+	}); err == nil || generation != "" {
+		t.Fatalf("before-claim error %v, generation %q", err, generation)
+	}
+	if err := in(func(tx pgx.Tx) error {
+		return a.notFired(ctx, tx, w.org, w.id(1), generation, PolicyError{errors.New("failed")})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	if err := w.owner.QueryRow(ctx, `SELECT fire_attempts FROM task_auto_starts WHERE task_id = $1`, w.id(1)).Scan(&attempts); err != nil || attempts != 0 {
+		t.Fatalf("unclaimed request: attempts %d, %v", attempts, err)
+	}
+}
+
+func TestAutoStartFireDoesNotClaimFutureRequest(t *testing.T) {
+	w, in := newRelWorld(t, 1)
+	w.exec(`INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person, due_at)
+		VALUES ($1||'_1', $1, 'deliver', 'per_'||$1, now() + interval '1 hour')`)
+	var generation string
+	a := &AutoStarts{Starter: requestFailingStarter{errors.New("must not start")}}
+	if err := in(func(tx pgx.Tx) error { return a.fire(context.Background(), tx, w.org, w.id(1), &generation) }); err != nil || generation != "" {
+		t.Fatalf("future fire: %v, claimed %q", err, generation)
 	}
 }
 

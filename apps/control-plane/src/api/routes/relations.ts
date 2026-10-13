@@ -286,7 +286,7 @@ async function setAutoStart(ctx: RequestContext): Promise<Response> {
     await scope.sql`
       INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person)
       VALUES (${task.id}, ${scope.organizationId}, ${input.how}, ${ctx.principal.personId})
-      ON CONFLICT (task_id) DO UPDATE SET how = EXCLUDED.how, set_by_person = EXCLUDED.set_by_person, set_at = now(), due_at = NULL, fire_attempts = 0`;
+      ON CONFLICT (task_id) DO UPDATE SET how = EXCLUDED.how, set_by_person = EXCLUDED.set_by_person, set_at = now(), generation = EXCLUDED.generation, due_at = NULL, fire_attempts = 0`;
     await recordAs(scope, ctx, EventTypes.TaskAutoStartSet, { how: input.how }, { projectId: task.projectId, taskId: task.id });
     const how = input.how === "deliver" ? "Deliver" : "Talk it through";
     await recordAs(scope, ctx, EventTypes.ChatNotice, { about: "auto_start_set",

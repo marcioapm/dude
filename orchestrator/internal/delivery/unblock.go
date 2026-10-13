@@ -235,14 +235,18 @@ func (a *AutoStarts) Sweep(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	for _, d := range todo {
-		err := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.fire(ctx, tx, d.Org, d.TaskID) })
+		var generation string
+		err := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.fire(ctx, tx, d.Org, d.TaskID, &generation) })
 		if err == nil {
 			continue
 		}
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.notFired(ctx, tx, d.Org, d.TaskID, err) }); ferr != nil {
+		if generation == "" {
+			continue
+		}
+		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.notFired(ctx, tx, d.Org, d.TaskID, generation, err) }); ferr != nil {
 			return 0, ferr
 		}
 	}
@@ -260,7 +264,20 @@ const fireRetryAfter = 5 * time.Second
 // notFired settles a fire that failed with cause. The start's own refusal
 // ends the request (failed); a transient failure leaves it due for a later
 // sweep; anything else does too, counted, and ends it at maxFireAttempts.
-func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID string, cause error) error {
+func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID, generation string, cause error) error {
+	if generation == "" {
+		return nil
+	}
+	// Hold the claimed request through settlement; an owner reset is a different request.
+	var current string
+	err := tx.QueryRow(ctx, `SELECT generation::text FROM task_auto_starts
+		WHERE task_id = $1 AND generation = $2::uuid FOR UPDATE`, taskID, generation).Scan(&current)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	if startRefused(cause) {
 		return a.failed(ctx, tx, org, taskID, cause)
 	}
@@ -270,7 +287,7 @@ func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID string
 		return err
 	}
 	var attempts int
-	err := tx.QueryRow(ctx, `UPDATE task_auto_starts SET fire_attempts = fire_attempts + 1,
+	err = tx.QueryRow(ctx, `UPDATE task_auto_starts SET fire_attempts = fire_attempts + 1,
 			due_at = now() + make_interval(secs => $2 * (fire_attempts + 1))
 		WHERE task_id = $1 AND due_at IS NOT NULL RETURNING fire_attempts`, taskID, fireRetryAfter.Seconds()).Scan(&attempts)
 	if db.IsNotFound(err) {
@@ -322,18 +339,20 @@ func transient(err error) bool {
 
 // fire is one due request: re-read every blocker, then the same start a
 // person makes (StartTx), as dude for the person who set it.
-func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string) error {
-	var how, setBy, setByName, projectID, taskKey, status string
+func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, claimed *string) error {
+	*claimed = ""
+	var how, setBy, setByName, projectID, taskKey, status, generation string
 	var setAt time.Time
-	err := tx.QueryRow(ctx, `SELECT a.how, a.set_by_person, COALESCE(p.name, ''), a.set_at FROM task_auto_starts a
+	err := tx.QueryRow(ctx, `SELECT a.how, a.set_by_person, COALESCE(p.name, ''), a.set_at, a.generation::text FROM task_auto_starts a
 		LEFT JOIN people p ON p.id = a.set_by_person
-		WHERE a.task_id = $1 AND a.due_at <= now() FOR UPDATE OF a SKIP LOCKED`, taskID).Scan(&how, &setBy, &setByName, &setAt)
+		WHERE a.task_id = $1 AND a.due_at <= now() FOR UPDATE OF a SKIP LOCKED`, taskID).Scan(&how, &setBy, &setByName, &setAt, &generation)
 	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	*claimed = generation
 	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text FROM tasks t
 		JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status); err != nil {
 		return err

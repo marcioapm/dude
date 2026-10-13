@@ -402,7 +402,11 @@ would help says so in Chat, and the owner sets it.
    the request stays due and a later sweep fires it, saying nothing. Any
    other error is retried the same way, counted on the row
    (`fire_attempts`, each wait 5 s longer), and at the fifth the request
-   ends as failed with that error.
+   ends as failed with that error. Settlement locks and checks the UUID
+   `generation` claimed by the fire before changing or ending the request.
+   Every owner PUT generates a new UUID, including repeated identical PUTs;
+   a stale failure or an error before claiming a row settles nothing.
+   `set_at` is transaction-time `now()`, retained for display, not identity.
 
 **What it says when it fires** (screens *history-chat*, *history*):
 
@@ -851,8 +855,10 @@ CREATE TABLE task_auto_starts (
   how             text NOT NULL CHECK (how IN ('deliver', 'talk')),
   set_by_person   text NOT NULL REFERENCES people(id) ON DELETE CASCADE,
   set_at          timestamptz NOT NULL DEFAULT now(),
+  generation      uuid NOT NULL DEFAULT gen_random_uuid(),
   -- Set by the merge that released the task's last blocker; the worker takes due rows.
-  due_at          timestamptz
+  due_at          timestamptz,
+  fire_attempts   integer NOT NULL DEFAULT 0
 );
 CREATE INDEX task_auto_starts_due_idx ON task_auto_starts (due_at) WHERE due_at IS NOT NULL;
 -- RLS as above.

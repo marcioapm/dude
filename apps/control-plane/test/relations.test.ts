@@ -230,10 +230,15 @@ test("start when unblocked is the owner's, only on a task blocked by something t
   expect((await call(ana, "PUT", `/v1/tasks/${t}/auto-start`, { how: "deliver" })).status).toBe(200);
   expect((await relations(bo, t)).autoStart).toMatchObject({ how: "deliver", by: { name: "Ana" } });
   // Setting it again is a new request: the worker's failed fires of the old one are forgotten.
+  const [{ generation: oldGeneration }] = await owner`SELECT generation FROM task_auto_starts WHERE task_id = ${t}`;
   await owner`UPDATE task_auto_starts SET fire_attempts = 3 WHERE task_id = ${t}`;
   expect((await call(ana, "PUT", `/v1/tasks/${t}/auto-start`, { how: "talk" })).status).toBe(200);
-  const [{ attempts }] = await owner`SELECT fire_attempts AS attempts FROM task_auto_starts WHERE task_id = ${t}`;
+  const [{ attempts, generation }] = await owner`SELECT fire_attempts AS attempts, generation FROM task_auto_starts WHERE task_id = ${t}`;
   expect(attempts).toBe(0);
+  expect(generation).not.toBe(oldGeneration);
+  expect((await call(ana, "PUT", `/v1/tasks/${t}/auto-start`, { how: "talk" })).status).toBe(200);
+  const [{ generation: repeatedGeneration }] = await owner`SELECT generation FROM task_auto_starts WHERE task_id = ${t}`;
+  expect(repeatedGeneration).not.toBe(generation);
   expect((await call(bo, "DELETE", `/v1/tasks/${t}/auto-start`)).status).toBe(403);
   expect((await call(ana, "DELETE", `/v1/tasks/${t}/auto-start`)).status).toBe(204);
   const [{ why }] = await owner`SELECT payload->>'why' AS why FROM events WHERE task_id = ${t} AND event_type = 'task.auto_start_cancelled'`;

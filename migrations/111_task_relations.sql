@@ -49,6 +49,7 @@ CREATE TABLE task_auto_starts (
   how             text NOT NULL CHECK (how IN ('deliver', 'talk')),
   set_by_person   text NOT NULL REFERENCES people(id) ON DELETE CASCADE,
   set_at          timestamptz NOT NULL DEFAULT now(),
+  generation      uuid NOT NULL DEFAULT gen_random_uuid(),
   -- Set by the merge that released the task's last blocker; the worker
   -- takes due rows, one transaction per task.
   due_at          timestamptz,
