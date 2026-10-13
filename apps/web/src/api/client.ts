@@ -688,11 +688,6 @@ export class ApiClient {
     return this.#request("DELETE", `/v1/me/keys/${id}`);
   }
 
-  /** Admins: add someone, with a key shown this once. */
-  invitePerson(input: { name: string; email: string; role: PersonRole }): Promise<{ person: Member; key: string }> {
-    return this.#request("POST", "/v1/people", input);
-  }
-
   updatePerson(id: string, changes: { name?: string; role?: PersonRole }): Promise<{ person: Member }> {
     return this.#request("PATCH", `/v1/people/${id}`, changes);
   }

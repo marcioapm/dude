@@ -23,7 +23,18 @@ interface PersonIdentity {
   role: "admin" | "member";
 }
 
-export type Principal = PersonIdentity & (
+export interface AccessAdmission {
+  gate: "member" | "invited" | "super_admin" | "none";
+  email: string;
+  superAdmin: boolean;
+  profile: { name: string | null; picture: string | null } | null;
+  account: { id: string; email: string; name: string; photoUrl: string | null; photoKey: string | null } | null;
+  memberships: Array<{ organization_id: string; organization_name: string; organization_slug: string;
+    person_id: string; name: string; role: "admin" | "member"; welcomed_at: Date | null }>;
+  invitations: unknown[];
+}
+
+export type Principal = PersonIdentity & { access?: AccessAdmission } & (
   | { credentialKind: "api_key"; apiKeyId: string }
   // expiresAt: when the credential that proved it lapses, seconds since the epoch.
   // resolved: name and role were read from the person's current, active row
@@ -113,17 +124,19 @@ export async function insertApiKey(
 export async function insertPerson(
   scope: OrgScope,
   person: { name: string; email: string; role?: "admin" | "member" | undefined; lastSeenWhere?: string | null },
-): Promise<{ personId: string; keyId: string; key: string } | null> {
+): Promise<{ personId: string } | null> {
   const taken = await scope.sql`SELECT 1 FROM people WHERE email = ${person.email} AND removed_at IS NULL`;
   if (taken.length > 0) return null;
   const personId = newId("person");
   const where = person.lastSeenWhere ?? null;
+  const [account] = await scope.sql`INSERT INTO accounts (id, email, name)
+    VALUES (${`acc_${crypto.randomUUID()}`}, ${person.email.trim().toLowerCase()}, ${person.name})
+    ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id, name, email`;
   await scope.sql`
-    INSERT INTO people (id, organization_id, name, email, role, last_seen_at, last_seen_where)
-    VALUES (${personId}, ${scope.organizationId}, ${person.name}, ${person.email}, ${person.role ?? "member"},
-            ${where ? new Date() : null}, ${where})`;
-  const { id, key } = await insertApiKey(scope, { name: person.name, personId });
-  return { personId, keyId: id, key };
+    INSERT INTO people (id, organization_id, account_id, name, email, role, last_seen_at, last_seen_where)
+    VALUES (${personId}, ${scope.organizationId}, ${account.id}, ${account.name}, ${account.email}, ${person.role ?? "member"},
+             ${where ? new Date() : null}, ${where})`;
+  return { personId };
 }
 
 /**

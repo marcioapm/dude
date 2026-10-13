@@ -6,17 +6,17 @@
  * request passed through the edge). The API does not rely on the edge having
  * checked it: every request's token is verified here against the team's
  * published keys, issuer and application audience, and the verified email
- * is then matched to one of the configured organization's people.
+ * is then admitted by the gate (docs/design/accounts.md, "The sign-in gate"):
+ * a member, an invitee, a configured super-admin, or nobody.
  *
  * Nothing here trusts a plain email header, an unverified claim, or the
  * request's own idea of its host.
  */
 
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
-import { newId } from "@dude/domain";
-import { type OrgScope, withOrg } from "../db/client.ts";
+import { withoutTenant } from "../db/client.ts";
 import type { AccessConfig } from "../config.ts";
-import type { Principal } from "./auth.ts";
+import type { AccessAdmission, Principal } from "./auth.ts";
 import { HttpError } from "./http.ts";
 
 export const ACCESS_LOGOUT_PATH = "/cdn-cgi/access/logout";
@@ -183,103 +183,85 @@ export interface AccessDeps {
   profile: (token: string, email: string) => Promise<Profile | null>;
 }
 
-export type Member = { personId: string; name: string; role: "admin" | "member" };
-export type Membership = Member | "removed" | "unknown";
-
-interface PersonRow {
-  id: string;
-  removed: boolean;
-  name: string;
-  role: "admin" | "member";
-  email: string;
-  photoUrl: string | null;
-  photoKey: string | null;
-}
-
-// people_by_email (migration 059) reads the scope's tenant by index; row-level security would not.
-const findByEmail = async (scope: OrgScope, email: string) => (await scope.sql`
-  SELECT id, removed, name, role, email, photo_url AS "photoUrl", photo_key AS "photoKey"
-  FROM people_by_email(${email})`) as PersonRow[];
-
-const member = (row: { id: string; name: string; role: string }): Member =>
-  ({ personId: row.id, name: row.name, role: row.role === "admin" ? "admin" : "member" });
-
-/**
- * The organization's person with `email`, making them a member if nobody
- * has it and `autoCreate` allows. Removed people stay removed: only an
- * admin's invitation brings someone back. Creation takes the same lock as
- * any change to the organization's people, so a first sign-in and a
- * removal, or two first sign-ins, take turns.
- *
- * The identity endpoint can take seconds, so `profile` is only ever awaited
- * between transactions: a short read decides whether it is needed, and a
- * second short transaction rechecks membership before writing anything.
- */
-export async function memberFor(organizationId: string, email: string, autoCreate: boolean,
-  profile: () => Promise<Profile | null>): Promise<Membership> {
-  const rows = await withOrg(organizationId, (scope) => findByEmail(scope, email));
-  const active = rows.find((r) => !r.removed);
-  if (active) {
-    const wantsName = active.name.trim() === "" || active.name.toLowerCase() === active.email.toLowerCase();
-    const wantsPhoto = !active.photoUrl && !active.photoKey;
-    if (!wantsName && !wantsPhoto) return member(active);
-    const got = await profile();
-    const name = wantsName ? got?.name ?? null : null;
-    const picture = wantsPhoto ? got?.picture ?? null : null;
-    return withOrg(organizationId, async (scope) => {
-      // Rechecked in the statement: the person may have been removed, or
-      // set their own name or photo, while the profile was fetched.
-      const kept = !name && !picture
-        ? await scope.sql`SELECT id, name, role FROM people WHERE id = ${active.id} AND removed_at IS NULL`
-        : await scope.sql`
-        UPDATE people SET
-          name = CASE WHEN ${name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text))
-                      THEN ${name}::text ELSE name END,
-          photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL THEN ${picture}::text ELSE photo_url END
-        WHERE id = ${active.id} AND removed_at IS NULL
-        RETURNING id, name, role`;
-      return kept[0] ? member(kept[0]) : "removed";
-    });
-  }
-  if (rows.length > 0) return "removed";
-  if (!autoCreate) return "unknown";
-
-  const seed = await profile();
-  return withOrg(organizationId, async (scope) => {
-    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
-    const now = await findByEmail(scope, email);
-    const current = now.find((r) => !r.removed);
-    if (current) return member(current);
-    // Removed while the profile was fetched: stays removed, never recreated.
-    if (now.length > 0) return "removed";
-    const personId = newId("person");
-    const name = seed?.name ?? email;
-    await scope.sql`
-      INSERT INTO people (id, organization_id, name, email, role, photo_url)
-      VALUES (${personId}, ${scope.organizationId}, ${name}, ${email}, 'member', ${seed?.picture ?? null})`;
-    return { personId, name, role: "member" };
+/** The gate's four lines for one verified email, read in one short transaction. */
+async function admissionFor(config: AccessConfig, email: string): Promise<AccessAdmission> {
+  return withoutTenant(async ({ sql }) => {
+    const [account] = (await sql`SELECT id, email::text, name, photo_url AS "photoUrl", photo_key AS "photoKey"
+      FROM accounts WHERE email = ${email}::citext`) as Array<NonNullable<AccessAdmission["account"]>>;
+    const memberships = (account ? await sql`SELECT * FROM account_memberships(${account.id})` : []) as AccessAdmission["memberships"];
+    const invitations = (await sql`SELECT invitations_for_email(${email}::citext) AS invitation`) as Array<{ invitation: unknown }>;
+    const superAdmin = config.super_admins.includes(email);
+    const gate = memberships.length ? "member" : invitations.length ? "invited" : superAdmin ? "super_admin" : "none";
+    return { gate, email, superAdmin, account: account ?? null, memberships,
+      invitations: invitations.map((r) => r.invitation), profile: null };
   });
 }
+
+// An account's name is a placeholder while it is empty or only the email.
+const wantsProfile = (a: NonNullable<AccessAdmission["account"]>) =>
+  a.name.trim() === "" || a.name.toLowerCase() === a.email.toLowerCase() || (!a.photoUrl && !a.photoKey);
 
 /**
  * Who a request is, by its Access token, or null. Throws 403 for a
  * cross-site request before anything is verified or written.
+ *
+ * The identity endpoint can take seconds, so the profile is only ever
+ * awaited between transactions, and only when something needs it: a
+ * member's placeholder name or missing photo, or the pre-membership pages,
+ * which show it. Admission is then read again, so a removal, revocation or
+ * acceptance that committed meanwhile decides this request.
  */
-export function accessAuthenticator(config: AccessConfig, organizationId: string, deps: AccessDeps) {
+export function accessAuthenticator(config: AccessConfig, _organizationId: string, deps: AccessDeps) {
   return async (request: Request): Promise<Principal | null> => {
     const token = accessToken(request);
     if (!token) return null;
     checkBrowserOrigin(request, config.public_url);
     const identity = await deps.verify(token);
     if (!identity) return null;
-    const membership = await memberFor(organizationId, identity.email, config.auto_create,
-      () => deps.profile(token, identity.email));
-    if (typeof membership === "string") return null;
-    // Name and role come from the membership just read or written, so the
-    // router need not resolve the person again.
-    return {
-      credentialKind: "person", organizationId, personId: membership.personId, kind: "user",
-      name: membership.name, role: membership.role, expiresAt: identity.expiresAt, resolved: true,
-    };
+    const url = new URL(request.url);
+    let admission = await admissionFor(config, identity.email);
+    const frontDoor = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/invitations/");
+    const fill = admission.gate === "member" && admission.account !== null && wantsProfile(admission.account);
+    if (fill || (admission.gate !== "member" && frontDoor)) {
+      const profile = await deps.profile(token, identity.email);
+      if (fill && profile) {
+        // Only blanks are filled, rechecked in the statement, and only while
+        // the account still has an active membership.
+        await withoutTenant(({ sql }) => sql`
+          UPDATE accounts SET
+            name = CASE WHEN ${profile.name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text))
+                        THEN ${profile.name}::text ELSE name END,
+            photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL THEN ${profile.picture}::text ELSE photo_url END
+          WHERE id = ${admission.account!.id} AND EXISTS (SELECT 1 FROM account_memberships(accounts.id))
+            AND ((${profile.name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text)))
+              OR (${profile.picture}::text IS NOT NULL AND photo_url IS NULL AND photo_key IS NULL))`);
+      }
+      admission = await admissionFor(config, identity.email);
+      admission.profile = profile;
+    }
+    const accountRoute = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/me/keys") ||
+      url.pathname.startsWith("/v1/invitations/") || url.pathname.startsWith("/v1/admin/") ||
+      url.pathname.startsWith("/v1/locate/");
+    const requested = request.headers.get("x-dude-organization") ??
+      (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
+    let selected: AccessAdmission["memberships"][number] | undefined;
+    if (requested) {
+      selected = admission.memberships.find((m) => m.organization_id === requested);
+    } else if (admission.memberships.length === 1 || (accountRoute && url.pathname !== "/v1/me")) {
+      selected = admission.memberships[0];
+    }
+    if (admission.gate === "member" && !selected && (requested ? !url.pathname.startsWith("/v1/admin/") : !accountRoute)) {
+      throw requested ? new HttpError(403, "not_a_member", "not_a_member")
+        : new HttpError(400, "organization_required", "organization_required");
+    }
+    if (admission.gate === "member") {
+      // At most once an hour; a lost touch is harmless.
+      await withoutTenant(({ sql }) => sql`UPDATE accounts SET signed_in_at = now()
+        WHERE id = ${admission.account!.id} AND (signed_in_at IS NULL OR signed_in_at < now() - interval '1 hour')`)
+        .catch(() => {});
+    }
+    return { credentialKind: "person", organizationId: selected?.organization_id ?? "",
+      personId: selected?.person_id ?? "", kind: "user", name: selected?.name ?? identity.email,
+      role: selected?.role ?? "member", expiresAt: identity.expiresAt, resolved: true, access: admission };
   };
 }

@@ -70,6 +70,11 @@ class DecisionsClient extends FixtureClient {
     this.patch = { ...this.patch, decider: "conductor", runs: [run({ id: CONDUCTOR, phase: null, role: "conductor", status: "running" })] };
     return { runId: CONDUCTOR, taskId, created: true, decider: "conductor" };
   }
+  delivered = 0;
+  override async deliver(_taskId: string) {
+    this.delivered++;
+    return { workflowRunId: "wf_dec", alreadyRunning: false };
+  }
   override async setDecider(taskId: string, decider: Decider, openPullRequest = false) {
     this.deciders.push(openPullRequest ? `${decider}+open` as Decider : decider);
     if (this.refuse && !(this.refuse.code === "pull_request_gate" && openPullRequest)) throw this.refuse;
@@ -99,31 +104,70 @@ const click = async (el: HTMLElement) => {
 const selected = (p: HTMLElement) => p.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
 describe("starting a task", () => {
-  test("Deliver and Talk it through, side by side and equal, in the header and on the Overview", async () => {
+  const toTab = async (p: HTMLElement, name: string) => {
+    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith(name))!;
+    await act(async () => void tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+    await settle();
+  };
+  const reachable = (b: HTMLButtonElement | null) => b !== null && b.tagName === "BUTTON" && !b.disabled && b.tabIndex >= 0;
+
+  test("on the Overview, Talk it through and Deliver are its two equal cards, and the header does not repeat them", async () => {
     const p = await page(new DecisionsClient({ status: "received", runs: [], decider: "policy" }));
-    const talk = p.querySelector<HTMLButtonElement>("[data-testid=talk]")!;
-    const deliver = p.querySelector<HTMLButtonElement>("[data-testid=deliver]")!;
-    expect(talk.textContent).toBe("Talk it through");
-    expect(deliver.textContent).toBe("Deliver");
-    // Equal: the same variant, neither the primary one.
-    expect(talk.getAttribute("data-variant")).toBe("secondary");
-    expect(deliver.getAttribute("data-variant")).toBe("secondary");
+    expect(selected(p)).toBe("Overview");
     const cards = [...p.querySelectorAll("[data-testid=start-choice] [data-option]")].map((c) => c.getAttribute("data-option"));
     expect(cards).toEqual(["talk", "deliver"]);
+    const talk = p.querySelector<HTMLButtonElement>("[data-testid=start-talk]");
+    const deliver = p.querySelector<HTMLButtonElement>("[data-testid=start-deliver]");
+    expect([talk?.textContent, deliver?.textContent]).toEqual(["Talk it through", "Deliver"]);
+    expect([reachable(talk), reachable(deliver)]).toEqual([true, true]);
+    expect(p.querySelector("[data-testid=talk]")).toBeNull();
+    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+  });
+
+  test("on another tab the header offers both, equal and reachable by keyboard; back on Overview it leaves them to the cards", async () => {
+    const client = new DecisionsClient({ status: "received", runs: [], decider: "policy" });
+    const p = await page(client);
+    await toTab(p, "Findings");
+    expect(selected(p)).toStartWith("Findings");
+    const talk = p.querySelector<HTMLButtonElement>("[data-testid=talk]");
+    const deliver = p.querySelector<HTMLButtonElement>("[data-testid=deliver]");
+    expect([talk?.textContent, deliver?.textContent]).toEqual(["Talk it through", "Deliver"]);
+    // Equal: the same variant, neither the primary one.
+    expect([talk!.getAttribute("data-variant"), deliver!.getAttribute("data-variant")]).toEqual(["secondary", "secondary"]);
+    expect([reachable(talk), reachable(deliver)]).toEqual([true, true]);
+    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    await click(deliver!);
+    expect(client.delivered).toBe(1);
+
+    await toTab(p, "Overview");
+    expect(p.querySelector("[data-testid=talk]")).toBeNull();
+    expect(p.querySelector("[data-testid=start-talk]")).not.toBeNull();
   });
 
   test("Talk it through starts the conductor and opens Chat on it", async () => {
     const client = new DecisionsClient({ status: "received", runs: [], decider: "policy" });
     const p = await page(client);
-    await click(p.querySelector<HTMLButtonElement>("[data-testid=talk]")!);
+    await click(p.querySelector<HTMLButtonElement>("[data-testid=start-talk]")!);
     expect(client.talked).toBe(1);
     await until(() => selected(p) === "Chat" ? true : null, "Chat");
     expect(p.querySelector("[data-testid=talk]")).toBeNull();
     expect(p.querySelector("[data-testid=deliver]")).toBeNull();
   });
 
-  test("a task already started offers neither", async () => {
+  test("from the header on another tab, Talk it through starts the conductor and opens Chat on it", async () => {
+    const client = new DecisionsClient({ status: "received", runs: [], decider: "policy" });
+    const p = await page(client);
+    await toTab(p, "Findings");
+    await click(p.querySelector<HTMLButtonElement>("[data-testid=talk]")!);
+    expect(client.talked).toBe(1);
+    await until(() => selected(p) === "Chat" ? true : null, "Chat");
+  });
+
+  test("a task already started offers neither, on the Overview or in the header", async () => {
     const p = await page(new DecisionsClient({ status: "running", decider: "policy" }));
+    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    await toTab(p, "Findings");
+    expect(selected(p)).toStartWith("Findings");
     expect(p.querySelector("[data-testid=talk]")).toBeNull();
     expect(p.querySelector("[data-testid=deliver]")).toBeNull();
   });
@@ -392,11 +436,14 @@ describe("a conducted task with two attempts", () => {
       await until(() => container.querySelector(`[data-testid=task-screen][data-attempt="${attempt ?? 2}"]`), `attempt ${attempt ?? 2}`);
       await settle();
       const there = (sel: string) => container.querySelector(sel) !== null;
-      expect([there("[data-testid=talk]"), there("[data-testid=deliver]")]).toEqual([offered, offered]);
       if (offered) {
+        // Overview: the cards; any other tab: the header's two.
+        expect([there("[data-testid=start-talk]"), there("[data-testid=start-deliver]"), there("[data-testid=talk]")]).toEqual([true, true, false]);
+        await toTab(container, "Findings");
         expect(container.querySelector("[data-testid=talk]")!.getAttribute("data-variant")).toBe("secondary");
         expect(container.querySelector("[data-testid=deliver]")!.getAttribute("data-variant")).toBe("secondary");
       } else {
+        expect([there("[data-testid=talk]"), there("[data-testid=deliver]")]).toEqual([false, false]);
         await toTab(container, "Overview");
         expect(container.querySelector("[data-testid=task-screen]")?.getAttribute("data-attempt")).toBe("1");
         expect(there("[data-testid=start-choice]")).toBe(false);

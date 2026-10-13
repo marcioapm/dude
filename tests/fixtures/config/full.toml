@@ -91,8 +91,7 @@ logins = ["dude-bot", "dude-factory"]
 [auth]
 provider = "cloudflare_access"
 public_url = "https://dude.example.com"
-auto_create = false
-default_organization = "example"
+super_admins = ["operator@example.com"]
 
 [auth.cloudflare_access]
 team = "example"

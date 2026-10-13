@@ -4,23 +4,13 @@
  * (its Runs, findings and pull requests, and its cost), nothing new.
  */
 
-import { EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, type Finding, type PersistedEvent, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
+import { EventTypes, NOT_STARTED_STATUSES, PHASE_DOER as DOER, TERMINAL_RUN_STATUSES, type Finding, type PersistedEvent, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
 
 export interface TaskHistoryLine {
   lead: string;
   steps: string[];
   facts: string[];
 }
-
-/** Each phase as a person names who did it. */
-const DOER: Record<string, string> = {
-  investigate: "investigator",
-  implement: "implementer",
-  review: "reviewer",
-  fix: "fixer",
-  simplify: "simplifier",
-  test: "tester",
-};
 
 /**
  * The line: the latest attempt's phases in order, a fan-out of one phase

@@ -16,7 +16,7 @@ import { EventRow } from "@dude/design-system/components";
 import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { Machine, MachineMove, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent } from "@dude/domain";
-import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
+import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { stepsOf, startVerbOf } from "../src/startCue.tsx";
 import { roleLabel } from "../src/machines.ts";
 import { modelCostShown } from "../src/api/client.ts";
@@ -736,6 +736,79 @@ describe("a steer read at the agent's next step", () => {
     const { turns } = project(events);
     expect(turns.map((t) => t.kind)).toEqual(["progress", "human"]);
     expect(turns[0]).toMatchObject({ done: 2 });
+  });
+});
+
+describe("the agent's task and what it did with it", () => {
+  const kinds = (events: PersistedEvent[]) => project(events).turns.map((t) => t.kind);
+
+  test("a question dude recorded before the syncer read the prompt still goes after the prompt", () => {
+    // DASH-6: ask_person's question.asked reached the ledger before lux's record of the prompt was read.
+    const events = [ev(EventTypes.PlanUpdated, { todos: [] }), ev(EventTypes.ToolCalled, { tool: "read", callId: "c_1" }),
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "q_1", prompt: "Should FACTORY.md be in English?" }),
+      ev("agent.tool.dude", { tool: "ask_person", result: { questionId: "q_1" } }),
+      ev(EventTypes.PromptDelivered, { text: "Localise the settings screens." }),
+      ev(EventTypes.AgentMessage, { text: "I asked; waiting for the answer." })];
+    expect(kinds(events)).toEqual(["prompt", "tool", "question", "message"]);
+  });
+
+  test("a notice before the agent did anything stays before the prompt", () => {
+    expect(kinds([ev("run.parked", { reason: "person" }), ev(EventTypes.PromptDelivered, { text: "Go." })])).toEqual(["notice", "prompt"]);
+  });
+
+  test("the progress row keeps its place when the prompt goes before it", () => {
+    const state = apply(emptyProjection(), [ev("agent.custom.progress", { data: { done: 1, of: 3 } }), ev(EventTypes.PromptDelivered, { text: "Go." })]);
+    apply(state, [ev("agent.custom.progress", { data: { done: 2, of: 3 } })]);
+    expect(state.turns.map((t) => t.kind)).toEqual(["prompt", "progress"]);
+    expect(state.turns[1]).toMatchObject({ done: 2 });
+  });
+});
+
+describe("the tools a Run used, for the session rail", () => {
+  const dude = (tool: string) => ev("agent.tool.dude", { tool, arguments: {}, result: {} });
+  const called = (tool: string, callId: string) => ev(EventTypes.ToolCalled, { tool, callId, input: {} });
+
+  test("successful recorded actions have readable completed labels beside harness calls", () => {
+    expect(toolUsage(project([called("read", "c_1"), dude("update_task"), dude("start_phase"), dude("start_phase")])))
+      .toEqual([{ name: "Read", count: 1 }, { name: "dude update task (completed)", count: 1 }, { name: "dude start phase (completed)", count: 2 }]);
+  });
+
+  test("a bare harness name pairs with its completed dude action, but a refused-only call stays bare", () => {
+    expect(toolUsage(project([called("update_task", "c_1"), dude("update_task")])))
+      .toEqual([{ name: "dude update task (called)", count: 1 }, { name: "dude update task (completed)", count: 1 }]);
+    expect(toolUsage(project([called("update_task", "refused"), ev(EventTypes.ToolCompleted, { callId: "refused", status: "error" })])))
+      .toEqual([{ name: "Update_task", count: 1 }]);
+  });
+
+  test("successful MCP overlap stays separately labelled for every harness alias", () => {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {
+      expect(toolUsage(project([dude("decide"), called(tool, "c_1"), ev(EventTypes.ToolCompleted, { callId: "c_1", status: "completed" })])))
+        .toEqual([{ name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 1 }]);
+    }
+  });
+
+  test("a prefixed harness call reads as dude's tool called, in words", () => {
+    expect(toolUsage(project([called("mcp__dude__name_session", "c_1"), called("dude_update_task", "c_2")])))
+      .toEqual([{ name: "dude name session (called)", count: 1 }, { name: "dude update task (called)", count: 1 }]);
+  });
+
+  test("two successful CLI decisions and one refused MCP decision preserve both sources", () => {
+    expect(toolUsage(project([called("bash", "cli_1"), dude("decide"), called("bash", "cli_2"), dude("decide"),
+      called("dude_decide", "mcp_1"), ev(EventTypes.ToolCompleted, { callId: "mcp_1", status: "error" })])))
+      .toEqual([{ name: "Bash", count: 2 }, { name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 2 }]);
+    expect(toolUsage(project([called("dude_decide", "refused"), ev(EventTypes.ToolCompleted, { callId: "refused", status: "error" })])))
+      .toEqual([{ name: "dude decide (called)", count: 1 }]);
+  });
+
+  test("server records before harness arrival remain complete in incremental projection", () => {
+    for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {
+      const state = apply(emptyProjection(), [dude("decide"), dude("decide")]);
+      expect(toolUsage(snapshot(state))).toEqual([{ name: "dude decide (completed)", count: 2 }]);
+      apply(state, [called(tool, "c_1")]);
+      expect(toolUsage(snapshot(state))).toEqual([
+        { name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 2 },
+      ]);
+    }
   });
 });
 

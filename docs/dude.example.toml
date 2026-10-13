@@ -173,13 +173,11 @@ provider = "api_key"                                     # DUDE_AUTH_PROVIDER
 # The origin people open dude at; changes signed in by Access must come from
 # it (the Origin header).
 # public_url = "https://dude.example.com"                # DUDE_AUTH_PUBLIC_URL
-# Someone Access lets in who is not yet one of the organization's people
-# becomes a member (never an admin, never with a key). false refuses them.
-# Optional.
-auto_create = true                                       # DUDE_AUTH_AUTO_CREATE
-# The slug of an existing organization Access sign-ins belong to. Never
-# created: startup fails if no organization has it.
-# default_organization = "example"                       # DUDE_AUTH_DEFAULT_ORGANIZATION
+# Operators who may create organisations and invite their first admins.
+# Optional, but required on a fresh Access deployment with no organisations.
+# super_admins = ["operator@example.com"]                  # DUDE_AUTH_SUPER_ADMINS
+# auto_create and default_organization are accepted for one release but ignored:
+# people join by invitation.
 
 [auth.cloudflare_access]
 # The Zero Trust team name: tokens are verified against

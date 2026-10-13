@@ -14,7 +14,7 @@
 
 import { SQL } from "bun";
 import { deriveProjectKey, newId } from "@dude/domain";
-import { insertPerson } from "../apps/control-plane/src/api/auth.ts";
+import { insertApiKey, insertPerson } from "../apps/control-plane/src/api/auth.ts";
 import { closePool, setPool, withOrg } from "../apps/control-plane/src/db/client.ts";
 
 const ownerDsn = process.env.OWNER_DSN;
@@ -65,7 +65,11 @@ try {
   const people = await withOrg(organizationId, async (scope) => {
     const { sql } = scope;
     const made: Array<{ personId: string; keyId: string; key: string }> = [];
-    for (const p of PEOPLE) made.push((await insertPerson(scope, p))!);
+    for (const p of PEOPLE) {
+      const person = (await insertPerson(scope, p))!;
+      const key = await insertApiKey(scope, { name: p.name, personId: person.personId });
+      made.push({ personId: person.personId, keyId: key.id, key: key.key });
+    }
 
     const projectId = newId("project");
     // As the API derives a key: the organisation is new, so this is WEB.

@@ -12,9 +12,9 @@ import type { AgentMachine } from "./machines.ts";
 export type SessionRole = "owner" | "chat" | "read";
 
 /** What a session is called until its agent or a member names it. */
-export const UNTITLED_SESSION = "New session";
+export const UNTITLED_SESSION = "Untitled session";
 
-/** A session's name as people see it: its title, or "New session" until it has one. */
+/** A session's name as people see it: its title, or "Untitled session" until it has one. */
 export function sessionTitle(s: { title: string | null }): string {
   return s.title ?? UNTITLED_SESSION;
 }

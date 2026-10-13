@@ -174,7 +174,7 @@ test("member management rechecks the current person role", async () => {
   const stale: Principal = { ...keyless, role: "admin" };
   const staleRouter = new Router(async () => stale);
   registerPeopleRoutes(staleRouter);
-  const response = await staleRouter.handle(ctx(stale, "POST", "/v1/people", { name: "No", email: "no@example.test" }).request);
+  const response = await staleRouter.handle(ctx(stale, "PATCH", "/v1/people/missing", { role: "admin" }).request);
   expect(response.status).toBe(403);
   expect(await owner`SELECT id FROM people WHERE email = 'no@example.test'`).toHaveLength(0);
 });

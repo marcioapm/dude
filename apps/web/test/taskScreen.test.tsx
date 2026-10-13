@@ -4,6 +4,8 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { PersistedEvent, Run } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
@@ -11,7 +13,7 @@ import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
-import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import { TaskScreen, activityLines } from "../src/screens/TaskScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -117,6 +119,76 @@ describe("the task page's tab from its URL", () => {
   test("a URL naming no tab opens the overview", async () => {
     const page = await taskPage(new FixtureClient("a"));
     expect(selectedTab(page)).toBe("Overview");
+  });
+});
+
+describe("the task header's owner", () => {
+  test("says once whose task it is and whose agent works, and the select beside it is named for changing it", async () => {
+    const page = await taskPage(new FixtureClient("a"));
+    const header = await until(() => page.querySelector<HTMLElement>("[data-testid=task-header]"), "the header");
+    const owner = await until(() => header.querySelector<HTMLElement>("[data-testid=task-owner]"), "the owner field");
+    // The attribution: the owner's name and that their implementer is working.
+    expect(header.textContent).toContain("Márcio Martins");
+    expect(header.textContent).toContain("Owner · Márcio's implementer is working");
+    // "Owner" labels the attribution only; the select is the action.
+    expect(header.textContent!.split("Owner")).toHaveLength(2);
+    const select = owner.querySelector<HTMLElement>("[role=combobox]")!;
+    expect(select.getAttribute("aria-label")).toBe("Change owner");
+    expect(owner.textContent).toContain("Change owner");
+    expect(owner.textContent).toContain("Márcio Martins");
+  });
+});
+
+describe("Activity's started lines", () => {
+  const run = (id: string, phase: string, role: string, category: string | null = null) => ({ id, phase, role, category, kind: "agent", attempt: 1 }) as unknown as Run;
+  let cursor = 0;
+  const created = (runId: string | null, payload: Record<string, unknown>): PersistedEvent => ({
+    eventId: `evt_c${++cursor}`, cursor, eventType: "run.created", occurredAt: new Date(Date.UTC(2026, 9, 3, 10, 0, cursor)).toISOString(),
+    organizationId: "org", projectId: "prj", taskId: TASK_ID, runId, sessionId: null, workflowRunId: null,
+    actor: { type: "system", id: "workflow" }, source: "control-plane", correlationId: null, causationId: null, payload,
+  }) as PersistedEvent;
+  const said = (events: PersistedEvent[], runs: Run[]) => {
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    return activityLines(events, people, runs, [], 1).map((l) => renderToStaticMarkup(<>{l.text}</>).replace(/<[^>]+>/g, ""));
+  };
+
+  test("name who started, as the role does, never the stage or a bare agent", () => {
+    const runs = [run("r_impl", "implement", "implementer"), run("r_rev", "review", "reviewer", "correctness"),
+      run("r_fix", "fix", "implementer"), run("r_simp", "simplify", "simplifier")];
+    const lines = said([
+      created("r_impl", { phase: "implement", role: "implementer" }),
+      created("r_rev", { phase: "review", role: "reviewer", category: "correctness" }),
+      // The round's own event: no Run, its reviewers named in the payload.
+      created(null, { phase: "review", reviewers: ["correctness", "security"], iteration: 0 }),
+      created("r_fix", { phase: "fix", role: "implementer" }),
+      created("r_simp", { phase: "simplify", role: "simplifier" }),
+    ], runs);
+    // Newest first, as Activity reads.
+    expect(lines).toEqual([
+      "The simplifier started",
+      "The fixer started",
+      "A review round started: correctness, security",
+      "The correctness reviewer started",
+      "The implementer started",
+    ]);
+    expect(lines.some((l) => l.includes("The agent started") || l.includes("The simplify"))).toBe(false);
+  });
+
+  test("a Run the page has not read yet is named from its event", () => {
+    expect(said([created("r_later", { phase: "simplify", role: "simplifier" })], [])).toEqual(["The simplifier started"]);
+  });
+
+  test("the API reviewer keeps its capitals, in its own line and in the round's; other categories stay lower case", () => {
+    const lines = said([
+      created("r_api", { phase: "review", role: "reviewer", category: "api" }),
+      created(null, { phase: "review", reviewers: ["correctness", "api"], iteration: 0 }),
+      created("r_api_unread", { phase: "review", role: "reviewer", category: "api" }),
+    ], [run("r_api", "review", "reviewer", "api")]);
+    expect(lines).toEqual([
+      "The API reviewer started",
+      "A review round started: correctness, API",
+      "The API reviewer started",
+    ]);
   });
 });
 

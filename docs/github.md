@@ -4,7 +4,7 @@ Dude uses an organization's GitHub credential both for Git clone/push (passed to
 
 Use a **fine-grained personal access token (PAT)** limited to the repositories dude should work on, **unless dude must read CI check runs** (GitHub Actions and most CI apps report that way): GitHub offers fine-grained tokens no permission that reads check runs, so only a classic token with `repo` (or a GitHub App) can. With a fine-grained token, dude sees only commit statuses and every pull request shows "CI unavailable". For a fine-grained token, select its resource owner, then **Only select repositories**. The token owner must also have the necessary repository access. Token permissions do not grant rights the owner lacks; organization approval, SSO policies and branch rules still apply.
 
-**Verify** (Organization settings → GitHub) tests each of these on every repository of the organization's projects without changing anything on GitHub, and says which is missing, or why one could not be tested.
+**Verify** (Organisation settings → GitHub) tests each of these on every repository of the organization's projects without changing anything on GitHub, and says which is missing, or why one could not be tested.
 
 ## Fine-grained PAT
 
@@ -40,7 +40,7 @@ Do not confuse the classic `workflow` scope with the fine-grained Workflows perm
 
 ## GitHub App
 
-An organization can connect dude as a GitHub App instead of with a token (Organization settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
+An organization can connect dude as a GitHub App instead of with a token (Organisation settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
 
 ### Creating the App
 
@@ -112,7 +112,7 @@ A token verification check that can read `/user` does not establish code, workfl
 
 **CI unavailable**, with the warning *GitHub refused the check-runs read; a fine-grained token cannot read check runs, so use a classic token with the repo scope (or a GitHub App once supported), and check SSO authorization, organization token approval and the token's repository access*, means GitHub answered 403 to the check-runs listing for the pull request's head, without marking it as a rate limit. Check runs are how GitHub Actions and most CI apps report, so the checks dude shows are only what it could read, commonly commit statuses such as CodeRabbit's. dude keeps the pull request out of ready-to-merge and refuses to merge it, but wakes no fixer and re-runs nothing for this.
 
-The 403 does not say why. With a **fine-grained token** it is expected and cannot be fixed by granting anything: GitHub has no Checks permission for fine-grained tokens. Replace it with a classic token with `repo` (or a GitHub App once dude supports one). With a classic token, a missing `repo` scope, SSO authorization not given to the token, organization token approval, or the owner losing access to the repository answer the same way; check each. Verify in Organization settings → GitHub says which applies per repository. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way, including GitHub's "abuse detection" secondary limit: it fails the sync, which is retried.
+The 403 does not say why. With a **fine-grained token** it is expected and cannot be fixed by granting anything: GitHub has no Checks permission for fine-grained tokens. Replace it with a classic token with `repo` (or a GitHub App once dude supports one). With a classic token, a missing `repo` scope, SSO authorization not given to the token, organization token approval, or the owner losing access to the repository answer the same way; check each. Verify in Organisation settings → GitHub says which applies per repository. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way, including GitHub's "abuse detection" secondary limit: it fails the sync, which is retried.
 
 **CI pending** with no warning means dude has no verdict on the head commit yet: checks queued or running, CI yet to register on a new push, or a run cancelled or waiting on approval. It does not claim that anything is running. Pending past the organization's patience asks a person.
 

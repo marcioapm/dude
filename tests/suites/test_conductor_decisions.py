@@ -12,7 +12,9 @@ written into the task; the conductor starts the implementer, then a
 review, triages, and before the pull request asks the gate's question;
 the person answers Open, and the pull request opens. Taking over: the
 first message in a delivered task's Chat hands its next decision to the
-conductor, which the pull request's feedback then waits on.
+conductor, which the pull request's feedback then waits on. Parked: with
+the default warm period the conductor parks between decisions, and each
+resumed conductor's decision still lands.
 """
 
 from __future__ import annotations
@@ -126,6 +128,43 @@ def test_talk_it_through_to_a_pull_request(client: ApiClient, forge_project: dic
     assert all(r["conductorRunId"] == conductor for r in client.task_runs(task["id"]) if r["phase"])
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next", "start_phase", "start_phase", "next", "open_pull_request"], decided
+
+
+def _parked(client: ApiClient, run_id: str, message: str) -> None:
+    wait_until(lambda: (r := client.get_run(run_id))["status"] == "paused" and r["dudePause"] == "conductor",
+               timeout=60, message=message)
+
+
+def test_a_conductor_parked_between_decisions_still_decides(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
+                                                            owner_dsn: str):
+    """The default warm period, the suite's seconds (DUDE_CONDUCTOR_WARM):
+    the conductor parks after each turn, and each decision is made by a
+    resumed conductor. Every start of its Run has a new tools token, which
+    its tool calls must carry."""
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet in Portuguese, decided by a parked conductor")
+    conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
+    _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
+    _parked(client, conductor, "the conductor never parked before its first decision")
+
+    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
+    wait_until(lambda: _phases(client, task["id"], "implement"), timeout=60,
+               message=f"the resumed conductor's start never landed: {_said(client, conductor)}")
+    _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
+    # The wake resumed it; past its turn it parks again before the next decision.
+    wait_until(lambda: any("after implement" in n for n in _woken(client, task["id"])), timeout=60,
+               message="the conductor was never woken after implement")
+    _parked(client, conductor, "the conductor never parked again after its wake")
+
+    _say(client, task["id"], "Review it.", _tool("decide", {"action": "next"}))
+    wait_until(lambda: _phases(client, task["id"], "review"), timeout=60,
+               message=f"the twice-resumed conductor's decision never landed: {_said(client, conductor)}")
+    assert not [t for t in _said(client, conductor) if "answered 401" in t], _said(client, conductor)
+    decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
+    assert decided == ["start_phase", "next"], decided
+    # Both decisions were made by a resumed conductor, each start with its own token.
+    assert len(query(owner_dsn, "SELECT 1 FROM run_resumes WHERE run_id = %s", (conductor,))) >= 2
 
 
 def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):

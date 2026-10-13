@@ -15,7 +15,7 @@ import re
 
 import requests
 
-from helpers import ApiClient, execute, query, wait_until
+from helpers import ApiClient, execute, provision_person, query, wait_until
 
 
 def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: ApiClient, project: dict):
@@ -403,10 +403,8 @@ def _fake_lux(env, method: str, path: str, body: dict | None = None) -> requests
 
 
 def _invite_member(admin: ApiClient, env, name: str) -> tuple[ApiClient, str]:
-    resp = admin.post("/v1/people", {"name": name, "email": f"{name.lower()}-{os.urandom(2).hex()}@acme.dev", "role": "member"})
-    assert resp.status_code == 201, resp.text
-    key = resp.json()["key"]
-    return ApiClient(env.control_plane_url, key), key
+    _, member = provision_person(admin, env, name, f"{name.lower()}-{os.urandom(2).hex()}@acme.dev")
+    return member, member.api_key
 
 
 def _pick(page: Page, trigger, label: str, meta: str = "") -> None:

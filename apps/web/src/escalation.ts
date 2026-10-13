@@ -71,7 +71,7 @@ export function escalationWords(e: Escalation): EscalationWords {
       return spent.length > 0
         ? {
             short: "PR fix rounds used up",
-            sentence: `${spent.length === 1 ? `The pull request in ${spent[0]} has` : `The pull requests in ${spent.join(", ")} have`} had ${plural(num("total"), "fix", "fixes")}, the most the organization allows for one.`,
+            sentence: `${spent.length === 1 ? `The pull request in ${spent[0]} has` : `The pull requests in ${spent.join(", ")} have`} had ${plural(num("total"), "fix", "fixes")}, the most the organisation allows for one.`,
             runId,
           }
         : {

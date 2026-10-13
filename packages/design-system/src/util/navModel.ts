@@ -12,9 +12,8 @@
  */
 
 import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
-import type { Person } from "../components/PersonAvatar.tsx";
-import type { PrChipPullRequest } from "../components/PrChip.tsx";
-import { toMs } from "./useNow.ts";
+import type { Person, PrChipPullRequest } from "./viewTypes.ts";
+import { toMs } from "./instant.ts";
 import {
   EMPTY_TRIAGE_COUNTS,
   TRIAGE_SPECS,

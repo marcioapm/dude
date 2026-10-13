@@ -463,6 +463,77 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
     assert console_errors == [], f"console errors on the board: {console_errors}"
 
 
+def test_a_needs_you_card_at_1440_keeps_its_epic_readable_beside_the_mark(gallery_page: Page, console_errors: list):
+    """At 1440x900 a lane is about 180px: the key, the epic and "Needs you" do not fit one line.
+    The epic keeps at least 8ch and the mark wraps under it, rather than the epic shrinking to a letter."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 900})
+    gallery_page.get_by_role("link", name="Project board (realistic)").click()
+    board = gallery_page.locator("#board-project").get_by_role("region", name="control-plane board").first
+    board.wait_for(state="visible")
+    cards = board.locator("[data-board-key][data-triage=needs_you]")
+    assert cards.count() > 0
+    for i in range(cards.count()):
+        m = cards.nth(i).evaluate("""c => {
+            const top = c.firstElementChild, epic = [...top.children].find(e => e.title);
+            if (!epic) return null;
+            const probe = document.createElement('span');
+            probe.style.cssText = 'position:absolute;visibility:hidden;font:inherit';
+            probe.textContent = 'MMMMMMMM'.slice(0, Math.min(8, epic.textContent.length));
+            epic.append(probe);
+            const r = {shown: epic.getBoundingClientRect().width, need: Math.min(probe.getBoundingClientRect().width,
+                       epic.scrollWidth), overflow: top.scrollWidth - top.clientWidth};
+            probe.remove();
+            return r;
+        }""")
+        if m is None:
+            continue
+        assert m["overflow"] <= 0, m
+        # Proportional text: 8ch of "M" bounds 8 real characters from above, so allow half of it.
+        assert m["shown"] >= m["need"] / 2, m
+    assert console_errors == []
+
+
+def test_a_stack_keeps_every_letter_on_its_face(gallery_page: Page, console_errors: list):
+    """At 16, 20, 24 and 28: each covered face's initials' ink sits right of the face on top of it and
+    that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the online ring
+    around it), and left of its own right edge. Ink bounds come from canvas metrics taken at 40x the
+    font size and scaled down, since at 6px they round to whole pixels. The ratio and these margins
+    are calibrated in DejaVu Sans, the headless fallback: a narrower sans keeps every letter on its
+    face too, but leaves this probe less able to notice a regression in the ring or margin rules."""
+    gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
+    cut, behind_online = [], {}
+    for size in (16, 20, 24, 28):
+        stacks = gallery_page.get_by_test_id(f"stack-initials-{size}").all()
+        assert stacks, size
+        for stack in stacks:
+            faces = stack.evaluate("""s => {
+                const ring = (el) => Math.max(0, ...getComputedStyle(el).boxShadow.replace(/[a-z]+\\([^)]*\\)/gi, '')
+                    .split(',').map(sh => Number((sh.match(/-?[\\d.]+px/g) ?? [])[3]?.slice(0, -2) ?? 0)));
+                const ctx = document.createElement('canvas').getContext('2d');
+                const faces = [...s.children];
+                return faces.slice(1).map((f, i) => {
+                    const span = f.querySelector('span'), t = span.getBoundingClientRect();
+                    const cs = getComputedStyle(span);
+                    ctx.font = `${cs.fontWeight} ${parseFloat(cs.fontSize) * 40}px ${cs.fontFamily}`;
+                    ctx.letterSpacing = `${(parseFloat(cs.letterSpacing) || 0) * 40}px`;
+                    const m = ctx.measureText(span.textContent);
+                    const inkLeft = t.left - m.actualBoundingBoxLeft / 40, inkRight = t.left + m.actualBoundingBoxRight / 40;
+                    const on = faces[i], r = ring(on);
+                    return {text: f.textContent, ring: r, covered: on.getBoundingClientRect().right + r - inkLeft,
+                            spill: inkRight - f.getBoundingClientRect().right};
+                });
+            }""")
+            behind_online.setdefault(size, []).extend(f["text"] for f in faces if f["ring"] > 1.5)
+            # 0.2x16 = 3.2px is not a whole number of 1/64px layout units, so allow that rounding.
+            cut += [(size, f) for f in faces if f["covered"] > 0.02 or f["spill"] > 0.02]
+    assert cut == [], cut
+    # At every size the fixtures put an online face on top of "WW" and of a two-digit "+N" chip, so the
+    # wider ring is measured against the widest initials and against the chip.
+    for size, texts in behind_online.items():
+        assert "WW" in texts and any(t.startswith("+") and len(t) == 3 for t in texts), (size, texts)
+    assert console_errors == []
+
+
 def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page, console_errors: list):
     """Quote hides when the editor narrows. If it held the toolbar's one Tab
     stop, the stop and focus move to a button still shown, so the toolbar
@@ -671,7 +742,7 @@ def test_a_session_title_is_renamed_in_place_with_enter_and_escape(gallery_page:
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
     pane = gallery_page.locator("#bs-title [data-theme]").first
     titles = pane.get_by_test_id("session-title")
-    expect(titles.nth(0)).to_have_text("New session")
+    expect(titles.nth(0)).to_have_text("Untitled session")
     titles.nth(1).click()
     field = pane.get_by_test_id("session-title-input")
     expect(field).to_be_focused()
@@ -770,7 +841,7 @@ def _title_fits(title) -> dict:
 
 
 def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(gallery_page: Page, console_errors: list):
-    """In a screen's header at desktop width, a short title and "New session" are never cut, shown or
+    """In a screen's header at desktop width, a short title and "Untitled session" are never cut, shown or
     edited; a title longer than the line is cut with an ellipsis, all of it in the tooltip."""
     gallery_page.set_viewport_size({"width": 1440, "height": 1000})
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
@@ -778,7 +849,7 @@ def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(
     titles = headers.get_by_test_id("session-title")
     short, untitled, long = (_title_fits(titles.nth(i)) for i in range(3))
     assert (short["text"], short["cut"]) == ("Billing v2", False), short
-    assert (untitled["text"], untitled["cut"]) == ("New session", False), untitled
+    assert (untitled["text"], untitled["cut"]) == ("Untitled session", False), untitled
     assert long["cut"] and long["tip"] == long["text"], long
     # Cut only for want of room: the long title takes the header's line.
     assert long["words"] > long["header"] * 0.6, long
@@ -794,7 +865,7 @@ def test_a_session_title_takes_the_headers_width_and_cuts_only_a_title_too_long(
 
 def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_page: Page, console_errors: list):
     """At 375px a shared header's marker, model and Share do not shrink; they wrap under the title,
-    which keeps the first line, with room for at least "New session"."""
+    which keeps the first line, with room for at least "Untitled session"."""
     gallery_page.get_by_role("link", name="SessionTitle", exact=True).click()
     gallery_page.set_viewport_size({"width": 375, "height": 900})
     pane = gallery_page.locator("#bs-title [data-theme]").first
@@ -806,7 +877,7 @@ def test_a_shared_session_header_on_a_phone_keeps_a_line_for_its_title(gallery_p
         el.parentElement.append(h);
         const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
         const probe = words.cloneNode(false);
-        probe.textContent = 'New session';
+        probe.textContent = 'Untitled session';
         probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
         h.append(probe);
         const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,

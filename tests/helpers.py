@@ -71,6 +71,22 @@ def create_api_key(dsn: str, organization_id: str, kind: str = "user", name: str
     return raw
 
 
+def provision_person(admin: ApiClient, env, name: str, email: str, role: str = "member") -> tuple[dict, ApiClient]:
+    """Operator-side key-mode fixture; production members join through Access invitations."""
+    org = admin.get("/v1/me").json()["organization"]["id"]
+    pid, aid = new_id("per"), new_id("acc")
+    with psycopg.connect(env.owner_dsn) as conn:
+        account = conn.execute("INSERT INTO accounts (id,email,name) VALUES (%s,%s,%s) "
+            "ON CONFLICT(email) DO UPDATE SET email=EXCLUDED.email RETURNING id", (aid,email.lower(),name)).fetchone()[0]
+        conn.execute("INSERT INTO people (id,organization_id,account_id,name,email,role) VALUES (%s,%s,%s,%s,%s,%s)",
+            (pid,org,account,name,email.lower(),role))
+        raw = KEY_PREFIX + secrets.token_urlsafe(24)
+        conn.execute("INSERT INTO api_keys (id,organization_id,person_id,name,key_hash,key_prefix,kind) VALUES (%s,%s,%s,%s,%s,%s,'user')",
+            (new_id("key"),org,pid,name,hashlib.sha256(raw.encode()).hexdigest(),raw[:16]))
+    who = ApiClient(env.control_plane_url,raw)
+    return who.get("/v1/me").json()["person"], who
+
+
 def query(dsn: str, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     """Run a read query as the owner, for assertions about stored state."""
     with psycopg.connect(dsn, autocommit=True) as conn:

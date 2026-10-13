@@ -423,6 +423,9 @@ export interface DigestTurn {
   peers: Array<{ task: string; status: string; at: string }>;
 }
 
+/** Turns that are the agent's own work on its task, which its task's prompt goes before. */
+const AGENTS_OWN: ReadonlySet<Turn["kind"]> = new Set(["tool", "message", "thought", "question", "usage", "event", "progress", "repositoryRequest"]);
+
 /** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
 export type DudePause = NonNullable<Run["dudePause"]>;
 export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }> = {
@@ -555,6 +558,27 @@ export function toolLabel(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+// These sources overlap but have no shared call id: they are not an additive total.
+export const TOOL_USAGE_NOTE = "Harness calls include failures and may repeat dude's completed actions.";
+
+function dudeToolWords(tool: string, source: "called" | "completed"): string {
+  return `dude ${tool.replaceAll("_", " ")} (${source})`;
+}
+
+// Claude Code and Codex record dude's tools without the server prefix, so a bare
+// name counts as dude's when the run also completed a dude action of that name.
+function harnessToolLabel(name: string, dudeTools: ReadonlyMap<string, number>): string {
+  const own = dudeToolName(name);
+  return own !== name || dudeTools.has(own) ? dudeToolWords(own, "called") : toolLabel(name);
+}
+
+export function toolUsage(conversation: Pick<Conversation, "toolCounts" | "dudeToolCounts">): { name: string; count: number }[] {
+  return [
+    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: harnessToolLabel(name, conversation.dudeToolCounts), count })),
+    ...Array.from(conversation.dudeToolCounts, ([name, count]) => ({ name: dudeToolWords(name, "completed"), count })),
+  ];
+}
+
 /**
  * Who priced a Run's model cost. lux's cost plugins meter every token and
  * settle the price over days (`settled` once its status is final); the
@@ -591,6 +615,8 @@ export interface Conversation {
   activeTool: { name: string; since: string } | null;
   /** How often it called each tool, by the tool's name as the harness gives it. */
   toolCounts: ReadonlyMap<string, number>;
+  /** How often dude recorded a call of each of its tools (`agent.tool.dude`), by the tool's name. */
+  dudeToolCounts: ReadonlyMap<string, number>;
   /**
    * Where a steer sent now lands, as this Run's lux last said: `next_step`,
    * `next_turn`, or null when it has said nothing (an older lux, which
@@ -654,6 +680,7 @@ export interface Projection {
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
   toolCounts: Map<string, number>;
+  dudeToolCounts: Map<string, number>;
   lands: SteerLands | null;
   /**
    * "Taken back up" notices whose resume is not timed yet, by the epoch
@@ -739,6 +766,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     activity: null,
     activeTool: null,
     toolCounts: new Map(),
+    dudeToolCounts: new Map(),
     lands: null,
     untimedUnparks: new Map(),
     untimedUnpark: null,
@@ -1116,7 +1144,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = typeof payload.text === "string" ? payload.text : "";
         const attachments = attachmentsOf(payload.attachments);
         if ((!text.trim() && attachments.length === 0) || state.briefed) break;
-        turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments });
+        // The agent's task, before anything the agent did with it. What dude's
+        // tools wrote while the agent worked (a question it asked) can reach
+        // the ledger before the syncer has read lux's record of the prompt
+        // from the stream; the agent asked it after having its task all the same.
+        const prompt: Turn = { kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments };
+        const first = turns.findIndex((t) => AGENTS_OWN.has(t.kind));
+        if (first < 0) turns.push(prompt);
+        else {
+          turns.splice(first, 0, prompt);
+          if (state.progressIndex !== null && state.progressIndex >= first) state.progressIndex += 1;
+        }
         break;
       }
 
@@ -1482,6 +1520,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // question only when it asks) names the open question it just
         // asked. decide_escalation names the answered one it acts on.
         const name = String(payload.tool ?? "");
+        if (name) state.dudeToolCounts.set(name, (state.dudeToolCounts.get(name) ?? 0) + 1);
         const asks = name === "ask_person" || name === "decide";
         const result = payload.result as Record<string, unknown> | null | undefined;
         const question = asks && typeof result?.questionId === "string" ? state.questionsById.get(result.questionId) : undefined;
@@ -1646,6 +1685,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       activity: state.activity,
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
+      dudeToolCounts: state.dudeToolCounts,
       lands: state.lands,
       start: shownStart(state.start, runStatus),
       startFailed: state.failedStart?.turn.start ?? null,
@@ -1695,6 +1735,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activity: null,
     activeTool: null,
     toolCounts: state.toolCounts,
+    dudeToolCounts: state.dudeToolCounts,
     lands: state.lands,
     start: null,
     startFailed: state.failedStart?.turn.start ?? null,
