@@ -165,7 +165,7 @@ func TestEveryStopLeavesTheFinalDiffThroughLuxsBeforeStopHook(t *testing.T) {
 
 func TestAnotherOrganizationCannotReadARunsDiff(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.DiffDelay = 10 * time.Millisecond
+	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
 	w.lux.Workspaces = t.TempDir()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}}
