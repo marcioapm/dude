@@ -34,14 +34,16 @@ export function ToolWithChildren({ turn, depth, note }: { turn: ToolTurn; depth:
         exitCode={turn.result?.exitCode}
         note={note}
       />
-      {turn.children.map((child) => <ChildThread key={child.id} child={child} revision={child.revision} depth={depth} />)}
+      {turn.children.map((child) => <ChildThread key={child.id} child={child} revision={child.revision} settled={child.settled} depth={depth} />)}
     </>
   );
 }
 
 // The projection mutates a child in place and bumps its revision (and its
-// ancestors') on every change: a sibling whose revision is unchanged is skipped.
-const ChildThread = memo(function ChildThread({ child, depth }: { child: ChildTurn; revision: number; depth: number }) {
+// ancestors') on every change: a sibling whose revision is unchanged is
+// skipped. A terminal Run's settled copy keeps the live revision, so
+// `settled` tells the two apart.
+const ChildThread = memo(function ChildThread({ child, depth }: { child: ChildTurn; revision: number; settled: boolean; depth: number }) {
   const [open, setOpen] = useState(false);
   const ended = child.status !== "running";
   const lastMessage = child.summary === null ? child.turns.findLast((t) => t.kind === "message") : undefined;
@@ -82,7 +84,7 @@ const ChildThread = memo(function ChildThread({ child, depth }: { child: ChildTu
       ) : null}
     </>
   );
-}, (a, b) => a.child.id === b.child.id && a.revision === b.revision && a.depth === b.depth);
+}, (a, b) => a.child.id === b.child.id && a.revision === b.revision && a.settled === b.settled && a.depth === b.depth);
 
 /** A child's own calls and messages, its children's threads one deeper than `depth`. */
 function ChildBody({ child, depth }: { child: ChildTurn; depth: number }) {

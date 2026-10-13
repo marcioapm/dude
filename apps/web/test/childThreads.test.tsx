@@ -185,6 +185,29 @@ test("the header of a depth-3 child opens it too", async () => {
   expect(document.querySelector("[role='dialog'] [data-testid='child-session']")?.getAttribute("data-child")).toBe("ses_great");
 });
 
+test("a child still running when its Run ended shows it settled, then how it ended once that is heard", async () => {
+  const state = apply(emptyProjection(), start());
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const draw = (runStatus?: "aborted") =>
+    act(async () => root!.render(<>{snapshot(state, runStatus).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
+  await draw();
+  expect(threadOf(host, "ses_kid")!.getAttribute("data-status")).toBe("running");
+
+  await draw("aborted");
+  expect(threadOf(host, "ses_kid")!.getAttribute("data-status")).toBe("aborted");
+
+  apply(state, [
+    ev(EventTypes.ChildEnded, { ...kid, status: "completed", summary: "Done now", costUsd: 0.37 }),
+    ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })]);
+  await draw("aborted");
+  const thread = threadOf(host, "ses_kid")!;
+  expect(thread.getAttribute("data-status")).toBe("completed");
+  expect(thread.textContent).toContain("Done now");
+  expect(thread.textContent).toContain("$0.37");
+});
+
 describe("a child's thread is drawn again only when it or a child under it changed", () => {
   const ids = ["a", "b", "a-grand"] as const;
   let state: ReturnType<typeof emptyProjection>;

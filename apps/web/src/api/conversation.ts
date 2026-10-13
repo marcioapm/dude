@@ -77,6 +77,11 @@ export interface ChildTurn {
    * not the object, to skip a child that did not change.
    */
   revision: number;
+  /**
+   * A terminal Run's settled copy, which may show a status the live child
+   * has not reached at the same revision: a renderer compares this too.
+   */
+  settled: boolean;
 }
 
 export interface MessageTurn {
@@ -1167,7 +1172,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
   // is never written after it is pushed, so it is shared.
   const settleChild = (child: ChildTurn): ChildTurn => ({
     ...child,
-    revision: child.revision + 1,
+    settled: true,
     status: child.status === "running" ? unfinished : child.status,
     waitingOn: null,
     endedAt: child.endedAt ?? child.startedAt,
@@ -1300,6 +1305,7 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
     waitingOn: null,
     parentChildId: null,
     revision: 0,
+    settled: false,
   };
   state.childrenById.set(id, child);
   // A child never hangs under itself: that would loop every walk up the tree.
