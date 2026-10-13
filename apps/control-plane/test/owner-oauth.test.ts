@@ -173,24 +173,30 @@ test("callback signals only live publications of the person's current frozen bra
   await owner`INSERT INTO tasks (id,organization_id,project_id,title,number) VALUES
     ('tsk_current','org_owner','prj_wake','Current',1),('tsk_other','org_owner','prj_wake','Other',2),
     ('tsk_racing','org_owner','prj_wake','Racing',3),('tsk_implementing','org_owner','prj_wake','Implementing',4),
-    ('tsk_done','org_owner','prj_wake','Done',5),('tsk_foreign','org_other','prj_wake_other','Foreign',1)`;
+    ('tsk_done','org_owner','prj_wake','Done',5),('tsk_held','org_owner','prj_wake','Held',6),
+    ('tsk_foreign','org_other','prj_wake_other','Foreign',1)`;
   await owner`INSERT INTO pr_publications (organization_id,task_id,branch,owner_person_id) VALUES
     ('org_owner','tsk_current','current','per_owner'),('org_owner','tsk_other','historical','per_owner'),
     ('org_owner','tsk_other','current','per_other'),('org_owner','tsk_racing','current','per_owner'),
     ('org_owner','tsk_implementing','current','per_owner'),('org_owner','tsk_done','current','per_owner'),
-    ('org_other','tsk_foreign','current','per_owner')`;
+    ('org_owner','tsk_held','current','per_owner'),('org_other','tsk_foreign','current','per_owner')`;
   await owner`INSERT INTO workflow_runs (id,organization_id,workflow_type,idempotency_key,status,step,state,awaiting_signals,task_id) VALUES
     ('wfr_current','org_owner','task.delivery','current','waiting','openPullRequest','{"branch":"current"}','["github.authorized"]','tsk_current'),
     ('wfr_other','org_owner','task.delivery','other','waiting','openPullRequest','{"branch":"current"}','["github.authorized"]','tsk_other'),
     ('wfr_racing','org_owner','task.delivery','racing','running','awaitPRFix','{"branch":"current"}','[]','tsk_racing'),
     ('wfr_implementing','org_owner','task.delivery','implementing','running','implement','{"branch":"current"}','[]','tsk_implementing'),
     ('wfr_done','org_owner','task.delivery','done','completed','openPullRequest','{"branch":"current"}','[]','tsk_done'),
+    ('wfr_held','org_owner','task.delivery','held','waiting','openPullRequest','{"branch":"current"}','["github.authorized"]','tsk_held'),
     ('wfr_foreign','org_other','task.delivery','foreign','waiting','openPullRequest','{"branch":"current"}','["github.authorized"]','tsk_foreign')`;
+  // A run held by a Wait gets its signal but is not woken before wait_until.
+  await owner`UPDATE workflow_runs SET wait_until = now() + interval '1 hour' WHERE id='wfr_held'`;
   expect((await callback(await start())).headers.get("location")).toBe(landed("connected"));
   expect([...await owner`SELECT id,status::text AS status FROM workflow_runs ORDER BY id`]).toEqual([
     { id: "wfr_current", status: "running" }, { id: "wfr_done", status: "completed" }, { id: "wfr_foreign", status: "waiting" },
-    { id: "wfr_implementing", status: "running" }, { id: "wfr_other", status: "waiting" }, { id: "wfr_racing", status: "running" }]);
+    { id: "wfr_held", status: "waiting" }, { id: "wfr_implementing", status: "running" }, { id: "wfr_other", status: "waiting" },
+    { id: "wfr_racing", status: "running" }]);
   expect([...await owner`SELECT workflow_run_id AS run,name,payload,consumed_at FROM workflow_signals ORDER BY workflow_run_id`]).toEqual([
     { run: "wfr_current", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null },
+    { run: "wfr_held", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null },
     { run: "wfr_racing", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null }]);
 });
