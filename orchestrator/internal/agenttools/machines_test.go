@@ -3,6 +3,8 @@ package agenttools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +39,7 @@ func machineRun(t *testing.T, validate func(context.Context, string, *delivery.M
 		('ms_std', $1, 'Standard', 2, 8192, 20, NULL, true), ('ms_large', $1, 'Large', 4, 16384, 40, NULL, false),
 		('ms_xl', $1, 'XL', 8, 32768, 80, 'pool_high', false)`, f.org)
 	mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_std","name":"Standard","cpus":2,"memoryMiB":8192,"diskGiB":20,"from":"default"}', lux_run_id = 'live' WHERE id = 'run_mach'`)
-	srv := httptest.NewServer((&agenttools.Server{DB: f.app, Lux: poolsLux{}, ValidateMachine: validate}).Handler())
+	srv := httptest.NewServer((&agenttools.Server{DB: f.app, Log: slog.New(slog.DiscardHandler), Lux: poolsLux{}, ValidateMachine: validate}).Handler())
 	t.Cleanup(srv.Close)
 	f.url = srv.URL
 	return f, token
@@ -178,6 +180,57 @@ func TestMCPGivesLuxsRefusalCode(t *testing.T) {
 	if status, out := f.post(t, token, "request_machine", `{"size":"XXL","reason":"oom"}`); status != 422 ||
 		out["error"] != "no size named XXL; you may move to: Large (4 · 16), XL (8 · 32, highmem pool)" {
 		t.Errorf("unknown: %d %v", status, out)
+	}
+}
+
+// A Run moves at most 3 times. A move lux refused does not count, so a
+// Run with three settled raises, one of them refused, may still move.
+func TestARunMovesAtMostThreeTimesAndRefusalsDoNotCount(t *testing.T) {
+	f, token := machineRun(t, func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error { return nil })
+	moves := func(refused ...bool) {
+		mustExec(t, f.owner, `DELETE FROM machine_moves WHERE run_id = 'run_mach'`)
+		for i, r := range refused {
+			code := any(nil)
+			if r {
+				code = "pool_unfit"
+			}
+			mustExec(t, f.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, refused, settled_at)
+				VALUES ($1, $2, $3, 'run_mach', 'reviewer', 'raise', '{}', 'ms_large', 'resize', $4, now())`, fmt.Sprintf("mmv_%d", i), f.org, f.item, code)
+		}
+	}
+	moves(false, false, false)
+	if status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`); status != 422 ||
+		out["error"] != "This Run has moved 3 times, the limit for one Run; a Reset does not give a move back. Carry on on Standard, or say in your work what did not fit." {
+		t.Fatalf("fourth move: %d %v", status, out)
+	}
+	moves(false, true, false)
+	if status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`); status != 200 {
+		t.Fatalf("a refused move counted: %d %v", status, out)
+	}
+}
+
+// One move of a Run at a time: a Run running again with its move not yet
+// settled (lux's outcome unknown) is refused another, and the database
+// holds the same line should two calls race past the check.
+func TestOneUnsettledMoveAtATime(t *testing.T) {
+	f, token := machineRun(t, func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error { return nil })
+	insert := func(id string) error {
+		_, err := f.owner.Exec(context.Background(), `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply)
+			VALUES ($1, $2, $3, 'run_mach', 'reviewer', 'raise', '{}', 'ms_xl', 'resize')`, id, f.org, f.item)
+		return err
+	}
+	if err := insert("mmv_unsettled"); err != nil {
+		t.Fatal(err)
+	}
+	status, out := f.post(t, token, "request_machine", `{"size":"Large","reason":"oom"}`)
+	if status != 422 || out["error"] != "you are being moved to XL now; ask again once you are there, if it is still too small" {
+		t.Fatalf("second move: %d %v", status, out)
+	}
+	if n := f.count(t, `SELECT count(*) FROM machine_moves WHERE run_id = 'run_mach'`); n != 1 {
+		t.Fatalf("%d moves", n)
+	}
+	if err := insert("mmv_second"); err == nil {
+		t.Fatal("a second unsettled move of the Run was stored")
 	}
 }
 

@@ -504,6 +504,28 @@ func TestASuccessfulMachineRequestEndsTheTurnAndARefusedOneDoesNot(t *testing.T)
 	}
 }
 
+// lux's dry run refuses the agent's move (its size's pool is gone): the
+// agent gets lux's words and code at once, and nothing stops or changes.
+func TestADryRunRefusalStopsNothing(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, 'pool_missing')`, w.org)
+	status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`)
+	var out struct{ Error, Code string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if status != 422 || out.Code != "unknown_pool" || out.Error != "no pool with id pool_missing" {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.luxCalls(live, "stop") != 0 ||
+		w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none' AND dude_pause IS NULL`, runID) != 1 ||
+		w.count(`SELECT count(*) FROM machine_moves`) != 0 || w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+		t.Fatalf("a refused dry run changed the Run: lux calls %v", w.lux.CallsOf(live))
+	}
+}
+
 // A lux from before dry runs and pools (lux#93) answers 400 to validateOnly
 // and to placement. The request is not refused for it: the Run is parked
 // and resumed with the same body. In its pool the move applies (resources
