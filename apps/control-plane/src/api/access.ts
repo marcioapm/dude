@@ -24,9 +24,9 @@ export async function canEditProject(ctx: RequestContext, _projectId: string): P
 }
 
 export async function requireOrgAdmin(ctx: RequestContext): Promise<void> {
-  if (!(await isOrgAdmin(ctx))) throw new HttpError(403, "only an organization admin can change this", "not_admin");
+  if (!(await isOrgAdmin(ctx))) throw new HttpError(403, "only an organisation admin can change this", "not_admin");
 }
 
 export async function requireProjectEditor(ctx: RequestContext, projectId: string): Promise<void> {
-  if (!(await canEditProject(ctx, projectId))) throw new HttpError(403, "only an organization admin can change this", "not_admin");
+  if (!(await canEditProject(ctx, projectId))) throw new HttpError(403, "only an organisation admin can change this", "not_admin");
 }

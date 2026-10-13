@@ -769,7 +769,7 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
     case "welcome":
       return "";
     case "orgSettings":
-      return "Organization settings";
+      return "Organisation settings";
     case "mySettings":
       return "Your settings";
     case "inbox":

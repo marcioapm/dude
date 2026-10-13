@@ -49,7 +49,7 @@ describe("escalationWords", () => {
     expect(escalationWords({ reason: "pull_request_conflict", detail: { repo: "web", number: 4 }, at }).sentence).toContain("web #4 conflicts");
     expect(escalationWords({ reason: "ci_stuck", detail: { repo: "api", number: 2 }, at }).short).toBe("CI is stuck");
     expect(escalationWords({ reason: "pr_loop_exhausted", detail: { spent: ["web"], total: 5 }, at }).sentence)
-      .toBe("The pull request in web has had 5 fixes, the most the organization allows for one.");
+      .toBe("The pull request in web has had 5 fixes, the most the organisation allows for one.");
   });
 });
 

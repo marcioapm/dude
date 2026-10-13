@@ -66,7 +66,7 @@ export function MembersSection({ client, me, people, onChanged }: {
       />
       <CardBody>
         <p className="muted">
-          Everyone here can create, deliver and steer tasks. Admins manage the organization: its members and its settings.
+          Everyone here can create, deliver and steer tasks. Admins manage the organisation: its members and its settings.
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {people.length > 0 ? (

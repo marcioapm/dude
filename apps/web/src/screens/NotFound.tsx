@@ -13,7 +13,7 @@ export function NotFound({ what, onBack }: { what: "task" | "run" | "epic" | "pr
         icon="search"
         // A session you are not in is not shown to exist either.
         title={what === "session" ? "This session doesn't exist, or you're not in it" : `This ${what} doesn't exist (or was deleted)`}
-        description="The link may be old, or for another organization."
+        description="The link may be old, or for another organisation."
         action={<Button variant="secondary" leadingIcon="arrow-right" onClick={onBack} data-testid="not-found-back">Go to the board</Button>}
       />
     </div>
