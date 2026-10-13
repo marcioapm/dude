@@ -822,8 +822,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ToolCalled: {
         const callId = String(payload.callId ?? event.eventId);
-        // A replay after resume/move must preserve the completed call and its children.
-        if (toolsByCall.get(callId)?.endedAt) break;
+        // A replay after resume/move must preserve the completed call and its children. A replay is the same
+        // call reported again; an id reused for another tool is a new call.
+        const prior = toolsByCall.get(callId);
+        if (prior?.endedAt && prior.tool === tool) break;
         state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const placeholder = toolsByCall.get(callId);
         if (placeholder && state.placeholderCalls.has(placeholder)) {

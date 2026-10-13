@@ -777,8 +777,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   with `role="subagent"` directly under the call's `ToolCallCard`, one per
   child, side by side when one turn started several. Its title is the
   description the parent gave and the subagent type; inside, its tool calls
-  and messages (never its thinking). Live it stays open; done, it folds to
-  its summary, turns, cost and duration.
+  and messages (never its thinking). In dude it is always a folded row:
+  the rail's Subagents block opens its transcript in a side panel; its own
+  children are folded rows there, navigating that same panel.
   The gallery's child-session examples mount only once they near the screen,
   so offscreen examples add no animation load to unrelated examples.
 - **Waiting.** A live child blocked on something nothing in the Run can
@@ -1795,6 +1796,11 @@ MarkdownCheatsheet.
   since, detail?}}` is a live thread blocked on what nothing in it can
   answer: attention rail and wash, "waiting <dur> on <on>" with the pause
   glyph in its header, `data-waiting="true"`; not an activity kind.
+  `openOnly collapsed onOpen={…}` renders a folded row at every depth:
+  click, Enter and Space open the separate transcript, never disclose a body.
+  The whole row, summary included, is `data-open-only="true"` with the
+  pointer cursor and hover wash. There is no disclosure chevron or nested Open button; waiting detail belongs
+  in the separate transcript. Other callers retain the depth-aware disclosure.
 - **QuestionCard** — an agent's question (or up to four, `items`) to a
   person as a turn. Waiting it is the loudest turn in the transcript
   (attention wash and bar, live avatar, a muted ticking wait clock; no badge
