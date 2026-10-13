@@ -23,6 +23,7 @@ import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerRelationRoutes } from "./api/routes/relations.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
+import { registerCoordinationRoutes } from "./api/routes/coordination.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { registerPushRoutes } from "./api/routes/push.ts";
 import { registerGithubOAuthRoutes } from "./api/routes/githubOAuth.ts";
@@ -70,6 +71,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerWorkRoutes(router);
   registerRelationRoutes(router);
   registerStructureRoutes(router);
+  registerCoordinationRoutes(router);
   registerInterventionRoutes(router);
   registerPushRoutes(router);
   registerPeopleRoutes(router);

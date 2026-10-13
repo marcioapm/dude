@@ -173,6 +173,7 @@ gallery for every value.
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
+| Peer | `--ds-peer-solid`, `--ds-peer-wash`, `--ds-peer-wash-hover`, `--ds-tint-peer{,-hover}` | Teal-cyan (OKLCH h 192) for a message between agents, drawn only as its wash (8%, 10% hovered). Not a tone, not a role. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
 | Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels, badges and key caps only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
 | Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
@@ -209,6 +210,27 @@ Machado 2009 protan and deutan at severity 1.0, slots that share a colour
 counted once) and keeps every role colour more than ΔE 3 from the attention
 fg, mark and solid (every way needs-you is drawn) in normal vision. `test/palette.test.ts` holds the WCAG half: the text
 ladder, tone and role foregrounds, link, focus ring and button label.
+
+The **peer** slot (`peer` in `palette.ts`) is the background of a message
+between agents, and nothing else. The other message backgrounds were
+taken: accent (a person's steer), attention (a waiting question, the
+needs-you block), danger (a failed tool call) and the neutral row hover.
+The free bands sit between the role hues; of the two candidates, teal-cyan
+near h 192 (between the implementer and the investigator) beat
+violet-magenta near h 320 (between the conductor and the QA pink): at its
+best tuning the violet wash lands ΔE 0.4 from the steer wash for protans
+(teal's worst is 1.1), and it sits on the merged and conductor violets.
+Teal-cyan's solid is ΔE ≥ 9.8 from success's solid in normal vision. The
+solid is held to normal ≥ 9, protan/deutan ≥ 7 against every tone solid,
+the accent and every role — below the roles' own 15 / 8 / 8, because it is
+never a mark of identity. The wash is 8% over the surface or raised thread,
+10% hovered (`tints.peer`/`peerHover`). The resting 8% wash composited on
+surface measures ≥ ΔE 1 from the resting steer wash, question wash and
+failed fill in all three simulations, and ≥ 2.5 off the surface in normal
+vision. The background supplements the role rail, face and Peer/Reply
+label; this floor does not guarantee background-only recognition under
+CVD. The highlight's 9 / 12% was too strong: at 12% the dark "Not sent"
+danger ink and the tag's secondary ink on the raised thread fall under 4.5:1.
 
 The neutrals are the same idea turned down. Surfaces are grey with the
 faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close
@@ -512,6 +534,76 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   where "Sent as" would be. While the conductor asks, it steps back to the
   waiting line, as in an agent session; the answer is given in its
   question's turn.
+
+### Peers (agents on an epic)
+
+- A task's agent can read and write to its peers: the other tasks on its
+  epic (and, once links exist, tasks linked to it by "depends on"). A
+  **`PeerMessage`** is the turn for it: on the **peer wash**
+  (`--ds-peer-wash`, `--ds-peer-wash-hover` hovered), the sender's role
+  face and a 2px rail in the sender's role colour (the thread rule, as
+  `ChatRunLine`): the wash says "between agents", the rail says who. In
+  the transcript and in a Coordination thread alike, so a peer message
+  never reads as the implementer's own turn.
+  "ABS-4 Implementer → ABS-2", a neutral **Peer** or **Reply** tag, and its
+  delivery in a steer's words ("sent 13:43 · read 13:43:52, after Bash";
+  queued, "Lands at ABS-2's next step. Nothing is interrupted.", the rail
+  dashed; no Run going, "ABS-3 has no Run going; it will see this when its
+  next Run starts."). In the sender's transcript it says "Sent · carrying
+  on": sending never blocks. A refused one says "Not sent: …" in danger
+  ink where the delivery line would be. A peer message wears the peer
+  wash; its rail stays its sender's role colour; never accent or
+  attention, never a person's face.
+- **A thread between agents is read only for people.** `PeerThread` has no
+  composer and no Reply; its head says the pair (`TaskChip showRole`) and
+  its state (waiting, "No reply from ABS-1 yet · nobody waits", answered),
+  its foot who writes in it. Under 520px the chips drop their role words.
+- **Waiting on a peer is not needs-you.** Where the Run stopped,
+  `PeerWaitLine` says it and why ("ran `dude wait pm_1`", or "turn ended
+  with its question to ABS-2 unanswered") and when it parks; once over, how
+  it ended (answered, the peer's task ended without replying). The Run's
+  header carries `Badge icon="clock"` "Waiting on ABS-2 · parks in 10 min"
+  (`statusNote`), the tree and board say it as activity, the epic card
+  carries **`PeerWaitMark`** in `EpicCard waiting`. None takes a tone or
+  the peer wash (it is a line about a message, not the message), or
+  counts in Waiting on you. `PeerWaitLine.now` accepts a Date, ISO string
+  or epoch milliseconds (defaults to `Date.now()` at render); pass a ticking
+  value with the header, and a fixed value in specimens/tests.
+- **`TaskChip`** names a task inline wherever peers are named: status mark,
+  mono key, role face, on the neutral active wash (also inside a peer
+  message: it names a task, it is not one); a button that says what it opens ("Open ABS-2, …:
+  its implementer"), or an image with that name. A peer by link carries a
+  neutral "depends on ABS-2 · project jervasion" chip in `PeerList`.
+- **`PeerList`** is what `list_tasks --peers` returns, as rows: `tool` (a
+  tool call's result: branch @ head, files by churn, what it last said in
+  quotes, "1 message for you"), `page` (the Coordination view's tasks, on
+  the raised shade) and `rail` (chip, title, phase). The caller's own row
+  says "you" and nothing else. It is named by `label`.
+- **Epic notes** are numbered and never edited, at most 10 at a time:
+  `Section limit` ("Epic notes 3 of 10", named "3 of at most 10 notes"; the
+  standalone `EpicNoteCount` says the same). **`EpicNote`** on the epic's
+  Coordination view says who pinned it (a person; an agent on its person's
+  face, "Implementer on ABS-2"; or "From a brainstorm session, filed by
+  Márcio"), when, "replaces note 3", "read by 3 of 4 agents", and a person's
+  two quiet actions, Replace and Retire. Replaced or retired, it is history:
+  "Replaced by note 4 at 13:51", "Retired by Márcio at 15:26", no actions,
+  folded under the current ones by **`EpicNoteHistory`** (one button line,
+  `aria-expanded` / `aria-controls`). **`EpicNoteRow`** is an agent's own
+  `note` call in its aside. The `pin` glyph is theirs alone.
+- **A note added, replaced or retired is an `EpicNoteNotice`** in every
+  transcript on the epic, where the agent was told: one quiet line on the
+  text column with the pin, never a face, a rail, a tag or the peer wash,
+  so it never reads as someone speaking. A replace shows the words that changed and what they
+  were (`noteWordChange` finds them from the two texts); a retire, "no
+  longer in force:" in muted ink.
+- **A conductor's digest** is **`SinceDigest`**, folded, just before the
+  briefing that told it: what the conductor was told of its epic, never a
+  wake, never a tone.
+- **A brainstorm proposes notes; it never pins them.** `ProposalCard`'s
+  epic item takes `notes`, drawn under its description on the hover wash,
+  headed by the pin and "2 epic notes, pinned when it is filed"; a `note`
+  item ("Note on …", "Replace note 3 on …", its texts as Now and After)
+  counts as "note" in `proposalSummary`.
 
 ### Brainstorm sessions
 
@@ -1437,7 +1529,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Every agent role has its own glyph (`ROLE_ICON` in `AgentAvatar`), the
   brainstorm's a bulb (`brainstorm`), also on each brainstorm session in a
   list. `shared` (two people) marks a brainstorm session someone else is in
-  too (`SharedMark`, `SidebarSessions`).
+  too (`SharedMark`, `SidebarSessions`). `pin` is an epic note's and
+  nothing else's (`EpicNote`, `EpicNoteNotice`, `EpicNoteRow`, a proposal's
+  notes).
 
 ### Numbers and identifiers
 
@@ -1731,7 +1825,7 @@ once; an item's `descriptionMono` and `descriptionWraps` set its second
 line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
 is not an item, for what the menu cannot list, and the menu's description
 for a screen reader, whose menu mode reads items alone), Skeleton/SkeletonLines/Spinner, EmptyState,
-ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+ScrollArea, Section (`count`, and `limit` for "3 of 10"), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
@@ -1835,6 +1929,26 @@ MarkdownCheatsheet.
 - **DeciderLine** — who takes a task's decisions, and the way to hand
   them back.
 - **StartChoice** — the ways to start a task, equal, side by side.
+
+`src/components/Peer.tsx` — agents on an epic (the rules are under *Peers*):
+
+- **TaskChip** — a task named inline: status mark, mono key, role face;
+  a button (`onOpen`) or a named image. `showRole` adds the role's word.
+- **PeerMessage** — a message between two tasks' agents as a turn
+  (`msg`, `viewer`, `compact`, `replyToText`, `waiting`, `carryingOn`,
+  `refused`); `delivery` queued / read / inbox.
+- **PeerThread** — two tasks' thread, read only: subject, pair, state
+  (`waiting` / `open` / `answered`), messages, foot.
+- **PeerWaitLine** — where a Run stopped to wait on a peer (`how` wait /
+  turn-ended, `parksAt`), and how the wait `ended`.
+- **EpicNote / EpicNoteCount / EpicNoteHistory / EpicNoteRow** — a pinned
+  note with Replace and Retire, the count against its bound, the folded
+  history, and an agent's own `note` call.
+- **EpicNoteNotice** — a note added, replaced or retired, where an agent
+  was told (`noteWordChange`, `noteLine`, `noteTitle` are its words).
+- **SinceDigest** — a conductor's "since you last looked", folded.
+- **PeerWaitMark** — "ABS-4 waits on ABS-2", every pair in its name.
+- **PeerList** — `list_tasks --peers` as rows: `tool`, `page`, `rail`.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `title` renders a plain-text name as the first `h1` (blank: `untitled`,
@@ -1894,6 +2008,9 @@ MarkdownCheatsheet.
 - **SearchResultRow / SearchResultList** — a ranked search result, in
   ArtifactRow's anatomy, expandable to why it ranked where it did.
 - **RefLead** — a task, epic, project or memory, as the sidebar draws it.
+- **EpicCard / EpicRow** — an epic in progress as a card (progress by lane,
+  pull requests, people, cost; `needsYou`, and `waiting` after the title for
+  a `PeerWaitMark`; `actions` in the corner), planned and done ones as rows.
 - **EntityLine / PersonLine / AuthorLine** — a named thing, a person, an
   author (person, agent for a person, or dude) in a row.
 - **RemovableList** — attached things, each removable.
@@ -2047,7 +2164,8 @@ sessions*):
   as whoever presses File; with nothing left for the person looking to
   file, one line in the Chat (what became of it, who filed it) that opens
   the card read only (`defaultOpen` starts it open). An item nobody can
-  file keeps the card open.
+  file keeps the card open. An epic item's `notes` are drawn under it,
+  pinned when it is filed; a `note` item adds or replaces one.
 - **SessionTitle** — the session's name in its header: "New session"
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:

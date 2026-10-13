@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // run_diff reads what run_diffs stores (migration 050, written by
@@ -25,6 +27,7 @@ const (
 
 type runDiffIn struct {
 	Run        string   `json:"run,omitempty" jsonschema:"a Run of this task (run_…); empty is your own"`
+	Task       string   `json:"task,omitempty" jsonschema:"a peer's key (like ABS-2) instead of a Run: its current Run's stored diff, or its latest if none is going"`
 	Paths      []string `json:"paths,omitempty" jsonschema:"files to show the changes of, as the list names them (exact); empty lists the files"`
 	NameStatus bool     `json:"nameStatus,omitempty" jsonschema:"list only each file's path and status (M, A, D, R): the cheapest form"`
 	Limit      int      `json:"limit,omitempty" jsonschema:"files per page of the list, 1 to 1000 (default 200)"`
@@ -104,6 +107,25 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 		return nil, refuse("nameStatus, limit and offset page the file list; with paths, leave them out")
 	}
 	runID := strings.TrimSpace(in.Run)
+	if key := strings.TrimSpace(in.Task); key != "" {
+		if runID != "" {
+			return nil, refuse("name a run or a task, not both")
+		}
+		peer, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, refuse("%s", delivery.NotAPeer(key))
+		}
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((`+peerDiffRun+`), '')`, peer.ID).Scan(&runID); err != nil {
+			return nil, err
+		}
+		if runID == "" {
+			return nil, refuse("%s has had no Run yet: nothing has changed", peer.Key)
+		}
+		return storedDiff(ctx, tx, runID, paths, in)
+	}
 	if runID == "" {
 		runID = c.RunID
 	}
@@ -120,13 +142,18 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 	if task != c.TaskID {
 		return nil, refuse("run %s is not of your task: only your task's runs can be read", runID)
 	}
+	return storedDiff(ctx, tx, runID, paths, in)
+}
 
+// storedDiff reads one Run's stored snapshot: its files, or the lines of
+// the paths asked for.
+func storedDiff(ctx context.Context, tx pgx.Tx, runID string, paths []string, in runDiffIn) (any, error) {
 	head := diffHeader{Run: runID}
 	listed, picked := []byte("[]"), []byte("[]")
 	var updated time.Time
 	// The list without its hunks, and the hunks only of the files asked for:
 	// a join, so many paths are hashed rather than each searched for.
-	err = tx.QueryRow(ctx, `SELECT d.base, d.final, d.updated_at,
+	err := tx.QueryRow(ctx, `SELECT d.base, d.final, d.updated_at,
 			COALESCE((SELECT jsonb_agg(f - 'hunks') FROM jsonb_array_elements(d.files) f), '[]'),
 			COALESCE((SELECT jsonb_agg(f) FROM jsonb_array_elements(d.files) f
 				JOIN (SELECT DISTINCT unnest($2::text[]) AS path) asked ON asked.path = f->>'path'), '[]')

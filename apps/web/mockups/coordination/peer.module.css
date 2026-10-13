@@ -1,0 +1,608 @@
+/*
+ * Proposed design-system pieces for agents coordinating on an epic. Built
+ * here, in the mockup, to DS standard (tokens only, both themes and
+ * densities, accessible names); docs/design/agent-coordination.md lists
+ * each with its props and the README text it would add.
+ *
+ * Colour rule: a peer is identified by its role colour (who), never by a
+ * tone (what state). Nothing here takes the accent (a person's steer) or
+ * attention (needs you); waiting on a peer is neutral ink with a clock.
+ */
+
+.taskChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+button.taskChip:hover {
+  background: var(--ds-color-row-hover);
+}
+button.taskChip:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 1px;
+}
+.taskKey {
+  font-family: var(--ds-font-mono);
+  font-weight: var(--ds-weight-medium);
+}
+.taskChipRole {
+  color: var(--ds-color-text-muted);
+}
+
+/* --- PeerMessage: a turn on the transcript's grid --------------------------- */
+
+.peer {
+  --rail: var(--ds-color-border-strong);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
+  column-gap: var(--ds-space-chat-avatar-gap);
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
+  min-width: 0;
+  /* The thread's rail: a bar in the sender's role colour, as ChatThread and ChatRunLine draw one. */
+  box-shadow: inset 2px 0 0 var(--rail);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-chat);
+}
+.peer:hover {
+  background: var(--ds-color-row-hover);
+}
+.peer[data-queued="true"] {
+  box-shadow: none;
+}
+.peer[data-queued="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(to bottom, var(--rail) 0 4px, transparent 4px 7px);
+}
+.conductor { --rail: var(--ds-role-conductor-solid); }
+.investigator { --rail: var(--ds-role-investigator-solid); }
+.implementer { --rail: var(--ds-role-implementer-solid); }
+.reviewer { --rail: var(--ds-role-reviewer-solid); }
+.simplifier { --rail: var(--ds-role-simplifier-solid); }
+.qa_browser { --rail: var(--ds-role-qa-browser-solid); }
+
+/* Compact: inside a thread on the Coordination view, a 24px face. */
+.peer.compact {
+  grid-template-columns: var(--ds-size-avatar-md) minmax(0, 1fr);
+  column-gap: var(--ds-space-12);
+  margin-top: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-normal);
+}
+.gutter {
+  padding-top: var(--ds-space-2);
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--ds-space-8);
+  row-gap: var(--ds-space-2);
+  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
+}
+.compact .head {
+  min-height: 0;
+}
+.name {
+  font-size: var(--ds-text-prose);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.compact .name {
+  font-size: var(--ds-text-md);
+}
+.arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+/* The tag says what the turn is, in the human turns' tag grammar, neutral. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--ds-size-badge-sm);
+  padding: 0 5px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-caps);
+  line-height: 1;
+  text-transform: uppercase;
+}
+.time {
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.body {
+  min-width: 0;
+  color: var(--ds-color-text-primary);
+}
+.replyTo {
+  display: flex;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  padding-left: var(--ds-space-8);
+  border-left: 2px solid var(--ds-color-border-strong);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-secondary);
+}
+.replyToLabel {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.replyToText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One line under the body: where it lands, or that the sender waits. Secondary ink, never a tone. */
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-2) var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-secondary);
+}
+.note b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.noteMuted {
+  color: var(--ds-color-text-muted);
+}
+.dangerNote {
+  composes: note;
+  color: var(--ds-tone-danger-fg);
+}
+
+/* --- EpicNote --------------------------------------------------------------- */
+
+.epicNote {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-12);
+  background: var(--ds-color-raised);
+  min-width: 0;
+}
+.pin {
+  padding-top: 3px;
+  color: var(--ds-color-text-secondary);
+}
+.noteText {
+  min-width: 0;
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-md);
+}
+.noteBy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  margin-top: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.noteByWho {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-secondary);
+}
+/* In a transcript: a row of the agent's aside, as ChatEvent is. */
+.noteInline {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  column-gap: var(--ds-space-8);
+  align-items: start;
+  padding: var(--ds-space-aside-y) var(--ds-space-8);
+  background: var(--ds-color-hover-wash);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  min-width: 0;
+}
+.noteInlineHead {
+  color: var(--ds-color-text-secondary);
+  font-weight: var(--ds-weight-medium);
+}
+.noteInlineText {
+  color: var(--ds-color-text-primary);
+}
+.noteNum {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.noteAction {
+  display: inline-flex;
+  gap: var(--ds-space-4);
+  margin-left: auto;
+}
+/* Section's count, with its bound: muted, tabular, out of the label's capitals. */
+.noteCount {
+  margin-left: var(--ds-space-6);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ds-color-text-muted);
+}
+/* A replaced note: kept for the record, its words in secondary ink. */
+.epicNoteReplaced .noteText {
+  color: var(--ds-color-text-secondary);
+}
+.noteReplacedBy {
+  color: var(--ds-color-text-secondary);
+}
+
+/* The replaced notes, folded under the current ones: one quiet button line, as SinceDigest. */
+.noteHistory {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.noteHistoryLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-height: var(--ds-size-row-item-sm);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  background: transparent;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  text-align: left;
+}
+.noteHistoryLine:hover {
+  background: var(--ds-color-row-hover);
+}
+.noteHistoryLine:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.noteHistoryHint {
+  color: var(--ds-color-text-muted);
+}
+.noteHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* --- A proposed epic's notes, under its description on a ProposalCard ------ */
+
+.proposedNotes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin-top: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-hover-wash);
+}
+.proposedNotesHead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.proposedNotesList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding: 0 0 0 var(--ds-space-16);
+  color: var(--ds-color-text-primary);
+}
+
+/* --- EpicNoteNotice: the epic's record changed, in a transcript's margin ---- */
+
+/*
+ * Laid on the transcript's text column (past the avatar gutter) so it reads
+ * as part of the flow, not as a turn: no face, no rail, no tag, no fill.
+ * A peer message has all four; a ChatNotice is centred between hairlines.
+ */
+.noteNotice {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  column-gap: var(--ds-space-8);
+  align-items: baseline;
+  margin: var(--ds-space-4) 0;
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x) var(--ds-space-2) calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-muted);
+}
+.noteNoticeGlyph {
+  align-self: start;
+  padding-top: 2px;
+  color: var(--ds-color-text-muted);
+}
+.noteNoticeBody {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.noteNoticeClamp {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.noteNoticeCode {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+.noteNoticeLead {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.noteNoticeBy {
+  color: var(--ds-color-text-muted);
+}
+.noteNoticeText {
+  color: var(--ds-color-text-secondary);
+}
+.noteNoticeWas {
+  color: var(--ds-color-text-muted);
+}
+
+/*
+ * PeerWaitLine: where the Run stopped to wait on a peer. The notice's
+ * grid and inks with the clock in place of the pin: the Run's own state,
+ * neutral, never attention.
+ */
+.waitLine {
+  composes: noteNotice;
+}
+
+/* --- PeerThread (the Coordination view) ------------------------------------ */
+
+.thread {
+  container: thread / inline-size;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-raised);
+  min-width: 0;
+}
+.threadHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6) var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+.threadSubject {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+  margin-right: auto;
+  min-width: 0;
+}
+.threadPair {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  color: var(--ds-color-text-muted);
+}
+/* A phone: the chips keep key, status and face; the role is in the face and its label. */
+@container thread (max-width: 520px) {
+  .threadPair .taskChipRole {
+    display: none;
+  }
+  .threadSubject {
+    flex-basis: 100%;
+  }
+  .threadFoot {
+    flex-wrap: wrap;
+  }
+}
+.threadState {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.threadFoot {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-4) var(--ds-space-12) var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.threadFoot > :last-child {
+  margin-left: auto;
+}
+
+/* --- SinceDigest ------------------------------------------------------------ */
+
+.digest {
+  margin: var(--ds-space-4) 0;
+  padding: 0 var(--ds-space-chat-pad-x) 0 calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+}
+.digestLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  width: 100%;
+  min-height: var(--ds-size-row-item-sm);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  text-align: left;
+}
+.digestLine:hover {
+  background: var(--ds-color-row-hover);
+}
+.digestLine:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.digestTitle {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+  white-space: nowrap;
+}
+.digestCounts {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-muted);
+}
+.digestWhen {
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.digestBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-6) 0 var(--ds-space-4);
+}
+.digestGroup {
+  margin: var(--ds-space-6) var(--ds-space-8) var(--ds-space-2);
+}
+.digestItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: var(--ds-space-8);
+  align-items: baseline;
+  padding: var(--ds-space-2) var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-primary);
+}
+.digestItem > :first-child {
+  align-self: center;
+}
+
+/* --- PeerWaitMark ----------------------------------------------------------- */
+
+.waitMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+
+/* --- PeerList: what `list_tasks --peers` returns, and the Coordination view's tasks ---- */
+
+.peers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.peerRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-raised);
+  font-size: var(--ds-text-sm);
+  min-width: 0;
+}
+.peers.dense .peerRow {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  background: transparent;
+}
+.peerLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.peerTitle {
+  min-width: 0;
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.peerFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2) var(--ds-space-12);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  min-width: 0;
+}
+/* A peer by "depends on" in a rail: the link on its own line, secondary ink. */
+.peerLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  flex-basis: 100%;
+  color: var(--ds-color-text-secondary);
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.peerSaid {
+  color: var(--ds-color-text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}

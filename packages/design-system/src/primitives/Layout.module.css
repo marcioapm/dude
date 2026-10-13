@@ -87,6 +87,11 @@
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
 }
+/* "3 of 10": a bound read as words, out of the label's capitals. */
+.sectionLimit {
+  text-transform: none;
+  letter-spacing: normal;
+}
 
 .callout {
   display: flex;

@@ -17,12 +17,15 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 |---|---|---|
 | `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides. The goal is required, at least 16 characters trimmed, as a person's is (`GoalMin`, `TASK_GOAL_MIN`) | implementer, investigator, conductor |
 | `create_epic` | a new epic in the project | investigator |
-| `list_tasks` | the project's epics and tasks, with status and keys | all |
+| `list_tasks` | the project's epics and tasks, with status and keys. With `peers: true` (`dude task list --peers`), the caller's peers instead (`task_peers`, migration 114: the other tasks on its epic; none off an epic), its own task marked `self`: each one's key, title, status, newest phase Run's phase and role, `run` live / parked / none, the peer it waits on, branch and head per repository, files by churn from the stored `run_diffs` snapshot (top 10 of `fileCount`), its agent's last message (one paragraph, ≤ 600 characters), and its unread messages to the caller (`messagesForYou`, `waitsOnYourReply`) | all |
 | `search_memory` | search the project's history: tasks, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
 | `ask_person` | decisions only a person can make; the turn ends and the answers are the next input. The only way an agent asks: the question block is gone. Either today's `{question, choices?: string[], actions?}` or `{questions: [{header, question, choices?: [{label, description?, recommended?}], multiple?}]}` — 1 to 4 questions asked together (header ≤ 24 characters and required when several, question ≤ 4000, 0–6 choices, label ≤ 120, description ≤ 300, at most one recommended, labels distinct); exactly one of the two, refused readably otherwise. From the shell: `dude ask "Q" --choice C`, or `dude ask --questions-json '[…]'` with the same array, sent to the same tool. dude adds "Something else…" (the person's own words) to every question: the agent never lists an "other". Kept whole in `questions.items` (migration 104); `prompt` is the question for one, "4 questions: Retry scope, …" for several, and `options` one question's labels. The person answers every question at once in the question's turn (`{answers: [{choices, text}], note?, attachmentIds?}` on the answer route; `{text}` still answers one); the answers are kept in `questions.answers`, and the agent is told them as one message ("Answers to your 4 questions: …", each question with its answer, then "Also from <name>:" and the note). One question's answer and directive are exactly as before ("Answer to your question %q"), which the pull request gate and an escalation's question match on. A conductor's is answered in its task's Chat. A conductor's asked while its delivery waits at an escalation is that escalation's question — one question, never several: its `choices` each need an `actions` entry naming one of the escalation's actions; the owner picking a choice decides the escalation as the banner does, and the banner closes the question (`question.closed`). A brainstorm session's takes `to` too: the member named answers the whole ask | implementer (and so the fixer), investigator, conductor |
 | `dude publish` | a file for people, from the shell: `dude publish FILE [--name NAME] [--description TEXT]`, the description one short line of what the file is for. It runs lux's `/.lux/bin/lux-shim publish` and answers with its JSON, `{"id","name","size","sha256"}`; a refusal is lux-shim's own words on stderr and its exit status. The file is listed with the task or session while the Run goes on (lux's `artifact.published` on the Run's stream, recorded by the translator), and the same name again is a new version. Agents are told only of `dude publish`, never a directory or `lux-shim`. On an older lux (`$LUX_ARTIFACTS` set) it copies the file there instead and drops the description, collected when the Run stops | all |
 | `request_repository` | ask for another repository of the organization, read or write, with a reason; a person approves or denies (#45) | all |
-| `run_diff` | what a Run of the caller's task changed (`dude diff`): its checkout, uncommitted work included, against the commit it started from, as stored in `run_diffs` — one snapshot, no history. Without paths, the files by churn with counts and no lines (paged, 200 by default, at most 1,000); `nameStatus`, path and status only; with paths, those files as unified diff text, at most 2,000 lines a call. Another task's Run is refused | all |
+| `run_diff` | what a Run of the caller's task changed (`dude diff`): its checkout, uncommitted work included, against the commit it started from, as stored in `run_diffs` — one snapshot, no history. Without paths, the files by churn with counts and no lines (paged, 200 by default, at most 1,000); `nameStatus`, path and status only; with paths, those files as unified diff text, at most 2,000 lines a call. Another task's Run is refused. With `task` (a peer's key; `dude diff --task ABS-2 [PATH…]`), that peer's newest implement / fix / simplify Run, a live one first, read from the same stored snapshot with the same paging and bounds; a task that is not a peer is refused as another task's Run is | all |
+| `message` | text to one peer task (`dude message ABS-2 "…" [--reply-to MSG]`), never a Run, never a broadcast. Never blocks: returns `{id, to, lands: next_step \| next_run, notice?}`. It is a directive (no `interrupt`) on the Run that speaks for the task — its newest live implementer, fixer or investigator; a reply goes to the Run that asked, while live — read at its next step; with none, it is held for the task's next such Run's prompt and `notice` says "ABS-3 has no Run going; it will see this when its next Run starts." A task that is done, failed or aborted is refused ("ABS-3 is done: no Run will read this. …"). At most `SteerTextMax`; at most 5 per Run in any rolling hour, the sixth refused saying when the next is allowed. A reply to one's own message closes one's own question. Refusals are `agent.message.refused` | implementer (and so the fixer), investigator, conductor |
+| `wait_for_reply` | ends the turn until the reply to one of the caller's own messages (`dude wait MSG`); returns the reply at once if it has come, or the peer-ended line, opening nothing, if the peer's task has ended. One open wait per Run | implementer, investigator, conductor |
+| `note` | pins a note on the caller's epic (`dude note "…" [--replaces N]`), numbered, never edited; with `replaces`, a new note in N's place. Returns `{id, n, replaces, told, current}`. At most 2,000 characters and 10 current notes ("This epic has 10 notes. Replace one (`dude note --replaces N`) instead."); a replace never counts. Agents cannot retire | implementer, investigator, conductor |
 | `findings` | the caller's task's review findings (`dude findings [ID...]`), open and most severe first, at most 200: each one's id, severity, category, repository, `file:line`, status, who raised it and how it was settled — fixed by which Run, accepted by a person, superseded, or open after so many fix attempts. No text in the list: with `ids` (at most 20) those findings in full — title, description, suggested fix, resolution note — and `unknown` for ids that are not the task's | conductor |
 | `pull_requests` | the caller's task's pull requests (`dude prs`): repository and number, URL, state, head branch and commit, base, checks (the roll-up and each check's status and conclusion), review (the roll-up and each reviewer's word), unresolved threads, and the feedback people left — the latest 50, oldest first, each with its author, kind (comment, line comment, review, changes requested), path, an excerpt of at most 280 characters on one line, whether a fixer Run was sent it (`actedOnBy`, matched on its repository, path, author and words in the Run's `pr_feedback`) and why it woke nobody (`ignored`); `feedbackTotal` counts all of it | conductor |
 | `start_phase` | the decision the task's delivery waits on (`dude phase start PHASE`): a phase Run from the task's head — implement, review (`categories`, else those the change warrants), fix (`findings`, else every open one; at pull request feedback, the feedback), simplify or test — created by the workflow's own steps, marked with the conductor (`runs.conductor_run_id`) and its `note`. Refused past the policy's review rounds, fix attempts per finding or pull request fix rounds | conductor, deciding |
@@ -95,6 +98,36 @@ approved.
   parked (`dude_pause = 'conductor'`) with nothing open for anyone: it
   raises nothing and the task does not move. The next message in Chat
   resumes it (`run_resumes.cause = 'conductor'`).
+
+## Waiting on a peer
+
+Agents on one epic coordinate (docs/design/agent-coordination.md). Waiting
+on a peer's reply is waiting on a person, with a peer at the other end:
+
+- **An open `peer_waits` row is part of `OpenAsk` and `HoldsTurn`**
+  (`delivery/store.go`). `wait_for_reply` opens one (`how = 'wait'`); a
+  turn that ends with the Run's newest question to a peer unanswered — a
+  message opening a thread with no reply in it, the peer's or its own —
+  opens one at the turn's end (`how = 'turn_ended'`,
+  `delivery.WaitOnUnansweredTx`, from the translator's `idle`). Either way
+  the turn is not done: the Run waits, does not complete, and its delivery
+  does not move on.
+- **Same grace, same park.** Past `parkAfterMinutes` it is parked
+  (`dude_pause = 'person'`, reason "parked while it waits on a peer's
+  reply"); the reply closes the wait and is queued for the Run as a
+  directive, which is the resume's input. `run_resumes.woken` counts the
+  wait's close.
+- **Closing a question without an answer** is replying to one's own
+  message, saying what one assumed: the wait closes (`closed_by = 'self'`)
+  and the turn may end.
+- **Waits die with their Run** (trigger `runs_close_peer_waits`, as
+  questions do): `closed_by = 'run_ended'`, `agent.peer.wait_ended`.
+  Messages to the Run's task stay for its next Run.
+- **No conductor is woken by any of it.** A message is never queued on a
+  conductor unless it is a reply the conductor itself waits on or the
+  conductor is mid-turn; note changes are not told to conductors at a step.
+  A conductor reads its epic's traffic in "Since you last looked, on this
+  epic", in its next briefing or wake note (`delivery.ConductorDigestTx`).
 
 ## Identity and authority
 

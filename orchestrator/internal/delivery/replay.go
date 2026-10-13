@@ -529,6 +529,11 @@ func proposedLine(p map[string]any, filed []string) string {
 			parts[i] = fmt.Sprintf("%d. an edit to %s", i+1, it.Task)
 		case "comment":
 			parts[i] = fmt.Sprintf("%d. a comment on %s", i+1, it.Task)
+		case "note":
+			parts[i] = fmt.Sprintf("%d. a note on %q in %s", i+1, it.Epic, it.Project)
+			if it.Replaces != 0 {
+				parts[i] = fmt.Sprintf("%d. a note replacing note %d on %q in %s", i+1, it.Replaces, it.Epic, it.Project)
+			}
 		default:
 			parts[i] = fmt.Sprintf("%d. %s", i+1, it.Kind)
 		}
