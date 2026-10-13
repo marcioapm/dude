@@ -28,16 +28,20 @@ type TenantServer struct {
 	// ready, waking, asleep, stopped, unreachable, exited or "no answer".
 	State string `json:"state"`
 	// Its process in its Run: stopped, starting, ready, unreachable, exited.
-	Process       string     `json:"process"`
-	RunID         *string    `json:"runId"`
-	RunState      string     `json:"runState"`
-	LastRequestAt *time.Time `json:"lastRequestAt"`
-	Wakes         int        `json:"wakes"`
+	Process         string     `json:"process"`
+	RunID           *string    `json:"runId"`
+	RunState        string     `json:"runState"`
+	LastRequestAt   *time.Time `json:"lastRequestAt"`
+	Wakes           int        `json:"wakes"`
+	WakeRequestedAt *time.Time `json:"wakeRequestedAt"`
 	// When its state last changed.
 	Since time.Time `json:"since"`
 	// How long without a request before server.idle: a Go duration
 	// ("45m0s") or seconds; 0 is never.
 	IdleAfter json.RawMessage `json:"idleAfter"`
+	// How long an open wake waits before lux says "no answer", as
+	// IdleAfter is written.
+	WakeTimeout json.RawMessage `json:"wakeTimeout"`
 	// What its process starts with: nil command for a port only.
 	Port    int               `json:"port"`
 	Command []string          `json:"command"`
@@ -48,14 +52,19 @@ type TenantServer struct {
 }
 
 // IdleAfterDuration is IdleAfter read; 0 when absent or unreadable.
-func (s TenantServer) IdleAfterDuration() time.Duration {
+func (s TenantServer) IdleAfterDuration() time.Duration { return readDuration(s.IdleAfter) }
+
+// WakeTimeoutDuration is WakeTimeout read; 0 when absent or unreadable.
+func (s TenantServer) WakeTimeoutDuration() time.Duration { return readDuration(s.WakeTimeout) }
+
+func readDuration(raw json.RawMessage) time.Duration {
 	var str string
-	if json.Unmarshal(s.IdleAfter, &str) == nil {
+	if json.Unmarshal(raw, &str) == nil {
 		d, _ := time.ParseDuration(str)
 		return d
 	}
 	var secs float64
-	if json.Unmarshal(s.IdleAfter, &secs) == nil {
+	if json.Unmarshal(raw, &secs) == nil {
 		return time.Duration(secs * float64(time.Second))
 	}
 	return 0
@@ -100,12 +109,16 @@ type CreateServer struct {
 }
 
 // PatchServer is PATCH /v1/servers/{id}'s body (lux's PatchServerInput):
-// only the fields given change, at the server's next start.
+// only the fields given change. Port, command, workdir and env apply at the
+// server's next start; wakeTimeout at once, to an open wake too (lux
+// measures the wake from when it was asked for, with the timeout it has
+// now).
 type PatchServer struct {
-	Port    *int               `json:"port,omitempty"`
-	Command *[]string          `json:"command,omitempty"`
-	Workdir *string            `json:"workdir,omitempty"`
-	Env     *map[string]string `json:"env,omitempty"`
+	Port        *int               `json:"port,omitempty"`
+	Command     *[]string          `json:"command,omitempty"`
+	Workdir     *string            `json:"workdir,omitempty"`
+	Env         *map[string]string `json:"env,omitempty"`
+	WakeTimeout *string            `json:"wakeTimeout,omitempty"`
 }
 
 // SyncRef moves one repository of a Run (its spec's name) to a ref.

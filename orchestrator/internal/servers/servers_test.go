@@ -12,6 +12,81 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+type timeoutLux struct {
+	lux.Client
+	created lux.CreateServer
+}
+
+func (l *timeoutLux) ListServers(context.Context, string, ...string) ([]lux.TenantServer, error) {
+	return nil, nil
+}
+func (l *timeoutLux) CreateServer(_ context.Context, in lux.CreateServer) (lux.TenantServer, error) {
+	l.created = in
+	return lux.TenantServer{ID: "srv_test"}, nil
+}
+
+func TestCreateServerSendsTheChosenWakeTimeout(t *testing.T) {
+	l := &timeoutLux{}
+	p := &Previews{Service: &Service{Lux: l, PreviewDomain: "preview.test"}}
+	for _, minutes := range []int{15, 25, 5, 7} {
+		_, err := p.createServer(context.Background(), wakeRun{}, PreviewOf{TaskKey: "TEST-1", ProjectSlug: "test"}, lux.ServerInput{Name: "web", Port: 3000}, PreviewSettings{}, time.Duration(minutes)*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := time.ParseDuration(l.created.WakeTimeout)
+		if err != nil || got != time.Duration(minutes)*time.Minute {
+			t.Fatalf("create timeout %q, want %dm", l.created.WakeTimeout, minutes)
+		}
+	}
+}
+
+func TestWakeTimeoutChoiceAndOpenWakeProtection(t *testing.T) {
+	settings := PreviewSettings{FirstWakeTimeoutMinutes: 25, WakeTimeoutMinutes: 7}
+	for _, tc := range []struct {
+		settings PreviewSettings
+		ready    bool
+		want     time.Duration
+	}{
+		{PreviewSettings{}, false, 15 * time.Minute}, {PreviewSettings{}, true, 5 * time.Minute},
+		{settings, false, 25 * time.Minute}, {settings, true, 7 * time.Minute},
+	} {
+		if got := wakeTimeout(tc.settings, tc.ready); got != tc.want {
+			t.Fatalf("wakeTimeout(%+v, %v) = %v", tc.settings, tc.ready, got)
+		}
+	}
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) *time.Time { t := now.Add(-ago); return &t }
+	for _, tc := range []struct {
+		state     string
+		requested *time.Time
+		want      time.Duration
+		patch     bool
+	}{
+		{lux.SrvAsleep, nil, 5 * time.Minute, true},
+		{lux.SrvReady, nil, 5 * time.Minute, true},
+		{lux.SrvWaking, at(time.Minute), 5 * time.Minute, false},
+		{lux.SrvWaking, nil, 5 * time.Minute, false},
+		{lux.SrvWaking, at(time.Minute), 25 * time.Minute, true},
+		// The timestamp outlives the wake: open until it plus the current 15m.
+		{lux.SrvAsleep, at(14*time.Minute + 59*time.Second), 5 * time.Minute, false},
+		{lux.SrvNoAnswer, at(15 * time.Minute), 5 * time.Minute, true},
+		{lux.SrvNoAnswer, at(2 * time.Hour), 5 * time.Minute, true},
+		{lux.SrvAsleep, nil, 15 * time.Minute, false},
+	} {
+		cur := lux.TenantServer{State: tc.state, WakeTimeout: json.RawMessage(`"15m"`), WakeRequestedAt: tc.requested}
+		got := wakeTimeoutPatch(cur, tc.want, now)
+		if (got != nil) != tc.patch {
+			t.Fatalf("patch state %s requested %v want %v = %v", tc.state, tc.requested, tc.want, got)
+		}
+		if got != nil {
+			d, err := time.ParseDuration(*got)
+			if err != nil || d != tc.want {
+				t.Fatal(got, err)
+			}
+		}
+	}
+}
+
 func TestARecipeRunsThroughAShellAfterItsSetup(t *testing.T) {
 	setup := "npm ci"
 	for _, c := range []struct {
