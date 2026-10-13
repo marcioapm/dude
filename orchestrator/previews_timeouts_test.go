@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,19 @@ import (
 func (w *world) wakeTimeoutOf(id string) time.Duration {
 	sv, _ := w.lux.TenantServer(id)
 	return sv.WakeTimeoutDuration()
+}
+
+// setWakeTimeout changes a server's wake timeout in lux behind dude's back.
+func (w *world) setWakeTimeout(id, timeout string) {
+	w.t.Helper()
+	if _, err := w.previews.Lux.PatchServer(context.Background(), id, lux.PatchServer{WakeTimeout: &timeout}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// patchesOf is the PATCHes lux saw to one server, from call index from on.
+func (w *world) patchesOf(id string, from int) []string {
+	return slices.DeleteFunc(w.tenantCallsOf(id, from), func(c string) bool { return !strings.HasPrefix(c, "patch ") })
 }
 
 func TestPreviewWakeTimeoutStartsLongAndChangesAfterReady(t *testing.T) {
@@ -51,8 +65,8 @@ func TestPreviewWakeTimeoutStartsLongAndChangesAfterReady(t *testing.T) {
 	for range 5 {
 		w.pump()
 	}
-	if got := w.wakeTimeoutOf(web); got != 5*time.Minute {
-		t.Fatalf("rechecked within 30 seconds: timeout %v; lux saw %v", got, w.lux.TenantCalls()[calls:])
+	if patches := w.patchesOf(web, calls); len(patches) > 0 || w.wakeTimeoutOf(web) != 5*time.Minute {
+		t.Fatalf("rechecked within 30 seconds: timeout %v; lux saw %v", w.wakeTimeoutOf(web), patches)
 	}
 
 	// Over 30 seconds ago: the asleep preview takes the new setting.
@@ -76,15 +90,66 @@ func TestAServerWithNoRecordedWakeTimeoutIsSet(t *testing.T) {
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
-	old := "5m0s"
-	if _, err := w.previews.Lux.PatchServer(context.Background(), web, lux.PatchServer{WakeTimeout: &old}); err != nil {
-		t.Fatal(err)
-	}
+	w.setWakeTimeout(web, "5m0s")
 	mustExec(t, w.owner, `UPDATE preview_servers SET wake_timeout_s = NULL WHERE run_id = $1`, runID)
 	mustExec(t, w.owner, `UPDATE runs SET wake_timeouts_checked_at = NULL WHERE id = $1`, runID)
 	w.until("the first wake timeout set", func() bool { return w.wakeTimeoutOf(web) == 15*time.Minute })
 	if w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND wake_timeout_s = 900`, runID) != 1 {
 		t.Fatal("the timeout set was not recorded")
+	}
+}
+
+// One server off its wake timeout is patched although another of the same
+// preview is on it; the other is left alone.
+func TestOnlyTheServerOffItsWakeTimeoutIsPatched(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.recipe("api", 3001, "npm run api", "", nil, true)
+	_, runID := w.declare()
+	web, api := w.serverID(runID, "web"), w.serverID(runID, "api")
+	w.setWakeTimeout(api, "10m0s")
+	mustExec(t, w.owner, `UPDATE preview_servers SET wake_timeout_s = 600 WHERE lux_server_id = $1`, api)
+	mustExec(t, w.owner, `UPDATE runs SET wake_timeouts_checked_at = NULL WHERE id = $1`, runID)
+	from := len(w.lux.TenantCalls())
+	w.until("api's first wake timeout set", func() bool { return w.wakeTimeoutOf(api) == 15*time.Minute })
+	if patches := w.patchesOf(web, from); len(patches) > 0 || w.wakeTimeoutOf(web) != 15*time.Minute {
+		t.Fatalf("web: timeout %v; lux saw %v", w.wakeTimeoutOf(web), patches)
+	}
+	if w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND wake_timeout_s = 900`, runID) != 2 {
+		t.Fatal("api's new timeout was not recorded")
+	}
+}
+
+// A server marked gone keeps the wake timeout dude last recorded for it;
+// lux no longer lists it, so the sweep could never set it, and it does not
+// make the preview's timeouts due.
+func TestADeletedServersWakeTimeoutDoesNotKeepThePreviewDue(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.recipe("api", 3001, "npm run api", "", nil, true)
+	_, runID := w.declare()
+	api := w.serverID(runID, "api")
+	// Marked first, as attachAll and endInLux do, so the feed's
+	// server.deleted finds it gone already and leaves the preview live.
+	mustExec(t, w.owner, `UPDATE preview_servers SET deleted_at = now(), wake_timeout_s = 600 WHERE lux_server_id = $1`, api)
+	if err := w.previews.Lux.DeleteServer(context.Background(), api); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET wake_timeouts_checked_at = NULL WHERE id = $1`, runID)
+	from := len(w.lux.TenantCalls())
+	for range 5 {
+		w.pump()
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_timeouts_checked_at IS NULL`, runID) != 1 {
+		t.Fatal("the deleted server made the preview's wake timeouts due, or the preview ended")
+	}
+	if calls := w.lux.TenantCalls()[from:]; len(calls) > 0 {
+		t.Fatalf("lux saw %v", calls)
+	}
+	if w.count(`SELECT count(*) FROM preview_servers WHERE lux_server_id = $1 AND deleted_at IS NOT NULL AND wake_timeout_s = 600`, api) != 1 {
+		t.Fatal("the deleted server's row changed")
 	}
 }
 
@@ -97,10 +162,7 @@ func TestAWakePatchesTheWakeTimeoutBeforeTheStart(t *testing.T) {
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
-	other := "10m0s"
-	if _, err := w.previews.Lux.PatchServer(context.Background(), web, lux.PatchServer{WakeTimeout: &other}); err != nil {
-		t.Fatal(err)
-	}
+	w.setWakeTimeout(web, "10m0s")
 	from := len(w.lux.TenantCalls())
 	w.open(web)
 	// Later PATCHes (the later timeout, once it served) may follow the start.

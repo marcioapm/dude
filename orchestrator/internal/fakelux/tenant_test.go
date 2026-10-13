@@ -217,7 +217,11 @@ func TestAPatchedWakeTimeoutIsWithinLuxsBounds(t *testing.T) {
 		if tc.ok != (err == nil) || (err != nil && !isLux(err, 422, "invalid_server")) {
 			t.Fatalf("PATCH wakeTimeout %s: %v", tc.timeout, err)
 		}
-		if now, _ := c.GetServer(ctx, sv.ID); now.WakeTimeoutDuration() != tc.want || (tc.ok && got.WakeTimeoutDuration() != tc.want) {
+		now, err := c.GetServer(ctx, sv.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if now.WakeTimeoutDuration() != tc.want || (tc.ok && got.WakeTimeoutDuration() != tc.want) {
 			t.Errorf("after PATCH %s: %v, want %v", tc.timeout, now.WakeTimeoutDuration(), tc.want)
 		}
 	}
