@@ -5,13 +5,21 @@
  * header, on its stuck call and in a notice.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { renderTurn } from "../src/screens/RunScreen.tsx";
 import { apply, emptyProjection, project, snapshot } from "../src/api/conversation.ts";
+import * as viewModule from "../src/childThreadView.tsx";
+import * as bodyModule from "../src/childBody.tsx";
+
+// The real exports, taken before any spy replaces them.
+const realView = { ...viewModule };
+const realBody = { ...bodyModule };
+const RealChildThreadView = viewModule.ChildThreadView;
+const RealChildBody = bodyModule.ChildBody;
 
 let cursor = 0;
 function ev(eventType: string, payload: Record<string, unknown> = {}, minutesAgo = 0): PersistedEvent {
@@ -210,14 +218,33 @@ test("a child still running when its Run ended shows it settled, then how it end
 
 describe("a child's thread is drawn again only when it or a child under it changed", () => {
   const ids = ["a", "b", "a-grand"] as const;
+  type Runs = Record<(typeof ids)[number], number>;
   let state: ReturnType<typeof emptyProjection>;
-  // How many times each child's thread body ran during one draw: every run reads its `turns`.
-  let runs: Record<(typeof ids)[number], number>;
+  // How many times each child's real thread view and body functions ran, by child id.
+  const threadRuns: Runs = { a: 0, b: 0, "a-grand": 0 };
+  const bodyRuns: Runs = { a: 0, b: 0, "a-grand": 0 };
+  const count = (runs: Runs, id: string) => { runs[id as keyof Runs] += 1; };
+  const clear = () => { for (const id of ids) threadRuns[id] = bodyRuns[id] = 0; };
 
-  async function draw(): Promise<typeof runs> {
-    for (const id of ids) runs[id] = 0;
+  // Call-through spies at each real function's own export; the memo around the
+  // view in childThreads.tsx renders whatever that export is at render time.
+  beforeAll(() => {
+    mock.module("../src/childThreadView.tsx", () => ({
+      ...realView,
+      ChildThreadView: (props: Parameters<typeof RealChildThreadView>[0]) => { count(threadRuns, props.child.id); return RealChildThreadView(props); },
+    }));
+    mock.module("../src/childBody.tsx", () => ({
+      ...realBody,
+      ChildBody: (props: Parameters<typeof RealChildBody>[0]) => { count(bodyRuns, props.child.id); return RealChildBody(props); },
+    }));
+  });
+  afterAll(() => {
+    mock.module("../src/childThreadView.tsx", () => realView);
+    mock.module("../src/childBody.tsx", () => realBody);
+  });
+
+  async function draw(): Promise<void> {
     await act(async () => root!.render(<>{snapshot(state).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
-    return { ...runs };
   }
 
   beforeEach(async () => {
@@ -229,52 +256,72 @@ describe("a child's thread is drawn again only when it or a child under it chang
       ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a1", tool: "task", input: {} }),
       ev(EventTypes.ChildStarted, { childId: "a-grand", callId: "a1", parentChildId: "a", kind: "task", title: "Alpha's own" }),
     ]);
-    runs = { a: 0, b: 0, "a-grand": 0 };
-    for (const id of ids) {
-      const child = state.childrenById.get(id)!;
-      let turns = child.turns;
-      Object.defineProperty(child, "turns", {
-        configurable: true, enumerable: true,
-        get: () => { runs[id] += 1; return turns; },
-        set: (v) => { turns = v; },
-      });
-    }
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
+    clear();
     await draw();
+    // The spies are the ones rendering: every thread and every open body ran on mount.
+    expect(threadRuns).toEqual({ a: 1, b: 1, "a-grand": 1 });
+    expect(bodyRuns).toEqual({ a: 1, b: 1, "a-grand": 0 });
+    clear();
+  });
+
+  test("an event on a runs a's thread and body and neither b's thread nor its body", async () => {
+    apply(state, [ev(EventTypes.ChildMessage, { childId: "a", callId: "s1", text: "Alpha speaks." })]);
+    await draw();
+    expect(threadRuns.a).toBeGreaterThan(0);
+    expect(bodyRuns.a).toBeGreaterThan(0);
+    expect(threadRuns.b).toBe(0);
+    expect(bodyRuns.b).toBe(0);
+    expect(threadOf(host!, "a")!.textContent).toContain("Alpha speaks.");
   });
 
   test("an event on b runs b's thread and neither a's nor a's grandchild's", async () => {
     apply(state, [ev(EventTypes.ChildMessage, { childId: "b", callId: "s2", text: "Beta speaks." })]);
-    const ran = await draw();
-    expect(ran.b).toBeGreaterThan(0);
-    expect(ran.a).toBe(0);
-    expect(ran["a-grand"]).toBe(0);
+    await draw();
+    expect(threadRuns.b).toBeGreaterThan(0);
+    expect(threadRuns.a).toBe(0);
+    expect(bodyRuns.a).toBe(0);
+    expect(threadRuns["a-grand"]).toBe(0);
     expect(threadOf(host!, "b")!.textContent).toContain("Beta speaks.");
   });
 
-  test("an event on a's grandchild runs it and a, and not b", async () => {
+  test("an event on a's grandchild runs its thread and a's, and not b's", async () => {
     apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
-    const ran = await draw();
-    expect(ran["a-grand"]).toBeGreaterThan(0);
-    expect(ran.a).toBeGreaterThan(0);
-    expect(ran.b).toBe(0);
+    await draw();
+    expect(threadRuns["a-grand"]).toBeGreaterThan(0);
+    expect(threadRuns.a).toBeGreaterThan(0);
+    expect(threadRuns.b).toBe(0);
+    expect(bodyRuns.b).toBe(0);
     // Depth 2 starts collapsed: the new message shows in its header's turn count.
     expect(threadOf(host!, "a-grand")!.textContent).toContain("1 turns");
   });
 
+  test("an event on a's expanded grandchild runs the grandchild's body too", async () => {
+    await act(async () => header(threadOf(host!, "a-grand")!).click());
+    clear();
+    apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
+    await draw();
+    expect(bodyRuns["a-grand"]).toBeGreaterThan(0);
+    expect(threadRuns["a-grand"]).toBeGreaterThan(0);
+    expect(threadRuns.b).toBe(0);
+    expect(bodyRuns.b).toBe(0);
+    expect(threadOf(host!, "a-grand")!.querySelector("[role='group']")!.textContent).toContain("Grandchild speaks.");
+  });
+
   test("a waiting on a permission, then its next call clearing it, runs a both times and never b", async () => {
     apply(state, [ev(EventTypes.ChildWaiting, { childId: "a", callId: "s1", permission: "bash", patterns: ["cat /etc/hostname"], answered: "none" })]);
-    let ran = await draw();
-    expect(ran.a).toBeGreaterThan(0);
-    expect(ran.b).toBe(0);
+    await draw();
+    expect(threadRuns.a).toBeGreaterThan(0);
+    expect(threadRuns.b).toBe(0);
     expect(threadOf(host!, "a")!.getAttribute("data-waiting")).toBe("true");
 
+    clear();
     apply(state, [ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a2", tool: "bash", input: { command: "cat /etc/hostname" } })]);
-    ran = await draw();
-    expect(ran.a).toBeGreaterThan(0);
-    expect(ran.b).toBe(0);
+    await draw();
+    expect(threadRuns.a).toBeGreaterThan(0);
+    expect(threadRuns.b).toBe(0);
     expect(threadOf(host!, "a")!.getAttribute("data-waiting")).toBeNull();
   });
 });
