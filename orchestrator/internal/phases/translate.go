@@ -1053,9 +1053,9 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 
 // agentEvent translates the agent's own protocol messages: ACP (OpenCode
 // and the scripted agent), Claude Code's stream-json (claude.*,
-// translate_claude.go) and Codex's app-server (codex.*,
-// translate_codex.go). An unknown event type is ignored rather than
-// guessed at.
+// translate_claude.go), Codex's app-server (codex.*, translate_codex.go)
+// and OpenCode's child sessions (opencode.*, translate_opencode.go). An
+// unknown event type is ignored rather than guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
@@ -1067,6 +1067,9 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	}
 	if typ, ok := strings.CutPrefix(f.Event.Type, "codex."); ok {
 		return t.codexEvent(ctx, tx, s, typ, f)
+	}
+	if typ, ok := strings.CutPrefix(f.Event.Type, "opencode."); ok {
+		return t.opencodeEvent(ctx, tx, s, typ, f)
 	}
 	typ, ok := strings.CutPrefix(f.Event.Type, "acp.")
 	if !ok {

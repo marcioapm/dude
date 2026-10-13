@@ -3,9 +3,14 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // types is each event's type, in order.
@@ -248,5 +253,178 @@ func TestTwoConcurrentCodexAgentsAreEachTheirOwnCallsChild(t *testing.T) {
 	}
 	if len(w.children()) != 0 {
 		t.Errorf("children left: %v", w.children())
+	}
+}
+
+const ocParent, ocChild, ocCall = "ses_ecc7cfcd9ffeUVgVM0hMDoyFbu", "ses_ecc7cf31effeGCzeSYD4SeLE8p", "toolu_01L91pCabVxisGJueHYPC6dV"
+
+// opencodeRecords is the real OpenCode 1.18.21 turn: ACP for the Run's own
+// session, and the child session's bus events as lux relays them.
+func opencodeRecords(t *testing.T) []map[string]any {
+	return append([]map[string]any{{"type": "lux.session", "data": map[string]any{"sessionId": ocParent}}},
+		recorded(t, "opencode-child.jsonl")...)
+}
+
+// A real OpenCode turn whose task tool ran a general subagent: ACP reports
+// the call as kind think, recorded as task; the child session's read and
+// reply are its own, never the Run's; the task's completion ends it.
+func TestAnOpenCodeSubagentIsRecordedAsTheParentCallsChild(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(opencodeRecords(t)...)
+	events := w.events()
+	want := []string{evSessionStarted, evToolCalled, evChildStarted, evChildToolCalled, evChildToolCompleted, evChildMessage,
+		evChildEnded, evToolCompleted, evModelRequestDone, evAgentMessage, evModelRequestDone}
+	if got := types(events); !slices.Equal(got, want) {
+		t.Fatalf("events = %v\nwant %v", got, want)
+	}
+	noChildCallAsTheParents(t, events)
+	if p := ofType(events, evToolCalled)[0].Payload; p["tool"] != "task" || p["callId"] != ocCall {
+		t.Errorf("parent call %v", p)
+	}
+	if p := ofType(events, evChildStarted)[0].Payload; p["childId"] != ocChild || p["callId"] != ocCall || p["kind"] != "task" ||
+		p["title"] != "Read /etc/hosts first line" || p["agentType"] != "general" || p["model"] != "claude-haiku-4.5" {
+		t.Errorf("started %v", p)
+	}
+	if p := ofType(events, evChildToolCompleted)[0].Payload; p["tool"] != "read" || p["parentCallId"] != ocCall ||
+		!strings.Contains(headOf(p, "output"), "1: ##") {
+		t.Errorf("child call's end %v", p)
+	}
+	msg := ofType(events, evChildMessage)[0].Payload
+	if tk := msg["tokens"].(map[string]any); msg["text"] != "##" || tk["cacheRead"] != float64(7979) {
+		t.Errorf("message %v", msg)
+	}
+	if p := ofType(events, evChildEnded)[0].Payload; p["status"] != "completed" || p["summary"] != "##" {
+		t.Errorf("ended %v", p)
+	}
+}
+
+// Kind think is OpenCode's task tool only when its input names a subagent
+// type; any other think call keeps its name.
+func TestOpenCodesThinkIsATaskOnlyWithASubagentType(t *testing.T) {
+	for _, tc := range []struct {
+		u    map[string]any
+		want string
+	}{
+		{map[string]any{"kind": "think", "title": "Investigate UI artifact capture", "rawInput": map[string]any{"subagent_type": "explore",
+			"description": "Investigate UI artifact capture"}}, "task"},
+		{map[string]any{"kind": "think", "title": "Weigh the options", "rawInput": map[string]any{"thought": "x"}}, "think"},
+		{map[string]any{"kind": "think", "title": "task", "rawInput": map[string]any{}}, "task"},
+		{map[string]any{"kind": "think", "title": "Two words"}, "think"},
+	} {
+		if got := toolName(tc.u); got != tc.want {
+			t.Errorf("%v: %q, want %q", tc.u, got, tc.want)
+		}
+	}
+}
+
+// A child's permission ask nobody answers: agent.child.waiting, and the
+// open call's runs.children entry says what it waits on until the child's
+// next event. A child of that child nests under it; one lux answered is
+// said and holds nothing.
+func TestAnOpenCodeChildWaitingOnAPermissionIsSaid(t *testing.T) {
+	oc := func(typ string, data map[string]any) map[string]any {
+		return map[string]any{"type": "opencode." + typ, "data": data}
+	}
+	w := newHarnessWorld(t)
+	w.feed(map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "ses_run"}},
+		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "kind": "think",
+			"title": "Investigate UI artifact capture", "rawInput": map[string]any{"subagent_type": "explore", "description": "Investigate UI artifact capture"}}},
+		oc("session", map[string]any{"id": "ses_kid", "parentID": "ses_run", "title": "Investigate (@explore subagent)"}),
+		oc("task", map[string]any{"sessionID": "ses_run", "callID": "c1", "childSessionID": "ses_kid", "model": "claude-haiku-4.5", "status": "running"}),
+		oc("part", map[string]any{"sessionID": "ses_kid", "callID": "k1", "tool": "grep", "status": "running", "title": "grep",
+			"input": map[string]any{"pattern": "capture", "path": "/opt/venv/lib/python3.12/site-packages"}}),
+		oc("permission", map[string]any{"sessionID": "ses_kid", "permissionID": "per_1", "permission": "external_directory",
+			"patterns": []any{"/opt/venv/lib/python3.12/site-packages/*"}, "callID": "k1", "answered": "none"}),
+	)
+	got := w.children()["c1"]
+	on, _ := got["waitingOn"].(map[string]any)
+	if got["childId"] != "ses_kid" || on["permission"] != "external_directory" {
+		t.Fatalf("children entry %v", got)
+	}
+	waiting := ofType(w.events(), evChildWaiting)
+	if len(waiting) != 1 || waiting[0].Payload["on"] != "permission" || waiting[0].Payload["answered"] != "none" ||
+		waiting[0].Payload["callId"] != "c1" {
+		t.Errorf("waiting %v", waiting)
+	}
+	w.restart()
+	w.feed(
+		oc("permission", map[string]any{"sessionID": "ses_kid", "permission": "read", "patterns": []any{"/etc/*"}, "answered": "allow"}),
+		oc("session", map[string]any{"id": "ses_grandkid", "parentID": "ses_kid", "title": "Deeper"}),
+		oc("task", map[string]any{"sessionID": "ses_kid", "callID": "k2", "childSessionID": "ses_grandkid", "status": "running"}),
+		oc("part", map[string]any{"sessionID": "ses_grandkid", "callID": "g1", "tool": "bash", "status": "completed",
+			"input": map[string]any{"command": "ls"}, "output": "a\nb"}),
+	)
+	got = w.children()["c1"]
+	if got["waitingOn"] != nil || !strings.HasPrefix(got["lastEvent"].(string), "bash completed") {
+		t.Errorf("after the child moved on: %v", got)
+	}
+	events := w.events()
+	if p := ofType(events, evChildStarted); len(p) != 1 || p[0].Payload["parentChildId"] != "ses_kid" || p[0].Payload["callId"] != "k2" {
+		t.Errorf("grandchild %v", p)
+	}
+	if p := ofType(events, evChildWaiting); len(p) != 1 || p[0].Payload["answered"] != "allow" {
+		t.Errorf("an answered ask %v", p)
+	}
+	if p := ofType(events, evChildToolCalled); len(p) != 1 || p[0].Payload["childId"] != "ses_grandkid" {
+		t.Errorf("grandchild's call %v", p)
+	}
+}
+
+// The fake lux says a child as each harness does (fakelux.Child): fed to
+// the translator, every harness's child is the same agent.child.* life,
+// nested under the parent's call, with none of its calls the Run's own.
+// This is what the E2E suites drive through the deployed processes.
+func TestTheFakeLuxsChildIsTheSameOnEveryHarness(t *testing.T) {
+	for _, adapter := range []string{"opencode", "claude-code", "codex"} {
+		t.Run(adapter, func(t *testing.T) {
+			fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(func() { srv.Close(); fake.Close() })
+			client := lux.New(srv.URL, "k")
+			lr, err := client.Submit(context.Background(), lux.Spec{Name: "t", Image: lux.Image{Ref: "img"},
+				Workload: lux.Workload{Adapter: adapter, Prompt: "go"}}, "child-"+adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(5 * time.Second); len(fake.Records(lr.ID)) == 0; time.Sleep(10 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the fake Run never started")
+				}
+			}
+			for _, st := range []fakelux.ChildStep{
+				{Op: "start", Title: "Investigate UI artifact capture", AgentType: "explore"},
+				{Op: "tool", ToolCallID: "k1", Tool: "bash", Input: map[string]any{"command": "ls /opt"}, Output: "venv"},
+				{Op: "message", Text: "Found the capture hook."},
+				{Op: "end", Text: "Found the capture hook."},
+			} {
+				st.CallID, st.ChildID = "call_1", "kid_1"
+				if err := fake.Child(lr.ID, st); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recs := fake.Records(lr.ID)
+			w := newHarnessWorld(t)
+			w.feed(recs...)
+			events := slices.DeleteFunc(w.events(), func(e harnessEvent) bool {
+				return !strings.HasPrefix(e.Type, "agent.child.") && e.Type != evToolCalled && e.Type != evToolCompleted
+			})
+			noChildCallAsTheParents(t, events)
+			var got []string
+			for _, e := range events {
+				if strings.HasPrefix(e.Type, "agent.child.") {
+					got = append(got, e.Type)
+					if e.Payload["childId"] != "kid_1" || (e.Payload["callId"] != "call_1" && e.Payload["parentCallId"] != "call_1") {
+						t.Errorf("%s: %v", e.Type, e.Payload)
+					}
+				}
+			}
+			want := []string{evChildStarted, evChildToolCalled, evChildToolCompleted, evChildMessage, evChildEnded}
+			if !slices.Equal(got, want) {
+				t.Errorf("child events %v, want %v", got, want)
+			}
+			if p := ofType(events, evChildStarted); len(p) == 1 && p[0].Payload["title"] != "Investigate UI artifact capture" {
+				t.Errorf("title %v", p[0].Payload)
+			}
+		})
 	}
 }
