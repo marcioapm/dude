@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { PersistedEvent, RunStatus } from "@dude/domain";
+import type { PersistedEvent, RunStatus, TaskServers } from "@dude/domain";
 import { act, mount, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
 import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
@@ -218,13 +218,18 @@ describe("the projection", () => {
   });
 });
 
-/** A Run whose ledger is the test's and whose detail is patched. */
+/** A Run whose ledger is the test's and whose detail is patched; lux's wait reason, when set. */
 class StartClient extends FixtureClient {
+  waitingReason: string | null = null;
   constructor(private readonly patch: Partial<RunDetail>, public ledger: PersistedEvent[]) {
     super("a");
   }
   override async getRun(id: string): Promise<RunDetail> {
     return { ...(await super.getRun(id)), ...this.patch };
+  }
+  override async runServers(runId = RUN_ID): Promise<TaskServers> {
+    const s = await super.runServers();
+    return { ...s, run: s.run ? { ...s.run, id: runId, waitingReason: this.waitingReason } : s.run };
   }
   protected override ledgerFor(q: LedgerQuery): PersistedEvent[] {
     if (q.runId !== RUN_ID) return super.ledgerFor(q);
@@ -233,8 +238,9 @@ class StartClient extends FixtureClient {
 }
 
 async function runPage(status: RunStatus, ledger: PersistedEvent[], chat = false, stopped?: Parameters<typeof RunScreen>[0]["stopped"],
-  retry?: () => Promise<unknown>) {
+  retry?: () => Promise<unknown>, waitingReason: string | null = null) {
   const client = new StartClient({ status, role: chat ? "conductor" : "implementer", phase: chat ? null : "implement" }, ledger);
+  client.waitingReason = waitingReason;
   const { container, unmount } = await mount(<RunScreen runId={RUN_ID} onBack={() => {}} client={client} stopped={stopped}
     {...(chat ? { chat: { head: null, send: () => Promise.resolve(), answer: () => Promise.resolve(), briefedWith: [], retry } } : {})} />);
   mounted.push(unmount);
@@ -266,6 +272,29 @@ describe("a task's Run page", () => {
     expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain(READ_WHEN_STARTED);
     expect(page.textContent).toContain(READ_WHEN_STARTED.replace(/\.$/, ""));
     expect(page.textContent).not.toContain("Lands when the agent starts");
+  });
+
+  test("waiting for a host that can run containers: the pinned callout says it once; the row keeps its stage and clock, no slow note", async () => {
+    const NESTED = "waiting for capacity: 1 host in its pool does not support nested containers";
+    const t = Date.now() - 100_000;
+    const ledger = [{ ...created(), occurredAt: new Date(t).toISOString() },
+      { ...stage("waiting", 0), payload: { stage: "waiting", since: new Date(t).toISOString(), epoch: 1 } }];
+    const page = await runPage("scheduled", ledger, false, undefined, undefined, NESTED);
+    await until(() => page.querySelector("[data-testid=waiting-for-host]"), "the pinned callout");
+    const row = page.querySelector("[data-testid=start-progress]")!;
+    expect(row.getAttribute("data-stage")).toBe("waiting");
+    expect(row.querySelector("[role=timer]")).not.toBeNull();
+    expect(page.querySelector("[data-testid=start-slow]")?.textContent ?? null).toBeNull();
+  });
+
+  test("waiting for capacity of another kind: no pinned callout; the row's slow note says it with lux's reason", async () => {
+    const t = Date.now() - 100_000;
+    const ledger = [{ ...created(), occurredAt: new Date(t).toISOString() },
+      { ...stage("waiting", 0), payload: { stage: "waiting", since: new Date(t).toISOString(), epoch: 1 } }];
+    const page = await runPage("scheduled", ledger, false, undefined, undefined, "waiting for capacity: 2 hosts lack cpus");
+    const slow = await until(() => page.querySelector("[data-testid=start-slow]"), "the slow note");
+    expect(slow.textContent).toContain("lux: waiting for capacity: 2 hosts lack cpus");
+    expect(page.querySelector("[data-testid=waiting-for-host]")?.textContent ?? null).toBeNull();
   });
 
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {

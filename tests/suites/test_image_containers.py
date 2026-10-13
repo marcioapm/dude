@@ -344,6 +344,13 @@ def test_a_preview_and_a_run_waiting_for_a_host_that_can_run_containers_say_so(
     _shoot(page, "09b-waiting-run")
     _shoot(page, "09b-waiting-run-narrow", width=1024)
     _shoot(page, "09b-waiting-run-wide", width=1920)
+    # The wait is said once, by the pinned callout: past the waiting stage's 60s threshold the row keeps its stage
+    # and clock and adds no slow note.
+    row = page.get_by_test_id("start-progress")
+    expect(row).to_have_attribute("data-stage", "waiting")
+    expect(row.locator("[role=timer]").first).to_have_text(re.compile(r"^0[1-9]:\d\d$"), timeout=75_000)
+    expect(page.get_by_test_id("start-slow")).to_have_count(0)
+    expect(pinned).to_have_count(1)
     assert all("409" in e for e in console_errors), console_errors
 
 

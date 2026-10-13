@@ -489,7 +489,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
-  const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role} /> : null;
+  // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its
+  // stages and clock without saying the same wait again.
+  const pinnedWait = !run.preparingImage && Boolean(waitingReason) && (!conversation.start || waitsForContainerHost(waitingReason));
+  const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role}
+    quiet={pinnedWait} /> : null;
   const startHint = readWhen(conversation.start);
   // The agent waits on the reader's answer: the composer steps back to one line.
   const asked = conversation.openQuestion;
@@ -667,7 +671,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               pinned={
                 run.preparingImage ? (
                   <PreparingImage preparing={run.preparingImage} />
-                ) : waitingReason && (!conversation.start || waitsForContainerHost(waitingReason)) ? (
+                ) : pinnedWait && waitingReason ? (
                   // While the row says where the start is, lux's reason is its slow note; a pool that cannot run
                   // this Run at all stays pinned, since only an admin can change it.
                   <WaitingForHost reason={waitingReason} onRunPage />

@@ -76,11 +76,14 @@ function useSlowNote(start: StartState): string | null {
 /** A woken conductor's failed start: its reasons go back to dude, which wakes the next conductor with them. */
 export const WAKES_NEXT = "dude will wake a new conductor.";
 
-/** The row where the agent's first turn will be; failed, with Try again or why it is not offered. */
-export function StartRow({ start, role, onRetry, taken, woken }: {
+/** The row where the agent's first turn will be; failed, with Try again or why it is not offered. `quiet`: a pinned
+ * callout already says why it waits, so the row keeps its stages and clock and omits the slow note. */
+export function StartRow({ start, role, onRetry, taken, woken, quiet }: {
   start: StartState; role: AgentRole; onRetry?: (() => void) | undefined; taken?: boolean | undefined; woken?: boolean | undefined;
+  quiet?: boolean | undefined;
 }) {
   const slow = useSlowNote(start);
+  const shownSlow = quiet ? null : slow;
   return (
     <>
       <StartProgress
@@ -91,8 +94,8 @@ export function StartRow({ start, role, onRetry, taken, woken }: {
         steps={stepsOf(start)}
         startedAt={start.startedAt}
         avatar={<AgentAvatar role={role} size="chat" />}
-        slowNote={slow ?? undefined}
-        slowReason={slow ? start.luxReason : undefined}
+        slowNote={shownSlow ?? undefined}
+        slowReason={shownSlow ? start.luxReason : undefined}
         failure={start.failed ? { reason: start.failed.reason, plain: start.failed.source === "dude", onRetry: taken || woken ? undefined : onRetry } : undefined}
         data-testid="start-progress"
       />
