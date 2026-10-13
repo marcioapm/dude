@@ -303,8 +303,10 @@ func (w *world) start(taskID string, policy delivery.Policy) string {
 // pump runs every loop once, as the orchestrator's main does continuously.
 func (w *world) pump() {
 	ctx := context.Background()
-	// Up to five steps of each workflow; a tick that claims nothing leaves
-	// nothing for the next to claim.
+	// Up to five steps of each workflow, stopping once a tick claims
+	// nothing: nothing is runnable right now. Work that becomes due later
+	// (a wake time, a lease, a signal) is the next pump's, and until keeps
+	// pumping to its same 20 s deadline.
 	for range 5 {
 		if n, err := w.runtime.Tick(ctx, 10); err != nil {
 			w.t.Fatal(err)
