@@ -116,13 +116,26 @@ export function messagesById(threads: EpicThreads | undefined): ReadonlyMap<stri
 }
 
 /** A message as `PeerMessage` draws it. */
-export function messageData(m: PeerMessageView, peers: readonly PeerState[] | undefined): PeerMessageData {
-  const from = { ...peerTask(m.from.key, peers, m.from.title), role: asRole(m.fromRole) ?? (m.fromPhase ? PHASE_ROLE[m.fromPhase] : undefined) };
+export function messageData(m: PeerMessageView, peers: readonly PeerState[] | undefined,
+  exchange?: ReadonlyMap<string, PeerMessageView>): PeerMessageData {
+  const from = { ...peerTask(m.from.key, peers, m.from.title), role: sentAs(m) };
+  // The task written to, as it took part in this exchange (the message it
+  // answers, or its answer): its task's live role is whoever runs now, which
+  // after a handover says a reviewer took part when an implementer did.
+  const counterpart = m.replyTo ? exchange?.get(m.replyTo)
+    : exchange ? [...exchange.values()].find((x) => x.replyTo === m.id && x.from.taskId === m.to.taskId) : undefined;
+  const to = peerTask(m.to.key, peers, m.to.title);
+  const spoke = counterpart && counterpart.from.taskId === m.to.taskId ? sentAs(counterpart) : undefined;
   return {
-    id: m.id, from, to: peerTask(m.to.key, peers, m.to.title), text: m.text, sentAt: m.sentAt, replyTo: m.replyTo,
+    id: m.id, from, to: spoke ? { ...to, role: spoke } : to, text: m.text, sentAt: m.sentAt, replyTo: m.replyTo,
     delivery: m.readAt ? { kind: "read", at: m.readAt } : m.briefedRunId ? { kind: "read", at: m.sentAt, after: "in its briefing" }
       : m.lands === "next_run" ? { kind: "inbox" } : { kind: "queued" },
   };
+}
+
+/** The role whose Run sent a message. */
+function sentAs(m: PeerMessageView): AgentRole | undefined {
+  return asRole(m.fromRole) ?? (m.fromPhase ? PHASE_ROLE[m.fromPhase] : undefined);
 }
 
 /** A thread's subject: its first message's first line, clipped. The API has no subject of its own. */
@@ -148,7 +161,7 @@ export function PeerTurnView({ turn, ctx }: { turn: PeerTurn; ctx: PeerContext }
   const known = ctx.messages.get(turn.message);
   const self = ctx.self ?? "";
   const sent = turn.direction === "sent";
-  const msg: PeerMessageData = known ? messageData(known, peers) : {
+  const msg: PeerMessageData = known ? messageData(known, peers, ctx.messages) : {
     id: turn.message,
     from: sent ? { key: self, role: ctx.role } : peerTask(turn.peer, peers),
     to: sent ? peerTask(turn.peer, peers) : { key: self },

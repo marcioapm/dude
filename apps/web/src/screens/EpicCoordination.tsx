@@ -16,7 +16,7 @@ import { firstName } from "@dude/design-system";
 import { EPIC_NOTE_TEXT_MAX, type EpicNote as EpicNoteRecord, type PeerState, type PeerThread as PeerThreadRecord } from "@dude/domain";
 import type { NavEpic } from "@dude/design-system";
 import { ApiError, type ApiClient } from "../api/client.ts";
-import { messageData, noteData, peerRows, peerTask, threadSubject, useCoordination } from "../coordination.tsx";
+import { messageData, noteData, peerRows, threadSubject, useCoordination } from "../coordination.tsx";
 import { usePeople } from "../people.tsx";
 
 export interface EpicCoordinationProps {
@@ -172,6 +172,8 @@ function Thread({ thread, peers }: { thread: PeerThreadRecord; peers: readonly P
   const [asker, asked] = thread.pair;
   const first = thread.messages[0]!;
   const byId = new Map(thread.messages.map((m) => [m.id, m]));
+  // The pair as they spoke here: a task gone on to review still asked as its implementer.
+  const opening = messageData(first, peers, byId);
   const replyAt = thread.messages.find((m) => m.replyTo !== null && m.from.taskId === asked.taskId)?.sentAt;
   const state = thread.state === "waiting" && thread.wait
     ? { kind: "waiting" as const, on: asked.key, since: thread.wait.since }
@@ -179,10 +181,10 @@ function Thread({ thread, peers }: { thread: PeerThreadRecord; peers: readonly P
     : { kind: "open" as const, on: asked.key };
   const waitOn = thread.state === "waiting" ? thread.wait : null;
   return (
-    <PeerThread a={peerTask(asker.key, peers, asker.title)} b={peerTask(asked.key, peers, asked.title)} subject={threadSubject(first.text)}
+    <PeerThread a={opening.from} b={opening.to} subject={threadSubject(first.text)}
       state={state} foot={<span>Between {asker.key}'s and {asked.key}'s agents. Everyone on the epic can read it; only the two agents write in it.</span>}>
       {thread.messages.map((m) => (
-        <PeerMessage key={m.id} compact msg={messageData(m, peers)} replyToText={m.replyTo ? byId.get(m.replyTo)?.text : undefined}
+        <PeerMessage key={m.id} compact msg={messageData(m, peers, byId)} replyToText={m.replyTo ? byId.get(m.replyTo)?.text : undefined}
           waiting={waitOn && waitOn.messageId === m.id ? {
             since: waitOn.since,
             note: waitOn.parksAt ? `Parks at ${new Date(waitOn.parksAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} if no reply.` : undefined,

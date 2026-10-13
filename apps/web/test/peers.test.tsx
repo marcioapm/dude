@@ -20,7 +20,7 @@ import { ProjectEpics } from "../src/screens/ProjectEpics.tsx";
 import { EpicCoordination } from "../src/screens/EpicCoordination.tsx";
 import { project, type DigestTurn, type PeerWaitTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { RunScreen, renderTurn } from "../src/screens/RunScreen.tsx";
-import { listedPeers, messagesById, noPeers, waitWords, type PeerContext } from "../src/coordination.tsx";
+import { listedPeers, messageData, messagesById, noPeers, waitWords, type PeerContext } from "../src/coordination.tsx";
 import { PeerList } from "@dude/design-system/components";
 import { PeopleProvider, type People } from "../src/people.tsx";
 
@@ -150,6 +150,18 @@ describe("the turns, drawn", () => {
       ev(EventTypes.AgentPeerWaitEnded, { message: "pm_1", on: "ABS-2", by: "peer_ended", status: "aborted", line: "Go's line." }),
     ]);
     expect(wait).toContain("Go&#x27;s line.");
+  });
+
+  test("a thread's chips name the roles that spoke in it, not the roles the tasks have moved on to", () => {
+    // ABS-4 has gone on to review; ABS-2 has gone on to its simplifier.
+    const moved: EpicPeers = { epicId: "e", tasks: PEERS.tasks.map((p) => ({ ...p, phase: p.key === "ABS-4" ? "review" : "simplify", role: p.key === "ABS-4" ? "reviewer" : "simplifier" })) };
+    const byId = messagesById(THREADS);
+    const [question, reply] = THREADS.threads[0]!.messages;
+    expect(messageData(question!, moved.tasks, byId)).toMatchObject({ from: { key: "ABS-4", role: "implementer" }, to: { key: "ABS-2", role: "implementer" } });
+    expect(messageData(reply!, moved.tasks, byId)).toMatchObject({ from: { key: "ABS-2", role: "implementer" }, to: { key: "ABS-4", role: "implementer" } });
+    // Unanswered yet, the task asked has said nothing here: it keeps its live role.
+    const lone = new Map([[question!.id, question!]]);
+    expect(messageData(question!, moved.tasks, lone).to).toMatchObject({ key: "ABS-2", role: "simplifier" });
   });
 
   test("a reply read here: its words from the thread, what it answers, and when it was read", () => {
