@@ -29,8 +29,14 @@ func (poolsLux) Pools(context.Context) ([]lux.Pool, error) {
 }
 
 // machineRun is a running reviewer on Standard, in an organization with
-// Large in its pool and XL in highmem, served by a server with lux.
+// Large in its pool and XL in highmem, served by a server with poolsLux.
 func machineRun(t *testing.T, validate func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error) (*fixture, string) {
+	t.Helper()
+	return machineRunOn(t, poolsLux{}, validate)
+}
+
+// machineRunOn is machineRun served with the lux given.
+func machineRunOn(t *testing.T, l lux.Client, validate func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error) (*fixture, string) {
 	t.Helper()
 	f := setup(t)
 	token := f.run(t, "run_mach", "reviewer", "running")
@@ -39,7 +45,7 @@ func machineRun(t *testing.T, validate func(context.Context, string, *delivery.M
 		('ms_std', $1, 'Standard', 2, 8192, 20, NULL, true), ('ms_large', $1, 'Large', 4, 16384, 40, NULL, false),
 		('ms_xl', $1, 'XL', 8, 32768, 80, 'pool_high', false)`, f.org)
 	mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_std","name":"Standard","cpus":2,"memoryMiB":8192,"diskGiB":20,"from":"default"}', lux_run_id = 'live' WHERE id = 'run_mach'`)
-	srv := httptest.NewServer((&agenttools.Server{DB: f.app, Log: slog.New(slog.DiscardHandler), Lux: poolsLux{}, ValidateMachine: validate}).Handler())
+	srv := httptest.NewServer((&agenttools.Server{DB: f.app, Log: slog.New(slog.DiscardHandler), Lux: l, ValidateMachine: validate}).Handler())
 	t.Cleanup(srv.Close)
 	f.url = srv.URL
 	return f, token
@@ -223,19 +229,9 @@ func TestEachLuxRefusalIsToldInTheDesignsWords(t *testing.T) {
 			"lux was already resuming this Run, so it could not move it to Large. Ask again once you are running."},
 	} {
 		t.Run(tc.code+" "+tc.size, func(t *testing.T) {
-			f := setup(t)
-			token := f.run(t, "run_mach", "reviewer", "running")
-			mustExec(t, f.owner, `DELETE FROM machine_sizes WHERE organization_id = $1`, f.org)
-			mustExec(t, f.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id, is_default) VALUES
-				('ms_std', $1, 'Standard', 2, 8192, 20, NULL, true), ('ms_large', $1, 'Large', 4, 16384, 40, NULL, false),
-				('ms_xl', $1, 'XL', 8, 32768, 80, 'pool_high', false)`, f.org)
-			mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_std","name":"Standard","cpus":2,"memoryMiB":8192,"diskGiB":20,"from":"default"}', lux_run_id = 'live' WHERE id = 'run_mach'`)
-			srv := httptest.NewServer((&agenttools.Server{DB: f.app, Log: slog.New(slog.DiscardHandler), Lux: factsLux{},
-				ValidateMachine: func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error {
-					return &lux.Error{Status: tc.status, Code: tc.code, Message: tc.luxSaid}
-				}}).Handler())
-			t.Cleanup(srv.Close)
-			f.url = srv.URL
+			f, token := machineRunOn(t, factsLux{}, func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error {
+				return &lux.Error{Status: tc.status, Code: tc.code, Message: tc.luxSaid}
+			})
 			status, out := f.post(t, token, "request_machine", `{"size":"`+tc.size+`","reason":"oom"}`)
 			if status != 422 || out["code"] != tc.code || out["error"] != tc.want {
 				t.Fatalf("%d %v\nwant %q", status, out, tc.want)
