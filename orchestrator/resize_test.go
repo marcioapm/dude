@@ -58,21 +58,10 @@ func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
 	}{{"accepted without note", "", false}, {"accepted with note", "Use two workers", false}, {"refused", "x", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
-			w.lux.Decide = hang
-			task := w.task()
-			w.deliver(task)
-			w.until("live", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
-			runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, task)
-			w.until("recorded running", func() bool {
-				return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
-			})
-			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-			mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
-			mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+			task, runID, live := w.raisedImplementer()
 			if tc.refuse {
 				mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_missing' WHERE organization_id=$1 AND is_default`, w.org)
 			}
-			live := w.lux.Runs()[0].ID
 			person := w.person("Resetter")
 			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": tc.note})
 			if tc.refuse {
@@ -118,20 +107,8 @@ func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
 			w.until("running again", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
 			})
-			srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error { return nil }}).Handler())
-			defer srv.Close()
-			token, hash := agenttools.NewToken()
-			mustExec(t, w.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
-			req, _ := http.NewRequest("POST", srv.URL+"/tools/request_machine", strings.NewReader(`{"size":"Bigger","reason":"oom again"}`))
-			req.Header.Set("Authorization", "Bearer "+token)
-			res, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, _ := io.ReadAll(res.Body)
-			res.Body.Close()
-			if res.StatusCode != 422 || !strings.Contains(string(body), "a Reset does not give a move back") {
-				t.Fatalf("quota after Reset: %d %s", res.StatusCode, body)
+			if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom again"}`); status != 422 || !strings.Contains(body, "a Reset does not give a move back") {
+				t.Fatalf("quota after Reset: %d %s", status, body)
 			}
 		})
 	}
@@ -142,10 +119,7 @@ func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
 // the Reset drops only the raise it read, by its moveId.
 func TestResetDropsOnlyTheRaiseItRead(t *testing.T) {
 	w := newWorld(t)
-	task, runID, live := w.liveImplementer()
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_read','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
-	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	task, _, live := w.raisedImplementer()
 	newer := `{"sizeId":"msz_big","moveId":"mmv_newer","askedBy":"run_other","reason":"again","at":"2026-10-13T01:00:00Z"}`
 	w.lux.OnResume = func(id string, validateOnly bool) {
 		if id == live && validateOnly {
@@ -162,22 +136,11 @@ func TestResetDropsOnlyTheRaiseItRead(t *testing.T) {
 
 func TestMachineResetKeepsPersonPause(t *testing.T) {
 	w := newWorld(t)
-	w.lux.Decide = hang
-	task := w.task()
-	w.deliver(task)
-	w.until("live", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
-	runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, task)
-	w.until("recorded running", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
-	})
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
-	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	task, runID, live := w.raisedImplementer()
 	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, out)
 	}
 	w.until("person paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
-	live := w.lux.Runs()[0].ID
 	resumes := w.luxCalls(live, "resume")
 	person := w.person("Resetter")
 	if status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": "smaller"}); status != 200 {
@@ -682,32 +645,10 @@ func TestPersonPauseDuringMachineMoveIsKept(t *testing.T) {
 
 func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
 	w := newWorld(t)
-	w.lux.Decide = hang
-	wi := w.task()
-	w.deliver(wi)
-	w.until("live agent", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
+	_, runID, liveID := w.liveImplementer()
 	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-	runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, wi)
-	w.until("recorded running", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
-	})
-	liveID := w.lux.Runs()[0].ID
-	srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
-		return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
-	}}).Handler())
-	defer srv.Close()
-	token, hash := agenttools.NewToken()
-	mustExec(t, w.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
-	req, _ := http.NewRequest("POST", srv.URL+"/tools/request_machine", strings.NewReader(`{"size":"Bigger","reason":"suite killed at four workers"}`))
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
-	if res.StatusCode != 200 {
-		t.Fatalf("request: %d %s", res.StatusCode, body)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"suite killed at four workers"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
 	}
 	w.until("move settled", func() bool {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
