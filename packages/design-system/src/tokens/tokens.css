@@ -223,6 +223,10 @@
   --ds-role-brainstorm-bg: #322843;
   --ds-role-brainstorm-solid: #9e80d1;
   --ds-role-brainstorm-on-solid: #000000;
+  --ds-role-subagent-fg: #78d0fd;
+  --ds-role-subagent-bg: #0e3243;
+  --ds-role-subagent-solid: #78d0fd;
+  --ds-role-subagent-on-solid: #000000;
   --ds-identity-0-fg: #f5b9b8;
   --ds-identity-0-bg: #4b3333;
   --ds-identity-1-fg: #ebc29b;
@@ -367,6 +371,10 @@
   --ds-role-brainstorm-bg: #eee7ff;
   --ds-role-brainstorm-solid: #5a358c;
   --ds-role-brainstorm-on-solid: #ffffff;
+  --ds-role-subagent-fg: #147fa9;
+  --ds-role-subagent-bg: #d6f0fe;
+  --ds-role-subagent-solid: #147fa9;
+  --ds-role-subagent-on-solid: #ffffff;
   --ds-identity-0-fg: #763638;
   --ds-identity-0-bg: #fce0e0;
   --ds-identity-1-fg: #6e4108;
@@ -512,6 +520,10 @@
     --ds-role-brainstorm-bg: #eee7ff;
     --ds-role-brainstorm-solid: #5a358c;
     --ds-role-brainstorm-on-solid: #ffffff;
+    --ds-role-subagent-fg: #147fa9;
+    --ds-role-subagent-bg: #d6f0fe;
+    --ds-role-subagent-solid: #147fa9;
+    --ds-role-subagent-on-solid: #ffffff;
     --ds-identity-0-fg: #763638;
     --ds-identity-0-bg: #fce0e0;
     --ds-identity-1-fg: #6e4108;

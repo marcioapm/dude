@@ -18,6 +18,7 @@ import { useId, useState, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { formatTimestamp, plural } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
+import type { AgentRole } from "@dude/domain";
 import type { AgentRoleName } from "../tokens/palette.ts";
 import type { TaskStatus } from "../tokens/status.ts";
 import { Button } from "../primitives/Button.tsx";
@@ -117,6 +118,7 @@ const RAIL: Record<AgentRoleName, string> = {
   reviewer: "reviewer",
   simplifier: "simplifier",
   qa_browser: "qaBrowser",
+  subagent: "investigator",
 };
 
 /**
@@ -257,7 +259,7 @@ export function PeerWaitLine({ on, msg, how, since, parksAt, ended, now }: PeerW
 
 /** Who pinned a note: an agent (its task, role, and the person it worked for), or a person. */
 export type EpicNoteAuthor =
-  | { readonly kind: "agent"; readonly task: string; readonly role: AgentRoleName; readonly for?: Person | undefined }
+  | { readonly kind: "agent"; readonly task: string; readonly role: AgentRole; readonly for?: Person | undefined }
   | { readonly kind: "person"; readonly person: Person };
 
 export interface EpicNoteData {

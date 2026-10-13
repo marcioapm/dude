@@ -213,6 +213,29 @@ def test_every_section_is_reachable_and_renders(gallery_page: Page, console_erro
         assert console_errors == [], f"console errors after opening {name!r}: {console_errors}"
 
 
+@pytest.mark.parametrize("anchor,name", [
+    ("st-play", "A fresh start"),
+    ("st-states", "Resumed, slow, older lux"),
+    ("st-failed", "Failed"),
+    ("st-move", "A move"),
+    ("st-chip", "StartChip"),
+])
+def test_starting_nav_reaches_an_unmounted_example(gallery_page: Page, anchor: str, name: str):
+    """A far-off section must mount and scroll when its example is selected."""
+    expect(gallery_page.locator("#st-play")).to_have_count(0)
+    gallery_page.get_by_role("link", name=name, exact=True).click()
+    expect(gallery_page.locator(f"#{anchor}")).to_be_in_viewport()
+    gallery_page.get_by_role("link", name="Status vocabulary", exact=True).click()
+    gallery_page.get_by_role("link", name="StartChip", exact=True).click()
+    expect(gallery_page.locator("#st-chip")).to_be_in_viewport()
+
+
+def test_starting_deep_link_mounts_and_scrolls(gallery_page: Page):
+    """Loading a bookmark must not leave its example permanently absent."""
+    gallery_page.goto(gallery_page.url.split("#")[0] + "#st-failed")
+    expect(gallery_page.locator("#st-failed")).to_be_in_viewport()
+
+
 def test_status_vocabulary_is_fully_rendered(gallery_page: Page):
     """Every domain status must have a visible treatment.
 
@@ -519,6 +542,28 @@ def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Pa
     string_tip = gallery_page.get_by_role("tooltip").filter(has_text="Open the session in a side panel")
     expect(string_tip).to_be_visible()
     expect(string_tip.locator("kbd")).to_have_text(["⏎"])
+    assert console_errors == []
+
+
+def test_child_examples_mount_after_hash_navigation(gallery_page: Page, console_errors: list):
+    block = gallery_page.locator("#ch-children")
+    expect(block.get_by_role("heading", name="ChatThread — a tool call's child session", exact=True)).to_have_count(1)
+    expect(block.get_by_test_id("child-examples-pending")).to_have_count(1)
+    expect(block.locator("section[data-session-id]")).to_have_count(0)
+    gallery_page.evaluate("location.hash = 'ch-children'")
+    expect(block.get_by_test_id("child-examples-pending")).to_have_count(0)
+    # Where the navigation itself lands, before any scroll of our own: the
+    # placeholder gave way to the examples, and the first is in view.
+    expect(block.locator("section[data-session-id]").first).to_be_in_viewport()
+    for theme in ("dark", "light"):
+        pane = block.locator(f"[data-theme='{theme}']")
+        threads = pane.locator("section[data-session-id]")
+        expect(threads).to_have_count(5)
+        assert threads.evaluate_all("els => els.map(e => e.dataset.status + (e.dataset.waiting ? ' waiting' : ''))") == [
+            "running", "running waiting", "completed", "running", "completed",
+        ]
+        expect(pane).to_contain_text("Nothing in this Run can answer it.")
+    assert gallery_page.evaluate("location.hash") == "#ch-children"
     assert console_errors == []
 
 

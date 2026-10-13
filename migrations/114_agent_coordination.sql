@@ -1,4 +1,4 @@
--- 113_agent_coordination.sql — agents on an epic see, ask and brief each
+-- 114_agent_coordination.sql — agents on an epic see, ask and brief each
 -- other (docs/design/agent-coordination.md).
 --
 -- task_peers   the peer rule, in one place: every tool, briefing and API

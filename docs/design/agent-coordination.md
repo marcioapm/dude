@@ -899,12 +899,12 @@ those links as they are; they add nothing to them and order nothing.
 ## As built (part A: orchestrator, API, CLI)
 
 Built on `feat/agent-coordination`; migration
-`113_agent_coordination.sql`. Where the build chose differently from the
+`114_agent_coordination.sql`. Where the build chose differently from the
 sections above, or where they were silent:
 
 - **Peers are the epic only.** Task relations exist, but they do not make
   peers yet. The rule is the SQL function `task_peers(task)`
-  (migration 113), returning `(peer_id, via)`; every tool, briefing and the
+  (migration 114), returning `(peer_id, via)`; every tool, briefing and the
   API read it through `delivery.Peers` / `PeerByKey`
   (`orchestrator/internal/delivery/peers.go`). Direct `blocks` edges could
   join it as a `UNION` there, with `via = 'depends_on'`.
@@ -969,7 +969,7 @@ sections above, or where they were silent:
 - **A peer's task ending releases its waiters** (part B). When a task's
   status becomes done, failed or aborted (`delivery.SetTaskStatusTx`, the
   one writer of a terminal task status), every open `peer_waits` on a
-  message to it closes with `closed_by = 'peer_ended'` (migration 114),
+  message to it closes with `closed_by = 'peer_ended'` (migration 115),
   `agent.peer.wait_ended {by: peer_ended, status}` is written on the
   sender's Run, and the sender gets the directive "ABS-2 ended without
   replying (status: done). Carry on with your assumption, or ask a

@@ -808,4 +808,72 @@ describe("an earlier conductor's conversation", () => {
     await until(() => page.querySelector("[data-testid=earlier-conductor-ended]"), "the earlier conversation again");
     expect(client.reads).toEqual([0, last]);
   });
+
+  test("a conductor whose start failed, retried by the next: its message says Try again started a new one", async () => {
+    cursor = 300;
+    const failed = [
+      ev("run.created", { role: "conductor" }, MARCIO),
+      ev("chat.message", { text: "what changed?" }, MARCIO),
+      ev("conductor.briefed", { text: BRIEFING.replace("why 8s?", "what changed?") }),
+      ev("run.stage", { stage: "container", since: at(3), epoch: 1 }),
+      ev("run.failed", { status: "failed", error: "x", stage: "container", reason: "start-failed" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+    const retries = (named: boolean) => ({ ...ev("run.created", { role: "conductor", ...(named ? { retries: EARLIER } : {}) }, MARCIO), cursor: 10_000 });
+    class Retried extends TwoConductors {
+      constructor(private readonly named: boolean) {
+        super(failed);
+      }
+      protected override ledgerFor(params: LedgerQuery): PersistedEvent[] {
+        const base = super.ledgerFor(params);
+        return params.taskId === TASK_ID && !params.runId ? [...base, retries(this.named)].filter((e) => e.cursor > (params.after ?? 0)) : base;
+      }
+    }
+    const said = async (named: boolean) => {
+      const page = await chatPage(new Retried(named));
+      const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the failed conductor");
+      return earlier.querySelector("[data-testid=human-turn]")!.textContent ?? "";
+    };
+    const shown = await said(true);
+    expect(shown).toContain("the agent did not start; Try again started a new one.");
+    expect(shown).not.toContain("Try again starts it");
+    // Not retried (a person's next message started the next): unchanged.
+    expect(await said(false)).toContain("Try again starts it with this message.");
+  });
+
+  test("Try again on a conductor whose start failed: the fresh one's briefing, the same words, is one line, not a second card", async () => {
+    cursor = 300;
+    const ASKED = BRIEFING.replace("why 8s?", "what changed?");
+    const failed = [
+      ev("run.created", { role: "conductor" }, MARCIO),
+      ev("chat.message", { text: "what changed?" }, MARCIO),
+      ev("conductor.briefed", { text: ASKED }),
+      ev("run.stage", { stage: "container", since: at(3), epoch: 1 }),
+      ev("run.failed", { status: "failed", error: "x", stage: "container", reason: "start-failed" }),
+    ].map((e) => ({ ...e, runId: EARLIER }));
+    cursor = 400;
+    const fresh = [
+      ev("run.created", { role: "conductor", retries: EARLIER }, MARCIO),
+      ev("conductor.briefed", { text: ASKED }),
+      ev("agent.message", { text: "Only the retry budget." }, { type: "agent", id: CONDUCTOR }),
+    ];
+    class Retried extends TwoConductors {
+      constructor() {
+        super(failed);
+      }
+      protected override ledgerFor(params: LedgerQuery): PersistedEvent[] {
+        if (params.runId === CONDUCTOR) return fresh.filter((e) => e.cursor > (params.after ?? 0));
+        const base = super.ledgerFor(params);
+        return params.taskId === TASK_ID && !params.runId ? [...base, fresh[0]!].filter((e) => e.cursor > (params.after ?? 0)) : base;
+      }
+    }
+    const page = await chatPage(new Retried());
+    const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the failed conductor");
+    const again = await until(() => page.querySelector<HTMLElement>("[data-testid=chat-briefed-again]"), "the briefed-again line");
+    expect(again.textContent).toContain("Briefed again with the same message");
+    expect(earlier.contains(again)).toBe(false);
+    // The failed conductor's card is the only full briefing.
+    const briefings = [...page.querySelectorAll("[data-testid=chat-briefing]")];
+    expect(briefings.length).toBe(1);
+    expect(earlier.contains(briefings[0]!)).toBe(true);
+  });
 });

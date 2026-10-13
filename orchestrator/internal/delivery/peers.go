@@ -12,7 +12,7 @@ import (
 
 // Peers: the tasks a task's agents may read, message and brief
 // (docs/design/agent-coordination.md). Who is a peer is the SQL function
-// task_peers (migration 113) and nothing else: every tool, briefing and
+// task_peers (migration 114) and nothing else: every tool, briefing and
 // API reads it through these helpers, so "depends on" links join it in one
 // place.
 

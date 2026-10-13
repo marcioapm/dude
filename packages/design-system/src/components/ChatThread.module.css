@@ -35,11 +35,34 @@
 .qa_browser {
   --rail: var(--ds-role-qa-browser-solid);
 }
+.subagent {
+  --rail: var(--ds-role-subagent-solid);
+}
 .finished {
   border-left-color: color-mix(in srgb, var(--rail) 45%, transparent);
 }
 .live {
   --rail-bg: color-mix(in srgb, var(--rail) 4%, transparent);
+}
+/* Live and blocked on what nothing in it can answer: the one attention
+   area of the thread. Its rail and wash take the attention tone in place
+   of the role's; the header says on what, for how long. */
+.root.waiting {
+  --rail: var(--ds-tone-attention-mark);
+  --rail-bg: var(--ds-tone-attention-bg);
+}
+.waitingOn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-tone-attention-fg);
+  font-weight: var(--ds-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+.waitingDetail {
+  padding: 0 var(--ds-space-12) var(--ds-space-6) calc(var(--ds-space-6) + 12px + var(--ds-space-8) + 16px + var(--ds-space-8));
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
 }
 
 .header {
@@ -54,6 +77,14 @@
   border-radius: 0;
 }
 .header:hover {
+  background: var(--ds-color-hover-wash);
+}
+/* An open-only row opens from anywhere on it, summary included: it all says so. */
+.root[data-open-only="true"] {
+  cursor: pointer;
+}
+.root[data-open-only="true"]:hover > .header,
+.root[data-open-only="true"]:hover > .summary {
   background: var(--ds-color-hover-wash);
 }
 .header:focus-visible {

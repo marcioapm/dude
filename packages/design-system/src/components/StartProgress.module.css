@@ -1,0 +1,257 @@
+/*
+ * StartProgress and StartChip. The row sits on the turn grid (avatar gutter
+ * + text column) so its words start where the agent's will. Only a failure
+ * takes a tone (the transcript's danger Callout); starting and slow take
+ * none but the starting mark's own.
+ */
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
+  column-gap: var(--ds-space-chat-avatar-gap);
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+.gutter {
+  padding-top: var(--ds-space-2);
+}
+.column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* A failure sits on the text column, as the transcript's ended turn does. */
+.failedRow {
+  margin-top: var(--ds-space-chat-gap);
+  padding: 0 var(--ds-space-chat-pad-x) 0 calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+  font-size: var(--ds-text-sm);
+}
+.failedLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.failedLine b {
+  font-weight: var(--ds-weight-medium);
+}
+.failedStages {
+  padding-left: var(--ds-space-8);
+}
+.toggleQuiet {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin-top: var(--ds-space-4);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  cursor: pointer;
+  border-radius: var(--ds-radius-mark);
+}
+.toggleQuiet:hover {
+  color: var(--ds-color-text-primary);
+}
+.toggleQuiet:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+}
+.toggleQuiet[aria-expanded="true"] .chev {
+  rotate: 180deg;
+}
+
+.headLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-8);
+}
+/* The line is the disclosure: the wash on hover, the pointer, the focus ring. */
+.head {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2) var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  margin-left: calc(-1 * var(--ds-space-8));
+  padding: var(--ds-space-2) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+}
+.head:hover {
+  background: var(--ds-color-hover-wash);
+}
+.head:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 1px;
+}
+/* No stages to open (an older lux): the same line, not a button. */
+.headStatic {
+  cursor: auto;
+}
+.headStatic:hover {
+  background: none;
+}
+.now {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reason {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-primary);
+}
+.clock {
+  color: var(--ds-color-text-primary);
+}
+.tick {
+  font-variant-numeric: tabular-nums;
+}
+.total {
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.chev {
+  display: inline-grid;
+  color: var(--ds-color-text-muted);
+  transition: rotate var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.head[aria-expanded="true"] .chev {
+  rotate: 180deg;
+}
+
+/* Slow: one calm line in secondary ink, never amber. */
+.slow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+  margin: var(--ds-space-2) 0 0;
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.slowGlyph {
+  flex: none;
+  color: var(--ds-color-text-muted);
+  translate: 0 1px;
+}
+.slowDetail {
+  display: block;
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+
+/* The stepper: StepList's and PreviewStages' glyph grammar, small, on a guide line. */
+.steps {
+  list-style: none;
+  margin: var(--ds-space-4) 0 var(--ds-space-2);
+  padding: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(0, max-content) auto;
+  column-gap: var(--ds-space-8);
+  max-width: 420px;
+}
+.steps[hidden] {
+  display: none;
+}
+.step {
+  display: contents;
+}
+.step > * {
+  min-height: var(--ds-size-row-item-sm);
+  display: flex;
+  align-items: center;
+}
+.stepGlyph {
+  position: relative;
+  justify-content: center;
+  color: var(--ds-color-text-disabled);
+}
+.stepGlyph::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 8px);
+  bottom: calc(-50% + 8px);
+  width: 1px;
+  translate: -0.5px 0;
+  background: var(--ds-color-border-subtle);
+}
+.step:last-child .stepGlyph::after {
+  display: none;
+}
+.stepLabel {
+  color: var(--ds-color-text-muted);
+}
+.stepTime {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+  padding-left: var(--ds-space-16);
+}
+.step[data-state="done"] .stepGlyph {
+  color: var(--ds-tone-success-mark);
+}
+.step[data-state="done"] .stepLabel {
+  color: var(--ds-color-text-secondary);
+}
+.step[data-state="current"] .stepGlyph {
+  color: var(--ds-tone-info-mark);
+}
+/* The one loop: divided by --ds-motion-live, so reduced motion freezes it in place. */
+.step[data-state="current"] .stepGlyph svg {
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+.step[data-state="current"] .stepLabel,
+.step[data-state="current"] .stepTime {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.step[data-state="failed"] .stepGlyph {
+  color: var(--ds-tone-danger-mark);
+}
+.step[data-state="failed"] .stepLabel {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.stepFailed {
+  color: var(--ds-tone-danger-fg);
+}
+
+/* StartChip: StatusMark's grammar, then the words, then the clock. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-height: var(--ds-size-chip);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  min-width: 0;
+}
+.chipPart {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.chipWords {
+  color: var(--ds-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chipDot {
+  color: var(--ds-color-text-muted);
+}

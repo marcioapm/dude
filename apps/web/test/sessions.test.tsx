@@ -19,6 +19,7 @@ import type { FileResult } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { App } from "../src/App.tsx";
 import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { project } from "../src/api/conversation.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
 
@@ -1595,5 +1596,381 @@ describe("a session's URL", () => {
     expect(formatPlace({ view: "brainstorm", id: "ssn_1" })).toBe("#/sessions/ssn_1");
     expect(formatPlace({ view: "sessions" })).toBe("#/sessions");
     expect(parsePlace("#/session/ses_1")).toEqual({ view: "tree", ref: { kind: "session", id: "ses_1" } });
+  });
+});
+
+describe("a session's agent starting", () => {
+  // Times near now, so the clocks read believably; the stage's since is lux's.
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  function starting(extra: () => PersistedEvent[] = () => []) {
+    const created = { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(20_000) };
+    const msg = { ...ev("chat.message", { text: "plan the epic" }, { type: "person", id: YOU } as PersistedEvent["actor"]), occurredAt: ago(19_000) };
+    const waiting = ev("run.stage", { stage: "waiting", since: ago(20_000), epoch: 1 });
+    const repos = ev("run.stage", { stage: "repositories", since: ago(12_000), epoch: 1 });
+    return [created, msg, waiting, repos, ...extra()];
+  }
+  const startingDetail = () => detail("owner", { session: { ...detail("owner").session,
+    run: { id: RUN, status: "scheduled", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } });
+
+  test("the header's chip, the row where its first turn will be, the queued message and the composer agree", async () => {
+    const page = await sessionPage(new SessionClient(startingDetail(), starting()));
+    const chip = await until(() => page.querySelector("[data-testid=start-chip]"), "the chip");
+    expect(chip.querySelector("[data-status=starting]")!.textContent).toContain("Starting");
+    expect(chip.textContent).toContain("Checking out repositories");
+    const row = page.querySelector("[data-testid=start-progress]")!;
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Starting: Checking out repositories.");
+    expect(row.textContent).toContain("in all");
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Will be read when the agent starts.");
+    expect(page.querySelector("[data-testid=composer-start-hint]")!.textContent).toBe("· Will be read when the agent starts.");
+  });
+
+  test("once it is up the cue goes, the message is read, and a line says how long it took", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), starting(() => [ev("agent.session.started", { role: "brainstorm" })])));
+    await until(() => page.querySelector("[data-testid=chat-notice]"), "the summary line");
+    expect(page.querySelector("[data-testid=start-progress]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
+    expect(page.querySelector("[data-testid=composer-start-hint]")).toBeNull();
+    expect(page.querySelector("[data-testid=chat-notice]")!.textContent).toMatch(/Started in \d+s\./);
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).not.toContain("Will be read");
+  });
+
+  test("failed: Try again starts a fresh agent with the message, which is queued again until it is up", async () => {
+    const failedAt = () => [ev("run.failed", { status: "failed", error: "x", stage: "repositories", reason: "pull failed: manifest unknown" })];
+    class Retrying extends SessionClient {
+      retried = 0;
+      override retrySessionAgent() {
+        this.retried += 1;
+        this.detail = { ...this.detail, session: { ...this.detail.session,
+          run: { id: "run_brainstorm2", status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } };
+        this.ledger.push(ev("run.created", { role: "brainstorm", retries: RUN }));
+        return Promise.resolve({ runId: "run_brainstorm2", created: true });
+      }
+    }
+    const client = new Retrying(detail("owner"), starting(failedAt));
+    const page = await sessionPage(client);
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not start: failed while checking out repositories: pull failed: manifest unknown.");
+    expect(page.querySelector("[data-testid=human-turn]")!.textContent).toContain("Not delivered:");
+    // The header says it too: "✕ Did not start · Failed while …", until Try again starts the next agent.
+    const chip = page.querySelector("[data-testid=start-chip]")!;
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).toContain("Failed while checking out repositories");
+    await click(page.querySelector("[data-testid=start-retry]")!);
+    expect(client.retried).toBe(1);
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => (page.querySelector("[data-testid=start-retry]") === null ? true : null), "Try again gone once used");
+    expect(page.querySelector("[data-testid=start-chip] [data-status=starting]")).not.toBeNull();
+    const sent = page.querySelector("[data-testid=human-turn]")!;
+    expect(sent.textContent).not.toContain("Not delivered");
+    expect(sent.textContent).toContain("Will be read when the agent starts.");
+    expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
+  });
+
+  test("failed before lux named a stage: the header still says Did not start, with no stage words", async () => {
+    const created = { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(20_000) };
+    const msg = { ...ev("chat.message", { text: "plan the epic" }, { type: "person", id: YOU } as PersistedEvent["actor"]), occurredAt: ago(19_000) };
+    const page = await sessionPage(new SessionClient(detail("owner"), [created, msg, ev("run.failed", { status: "failed", error: "No model yet." })]));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    const chip = await until(() => page.querySelector("[data-testid=start-chip]"), "the header's mark");
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).not.toContain("Failed while");
+  });
+
+  test("Try again's fresh agent, briefed with the same words: one full briefing card, then one line that opens it; the message read once", async () => {
+    const BRIEF = "Brainstorm, you are working with Márcio on billing.\n\n## The first message\n\nMárcio: plan the epic";
+    const failedThenRetried = () => [
+      ...starting(() => [
+        ev("session.briefed", { text: BRIEF }),
+        ev("run.failed", { status: "failed", error: "x", stage: "repositories", reason: "clone failed" }),
+      ]),
+      { ...ev("run.created", { role: "brainstorm", retries: RUN }), runId: "run_brainstorm2" },
+      { ...ev("session.briefed", { text: BRIEF }), runId: "run_brainstorm2" },
+      { ...ev("agent.session.started", { role: "brainstorm" }), runId: "run_brainstorm2" },
+    ];
+    const c = project(failedThenRetried(), "running");
+    const briefings = c.turns.filter((t) => t.kind === "prompt");
+    expect(briefings.map((t) => t.kind === "prompt" && [t.briefing, t.again ?? false])).toEqual([[true, false], [true, true]]);
+    expect(c.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && [t.text, t.deliveredAt !== null, t.failed]))
+      .toEqual([["plan the epic", true, null]]);
+
+    const page = await sessionPage(new SessionClient(detail("owner"), failedThenRetried()));
+    await until(() => page.querySelector("[data-testid=chat-briefed-again]"), "the line");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(1);
+    expect(page.querySelectorAll("[data-testid=human-turn]").length).toBe(1);
+    const toggle = page.querySelector<HTMLButtonElement>("[data-testid=briefed-again-toggle]")!;
+    expect(toggle.textContent).toBe("Briefed again with the same message");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(page.querySelectorAll("[data-testid=chat-briefing]").length).toBe(2);
+  });
+
+  test("a later Run that is not Try again's keeps its briefing in full, even with the same words", () => {
+    const BRIEF = "Brainstorm, you are working with Márcio.";
+    const c = project([ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF }),
+      ev("run.created", { role: "brainstorm" }), ev("session.briefed", { text: BRIEF })], "running");
+    expect(c.turns.filter((t) => t.kind === "prompt").map((t) => t.kind === "prompt" && (t.again ?? false))).toEqual([false, false]);
+  });
+
+  // A parked agent whose resume lux ended while it waited for a host: its message queued, never read.
+  function failedResume() {
+    const at = (ms: number) => ago(60_000 - ms);
+    const e = (type: string, payload: Record<string, unknown>, ms: number, actor?: PersistedEvent["actor"]) =>
+      ({ ...ev(type, payload, actor), occurredAt: at(ms) });
+    return [
+      e("run.created", { role: "brainstorm" }, 0),
+      e("agent.message", { text: "Metering lives in billing." }, 1_000),
+      e("run.parked", { reason: "session", stopped: "stopped" }, 2_000),
+      e("chat.message", { text: "and the tests?", directiveId: "dir_2" }, 3_000, { type: "person", id: YOU } as PersistedEvent["actor"]),
+      e("run.unparked", { reason: "session", epoch: 2 }, 3_100),
+      e("run.stage", { stage: "waiting", since: at(3_100), epoch: 1 }, 3_200),
+      e("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }, 9_000),
+    ];
+  }
+
+  test("a resume: no 'Taken back up' while its row still shows stages; once the agent is back, the timed line alone", async () => {
+    const at = (ms: number) => ago(60_000 - ms);
+    const e = (type: string, payload: Record<string, unknown>, ms: number, actor?: PersistedEvent["actor"]) =>
+      ({ ...ev(type, payload, actor), occurredAt: at(ms) });
+    const ledger = [
+      e("run.created", { role: "brainstorm" }, 0),
+      e("agent.message", { text: "Metering lives in billing." }, 1_000),
+      e("run.parked", { reason: "session", stopped: "stopped" }, 2_000),
+      e("chat.message", { text: "and the tests?", directiveId: "dir_2" }, 3_000, { type: "person", id: YOU } as PersistedEvent["actor"]),
+      e("run.unparked", { reason: "session", epoch: 2 }, 3_100),
+      e("run.stage", { stage: "waiting", since: at(3_100), epoch: 2 }, 3_200),
+      e("run.stage", { stage: "volumes", since: at(9_000), epoch: 2 }, 9_100),
+    ];
+    const client = new SessionClient(detail("owner"), ledger);
+    const page = await sessionPage(client);
+    const row = await until(() => page.querySelector("[data-testid=start-progress][data-state=starting]"), "the Resuming row");
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Resuming: Restoring its workspace.");
+    const said = () => [...page.querySelectorAll("[data-testid=chat-notice]")].map((n) => n.textContent ?? "");
+    expect(said().filter((t) => t.includes("Taken back up"))).toEqual([]);
+    const timed = e("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 33_100);
+    client.ledger.push(timed);
+    await act(async () => emit(timed));
+    await until(() => (page.querySelector("[data-testid=start-progress]") === null ? true : null), "the row gone");
+    const backs = said().filter((t) => t.includes("Taken back up"));
+    expect(backs).toHaveLength(1);
+    expect(backs[0]).toContain("Taken back up in 30s.");
+  });
+
+  test("a resume that failed: Did not resume, with Try again, which hands its message to a fresh agent", async () => {
+    class Retrying extends SessionClient {
+      retried = 0;
+      override retrySessionAgent() {
+        this.retried += 1;
+        return Promise.resolve({ runId: "run_brainstorm2", created: true });
+      }
+    }
+    const client = new Retrying(detail("owner"), failedResume());
+    const page = await sessionPage(client);
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toContain("Did not resume: failed while waiting for a machine: terminated.");
+    await click(page.querySelector("[data-testid=start-retry]")!);
+    expect(client.retried).toBe(1);
+  });
+
+  test("a resume that failed, then Try again as the server records it: retried, its message one turn, now the fresh agent's", () => {
+    const next = "run_brainstorm2";
+    const on = (e: PersistedEvent) => ({ ...e, runId: next, occurredAt: ago(1_000) });
+    const directive = failedResume().find((e) => e.eventType === "chat.message")!.payload.directiveId;
+    // What RetryBrainstorm's hand-over writes: the fresh agent naming the Run it retries, briefed with the
+    // message (shown again, no directive), then the failed Run's copy settled naming it.
+    const ledger = [
+      ...failedResume(),
+      on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
+      on(ev("chat.message", { text: "and the tests?", supersedes: directive }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …\n\n## The first message\n\nMárcio: and the tests?", supersedes: directive })),
+      { ...ev("run.directive.failed", { directiveId: directive, error: `the session's agent stopped before reading it; the next one, ${next}, has it`,
+        nextRunId: next }), occurredAt: ago(1_000) },
+    ];
+    const c = project(ledger, "pending");
+    const ended = c.turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && [ended.retried, ended.taken]).toEqual([true, undefined]);
+    const human = c.turns.filter((t) => t.kind === "human");
+    expect(human.map((t) => t.kind === "human" && [t.text, t.failed, t.deliveredAt])).toEqual([["and the tests?", null, null]]);
+    // Read once the fresh agent is up.
+    const up = project([...ledger, on(ev("agent.session.started", { role: "brainstorm" }))], "running");
+    expect(up.turns.filter((t) => t.kind === "human").map((t) => t.kind === "human" && t.deliveredAt !== null)).toEqual([true]);
+  });
+
+  test("a resume that failed, then Try again as the server records it: no 'a new agent took them' line, one copy", async () => {
+    const next = "run_brainstorm2";
+    const on = (e: PersistedEvent) => ({ ...e, runId: next, occurredAt: ago(1_000) });
+    const directive = failedResume().find((e) => e.eventType === "chat.message")!.payload.directiveId;
+    const ledger = [
+      ...failedResume(),
+      on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN })),
+      on(ev("chat.message", { text: "and the tests?", supersedes: directive }, { type: "person", id: YOU } as PersistedEvent["actor"])),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: directive })),
+      { ...ev("run.directive.failed", { directiveId: directive, error: "x", nextRunId: next }), occurredAt: ago(1_000) },
+    ];
+    const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
+      run: { id: next, status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } }), ledger));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry-taken]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect([...page.querySelectorAll("[data-testid=human-turn]")].filter((t) => t.textContent?.includes("and the tests?")).length).toBe(1);
+  });
+
+  test("Try again after a new agent already took the messages: says so, and is not offered again", async () => {
+    class Taken extends SessionClient {
+      override retrySessionAgent(): Promise<{ runId: string; created: boolean }> {
+        return Promise.reject(new ApiError(409, "retry_taken", "a new agent already took the later messages"));
+      }
+    }
+    const page = await sessionPage(new Taken(detail("owner"), failedResume()));
+    await click(await until(() => page.querySelector("[data-testid=start-retry]"), "Try again"));
+    const said = await until(() => page.querySelector("[data-testid=start-retry-taken]"), "the line");
+    expect(said.textContent).toBe("A new agent already took the later messages.");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.textContent).not.toContain("Could not start it again");
+  });
+
+  test("a failed start a later agent took over (no Try again): not offered, and said why", async () => {
+    const later = [...failedResume(), { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(1_000) }];
+    const page = await sessionPage(new SessionClient(detail("owner"), later));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-retry-taken]")!.textContent).toBe("A new agent already took the later messages.");
+  });
+});
+
+describe("Try again hands each unread message on as the directive it replaces, never by its words", () => {
+  const NEXT = "run_brainstorm2";
+  const by = (id: string) => ({ type: "person", id }) as PersistedEvent["actor"];
+  const on = (e: PersistedEvent) => ({ ...e, runId: NEXT });
+  // A parked agent whose resume lux ended, with `unread` sent to it; `before` is what it did before it parked.
+  // Thunks, so each event's cursor follows the ones before it.
+  const failedWith = (before: () => PersistedEvent[], unread: () => PersistedEvent[]) => [
+    ev("run.created", { role: "brainstorm" }),
+    ev("agent.message", { text: "Metering lives in billing." }),
+    ...before(),
+    ev("run.parked", { reason: "session", stopped: "stopped" }),
+    ...unread(),
+    ev("run.unparked", { reason: "session", epoch: 2 }),
+    ev("run.stage", { stage: "waiting", since: at(0), epoch: 1 }),
+    ev("run.failed", { status: "failed", error: "terminated", stage: "waiting", reason: "terminated" }),
+  ];
+  const retried = () => on(ev("run.created", { role: "brainstorm", publishes: false, retries: RUN }));
+  const HAS_IT = `the session's agent stopped before reading it; the next one, ${NEXT}, has it`;
+  const settled = (directiveId: string, error = HAS_IT) => ev("run.directive.failed", { directiveId, error, nextRunId: NEXT });
+  const humans = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) =>
+    t.kind === "human" ? [[t.by?.id, t.text, t.directiveId, t.deliveredAt !== null, t.failed]] : []);
+
+  test("an answer's note is the fresh agent's briefing; an identical later Chat message stays its writer's own turn", () => {
+    const ledger = [
+      ...failedWith(() => [ev("question.asked", { kind: "agent", questionId: "q_1", prompt: "Which table?" })], () => [
+        ev("question.answered", { questionId: "q_1", answer: "jobs", note: "same", directiveId: "dir_ans" }, by(ANA.id)),
+        ev("chat.message", { text: "same", directiveId: "dir_msg" }, by(YOU)),
+      ]),
+      // sessionHandOver: the answer has no Chat copy, only the briefing naming it; the message is queued for the fresh agent.
+      retried(),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_ans" })),
+      on(ev("chat.message", { text: "same", directiveId: "dir_n2", supersedes: "dir_msg" }, by(YOU))),
+      settled("dir_ans"), settled("dir_msg"),
+      on(ev("agent.session.started", { role: "brainstorm" })),
+      on(ev("run.directive.delivered", { directiveId: "dir_n2", read: true })),
+    ];
+    expect(humans(ledger)).toEqual([
+      [ANA.id, "same", null, true, null],
+      [YOU, "same", "dir_n2", true, null],
+    ]);
+  });
+
+  test("of two identical unread messages, the one refused for its images stays failed; the one handed on is read", () => {
+    const image = { id: "att_1", name: "plan.png", width: 10, height: 10, original: { bytes: 1 } };
+    const IMAGES = "the session's agent stopped before reading it; its images were not passed on; send it again";
+    const ledger = [
+      ...failedWith(() => [], () => [
+        ev("chat.message", { text: "again", directiveId: "dir_img", attachments: [image] }, by(YOU)),
+        ev("chat.message", { text: "again", directiveId: "dir_plain" }, by(YOU)),
+      ]),
+      retried(),
+      on(ev("chat.message", { text: "again", supersedes: "dir_plain" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_plain" })),
+      settled("dir_img", IMAGES), settled("dir_plain"),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "again", "dir_img", false, IMAGES],
+      [YOU, "again", null, false, null],
+    ]);
+    expect(humans([...ledger, on(ev("agent.session.started", { role: "brainstorm" }))])).toEqual([
+      [YOU, "again", "dir_img", false, IMAGES],
+      [YOU, "again", null, true, null],
+    ]);
+  });
+
+  test("two identical messages queued for the fresh agent: each delivery and failure lands on the turn its directive replaced", () => {
+    const ledger = [
+      // dir_b and dir_a were queued in one transaction (an earlier hand-over): the same created_at, so the hand-over
+      // takes them in id order, which need not be the order their Chat events were written.
+      ...failedWith(() => [], () => [
+        ev("chat.message", { text: "start", directiveId: "dir_0" }, by(YOU)),
+        ev("chat.message", { text: "ok", directiveId: "dir_b" }, by(ANA.id)),
+        ev("chat.message", { text: "ok", directiveId: "dir_a" }, by(YOU)),
+      ]),
+      retried(),
+      on(ev("chat.message", { text: "start", supersedes: "dir_0" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_0" })),
+      on(ev("chat.message", { text: "ok", directiveId: "dir_na", supersedes: "dir_a" }, by(YOU))),
+      on(ev("chat.message", { text: "ok", directiveId: "dir_nb", supersedes: "dir_b" }, by(ANA.id))),
+      settled("dir_0"), settled("dir_a"), settled("dir_b"),
+      on(ev("agent.session.started", { role: "brainstorm" })),
+      on(ev("run.directive.delivered", { directiveId: "dir_na", read: true })),
+      on(ev("run.directive.failed", { directiveId: "dir_nb", error: "lux could not deliver it" })),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "start", null, true, null],
+      [ANA.id, "ok", "dir_nb", false, "lux could not deliver it"],
+      [YOU, "ok", "dir_na", true, null],
+    ]);
+  });
+
+  test("a sweep's hand-over that names the directive it replaces, without Try again, stays a turn of its own", () => {
+    const ledger = [
+      ...failedWith(() => [], () => [ev("chat.message", { text: "ok", directiveId: "dir_a" }, by(YOU))]),
+      on(ev("run.created", { role: "brainstorm", publishes: false })),
+      on(ev("chat.message", { text: "ok", supersedes: "dir_a" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_a" })),
+      settled("dir_a"),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "ok", "dir_a", false, HAS_IT],
+      [YOU, "ok", null, false, null],
+    ]);
+  });
+
+  // An aside held for the question the agent put to Ana, and a message the old harness accepted but never
+  // read; the resume fails, and Try again hands the aside on as the fresh agent's briefing, the other queued.
+  const heldThenRetried = () => [
+    ...failedWith(() => [ev("question.asked", { kind: "agent", questionId: "q_1", prompt: "Which table?", to: ANA.id })], () => [
+      ev("chat.message", { text: "use jobs", directiveId: "dir_held", heldFor: "q_1" }, by(YOU)),
+      ev("chat.message", { text: "and the tests?", directiveId: "dir_acc" }, by(YOU)),
+      ev("run.directive.accepted", { directiveId: "dir_acc", lands: "next_turn" }),
+    ]),
+    retried(),
+    on(ev("chat.message", { text: "use jobs", supersedes: "dir_held" }, by(YOU))),
+    on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_held" })),
+    on(ev("chat.message", { text: "and the tests?", directiveId: "dir_n", supersedes: "dir_acc" }, by(YOU))),
+    settled("dir_held"), settled("dir_acc"),
+  ];
+
+  test("a held aside and an accepted message handed on take the fresh attempt's state: no hold, no old receipt", () => {
+    const c = project(heldThenRetried(), "pending");
+    expect(c.turns.flatMap((t) => t.kind === "human" ? [[t.text, t.directiveId, t.heldFor, t.acceptedAt, t.lands, t.deliveredAt, t.failed]] : []))
+      .toEqual([
+        ["use jobs", null, null, null, null, null, null],
+        ["and the tests?", "dir_n", null, null, null, null, null],
+      ]);
+  });
+
+  test("the held aside handed to a fresh agent reads as waiting for it to start, not for the old question's answer", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
+      run: { id: NEXT, status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } }), heldThenRetried()));
+    const aside = await until(() => [...page.querySelectorAll("[data-testid=human-turn]")].find((t) => t.textContent?.includes("use jobs")) ?? null, "the aside");
+    expect(aside.textContent).toContain("Will be read when the agent starts.");
+    expect(aside.textContent).not.toContain("goes after the answer");
   });
 });

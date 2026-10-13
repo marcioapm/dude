@@ -47,7 +47,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -608,6 +608,12 @@ export const runSchema = z.object({
     .default(null),
   /** The Run that replaced it when it was restarted; null for none. */
   replacedBy: z.string().nullable().default(null),
+  /**
+   * Where its start is while it starts, from its latest `run.stage`: lux's
+   * stage, since when, and the placement's epoch. Null once lux reports it
+   * running, when it is not live, or from a lux that reports no stages.
+   */
+  startStage: z.object({ stage: z.string(), since: z.string().nullable(), epoch: z.number().nullable() }).nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
 

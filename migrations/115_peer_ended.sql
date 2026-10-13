@@ -1,4 +1,4 @@
--- 114_peer_ended.sql — a wait on a peer also ends when the peer's task
+-- 115_peer_ended.sql — a wait on a peer also ends when the peer's task
 -- ends without replying (docs/design/agent-coordination.md, "As built");
 -- and the scripted agent's fake/peer is a test model a tier may request.
 --

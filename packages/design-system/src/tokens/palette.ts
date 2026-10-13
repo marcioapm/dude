@@ -197,18 +197,30 @@ export const tones: Record<"light" | "dark", Record<ToneName, ToneInstance>> = {
 // secondary cue.
 // ---------------------------------------------------------------------------
 
-export type AgentRoleName = AgentRole;
+/**
+ * The roles the design system draws: dude's agent roles, and `subagent`, a
+ * visual role only — a child session (an explore or general agent a Run's
+ * agent started from a tool call), which is not a Run and has no role in
+ * the domain.
+ */
+export type AgentRoleName = AgentRole | "subagent";
 
-export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = ALL_AGENT_ROLES;
+export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = [...ALL_AGENT_ROLES, "subagent"];
 
 /**
  * Roles that wear another role's colour instead of a slot of their own. The
  * brainstorm is a conversation agent like the conductor: no seventh hue at
  * this chroma and lightness clears the pair bar against all six slots in
  * both modes, and the free hues near 80 read as the attention tone. Its
- * glyph and label tell it apart.
+ * glyph and label tell it apart. The subagent wears the investigator's for
+ * the same reason (searched again at chroma 0–0.2, lightness 0.3–0.95: only
+ * near-white in dark and near-black in light clear it, which read as text);
+ * a child mostly reads and searches, and its fork glyph and label tell it
+ * apart.
  */
-export const ROLE_COLOUR_OF = { brainstorm: "conductor" } as const satisfies Partial<Record<AgentRoleName, AgentRoleName>>;
+export const ROLE_COLOUR_OF = { brainstorm: "conductor", subagent: "investigator" } as const satisfies Partial<
+  Record<AgentRoleName, AgentRoleName>
+>;
 
 /** A role that owns a colour slot. */
 export type RoleColourSlot = Exclude<AgentRoleName, keyof typeof ROLE_COLOUR_OF>;

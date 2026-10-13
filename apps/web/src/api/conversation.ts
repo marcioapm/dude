@@ -14,11 +14,12 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus } from "@dude/domain";
-import { EventTypes, TERMINAL_RUN_STATUSES, askItems, itemAnswers } from "@dude/domain";
+import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus, SessionStatus, StartStage } from "@dude/domain";
+import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStartStage, itemAnswers } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
+import { instant } from "../instant.ts";
 
 /**
  * What a finished tool call produced. Agents report one merged stream or
@@ -43,6 +44,47 @@ export interface ToolTurn {
   result: ToolResult | null;
   /** dude refused the call (a message over the rate, to no peer): why, in its words. */
   refusal?: string;
+  /** The child sessions (subagents) this call started, in the order they started. */
+  children: ChildTurn[];
+}
+
+/**
+ * A child session a tool call started (a task or spawn call's subagent),
+ * nested under that call: its own tool calls and messages, how it ended,
+ * and a permission it waits on that nothing in the Run can answer.
+ */
+export interface ChildTurn {
+  kind: "child";
+  id: string;
+  /** The parent's call that started it. */
+  callId: string;
+  /** `task` (OpenCode, Claude Code) or `spawn` (Codex). */
+  childKind: string;
+  title: string;
+  agentType: string | null;
+  model: string | null;
+  status: SessionStatus;
+  startedAt: string;
+  endedAt: string | null;
+  /** What its harness said it spent: already in the Run's cost, never added to it. */
+  costUsd: number | null;
+  /** How it ended, in its harness's words. */
+  summary: string | null;
+  turns: Array<ToolTurn | MessageTurn>;
+  waitingOn: { permission: string; patterns: string[]; since: string } | null;
+  /** The child whose call started this one; null under one of the Run's own calls. */
+  parentChildId: string | null;
+  /**
+   * Bumped whenever this child or any child under it changes. The
+   * projection mutates children in place, so a renderer compares this,
+   * not the object, to skip a child that did not change.
+   */
+  revision: number;
+  /**
+   * A terminal Run's settled copy, which may show a status the live child
+   * has not reached at the same revision: a renderer compares this too.
+   */
+  settled: boolean;
 }
 
 export interface MessageTurn {
@@ -101,6 +143,8 @@ export interface PromptTurn {
   at: string;
   /** dude's briefing of a task's conductor, not a phase's task. */
   briefing?: true;
+  /** A briefing Try again repeated, word for word, to the fresh agent: shown folded, the first one already says it. */
+  again?: true;
   /** Images a person gave with the task. */
   attachments: AttachmentInfo[];
 }
@@ -264,6 +308,33 @@ export interface EndedTurn {
   by: ActorRef | null;
   /** The reason given, when there was one. */
   why: string | null;
+  /** A start that failed before the agent ran: where it was, as the row showed it. lux's reason is `why`. */
+  start?: StartState;
+  /** That start was tried again: a fresh agent took its message. */
+  retried?: boolean;
+  /** A later agent took what it left without Try again (the hand-over, a next message): nothing is left to try again. */
+  taken?: boolean;
+  /** A conductor dude started with its wake note, no person's message: dude wakes the next one for the same reasons. */
+  woken?: boolean;
+}
+
+/**
+ * Where an agent is while it starts, from its `run.stage` events: a fresh
+ * agent, one taken back up, or one moved to another machine (led by
+ * `park`). `stage` is null while lux has named none (an older lux).
+ */
+export interface StartState {
+  kind: "start" | "resume" | "move";
+  stage: StartStage | null;
+  stageSince: string | null;
+  /** When this start began: the Run's creation, the resume's request, or the move's stop. */
+  startedAt: string;
+  /** Stages passed in this start, with how long each took (consecutive `since`s, both lux's). */
+  done: Array<{ stage: StartStage; tookMs: number }>;
+  /** lux's reason with its latest stage (why it waits for a machine), when it gave one. */
+  luxReason: string | null;
+  /** It failed in `stage`: lux's raw reason, or dude's own sentence (`run.failed`'s error) when lux gave none. */
+  failed: { reason: string | null; source: "lux" | "dude" } | null;
 }
 
 export type Turn =
@@ -386,13 +457,13 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   },
 };
 
-/** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them. */
+/** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them: lux's in the stages' words, dude's in its own. */
 const RESUME_PHASES: ReadonlyArray<readonly [key: string, label: string]> = [
   ["react", "dude asked lux"],
-  ["schedule", "lux placed it"],
-  ["image", "image ready"],
-  ["restore", "restored"],
-  ["start", "started"],
+  ["schedule", START_STAGE_WORDS.waiting.done],
+  ["image", START_STAGE_WORDS.image.done],
+  ["restore", START_STAGE_WORDS.volumes.done],
+  ["start", START_STAGE_WORDS.container.done],
   ["reload", "agent reloaded"],
   ["take", "took its input"],
   ["firstOutput", "first words"],
@@ -425,10 +496,28 @@ export const CUSTOM_EVENT_PREFIX = "agent.custom.";
  * until the turn ends, and is described so.
  */
 export type SteerWait =
-  | { kind: "paused" } | { kind: "starting" } | { kind: "next_turn" }
+  | { kind: "paused" } | { kind: "starting"; back?: boolean } | { kind: "next_turn" }
   | { kind: "tool"; tool: string } | { kind: "next_step" };
 
-export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): SteerWait {
+/** What a message waits on while its agent starts: one sentence for the queued turn and the composer. */
+export const READ_WHEN_STARTED = "Will be read when the agent starts.";
+export const READ_WHEN_BACK = "Will be read when the agent is back.";
+/** A message whose agent never started: why it was not delivered, and what Try again does with it. */
+export const NOT_STARTED = "the agent did not start. Try again starts it with this message.";
+/** The same message once a later agent took over without Try again: nothing left to try. */
+export const NOT_STARTED_TAKEN = "the agent did not start; a later agent took over.";
+/** The same message on a failed conductor a later one retries (Try again): its own ledger cannot see that, its Chat can. */
+export const NOT_STARTED_RETRIED = "the agent did not start; Try again started a new one.";
+
+/** While its agent starts (not once that start failed): when a message sent now is read. */
+export function readWhen(start: StartState | null): string | null {
+  if (!start || start.failed) return null;
+  return start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK;
+}
+
+export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null,
+  start: StartState | null = null): SteerWait {
+  if (start && !start.failed) return { kind: "starting", back: start.kind !== "start" };
   if (runStatus === "paused") return { kind: "paused" };
   if (runStatus === "pending" || runStatus === "scheduled" || runStatus === "starting") return { kind: "starting" };
   const where = turn.lands ?? lands;
@@ -437,7 +526,9 @@ export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: str
 }
 
 /** The composer's hint for a steer sent now, following the same capability. */
-export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): string | null {
+export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null, start: StartState | null = null): string | null {
+  const starting = readWhen(start);
+  if (starting) return starting.replace(/\.$/, "");
   if (runStatus !== "running") return null;
   if (lands !== "next_step") return "Lands when the turn ends";
   return activeTool ? "Lands after the current tool" : "Lands at the agent's next step";
@@ -490,6 +581,10 @@ export interface Conversation {
    * holds a steer until the turn ends).
    */
   lands: SteerLands | null;
+  /** Where its agent is while it starts, resumes or moves; null once it runs (or ended). */
+  start: StartState | null;
+  /** The current Run's start that failed, until a next Run (Try again, a next message) is created: the header says so. */
+  startFailed: StartState | null;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -514,6 +609,14 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
+  /** Child sessions by their id, and each child's tool calls by theirs. */
+  childrenById: Map<string, ChildTurn>;
+  childToolsByCall: Map<string, ToolTurn>;
+  /**
+   * Calls made for a child whose parent's call was not heard yet: that
+   * call's own event fills one in rather than adding a second turn.
+   */
+  placeholderCalls: Set<ToolTurn>;
   /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
   questionsById: Map<string, QuestionTurn>;
@@ -556,6 +659,8 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /** A "Taken back up" notice whose start (a resume or a move) is still live: shown once the agent is up, never if it fails. */
+  heldUnpark: NoticeTurn | null;
   /**
    * The question a dude ask tool (`agent.tool.dude`) just asked, by the
    * tool's name, until the next harness tool event: dude records the call
@@ -570,14 +675,41 @@ export interface Projection {
   pendingRefusal: string | null;
   /** Message calls whose message was sent: a later refusal is another call's. */
   sentCalls: WeakSet<ToolTurn>;
+  /** The last briefing's text as shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
+  lastBriefing: string | null;
+  retryRun: boolean;
+  /** Where the current Run's agent is while it starts; null once it runs. */
+  start: StartState | null;
+  /** The current start has had a `run.stage`: a lux that reports stages, so its end gets a summary line. */
+  startStaged: boolean;
+  /** The current Run's agent has run: a later start is a resume. */
+  ran: boolean;
+  /** The current Run is a conductor dude started with its wake note (conductor.woken started). */
+  startWoken: boolean;
+  /** Messages its briefing carries, shown queued until the agent is up. */
+  startMessages: HumanTurn[];
+  /** The last start that failed, and the messages it never delivered: Try again hands them to a fresh agent. */
+  failedStart: { turn: EndedTurn; messages: HumanTurn[] } | null;
+  /**
+   * After Try again (run.created with retries): the failed Run's unread messages. The new Run's copy of one
+   * names its directive (`supersedes`) and becomes that same turn; one the backend skips or refuses stays as it is.
+   */
+  retrying: Set<HumanTurn>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
 
-export function emptyProjection(): Projection {
+/**
+ * `briefedBefore`: the briefing of the Run this ledger's first Run retries, when that Run's ledger is
+ * another (a task's conductors): Try again's briefing repeating it is then one line, as within one ledger.
+ */
+export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
+    childrenById: new Map(),
+    childToolsByCall: new Map(),
+    placeholderCalls: new Set(),
     steersByDirective: new Map(),
     questionsById: new Map(),
     repoRequestsById: new Map(),
@@ -595,11 +727,21 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    heldUnpark: null,
     pendingAsk: null,
     briefed: false,
     peerWaits: new Map(),
     pendingRefusal: null,
     sentCalls: new WeakSet(),
+    lastBriefing: briefedBefore ? withoutMessage(briefedBefore) : null,
+    retryRun: false,
+    start: null,
+    startStaged: false,
+    ran: false,
+    startWoken: false,
+    startMessages: [],
+    failedStart: null,
+    retrying: new Set(),
     cursor: 0,
   };
 }
@@ -640,6 +782,93 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     // Only the harness's next report of a tool can be the ask's own.
     const ask = state.pendingAsk;
     if (isToolEvent) state.pendingAsk = null;
+    // The agent's own records (or lux reporting it running) end a start: it is up.
+    if (AGENT_UP.has(event.eventType)) endStart(state, event);
+
+    switch (event.eventType) {
+      case EventTypes.RunCreated:
+        // A new Run of this ledger (a session's next agent, a task's next conductor): it starts afresh.
+        state.ran = false;
+        state.start = newStart("start", event.occurredAt);
+        state.startStaged = false;
+        state.startWoken = false;
+        state.heldUnpark = null;
+        state.retryRun = typeof payload.retries === "string";
+        // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
+        state.startMessages = [];
+        state.retrying = new Set();
+        // Try again on a start that failed: the fresh agent has its messages, queued again.
+        if (typeof payload.retries === "string" && state.failedStart) {
+          state.failedStart.turn.retried = true;
+          for (const m of state.failedStart.messages) m.failed = null;
+          state.startMessages = state.failedStart.messages;
+          state.failedStart = null;
+        } else if (state.failedStart) {
+          // Any other next agent: what the failed one left is that agent's now.
+          state.failedStart.turn.taken = true;
+          for (const m of state.failedStart.messages) m.failed = NOT_STARTED_TAKEN;
+          state.failedStart = null;
+        }
+        // What the failed Run was sent and never read: Try again sends it to the fresh agent, the same turn again.
+        if (typeof payload.retries === "string") {
+          state.retrying = new Set(turns.filter((t): t is HumanTurn =>
+            t.kind === "human" && t.directiveId !== null && t.deliveredAt === null && t.failed === null));
+        }
+        break;
+
+      case EventTypes.BrainstormBriefed:
+        // A briefing that is itself the handed-on directive (an answer, which has no Chat copy): its turn is the start's.
+        handedOn(state, payload, null);
+        break;
+
+      case EventTypes.RunStage: {
+        if (!isStartStage(payload.stage)) break;
+        const stage = payload.stage;
+        const since = typeof payload.since === "string" ? payload.since : event.occurredAt;
+        const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : null;
+        let start = state.start;
+        if (stage === "park") {
+          // A move: stopped with its work kept, then started on another machine.
+          start = newStart("move", since);
+        } else if (!start) {
+          start = newStart(state.ran ? "resume" : "start", event.occurredAt);
+        }
+        enterStage(start, stage, since);
+        start.luxReason = reason;
+        state.start = start;
+        state.startStaged = true;
+        break;
+      }
+
+      case EventTypes.RunResumed:
+      case "run.unparked": {
+        // Taken back up: what follows is a resume (its stages may already have come).
+        const at = typeof payload.requestedAt === "string" ? payload.requestedAt : event.occurredAt;
+        if (state.start) {
+          if (state.start.kind === "start" && state.ran) state.start.kind = "resume";
+        } else {
+          state.start = newStart("resume", at);
+          state.startStaged = false;
+        }
+        break;
+      }
+
+      case EventTypes.RunStarted:
+        endStart(state, event);
+        break;
+
+      case EventTypes.RunCompleted:
+        // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
+        state.start = null;
+        state.startMessages = [];
+        state.heldUnpark = null;
+        break;
+
+      case EventTypes.ConductorWoken:
+        // dude's wake started this conductor: its briefing is dude's note, not a person's message.
+        if (payload.started === true && !state.ran) state.startWoken = true;
+        break;
+    }
 
     switch (event.eventType) {
       case EventTypes.PlanUpdated: {
@@ -672,21 +901,22 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ToolCalled: {
-        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const callId = String(payload.callId ?? event.eventId);
-        const turn: ToolTurn = {
-          kind: "tool",
-          id: callId,
-          tool,
-          args: payload.input ?? null,
-          status: "running",
-          startedAt: event.occurredAt,
-          endedAt: null,
-          result: null,
-        };
-        toolsByCall.set(callId, turn);
-        addToolTurn(state, turn, ask);
-        takeRefusal(state, turn);
+        // A replay after resume/move must preserve the completed call and its children. A replay is the same
+        // call reported again; an id reused for another tool is a new call.
+        const prior = toolsByCall.get(callId);
+        if (prior?.endedAt && prior.tool === tool) break;
+        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
+        const placeholder = toolsByCall.get(callId);
+        if (placeholder && state.placeholderCalls.has(placeholder)) {
+          claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
+          takeRefusal(state, placeholder);
+        } else {
+          const turn = toolTurn(callId, tool, payload, event.occurredAt);
+          toolsByCall.set(callId, turn);
+          addToolTurn(state, turn, ask);
+          takeRefusal(state, turn);
+        }
 
         state.activity = "tool";
         state.activeTool = { name: tool, since: event.occurredAt };
@@ -696,31 +926,19 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
         const existing = toolsByCall.get(callId);
-        // The harness reports "error"; the design system's vocabulary calls
-        // it "failed".
-        const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
-
-        const result = resultFrom(payload);
         if (existing) {
-          // A refusal dude recorded is the outcome, whatever the harness says of the call.
-          existing.status = existing.refusal !== undefined ? "failed" : status;
-          existing.endedAt = event.occurredAt;
-          existing.result = result;
-          takeRefusal(state, existing);
+          // A repeated completion never re-times a finished call.
+          if (!existing.endedAt) {
+            claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
+            endTool(existing, payload, event.occurredAt);
+            takeRefusal(state, existing);
+          }
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
           // than a gap in the record.
-          const turn: ToolTurn = {
-            kind: "tool",
-            id: callId || event.eventId,
-            tool,
-            args: payload.input ?? null,
-            status,
-            startedAt: event.occurredAt,
-            endedAt: event.occurredAt,
-            result,
-          };
+          const turn = toolTurn(callId || event.eventId, tool, payload, event.occurredAt);
+          endTool(turn, payload, event.occurredAt);
           toolsByCall.set(turn.id, turn);
           addToolTurn(state, turn, ask);
           takeRefusal(state, turn);
@@ -730,6 +948,78 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = "thinking";
           state.activeTool = null;
         }
+        break;
+      }
+
+      case EventTypes.ChildStarted: {
+        touch(state, childOf(state, payload, event));
+        break;
+      }
+
+      case EventTypes.ChildToolCalled:
+      case EventTypes.ChildToolCompleted: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        const callId = String(payload.callId ?? event.eventId);
+        const childTool = String(payload.tool ?? "tool");
+        let turn = state.childToolsByCall.get(`${child.id}/${callId}`);
+        if (!turn) {
+          turn = toolTurn(callId, childTool, payload, event.occurredAt);
+          state.childToolsByCall.set(`${child.id}/${callId}`, turn);
+          child.turns.push(turn);
+        } else {
+          claimPlaceholder(state, turn, childTool, payload, event.occurredAt, event.eventType === EventTypes.ChildToolCalled);
+        }
+        if (event.eventType === EventTypes.ChildToolCompleted) endTool(turn, payload, event.occurredAt);
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildMessage: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (text.trim()) child.turns.push({ kind: "message", id: event.eventId, text, at: event.occurredAt, contextTokens: null, outputTokens: null });
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildWaiting: {
+        const child = childOf(state, payload, event);
+        // One answered for it, or for a call already over, holds nothing.
+        if (payload.answered === "allow" || payload.held === false) break;
+        child.waitingOn = {
+          permission: String(payload.permission ?? payload.on ?? "a permission"),
+          patterns: Array.isArray(payload.patterns) ? payload.patterns.map(String) : [],
+          since: event.occurredAt,
+        };
+        touch(state, child);
+        break;
+      }
+
+      case EventTypes.ChildEnded: {
+        const child = childOf(state, payload, event);
+        child.waitingOn = null;
+        switch (payload.status) {
+          case "failed":
+            child.status = "failed";
+            break;
+          case "interrupted":
+            child.status = "aborted";
+            break;
+          default:
+            child.status = "completed";
+        }
+        child.endedAt = event.occurredAt;
+        if (typeof payload.costUsd === "number") child.costUsd = payload.costUsd;
+        if (typeof payload.summary === "string" && payload.summary.trim()) child.summary = payload.summary;
+        for (const turn of child.turns) {
+          if (turn.kind === "tool" && turn.status === "running") {
+            turn.status = child.status;
+            turn.endedAt = event.occurredAt;
+          }
+        }
+        touch(state, child);
         break;
       }
 
@@ -760,7 +1050,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // The digest written for this briefing goes just before it, after the message that asked for it.
         const digest = turns.findLast((t): t is DigestTurn => t.kind === "digest");
         if (digest && digest.where === "briefing" && !turns.slice(turns.indexOf(digest)).some((t) => t.kind === "prompt")) moveToEnd(state, digest);
-        turns.push({ kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] });
+        const briefing: PromptTurn = { kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] };
+        // Try again briefs the fresh agent with the failed one's briefing: the same words, said once in full.
+        if (state.retryRun && state.lastBriefing === briefing.text) briefing.again = true;
+        else state.lastBriefing = briefing.text;
+        turns.push(briefing);
         break;
       }
 
@@ -777,6 +1071,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // a pull request is signed by its GitHub login; the conductor's
         // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        // Try again handing on a message the failed Run never read: the same turn, now the fresh agent's to read.
+        if (handedOn(state, payload, directiveId)) break;
         const github = githubOf(payload.github);
         const turn: HumanTurn = {
           ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
@@ -789,6 +1085,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         };
         if (github?.login) turn.by = { id: `github:${github.login}`, name: `${github.login} (GitHub)` };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
+        // The message a starting agent's briefing carries: read once the agent is up, not as it was written.
+        if (!directiveId && state.start && !state.ran && !turn.conductor) {
+          turn.deliveredAt = null;
+          state.startMessages.push(turn);
+        }
         turns.push(turn);
         break;
       }
@@ -821,6 +1122,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.DirectiveFailed: {
         const id = String(payload.directiveId ?? "");
         const steer = state.steersByDirective.get(id);
+        // The hand-over settling a message on the old Run: it is no longer one a copy can take.
+        if (steer) state.retrying.delete(steer);
         // Only its latest attempt's failure fails the turn: an Interrupt now
         // that carries the words still may deliver them.
         if (steer && steer.deliveredAt === null && steer.directiveId === id) {
@@ -995,11 +1298,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             break;
           }
         }
-        turns.push(turn);
+        // While its start is live the agent is not back yet: the notice waits for it (endStart).
+        if (notice === "parked") placeHeldUnpark(state, event.occurredAt);
+        if (notice === "unparked" && state.start && !state.start.failed) state.heldUnpark = turn;
+        else turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
           state.untimedUnpark = null;
+          state.start = null;
         }
         if (notice === "unparked") {
           if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
@@ -1009,7 +1316,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunPaused:
+        placeHeldUnpark(state, event.occurredAt);
         state.untimedUnpark = null;
+        if (state.start && !state.start.failed) state.start = null;
+        break;
+
+      case EventTypes.ServersChanged:
+        // lux reports the Run running (after a wait for a host, a resume or a move): it is up.
+        if (payload.change === "state" && payload.luxState === "running") endStart(state, event);
         break;
 
       case EventTypes.RunResumeTimed: {
@@ -1045,13 +1359,33 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const why = String((failed ? payload.error : payload.reason) ?? "").trim();
         // A conductor's or session agent's failed turn that parked it (kept): its turn failed, not the Run.
         const failedText = payload.kept === true ? "Its turn failed" : "Failed";
-        turns.push({
+        const ended: EndedTurn = {
           kind: "ended", id: event.eventId, outcome: failed ? "failed" : "aborted",
           text: failed ? (why ? `${failedText}: ${why}` : `${failedText}.`) : why ? `Aborted: ${why}` : "Aborted.",
           at: event.occurredAt,
           by: failed ? null : humanActor(event),
           why: why || null,
-        });
+        };
+        // A start that failed before the agent ran: the row's stages, failed in the one it was in, with lux's own reason.
+        // A move whose Run failed at its stop (park: a resumePolicy that does not resume it) never began a start.
+        const starting = state.start;
+        const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
+        if (failed && starting && payload.kept !== true && stage !== "park") {
+          if (stage) enterStage(starting, stage, event.occurredAt);
+          const luxReason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : null;
+          starting.failed = luxReason ? { reason: luxReason, source: "lux" } : { reason: ended.why, source: "dude" };
+          ended.start = starting;
+          // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
+          // failed resuming for a person's message keeps Try again.
+          if (state.startWoken && !state.ran) ended.woken = true;
+          for (const m of state.startMessages) if (m.deliveredAt === null) m.failed = NOT_STARTED;
+          state.failedStart = { turn: ended, messages: state.startMessages.filter((m) => m.deliveredAt === null) };
+          state.startMessages = [];
+        }
+        state.start = null;
+        // A failed resume or move shows its failure, never "Taken back up".
+        state.heldUnpark = null;
+        turns.push(ended);
         state.activity = null;
         state.activeTool = null;
         break;
@@ -1228,6 +1562,8 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
       lands: state.lands,
+      start: shownStart(state.start, runStatus),
+      startFailed: state.failedStart?.turn.start ?? null,
     };
   }
 
@@ -1240,12 +1576,28 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
    * error.
    */
   const unfinished: ToolCallStatus = runStatus === "aborted" ? "aborted" : "failed";
+  // Settles a call and every child under it, to any depth: an ended child
+  // keeps its status but its descendants are settled too. Every call, child,
+  // turns and children array is copied, because `apply` keeps writing the
+  // live ones (a late event pushes into them or ends a call); a child's
+  // message turn is never written after it is pushed, so it is shared (the
+  // Run's own last message does take its tokens later, but that is not
+  // under a call).
+  const settleChild = (child: ChildTurn): ChildTurn => ({
+    ...child,
+    settled: true,
+    status: child.status === "running" ? unfinished : child.status,
+    waitingOn: null,
+    endedAt: child.endedAt ?? child.startedAt,
+    turns: child.turns.map((t) => (t.kind === "tool" ? settle(t) : t)),
+  });
+  const settle = (turn: ToolTurn): ToolTurn => ({
+    ...turn,
+    ...(turn.status === "running" ? { status: unfinished, endedAt: turn.endedAt ?? turn.startedAt } : {}),
+    children: turn.children.map(settleChild),
+  });
   return {
-    turns: state.turns.map((turn) =>
-      turn.kind === "tool" && turn.status === "running"
-        ? { ...turn, status: unfinished, endedAt: turn.endedAt ?? turn.startedAt }
-        : turn,
-    ),
+    turns: state.turns.map((turn) => (turn.kind === "tool" ? settle(turn) : turn)),
     plan: state.plan,
     ...modelCost(state),
     tokens: state.tokens,
@@ -1259,7 +1611,22 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activeTool: null,
     toolCounts: state.toolCounts,
     lands: state.lands,
+    start: null,
+    startFailed: state.failedStart?.turn.start ?? null,
   };
+}
+
+/**
+ * The start as the screens show it. A fresh Run is running to dude only
+ * once lux has reported it running (the stream's state event), which can
+ * come before any record of its agent: it has started. A resume or a move
+ * is running to dude from its request, so only the ledger ends it.
+ */
+function shownStart(start: StartState | null, runStatus: RunStatus | undefined): StartState | null {
+  if (!start || start.failed) return start;
+  if (start.kind === "start" && runStatus === "running") return null;
+  if (runStatus === "paused") return null;
+  return start;
 }
 
 /** The Run's model cost: lux's latest once it reported one, else the harness's sum. */
@@ -1308,6 +1675,92 @@ function normalizeTodoStatus(status: unknown): PlanItem["status"] {
   return (TODO_STATUSES as readonly string[]).includes(status as string)
     ? (status as PlanItem["status"])
     : "pending";
+}
+
+/** A tool call's turn as its call reports it, running. */
+function toolTurn(id: string, tool: string, payload: Record<string, unknown>, at: string): ToolTurn {
+  return { kind: "tool", id, tool, args: payload.input ?? null, status: "running", startedAt: at, endedAt: null, result: null, children: [] };
+}
+
+/**
+ * A tool call's end as its completion reports it. The harness's "error" is the design system's "failed"; a refusal
+ * dude recorded is the outcome, whatever the harness says of the call.
+ */
+function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): void {
+  turn.status = turn.refusal !== undefined || payload.status === "error" ? "failed" : "completed";
+  turn.endedAt = at;
+  turn.result = resultFrom(payload);
+}
+
+/**
+ * A call made for a child before its own call event, filled in by that
+ * call's first event — its call, or its completion from a harness that
+ * reports a call only once finished — in place: the same object keeps its
+ * id, its place and its children. A completion carries no start, so the
+ * child's start stays the call's; args it omits keep what the call had.
+ */
+function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, payload: Record<string, unknown>, at: string, called: boolean): void {
+  if (!state.placeholderCalls.delete(turn)) return;
+  turn.tool = tool;
+  turn.args = payload.input ?? turn.args;
+  if (called) turn.startedAt = at;
+}
+
+/** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
+function touch(state: Projection, child: ChildTurn): void {
+  for (let c: ChildTurn | undefined = child; c; c = c.parentChildId ? state.childrenById.get(c.parentChildId) : undefined) c.revision += 1;
+}
+
+/**
+ * The child an `agent.child.*` event is about, made from it when it is the
+ * first heard of the child, and hung under the parent's call. A child of a
+ * child hangs under its parent child's call; one whose call is unknown (a
+ * harness that reports only once finished) under a call made for it, as a
+ * completion with no matching call is.
+ */
+function childOf(state: Projection, payload: Record<string, unknown>, event: PersistedEvent): ChildTurn {
+  const id = String(payload.childId ?? event.eventId);
+  const known = state.childrenById.get(id);
+  if (known) return known;
+  const callId = String(payload.parentCallId ?? payload.callId ?? "");
+  const child: ChildTurn = {
+    kind: "child",
+    id,
+    callId,
+    childKind: typeof payload.kind === "string" ? payload.kind : "task",
+    title: typeof payload.title === "string" ? payload.title : "",
+    agentType: typeof payload.agentType === "string" ? payload.agentType : null,
+    model: typeof payload.model === "string" ? payload.model : null,
+    status: "running",
+    startedAt: event.occurredAt,
+    endedAt: null,
+    costUsd: null,
+    summary: null,
+    turns: [],
+    waitingOn: null,
+    parentChildId: null,
+    revision: 0,
+    settled: false,
+  };
+  state.childrenById.set(id, child);
+  // A child never hangs under itself: that would loop every walk up the tree.
+  const parentChild = typeof payload.parentChildId === "string" && payload.parentChildId !== id
+    ? state.childrenById.get(payload.parentChildId) : undefined;
+  child.parentChildId = parentChild?.id ?? null;
+  let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
+  if (!call) {
+    call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
+    state.placeholderCalls.add(call);
+    if (parentChild) {
+      state.childToolsByCall.set(`${parentChild.id}/${call.id}`, call);
+      parentChild.turns.push(call);
+    } else {
+      state.toolsByCall.set(call.id, call);
+      state.turns.push(call);
+    }
+  }
+  call.children.push(child);
+  return child;
 }
 
 /** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
@@ -1482,4 +1935,84 @@ function takeRefusal(state: Projection, turn: ToolTurn): void {
   if (state.pendingRefusal === null || dudeToolName(turn.tool) !== "message") return;
   refuse(turn, state.pendingRefusal);
   state.pendingRefusal = null;
+}
+
+/**
+ * A copy of a message the failed Run never read, handed on by Try again: the event names the directive it
+ * replaces (`supersedes`), and that directive's turn becomes the new copy's (`directiveId`, or with none the
+ * fresh agent's start message). False when it names no such unread turn: it is a turn of its own. The turn takes
+ * the new attempt's state: its hold (none when the copy names none) and no receipt from the dead agent's harness.
+ */
+function handedOn(state: Projection, payload: Record<string, unknown>, directiveId: string | null): boolean {
+  const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
+  if (!earlier || !state.retrying.delete(earlier)) return false;
+  earlier.directiveId = directiveId;
+  earlier.heldFor = typeof payload.heldFor === "string" ? payload.heldFor : null;
+  earlier.acceptedAt = null;
+  earlier.lands = null;
+  earlier.read = false;
+  earlier.after = null;
+  earlier.interrupting = false;
+  if (directiveId) state.steersByDirective.set(directiveId, earlier);
+  else if (state.start && !state.ran) state.startMessages.push(earlier);
+  return true;
+}
+
+/** Events that say the agent is up: what it wrote or took, or the harness taking its input. */
+const AGENT_UP: ReadonlySet<string> = new Set([
+  EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted, EventTypes.PlanUpdated,
+  EventTypes.ModelRequestCompleted, EventTypes.SessionStarted, EventTypes.PromptDelivered, EventTypes.DirectiveAccepted,
+  EventTypes.DirectiveDelivered, EventTypes.RunResumeTimed,
+]);
+
+/**
+ * The agent is up: its start is over. A fresh start that lux staged ends in
+ * a line of its own ("Started in 31s.", its stages in the hover, the resume
+ * line's words); a resume has its "Taken back up" line already. The
+ * messages its briefing carried are read now.
+ */
+function endStart(state: Projection, event: PersistedEvent): void {
+  const start = state.start;
+  state.ran = true;
+  if (!start || start.failed) return;
+  state.start = null;
+  for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
+  state.startMessages = [];
+  placeHeldUnpark(state, event.occurredAt);
+  if (start.kind !== "start" || !state.startStaged) return;
+  const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
+  if (start.stage && start.stageSince) {
+    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(msBetween(start.stageSince, event.occurredAt))}`);
+  }
+  state.turns.push({
+    kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
+    text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
+  });
+}
+
+/**
+ * A held "Taken back up" goes into the transcript at `at`: the agent is up, or was parked or paused again (dude
+ * parks only an agent that ran). A failed or ended start drops it instead.
+ */
+function placeHeldUnpark(state: Projection, at: string): void {
+  if (!state.heldUnpark) return;
+  state.heldUnpark.at = at;
+  state.turns.push(state.heldUnpark);
+  state.heldUnpark = null;
+}
+
+function newStart(kind: StartState["kind"], startedAt: string): StartState {
+  return { kind, stage: null, stageSince: null, startedAt, done: [], luxReason: null, failed: null };
+}
+
+/** The start is in `stage` from `since`: the stage it was in, if another, is done, timed by the two `since`s. */
+function enterStage(start: StartState, stage: StartStage, since: string): void {
+  if (start.stage === stage) return;
+  if (start.stage && start.stageSince) start.done.push({ stage: start.stage, tookMs: msBetween(start.stageSince, since) });
+  start.stage = stage;
+  start.stageSince = since;
+}
+
+function msBetween(from: string, to: string): number {
+  return Math.max(0, instant(to) - instant(from));
 }
