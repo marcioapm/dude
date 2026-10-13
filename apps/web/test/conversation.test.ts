@@ -600,8 +600,6 @@ describe("the tools a Run used, for the session rail", () => {
       .toEqual([{ name: "Read", count: 1 }, { name: "dude update task (completed)", count: 1 }, { name: "dude start phase (completed)", count: 2 }]);
   });
 
-  const harnessLabel = { decide: "dude decide (called)", dude_decide: "dude decide (called)", mcp__dude__decide: "dude decide (called)" } as const;
-
   test("a bare harness name pairs with its completed dude action, but a refused-only call stays bare", () => {
     expect(toolUsage(project([called("update_task", "c_1"), dude("update_task")])))
       .toEqual([{ name: "dude update task (called)", count: 1 }, { name: "dude update task (completed)", count: 1 }]);
@@ -612,7 +610,7 @@ describe("the tools a Run used, for the session rail", () => {
   test("successful MCP overlap stays separately labelled for every harness alias", () => {
     for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {
       expect(toolUsage(project([dude("decide"), called(tool, "c_1"), ev(EventTypes.ToolCompleted, { callId: "c_1", status: "completed" })])))
-        .toEqual([{ name: harnessLabel[tool], count: 1 }, { name: "dude decide (completed)", count: 1 }]);
+        .toEqual([{ name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 1 }]);
     }
   });
 
@@ -635,7 +633,7 @@ describe("the tools a Run used, for the session rail", () => {
       expect(toolUsage(snapshot(state))).toEqual([{ name: "dude decide (completed)", count: 2 }]);
       apply(state, [called(tool, "c_1")]);
       expect(toolUsage(snapshot(state))).toEqual([
-        { name: harnessLabel[tool], count: 1 }, { name: "dude decide (completed)", count: 2 },
+        { name: "dude decide (called)", count: 1 }, { name: "dude decide (completed)", count: 2 },
       ]);
     }
   });
