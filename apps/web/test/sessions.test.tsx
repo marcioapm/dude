@@ -180,7 +180,7 @@ describe("a session's raised machine", () => {
   test("the rail shows the raised size, its pool and the settings' size from the detail; nothing when none is raised", async () => {
     const page = await sessionPage(new ResetClient(detail("owner", { agentMachines: [raised] })));
     const block = await until(() => page.querySelector<HTMLElement>("[data-testid=session-machine]"), "the Machine block");
-    expect(block.querySelector("button[aria-label]")!.getAttribute("aria-label")).toBe("Machine: XL, 8 CPUs · 32 GiB · 80 GiB, raised for this session");
+    expect(block.querySelector("button[aria-label]")!.getAttribute("aria-label")).toBe("Machine: XL, 8 CPUs · 32 GiB, raised for this session");
     expect(block.textContent).toContain("highmem");
     expect(block.textContent).toContain("Small");
     const bare = await sessionPage(new ResetClient(detail("owner")));

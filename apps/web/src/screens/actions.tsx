@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock } from "@dude/design-system/components";
-import { machineSpec, type AgentMachine, type Machine } from "@dude/domain";
+import { MIB, gib, type AgentMachine, type Machine } from "@dude/domain";
 import { raisedProvenance, raisedRows, roleLabel, taskRaisedMachines } from "../machines.ts";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
@@ -70,7 +70,7 @@ export function SessionMachineBlock({ client, id, machine, by, onChanged }: {
   const { size, settings } = machine;
   if (!size) return null;
   return <SessionRailBlock label="Machine" data-testid="session-machine">
-    <MachineChip name={size.name} spec={machineSpec(size)} raised="for this session"
+    <MachineChip name={size.name} spec={`${size.cpus} CPUs · ${gib(size.memoryMiB * MIB)} GiB`} raised="for this session"
       tooltip={<MachineTip name={size.name}>{raisedProvenance(machine.raise, machine.askedBy.role ?? machine.raise.role)}.
         {settings ? ` Its settings name ${settings.name}.` : ""}</MachineTip>} />
     <SessionFacts facts={[{ label: "Pool", value: size.pool ?? "Default pool" }, { label: "Settings' size", value: settings?.name ?? "None" }]} />
