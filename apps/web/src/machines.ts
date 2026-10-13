@@ -18,68 +18,62 @@ import {
   type MachineSizeInput,
   type MachineSizeUse,
   type MachineSizeWithUse,
+  type Run,
   type SettingsRole,
 } from "@dude/domain";
 
-import type { Run, SettingsResponse } from "@dude/domain";
+import type { AgentMachine, Machine, MachineMove, Raise, SessionDetail } from "@dude/domain";
 import type { MachineRaise } from "@dude/design-system/components";
 import { formatDuration } from "@dude/design-system";
+import type { TaskDetail } from "./api/client.ts";
 
-export type RaisedMachine = NonNullable<Run["machine"]> & {
-  raised?: { sizeId: string; moveId: string; askedBy: string; role?: string; reason: string; at: string };
-};
+/** A Run's machine as the API records it, the raise it runs on included. */
+export type RaisedMachine = NonNullable<Run["machine"]>;
 
-// The task detail's resolved entries are isolated here until the backend contract lands.
-export function taskRaisedMachines(detail: unknown): Partial<Record<SettingsRole, RaisedMachine>> {
-  return (detail as { agentMachines?: Partial<Record<SettingsRole, RaisedMachine>> }).agentMachines ?? {};
+export function taskRaisedMachines(detail: Pick<TaskDetail, "agentMachines">): AgentMachine[] {
+  return detail.agentMachines ?? [];
 }
 
-export function raisedProvenance(machine: RaisedMachine, now = Date.now()): string | null {
-  const r = machine.raised;
-  if (!r) return null;
-  const at = Date.parse(r.at);
-  const when = Number.isFinite(at) ? `${formatDuration(Math.max(0, now - at), { style: "age" })} ago` : r.at;
-  return `Asked for by ${r.askedBy}${r.role ? ` (the ${roleLabel(r.role).toLowerCase()})` : ""}, ${when}: ${r.reason}`;
+/** A session's one raise (role `brainstorm`), or null. */
+export function sessionRaisedMachine(detail: Pick<SessionDetail, "agentMachines">): AgentMachine | null {
+  return detail.agentMachines?.[0] ?? null;
 }
 
-export function sessionRaisedMachine(detail: unknown): RaisedMachine | null {
-  const d = detail as { agentMachine?: RaisedMachine | null };
-  return d.agentMachine ?? null;
+/** "Asked for by run_7f3k (the implementer), 1h ago: <reason>". `role` is the asking Run's, when known. */
+export function raisedProvenance(raise: Pick<Raise, "askedBy" | "reason" | "at">, role: string | null | undefined, now = Date.now()): string {
+  const at = Date.parse(raise.at);
+  const when = Number.isFinite(at) ? `${formatDuration(Math.max(0, now - at), { style: "age" })} ago` : raise.at;
+  return `Asked for by ${raise.askedBy}${role ? ` (the ${roleLabel(role).toLowerCase()})` : ""}, ${when}: ${raise.reason}`;
 }
 
-export interface MachineEventView {
-  role: string;
-  from: string;
-  to: string;
-  pool: string | null;
-  reason: string;
-  note: string;
-  by: string;
-  moveId: string | null;
+/** What a move event names: sizes by name, and the pool only when the move changes it. */
+export function moveWords(move: MachineMove): { role: string; from: string; to: string; pool: string | null } {
+  const pool = move.pool ? move.pool.to.name ?? move.pool.to.id : null;
+  return { role: move.role, from: move.from.name, to: move.to.name, pool };
 }
 
-export function machineEventView(p: Record<string, unknown>): MachineEventView {
-  const name = (v: unknown): string => typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { name?: unknown }).name === "string" ? (v as { name: string }).name : "its requested size";
-  const pool = p.pool && typeof p.pool === "object" ? (p.pool as { to?: unknown }).to : p.pool;
-  return { role: typeof p.role === "string" ? p.role : "brainstorm", from: name(p.from), to: name(p.to),
-    pool: typeof pool === "string" ? pool : null, reason: typeof p.message === "string" ? p.message : typeof p.reason === "string" ? p.reason : typeof p.refused === "string" ? p.refused : "",
-    note: typeof p.note === "string" ? p.note : "", by: typeof p.by === "string" ? p.by : "Someone",
-    moveId: typeof p.moveId === "string" ? p.moveId : null };
-}
-
-export function raisedRows(machines: Partial<Record<SettingsRole, RaisedMachine>>, settings: SettingsResponse, sizes: readonly MachineSize[],
-  reset: (role: SettingsRole, from: RaisedMachine, to: MachineSize) => void): MachineRaise[] {
-  return Object.entries(machines).flatMap(([key, machine]) => {
-    const role = key as SettingsRole;
-    if (!machine.raised) return [];
-    const field = settings.roles[role]?.machineSize;
-    const to = sizes.find((s) => s.id === field?.value) ?? sizes.find((s) => s.isDefault);
-    const follows = role === "fixer" && (machine.raised.role === "implementer" || (field?.followsImplementer && !machine.raised.role));
-    const avatar = role === "fixer" ? "implementer" : role;
-    return [{ role: avatar as MachineRaise["role"], label: roleLabel(role), size: machine, settings: { name: to?.name ?? "its settings' size" },
-      detail: raisedProvenance(machine), follows: follows ? "implementer" : undefined,
-      onReset: to && !follows ? () => reset(role, machine, to) : undefined }];
+/**
+ * The Overview's rows: one per raised role with its Reset back to the
+ * settings' size, then each role that follows it (the fixer following the
+ * implementer), which has no Reset of its own. A raise whose size was
+ * removed meanwhile names no size and is left out until removal rewrites it.
+ */
+export function raisedRows(machines: readonly AgentMachine[], reset: (machine: AgentMachine, from: Machine, to: Machine) => void): MachineRaise[] {
+  return machines.flatMap((m) => {
+    const size = m.size;
+    if (!size) return [];
+    const settings = m.settings;
+    const own: MachineRaise = { role: avatarOf(m.role), label: roleLabel(m.role), size, settings: { name: settings?.name ?? "its settings' size" },
+      detail: raisedProvenance(m.raise, m.askedBy.role ?? m.raise.role), onReset: settings ? () => reset(m, size, settings) : undefined };
+    const followers = m.followedBy.map((role): MachineRaise => ({ role: avatarOf(role), label: roleLabel(role), size,
+      settings: { name: settings?.name ?? "its settings' size" }, detail: null, follows: roleLabel(m.role).toLowerCase() }));
+    return [own, ...followers];
   });
+}
+
+/** A settings role's face: the fixer has none of its own and wears the implementer's. */
+function avatarOf(role: string): MachineRaise["role"] {
+  return (role === "fixer" ? "implementer" : role) as MachineRaise["role"];
 }
 
 /** A pool's host, as a person reads it: "16 CPUs · 32 GiB · 180 GiB", disk "not reserved" when 0. */

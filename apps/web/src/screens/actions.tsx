@@ -10,12 +10,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock } from "@dude/design-system/components";
-import type { MachineSize, SettingsResponse, SettingsRole } from "@dude/domain";
-import { raisedProvenance, raisedRows, taskRaisedMachines, type RaisedMachine } from "../machines.ts";
+import { machineSpec, type AgentMachine, type Machine } from "@dude/domain";
+import { raisedProvenance, raisedRows, roleLabel, taskRaisedMachines } from "../machines.ts";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { Dialog, Button, Callout, Input, Textarea } from "@dude/design-system/primitives";
-import type { ApiClient, Epic } from "../api/client.ts";
+import type { ApiClient, Epic, TaskDetail } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 export function ResetMachineConfirm({ label, from, to, by, session, onConfirm, onClose }: {
@@ -58,63 +58,44 @@ export function ResetMachineConfirm({ label, from, to, by, session, onConfirm, o
   );
 }
 
-export function SessionMachineBlock({ client, id, machine, by, canReset, onChanged }: {
-  client: ApiClient; id: string; machine: RaisedMachine; by: string; canReset: boolean; onChanged: () => void;
+/**
+ * A session's raised machine in its rail: the chip with who asked, the
+ * pool, the settings' size a Reset returns to, and Reset, which every
+ * member may use. All of it is the session detail's `agentMachines`.
+ */
+export function SessionMachineBlock({ client, id, machine, by, onChanged }: {
+  client: ApiClient; id: string; machine: AgentMachine; by: string; onChanged: () => void;
 }) {
-  const [to, setTo] = useState<MachineSize | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
-  useEffect(() => {
-    let current = true;
-    void Promise.all([client.organizationSettings(), client.machineSizes()]).then(([settings, sizes]) => {
-      if (current) setTo(sizes.sizes.find((s) => s.id === settings.roles.brainstorm.machineSize.value) ?? sizes.sizes.find((s) => s.isDefault) ?? null);
-    }, (err: unknown) => current && setProblem(errorText(err)));
-    return () => { current = false; };
-  }, [client]);
-  return <SessionRailBlock label="Machine">
-    <MachineChip name={machine.name} spec={`${machine.cpus} CPUs · ${machine.memoryMiB / 1024} GiB`} raised="for this session"
-      tooltip={<MachineTip name={machine.name}>{raisedProvenance(machine)}. {to ? `Settings name ${to.name}.` : ""}</MachineTip>} />
-    <SessionFacts facts={[{ label: "Pool", value: machine.pool ?? "Default pool" }, { label: "Settings' size", value: to?.name ?? "Loading…" }]} />
-    {problem ? <Callout tone="danger" role="alert">{problem}</Callout> : null}
-    {canReset && to ? <Button size="sm" variant="quiet" onClick={() => setConfirm(true)}>Reset</Button> : null}
-    {confirm && to ? <ResetMachineConfirm label="brainstorm" from={machine.name} to={to.name} by={by} session
+  const { size, settings } = machine;
+  if (!size) return null;
+  return <SessionRailBlock label="Machine" data-testid="session-machine">
+    <MachineChip name={size.name} spec={machineSpec(size)} raised="for this session"
+      tooltip={<MachineTip name={size.name}>{raisedProvenance(machine.raise, machine.askedBy.role ?? machine.raise.role)}.
+        {settings ? ` Its settings name ${settings.name}.` : ""}</MachineTip>} />
+    <SessionFacts facts={[{ label: "Pool", value: size.pool ?? "Default pool" }, { label: "Settings' size", value: settings?.name ?? "None" }]} />
+    {settings ? <Button size="sm" variant="quiet" onClick={() => setConfirm(true)} data-testid="session-machine-reset">Reset</Button> : null}
+    {confirm && settings ? <ResetMachineConfirm label="brainstorm" from={size.name} to={settings.name} by={by} session
       onClose={() => setConfirm(false)} onConfirm={async (note) => { await client.resetSessionMachine(id, note); onChanged(); }} /> : null}
   </SessionRailBlock>;
 }
 
+/** The Overview's Machines panel: each raised role, the roles following it, and Reset back to the settings' size. */
 export function TaskMachineRaises({ client, task, by, onChanged }: {
-  client: ApiClient; task: { id: string; projectId: string }; by: string; onChanged: () => void;
+  client: ApiClient; task: Pick<TaskDetail, "id" | "agentMachines">; by: string; onChanged: () => void;
 }) {
   const machines = taskRaisedMachines(task);
-  const hasRaises = Object.keys(machines).length > 0;
-  const [data, setData] = useState<{ settings: SettingsResponse; sizes: MachineSize[] } | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [reset, setReset] = useState<{ role: SettingsRole; from: RaisedMachine; to: MachineSize } | null>(null);
-  useEffect(() => {
-    if (!hasRaises) return;
-    let current = true;
-    setData(null);
-    setProblem(null);
-    void Promise.all([client.projectSettings(task.projectId), client.machineSizes()]).then(
-      ([settings, sizes]) => current && setData({ settings, sizes: sizes.sizes }),
-      (err: unknown) => current && setProblem(errorText(err)),
-    );
-    return () => { current = false; };
-  }, [client, task.projectId, hasRaises]);
-  if (!hasRaises) return null;
-  const rows = data ? raisedRows(machines, data.settings, data.sizes, (role, from, to) => setReset({ role, from, to })) : [];
+  const [reset, setReset] = useState<{ role: string; from: Machine; to: Machine } | null>(null);
+  if (machines.length === 0) return null;
+  const rows = raisedRows(machines, (m, from, to) => setReset({ role: m.role, from, to }));
   return <>
-    <MachineRaises where="raised in this task" raises={rows} loading={!data && !problem} error={problem} />
-    {reset ? <ResetMachineConfirm label={roleLabelForReset(reset.role)} from={reset.from.name} to={reset.to.name} by={by}
+    <MachineRaises where="raised in this task" raises={rows} />
+    {reset ? <ResetMachineConfirm label={roleLabel(reset.role).toLowerCase()} from={reset.from.name} to={reset.to.name} by={by}
       onClose={() => setReset(null)} onConfirm={async (note) => {
         await client.resetTaskMachine(task.id, reset.role, note);
         onChanged();
       }} /> : null}
   </>;
-}
-
-function roleLabelForReset(role: SettingsRole): string {
-  return role === "qa_browser" ? "tester" : role;
 }
 
 /** What an action asks the app to open; the app owns navigation and dialogs. */

@@ -618,7 +618,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 live={!earlier && item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 || showServers || Object.keys(taskRaisedMachines(item)).length > 0 ? (
+            {prs.length > 0 || showServers || taskRaisedMachines(item).length > 0 ? (
               <aside className="taskAside" aria-label="Pull requests, machines and servers">
                 <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (

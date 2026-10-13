@@ -49,7 +49,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
-  "machine.requested", "machine.raised", "machine.refused", "machine.reset",
+  EventTypes.MachineRequested, EventTypes.MachineRaised, EventTypes.MachineRefused, EventTypes.MachineReset,
   EventTypes.BrainstormModelApplied,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
@@ -296,6 +296,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
       undefined, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
   const startHint = readWhen(starting);
+  const raised = sessionRaisedMachine(detail);
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
@@ -414,8 +415,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
               </SessionRailBlock>
-              {sessionRaisedMachine(detail) ? <SessionMachineBlock client={client} id={sessionId} machine={sessionRaisedMachine(detail)!}
-                by={firstName(people.names.get(you.id) ?? "you")} canReset={!reader} onChanged={() => void load()} /> : null}
+              {/* Every member may Reset, readers included (the API's rule, as for starting a task). */}
+              {raised ? <SessionMachineBlock client={client} id={sessionId} machine={raised}
+                by={firstName(people.names.get(you.id) ?? "you")} onChanged={() => void load()} /> : null}
               <SessionRailBlock label="Cost">
                 <SessionFacts facts={[{ label: "Session", value: <CostDisplay usd={session.costUsd} /> }]} />
               </SessionRailBlock>

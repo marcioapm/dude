@@ -1170,7 +1170,7 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           key={turn.id}
           name={turn.tool}
           args={turn.args}
-          summary={turn.machine ? <>Asked for a larger machine: {turn.machine.from} → <b>{turn.machine.to}</b>{turn.machine.pool ? ` · ${turn.machine.pool} pool` : ""}</> : undefined}
+          summary={turn.machine ? <>Asked for a larger machine: {turn.machine.from ? <>{turn.machine.from} → </> : null}<b>{turn.machine.to}</b>{turn.machine.pool ? ` · ${turn.machine.pool} pool` : ""}</> : undefined}
           result={turn.machine?.answer}
           error={turn.machine?.error}
           status={turn.status}
@@ -1372,7 +1372,7 @@ export function RunMachineChip({ machine, memoryLimit, role, phase }: { machine:
       raised={machine.raised ? machine.from === "session" ? "for this session" : "for this task" : undefined}
       tooltip={
         <MachineTip name={machine.name}>
-          {machine.raised ? <>{raisedProvenance(machine)}. {phase === "fix" && machine.raised.role === "implementer" ? "The fixer follows the implementer. " : ""}
+          {machine.raised ? <>{raisedProvenance(machine.raised, machine.raised.role)}. {phase === "fix" && machine.raised.role === "implementer" ? "The fixer follows the implementer. " : ""}
             {machine.from === "session" ? "Raised for this session." : "Reset is on the task's Overview."}</>
             : <>{from} Set when the session started or last resumed — a change to its size reaches it when it next resumes.</>}
           {machine.diskKept ? ` lux kept its ${machine.diskGiB} GiB disk rather than ${machine.diskKept.requestedGiB}${machine.diskKept.reason ? `: ${machine.diskKept.reason}` : ""}.` : null}
