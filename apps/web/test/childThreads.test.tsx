@@ -6,6 +6,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { ChatThread } from "@dude/design-system/components";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { EventTypes } from "@dude/domain";
@@ -60,6 +61,23 @@ function threadsUnder(card: Element): string[] {
   return ids;
 }
 const card = (el: HTMLElement, text: string) => [...el.querySelectorAll(":scope > [data-tool]")].find((c) => c.textContent!.includes(text))!;
+
+test("an open-only thread stays folded and opens by click, Enter and Space", async () => {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const opened: string[] = [];
+  await act(async () => root!.render(<ChatThread sessionId="row" role="subagent" status="running" task="Research" openOnly collapsed onOpen={(id) => opened.push(id)}>
+    <span>Hidden transcript</span>
+  </ChatThread>));
+  const row = host.querySelector<HTMLElement>("[role='button']")!;
+  expect(host.textContent).not.toContain("Hidden transcript");
+  expect(row.getAttribute("aria-expanded")).toBeNull();
+  await act(async () => row.click());
+  for (const key of ["Enter", " "]) await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
+  expect(opened).toEqual(["row", "row", "row"]);
+  expect(host.querySelector("[role='group']")).toBeNull();
+});
 
 const start = () => [
   ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Inspect test capture setup", subagent_type: "explore" } }, 120),

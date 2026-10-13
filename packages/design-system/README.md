@@ -1756,6 +1756,10 @@ MarkdownCheatsheet.
   since, detail?}}` is a live thread blocked on what nothing in it can
   answer: attention rail and wash, "waiting <dur> on <on>" with the pause
   glyph in its header, `data-waiting="true"`; not an activity kind.
+  `openOnly collapsed onOpen={…}` renders a folded row at every depth:
+  click, Enter and Space open the separate transcript, never disclose a body.
+  There is no disclosure chevron or nested Open button; waiting detail belongs
+  in the separate transcript. Other callers retain the depth-aware disclosure.
 - **QuestionCard** — an agent's question (or up to four, `items`) to a
   person as a turn. Waiting it is the loudest turn in the transcript
   (attention wash and bar, live avatar, a muted ticking wait clock; no badge

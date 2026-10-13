@@ -32,6 +32,7 @@ export interface ChatThreadProps extends Omit<HTMLAttributes<HTMLElement>, "chil
   /** Nesting depth; the transcript sets it. Depth ≥ 2 flattens to a rail. */
   readonly depth?: number | undefined;
   readonly defaultCollapsed?: boolean | undefined;
+  readonly openOnly?: boolean | undefined;
   readonly collapsed?: boolean | undefined;
   readonly onCollapsedChange?: ((collapsed: boolean) => void) | undefined;
   /** Open this session in its own transcript. Rendered as an action in the header. */
@@ -90,6 +91,7 @@ export function ChatThread({
   depth = 1,
   defaultCollapsed,
   collapsed,
+  openOnly = false,
   onCollapsedChange,
   onOpen,
   turnCount,
@@ -100,7 +102,7 @@ export function ChatThread({
 }: ChatThreadProps) {
   const spec = statusSpec(status);
   const finished = spec.terminal;
-  const pinnedClosed = depth >= 3;
+  const pinnedClosed = openOnly || depth >= 3;
   const disclosure = useDisclosure({
     expanded: collapsed === undefined ? undefined : !collapsed,
     defaultExpanded: !(defaultCollapsed ?? (finished || depth >= 2)),
@@ -152,7 +154,7 @@ export function ChatThread({
           {isCollapsed && turnCount !== undefined ? <span className={styles["turns"]}>{turnCount} turns</span> : null}
           {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="muted" /> : null}
           {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
-          {onOpen ? (
+          {onOpen && !openOnly ? (
             <button
               type="button"
               className={styles["open"]}
@@ -168,7 +170,7 @@ export function ChatThread({
           ) : null}
         </span>
       </div>
-      {isWaiting && waiting.detail !== undefined ? <div className={styles["waitingDetail"]}>{waiting.detail}</div> : null}
+      {!openOnly && isWaiting && waiting.detail !== undefined ? <div className={styles["waitingDetail"]}>{waiting.detail}</div> : null}
       {isCollapsed && summary !== undefined ? <div className={styles["summary"]}>{summary}</div> : null}
       {!isCollapsed ? (
         <div className={styles["body"]} role="group">

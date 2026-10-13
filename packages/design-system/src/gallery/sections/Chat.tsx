@@ -536,6 +536,8 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       >
         <Panes mode={mode} surface>
           <Col>
+            <Label>open-only row — opens a separate transcript, never expands</Label>
+            <ChatThread sessionId="row-child" role="subagent" status="running" task="Inspect test capture setup" openOnly collapsed onOpen={() => undefined} summary="Reading the browser fixtures" turnCount={3} costUsd={0.08} startedAt={Date.now() - 90_000} />
             <ChatThread sessionId="ses_01J9K3" role="investigator" status="completed" model="claude-sonnet-4" task="Map webhook handler and existing retry patterns" startedAt={at(2_101)} endedAt={at(19_002)} costUsd={0.084} turnCount={3} summary="3 findings, 1 risk · no retry layer exists today">
               <ChatMessage role="investigator" model="claude-sonnet-4" content="Found the call site. No retry anywhere in the integration layer." startedAt={at(2_101)} endedAt={at(19_002)} costUsd={0.084} activity="completed" />
             </ChatThread>
