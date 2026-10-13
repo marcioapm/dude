@@ -48,6 +48,8 @@ CREATE TABLE machine_moves (
 );
 -- One move of a Run at a time: a move is settled when the Run resumes.
 CREATE UNIQUE INDEX machine_moves_one_at_a_time ON machine_moves (run_id) WHERE settled_at IS NULL;
+-- A Run's moves settled or not: the three-raise cap counts them, and a Run's delete cascades through them.
+CREATE INDEX machine_moves_run_idx ON machine_moves (run_id);
 CREATE INDEX machine_moves_task_idx ON machine_moves (task_id, created_at) WHERE task_id IS NOT NULL;
 CREATE INDEX machine_moves_session_idx ON machine_moves (session_id, created_at) WHERE session_id IS NOT NULL;
 
