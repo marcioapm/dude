@@ -12,6 +12,8 @@ import type { NavRef } from "@dude/design-system";
 export type Place =
   // The welcome (`#/`): what dude opens on, and where New session goes.
   | { view: "welcome" }
+  // Welcome to <organisation>: where Join lands (`#/o/<slug>/welcome`).
+  | { view: "joined" }
   // A task's page may name the tab it opens on, and the attempt it shows
   // when that is not the current one (`?attempt=1`).
   | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number }
@@ -34,10 +36,37 @@ export const attemptScoped = (tab: TaskTab | undefined): boolean => tab !== "ser
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
-export function parsePlace(hash: string): Place | null {
+/**
+ * The organisation this tab's places are in: every hash formatPlace writes
+ * starts `#/o/<slug>/`, so a link copied from it opens in the same
+ * organisation. Set by the shell when it mounts an organisation; null (an
+ * older link, a test) writes the bare hash.
+ */
+let organizationSlug: string | null = null;
+
+export function setPlaceOrganization(slug: string | null): void {
+  organizationSlug = slug;
+}
+
+/** `#/o/<slug>/rest` → the slug and `#/rest`; anything else has no slug. */
+export function splitOrganization(hash: string): { slug: string | null; rest: string } {
+  const m = /^#?\/?o\/([^/?#]+)\/?(.*)$/.exec(hash);
+  if (!m) return { slug: null, rest: hash };
+  return { slug: decodeURIComponent(m[1]!), rest: `#/${m[2] ?? ""}` };
+}
+
+/** A tenant hash in `slug`: what a place's link is once its organisation is known. */
+export function inOrganization(slug: string, hash: string): string {
+  return `#/o/${encodeURIComponent(slug)}/${hash.replace(/^#?\/?/, "")}`;
+}
+
+export function parsePlace(full: string): Place | null {
+  const hash = splitOrganization(full).rest;
   const [path = "", query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
   // Nothing in the URL is the welcome.
   if (path === "" || path === " ") return { view: "welcome" };
+  // The first page in an organisation just joined.
+  if (path === "welcome") return { view: "joined" };
   const [given, id, view, page, ...rest] = path.split("/");
   // Links from before "work item" became "task": bookmarks, and
   // notifications already delivered.
@@ -65,10 +94,17 @@ export function parsePlace(hash: string): Place | null {
 }
 
 export function formatPlace(place: Place | null): string {
+  const hash = bareHash(place);
+  return hash && organizationSlug ? inOrganization(organizationSlug, hash) : hash;
+}
+
+function bareHash(place: Place | null): string {
   if (!place) return "";
   switch (place.view) {
     case "welcome":
       return "#/";
+    case "joined":
+      return "#/welcome";
     case "orgSettings":
       return place.page
         ? `#/org/settings/${place.page}${place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`

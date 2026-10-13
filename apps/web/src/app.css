@@ -1159,3 +1159,171 @@ body {
     width: 100%;
   }
 }
+
+/* -- Accounts: the pages outside an organisation and its own pages (docs/design/accounts.md). Layout only. -- */
+.profileStrip {
+  display: flex;
+  gap: var(--ds-space-24);
+  align-items: flex-start;
+}
+.profileStripFields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.inviteCards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.inviteCard {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-16);
+  padding: var(--ds-space-card-pad);
+}
+.inviteCardText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-text-sm);
+}
+.inviteCardText b {
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+}
+.inviteCardActions {
+  display: flex;
+  flex: none;
+  gap: var(--ds-space-8);
+}
+.fineCentre {
+  margin: 0;
+  text-align: center;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.cardFooterCentred {
+  justify-content: center;
+}
+.plainRows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plainRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-row-comfortable);
+  margin: 0;
+  padding: var(--ds-space-6) var(--ds-space-card-pad);
+}
+.plainRow > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.howBlock,
+.keyGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.nextStep {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-16);
+}
+.keyGroupHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.spacer {
+  flex: 1;
+}
+.rowActions {
+  display: inline-flex;
+  gap: var(--ds-space-4);
+  justify-content: flex-end;
+}
+.invitationFilters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-12);
+}
+.invitationSearch {
+  width: 260px;
+  max-width: 100%;
+}
+.envelope {
+  display: grid;
+  place-items: center;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
+  color: var(--ds-color-text-muted);
+}
+.statusCell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+}
+.inlineFace {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+/* The super-admin's page: outside every organisation, on the canvas, no sidebar. */
+.adminPage {
+  flex: 1;
+  min-height: 0;
+  padding: var(--ds-space-main-pad) var(--ds-space-32);
+  overflow: auto;
+  background: var(--ds-color-canvas);
+}
+.adminMark {
+  display: grid;
+  place-items: center;
+}
+.adminFoot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.adminFoot p {
+  margin: 0;
+}
+#root {
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 639.98px) {
+  .profileStrip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--ds-space-12);
+  }
+  .inviteCard {
+    flex-wrap: wrap;
+  }
+  .inviteCardActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .adminPage {
+    padding: var(--ds-space-16);
+  }
+}

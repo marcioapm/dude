@@ -6,10 +6,12 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
-import { Breadcrumb } from "@dude/design-system/components";
+import { Breadcrumb, EntityLine, OrgFace } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
-import { KeysSection, ProfileSection } from "./YouSections.tsx";
+import { KeysSection, ProfileSection, type KeyGroup } from "./YouSections.tsx";
+import { useAccount } from "../accounts/context.tsx";
+import { untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
 
@@ -42,19 +44,49 @@ export function MySettingsScreen({ client, me, onChanged }: {
   }, [client, read]);
 
   const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
+  const account = useAccount();
+  // Keys across your organisations: read with the credential that names none.
+  const keysClient = account?.base ?? client;
+  const groups: KeyGroup[] = account
+    ? account.memberships.map((m) => ({ id: m.id, name: m.name, slug: m.slug, role: m.role }))
+    : me ? [{ id: "", name: "this organisation", slug: "", role: me.role }] : [];
 
   return (
     <Page data-testid="my-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
-        description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
+      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Your settings"
+        description="Only you see these. Your profile and keys are yours in every organisation; how dude looks is this browser's." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields
         // from /v1/me): after a save the form starts again as each read lands,
         // so it ends on the saved values whichever lands first.
         <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
-          onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
+          organizations={account?.memberships.map((m) => m.name)} accessEmail={account?.authMethod === "cloudflare_access"}
+          onChanged={() => { setRead((n) => n + 1); onChanged(); account?.refresh(); }} />
       ) : null}
-      <KeysSection client={client} />
+      {groups.length ? <KeysSection client={keysClient} groups={groups} you={me?.name ?? ""} /> : null}
+      {account && account.memberships.length + account.invitations.length > 1 ? (
+        <Card data-testid="my-organisations">
+          <CardHeader title="Organisations" />
+          <CardBody padding="flush">
+            <ul className="plainRows" role="list">
+              {account.memberships.map((m) => (
+                <li key={m.id} className="plainRow">
+                  <EntityLine lead={<OrgFace org={m} size={24} aria-hidden />} name={m.name} detail={`${m.role === "admin" ? "Admin" : "Member"} · ${window.location.host}/#/o/${m.slug}`} />
+                  {m.id === account.current.id ? <span className="muted">This tab</span>
+                    : <Button size="sm" variant="quiet" onClick={() => account.switchTo(m.id)}>Open</Button>}
+                </li>
+              ))}
+              {account.invitations.map((i) => (
+                <li key={i.code} className="plainRow">
+                  <EntityLine lead={<OrgFace org={i.organization} size={24} aria-hidden />} name={i.organization.name}
+                    detail={`Invited by ${i.inviter} · expires ${untilWords(i.expiresAt)}`} />
+                  <Button size="sm" variant="secondary" onClick={() => account.join(i.code)} data-testid={`settings-join-${i.organization.slug}`}>Join…</Button>
+                </li>
+              ))}
+            </ul>
+          </CardBody>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader title="Appearance" />
         <CardBody>

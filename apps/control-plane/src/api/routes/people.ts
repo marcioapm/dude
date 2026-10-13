@@ -196,7 +196,7 @@ async function getMe(ctx: RequestContext): Promise<Response> {
     const person = await myDetail(scope, ctx.principal.personId);
     // organizations is not a tenant table; the row is the caller's own.
     const org = (await scope.sql`
-      SELECT id, name FROM organizations WHERE id = ${ctx.principal.organizationId}`) as Array<{ id: string; name: string }>;
+      SELECT id, name, slug FROM organizations WHERE id = ${ctx.principal.organizationId}`) as Array<{ id: string; name: string; slug: string }>;
     return { person, organization: org[0]! };
   });
   // How the browser signed in decides how it signs out: a key is forgotten

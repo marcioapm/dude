@@ -348,6 +348,14 @@ export class FixtureClient extends ApiClient {
   override me() {
     return Promise.resolve({ person: PEOPLE[0]!, organization: ORG });
   }
+  /** As a key answers it: a member of the one organisation. */
+  override gate() {
+    return this.me();
+  }
+  /** The fixtures are one organisation: naming it changes nothing they answer. */
+  override inOrganization(_organizationId: string): ApiClient {
+    return this;
+  }
   // -- settings: the network the pages change; the rest as data.ts has it --
 
   #orgEgress = [...SETTINGS.network.organizationEgress!];

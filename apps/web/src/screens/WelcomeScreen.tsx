@@ -34,7 +34,7 @@ export function partOfDay(d: Date = new Date()): string {
   return "Evening";
 }
 
-export function WelcomeScreen({ client, projects, sessions, name, now, offer, onOpenSession, onAllSessions, onCreated }: {
+export function WelcomeScreen({ client, projects, sessions, name, orgName, now, offer, onOpenSession, onAllSessions, onCreated }: {
   client: ApiClient;
   /** The organisation's projects: what the composer can link. */
   projects: readonly NavProject[];
@@ -42,6 +42,8 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
   sessions: readonly SessionSummary[] | null;
   /** The person's name, for the greeting. */
   name: string | null;
+  /** Named in the line when you are in more than one: "What are we working out in Acme today?". */
+  orgName?: string | undefined;
   /** The clock the greeting reads; the browser's by default. */
   now?: () => Date;
   /** Under the recent sessions (or the first-time line): New project, for an organisation with none. */
@@ -127,7 +129,7 @@ export function WelcomeScreen({ client, projects, sessions, name, now, offer, on
       <Welcome
         mark={<DudeMark size="fill" />}
         greeting={name ? `${partOfDay(clock)}, ${firstName(name)}` : partOfDay(clock)}
-        line="What are we working out today?"
+        line={orgName ? `What are we working out in ${orgName} today?` : "What are we working out today?"}
         composer={
           <div ref={wrap} className="welcomeComposer">
             <DraftedComposer
