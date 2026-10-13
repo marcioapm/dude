@@ -260,7 +260,7 @@ test("a Run that ended settles a grandchild still waiting under a child that alr
   const { child, grand } = grandOf(project(events, "aborted").turns);
   expect(child.status).toBe("completed");
   expect(grand).toMatchObject({ id: "grand", status: "aborted", waitingOn: null });
-  // The live projection is untouched, and what needed no settling is the same object.
+  // The live projection is untouched.
   expect(grandOf(live.turns).grand).toMatchObject({ status: "running", waitingOn: { permission: "bash" } });
   const settledAgain = snapshot(state, "aborted");
   expect(settledAgain.turns[0]).not.toBe(live.turns[0]);

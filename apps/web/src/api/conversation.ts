@@ -1169,8 +1169,10 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
   // Settles a call and every child under it, to any depth: an ended child
   // keeps its status but its descendants are settled too. Every call, child,
   // turns and children array is copied, because `apply` keeps writing the
-  // live ones (a late event pushes into them or ends a call); a message turn
-  // is never written after it is pushed, so it is shared.
+  // live ones (a late event pushes into them or ends a call); a child's
+  // message turn is never written after it is pushed, so it is shared (the
+  // Run's own last message does take its tokens later, but that is not
+  // under a call).
   const settleChild = (child: ChildTurn): ChildTurn => ({
     ...child,
     settled: true,
