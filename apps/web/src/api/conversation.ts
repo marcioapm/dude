@@ -652,7 +652,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     if (isToolEvent) state.pendingAsk = null;
     // The agent's own records (or lux reporting it running) end a start: it is up. A machine move's start ends
     // only once the Run has stopped for it: until then they are the turn the request ended.
-    if (AGENT_UP.has(event.eventType) && !(state.start?.machine && !state.start.machine.stopped)) endStart(state, event);
+    if (AGENT_UP.has(event.eventType) && !moveNotStopped(state)) endStart(state, event);
 
     switch (event.eventType) {
       case EventTypes.RunCreated:
@@ -742,17 +742,16 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.MachineRequested: {
         const p = payload as unknown as MachineRequestedPayload;
         const m = moveWords(p);
-        const called = turns.findLast((t): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "request_machine" && t.status === "running")
-          ?? turns.findLast((t): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "request_machine" && !t.machine?.from);
+        const requestCall = (t: Turn): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "request_machine";
+        const called = turns.findLast((t): t is ToolTurn => requestCall(t) && t.status === "running")
+          ?? turns.findLast((t): t is ToolTurn => requestCall(t) && !t.machine?.from);
         if (called) called.machine = { ...called.machine, from: m.from, to: m.to, pool: m.pool };
         if (p.refused !== undefined) {
           // Refused before any park: the tool card says it in the exact words; asked through the CLI, a notice does.
           if (!called) turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: p.message ?? p.refused });
           break;
         }
-        state.start = newStart("move", event.occurredAt);
-        state.start.machine = { role: m.role, to: m.to, pool: m.pool, moveId: p.moveId ?? null, stopped: false };
-        enterStage(state.start, "park", event.occurredAt);
+        state.start = moveStart(m, p.moveId ?? null, event.occurredAt);
         state.activity = null;
         break;
       }
@@ -775,14 +774,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
       case EventTypes.MachineReset: {
         const p = payload as unknown as MachineResetPayload;
-        const m = moveWords(p);
         turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: resetNotice(p) });
         // Only a reset that moves a live Run (it has a moveId) has a move to show.
-        if (p.moveId) {
-          state.start = newStart("move", event.occurredAt);
-          state.start.machine = { role: m.role, to: m.to, pool: m.pool, moveId: p.moveId, stopped: false };
-          enterStage(state.start, "park", event.occurredAt);
-        }
+        if (p.moveId) state.start = moveStart(moveWords(p), p.moveId, event.occurredAt);
         break;
       }
       case EventTypes.RunResized: {
@@ -1184,7 +1178,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ServersChanged:
         // lux reports the Run running (after a wait for a host, a resume or a move): it is up. Not a move's Run before its stop.
-        if (payload.change === "state" && payload.luxState === "running" && !(state.start?.machine && !state.start.machine.stopped)) endStart(state, event);
+        if (payload.change === "state" && payload.luxState === "running" && !moveNotStopped(state)) endStart(state, event);
         break;
 
       case EventTypes.RunResumeTimed: {
@@ -1434,7 +1428,6 @@ function normalizeTodoStatus(status: unknown): PlanItem["status"] {
     : "pending";
 }
 
-/** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
 /** The tool's answer, or its refusal's words and code: exactly one of `answer` and `error`. */
 type MachineSaid = { answer?: string; error?: string; code?: string };
 
@@ -1474,6 +1467,7 @@ function laterRuns(role: string, size: string, inTask: boolean): string {
   return ` Later ${roleLabel(role).toLowerCase()} Runs in this task run on ${size} too.`;
 }
 
+/** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
 function resultFrom(payload: Record<string, unknown>): ToolResult | null {
   const result: ToolResult = {};
   for (const key of ["output", "stdout", "stderr"] as const) {
@@ -1667,6 +1661,19 @@ function endStart(state: Projection, event: PersistedEvent): void {
 
 function newStart(kind: StartState["kind"], startedAt: string): StartState {
   return { kind, stage: null, stageSince: null, startedAt, done: [], luxReason: null, failed: null };
+}
+
+/** A machine move's start, parking from `at`. */
+function moveStart(m: { role: string; to: string; pool: string | null }, moveId: string | null, at: string): StartState {
+  const start = newStart("move", at);
+  start.machine = { role: m.role, to: m.to, pool: m.pool, moveId, stopped: false };
+  enterStage(start, "park", at);
+  return start;
+}
+
+/** A machine move whose Run has not stopped yet: the agent's records are still the turn the request ended. */
+function moveNotStopped(state: Projection): boolean {
+  return !!state.start?.machine && !state.start.machine.stopped;
 }
 
 /** The start is in `stage` from `since`: the stage it was in, if another, is done, timed by the two `since`s. */
