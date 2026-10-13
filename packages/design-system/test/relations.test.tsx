@@ -75,6 +75,13 @@ describe("StartGate", () => {
     expect(el.querySelector('[data-testid="start-anyway"]')).toBeNull();
     expect([...el.querySelectorAll("button[disabled]")].map((b) => b.textContent)).toEqual(["Deliver", "Start when unblocked…"]);
     expect(el.textContent).toContain("will never merge");
+    // The refused item's focusable wrapper, like the ways': a disabled button named for it, described once.
+    const refused = el.querySelector<HTMLElement>('[aria-label="Start when unblocked…"][role="button"]')!;
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    const describedBy = refused.getAttribute("aria-describedby")!;
+    expect(document.getElementById(describedBy)?.textContent)
+      .toBe("CP-37 was marked done with nothing merged and will never merge, so this would never start it.");
+    expect(el.querySelectorAll(`[aria-describedby="${describedBy}"]`).length).toBe(1);
   });
 });
 
