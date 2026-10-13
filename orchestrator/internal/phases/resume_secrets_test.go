@@ -2,10 +2,17 @@ package phases
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -61,5 +68,21 @@ func TestAResumeSuppliesEverySecretLuxDeclares(t *testing.T) {
 	down := &Syncer{Forges: forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, errors.New("db down") })}
 	if _, err := down.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !passing(err) {
 		t.Errorf("GIT_TOKEN with the forge unreadable: %v, want a passing error", err)
+	}
+
+	// An owner's token for an owner the App is no longer installed on:
+	// GitHub refuses it, so the resume fails for good rather than retrying.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := httptest.NewServer(fakegithub.NewApp(9102, "dude-gone", &key.PublicKey).Handler())
+	defer fake.Close()
+	block := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	app := forge.NewGitHub(forge.Credential{Auth: "github_app", Secret: string(block), AppID: "9102", APIBaseURL: fake.URL})
+	uninstalled := &Syncer{Forges: forgeFor(func(context.Context, string) (*forge.GitHub, error) { return app, nil })}
+	_, err = uninstalled.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN_GONE"), nil)
+	if !errors.As(err, &cannot) || !strings.Contains(err.Error(), "the GitHub App is not installed on gone") {
+		t.Errorf("GIT_TOKEN_GONE with the App uninstalled from gone: %v, want errCannotResume naming it", err)
 	}
 }
