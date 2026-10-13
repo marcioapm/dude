@@ -130,6 +130,11 @@ const proposal: ProposalCardItem[] = [
     project: { key: "CP", name: "control-plane" }, canFile: true, relations: [{ kind: "blocked-by", item: 1 }, { kind: "related", task: { key: "CP-44", status: "received" } }] },
 ];
 
+type WhenNearProps = {
+  readonly children: ReactNode;
+  readonly anchors?: readonly string[];
+};
+
 /**
  * Mounts its children once they near the viewport. The section's blocks are
  * about 8,000 elements and 190 running animations: drawn from the start they
@@ -137,16 +142,21 @@ const proposal: ProposalCardItem[] = [
  * gallery could take seconds to fade in. A gallery without IntersectionObserver
  * draws them at once.
  */
-export function WhenNear({ children, anchors = [] }: { readonly children: ReactNode; readonly anchors?: readonly string[] }) {
-  const target = () => anchors.includes(location.hash.slice(1)) ? location.hash.slice(1) : undefined;
-  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined" || !!target());
+export function WhenNear({ children, anchors = [] }: WhenNearProps): ReactNode {
+  function anchorTarget(): string | undefined {
+    const id = location.hash.slice(1);
+    return anchors.includes(id) ? id : undefined;
+  }
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined" || !!anchorTarget());
   useEffect(() => {
-    const reveal = () => { if (target()) setNear(true); };
+    function reveal(): void {
+      if (anchorTarget()) setNear(true);
+    }
     window.addEventListener("hashchange", reveal);
     return () => window.removeEventListener("hashchange", reveal);
   }, [anchors]);
   useLayoutEffect(() => {
-    const id = target();
+    const id = anchorTarget();
     if (near && id) document.getElementById(id)?.scrollIntoView();
   }, [near]);
   const placeholder = useRef<HTMLDivElement>(null);
