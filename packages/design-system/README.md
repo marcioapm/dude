@@ -901,7 +901,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
   takes the focus when it opens; the gallery passes `autoFocus={false}`, so a
   static picture never takes the focus. The gallery mounts the Task relations
-  section's blocks only once it nears the screen (`WhenNear`): drawn from the
+  section's blocks once it nears the screen (`WhenNear`), or when an initial
+  URL or sidebar fragment requests one of its 13 `#rel-*` blocks. A requested
+  block scrolls into view after mounting; unrelated fragments leave the blocks
+  deferred. Without IntersectionObserver they render immediately. Drawn from the
   start, its 8,000 elements and 190 running animations held other sections'
   animations back, enough that a tooltip elsewhere took seconds to fade in.
 - `DependencyStrip` is an epic's order, in steps, with what can start now;
