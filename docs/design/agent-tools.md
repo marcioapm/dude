@@ -131,7 +131,7 @@ Codex's thread, Claude Code's task) and `callId` (the parent's
 | `agent.child.tool.called` | as `agent.tool.called` (`tool`, `callId` — the child's own call —, `input`, `title`) plus `childId`, `parentCallId` | a child's tool call starts |
 | `agent.child.tool.completed` | as `agent.tool.completed` (`tool`, `callId`, `status`, the result) plus `childId`, `parentCallId` | it ends |
 | `agent.child.message` | `{childId, callId, text, costUsd?, tokens?}` | a child's assistant message completes |
-| `agent.child.waiting` | `{childId, callId, on: "permission", permission, patterns, answered, held, childCallId?}` — `held` false when lux answered it or the call it was for is already over | the harness asked a permission for the child; the child's next event ends the wait |
+| `agent.child.waiting` | `{childId, callId, on: "permission", permission, patterns, answered, held, childCallId?}` — `held` false when lux answered it or the call it was for is already over | the harness asked a permission for the child; that child's next activity ends the wait |
 | `agent.child.ended` | `{childId, callId, status, summary, costUsd?, tokens?, durationSecs}` — status `completed`, `failed` or `interrupted` | the child is done |
 
 Only completed things are recorded: no deltas, no reasoning, one
@@ -147,7 +147,12 @@ it again.
   is the call. `system task_started` names the child (`task_id`) and the
   call (`tool_use_id`); every child line carries `parent_tool_use_id`,
   the call's id, and is translated as the child's, never the parent's.
-  `system task_notification` ends it with its status, summary and usage.
+  A child line that arrives before any `task_started` for its call starts
+  the child itself: its `childId` is then the `parent_tool_use_id`, its
+  `title` and `agentType` the line's `task_description` and
+  `subagent_type`, and a `task_started` after it keeps that id.
+  `system task_notification` ends it with its status, summary and usage;
+  a `task_progress` after it is ignored.
 - **Codex** (`codex.*`): any notification on a thread other than the
   Run's (its session) is a child's. The parent's `collabAgentToolCall`
   item (`spawnAgent`) is the call; the `subAgentActivity` item that
@@ -169,9 +174,16 @@ it again.
   object when it still parses, else as the string, with `truncated`. A
   task's `model` is OpenCode's `{modelID, providerID}`, recorded as
   `providerID/modelID`. lux relays an ask nothing answered with a
-  `lux.warning`, after child records that may already follow it: an ask
-  for a call already over is recorded (`held: false`) and holds nothing,
-  and any later record of the child ends a wait.
+  `lux.warning`, after child records that may already follow it. An ask
+  is held only while nothing answered it and the call it names is still
+  open. An ask for a call already completed (or of a child already
+  ended) is recorded with `held: false` and changes nothing: no wait is
+  set in `runs.children`, an earlier wait stays as it was, and the
+  transcript does not show the thread as waiting. A held wait ends at the
+  child's next activity: a `pending` part, a new call, a call's end, a
+  message, or the child's end. `opencode.session`, a `running`
+  `opencode.task`, and a repeated `running` part for a call already
+  started do not end it.
 
 ### The stall detector
 
