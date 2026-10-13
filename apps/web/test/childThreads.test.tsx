@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { renderTurn } from "../src/screens/RunScreen.tsx";
-import { project } from "../src/api/conversation.ts";
+import { apply, emptyProjection, project, snapshot } from "../src/api/conversation.ts";
 
 let cursor = 0;
 function ev(eventType: string, payload: Record<string, unknown> = {}, minutesAgo = 0): PersistedEvent {
@@ -126,4 +126,75 @@ test("a child watched while it works folds when it ends", async () => {
   const thread = el.querySelector("[data-testid='child-thread']")!;
   expect(thread.querySelector("[role='group']")).toBeNull();
   expect(thread.textContent).toContain("Done: 1280×720.");
+});
+
+// c1 → ses_kid (depth 1) → its call k2 → ses_grand (depth 2) → its call k3 → ses_great (depth 3).
+const deep = () => [...start(),
+  ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k2", tool: "task", input: { description: "Deeper" } }, 110),
+  ev(EventTypes.ChildStarted, { childId: "ses_grand", callId: "k2", parentChildId: "ses_kid", kind: "task", title: "Deeper" }, 110),
+  ev(EventTypes.ChildToolCalled, { childId: "ses_grand", parentCallId: "k2", callId: "k3", tool: "task", input: { description: "Deepest" } }, 109),
+  ev(EventTypes.ChildStarted, { childId: "ses_great", callId: "k3", parentChildId: "ses_grand", kind: "task", title: "Deepest" }, 109),
+  ev(EventTypes.ChildMessage, { childId: "ses_great", callId: "k3", text: "Found it at depth three." }, 108),
+];
+
+const threadOf = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-testid='child-thread'][data-child='${id}']`);
+const header = (thread: HTMLElement) => thread.querySelector<HTMLElement>(":scope > [role='button']")!;
+
+test("a live child starts open at depth 1 and collapsed at depth 2, as the design system's depth rule says", async () => {
+  const el = await render(deep());
+  expect(threadOf(el, "ses_kid")!.querySelector(":scope > [role='group']")).toBeTruthy();
+  const grand = threadOf(el, "ses_grand")!;
+  expect(grand.getAttribute("data-status")).toBe("running");
+  expect(header(grand).getAttribute("aria-expanded")).toBe("false");
+  expect(grand.querySelector(":scope > [role='group']")).toBeNull();
+});
+
+test("a depth-3 child is its header with an Open action, which shows the child's own calls and messages", async () => {
+  const el = await render(deep());
+  await act(async () => header(threadOf(el, "ses_grand")!).click());
+  const great = threadOf(el, "ses_great")!;
+  expect(great.getAttribute("data-depth")).toBe("3");
+  expect(great.querySelector("[role='group']")).toBeNull();
+  const open = great.querySelector<HTMLButtonElement>("button[aria-label='Open session']")!;
+  expect(open).toBeTruthy();
+  await act(async () => open.click());
+  const session = document.querySelector<HTMLElement>("[role='dialog'] [data-testid='child-session']")!;
+  expect(session.getAttribute("data-child")).toBe("ses_great");
+  expect(session.textContent).toContain("Found it at depth three.");
+  expect(document.querySelector("[role='dialog']")!.textContent).toContain("Deepest");
+});
+
+test("the header of a depth-3 child opens it too", async () => {
+  const el = await render(deep());
+  await act(async () => header(threadOf(el, "ses_grand")!).click());
+  await act(async () => header(threadOf(el, "ses_great")!).click());
+  expect(document.querySelector("[role='dialog'] [data-testid='child-session']")?.getAttribute("data-child")).toBe("ses_great");
+});
+
+test("an event for one child redraws it and every child above it, and skips its siblings", async () => {
+  const state = apply(emptyProjection(), [
+    ev(EventTypes.ToolCalled, { tool: "task", callId: "s1", input: { description: "First" } }),
+    ev(EventTypes.ToolCalled, { tool: "task", callId: "s2", input: { description: "Second" } }),
+    ev(EventTypes.ChildStarted, { childId: "a", callId: "s1", kind: "task", title: "Alpha" }),
+    ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "task", title: "Beta" }),
+    ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a1", tool: "task", input: {} }),
+    ev(EventTypes.ChildStarted, { childId: "a-grand", callId: "a1", parentChildId: "a", kind: "task", title: "Alpha's own" }),
+  ]);
+  const draw = () => act(async () => root!.render(<>{snapshot(state).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await draw();
+  // Changed behind the projection's back: drawn only if b is rendered again.
+  state.childrenById.get("b")!.title = "Beta, renamed unseen";
+  apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
+  await draw();
+  expect(threadOf(host, "b")!.textContent).toContain("Beta");
+  expect(threadOf(host, "b")!.textContent).not.toContain("renamed unseen");
+  // The grandchild is at depth 2, collapsed: its new message reaches a's open body through its header's turn count.
+  expect(threadOf(host, "a-grand")!.textContent).toContain("1 turns");
+  apply(state, [ev(EventTypes.ChildMessage, { childId: "b", callId: "s2", text: "Beta speaks." })]);
+  await draw();
+  expect(threadOf(host, "b")!.textContent).toContain("Beta speaks.");
+  expect(threadOf(host, "b")!.textContent).toContain("renamed unseen");
 });

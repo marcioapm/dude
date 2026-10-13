@@ -69,6 +69,14 @@ export interface ChildTurn {
   summary: string | null;
   turns: Array<ToolTurn | MessageTurn>;
   waitingOn: { permission: string; patterns: string[]; since: string } | null;
+  /** The child whose call started this one; null under one of the Run's own calls. */
+  parentChildId: string | null;
+  /**
+   * Bumped whenever this child or any child under it changes. The
+   * projection mutates children in place, so a renderer compares this,
+   * not the object, to skip a child that did not change.
+   */
+  revision: number;
 }
 
 export interface MessageTurn {
@@ -670,7 +678,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ChildStarted: {
-        childOf(state, payload, event);
+        touch(state, childOf(state, payload, event));
         break;
       }
 
@@ -689,6 +697,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           fillPlaceholder(state, turn, childTool, payload, event.occurredAt);
         }
         if (event.eventType === EventTypes.ChildToolCompleted) endTool(turn, payload, event.occurredAt);
+        touch(state, child);
         break;
       }
 
@@ -697,6 +706,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         child.waitingOn = null;
         const text = typeof payload.text === "string" ? payload.text : "";
         if (text.trim()) child.turns.push({ kind: "message", id: event.eventId, text, at: event.occurredAt, contextTokens: null, outputTokens: null });
+        touch(state, child);
         break;
       }
 
@@ -709,6 +719,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           patterns: Array.isArray(payload.patterns) ? payload.patterns.map(String) : [],
           since: event.occurredAt,
         };
+        touch(state, child);
         break;
       }
 
@@ -725,6 +736,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             turn.endedAt = event.occurredAt;
           }
         }
+        touch(state, child);
         break;
       }
 
@@ -1158,6 +1170,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     if (!live && !turnsChanged && child.waitingOn === null) return child;
     return {
       ...child,
+      revision: child.revision + 1,
       status: live ? unfinished : child.status,
       waitingOn: null,
       endedAt: child.endedAt ?? child.startedAt,
@@ -1262,6 +1275,11 @@ function fillPlaceholder(state: Projection, turn: ToolTurn, tool: string, payloa
   turn.startedAt = at;
 }
 
+/** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
+function touch(state: Projection, child: ChildTurn): void {
+  for (let c: ChildTurn | undefined = child; c; c = c.parentChildId ? state.childrenById.get(c.parentChildId) : undefined) c.revision += 1;
+}
+
 /**
  * The child an `agent.child.*` event is about, made from it when it is the
  * first heard of the child, and hung under the parent's call. A child of a
@@ -1289,9 +1307,14 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
     summary: null,
     turns: [],
     waitingOn: null,
+    parentChildId: null,
+    revision: 0,
   };
   state.childrenById.set(id, child);
-  const parentChild = typeof payload.parentChildId === "string" ? state.childrenById.get(payload.parentChildId) : undefined;
+  // A child never hangs under itself: that would loop every walk up the tree.
+  const parentChild = typeof payload.parentChildId === "string" && payload.parentChildId !== id
+    ? state.childrenById.get(payload.parentChildId) : undefined;
+  child.parentChildId = parentChild?.id ?? null;
   let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
   if (!call) {
     call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
