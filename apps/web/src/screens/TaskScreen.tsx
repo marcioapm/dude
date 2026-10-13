@@ -1170,12 +1170,17 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       case "run.created": {
         if (typeof p.phase !== "string") break;
-        const role = (typeof p.role === "string" ? p.role : p.phase === "review" ? "reviewer" : DEFAULT_RUN_ROLE) as Run["role"] & string;
+        let role: Run["role"] & string = DEFAULT_RUN_ROLE;
+        if (typeof p.role === "string") {
+          role = p.role as Run["role"] & string;
+        } else if (p.phase === "review") {
+          role = "reviewer";
+        }
         // A review round's own event names no Run, only its reviewers, each of whose Runs has a line of its own: the round is a stage.
         const reviewers = !e.runId && Array.isArray(p.reviewers) ? p.reviewers.map(String) : null;
-        const who = reviewers ? <>A <b>review round</b> started: {reviewers.map(reviewerCategoryInSentence).join(", ")}</>
+        const text = reviewers ? <>A <b>review round</b> started: {reviewers.map(reviewerCategoryInSentence).join(", ")}</>
           : <>The <b>{(e.runId && labels.get(e.runId)) || runDoer({ phase: p.phase, category: typeof p.category === "string" ? p.category : null })}</b> started</>;
-        out.push({ ...base, who: <AgentAvatar role={role} size="lg" />, text: who, open: session(e.runId) });
+        out.push({ ...base, who: <AgentAvatar role={role} size="lg" />, text, open: session(e.runId) });
         break;
       }
       case "review.completed": {
