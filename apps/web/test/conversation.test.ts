@@ -114,8 +114,12 @@ describe("machine moves", () => {
   test("lux refusing the real resume ends the move with whom it was kept on and lux's exact words", () => {
     const refused: MachineRefusedPayload = { moveId: "mmv_1", role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, kind: "raise",
       kept: STANDARD, code: "platform_mismatch", message: "XL requires arm64; this image only supports amd64." };
-    const c = project([...acceptedMove("implementer", XL, TO_HIGHMEM), ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
+    const c = project([...acceptedMove("implementer", XL, TO_HIGHMEM),
+      // The backend records the size lux kept before it settles the move as refused.
+      ev(EventTypes.RunResized, { machine: STANDARD }),
+      ev(EventTypes.MachineRefused, refused as unknown as Record<string, unknown>)], "running");
     expect(c.start).toBeNull();
+    expect(notices(c).some((n) => n.includes("moved to"))).toBe(false);
     expect(notices(c).at(-1)).toBe("The implementer asked for XL; lux kept it on Standard: XL requires arm64; this image only supports amd64.");
   });
 

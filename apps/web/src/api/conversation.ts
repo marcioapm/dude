@@ -785,10 +785,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
       case EventTypes.RunResized: {
-        // lux applied the move's size: said once, with how long the move has taken so far.
+        // lux applied the move's size: said once, with how long the move has taken so far. A size lux kept
+        // instead is the refusal's to say (machine.refused follows); size names are unique per organization.
         const machine = (payload as { machine?: { name?: unknown } }).machine;
         const move = state.start?.machine;
-        if (state.start && move && typeof machine?.name === "string") {
+        if (state.start && move && typeof machine?.name === "string" && machine.name === move.to) {
           turns.push({ kind: "notice", id: event.eventId, notice: "unparked", at: event.occurredAt,
             text: `The ${roleLabel(move.role).toLowerCase()} moved to ${machine.name} in ${formatDuration(msBetween(state.start.startedAt, event.occurredAt))}, with its conversation and work.` });
         }
