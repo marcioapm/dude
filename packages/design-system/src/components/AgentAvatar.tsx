@@ -15,6 +15,7 @@ export const ROLE_LABEL: Record<AvatarKind, string> = {
   simplifier: "Simplifier",
   qa_browser: "QA browser",
   brainstorm: "Brainstorm",
+  subagent: "Subagent",
   human: "Human",
   system: "System",
   integration: "Integration",
@@ -29,6 +30,7 @@ export const ROLE_ICON: Record<AvatarKind, IconName> = {
   simplifier: "simplifier",
   qa_browser: "qa_browser",
   brainstorm: "brainstorm",
+  subagent: "subagent",
   human: "human",
   system: "system",
   integration: "integration",
@@ -58,7 +60,9 @@ export interface AgentAvatarProps extends HTMLAttributes<HTMLSpanElement> {
  * Identifies *who* did something. Roles are distinguished by glyph shape,
  * hue, and — for the conversation agents (conductor, brainstorm) — a round
  * mask, so identity survives colorblindness and monochrome. The brainstorm
- * wears the conductor's colour; its bulb glyph and label tell them apart.
+ * wears the conductor's colour; its bulb glyph and label tell them apart. A
+ * subagent (a child session, not a dude role) wears the investigator's, as
+ * a square with a fork.
  * Humans are round with a ring; system is hollow; integrations are
  * outlined squares.
  */
