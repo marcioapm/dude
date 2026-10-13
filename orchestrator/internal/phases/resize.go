@@ -276,7 +276,7 @@ type pendingMove struct {
 
 func loadPendingMove(ctx context.Context, tx pgx.Tx, runID string) (*pendingMove, error) {
 	var m pendingMove
-	err := tx.QueryRow(ctx, `SELECT id, role, kind, to_size_id, from_size, COALESCE(refused, ''), COALESCE(refused_message, '')
+	err := tx.QueryRow(ctx, `SELECT id, role, kind, COALESCE(to_size_id, ''), from_size, COALESCE(refused, ''), COALESCE(refused_message, '')
 		FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID).Scan(&m.ID, &m.Role, &m.Kind, &m.To, &m.From, &m.Code, &m.Message)
 	if db.IsNotFound(err) {
 		return nil, nil
@@ -355,7 +355,9 @@ func (s *Syncer) settleMachine(ctx context.Context, r phaseRun, plan *ResizePlan
 			return err
 		}
 		code, message := move.Code, move.Message
-		moved := actual.SizeID == move.To
+		// A target removed meanwhile ("") left the layer to what the
+		// removal moved it to: whatever lux applied is the move's end.
+		moved := move.To == "" && code == "" && message == "" || actual.SizeID == move.To
 		if moved {
 			code, message = "", ""
 		} else if code == "" && message == "" {

@@ -77,6 +77,45 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// A move's target removed while it was under way (to_size_id cleared, the
+// layer dropped with it): the resume settles it on what lux applied, with
+// no refusal and no layer brought back; a settled move's history stays.
+func TestMachineSettlementAfterTargetSizeRemoved(t *testing.T) {
+	w := newResumeWorld(t)
+	for _, q := range []string{
+		`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_gone_'||$1, $1, 'Gone', 4, 4096, 40)`,
+		`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, settled_at) VALUES ('mmv_hist', $1, 'wi_'||$1, 'run_'||$1, 'implementer', 'raise', '{"sizeId":"old"}', 'msz_gone_'||$1, 'resize', now())`,
+		`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_open', $1, 'wi_'||$1, 'run_'||$1, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', 'msz_gone_'||$1, 'resize')`,
+		`DELETE FROM machine_sizes WHERE id = 'msz_gone_'||$1`,
+	} {
+		if _, err := w.owner.Exec(w.ctx, q, w.run.Org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+	plan := &ResizePlan{Recorded: old, Target: old}
+	if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.s.settleMachine(w.ctx, w.run, plan, lux.Run{}); err != nil {
+		t.Fatal(err)
+	}
+	var settled, history int
+	var raises delivery.Raises
+	if err := w.owner.QueryRow(w.ctx, `SELECT
+		(SELECT count(*) FROM machine_moves WHERE id = 'mmv_open' AND settled_at IS NOT NULL AND refused IS NULL AND to_size_id IS NULL),
+		(SELECT count(*) FROM machine_moves WHERE id = 'mmv_hist' AND to_size_id IS NULL AND settled_at IS NOT NULL),
+		(SELECT agent_machines FROM tasks WHERE id = $1)`, w.run.TaskID).Scan(&settled, &history, &raises); err != nil {
+		t.Fatal(err)
+	}
+	if settled != 1 || history != 1 || len(raises) != 0 {
+		t.Fatalf("settled=%d history=%d raises=%v", settled, history, raises)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'machine.refused'`); n != 0 {
+		t.Fatalf("a removed target was refused %d times", n)
+	}
+}
+
 // placementLux is lux as far as a resume's timing goes: Get answers the
 // Run with the placements set, or an error, and counts what was asked.
 type placementLux struct {

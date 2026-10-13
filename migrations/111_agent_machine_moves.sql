@@ -24,7 +24,10 @@ CREATE TABLE machine_moves (
   kind            text NOT NULL CHECK (kind IN ('raise', 'reset')),
   -- runs.machine before the move.
   from_size       jsonb NOT NULL,
-  to_size_id      text NOT NULL REFERENCES machine_sizes(id),
+  -- The size moved to. A size's removal moves an unsettled move to its
+  -- replacement, as it moves the task and session layers; a settled move's
+  -- target is cleared, its event payloads keeping the size as it was.
+  to_size_id      text REFERENCES machine_sizes(id) ON DELETE SET NULL,
   -- 'none': a Reset with nothing running, which only clears the layer.
   apply           text NOT NULL CHECK (apply IN ('resize', 'none')),
   -- {from, to}: lux pool ids, when the move changed pools.
