@@ -289,25 +289,50 @@ func (s *Syncer) timeout() string {
 // failBroken fails a Run whose broken turn waited past its bound: lux
 // never said why its agent's process exited (heldWait), or never had it
 // running again after a move (moveWait), which it names.
+//
+// The sweep's snapshot only nominates the Run: under the Run's row lock
+// (the one the follower's batches take) the hold, its classification, its
+// bound and the Run's control are read again, and the Run fails only if
+// the hold as it is now is overdue by its own bound.
 func (s *Syncer) failBroken(ctx context.Context, r phaseRun) error {
-	b := r.Broken
-	why, more := b.Error, map[string]any{"agentError": b.AgentError}
-	if b.Moved != "" {
-		why = fmt.Sprintf("%s, and it was not running again within %s; %s",
-			luxStopWords(luxStop{Reason: b.Moved}, ""), cmp.Or(s.MoveWait, moveWait), b.Error)
-		more["luxStop"] = b.Moved
-	}
-	s.unfollow(r.ID)
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true,
-				harness_state = harness_state - 'brokenTurn'
-			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL
-			  AND harness_state->'brokenTurn'->>'at' IS NOT NULL`, r.ID, why)
-		if err != nil || tag.RowsAffected() == 0 {
+	failed := false
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var raw []byte
+		var secs float64
+		var live bool
+		if err := tx.QueryRow(ctx, `SELECT harness_state->'brokenTurn',
+				COALESCE(extract(epoch FROM now() - (harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
+status IN ('scheduled', 'starting', 'running') AND control = 'none' AND lux_stop_reason IS NULL
+			FROM runs WHERE id = $1 FOR UPDATE`, r.ID).Scan(&raw, &secs, &live); err != nil {
 			return err
 		}
+		cur := r
+		cur.Broken = nil
+		if err := cur.scanBroken(raw, secs); err != nil {
+			return err
+		}
+		if !live || !s.brokenOverdue(cur) {
+			return nil
+		}
+		b := cur.Broken
+		why, more := b.Error, map[string]any{"agentError": b.AgentError}
+		if b.Moved != "" {
+			why = fmt.Sprintf("%s, and it was not running again within %s; %s",
+				luxStopWords(luxStop{Reason: b.Moved}, ""), cmp.Or(s.MoveWait, moveWait), b.Error)
+			more["luxStop"] = b.Moved
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true,
+				harness_state = harness_state - 'brokenTurn'
+			WHERE id = $1`, r.ID, why); err != nil {
+			return err
+		}
+		failed = true
 		return s.failedTxWith(ctx, tx, r, why, more)
 	})
+	if err == nil && failed {
+		s.unfollow(r.ID)
+	}
+	return err
 }
 
 // brokenOverdue says whether r's broken turn has waited past its bound.
