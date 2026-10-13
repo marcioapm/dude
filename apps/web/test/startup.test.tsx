@@ -79,21 +79,22 @@ describe("the projection", () => {
     expect(up.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started")).map((t) => t.at)).toEqual([at(10_000)]);
   });
 
-  const notices = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) => t.kind === "notice" ? [t.text] : []);
+  const takenBack = (events: PersistedEvent[]) => project(events, "running").turns
+    .flatMap((t) => t.kind === "notice" && t.text.startsWith("Taken back up") ? [t.text] : []);
 
   test("a resume says 'Taken back up' only once the agent is up, timed; never while its start is live", () => {
     const ran = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000)];
     const resuming = [...ran, message("and now?", 29_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000),
       stage("waiting", 30_000, 2), stage("volumes", 32_000, 2), stage("running", 40_000, 2)];
-    expect(notices(resuming).filter((n) => n.startsWith("Taken back up"))).toEqual([]);
+    expect(takenBack(resuming)).toEqual([]);
     const up = [...resuming, ev("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 60_000), ev("agent.message", { text: "back" }, 60_001)];
-    expect(notices(up).filter((n) => n.startsWith("Taken back up"))).toEqual(["Taken back up in 30s."]);
+    expect(takenBack(up)).toEqual(["Taken back up in 30s."]);
     // It sits where the agent came back, before its first words.
     const turns = project(up, "running").turns;
     expect(turns.at(-2)).toMatchObject({ kind: "notice", text: "Taken back up in 30s.", at: at(60_000) });
     // Parked again once back: the notice was placed when the agent came up, and is not placed a second time.
     const parkedAgain = [...up, ev("run.parked", { reason: "session" }, 90_000)];
-    expect(notices(parkedAgain).filter((n) => n.startsWith("Taken back up"))).toEqual(["Taken back up in 30s."]);
+    expect(takenBack(parkedAgain)).toEqual(["Taken back up in 30s."]);
   });
 
   test("a move says 'Taken back up' only once the agent is up; never while its start is live", () => {
@@ -101,8 +102,8 @@ describe("the projection", () => {
       stage("park", 20_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 25_000),
       stage("waiting", 25_000, 2), stage("running", 30_000, 2)];
     expect(project(moving, "running").start).toMatchObject({ kind: "move", stage: "running" });
-    expect(notices(moving).filter((n) => n.startsWith("Taken back up"))).toEqual([]);
-    expect(notices([...moving, ev("agent.message", { text: "on Large now" }, 41_000)]).filter((n) => n.startsWith("Taken back up"))).toHaveLength(1);
+    expect(takenBack(moving)).toEqual([]);
+    expect(takenBack([...moving, ev("agent.message", { text: "on Large now" }, 41_000)])).toHaveLength(1);
   });
 
   test("a resume or a move that fails shows the failure, never 'Taken back up'", () => {
@@ -122,15 +123,18 @@ describe("the projection", () => {
 
   // A harness taken back up can report a call it finished before the park again; that call keeps its time.
   for (const how of ["resume", "move"] as const) {
+    // The agent stops at 5s and is handed back: a move's park, or a park and its unpark.
+    const handedBack = () => how === "move"
+      ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
+      : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+
     test(`a tool call that finished before a ${how} keeps its duration through it and after`, () => {
       const tool = (type: "agent.tool.called" | "agent.tool.completed", name: string, callId: string, ms: number) =>
         ev(type, { tool: name, callId, ...(type === "agent.tool.completed" ? { status: "completed" } : { input: {} }) }, ms);
       const first = how === "move" ? "request_machine" : "read";
       const before = [created(), stage("waiting", 0), stage("running", 100),
         tool("agent.tool.called", first, "call_1", 1_000), tool("agent.tool.completed", first, "call_1", 1_001)];
-      const park = how === "move"
-        ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
-        : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+      const parked = handedBack();
       const back = [stage("waiting", 31_000, 2), stage("volumes", 33_000, 2), stage("running", 38_000, 2),
         // The harness's replay of what it already did, then new work.
         tool("agent.tool.called", first, "call_1", 40_000), tool("agent.tool.completed", first, "call_1", 41_000),
@@ -138,8 +142,8 @@ describe("the projection", () => {
       const tookMs = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) =>
         t.kind === "tool" ? [[t.id, Date.parse(t.endedAt!) - Date.parse(t.startedAt)]] : []);
       expect(tookMs(before)).toEqual([["call_1", 1]]);
-      expect(tookMs([...before, ...park, ...back])).toEqual([["call_1", 1], ["call_2", 2_000]]);
-      expect(project([...before, ...park, ...back], "running").toolCounts.get(first)).toBe(1);
+      expect(tookMs([...before, ...parked, ...back])).toEqual([["call_1", 1], ["call_2", 2_000]]);
+      expect(project([...before, ...parked, ...back], "running").toolCounts.get(first)).toBe(1);
     });
 
     test(`a tool call still running at a ${how} completes after it, timed over its whole span`, () => {
@@ -147,12 +151,10 @@ describe("the projection", () => {
       const name = how === "move" ? "request_machine" : "bash";
       const before = [created(), stage("waiting", 0), stage("running", 100),
         ev("agent.tool.called", { tool: name, callId: "call_live", input: {} }, 2_000)];
-      const park = how === "move"
-        ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
-        : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+      const parked = handedBack();
       const back = [stage("waiting", 31_000, 2), stage("running", 38_000, 2),
         ev("agent.tool.completed", { tool: name, callId: "call_live", status: "completed" }, 42_000)];
-      const rows = project([...before, ...park, ...back], "running").turns.filter((t) => t.kind === "tool");
+      const rows = project([...before, ...parked, ...back], "running").turns.filter((t) => t.kind === "tool");
       expect(rows).toHaveLength(1);
       const row = rows[0]!;
       expect(row.kind === "tool" && row.status).toBe("completed");
@@ -284,6 +286,11 @@ describe("a task's Run page", () => {
       { ...ev("run.steered", { text: "Use the jobs table.", directiveId: "dir_1" }, 0, { type: "human", id: "per_ana" }), occurredAt: iso(16_000) },
     ];
   };
+  // A Run created `ms` ago and waiting for a machine since.
+  const waitingFor = (ms: number) => {
+    const since = new Date(recent(ms)).toISOString();
+    return [{ ...created(), occurredAt: since }, { ...stage("waiting", 0), payload: { stage: "waiting", since, epoch: 1 } }];
+  };
 
   test("the chip is the header's statusNote, bare; the row says the stage; the steer and the composer say when it is read", async () => {
     const page = await runPage("scheduled", live());
@@ -300,10 +307,7 @@ describe("a task's Run page", () => {
 
   test("waiting for a host that can run containers: the pinned callout says it once; the row keeps its stage and clock, no slow note", async () => {
     const NESTED = "waiting for capacity: 1 host in its pool does not support nested containers";
-    const t = Date.now() - 100_000;
-    const ledger = [{ ...created(), occurredAt: new Date(t).toISOString() },
-      { ...stage("waiting", 0), payload: { stage: "waiting", since: new Date(t).toISOString(), epoch: 1 } }];
-    const page = await runPage("scheduled", ledger, false, undefined, undefined, NESTED);
+    const page = await runPage("scheduled", waitingFor(100_000), false, undefined, undefined, NESTED);
     await until(() => page.querySelector("[data-testid=waiting-for-host]"), "the pinned callout");
     const row = page.querySelector("[data-testid=start-progress]")!;
     expect(row.getAttribute("data-stage")).toBe("waiting");
@@ -312,24 +316,18 @@ describe("a task's Run page", () => {
   });
 
   test("waiting for capacity of another kind: no pinned callout; the row's slow note says it with lux's reason", async () => {
-    const t = Date.now() - 100_000;
-    const ledger = [{ ...created(), occurredAt: new Date(t).toISOString() },
-      { ...stage("waiting", 0), payload: { stage: "waiting", since: new Date(t).toISOString(), epoch: 1 } }];
-    const page = await runPage("scheduled", ledger, false, undefined, undefined, "waiting for capacity: 2 hosts lack cpus");
+    const page = await runPage("scheduled", waitingFor(100_000), false, undefined, undefined, "waiting for capacity: 2 hosts lack cpus");
     const slow = await until(() => page.querySelector("[data-testid=start-slow]"), "the slow note");
     expect(slow.textContent).toContain("lux: waiting for capacity: 2 hosts lack cpus");
     expect(page.querySelector("[data-testid=waiting-for-host]")?.textContent ?? null).toBeNull();
   });
 
   test("the Run's own status: Scheduled while it waits for a machine, Starting once placed (any later stage), as lux moves it", async () => {
-    const t = Date.now() - 20_000;
-    const iso = (d: number) => new Date(t + d).toISOString();
-    const waiting = [{ ...created(), occurredAt: iso(0) }, { ...stage("waiting", 0), payload: { stage: "waiting", since: iso(0), epoch: 1 } }];
-    const page = await runPage("scheduled", waiting);
+    const page = await runPage("scheduled", waitingFor(20_000));
     const status = () => page.querySelector("[data-testid=start-chip]")!.closest("header")!.querySelector("[data-status]")!;
     await until(() => page.querySelector("[data-testid=start-chip]"), "the chip");
     expect(status().getAttribute("data-status")).toBe("scheduled");
-    const placed = { ...stage("image", 0), payload: { stage: "image", since: iso(5_000), epoch: 1 } };
+    const placed = { ...stage("image", 0), payload: { stage: "image", since: new Date(Date.now() - 15_000).toISOString(), epoch: 1 } };
     await act(async () => emit(placed));
     await until(() => (status().getAttribute("data-status") === "starting" ? true : null), "Starting once placed");
     expect(status().textContent).toContain("Starting");
