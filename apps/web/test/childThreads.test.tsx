@@ -323,6 +323,13 @@ test("the screen opens a child beside its transcript, navigates children and ret
   expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
   await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button")!.click());
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
+  await act(async () => header(threadOf(panel(), "ses_grand")!).click());
+  expect(panel().getAttribute("data-child")).toBe("ses_grand");
+  await act(async () => header(threadOf(el, "ses_kid")!).click());
+  expect(panel().getAttribute("data-child")).toBe("ses_kid");
+  expect([...panel().querySelectorAll("button")].some((button) => button.textContent === "Deeper")).toBe(false);
+  await act(async () => panel().querySelector<HTMLButtonElement>("button[aria-label='Close subagent']")!.click());
+  expect(el.querySelector("[data-testid='child-panel']") === null).toBe(true);
 });
 
 test("a description-only call is the child's prompt turn fallback", async () => {
