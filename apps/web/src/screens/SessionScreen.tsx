@@ -22,7 +22,7 @@ import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harnes
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { READ_WHEN_BACK, READ_WHEN_STARTED, apply, emptyProjection, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, readWhen, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
@@ -292,7 +292,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       undefined, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
-  const startHint = starting && !starting.failed ? (starting.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK) : null;
+  const startHint = readWhen(starting);
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;

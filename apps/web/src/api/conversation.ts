@@ -397,6 +397,12 @@ export const NOT_STARTED_TAKEN = "the agent did not start; a later agent took ov
 /** The same message on a failed conductor a later one retries (Try again): its own ledger cannot see that, its Chat can. */
 export const NOT_STARTED_RETRIED = "the agent did not start; Try again started a new one.";
 
+/** While its agent starts (not once that start failed): when a message sent now is read. */
+export function readWhen(start: StartState | null): string | null {
+  if (!start || start.failed) return null;
+  return start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK;
+}
+
 export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null,
   start: StartState | null = null): SteerWait {
   if (start && !start.failed) return { kind: "starting", back: start.kind !== "start" };
@@ -409,7 +415,8 @@ export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: str
 
 /** The composer's hint for a steer sent now, following the same capability. */
 export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null, start: StartState | null = null): string | null {
-  if (start && !start.failed) return (start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK).replace(/\.$/, "");
+  const starting = readWhen(start);
+  if (starting) return starting.replace(/\.$/, "");
   if (runStatus !== "running") return null;
   if (lands !== "next_step") return "Lands when the turn ends";
   return activeTool ? "Lands after the current tool" : "Lands at the agent's next step";
@@ -634,7 +641,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.RunCreated:
         // A new Run of this ledger (a session's next agent, a task's next conductor): it starts afresh.
         state.ran = false;
-        state.start = { kind: "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
+        state.start = newStart("start", event.occurredAt);
         state.startStaged = false;
         state.startWoken = false;
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
@@ -672,17 +679,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         let start = state.start;
         if (stage === "park") {
           // A move: stopped with its work kept, then started on another machine.
-          start = { kind: "move", stage: null, stageSince: null, startedAt: since, done: [], luxReason: null, failed: null };
+          start = newStart("move", since);
         } else if (!start) {
-          start = { kind: state.ran ? "resume" : "start", stage: null, stageSince: null, startedAt: event.occurredAt, done: [], luxReason: null, failed: null };
+          start = newStart(state.ran ? "resume" : "start", event.occurredAt);
         }
-        if (start.stage && start.stage !== stage && start.stageSince) {
-          start.done.push({ stage: start.stage, tookMs: Math.max(0, instant(since) - instant(start.stageSince)) });
-        }
-        if (start.stage !== stage) {
-          start.stage = stage;
-          start.stageSince = since;
-        }
+        enterStage(start, stage, since);
         start.luxReason = reason;
         state.start = start;
         state.startStaged = true;
@@ -696,7 +697,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (state.start) {
           if (state.start.kind === "start" && state.ran) state.start.kind = "resume";
         } else {
-          state.start = { kind: "resume", stage: null, stageSince: null, startedAt: at, done: [], luxReason: null, failed: null };
+          state.start = newStart("resume", at);
           state.startStaged = false;
         }
         break;
@@ -847,12 +848,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // a pull request is signed by its GitHub login; the conductor's
         // reply on a pull request is the conductor's, delivered as written.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
-        const text = String(payload.text ?? "");
         // Try again handing on a message the failed Run never read: the same turn, now the fresh agent's to read.
         if (handedOn(state, payload, directiveId)) break;
         const github = githubOf(payload.github);
         const turn: HumanTurn = {
-          ...humanTurn(event, "message", text, directiveId ? null : event.occurredAt),
+          ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
           directiveId,
           conductor: payload.by === "conductor",
           github,
@@ -1144,13 +1144,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const starting = state.start;
         const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
         if (failed && starting && payload.kept !== true && stage !== "park") {
-          if (stage && starting.stage && stage !== starting.stage && starting.stageSince) {
-            starting.done.push({ stage: starting.stage, tookMs: Math.max(0, instant(event.occurredAt) - instant(starting.stageSince)) });
-          }
-          if (stage && stage !== starting.stage) {
-            starting.stage = stage;
-            starting.stageSince = event.occurredAt;
-          }
+          if (stage) enterStage(starting, stage, event.occurredAt);
           starting.failed = { reason: typeof payload.reason === "string" && payload.reason ? payload.reason : null };
           ended.start = starting;
           // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
@@ -1160,7 +1154,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.failedStart = { turn: ended, messages: state.startMessages.filter((m) => m.deliveredAt === null) };
           state.startMessages = [];
         }
-        if (state.start) state.start = null;
+        state.start = null;
         turns.push(ended);
         state.activity = null;
         state.activeTool = null;
@@ -1532,12 +1526,28 @@ function endStart(state: Projection, event: PersistedEvent): void {
   for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
   state.startMessages = [];
   if (start.kind !== "start" || !state.startStaged) return;
-  const lines = [...start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`)];
+  const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
   if (start.stage && start.stageSince) {
-    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(Math.max(0, instant(event.occurredAt) - instant(start.stageSince)))}`);
+    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(msBetween(start.stageSince, event.occurredAt))}`);
   }
   state.turns.push({
     kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
-    text: `Started in ${formatDuration(Math.max(0, instant(event.occurredAt) - instant(start.startedAt)))}.`,
+    text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
   });
+}
+
+function newStart(kind: StartState["kind"], startedAt: string): StartState {
+  return { kind, stage: null, stageSince: null, startedAt, done: [], luxReason: null, failed: null };
+}
+
+/** The start is in `stage` from `since`: the stage it was in, if another, is done, timed by the two `since`s. */
+function enterStage(start: StartState, stage: StartStage, since: string): void {
+  if (start.stage === stage) return;
+  if (start.stage && start.stageSince) start.done.push({ stage: start.stage, tookMs: msBetween(start.stageSince, since) });
+  start.stage = stage;
+  start.stageSince = since;
+}
+
+function msBetween(from: string, to: string): number {
+  return Math.max(0, instant(to) - instant(from));
 }

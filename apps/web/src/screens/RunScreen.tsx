@@ -53,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
@@ -489,6 +489,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
   const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role} /> : null;
+  const startHint = readWhen(conversation.start);
   // The agent waits on the reader's answer: the composer steps back to one line.
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
@@ -523,8 +524,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
-                  toAside={conversation.start && !conversation.start.failed ? <span className="muted" data-testid="composer-start-hint">
-                    · {conversation.start.kind === "start" ? READ_WHEN_STARTED : READ_WHEN_BACK}</span> : undefined}
+                  toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
                 />
                 </>
               }
