@@ -113,7 +113,7 @@ type appForges struct{ gh *forge.GitHub }
 
 func (a appForges) For(context.Context, string) (*forge.GitHub, error) { return a.gh, nil }
 
-func newAppForges(t *testing.T, appDelay time.Duration) appForges {
+func newAppForges(t *testing.T, appDelay time.Duration, started ...chan struct{}) appForges {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -124,6 +124,9 @@ func newAppForges(t *testing.T, appDelay time.Duration) appForges {
 	h := app.Handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/app" {
+			if len(started) > 0 {
+				started[0] <- struct{}{}
+			}
 			select {
 			case <-time.After(appDelay):
 			case <-r.Context().Done():
@@ -185,7 +188,8 @@ func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
 // the bot on a slow GitHub holds it: a commit's co-authors still come
 // within the endpoint's bound.
 func TestACommitsCoauthorsDoNotWaitBehindAnotherBotLookup(t *testing.T) {
-	forges := newAppForges(t, 6*time.Second)
+	started := make(chan struct{}, 1)
+	forges := newAppForges(t, 6*time.Second, started)
 	f := setupWith(t, &agenttools.Server{Forges: forges})
 	f.coauthorTask(t)
 	token := f.run(t, "run_co_behind", "implementer", "running")
@@ -195,7 +199,11 @@ func TestACommitsCoauthorsDoNotWaitBehindAnotherBotLookup(t *testing.T) {
 		_, _ = forges.gh.Bot(context.Background())
 	}()
 	t.Cleanup(func() { <-first })
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the unbounded Bot caller never reached /app")
+	}
 	start := time.Now()
 	status, body := f.getCoauthors(t, token)
 	if took := time.Since(start); took >= 3*time.Second {
