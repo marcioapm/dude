@@ -1379,8 +1379,9 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
 function shownStart(start: StartState | null, runStatus: RunStatus | undefined): StartState | null {
   if (!start || start.failed) return start;
   if (start.kind === "start" && runStatus === "running") return null;
-  // A machine move is paused by dude between its park and its resume; a person's pause ends it in the fold.
-  if (runStatus === "paused" && !start.machine) return null;
+  // A machine move is paused by dude between its park and its resume, once its park is done. A Run already
+  // paused (a person's pause, or an idle park) moves at its next resume: nothing is shown until that resume's stages.
+  if (runStatus === "paused" && !start.machine?.stopped) return null;
   return start;
 }
 

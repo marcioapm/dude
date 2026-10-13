@@ -160,6 +160,17 @@ describe("machine moves", () => {
     expect(notices(cleared)).toEqual(["Márcio moved the implementer back to Standard."]);
     expect(cleared.start).toBeNull();
   });
+
+  test("a Reset of a Run a person paused shows no move until the person resumes it; then its stages do", () => {
+    const reset: MachineResetPayload = { moveId: "mmv_3", role: "implementer", from: LARGE, to: STANDARD, by: { id: "u_m", name: "Márcio" }, note: "" };
+    const paused = [ev(EventTypes.AgentMessage, { text: "Working." }), ev(EventTypes.RunPaused, { confirmed: true }),
+      ev(EventTypes.MachineReset, reset as unknown as Record<string, unknown>)];
+    expect(project(paused, "paused").start).toBeNull();
+    const resumed = project([...paused, ev(EventTypes.RunResumed, {}),
+      ev(EventTypes.RunStage, { stage: "waiting", since: new Date(Date.UTC(2026, 0, 1, 0, 0, cursor + 1)).toISOString(), epoch: 2 })], "running");
+    expect(startVerbOf(resumed.start!)).toBe("Moving to Standard");
+    expect(stepsOf(resumed.start!).find((s) => s.id === "waiting")!.state).toBe("current");
+  });
 });
 
 describe("git event labels", () => {
