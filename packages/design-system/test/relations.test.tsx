@@ -168,6 +168,20 @@ describe("RelationList", () => {
 });
 
 describe("RelationPicker", () => {
+  for (const autoFocus of [undefined, true, false]) {
+    test(`autoFocus=${autoFocus} ${autoFocus === false ? "preserves external focus" : "focuses search"}`, async () => {
+      const sentinel = document.createElement("button");
+      document.body.append(sentinel);
+      sentinel.focus();
+      try {
+        const el = await mount(<RelationPicker here={{ key: "CP-40" }} related={new Set()} find={async () => [meter]}
+          onAdd={async () => undefined} onClose={() => undefined} autoFocus={autoFocus} />);
+        const search = el.querySelector("input");
+        expect(search !== null).toBe(true);
+        expect(document.activeElement === (autoFocus === false ? sentinel : search)).toBe(true);
+      } finally { sentinel.remove(); }
+    });
+  }
   test("a loop is named, with Make it Related instead", async () => {
     const added: string[] = [];
     await mount(<RelationPicker here={{ key: "CP-40" }} related={new Set()} find={async () => [meter]} onClose={() => undefined}
