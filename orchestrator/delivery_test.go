@@ -336,6 +336,10 @@ func (w *world) pump() {
 	}
 }
 
+// untilPoll is how long until waits between passes: what it waits on is
+// mostly the fakes' goroutines, a few milliseconds behind a pass.
+const untilPoll = 10 * time.Millisecond
+
 // until pumps until cond holds, or fails the test with what it last saw.
 func (w *world) until(what string, cond func() bool) {
 	w.t.Helper()
@@ -345,7 +349,7 @@ func (w *world) until(what string, cond func() bool) {
 		if cond() {
 			return
 		}
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(untilPoll)
 	}
 	w.t.Fatalf("timed out waiting for %s\nruns:\n%s", what, w.describeRuns())
 }
