@@ -258,7 +258,10 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if err := c.env.validateMachine(ctx, live, current, target, before); err != nil {
-		return out, refuse("%s", err)
+		if le, ok := lux.AsError(err); ok {
+			return out, refusal{msg: le.Message, code: le.Code}
+		}
+		return out, err
 	}
 	id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
 	raise := delivery.Raise{SizeID: target.SizeID, MoveID: id, AskedBy: c.RunID, Role: c.Role, Reason: reason, At: time.Now().UTC()}

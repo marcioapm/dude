@@ -346,7 +346,7 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // (at once), a person it waited on (once nothing is open for them), a
 // conductor parked after its warm period (once someone wrote to it). An idle
 // park, like a person's own pause, waits for a person's Resume.
-const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
+const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND NOT ask.open)
 	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
 
@@ -2052,6 +2052,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	defer func() {
 		if err == nil {
 			RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, resumed)
+			err = s.settleMachine(ctx, r, plan, resumed)
 		}
 	}()
 	resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)

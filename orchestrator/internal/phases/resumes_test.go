@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -14,8 +15,50 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		t.Run(fmt.Sprint(refused), func(t *testing.T) {
+			w := newResumeWorld(t)
+			var size string
+			if err := w.owner.QueryRow(w.ctx, `SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size); err != nil {
+				t.Fatal(err)
+			}
+			for _, q := range []string{
+				`UPDATE tasks SET agent_machines = '{"implementer":{"sizeId":"target","moveId":"mmv_test","askedBy":"r","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id = $1`,
+			} {
+				if _, err := w.owner.Exec(w.ctx, q, w.run.TaskID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_test', $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', $4, 'resize')`, w.run.Org, w.run.TaskID, w.run.ID, size); err != nil {
+				t.Fatal(err)
+			}
+			plan := &ResizePlan{Recorded: &delivery.Machine{SizeID: "old"}, Target: &delivery.Machine{SizeID: size}}
+			if refused {
+				plan.refused = &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+			}
+			for i := 0; i < 2; i++ {
+				if err := w.s.settleMachine(w.ctx, w.run, plan, lux.Run{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var raises delivery.Raises
+			var settled bool
+			var code *string
+			var events int
+			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type IN ('machine.raised','machine.refused')) FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID).Scan(&raises, &settled, &code, &events); err != nil {
+				t.Fatal(err)
+			}
+			if !settled || events != 1 || refused && (len(raises) != 0 || code == nil || *code != "pool_unfit") || !refused && len(raises) != 1 {
+				t.Fatalf("settled=%v events=%d raises=%+v code=%v", settled, events, raises, code)
+			}
+		})
+	}
+}
 
 // placementLux is lux as far as a resume's timing goes: Get answers the
 // Run with the placements set, or an error, and counts what was asked.

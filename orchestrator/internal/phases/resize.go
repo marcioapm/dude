@@ -250,6 +250,65 @@ func (p *ResizePlan) keptNote() string {
 	}
 }
 
+func (s *Syncer) settleMachine(ctx context.Context, r phaseRun, plan *ResizePlan, answer lux.Run) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var id, role, kind string
+		var from struct {
+			delivery.Machine
+			PreviousRaise *delivery.Raise `json:"previousRaise"`
+		}
+		err := tx.QueryRow(ctx, `SELECT id, role, kind, from_size FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, r.ID).Scan(&id, &role, &kind, &from)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var refusal *lux.Error
+		if plan != nil {
+			refusal = plan.refused
+		}
+		code, message := "", ""
+		if refusal != nil {
+			code, message = refusal.Code, refusal.Message
+		}
+		tag, err := tx.Exec(ctx, `UPDATE machine_moves SET settled_at = now(), refused = $2, refused_message = $3 WHERE id = $1 AND settled_at IS NULL`, id, db.Nullable(code), db.Nullable(message))
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		payload := map[string]any{"moveId": id, "role": role, "from": from.SizeID}
+		typ := "machine.raised"
+		if refusal != nil {
+			typ = "machine.refused"
+			payload["code"], payload["message"] = code, message
+			previous, _ := json.Marshal(from.PreviousRaise)
+			// Restore only the layer this move wrote; a later person's action wins.
+			if r.SessionID != "" {
+				_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = NULLIF($2::jsonb, 'null'::jsonb) WHERE id = $1 AND agent_machine->>'moveId' = $3`, r.SessionID, previous, id)
+			} else {
+				_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = CASE WHEN $3::jsonb = 'null'::jsonb THEN agent_machines - $2 ELSE jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) END WHERE id = $1 AND agent_machines->$2->>'moveId' = $4`, r.TaskID, role, previous, id)
+			}
+			if err != nil {
+				return err
+			}
+		} else {
+			var actual *delivery.Machine
+			if plan != nil {
+				actual = plan.Outcome(answer)
+			}
+			if actual != nil {
+				payload["to"] = actual.SizeID
+				payload["pool"] = map[string]any{"from": from.PoolID, "to": actual.PoolID}
+			}
+			if kind == "reset" {
+				typ = "machine.reset"
+			}
+		}
+		_, err = ledger.Append(ctx, tx, r.ref().Event(typ, ledger.ActorSystem, payload))
+		return err
+	})
+}
+
 // runSizes is the size an agent Run's role names now (nil: the
 // organization has none) and, for a resume, the one runs.machine records.
 type runSizes struct {

@@ -46,7 +46,7 @@ func TestMachineRequestValidatesBeforeParkingAndPersistsOnce(t *testing.T) {
 					t.Fatalf("park before validation: %s", control)
 				}
 				if rejected {
-					return fmt.Errorf("exact lux refusal")
+					return &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact lux refusal"}
 				}
 				return nil
 			}}).Handler())

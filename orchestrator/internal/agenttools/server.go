@@ -183,7 +183,7 @@ func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	var refused refusal
 	switch {
 	case errors.As(err, &refused):
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error()})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error(), "code": refused.code})
 	case err != nil:
 		s.Log.Error("agent tool failed", "tool", t.name, "run", c.RunID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -473,11 +473,14 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 }
 
 // refusal is a tool declining a request, with the reason for the caller.
-type refusal struct{ msg string }
+type refusal struct {
+	msg  string
+	code string
+}
 
 func (r refusal) Error() string { return r.msg }
 
-func refuse(format string, a ...any) error { return refusal{fmt.Sprintf(format, a...)} }
+func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
 
 // structured is a tool's result as MCP structured content, which must be a
 // JSON object: a list is given as {"items": [...]}. (The text content, and

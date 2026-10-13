@@ -3,6 +3,13 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +18,49 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = hang
+	wi := w.task()
+	w.deliver(wi)
+	w.until("live agent", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	runID := w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, wi)
+	w.until("recorded running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+	})
+	liveID := w.lux.Runs()[0].ID
+	srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
+		return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
+	}}).Handler())
+	defer srv.Close()
+	token, hash := agenttools.NewToken()
+	mustExec(t, w.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
+	req, _ := http.NewRequest("POST", srv.URL+"/tools/request_machine", strings.NewReader(`{"size":"Bigger","reason":"suite killed at four workers"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		t.Fatalf("request: %d %s", res.StatusCode, body)
+	}
+	w.until("move settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+	})
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].ID != liveID {
+		t.Fatal("machine move replaced Run")
+	}
+	if got := w.machineOf(runID); got["name"] != "Bigger" || got["from"] != "task" {
+		t.Fatalf("machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
+		t.Fatal("missing raised settlement")
+	}
+}
 
 // Resizing a parked Run on resume (lux#51), through the fake lux's HTTP
 // API: what dude sends, what lux's spec then holds, and what runs.machine

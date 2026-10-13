@@ -38,6 +38,7 @@ import (
 const (
 	causeAnswer     = "answer"
 	causeRepository = "repository"
+	causeMachine    = "machine"
 	causePerson     = "person"
 	causeIdle       = "idle"
 	// A person's message to a parked conductor.
@@ -55,6 +56,8 @@ func resumeCause(r phaseRun) string {
 		return causeIdle
 	case r.Control == "resume":
 		return causePerson
+	case r.DudePause == "machine":
+		return causeMachine
 	case r.DudePause == "repository":
 		return causeRepository
 	case r.DudePause == "conductor":
