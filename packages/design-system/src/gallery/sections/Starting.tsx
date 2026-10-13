@@ -61,7 +61,7 @@ export function StartingSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="starting" title="Starting"
       intro="An agent that is starting says where it is, where its first turn will be. One map of words for lux's stages, shared with branch previews; the caller gives the stage list, so stages that do not occur are not drawn, and the verb, so a resume or a move reads as one.">
-      <WhenNear anchors={startingBlockIds}>
+      <WhenNear anchors={startingBlockIds} pendingTestId="starting-pending">
       <Block id="st-play" title="StartProgress: a fresh start, playing"
         note="The six stages of a fresh start, one after another, opened. The current stage breathes (frozen under reduced motion); done stages keep their times; the total shows once a stage has passed. A polite live region says each stage once; the clocks are timers outside it.">
         <Panes mode={mode}>{() => <Playing />}</Panes>

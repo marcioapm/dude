@@ -37,6 +37,9 @@ test("the Starting blocks, whose clocks tick, wait until the section nears the s
   expect(host.querySelectorAll("section#starting").length).toBe(1);
   expect(host.querySelectorAll("section#starting [id^='st-']").length).toBe(0);
   expect(host.querySelectorAll("section#starting [role=timer]").length).toBe(0);
+  // Its placeholder must not be counted as the Task relations placeholder.
+  expect(host.querySelectorAll("[data-testid='starting-pending']").length).toBe(1);
+  expect(host.querySelectorAll("[data-testid='relations-pending']").length).toBe(0);
 });
 
 /** Explicit entries pin delayed reveal and one-way retention without clock noise. */

@@ -144,7 +144,12 @@ const noAnchors: ReadonlySet<string> = new Set();
  * gallery could take seconds to fade in. A gallery without IntersectionObserver
  * draws them at once.
  */
-export function WhenNear({ children, anchors = noAnchors }: { readonly children: ReactNode; readonly anchors?: ReadonlySet<string> }) {
+export function WhenNear({ children, anchors = noAnchors, pendingTestId = "relations-pending" }: {
+  readonly children: ReactNode;
+  readonly anchors?: ReadonlySet<string>;
+  /** Each deferred section's placeholder needs its own id: tests count them. */
+  readonly pendingTestId?: string;
+}) {
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   const placeholder = useRef<HTMLDivElement>(null);
   const pendingTarget = useRef<string | null>(null);
@@ -175,7 +180,7 @@ export function WhenNear({ children, anchors = noAnchors }: { readonly children:
     seen.observe(placeholder.current);
     return () => seen.disconnect();
   }, [near]);
-  return near ? <>{children}</> : <div ref={placeholder} data-testid="relations-pending" style={{ minHeight: 6000 }} />;
+  return near ? <>{children}</> : <div ref={placeholder} data-testid={pendingTestId} style={{ minHeight: 6000 }} />;
 }
 
 export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
