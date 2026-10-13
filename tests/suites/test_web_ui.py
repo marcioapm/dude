@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, sign_in, toast, wait_until
+from helpers import ApiClient, create_api_key, open_my_settings, sign_in, toast, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1407,7 +1407,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
     """You choose how dude looks; it stays so after a reload."""
     sign_in(page, web_url, org["api_key"], board=False)
-    page.get_by_test_id("my-settings-button").click()
+    open_my_settings(page)
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     html = page.locator("html")
     expect(html).to_have_attribute("data-density", "comfortable")
@@ -1445,7 +1445,7 @@ def test_a_browser_turns_notifications_on_and_off(
       PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
     sign_in(page, web_url, org["api_key"], board=False)
-    page.get_by_test_id("my-settings-button").click()
+    open_my_settings(page)
     state = page.get_by_test_id("push-state")
     expect(state).to_have_attribute("data-state", "off")
 

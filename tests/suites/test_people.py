@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from env import REPO_ROOT, find_free_port
-from helpers import provision_person, ApiClient, create_api_key, execute, query, sign_in, wait_until
+from helpers import provision_person, ApiClient, create_api_key, execute, open_my_settings, query, sign_in, wait_until
 
 
 @pytest.fixture
@@ -458,9 +458,9 @@ def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient
     online = page.get_by_test_id("online")
     # You and Cy; Ana was never seen.
     expect(online).to_have_attribute("aria-label", "Online: e2e user, Cy")
-    band = page.get_by_test_id("my-settings-button")
+    band = page.get_by_test_id("switcher")
     expect(band).to_contain_text("e2e user")
-    band.click()
+    open_my_settings(page)
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     assert console_errors == []
 
@@ -532,15 +532,15 @@ def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, cl
 @pytest.mark.ui
 def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
     _sign_in(page, web_url, client.api_key, board=False)
-    page.get_by_test_id("my-settings-button").click()
+    open_my_settings(page)
     page.get_by_test_id("profile-name").fill("Ana Ribeiro")
     page.get_by_test_id("profile-save").click()
-    expect(page.get_by_test_id("my-settings-button")).to_contain_text("Ana Ribeiro")
+    expect(page.get_by_test_id("switcher")).to_contain_text("Ana Ribeiro")
 
     # A photo, resized in the browser, is your face everywhere.
     png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a730000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082")
     page.get_by_test_id("photo-file").set_input_files({"name": "me.png", "mimeType": "image/png", "buffer": png})
-    expect(page.get_by_test_id("my-settings-button").locator("img")).to_have_count(1)
+    expect(page.get_by_test_id("switcher").locator("img")).to_have_count(1)
     photo = client.get("/v1/me").json()["person"]["photoUrl"]
     assert photo.startswith("/v1/people/")
     # Resized to a JPEG in the browser, stored, and served back.
@@ -568,13 +568,12 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
-    # Members says how people join and that inviting here is not available, with no key-issuing form.
-    guidance = members.get_by_text("People join this organisation by invitation.")
-    expect(guidance).to_have_text(
-        "People join this organisation by invitation. Cloudflare Access must also let them in; dude doesn't manage that."
-        " Inviting people from this screen is not available yet."
-    )
-    expect(page.get_by_test_id("invite")).to_have_count(0)
+    # Members says how people join and offers Invite people, which opens the chip editor; no key is issued.
+    expect(members).to_contain_text("by invitation. Cloudflare Access must also let them in; dude doesn't manage that.")
+    expect(members).not_to_contain_text("not available yet")
+    page.get_by_test_id("invite").click()
+    expect(page.get_by_role("textbox", name="Emails")).to_be_visible()
+    page.keyboard.press("Escape")
     expect(page.get_by_test_id("invite-submit")).to_have_count(0)
     assert len(client.get("/v1/people").json()["people"]) == 1
     assert console_errors == []

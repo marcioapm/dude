@@ -316,6 +316,12 @@ def sign_in(page, web_url: str, api_key: str, at: str | None = None, board: bool
         expect(page).to_have_url(re.compile(r"#/project/"))
 
 
+def open_my_settings(page) -> None:
+    """Your settings, from the profile band's menu (the switcher), as a person opens them."""
+    page.get_by_test_id("switcher").click()
+    page.get_by_test_id("rowmenu-settings").click()
+
+
 def toast(page, text: str):
     """A toast, by its text: the design system marks each one (data-toast),
     since Radix also renders a hidden copy of the text for a second."""

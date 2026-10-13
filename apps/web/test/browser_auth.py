@@ -118,6 +118,15 @@ class BrowserAuth(unittest.TestCase):
     def shell(self):
         expect(self.page.get_by_test_id("shell")).to_be_visible()
 
+    def sign_out(self):
+        """From the profile band's menu once it knows who you are; the band's own link before."""
+        switcher = self.page.get_by_test_id("switcher")
+        if switcher.count():
+            switcher.click()
+            self.page.get_by_test_id("rowmenu-signout").click()
+        else:
+            self.page.get_by_test_id("sign-out").click()
+
     def prompt(self):
         expect(self.page.get_by_label("API key", exact=True)).to_be_visible()
         expect(self.page.get_by_test_id("shell")).to_have_count(0)
@@ -129,7 +138,7 @@ class BrowserAuth(unittest.TestCase):
             self.shell()
         self.assertEqual(self.probes, [None])
         self.assertNotIn("key=", stream.value.url)
-        self.page.get_by_test_id("sign-out").click()
+        self.sign_out()
         expect(self.page.get_by_role("heading", name="Signed out")).to_be_visible()
         self.assertEqual(self.page.url, URL + "/cdn-cgi/access/logout")
         self.assertEqual(self.probes, [None])
@@ -140,7 +149,7 @@ class BrowserAuth(unittest.TestCase):
         self.open("valid")
         self.shell()
         self.assertEqual(self.probes, ["Bearer valid"])
-        self.page.get_by_test_id("sign-out").click()
+        self.sign_out()
         self.prompt()
         self.assertEqual(self.probes, ["Bearer valid"])
         self.assertIsNone(self.page.evaluate("localStorage.getItem('dude.apiKey')"))
@@ -352,7 +361,7 @@ class BrowserAuth(unittest.TestCase):
                     self.page.evaluate("location.hash = '#/waiting'")
                     expect(self.page.get_by_test_id("shell")).to_be_visible()
                 elif leave == "sign-out":
-                    self.page.get_by_test_id("sign-out").click()
+                    self.sign_out()
                     self.prompt()
                 else:
                     streams = len(self.streams)
