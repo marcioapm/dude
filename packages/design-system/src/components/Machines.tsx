@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
+import { AgentAvatar, type AgentAvatarProps } from "./AgentAvatar.tsx";
+import { TextButton } from "./Settings.tsx";
+import summary from "./ServersSummary.module.css";
 import styles from "./Machines.module.css";
 
 /*
@@ -120,10 +123,59 @@ export function MachineChip({ name, spec, tooltip, raised, icon = "chip", "data-
       <Icon name={icon} size={12} className={styles["chipIcon"]} />
       <span className={cx(styles["chipName"], "ds-cap")}>{name}</span>
       <span className={cx(styles["chipSpec"], "ds-cap", "ds-tnum")}>{spec}</span>
-      {raised ? <span className={cx(styles["chipSpec"], "ds-cap")}><Icon name="arrow-up" size={11} /> raised {raised}</span> : null}
+      {raised ? <span className={cx(styles["raised"], "ds-cap")}><Icon name="arrow-up" size={11} /> raised {raised}</span> : null}
     </button>
   );
   return tooltip ? <Tooltip content={tooltip} side="bottom" keepOnPress>{chip}</Tooltip> : chip;
+}
+
+export interface MachineRaise {
+  readonly role: AgentAvatarProps["role"];
+  readonly label: string;
+  readonly size: { readonly name: string; readonly cpus: number; readonly memoryMiB: number };
+  readonly settings: { readonly name: string };
+  readonly detail: ReactNode;
+  readonly follows?: string | undefined;
+  readonly onReset?: (() => void) | undefined;
+  readonly busy?: boolean | undefined;
+}
+
+export interface MachineRaisesProps {
+  readonly raises: readonly MachineRaise[];
+  readonly where?: ReactNode;
+  readonly loading?: boolean | undefined;
+  readonly error?: string | null | undefined;
+}
+
+export function MachineRaises({ raises, where, loading, error }: MachineRaisesProps) {
+  if (!raises.length && !loading && !error) return null;
+  return (
+    <aside className={summary["root"]} aria-label="Machines raised" aria-busy={loading || undefined} data-testid="machine-raises">
+      <div className={summary["head"]}>
+        <Icon name="chip" size={16} className={summary["glyph"]} />
+        <span className={summary["title"]}>Machines</span>
+        {where ? <span className={summary["where"]}>{where}</span> : null}
+      </div>
+      {loading ? <p className={summary["empty"]} role="status">Loading raised machines…</p> : null}
+      {error ? <p className={styles["raiseError"]} role="alert">{error}</p> : null}
+      <ul className={styles["raiseRows"]}>
+        {raises.map((r) => (
+          <li key={r.label} className={styles["raiseRow"]}>
+            <AgentAvatar role={r.role} size="sm" />
+            <span className={styles["raiseText"]}>
+              <span>{r.label} runs on <b>{r.size.name}</b> <span className={styles["raiseSpec"]}>{r.size.cpus} CPUs · {r.size.memoryMiB / 1024} GiB</span></span>
+              <span className={styles["raiseDetail"]}>{r.follows ? `Follows the ${r.follows}: it names no size of its own` : r.detail}</span>
+            </span>
+            {r.onReset && !r.follows ? (
+              <Tooltip content={`Moves the ${r.label.toLowerCase()} back to ${r.settings.name}, its settings' size, now; later Runs run on ${r.settings.name} too.`}>
+                <TextButton disabled={loading || r.busy} onClick={r.onReset} aria-label={`Reset the ${r.label.toLowerCase()} to ${r.settings.name}`}>Reset</TextButton>
+              </Tooltip>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </aside>
+  );
 }
 
 /** Who uses something: a row of small faces (agents' tiles, projects' squares), then the words. */

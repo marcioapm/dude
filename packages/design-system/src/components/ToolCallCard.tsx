@@ -65,6 +65,7 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
 }
 
 const TOOL_ICON: ReadonlyArray<readonly [RegExp, IconName]> = [
+  [/^(request_machine|machine)/i, "chip"],
   [/^(bash|shell|sh|exec|run|terminal)/i, "terminal"],
   [/^(read|write|edit|multiedit|create|view|cat)/i, "file"],
   [/^(grep|glob|search|find|ls|list)/i, "search"],
