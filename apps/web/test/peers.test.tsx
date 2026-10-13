@@ -213,6 +213,13 @@ describe("the turns, drawn", () => {
     expect(digest).not.toContain("Which body?");
   });
 
+  test("the transcript wait uses the supplied header clock", () => {
+    const turn = project([ev(EventTypes.AgentPeerWaiting, { message: "pm_1", on: "ABS-2", how: "wait", parks_at: "2026-10-12T13:57:02Z" })], "running").turns[0]!;
+    const at = Date.parse("2026-10-12T13:53:02Z");
+    const text = html(renderTurn(turn, "implementer", 0, false, PEOPLE, "Duder", undefined, undefined, undefined, undefined, undefined, undefined, CTX, at));
+    expect(text).toContain("parks in 4 min");
+  });
+
   test("the header's words for a wait", () => {
     const now = Date.parse("2026-10-12T13:47:02Z");
     expect(waitWords("ABS-2", "2026-10-12T13:57:02Z", false, now)).toBe("Waiting on ABS-2 · parks in 10 min");
