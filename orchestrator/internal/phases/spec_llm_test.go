@@ -50,17 +50,15 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 	}
 }
 
-// A Run's OpenCode config names the model under the provider its name goes
-// through, and declares it there, so a model the image's file does not list
-// still resolves; the tier's effort is the model's options.
 // permissions is the permission block every OpenCode config carries, as
-// JSON marshals it (keys sorted).
-const permissions = `"permission":{"*":"allow","doom_loop":"allow","external_directory":"allow","read":"allow"}`
+// JSON marshals it.
+const permissions = `"permission":{"*":"allow"}`
 
-// A Run's OpenCode config allows every permission, the ones OpenCode asks
-// for by default named one by one: a read outside the worktree, a .env
-// read, a repeated call. A subagent's ask cannot be answered by anyone, so
-// it must never be asked (an ask from a child session hung a Run for 2h20).
+// A Run's OpenCode config allows every permission before it is asked: a
+// subagent's ask is never answered (its session is not the ACP's), so one
+// would hang the parent's task call. One "*" rule suffices, as OpenCode
+// evaluates a user's rules after its own asks; a narrower rule, or none,
+// would let an ask through.
 func TestAnOpenCodeRunAllowsEveryPermissionBeforeItIsAsked(t *testing.T) {
 	var got struct {
 		Permission map[string]string `json:"permission"`
@@ -68,13 +66,19 @@ func TestAnOpenCodeRunAllowsEveryPermissionBeforeItIsAsked(t *testing.T) {
 	if err := json.Unmarshal([]byte(openCodeConfig("claude-opus-5-5", "", nil, nil)), &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"*", "external_directory", "doom_loop", "read"} {
-		if got.Permission[key] != "allow" {
-			t.Errorf("permission %q = %q, want allow (asked by default; a child session's ask is never answered)", key, got.Permission[key])
+	if got.Permission["*"] != "allow" {
+		t.Errorf("permission * = %q, want allow", got.Permission["*"])
+	}
+	for key, action := range got.Permission {
+		if action != "allow" {
+			t.Errorf("permission %q = %q: a rule that is not allow lets an ask through", key, action)
 		}
 	}
 }
 
+// A Run's OpenCode config names the model under the provider its name goes
+// through, and declares it there, so a model the image's file does not list
+// still resolves; the tier's effort is the model's options.
 func TestTheModelAndEffortAreInlineOpenCodeConfig(t *testing.T) {
 	for _, tc := range []struct {
 		model, effort string

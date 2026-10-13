@@ -766,6 +766,14 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 	}
 }
 
+// openCodePermissions: a Run is unattended, and OpenCode v1.18.21's ACP
+// bridge drops a permission ask from a session it did not open over ACP,
+// which a task-tool subagent's is: its ask (a read outside the worktree, by
+// default) reaches no one and the parent's task call waits for good
+// (2026-10-13). A user "*" rule is evaluated after OpenCode's own asks, so
+// it alone allows everything before it is asked.
+var openCodePermissions = map[string]any{"*": "allow"}
+
 // openCodeConfig is a Run's model and its tier's settings as OpenCode
 // config.
 //
@@ -780,20 +788,8 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 // The tier's effort and options go in the model's options, which OpenCode
 // sends on every request (an agent's variant does not take effect, and the
 // AI SDK drops keys it does not know without a word); its headers in the
-// model's headers, likewise sent on every request.
-//
-// Every permission is allowed (openCodePermissions): the Run is unattended,
-// and a child session (the task tool's subagent) cannot be answered at all.
-// openCodePermissions: OpenCode asks before a read outside the worktree
-// (external_directory), a read of a .env file, and a tool call it judges
-// repetitive (doom_loop); "*" covers every other tool. lux answers the
-// Run's own session's asks (allow, once), but OpenCode's ACP bridge drops
-// an ask from a session it did not open over ACP, and a subagent's session
-// is one: its ask hangs the parent's task call for good (2026-10-13, 2h20
-// on a grep of a site-packages path). Allowing in the config answers
-// every session before it asks. The keys are OpenCode's permission config.
-var openCodePermissions = map[string]any{"*": "allow", "external_directory": "allow", "doom_loop": "allow", "read": "allow"}
-
+// model's headers, likewise sent on every request. Every permission is
+// allowed (openCodePermissions).
 func openCodeConfig(model, effort string, options map[string]any, headers map[string]string) string {
 	provider := llm.Provider(model)
 	entry := map[string]any{"options": llm.ModelOptions(model, effort, options)}
