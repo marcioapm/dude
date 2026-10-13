@@ -348,11 +348,6 @@ def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Pa
     gallery_page.get_by_role("link", name="MarkdownEditor").click()
     bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
     bold.hover()
-    # The full gallery has tens of thousands of accessible nodes. Repeatedly
-    # computing every tooltip's accessible name before the delayed tooltip
-    # exists can starve its 400ms opening timer. Wait cheaply for the role,
-    # then keep the exact name and shortcut assertions below.
-    expect(gallery_page.locator('[role="tooltip"]')).to_be_visible()
     tip = gallery_page.get_by_role("tooltip", name="Bold")
     caps = tip.locator("kbd")
     expect(tip).to_be_visible()
