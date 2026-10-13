@@ -36,6 +36,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // EventType is the ledger event for one call of a dude tool.
@@ -43,8 +44,10 @@ const EventType = "agent.tool.dude"
 
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
-	DB  *db.DB
-	Log *slog.Logger
+	DB              *db.DB
+	Log             *slog.Logger
+	Lux             lux.Client
+	ValidateMachine func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error
 	// Embedder lets search_memory search by meaning; nil, by words alone.
 	Embedder embeddings.Embedder
 	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
@@ -69,10 +72,12 @@ type Caller struct {
 // env is the server's, for the tools that need more than the database, and
 // what a tool's prepare step made before its transaction opened.
 type env struct {
-	embedder embeddings.Embedder
-	kick     func()
-	forges   delivery.Forges
-	prepared any
+	embedder        embeddings.Embedder
+	lux             lux.Client
+	validateMachine func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error
+	kick            func()
+	forges          delivery.Forges
+	prepared        any
 }
 
 func (c Caller) run() delivery.RunRef {
@@ -378,7 +383,7 @@ const (
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
-	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges}
+	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}

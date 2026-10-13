@@ -14,11 +14,77 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+type machineLux struct{ lux.Client }
+
+func (machineLux) Get(context.Context, string) (lux.Run, error) {
+	return lux.Run{ID: "live", State: "running"}, nil
+}
+
+func TestMachineRequestValidatesBeforeParkingAndPersistsOnce(t *testing.T) {
+	for _, rejected := range []bool{true, false} {
+		t.Run(fmt.Sprint(rejected), func(t *testing.T) {
+			f := setup(t)
+			token := f.run(t, "run_machine", "reviewer", "running")
+			mustExec(t, f.owner, `DELETE FROM machine_sizes WHERE organization_id = $1`, f.org)
+			mustExec(t, f.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, is_default) VALUES ('ms_small', $1, 'Small', 2, 2048, 20, true), ('ms_large', $1, 'Large', 4, 4096, 40, false)`, f.org)
+			mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_small","name":"Small","cpus":2,"memoryMiB":2048,"diskGiB":20,"from":"default"}', lux_run_id = 'live' WHERE id = 'run_machine'`)
+			app := f.app
+			validated := 0
+			srv := httptest.NewServer((&agenttools.Server{DB: app, Lux: machineLux{}, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
+				validated++
+				var control string
+				if err := f.owner.QueryRow(ctx, `SELECT control FROM runs WHERE id = 'run_machine'`).Scan(&control); err != nil {
+					t.Fatal(err)
+				}
+				if control != "none" {
+					t.Fatalf("park before validation: %s", control)
+				}
+				if rejected {
+					return fmt.Errorf("exact lux refusal")
+				}
+				return nil
+			}}).Handler())
+			defer srv.Close()
+			f.url = srv.URL
+			status, _ := f.post(t, token, "request_machine", `{"size":"Large","reason":"suite killed"}`)
+			want := 200
+			if rejected {
+				want = 422
+			}
+			if status != want || validated != 1 {
+				t.Fatalf("status=%d validated=%d", status, validated)
+			}
+			var moves int
+			var control string
+			var raises delivery.Raises
+			if err := f.owner.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM machine_moves), r.control, t.agent_machines FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id='run_machine'`).Scan(&moves, &control, &raises); err != nil {
+				t.Fatal(err)
+			}
+			if rejected {
+				if moves != 0 || control != "none" || len(raises) != 0 {
+					t.Fatalf("refusal changed state: %d %s %+v", moves, control, raises)
+				}
+			} else {
+				if moves != 1 || control != "pause_graceful" || raises["reviewer"].SizeID != "ms_large" {
+					t.Fatalf("accepted state: %d %s %+v", moves, control, raises)
+				}
+				if status, _ := f.post(t, token, "request_machine", `{"size":"Large","reason":"retry"}`); status != 422 {
+					t.Fatalf("duplicate=%d", status)
+				}
+			}
+		})
+	}
+}
 
 // A Run with a token, in a project with one task already.
 type fixture struct {
+	app           *db.DB
 	owner         *pgx.Conn
 	url           string
 	org           string
@@ -29,7 +95,7 @@ func setup(t *testing.T) *fixture {
 	t.Helper()
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
-	f := &fixture{owner: owner, org: org, project: "prj_" + org, item: "wi_" + org}
+	f := &fixture{app: app, owner: owner, org: org, project: "prj_" + org, item: "wi_" + org}
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, next_task_number)
 		VALUES ($1, $2, 'P', $1, 'TEXT', 2)`, f.project, org)
 	mustExec(t, owner, `INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Text utilities')`,
@@ -202,7 +268,7 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 	}
 	// Seeing work, recording events and what it learned, not making work or
 	// stopping for a person.
-	if strings.Join(names, ",") != "emit_event,get_memory,list_epics,list_repositories,list_tasks,remember,request_repository,run_diff,search_memory" {
+	if strings.Join(names, ",") != "emit_event,get_memory,list_epics,list_machine_sizes,list_repositories,list_tasks,remember,request_machine,request_repository,run_diff,search_memory" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
