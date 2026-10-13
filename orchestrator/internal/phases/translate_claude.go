@@ -431,6 +431,11 @@ func (t *translator) claudeTask(ctx context.Context, tx pgx.Tx, s *Syncer, line 
 		return t.startChild(ctx, tx, s, t.claudeChildOf(line.ToolUseID, line))
 	case "task_progress":
 		c := t.claudeChildOf(line.ToolUseID, line)
+		// Progress Claude Code writes after the notification is not activity:
+		// the child's end stays its last event.
+		if c.Ended {
+			return nil
+		}
 		if err := t.startChild(ctx, tx, s, c); err != nil {
 			return err
 		}

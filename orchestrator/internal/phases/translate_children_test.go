@@ -123,6 +123,46 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
+// A task_progress Claude Code writes after the subagent's
+// task_notification is no activity: while the parent's call is still open
+// the child's line keeps its end as its last event and its clock, and the
+// Run's last activity does not move.
+func TestAClaudeProgressAfterTheSubagentEndedIsNotActivity(t *testing.T) {
+	recs := recorded(t, "claude-child.jsonl")
+	end := slices.IndexFunc(recs, func(r map[string]any) bool { return strings.Contains(mustJSON(r), `"task_notification"`) })
+	progress := slices.IndexFunc(recs, func(r map[string]any) bool { return strings.Contains(mustJSON(r), `"task_progress"`) })
+	if end < 0 || progress < 0 || progress > end {
+		t.Fatal("the recording has no progress before its notification")
+	}
+	const parent = "toolu_01GJFr24BVyX5H76UdYzZuQa"
+	w := newHarnessWorld(t)
+	w.feed(recs[:end+1]...)
+	if last := w.children()[parent]["lastEvent"]; last != "ended completed" {
+		t.Fatalf("before: lastEvent %v", last)
+	}
+	mustExecH(t, w, `UPDATE runs SET agent_active_at = now() - interval '40 minutes',
+		children = jsonb_set(children, ARRAY[(SELECT k FROM jsonb_object_keys(children) k LIMIT 1), 'lastEventAt'],
+			to_jsonb(now() - interval '40 minutes')) WHERE id = $1`)
+	before := w.children()[parent]["lastEventAt"]
+	w.events()
+	w.feed(recs[progress])
+	if got := w.events(); len(got) != 0 {
+		t.Errorf("a late progress wrote %v", types(got))
+	}
+	got := w.children()[parent]
+	if got["lastEvent"] != "ended completed" || got["lastEventAt"] != before {
+		t.Errorf("a late progress touched the ended child: %v (lastEventAt was %v)", got, before)
+	}
+	var since time.Duration
+	if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM now() - agent_active_at)::float8 * interval '1 second'
+		FROM runs WHERE id = $1`, w.run.ID).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+	if since < 39*time.Minute {
+		t.Errorf("a late progress moved the Run's last activity to %v ago", since)
+	}
+}
+
 // A real Codex turn (0.144.1) that delegated a read to a spawned agent: the
 // agent's thread is a child of the call its subAgentActivity names, its
 // command and reply are its own, its tokens are not the Run's, and its
