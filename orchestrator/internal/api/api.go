@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -260,15 +261,21 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		// A settings role's Runs: a phase's (fixer is phase fix, not every
 		// role='implementer' Run), else the conductor's or brainstorm's,
 		// which have no phase.
+		// Only the newest live Run of the role is moved; any other (a second
+		// reviewer) takes the settings' size at its next resume.
 		phase := delivery.PhaseForPromptRole(body.Role)
 		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, control, machine FROM runs
-			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','starting')
+			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','scheduled','starting')
 				AND CASE WHEN $4 = '' THEN phase IS NULL AND role::text=$3 ELSE phase::text=$4 END
 			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, phase).Scan(&runID, &live, &status, &control, &current)
 		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		active := err == nil && live != "" && current != nil
+		found := err == nil
+		if found && status != "running" && status != "paused" {
+			return fail(409, "pending", "the Run is %s; reset once it runs or pauses", status)
+		}
+		active := found && live != "" && current != nil
 		if active {
 			var pending bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL)`, runID).Scan(&pending); err != nil {
@@ -281,7 +288,8 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 			if err != nil {
 				return err
 			}
-			if err := phases.ValidateResize(ctx, s.Lux, live, phases.PlanResize(ctx, s.Lux, current, &target, before)); err != nil {
+			plan := phases.PlanResize(ctx, s.Lux, current, &target, before)
+			if err := phases.ValidateResize(ctx, s.Lux, live, plan); err != nil {
 				if errors.Is(err, delivery.ErrPoolsUnread) {
 					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
 				}
@@ -290,19 +298,23 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 				}
 				return err
 			}
+			// A resume that would send lux nothing (the settings' size has
+			// the raised one's numbers and pool) moves nothing: the layer is
+			// cleared, and the Run is left as it is.
+			active = plan != nil && plan.Send != nil
+		}
+		if active && status == "running" {
 			// A paused Run keeps its pause, person's or dude's: the move
 			// applies at whichever resume comes next.
-			switch {
-			case status == "running" && control == "none":
-				tag, err := tx.Exec(ctx, `UPDATE runs SET control='pause_graceful', control_requested_at=now(), control_reason='machine reset', dude_pause='machine' WHERE id=$1 AND status='running' AND control='none'`, runID)
-				if err != nil {
-					return err
-				}
-				if tag.RowsAffected() == 0 {
-					return fail(409, "pending", "Run is no longer available for a machine move")
-				}
-			case status != "paused":
-				return fail(409, "pending", "the Run is %s; reset once it runs or pauses", status)
+			if control != "none" {
+				return fail(409, "pending", "Run is no longer available for a machine move")
+			}
+			tag, err := tx.Exec(ctx, `UPDATE runs SET control='pause_graceful', control_requested_at=now(), control_reason='machine reset', dude_pause='machine' WHERE id=$1 AND status='running' AND control='none'`, runID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return fail(409, "pending", "Run is no longer available for a machine move")
 			}
 		}
 		id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
@@ -313,6 +325,11 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if active {
 			moved = true
 			if _, err := tx.Exec(ctx, `INSERT INTO machine_moves(id,organization_id,task_id,session_id,run_id,role,kind,from_size,to_size_id,apply,reason,by_person) VALUES($1,$2,$3,$4,$5,$6,'reset',$7,$8,'resize',$9,$10)`, id, org, db.Nullable(body.TaskID), db.Nullable(body.SessionID), runID, body.Role, from, target.SizeID, db.Nullable(body.Note), p.Person); err != nil {
+				// Another Reset of this paused Run won the race past the check.
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.ConstraintName == "machine_moves_one_at_a_time" {
+					return fail(409, "pending", "a machine move is under way")
+				}
 				return err
 			}
 		}

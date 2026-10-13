@@ -332,6 +332,79 @@ func TestAFixersRaiseIsTheFixersAndOnlyItsResetMovesIt(t *testing.T) {
 	}
 }
 
+// raisedImplementer is a live implementer recorded on Bigger, raised for
+// its task under moveId mmv_old.
+func (w *world) raisedImplementer() (task, runID, live string) {
+	w.t.Helper()
+	task, runID, live = w.liveImplementer()
+	mustExec(w.t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	return task, runID, live
+}
+
+// Two Resets of a paused Run racing past the pending check: the second's
+// move row meets the one-at-a-time index and is answered 409, not 500.
+func TestASecondResetRacingTheFirstIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.raisedImplementer()
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	// The other Reset's row lands while this one's dry run is with lux.
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == live && validateOnly {
+			mustExec(t, w.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_other', $1, $2, $3, 'implementer', 'reset', '{}', 'msz_big', 'resize')`, w.org, task, runID)
+		}
+	}
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("racing reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 {
+		t.Fatal("the refused Reset cleared the layer")
+	}
+}
+
+// A Run lux has not started yet (scheduled) is not "nothing running": its
+// Reset is refused until it runs or pauses.
+func TestAResetOfAScheduledRunIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.raisedImplementer()
+	mustExec(t, w.owner, `UPDATE runs SET status='scheduled' WHERE id=$1`, runID)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 {
+		t.Fatal("the layer was cleared")
+	}
+}
+
+// A Reset whose settings size gives the Run what it has already (same
+// numbers, same pool) parks nothing: the layer is cleared, no move is
+// recorded, and no refusal is said.
+func TestAResetToTheSameNumbersOnlyClearsTheLayer(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_same', $1, 'Same', 2, 8192, 20)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_same","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_same","name":"Same","from":"task"}' WHERE id=$1`, runID)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if status != 200 || out["moved"] != false {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 || w.count(`SELECT count(*) FROM machine_moves`) != 0 ||
+		w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) != 1 || w.luxCalls(live, "stop") != 0 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.refused'`, task) != 0 {
+		t.Fatalf("a Reset to the same numbers moved the Run: lux calls %v", w.lux.CallsOf(live))
+	}
+}
+
 // A process that dies after lux accepted the sized resume, before dude
 // recorded it: the next sweep's resume finds lux resuming already, and the
 // move is settled from what lux then reports the Run has.
