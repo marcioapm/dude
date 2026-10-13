@@ -132,6 +132,22 @@ describe("settings pages", () => {
   });
 });
 
+describe("the sidebar's profile band", () => {
+  test("Sign out and your settings each say what they do in a tooltip on keyboard focus, not only to a screen reader", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const signOut = await until(() => page.querySelector<HTMLElement>("[data-testid=sign-out]"), "Sign out");
+    expect(signOut.getAttribute("aria-label")).toBe("Sign out");
+    await settle(50);
+    await act(async () => signOut.focus());
+    expect((await until(() => document.querySelector("[role=tooltip]"), "Sign out's tooltip")).textContent).toBe("Sign out");
+    await act(async () => signOut.blur());
+    await until(() => (document.querySelector("[role=tooltip]") ? null : true), "its tooltip gone");
+    const settings = page.querySelector<HTMLElement>("[data-testid=my-settings-button]")!;
+    await act(async () => settings.focus());
+    expect((await until(() => document.querySelector("[role=tooltip]"), "the settings tooltip")).textContent).toBe("Your settings");
+  });
+});
+
 describe("the first load with no place", () => {
   /** A client whose tree arrives only when `arrive` is called. */
   class SlowTree extends FixtureClient {

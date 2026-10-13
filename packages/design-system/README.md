@@ -1991,6 +1991,10 @@ MarkdownCheatsheet.
   is a project's `projectCounts` in words.
 - **SidebarRailItem** — one square of the rail, named, its words in a
   tooltip to the right.
+- **SidebarProfile** — you, at the foot of the sidebar: face, name, a gear,
+  the whole row opening your settings, said in a `Tooltip` on hover and
+  focus; `actions` after it (an icon-only sign-out, given its own `Tooltip`
+  by the app, as every icon-only action in a band is).
 - **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
