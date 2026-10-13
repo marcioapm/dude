@@ -895,6 +895,39 @@ func TestNoMoveIsParkedWhileLuxsPoolsCannotBeRead(t *testing.T) {
 	}
 }
 
+// A refusal is worded from the pool list the call already read: a refused
+// request reads lux's pools for its choices and its payload's names (its
+// size names a pool, so planning reads none), and a refused Reset once.
+func TestARefusedMoveReadsLuxsPoolsNoMoreThanItsCallDid(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.liveImplementer()
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, 'pool_missing')`, w.org)
+	reads := pools.calls.Load()
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 422 || !strings.Contains(body, `"code":"unknown_pool"`) {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	if got := pools.calls.Load() - reads; got != 2 {
+		t.Fatalf("a refused request read lux's pools %d times, want 2", got)
+	}
+
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_gone' WHERE organization_id=$1 AND is_default`, w.org)
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	w.api = srv.URL
+	reads = pools.calls.Load()
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 422 || e["code"] != "unknown_pool" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if got := pools.calls.Load() - reads; got != 1 {
+		t.Fatalf("a refused Reset read lux's pools %d times, want 1", got)
+	}
+}
+
 // lux's dry run refuses the agent's move (its size's pool is gone): the
 // agent gets lux's words and code at once, and nothing stops or changes.
 func TestADryRunRefusalStopsNothing(t *testing.T) {

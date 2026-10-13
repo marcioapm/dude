@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,6 +77,59 @@ func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Run's move lux refuses at the real resume is worded once, for the
+// refusal kept and for the agent's fallback input alike: lux's pool list is
+// read once for it.
+func TestARefusedMovesResumeReadsLuxsPoolsOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	var size string
+	if err := w.owner.QueryRow(w.ctx, `SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_test', $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', $4, 'resize')`, w.run.Org, w.run.TaskID, w.run.ID, size); err != nil {
+		t.Fatal(err)
+	}
+	refusing := &poolUnfitLux{placementLux: w.lux}
+	w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+	w.s.Lux = refusing
+	old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+	target := &delivery.Machine{SizeID: size, Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+	plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+	if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+		t.Fatal(err)
+	}
+	before := refusing.poolReads.Load()
+	if _, err := ResumeSized(w.ctx, refusing, "lrun_1", lux.ResumeInput{Input: "Carry on."}, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := refusing.poolReads.Load() - before; got != 1 {
+		t.Fatalf("lux's pools read %d times for one refusal, want 1", got)
+	}
+	if refusing.resumes.Load() != 2 {
+		t.Fatalf("resumes %d, want the refused one and its fallback", refusing.resumes.Load())
+	}
+}
+
+// poolUnfitLux refuses a resume with resources (422 pool_unfit) and takes
+// one without; it counts pool reads and resumes.
+type poolUnfitLux struct {
+	*placementLux
+	poolReads, resumes atomic.Int32
+}
+
+func (f *poolUnfitLux) Pools(ctx context.Context) ([]lux.Pool, error) {
+	f.poolReads.Add(1)
+	return f.placementLux.Pools(ctx)
+}
+
+func (f *poolUnfitLux) Resume(_ context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	f.resumes.Add(1)
+	if in.Resources != nil {
+		return lux.Run{}, &lux.Error{Status: 422, Code: "pool_unfit", Message: "pool pool_d cannot take this Run: it needs 4 cpus; its largest host has 2"}
+	}
+	return lux.Run{ID: id, State: "resuming"}, nil
 }
 
 // A session agent's raise lux refused for good puts back the session's

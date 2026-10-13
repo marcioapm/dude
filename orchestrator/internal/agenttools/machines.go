@@ -38,18 +38,19 @@ type requestMachineOut struct {
 }
 
 // machineChoices are the sizes the calling Run could move to, from its
-// runs.machine, the organization's sizes, lux's pools and lux's record of
-// the Run; ok false when the Run records no machine.
-func machineChoices(ctx context.Context, tx pgx.Tx, c Caller) (delivery.MachineChoices, delivery.Sizes, bool, error) {
+// runs.machine, the organization's sizes, lux's pools (returned too, nil
+// when unread) and lux's record of the Run; ok false when the Run records
+// no machine.
+func machineChoices(ctx context.Context, tx pgx.Tx, c Caller) (delivery.MachineChoices, delivery.Sizes, []lux.Pool, bool, error) {
 	var current *delivery.Machine
 	var live, org string
 	if err := tx.QueryRow(ctx, `SELECT r.machine, COALESCE(r.lux_run_id, ''), o.name FROM runs r JOIN organizations o ON o.id = r.organization_id
 		WHERE r.id = $1`, c.RunID).Scan(&current, &live, &org); err != nil {
-		return delivery.MachineChoices{}, delivery.Sizes{}, false, err
+		return delivery.MachineChoices{}, delivery.Sizes{}, nil, false, err
 	}
 	sizes, err := delivery.LoadSizes(ctx, tx)
 	if err != nil || current == nil {
-		return delivery.MachineChoices{}, sizes, false, err
+		return delivery.MachineChoices{}, sizes, nil, false, err
 	}
 	var pools []lux.Pool
 	var run lux.Run
@@ -60,14 +61,14 @@ func machineChoices(ctx context.Context, tx pgx.Tx, c Caller) (delivery.MachineC
 			run, _ = c.env.lux.Get(ctx, live)
 		}
 	}
-	return sizes.Choices(*current, org, pools, run), sizes, true, nil
+	return sizes.Choices(*current, org, pools, run), sizes, pools, true, nil
 }
 
 // machineOffer is a machine tool's description for the calling Run: the
 // sizes it could move to, or that there are none.
 func machineOffer(request bool) func(ctx context.Context, tx pgx.Tx, c Caller) (string, error) {
 	return func(ctx context.Context, tx pgx.Tx, c Caller) (string, error) {
-		choices, _, ok, err := machineChoices(ctx, tx, c)
+		choices, _, _, ok, err := machineChoices(ctx, tx, c)
 		if err != nil || !ok {
 			return "", err
 		}
@@ -82,7 +83,7 @@ func machineOffer(request bool) func(ctx context.Context, tx pgx.Tx, c Caller) (
 }
 
 func listMachineSizes(ctx context.Context, tx pgx.Tx, c Caller, _ struct{}) ([]delivery.Machine, error) {
-	choices, _, ok, err := machineChoices(ctx, tx, c)
+	choices, _, _, ok, err := machineChoices(ctx, tx, c)
 	if err != nil || !ok || choices.Targets == nil {
 		return []delivery.Machine{}, err
 	}
@@ -127,7 +128,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	if current == nil || live == "" || status != "running" || control != "none" {
 		return out, refusal{msg: "this Run is not live and available for a machine move", code: "not_live"}
 	}
-	choices, sizes, _, err := machineChoices(ctx, tx, c)
+	choices, sizes, pools, _, err := machineChoices(ctx, tx, c)
 	if err != nil {
 		return out, err
 	}
@@ -171,7 +172,6 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		}
 		if le, ok := lux.AsError(err); ok {
 			// lux's code in dude's words; its own message names pools by id.
-			pools, _ := c.env.lux.Pools(ctx)
 			return out, refusedAs(delivery.RefusalOf(le, target, pools, before).ForAgent(), le.Code, le.Code)
 		}
 		return out, err

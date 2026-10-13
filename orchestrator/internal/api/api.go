@@ -218,7 +218,7 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 	if p.Person == "" {
 		return errNoPerson
 	}
-	names := delivery.LoadPoolNames(r.Context(), s.Lux)
+	pools, names := delivery.LoadPools(r.Context(), s.Lux)
 	moved := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		ctx := r.Context()
@@ -309,7 +309,6 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 				}
 				if le, ok := lux.AsError(err); ok {
 					// lux's code in dude's words; its own message names pools by id.
-					pools, _ := s.Lux.Pools(ctx)
 					return fail(le.Status, le.Code, "%s", delivery.RefusalOf(le, target, pools, before).ForPerson())
 				}
 				return err

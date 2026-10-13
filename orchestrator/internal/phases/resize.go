@@ -392,8 +392,15 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 		asked = *plan.Target
 	}
 	plan.moveKind = move.Kind
+	// onRefused and keptInput both word the same refusal: lux's pools are
+	// read once for it.
+	var pools []lux.Pool
+	poolsRead := false
 	plan.refusalOf = func(le *lux.Error) delivery.MoveRefusal {
-		pools, _ := s.Lux.Pools(ctx)
+		if !poolsRead {
+			pools, _ = s.Lux.Pools(ctx)
+			poolsRead = true
+		}
 		return delivery.RefusalOf(le, asked, pools, plan.before)
 	}
 	// Told only of a move this resume asks lux for.

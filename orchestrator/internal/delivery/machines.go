@@ -163,13 +163,20 @@ type PoolNames struct {
 // LoadPoolNames reads lux's pool names; lux out of reach is no names, and
 // payloads then carry pool ids alone.
 func LoadPoolNames(ctx context.Context, c lux.Client) PoolNames {
+	_, names := LoadPools(ctx, c)
+	return names
+}
+
+// LoadPools reads lux's pools once, with their names; lux out of reach is
+// neither.
+func LoadPools(ctx context.Context, c lux.Client) ([]lux.Pool, PoolNames) {
 	out := PoolNames{ByID: map[string]string{}}
 	if c == nil {
-		return out
+		return nil, out
 	}
 	pools, err := c.Pools(ctx)
 	if err != nil {
-		return out
+		return nil, out
 	}
 	for _, p := range pools {
 		out.ByID[p.ID] = p.Name
@@ -177,7 +184,7 @@ func LoadPoolNames(ctx context.Context, c lux.Client) PoolNames {
 			out.Default = p.Name
 		}
 	}
-	return out
+	return pools, out
 }
 
 // Name fills m.Pool from the names when lux named its pool.
