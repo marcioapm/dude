@@ -138,6 +138,23 @@ describe("the projection", () => {
       expect(tookMs([...before, ...park, ...back])).toEqual([["call_1", 1], ["call_2", 2_000]]);
       expect(project([...before, ...park, ...back], "running").toolCounts.get(first)).toBe(1);
     });
+
+    test(`a tool call still running at a ${how} completes after it, timed over its whole span`, () => {
+      // A move's own call (request_machine) completes once the agent is back on its new machine.
+      const name = how === "move" ? "request_machine" : "bash";
+      const before = [created(), stage("waiting", 0), stage("running", 100),
+        ev("agent.tool.called", { tool: name, callId: "call_live", input: {} }, 2_000)];
+      const park = how === "move"
+        ? [stage("park", 5_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 9_000)]
+        : [ev("run.parked", { reason: "session" }, 5_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000)];
+      const back = [stage("waiting", 31_000, 2), stage("running", 38_000, 2),
+        ev("agent.tool.completed", { tool: name, callId: "call_live", status: "completed" }, 42_000)];
+      const rows = project([...before, ...park, ...back], "running").turns.filter((t) => t.kind === "tool");
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row.kind === "tool" && row.status).toBe("completed");
+      expect(row.kind === "tool" && Date.parse(row.endedAt!) - Date.parse(row.startedAt)).toBe(40_000);
+    });
   }
 
   test("a move: park leads, and it reads as a move", () => {
