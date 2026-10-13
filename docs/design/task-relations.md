@@ -223,7 +223,7 @@ use the same guard.
 
 ### Start over and Try again
 
-*Decided (build): as proposed below.* Try again and Resume stay unguarded;
+*Decided at build.* Try again and Resume stay unguarded;
 Start over is guarded, with Start anyway.
 
 - **Try again and Resume continue the same attempt**, on its branch, from
@@ -235,9 +235,10 @@ Start over is guarded, with Start anyway.
   every sense that matters to the rule: its agents read a `main` that must
   hold what the task waits on. It gets **the same guard** (`GuardStartTx`
   in `recoverTask`, before the new attempt starts) and the **Start over
-  anyway escape** in `PickUpDialog`: a refused
-  confirmation names the blockers and offers Start over anyway in its
-  footer, sending the same request with `override: true`. No second dialog.
+  anyway escape** in `PickUpDialog`. Its confirm is not disabled up front:
+  a refused confirmation names the blockers in the shared words and offers
+  Start over anyway in its footer, sending the same request with
+  `override: true`. No second dialog.
 
 ### Override: "Start anyway"
 
@@ -1260,10 +1261,6 @@ bucket, and the hover highlight adds nothing visible above the board.
 
 Where the build departs from the text above:
 
-- **Start over in `PickUpDialog`** is not disabled up front. Its confirm
-  sends the start; refused as `blocked`, the dialog says why in the shared
-  words and offers **Start over anyway** in its footer, which sends the
-  same request with `override`. No second dialog.
 - **The implement step's guard (path 5)** parks a blocked delivery
   (`AwaitSignals relations.unblocked`, re-reading its blockers every 5
   minutes) and sets the task queued, "blocked by …". A person's Start anyway
