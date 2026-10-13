@@ -383,7 +383,8 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 
 const brainstormToolsNote = "The dude tools read the linked projects: list_tasks, list_epics, pull_requests, findings, " +
 	"list_repositories, search_memory and get_memory, each with a project key (optional when one is linked). " +
-	"propose fills the session's proposal card — new epics and tasks, edits to tasks, comments — for a member to " +
+	"propose fills the session's proposal card — new epics and tasks, edits to tasks, comments, and epic notes (a new " +
+	"epic's notes, or a note on an existing epic) — for a member to " +
 	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
 	"and what others say meanwhile reaches you with the answer."
@@ -593,24 +594,28 @@ func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string)
 // Proposal items (session_proposals.items), each one thing the card asks
 // a member to file.
 type ProposalItem struct {
-	// epic, task, edit, comment, or relation (a brainstorm's relate).
+	// epic, task, edit, comment, note or relation.
 	Kind string `json:"kind"`
-	// The project, by key (epic, task).
+	// The project, by key (epic, task, note).
 	Project string `json:"project,omitempty"`
-	// A task's epic: an existing one's title, or a new epic's of this
-	// proposal (by its title).
+	// A task's or note's epic: an existing one's title, or a new epic's of
+	// this proposal (by its title).
 	Epic               string   `json:"epic,omitempty"`
 	Title              string   `json:"title,omitempty"`
 	Goal               string   `json:"goal,omitempty"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty"`
 	Description        string   `json:"description,omitempty"`
+	// epic: notes pinned on it when it is filed, in order.
+	Notes []string `json:"notes,omitempty"`
 	// edit, comment: the task, by key.
 	Task string `json:"task,omitempty"`
 	// edit: the task's text before, as the agent read it, for the card.
 	Before *TaskText `json:"before,omitempty"`
 	After  *TaskText `json:"after,omitempty"`
-	// comment.
+	// comment, note.
 	Text string `json:"text,omitempty"`
+	// note: the number of the note it replaces on Epic.
+	Replaces int `json:"replaces,omitempty"`
 	// task: what it waits on, holds up, and relates to — an existing
 	// task's key, or another item of this proposal.
 	BlockedBy []ProposalRef `json:"blockedBy,omitempty"`

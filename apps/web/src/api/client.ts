@@ -78,6 +78,12 @@ import type {
   SearchOutcome,
   AttachmentInfo,
   PreviewSecret,
+  NoteRecord,
+  EpicNotes,
+  EpicPeers,
+  EpicThreads,
+  PinNoteInput,
+  PinnedNote,
   AutoStartHow,
   RelationSide,
   TaskRelations,
@@ -110,6 +116,17 @@ export type {
   Run,
   Session,
   Task,
+  EpicNote,
+  EpicNotes,
+  EpicPeers,
+  EpicThreads,
+  NoteRecord,
+  PeerMessageView,
+  PeerState,
+  PeerThread,
+  PeerWaitView,
+  PinNoteInput,
+  PinnedNote,
 } from "@dude/domain";
 
 /** A person as `/v1/people` lists them: where they were last seen, too. */
@@ -292,6 +309,8 @@ export interface EpicOverview {
   machineUsd: number;
   lastActivity: string | null;
   needsYou: number;
+  /** Its tasks' agents waiting on a peer's reply now, as [waiting task's key, the key it waits on]. */
+  waiting?: Array<[string, string]>;
   createdAt: string;
   updatedAt: string;
 }
@@ -948,6 +967,39 @@ export class ApiClient {
 
   deleteEpic(id: string): Promise<void> {
     return this.#request("DELETE", `/v1/epics/${id}`);
+  }
+
+  /** An epic's notes: the current ones (at most `limit`), and the replaced and retired. */
+  epicNotes(epicId: string): Promise<EpicNotes> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/notes`);
+  }
+
+  /**
+   * Pin a note on an epic, or replace note `replaces`, as the person: every
+   * live agent on the epic is told at its next step. 409 past the limit
+   * (`note_limit`) or for a note no longer current.
+   */
+  pinEpicNote(epicId: string, input: PinNoteInput): Promise<PinnedNote> {
+    return this.#request("POST", `/v1/epics/${encodeURIComponent(epicId)}/notes`, input);
+  }
+
+  /** Retire note `n` with no replacement: a person's alone; agents are told. */
+  retireEpicNote(epicId: string, n: number): Promise<NoteRecord> {
+    return this.#request("POST", `/v1/epics/${encodeURIComponent(epicId)}/notes/${n}/retire`, {});
+  }
+
+  /** The threads between an epic's tasks' agents: read only, for people. */
+  epicThreads(epicId: string): Promise<EpicThreads> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/threads`);
+  }
+
+  epicWaiting(epicId: string): Promise<{ epicId: string; waiting: number }> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/waiting`);
+  }
+
+  /** Each task on an epic as its peers see it: phase, live or parked, whom it waits on. */
+  epicPeers(epicId: string): Promise<EpicPeers> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/peers`);
   }
 
   /**

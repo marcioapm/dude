@@ -150,6 +150,19 @@ const AskSeveralModel = "fake/ask-several"
 const Questions = `{"questions":[{"header":"Layout","question":"Does it overflow on a phone?","choices":[{"label":"Yes"},{"label":"No"}]},` +
 	`{"header":"Copy","question":"What should the button say?","choices":[{"label":"Split payment"},{"label":"Pay in parts"}]}]}`
 
+// PeerModel's implementer (fake lux only) coordinates with its epic's
+// peers. If a peer has a live Run, it asks that peer PeerQuestion and
+// waits on the reply, which resumes it, and it finishes. Otherwise it
+// never finishes its turn and answers each peer message it reads with
+// PeerAnswer.
+const PeerModel = "fake/peer"
+
+// PeerQuestion and PeerAnswer are what PeerModel's implementers say.
+const (
+	PeerQuestion = "Which body does your route take?"
+	PeerAnswer   = "It takes {metric, from, period}."
+)
+
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
 
@@ -192,6 +205,8 @@ type Step struct {
 	Publish map[string]string
 	// dude tools it calls before replying, [tool, JSON arguments].
 	Tools [][2]string
+	// It plays PeerModel: asks a live peer and waits, or answers peers.
+	Peer bool
 	// Files it writes into its checkout and does not commit, path →
 	// content.
 	Edits map[string]string
@@ -440,6 +455,9 @@ func For(phase, model, runID string, fixed bool) Step {
 				{"emit_event", `{"type":"progress","data":{"done":1,"of":2,"step":"writing FACTORY.md"}}`},
 				{"emit_event", `{"type":"progress","data":{"done":2,"of":2,"step":"committing"}}`},
 			}
+		}
+		if model == PeerModel {
+			step.Peer = true
 		}
 		return step
 	case "fix":

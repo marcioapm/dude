@@ -45,7 +45,9 @@ var brainstormTools = []tool{
 		"will find it. A fact that holds, a procedure that works, a trap and its way around. Search first.",
 		brainstorms, sessionRemember).limit(remembersPerRun),
 	define("propose", "Put work on the session's proposal card, for a member to file with a click, as themselves: "+
-		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task. "+
+		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task, "+
+		"and notes for an epic: a new epic's notes, or a note on an existing one. A note is a short working fact every "+
+		"agent on the epic must follow (a contract, a decision, where the docs are); you never pin one yourself. "+
 		"A task item may say what it waits on and holds up (blockedBy, blocks, related): an existing task as "+
 		"{\"key\": \"BL-41\"}, or another item of this proposal as {\"item\": 1}, numbered from 1 as the card numbers "+
 		"them. Work out the order: filing a task files what it waits on with it. "+
@@ -135,7 +137,7 @@ func sessionListTasks(ctx context.Context, tx pgx.Tx, c Caller, in sessionListTa
 	if err != nil {
 		return listTasksOut{}, err
 	}
-	return listTasks(ctx, tx, inProject(c, p.ID), listTasksIn{Text: in.Text})
+	return projectTasks(ctx, tx, inProject(c, p.ID), in.Text, false)
 }
 
 func sessionListEpics(ctx context.Context, tx pgx.Tx, c Caller, in projectIn) ([]epicOut, error) {
@@ -364,7 +366,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory
 }
 
 type proposeIn struct {
-	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description}; {kind: task, project, epic?, title, goal, acceptanceCriteria, blockedBy?, blocks?, related?}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}"`
+	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description, notes?: [text]} (notes pinned when filed); {kind: task, project, epic?, title, goal, acceptanceCriteria, blockedBy?, blocks?, related?}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}; {kind: note, project, epic, text, replaces?} (replaces: a current note's number)"`
 }
 
 type proposeOut struct {
@@ -407,8 +409,19 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				if len(item.Title) > 200 || len(item.Description) > 10_000 {
 					return proposeOut{}, refuse("item %d: an epic's title is at most 200 characters, its description 10,000", n)
 				}
+				if len(item.Notes) > delivery.NotesMax {
+					return proposeOut{}, refuse("item %d: an epic holds at most %d notes", n, delivery.NotesMax)
+				}
+				for j, text := range item.Notes {
+					if item.Notes[j] = strings.TrimSpace(text); item.Notes[j] == "" || utf8.RuneCountInString(item.Notes[j]) > delivery.NoteTextMax {
+						return proposeOut{}, refuse("item %d: note %d is 1 to %d characters", n, j+1, delivery.NoteTextMax)
+					}
+				}
 				newEpics[strings.ToLower(p.Key+"/"+item.Title)] = true
 				break
+			}
+			if len(item.Notes) > 0 {
+				return proposeOut{}, refuse("item %d: notes go on an epic, or as a note item", n)
 			}
 			if err := checkTaskText(&item.Goal, &item.AcceptanceCriteria, true); err != nil {
 				return proposeOut{}, refuse("item %d: %v", n, err)
@@ -461,8 +474,35 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 			var nowCrit []string
 			_ = json.Unmarshal(raw, &nowCrit)
 			item.Before = &delivery.TaskText{Goal: &nowGoal, AcceptanceCriteria: &nowCrit}
+		case "note":
+			p, err := linkedProject(ctx, tx, c, item.Project)
+			if err != nil {
+				return proposeOut{}, refuse("item %d: %v", n, err)
+			}
+			item.Project = p.Key
+			item.Epic, item.Text = strings.TrimSpace(item.Epic), strings.TrimSpace(item.Text)
+			if item.Text == "" || utf8.RuneCountInString(item.Text) > delivery.NoteTextMax {
+				return proposeOut{}, refuse("item %d: a note of 1 to %d characters", n, delivery.NoteTextMax)
+			}
+			if item.Replaces < 0 {
+				return proposeOut{}, refuse("item %d: replaces is a note's number", n)
+			}
+			if item.Epic == "" {
+				return proposeOut{}, refuse("item %d: a note names its epic", n)
+			}
+			if !newEpics[strings.ToLower(p.Key+"/"+item.Epic)] {
+				id, err := epicByTitle(ctx, tx, p.ID, item.Epic)
+				if err != nil {
+					return proposeOut{}, err
+				}
+				if id == "" {
+					return proposeOut{}, refuse("item %d: no epic %q in %s, and none proposed before it", n, item.Epic, p.Key)
+				}
+			} else if item.Replaces != 0 {
+				return proposeOut{}, refuse("item %d: a new epic has no note %d to replace", n, item.Replaces)
+			}
 		default:
-			return proposeOut{}, refuse("item %d: kind is epic, task, edit or comment", n)
+			return proposeOut{}, refuse("item %d: kind is epic, task, edit, comment or note", n)
 		}
 		items[i] = item
 	}

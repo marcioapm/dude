@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, roleColors, tones } from "../src/tokens/palette.ts";
-import { themeColors, type ThemeMode } from "../src/tokens/themes.ts";
+import { flattenTheme, themeColors, type ThemeMode } from "../src/tokens/themes.ts";
 import { tints } from "../src/tokens/tints.ts";
 
 function luminance(hex: string): number {
@@ -232,11 +232,74 @@ describe("text on tints", () => {
       expect(contrast(c.textMuted, c.fieldRaised), `${mode} placeholder`).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  // A peer message sits on the surface in a transcript and on the raised
+  // shade in a Coordination thread, at rest and hovered. The washes are the
+  // emitted `--ds-peer-wash` tokens, composited as the browser does.
+  const peerWashes = (mode: ThemeMode) => {
+    const c = themeColors[mode];
+    const emitted = flattenTheme(mode);
+    const out: Record<string, string> = {};
+    for (const bg of ["surface", "raised"] as const) {
+      out[`${bg} + peer wash`] = over(emitted["peer-wash"]!, c[bg]);
+      out[`${bg} + peer hover`] = over(emitted["peer-wash-hover"]!, c[bg]);
+    }
+    return out;
+  };
+
+  test("the emitted peer tokens are the teal solid, its 8% wash and its 10% hover, in both themes", () => {
+    const peerTokens = (mode: ThemeMode) => {
+      const t = flattenTheme(mode);
+      return { solid: t["peer-solid"], wash: t["peer-wash"], hover: t["peer-wash-hover"] };
+    };
+    expect(peerTokens("dark")).toEqual({ solid: "#13938f", wash: "rgba(19, 147, 143, 0.08)", hover: "rgba(19, 147, 143, 0.1)" });
+    expect(peerTokens("light")).toEqual({ solid: "#16a7a3", wash: "rgba(22, 167, 163, 0.08)", hover: "rgba(22, 167, 163, 0.1)" });
+    for (const mode of MODES) {
+      const w = peerWashes(mode);
+      expect(w["surface + peer hover"], `${mode} hover is its own step`).not.toBe(w["surface + peer wash"]);
+    }
+  });
+
+  test("a peer message's body (primary), delivery line (secondary) and times and arrow (muted) clear 4.5:1 on its wash and hover", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const [state, bg] of Object.entries(peerWashes(mode))) {
+        for (const [ink, hex] of [["primary", c.textPrimary], ["secondary", c.textSecondary], ["muted", c.textMuted], ["link", c.accentText]] as const) {
+          expect(contrast(hex, bg), `${mode} ${ink} on ${state}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+
+  // A refused message is never sent, so it is only ever in its sender's
+  // transcript, on the surface; a thread holds sent messages alone.
+  test("a refused peer message's Not sent line (danger fg) clears 4.5:1 on the wash and hover over the surface", () => {
+    for (const mode of MODES) {
+      const surface = Object.entries(peerWashes(mode)).filter(([state]) => state.startsWith("surface"));
+      for (const [state, bg] of surface) {
+        expect(contrast(tones[mode].danger.fg, bg), `${mode} on ${state}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  test("a peer message's Peer/Reply tag (secondary) and TaskChip key (primary) clear 4.5:1, and the chip's status mark 3:1, on the active wash over its wash", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const [state, bg] of Object.entries(peerWashes(mode))) {
+        const chip = over(c.activeWash, bg);
+        expect(contrast(c.textSecondary, chip), `${mode} tag and chip role on ${state}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(c.textPrimary, chip), `${mode} chip key on ${state}`).toBeGreaterThanOrEqual(4.5);
+        for (const t of TONE_NAMES) expect(contrast(tones[mode][t].fg, chip), `${mode} ${t} mark on ${state}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
 });
 
 /** An `rgba()` wash token composited over an opaque background. */
 function over(wash: string, bg: string): string {
-  const [r, g, b, a] = wash.match(/[\d.]+/g)!.map(Number) as [number, number, number, number];
+  const m = wash.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+  if (!m) throw new Error(`not an rgba() token: ${wash}`);
+  const [r, g, b, a] = m.slice(1).map(Number) as [number, number, number, number];
   return mix(`#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`, bg, a);
 }
 

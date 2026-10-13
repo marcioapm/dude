@@ -32,7 +32,10 @@ var tools = []tool{
 	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
 		"asked for them, and each one's relations: what it is blocked by (and whether that merged), what it blocks, "+
 		"what it is related to, and whether it can start — optionally only those mentioning some text, or only "+
-		"those that can start (startable). Use it before creating work, to find what already exists.", nil, listTasks),
+		"those that can start (startable). Use it before creating work, to find what already exists. "+
+		"With peers: true, your peers instead (the other tasks on your epic): each one's phase, "+
+		"whether its Run is live or parked, branch and head, files changed, its agent's last words, and its messages "+
+		"waiting for you.", nil, listTasks),
 	define("list_epics", "The project's epics, in priority order, with how many tasks each has and how many "+
 		"are still open.", nil, listEpics),
 	define("ask_person", askDescription+" After calling it, end your turn: the answers are your next message.",
@@ -66,7 +69,8 @@ var tools = []tool{
 	define("run_diff", "What a Run of your task changed: this Run's checkout, uncommitted work included, against "+
 		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
 		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
-		"With paths, those files' changes as unified diff text, at most 2,000 lines in all.", nil, runDiff),
+		"With paths, those files' changes as unified diff text, at most 2,000 lines in all. With task (a peer's key), "+
+		"that peer's code as dude last stored it, the same way.", nil, runDiff),
 	define("findings", "Your task's review findings, open and most severe first: each one's id, severity, "+
 		"category, file:line, status and how it was settled (fixed by which Run, accepted by a person, or open after "+
 		"so many fix attempts). Name ids (at most 20) to read those in full: title, description, suggested fix and "+
@@ -125,6 +129,7 @@ var tools = []tool{
 
 type listTasksIn struct {
 	Text      string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
+	Peers     bool   `json:"peers,omitempty" jsonschema:"your peers instead: the other tasks on your epic, each with its phase, live or parked, branch and head, files changed, its agent's last words and the messages it has waiting for you; your own task is marked self"`
 	Startable bool   `json:"startable,omitempty" jsonschema:"only tasks not started with nothing unmerged in front of them"`
 }
 
@@ -149,7 +154,18 @@ type listTasksOut struct {
 	Tasks []taskOut `json:"tasks"`
 }
 
-func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTasksOut, error) {
+// listTasks is the project's work, or with peers the caller's peers.
+func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (any, error) {
+	if in.Peers {
+		if strings.TrimSpace(in.Text) != "" || in.Startable {
+			return nil, refuse("peers lists your peers whole: leave text and startable out")
+		}
+		return listPeers(ctx, tx, c)
+	}
+	return projectTasks(ctx, tx, c, in.Text, in.Startable)
+}
+
+func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, text string, startable bool) (listTasksOut, error) {
 	out := listTasksOut{Epics: []string{}, Tasks: []taskOut{}}
 	rows, err := tx.Query(ctx, `SELECT title FROM epics WHERE project_id = $1 ORDER BY position, created_at`, c.ProjectID)
 	if err != nil {
@@ -166,7 +182,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 		FROM tasks w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
 		WHERE w.project_id = $1
 		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
-		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(in.Text)))
+		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(text)))
 	if err != nil {
 		return out, err
 	}
@@ -188,7 +204,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 	}
 	for _, t := range all {
 		t.TaskRelationsOut = rels[t.ID]
-		if in.Startable && (t.TaskRelationsOut == nil || !t.Startable) {
+		if startable && (t.TaskRelationsOut == nil || !t.Startable) {
 			continue
 		}
 		t.Line = strings.TrimSuffix(t.Key+" · "+t.Status+" · "+delivery.RelationLine(t.TaskRelationsOut), " · ")

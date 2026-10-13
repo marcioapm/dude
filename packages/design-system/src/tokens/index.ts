@@ -20,6 +20,7 @@ export {
   accent,
   diff,
   merged,
+  peer,
   identityColors,
   IDENTITY_SLOTS,
   TONE_NAMES,
@@ -28,7 +29,7 @@ export {
   ansiColors,
   ansiForegroundLightness,
 } from "./palette.ts";
-export type { ToneName, ToneInstance, AgentRoleName, RoleColor, IdentityColor, AnsiColorName } from "./palette.ts";
+export type { ToneName, ToneInstance, AgentRoleName, RoleColor, IdentityColor, AnsiColorName, PeerColor } from "./palette.ts";
 export { oklch, toHex } from "./oklch.ts";
 export type { Oklch } from "./oklch.ts";
 
@@ -70,6 +71,7 @@ export type TokenName =
   | `identity-${number}-${"fg" | "bg"}`
   | `diff-${string}`
   | `merged-${"fg" | "bg"}`
+  | `peer-${"solid" | "wash" | "wash-hover"}`
   | `ansi-${string}`
   | `shadow-${1 | 2 | 3}`
   | `duration-${keyof typeof import("./scale.ts").duration}`

@@ -59,6 +59,9 @@ type PromptInput struct {
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
 	Images []PromptImage
+	// The task's epic as the Run is briefed on it (EpicBriefing): its
+	// peers, the notes in force, messages held for it. "" off an epic.
+	Coordination string
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -296,7 +299,8 @@ const toolsNote = "The dude tools (list_tasks, list_epics, list_repositories, cr
 	"learned before you: search it (search_memory) before investigating something that may already be known, " +
 	"and when you learn something the next agent should know — a fact that holds, a procedure that works, a trap " +
 	"and its way around — save it (remember), after searching so you do not save it twice. Do not save what the " +
-	"code or the task already says."
+	"code or the task already says. On an epic, your briefing's \"On this epic\" says which of the peer tools " +
+	"(list_tasks with peers, run_diff with task, message, wait_for_reply, note) you have."
 
 // cliNote tells an agent about the dude CLI.
 const cliNote = "The same, from the shell: the `dude` command (see `dude help`) — " +
@@ -476,8 +480,13 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier). " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
 	"publish takes what you committed in your checkout to the task branch, while you decide. " +
+	"On an epic, list_tasks with peers and run_diff with task read the other tasks on it; message asks one of them " +
+	"something (never blocking; wait_for_reply ends your turn until its reply), and note pins a fact every agent on " +
+	"the epic must follow. What they said to each other reaches you in your next briefing or wake, never as a wake. " +
 	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
+	"`dude task list --peers`, `dude diff --task KEY`, `dude message KEY TEXT [--reply-to MSG]`, `dude wait MSG`, " +
+	"`dude note TEXT [--replaces N]`, " +
 	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
 	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A` (one question; several at once: " +
 	"`dude ask --questions-json '[{\"header\":H,\"question\":Q,\"choices\":[{\"label\":L}]},...]'`), " +
@@ -635,6 +644,9 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	if n := strings.TrimSpace(in.RestartNote); n != "" {
 		add("## Restarted\n\n" + n)
+	}
+	if c := strings.TrimSpace(in.Coordination); c != "" {
+		add(c)
 	}
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)
