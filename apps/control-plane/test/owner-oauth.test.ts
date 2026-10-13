@@ -194,4 +194,3 @@ test("callback signals only live publications of the person's current frozen bra
     { run: "wfr_current", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null },
     { run: "wfr_racing", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null }]);
 });
-
