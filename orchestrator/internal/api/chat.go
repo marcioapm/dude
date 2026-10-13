@@ -258,7 +258,6 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 	return delivery.DeciderConductor, nil
 }
 
-
 // talkThrough starts a task's delivery for its conductor to decide: as
 // Deliver starts one, with decider conductor, so its first step parks on
 // the conductor's decision to start the implementer. The conductor itself
