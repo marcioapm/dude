@@ -18,6 +18,9 @@ from playwright.sync_api import Page, expect
 
 from helpers import ApiClient, query, sign_in, wait_until
 
+# Each drives the Run's transcript in a browser.
+pytestmark = pytest.mark.ui
+
 CALL, CHILD = "call_child_1", "kid_1"
 TITLE = "Inspect test capture setup"
 PERMISSION = "external_directory"

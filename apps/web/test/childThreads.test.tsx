@@ -43,6 +43,16 @@ async function render(events: PersistedEvent[]): Promise<HTMLElement> {
   return host;
 }
 
+// A card's threads are the ones drawn after it and before the next card at its level.
+function threadsUnder(card: Element): string[] {
+  const ids: string[] = [];
+  for (let n = card.nextElementSibling; n && !n.matches("[data-tool]"); n = n.nextElementSibling) {
+    if (n.matches("[data-testid='child-thread']")) ids.push(n.getAttribute("data-child")!);
+  }
+  return ids;
+}
+const card = (el: HTMLElement, text: string) => [...el.querySelectorAll(":scope > [data-tool]")].find((c) => c.textContent!.includes(text))!;
+
 const start = () => [
   ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Inspect test capture setup", subagent_type: "explore" } }, 120),
   ev(EventTypes.ChildStarted, { ...kid, kind: "task", title: "Inspect test capture setup", agentType: "explore", model: "claude-haiku-4.5" }, 120),
@@ -59,7 +69,7 @@ test("a live child is an open subagent thread under the call's card, with its ca
   expect(thread.querySelector("[data-role='subagent']")).toBeTruthy();
   expect(thread.getAttribute("aria-label")).toBe("Subagent subagent: Inspect test capture setup · explore");
   // Under the parent's card, not inside it.
-  expect(thread.previousElementSibling?.textContent).toContain("task");
+  expect(threadsUnder(card(el, "Inspect test capture setup"))).toEqual(["ses_kid"]);
   const body = thread.querySelector("[role='group']")!;
   expect(body.textContent).toContain("grep");
   expect(body.textContent).toContain("No viewport is set in the repo.");
@@ -94,10 +104,14 @@ test("a done child folds to its summary, with its turns counted", async () => {
 
 test("two children of one turn are two threads, each under its own call", async () => {
   const el = await render([
-    ev(EventTypes.ToolCalled, { tool: "task", callId: "s1" }), ev(EventTypes.ToolCalled, { tool: "task", callId: "s2" }),
-    ev(EventTypes.ChildStarted, { childId: "a", callId: "s1", kind: "spawn", title: "Inspect test capture setup" }),
-    ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "spawn", title: "Find the chart fixture dataset" })]);
-  expect([...el.querySelectorAll("[data-testid='child-thread']")].map((t) => t.getAttribute("data-child"))).toEqual(["a", "b"]);
+    ev(EventTypes.ToolCalled, { tool: "task", callId: "s1", input: { description: "Inspect test capture setup" } }),
+    ev(EventTypes.ToolCalled, { tool: "task", callId: "s2", input: { description: "Find the chart fixture dataset" } }),
+    // Started in the other order from their calls: each still lands under its own.
+    ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "spawn", title: "Chart" }),
+    ev(EventTypes.ChildStarted, { childId: "a", callId: "s1", kind: "spawn", title: "Capture" })]);
+  expect(el.querySelectorAll(":scope > [data-tool]")).toHaveLength(2);
+  expect(threadsUnder(card(el, "Inspect test capture setup"))).toEqual(["a"]);
+  expect(threadsUnder(card(el, "Find the chart fixture dataset"))).toEqual(["b"]);
 });
 
 test("a child heard before its parent's call is drawn once, under that call's one card", async () => {
