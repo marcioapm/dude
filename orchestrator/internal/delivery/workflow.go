@@ -841,10 +841,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if errors.As(err, new(forge.OwnerAuthorizationError)) {
-		if statusErr := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", err.Error()); statusErr != nil {
-			return workflow.Result{}, statusErr
-		}
-		return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
+		return w.awaitOwnerAuthorization(ctx, sc, st, err)
 	}
 	if err != nil {
 		return workflow.Result{}, err
@@ -867,6 +864,15 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		return workflow.Result{}, err
 	}
 	return waitForPR(st), nil
+}
+
+// awaitOwnerAuthorization parks a publication until its frozen owner
+// connects GitHub; the branch stays pushed and no retry budget is spent.
+func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepContext, st *State, cause error) (workflow.Result, error) {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", cause.Error()); err != nil {
+		return workflow.Result{}, err
+	}
+	return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
 }
 
 // awaitPullRequest wakes a fixer only when there is something to fix: the
@@ -1118,10 +1124,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// that one gets its own, alongside the others.
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if errors.As(err, new(forge.OwnerAuthorizationError)) {
-		if statusErr := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", err.Error()); statusErr != nil {
-			return workflow.Result{}, statusErr
-		}
-		return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
+		return w.awaitOwnerAuthorization(ctx, sc, st, err)
 	}
 	if err != nil {
 		return workflow.Result{}, err
