@@ -1290,7 +1290,7 @@ def test_a_parked_agent_is_answered_from_its_chat(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
-    expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
+    expect(page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))).to_contain_text("Parked while it waits for you")
     # Paused, yet its question's turn takes the answer: that is what resumes it.
     page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
@@ -1395,7 +1395,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
-    expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
+    expect(page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))).to_contain_text("Parked while it waits for you")
     # No question to answer: the composer says what does resume it.
     expect(page.get_by_placeholder("decide its request above")).to_be_visible()
     page.get_by_test_id("repository-request").get_by_role("button", name="Approve").click()
