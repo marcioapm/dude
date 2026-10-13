@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +119,68 @@ func TestWaitForReplyParksAfterTheGraceAndTheReplyResumesTheRun(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
 		t.Errorf("%d received events on the waiting Run", n)
+	}
+}
+
+// An agent that waits on a peer and then moves machine keeps waiting: the
+// move's resume and settlement leave the wait open and the turn held, and
+// the reply after the move reaches the agent once.
+func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+		w.org, fakeagent.MachineSize)
+	wi, peer := w.task(), w.task()
+	w.onAnEpic(wi, peer)
+	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
+			Machine: fakeagent.MachineRequest, Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	w.deliver(wi)
+	var runID, message string
+	w.until("the agent to wait on its peer and ask to move", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id, w.message_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
+			WHERE r.task_id = $1 AND w.how = 'wait'`, wi).Scan(&runID, &message)
+		return runID != "" && w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1`, runID) == 1
+	})
+	// The resumed turn on the new size ends with the wait still open.
+	w.until("the move settled and the resumed turn over", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND settled_at IS NOT NULL`, runID) == 1 &&
+			slices.Contains(w.said(runID), "Wired the client.")
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
+		t.Errorf("%d open waits after the move, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL`, runID); n != 1 {
+		t.Errorf("the Run is not waiting after the move:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID); n != 0 {
+		t.Fatal("the waiting Run completed across the move")
+	}
+	const reply = "{metric, from, period}"
+	w.send(w.peerRun(peer), wi, message, reply)
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
+		t.Errorf("%d received events on the waiting Run, want 1", n)
+	}
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
+	for _, lr := range w.lux.Runs() {
+		if lr.ID != live {
+			continue
+		}
+		if n := strings.Count(strings.Join(lr.Inputs, "\n"), reply); n != 1 {
+			t.Errorf("the reply reached the agent %d times: %q", n, lr.Inputs)
+		}
 	}
 }
 
