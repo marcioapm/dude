@@ -151,6 +151,8 @@ func TestALuxWithoutPushCredentialsIsPushedWithout(t *testing.T) {
 func TestAPushALuxdWithoutTheHostRefusedIsRetried(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HostUnreachable = 1
+	// The refused push's retry is due at once, not after its 5 s back-off.
+	w.syncer.RetryAhead = time.Minute
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -201,6 +203,7 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
+	w.syncer.RetryAhead = time.Minute
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
