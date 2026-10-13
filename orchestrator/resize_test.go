@@ -136,6 +136,29 @@ func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
 	}
 }
 
+// A raise that replaces the task's layer while a Reset is under way (lux's
+// dry run is between the Reset's read of the layer and its write) is kept:
+// the Reset drops only the raise it read, by its moveId.
+func TestResetDropsOnlyTheRaiseItRead(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_read','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	newer := `{"sizeId":"msz_big","moveId":"mmv_newer","askedBy":"run_other","reason":"again","at":"2026-10-13T01:00:00Z"}`
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == live && validateOnly {
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, newer)
+		}
+	}
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, newer) != 1 {
+		t.Fatalf("the newer raise was dropped: %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
+	}
+}
+
 func TestMachineResetKeepsPersonPause(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = hang
@@ -349,6 +372,29 @@ func TestMachineMoveRefusalSurvivesRestartBeforeFallback(t *testing.T) {
 	}
 	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'message'=$2 AND payload->'to'->>'name'='Bigger'`, runID, message) != 1 {
 		t.Fatal("machine.refused not recorded once with the asked size")
+	}
+}
+
+// A refused raise puts back the layer it replaced only while the layer is
+// still its own: another Run of the role (two reviewers share one) that
+// raised it since keeps its raise.
+func TestARefusedRaiseLeavesANewerRaiseAlone(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, $2)`, w.org, bigPool)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	// The pool goes before the real resume, and another Run's raise
+	// replaces this one's in the task's layer.
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	newer := `{"sizeId":"msz_big","moveId":"mmv_newer","askedBy":"run_other","reason":"again","at":"2026-10-13T01:00:00Z"}`
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, newer)
+	w.until("settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
+	})
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, newer) != 1 {
+		t.Fatalf("the newer raise was replaced: %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
 	}
 }
 

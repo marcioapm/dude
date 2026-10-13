@@ -65,6 +65,36 @@ func TestResetMovesALiveSessionAgentBackDown(t *testing.T) {
 	}
 }
 
+// A raise that replaces the session's layer while its Reset is under way
+// (during lux's dry run) is kept: the Reset drops only the raise it read.
+func TestASessionResetDropsOnlyTheRaiseItRead(t *testing.T) {
+	s := newSessionWorld(t)
+	s.syncer.ConductorWarm = time.Hour
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	s.until("the brainstorm live", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running' AND control = 'none'`, run) == 1
+	})
+	standard := s.str(`SELECT id FROM machine_sizes WHERE organization_id = $1 AND name = 'Standard'`, s.org)
+	mustExec(t, s.owner, `UPDATE sessions SET agent_machine = jsonb_build_object('sizeId', $2::text, 'moveId', 'mmv_read', 'askedBy', $3::text,
+		'reason', 'oom', 'at', '2026-10-13T00:00:00Z') WHERE id = $1`, id, standard, run)
+	mustExec(t, s.owner, `UPDATE runs SET machine = machine || jsonb_build_object('sizeId', $2::text, 'name', 'Standard', 'cpus', 2,
+		'memoryMiB', 8192, 'diskGiB', 20, 'from', 'session') WHERE id = $1`, run, standard)
+	live := s.previewLux(run)
+	s.lux.OnResume = func(lr string, validateOnly bool) {
+		if lr == live && validateOnly {
+			mustExec(t, s.owner, `UPDATE sessions SET agent_machine = agent_machine || '{"moveId":"mmv_newer"}' WHERE id = $1`, id)
+		}
+	}
+	if status, out := s.as(s.marcio, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if s.count(`SELECT count(*) FROM sessions WHERE id = $1 AND agent_machine->>'moveId' = 'mmv_newer'`, id) != 1 {
+		t.Fatal("the newer raise was dropped")
+	}
+}
+
 // A task's live conductor raises its machine, and a person's Reset of the
 // conductor's role moves that Run back down.
 func TestResetMovesALiveConductorBackDown(t *testing.T) {
