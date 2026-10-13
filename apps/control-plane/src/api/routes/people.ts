@@ -366,7 +366,10 @@ const createKeyInput = z.object({ name: z.string().trim().min(1).max(100), organ
 
 async function createMyKey(ctx: RequestContext): Promise<Response> {
   const { name, organizationId } = await parseBody(ctx.request, createKeyInput);
-  const membership = ctx.principal.access?.memberships.find((m) => m.organization_id === organizationId);
+  const selected = organizationId ?? ctx.request.headers.get("x-dude-organization") ??
+    (ctx.principal.access?.memberships.length === 1 ? ctx.principal.access.memberships[0]!.organization_id : undefined);
+  if (ctx.principal.access && !selected) throw new HttpError(400, "organization_required", "organization_required");
+  const membership = ctx.principal.access?.memberships.find((m) => m.organization_id === selected);
   if (ctx.principal.access && !membership) throw new HttpError(403, "not_a_member", "not_a_member");
   if (!ctx.principal.access && organizationId && organizationId !== ctx.principal.organizationId) throw new HttpError(403, "not_a_member", "not_a_member");
   const made = await withOrg(membership?.organization_id ?? ctx.principal.organizationId, (scope) =>
@@ -377,19 +380,23 @@ async function createMyKey(ctx: RequestContext): Promise<Response> {
 
 async function revokeMyKey(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
-  const result = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT id FROM api_keys WHERE person_id = ${ctx.principal.personId} AND revoked_at IS NULL
-      FOR UPDATE`) as Array<{ id: string }>;
-    if (!rows.some((k) => k.id === id)) return "missing";
-    // A verified person credential remains usable without an API key.
-    if (rows.length === 1 && ctx.principal.credentialKind !== "person") return "last";
-    await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${id}`;
-    return "revoked";
-  });
-  if (result === "missing") throw notFound(`key ${id} is not one of yours`);
-  if (result === "last") throw conflict("that is your only key; make another before revoking it");
-  return noContent();
+  const memberships = ctx.principal.access?.memberships ??
+    [{ organization_id: ctx.principal.organizationId, person_id: ctx.principal.personId }];
+  for (const membership of memberships) {
+    const result = await withOrg(membership.organization_id, async (scope) => {
+      const rows = (await scope.sql`
+        SELECT id FROM api_keys WHERE person_id = ${membership.person_id} AND revoked_at IS NULL
+        FOR UPDATE`) as Array<{ id: string }>;
+      if (!rows.some((k) => k.id === id)) return "missing";
+      // A verified person credential remains usable without an API key.
+      if (rows.length === 1 && ctx.principal.credentialKind !== "person") return "last";
+      await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${id}`;
+      return "revoked";
+    });
+    if (result === "last") throw conflict("that is your only key; make another before revoking it");
+    if (result === "revoked") return noContent();
+  }
+  throw notFound("key not found");
 }
 
 // ---------------------------------------------------------------------------
