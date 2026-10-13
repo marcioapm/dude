@@ -89,8 +89,15 @@ describe("signing in", () => {
   test("a removed person gets gate none and is not recreated; strangers are refused whatever the old settings say", async () => {
     const id = await member(owner, org, at("gone"), { name: "Gone" });
     await owner`UPDATE people SET removed_at = now() WHERE id = ${id}`;
-    const got = await me(router, cookie(await sign(signer, { email: at("gone") })));
-    expect(got.body).toMatchObject({ gate: "none" });
+    await owner`UPDATE accounts SET signed_in_at=now()-interval '2 days' WHERE email=${at("gone")}`;
+    const before = await owner`SELECT * FROM accounts WHERE email=${at("gone")}`;
+    edge.profiles.set(at("gone"), { email: at("gone"), name: "Own Identity", oidc_fields: { picture: "https://img.example/own.png" } });
+    const token = await sign(signer, { email: at("gone") });
+    const got = await me(router, cookie(token));
+    const expected = { gate: "none", email: at("gone"), name: "Own Identity", photoUrl: "https://img.example/own.png" };
+    expect(got.body).toEqual(expected as never);
+    expect((await me(router, cookie(token))).body).toEqual(expected as never);
+    expect(await owner`SELECT * FROM accounts WHERE email=${at("gone")}`).toEqual(before);
     expect(got.body).not.toHaveProperty("person");
     expect(await peopleByEmail(at("gone"))).toHaveLength(1);
     expect((await peopleByEmail(at("gone")))[0]!.removed_at).not.toBeNull();

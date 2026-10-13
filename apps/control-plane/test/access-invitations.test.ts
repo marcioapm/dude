@@ -4,7 +4,7 @@ import { attentionItems, waitingSplit, type NavProject } from "../../../packages
 import { createApiKey } from "../src/api/auth.ts";
 import type { Router } from "../src/api/router.ts";
 import { closePool, setPool } from "../src/db/client.ts";
-import { Edge, OPERATOR, ORIGIN, cookie, databases, fullRouter, invitation, member, rsaKey, sign, type Key } from "./access-harness.ts";
+import { Edge, OPERATOR, ORIGIN, cookie, databases, fullRouter, invitation, member, rsaKey, sign, waitFor, type Key } from "./access-harness.ts";
 
 const suffix = Bun.randomUUIDv7("hex").slice(-12);
 const acme = `org_inv_${suffix}`;
@@ -45,7 +45,7 @@ const invite = (emails: string[], role = "member", by = at("ana"), organization 
 
 describe("inviting", () => {
   test("every per-address result, with a link for the first three only", async () => {
-    await invite([at("expiring")]);
+    const expired = (await invite([at("expiring")])).body.results[0];
     await owner`UPDATE invitations SET expires_at = now() - interval '1 day' WHERE email = ${at("expiring")}`;
     await invite([at("waiting")]);
     const got = await as(at("ana"), "POST", "/v1/organization/invitations", { role: "member", invitations: [
@@ -61,6 +61,10 @@ describe("inviting", () => {
     for (const r of results) expect(r.link !== undefined).toBe(["created", "existing", "renewed"].includes(r.result));
     expect(results[0]!.link).toBe(`#/invite/${results[0]!.invitation!.code}`);
     expect(results[0]!.invitation!.code).toMatch(/^[0-9A-Za-z]{22}$/);
+    expect(results[5]).toMatchObject({ result: "renewed", link: expired.link,
+      invitation: { id: expired.invitation.id, code: expired.invitation.code } });
+    expect(await as(at("expiring"), "GET", `/v1/invitations/${expired.invitation.code}`, undefined, null))
+      .toMatchObject({ status: 200, body: { state: "pending", code: expired.invitation.code } });
   });
 
   test("renew keeps the same code; revoking twice is a 404; members may not invite", async () => {
@@ -87,6 +91,47 @@ describe("inviting", () => {
 });
 
 describe("accepting", () => {
+  for (const state of ["revoked", "expired"] as const) {
+    test(`accept rechecks ${state} after waiting on the people lock`, async () => {
+      const email = at(`race-${state}`);
+      const code = await invitation(owner, acme, email);
+      const locked = Promise.withResolvers<number>();
+      const release = Promise.withResolvers<boolean>();
+      const holding = owner.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext('people:' || ${acme}))`;
+        const [backend] = await tx`SELECT pg_backend_pid() AS pid`;
+        locked.resolve(backend.pid);
+        if (!(await release.promise)) return;
+        if (state === "revoked") await tx`UPDATE invitations SET revoked_at=now() WHERE code=${code}`;
+        else await tx`UPDATE invitations SET expires_at=now()-interval '1 second' WHERE code=${code}`;
+      });
+      let accepting: ReturnType<typeof as> | undefined;
+      try {
+        const pid = await locked.promise;
+        accepting = as(email, "POST", `/v1/invitations/${code}/accept`, {}, null);
+        await waitFor(async () => {
+          const [row] = await owner`SELECT EXISTS (
+            SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+            WHERE a.datname=current_database() AND a.usename='dude_app'
+              AND a.wait_event='advisory' AND l.locktype='advisory' AND NOT l.granted
+              AND ${pid} = ANY(pg_blocking_pids(a.pid))) AS waiting`;
+          return row.waiting;
+        });
+        release.resolve(true);
+        await holding;
+        expect(await accepting).toEqual({ status: 404,
+          body: { error: { code: "invitation_unusable", message: "invitation_unusable" } } });
+        expect(await owner`SELECT * FROM accounts WHERE email=${email}`).toHaveLength(0);
+        expect(await owner`SELECT * FROM people WHERE email=${email}`).toHaveLength(0);
+        expect((await owner`SELECT accepted_at FROM invitations WHERE code=${code}`)[0].accepted_at).toBeNull();
+      } finally {
+        release.resolve(false);
+        await holding;
+        await accepting;
+      }
+    }, 10000);
+  }
+
   test("wrong email learns nothing; unusable codes are one identical 404", async () => {
     const code = await invitation(owner, acme, at("chloe"));
     const wrong = await as(at("someone"), "GET", `/v1/invitations/${code}`, undefined, null);
@@ -140,6 +185,39 @@ describe("accepting", () => {
 });
 
 describe("your keys, in each organisation", () => {
+  test("legacy create selects one membership or a header, but never an ambiguous first member", async () => {
+    const email = at("legacy-key");
+    await member(owner, acme, email);
+    expect((await as(email, "POST", "/v1/me/keys", { name: "Single" }, null)).status).toBe(201);
+    await member(owner, northwind, email);
+    expect(await as(email, "POST", "/v1/me/keys", { name: "Ambiguous" }, null))
+      .toMatchObject({ status: 400, body: { error: { code: "organization_required" } } });
+    expect((await as(email, "POST", "/v1/me/keys", { name: "Header" }, northwind)).status).toBe(201);
+    expect((await as(email, "POST", "/v1/me/keys", { name: "Explicit", organizationId: acme }, null)).status).toBe(201);
+    expect((await as(email, "POST", "/v1/me/keys", { name: "Foreign", organizationId: `${acme}_foreign` }, null)).status).toBe(403);
+  });
+
+  test("no-header revoke finds the caller's B key, and cannot revoke a foreign key", async () => {
+    const email = at("revoke-key");
+    await member(owner, acme, email);
+    await member(owner, northwind, email);
+    const a = (await as(email, "POST", "/v1/me/keys", { name: "A", organizationId: acme }, null)).body;
+    const b = (await as(email, "POST", "/v1/me/keys", { name: "B", organizationId: northwind }, null)).body;
+    const foreign = (await as(at("ana"), "POST", "/v1/me/keys", { name: "Foreign" }, null)).body;
+    expect((await as(email, "GET", "/v1/me/keys", undefined, null)).body.keys.map((k: Json) => k.id).sort())
+      .toEqual([a.id, b.id].sort());
+    const before = await owner`SELECT * FROM api_keys WHERE id=${foreign.id}`;
+    const unknown = await as(email, "DELETE", "/v1/me/keys/unknown", undefined, null);
+    expect(await as(email, "DELETE", `/v1/me/keys/${foreign.id}`, undefined, null)).toEqual(unknown);
+    expect(await owner`SELECT * FROM api_keys WHERE id=${foreign.id}`).toEqual(before);
+    expect((await as(email, "DELETE", `/v1/me/keys/${b.id}`, undefined, null)).status).toBe(204);
+    const status = async (key: string) => (await router.handle(new Request(`${ORIGIN}/v1/me`, {
+      headers: { authorization: `Bearer ${key}` } }))).status;
+    expect(await status(b.key)).toBe(401);
+    expect(await status(a.key)).toBe(200);
+    expect(await status(foreign.key)).toBe(200);
+  });
+
   test("listed across memberships, made for one, and removal revokes only that organisation's", async () => {
     const email = at("fay");
     const inAcme = await member(owner, acme, email);
