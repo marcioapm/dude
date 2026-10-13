@@ -848,6 +848,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   don't move under the pointer. "Can start" and "Blocked" are a `Segmented`
   filter in the header (counts in the labels), not a triage bucket: blocked
   needs nobody.
+- **Cards are memoised.** A card re-renders only when its own props change,
+  so a hover redraws the cards whose lit state changes and no others. Each
+  card calls `cardMarks` and `cardStart` itself, so pass **stable
+  references** (`useCallback`, or a function defined once): a new closure on
+  every render of the board's parent redraws every card.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -874,6 +879,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   header's ways while a task is blocked: the reason in words, naming each
   open blocker, then Start when unblocked (owner only) and Start anyway.
   `StartMenu` is the card's form of the same choice.
+- **A disabled control the reader can still reach.** A disabled `<button>`
+  takes no focus or pointer, so its tooltip would never open. Each refused
+  way in `StartGate` (and a refused Start when unblocked…) is wrapped in a
+  focusable span that is the control assistive tech meets: `role="button"`,
+  `aria-disabled="true"`, `aria-label` the way's label ("Deliver", "Start
+  when unblocked…"), and `aria-describedby` naming one description, the
+  reason. The inner button carries no description of its own, so the reason
+  is read once.
 - **Start anyway** (`StartAnywayDialog`) names each blocker and what starting
   now means; Keep waiting holds the focus, the confirm is primary. Only a
   person overrides.
