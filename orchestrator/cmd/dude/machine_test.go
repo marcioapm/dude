@@ -119,7 +119,8 @@ func TestDudeMachineRequestRefused(t *testing.T) {
 	owner, run := machineCLI(t, &lux.Error{Status: 422, Code: "platform_mismatch", Message: "pool highmem runs linux/arm64; this Run's image offers only linux/amd64"})
 	var out bytes.Buffer
 	err := runCLI(&out, "machine", "request", "XL", "--reason", "oom")
-	if err == nil || err.Error() != "pool highmem runs linux/arm64; this Run's image offers only linux/amd64" || out.Len() != 0 {
+	// lux's words name the pool by id; the tool's say it by name. This lux lists no platforms.
+	if err == nil || err.Error() != "XL is in highmem, whose machines cannot run this agent's image. Ask for another size, or ask a person to add an image for them." || out.Len() != 0 {
 		t.Fatalf("lux's refusal: %v %q", err, out.String())
 	}
 	err = runCLI(&out, "machine", "request", "Standard", "--reason", "oom")
