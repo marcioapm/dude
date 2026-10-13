@@ -7,18 +7,24 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // autoStart sets the task's start when unblocked as the world's person.
@@ -534,6 +540,141 @@ func TestStartWhenUnblockedThatFailsEnds(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 0 {
 		t.Fatal("a failed start made a delivery")
+	}
+}
+
+// requestKept says the task's request is still standing and due, with
+// attempts counted fires, and that nothing ended it or told Chat it failed.
+func (w *world) requestKept(task string, attempts int) {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM task_auto_starts WHERE task_id = $1 AND due_at IS NOT NULL AND fire_attempts = $2`,
+		task, attempts); n != 1 {
+		w.t.Fatalf("the request is not kept due with %d attempts", attempts)
+	}
+	if w.events(task, "task.auto_start_cancelled") != 0 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'auto_start_failed'`, task) != 0 {
+		w.t.Fatal("the request was ended as failed")
+	}
+}
+
+// dueNow makes the task's request due now, as the next sweep finds it.
+func (w *world) dueNow(task string) {
+	mustExec(w.t, w.owner, `UPDATE task_auto_starts SET due_at = now() WHERE task_id = $1`, task)
+}
+
+// A fire that loses a deadlock is the database's failure, not the start's:
+// the request stays due, Chat is told nothing, and the next sweep starts
+// the task. The deadlock is real: a writer holds the task's row and then
+// wants the request's, while the fire holds the request's and its guard
+// wants the task's; the fire waited first, so it is the one aborted.
+func TestStartWhenUnblockedThatLosesADeadlockIsRetried(t *testing.T) {
+	w := newWorld(t)
+	blocker, task := w.task(), w.task()
+	w.blocks(blocker, task)
+	w.autoStart(task, "deliver")
+	w.markMergedDone(blocker)
+	ctx := context.Background()
+	other := w.openTx()
+	if _, err := other.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, task); err != nil {
+		t.Fatal(err)
+	}
+	swept := make(chan error, 1)
+	go func() {
+		_, err := (&delivery.AutoStarts{DB: w.app, Starter: w.runtime}).Sweep(ctx)
+		swept <- err
+	}()
+	w.until("the fire to wait on the task's row", func() bool {
+		return w.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> $1
+			AND wait_event_type = 'Lock' AND query LIKE '%FROM tasks WHERE id = $1 FOR NO KEY UPDATE%'`, other.pid) == 1
+	})
+	locked := other.async(func() error {
+		_, err := other.Exec(ctx, `SELECT 1 FROM task_auto_starts WHERE task_id = $1 FOR UPDATE`, task)
+		return err
+	})
+	if err := other.result(locked); err != nil {
+		t.Fatalf("the writer lost the deadlock, not the fire: %v", err)
+	}
+	if err := other.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-swept; err != nil {
+		t.Fatal(err)
+	}
+	w.requestKept(task, 0)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 0 {
+		t.Fatal("the deadlocked fire started the task")
+	}
+	w.dueNow(task)
+	if w.fireAutoStarts() != 1 || w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task) != 1 {
+		t.Fatal("the retried request did not start the task")
+	}
+}
+
+// failingStarter is a start that fails with err.
+type failingStarter struct{ err error }
+
+func (f failingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {
+	return "", false, f.err
+}
+
+// Transient failures of the start (serialisation, a statement timeout, a
+// connection reset) never end a request, however many times they happen.
+func TestStartWhenUnblockedFailingTransientlyIsKept(t *testing.T) {
+	for _, cause := range []error{
+		&pgconn.PgError{Code: "40001", Message: "could not serialize access"},
+		&pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"},
+		&pgconn.PgError{Code: "08006", Message: "connection failure"},
+		fmt.Errorf("read: %w", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}),
+		fmt.Errorf("receive message: %w", io.ErrUnexpectedEOF),
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			w := newWorld(t)
+			blocker, task := w.task(), w.task()
+			w.blocks(blocker, task)
+			w.autoStart(task, "deliver")
+			w.markMergedDone(blocker)
+			for range 7 {
+				if _, err := (&delivery.AutoStarts{DB: w.app, Starter: failingStarter{cause}}).Sweep(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				w.requestKept(task, 0)
+				w.dueNow(task)
+			}
+		})
+	}
+}
+
+// An unknown failure is retried, counted, and ends the request as failed
+// at the fifth, with the error, saying so in Chat.
+func TestStartWhenUnblockedFailingUnknownlyEndsAfterItsBound(t *testing.T) {
+	w := newWorld(t)
+	blocker, task := w.task(), w.task()
+	w.blocks(blocker, task)
+	w.autoStart(task, "deliver")
+	w.markMergedDone(blocker)
+	failing := &delivery.AutoStarts{DB: w.app, Starter: failingStarter{errors.New("the starter broke")}}
+	for i := 1; i < 5; i++ {
+		if _, err := failing.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.requestKept(task, i)
+		if n := w.count(`SELECT count(*) FROM task_auto_starts WHERE task_id = $1 AND due_at > now()`, task); n != 1 {
+			t.Fatal("a retried request is due at once, not after a pause")
+		}
+		w.dueNow(task)
+	}
+	if _, err := failing.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM task_auto_starts WHERE task_id = $1`, task); n != 0 {
+		t.Fatal("the request outlived its bound")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.auto_start_cancelled'
+		AND payload->>'why' = 'failed' AND payload->>'error' = 'the starter broke'`, task); n != 1 {
+		t.Fatal("task.auto_start_cancelled {why: failed, error} is missing")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'auto_start_failed'`, task); n != 1 {
+		t.Fatal("Chat was not told")
 	}
 }
 

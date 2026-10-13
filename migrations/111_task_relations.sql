@@ -51,7 +51,10 @@ CREATE TABLE task_auto_starts (
   set_at          timestamptz NOT NULL DEFAULT now(),
   -- Set by the merge that released the task's last blocker; the worker
   -- takes due rows, one transaction per task.
-  due_at          timestamptz
+  due_at          timestamptz,
+  -- Fires that failed for a reason neither transient nor the start's own
+  -- refusal; the worker ends the request once it reaches its bound.
+  fire_attempts   integer NOT NULL DEFAULT 0
 );
 CREATE INDEX task_auto_starts_due_idx ON task_auto_starts (due_at) WHERE due_at IS NOT NULL;
 

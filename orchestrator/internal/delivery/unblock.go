@@ -2,11 +2,16 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -219,7 +224,7 @@ func (a *AutoStarts) Sweep(ctx context.Context) (int, error) {
 	type due struct{ Org, TaskID string }
 	var todo []due
 	if err := a.DB.InSystem(ctx, "auto-starts", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT organization_id, task_id FROM task_auto_starts WHERE due_at IS NOT NULL
+		rows, err := tx.Query(ctx, `SELECT organization_id, task_id FROM task_auto_starts WHERE due_at <= now()
 			ORDER BY due_at LIMIT $1`, autoStartBatch)
 		if err != nil {
 			return err
@@ -234,12 +239,85 @@ func (a *AutoStarts) Sweep(ctx context.Context) (int, error) {
 		if err == nil {
 			continue
 		}
-		// Non-blocker failures end the request and explain how to start manually.
-		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.failed(ctx, tx, d.Org, d.TaskID, err) }); ferr != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.notFired(ctx, tx, d.Org, d.TaskID, err) }); ferr != nil {
 			return 0, ferr
 		}
 	}
 	return len(todo), nil
+}
+
+// maxFireAttempts bounds the fires of one request that fail for a reason
+// not known to be transient nor the start's own refusal.
+const maxFireAttempts = 5
+
+// fireRetryAfter is how long a request that did not fire waits before the
+// next sweep takes it again, per counted attempt for an unknown error.
+const fireRetryAfter = 5 * time.Second
+
+// notFired settles a fire that failed with cause. The start's own refusal
+// ends the request (failed); a transient failure leaves it due for a later
+// sweep; anything else does too, counted, and ends it at maxFireAttempts.
+func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID string, cause error) error {
+	if startRefused(cause) {
+		return a.failed(ctx, tx, org, taskID, cause)
+	}
+	if transient(cause) {
+		_, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = now() + make_interval(secs => $2)
+			WHERE task_id = $1 AND due_at IS NOT NULL`, taskID, fireRetryAfter.Seconds())
+		return err
+	}
+	var attempts int
+	err := tx.QueryRow(ctx, `UPDATE task_auto_starts SET fire_attempts = fire_attempts + 1,
+			due_at = now() + make_interval(secs => $2 * (fire_attempts + 1))
+		WHERE task_id = $1 AND due_at IS NOT NULL RETURNING fire_attempts`, taskID, fireRetryAfter.Seconds()).Scan(&attempts)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil || attempts < maxFireAttempts {
+		return err
+	}
+	return a.failed(ctx, tx, org, taskID, cause)
+}
+
+// startRefused says err is the start's own deterministic refusal, which
+// firing again would meet again: the task gone (TaskNotFound, no row), a
+// policy or delivery state that does not decode (PolicyError, a JSON
+// error, as PolicyFor and LoadDelivery wrap it), or a write the data
+// refuses (SQLSTATE class 22 data exception, 23 integrity violation:
+// NameOnlyRepository's insert, the delivery's start).
+func startRefused(err error) bool {
+	var notFound TaskNotFound
+	var policy PolicyError
+	var syntax *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	if errors.As(err, &notFound) || errors.As(err, &policy) ||
+		errors.As(err, &syntax) || errors.As(err, &typ) || db.IsNotFound(err) {
+		return true
+	}
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (strings.HasPrefix(pg.Code, "22") || strings.HasPrefix(pg.Code, "23"))
+}
+
+// transient says err is the database's or the connection's, not the
+// start's: SQLSTATE class 40 (deadlock, serialisation), 57 (statement
+// timeout, admin shutdown), 08 (connection), 53 (resources), or a
+// connection that failed, timed out or was closed.
+func transient(err error) bool {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		switch pg.Code[:min(2, len(pg.Code))] {
+		case "40", "57", "08", "53":
+			return true
+		}
+		return false
+	}
+	var connect *pgconn.ConnectError
+	var netErr net.Error
+	return errors.As(err, &connect) || errors.As(err, &netErr) || pgconn.Timeout(err) || pgconn.SafeToRetry(err) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // fire is one due request: re-read every blocker, then the same start a
@@ -249,7 +327,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string) er
 	var setAt time.Time
 	err := tx.QueryRow(ctx, `SELECT a.how, a.set_by_person, COALESCE(p.name, ''), a.set_at FROM task_auto_starts a
 		LEFT JOIN people p ON p.id = a.set_by_person
-		WHERE a.task_id = $1 AND a.due_at IS NOT NULL FOR UPDATE OF a SKIP LOCKED`, taskID).Scan(&how, &setBy, &setByName, &setAt)
+		WHERE a.task_id = $1 AND a.due_at <= now() FOR UPDATE OF a SKIP LOCKED`, taskID).Scan(&how, &setBy, &setByName, &setAt)
 	if db.IsNotFound(err) {
 		return nil
 	}
@@ -356,10 +434,9 @@ func lastUnblock(ctx context.Context, tx pgx.Tx, taskID string) (string, *int, e
 	return *by, pr, nil
 }
 
-// failed ends a request that could not fire for a reason other than a
-// blocker (task.auto_start_cancelled, why "failed", with the error), and
-// says so in the task's Chat: nothing will retry it, so none is left
-// standing to fire unexpectedly on some later merge.
+// failed ends a request that will not fire (task.auto_start_cancelled, why
+// "failed", with the error), and says so in the task's Chat, so none is
+// left standing to fire unexpectedly on some later merge.
 func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID string, cause error) error {
 	msg := clip(cause.Error(), 500)
 	ended, err := endAutoStartTx(ctx, tx, org, taskID, AutoStartEndFailed, "", "", map[string]any{"error": msg})
