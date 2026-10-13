@@ -334,6 +334,36 @@ test("a description-only call is the child's prompt turn fallback", async () => 
   expect(panel.querySelector("[data-intent='prompt']")!.textContent).toContain("Read the test defaults.");
 });
 
+test("desktop keyboard browsing returns focus to the root row and Back to the nested row", async () => {
+  const el = await screen(deep());
+  const opener = header(threadOf(el, "ses_kid")!);
+  opener.focus();
+  await act(async () => opener.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  let panel = el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
+  await act(async () => header(threadOf(panel, "ses_grand")!).click());
+  panel = el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
+  const back = [...panel.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Inspect test capture setup")!;
+  back.focus();
+  await act(async () => back.click());
+  expect(document.activeElement === header(threadOf(panel, "ses_grand")!)).toBe(true);
+  panel.querySelector<HTMLButtonElement>("button[aria-label='Close subagent']")!.focus();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.activeElement === opener).toBe(true);
+});
+
+test("a rail opener moves focus into the panel, then restores the newly mounted quicklink", async () => {
+  const el = await screen(start());
+  const opener = el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button[data-child='ses_kid']")!;
+  opener.focus();
+  await act(async () => opener.click());
+  const close = el.querySelector<HTMLButtonElement>("button[aria-label='Close subagent']")!;
+  expect(document.activeElement === close).toBe(true);
+  await act(async () => close.click());
+  const restored = el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button[data-child='ses_kid']")!;
+  expect(restored !== opener).toBe(true);
+  expect(document.activeElement === restored).toBe(true);
+});
+
 test("permission waiting stays on the row and rail, with the notice and stuck call only in the panel", async () => {
   const el = await screen([...start(),
     ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k8", tool: "grep", input: { path: "/opt/venv" } }, 117),

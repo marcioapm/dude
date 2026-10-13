@@ -280,8 +280,19 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
   const [childPath, setChildPath] = useState<string[]>([]);
-  const openChild = useCallback((id: string) => setChildPath([id]), []);
-  const closeChild = useCallback(() => setChildPath([]), []);
+  const childOpener = useRef<{ id: string; rail: boolean } | null>(null);
+  const pendingChildFocus = useRef<{ id: string; rail: boolean; panel: boolean } | null>(null);
+  const childScreen = useRef<HTMLDivElement>(null);
+  const openChild = useCallback((id: string) => {
+    const rail = Boolean(document.activeElement?.closest("[data-testid='rail-subagents']"));
+    childOpener.current = { id, rail };
+    if (rail) pendingChildFocus.current = { id, rail, panel: true };
+    setChildPath([id]);
+  }, []);
+  const closeChild = useCallback(() => {
+    if (childOpener.current) pendingChildFocus.current = { ...childOpener.current, panel: false };
+    setChildPath([]);
+  }, []);
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 959px)");
@@ -289,6 +300,16 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     media.addEventListener("change", change);
     return () => media.removeEventListener("change", change);
   }, []);
+  useEffect(() => {
+    const target = pendingChildFocus.current;
+    pendingChildFocus.current = null;
+    if (!target || narrow) return;
+    const scope = childScreen.current;
+    const selector = target.panel ? "[data-testid='child-panel'] button[aria-label='Close subagent']"
+      : target.rail ? `[data-testid='rail-subagents'] button[data-child="${CSS.escape(target.id)}"]`
+      : `[data-testid='child-thread'][data-child="${CSS.escape(target.id)}"] > [role='button']`;
+    scope?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+  }, [childPath, narrow]);
   useEffect(() => { setChildPath([]); }, [runId]);
   useEffect(() => {
     if (!childPath.length) return;
@@ -307,7 +328,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <span className="ds-label">Subagent</span>
           <IconButton icon="close" label="Close subagent" size="sm" variant="quiet" onClick={closeChild} />
         </div>
-        {parentChild ? <Button leadingIcon="chevron-left" size="sm" variant="quiet" onClick={() => setChildPath((path) => path.slice(0, -1))}>{parentChild.child.title}</Button> : null}
+        {parentChild ? <Button leadingIcon="chevron-left" size="sm" variant="quiet" onClick={() => {
+          pendingChildFocus.current = { id: childPath.at(-1)!, rail: false, panel: false };
+          setChildPath((path) => path.slice(0, -1));
+        }}>{parentChild.child.title}</Button> : null}
         <h3>{childTitle(openedChild.child)}</h3>
         <ChildStatus child={openedChild.child} />
       </div>
@@ -438,7 +462,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   if (missing) return <NotFound what="run" onBack={onBack} />;
   if (!run) {
-    return <div className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
+    return <div ref={childScreen} className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
 
   // Someone else's to answer: their name. A task nobody owns is anyone's.
@@ -519,7 +543,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     const asking = conversation.openQuestion;
     return (
       <ChildOpenContext.Provider value={openChild}>
-      <div className="runScreen" data-view="chat" data-testid="chat-screen">
+      <div ref={childScreen} className="runScreen" data-view="chat" data-testid="chat-screen">
         <div className="runView">
           <div className="runChat">
             <ChatTranscript
@@ -655,7 +679,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   return (
     <ChildOpenContext.Provider value={openChild}>
-    <div className="runScreen" data-view={view} data-testid="run-screen">
+    <div ref={childScreen} className="runScreen" data-view={view} data-testid="run-screen">
       {/* The whole session takes a dropped image, header and rail included, on the conversation:
           into the composer's tray, or, while several questions wait on you, their note's. */}
       <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || !composerOpen || (waitingForYou !== undefined && (asked?.items.length ?? 0) < 2)}
