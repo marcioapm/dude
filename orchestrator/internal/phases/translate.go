@@ -512,7 +512,6 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if reason == "" {
 		reason = state
 	}
-	luxReason := reason
 	why, event := "the agent's run ended before finishing its task: "+reason, reason
 	if reason == luxTimeout {
 		why = "lux stopped it at its time limit: " + cmp.Or(s.Agent.Timeout, DefaultTimeout) + " of running"
@@ -526,7 +525,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		return err
 	}
 	if stage != "" {
-		return s.failedTxWith(ctx, tx, t.run, event, map[string]any{"stage": stage, "reason": luxReason})
+		return s.failedTxWith(ctx, tx, t.run, event, map[string]any{"stage": stage, "reason": reason})
 	}
 	return s.failedTx(ctx, tx, t.run, event)
 }
