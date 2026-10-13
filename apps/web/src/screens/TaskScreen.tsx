@@ -711,7 +711,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       className={under ? "sessionUnder" : undefined}
                       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
                       title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
-                      detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
+                      detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : runStatusShown(run) === "starting" ? "starting" : "not started"}</>}
                       trailing={<>
                         {run.stalled ? (
                           <Badge tone="attention" size="sm" icon="warning" data-testid="session-stalled" title={run.stalled.text}>stalled</Badge>

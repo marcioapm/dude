@@ -341,10 +341,10 @@ describe("a task's Run page", () => {
   });
 
   /** The task page on `tab`, with a conductor and a phase Run it started that lux placed (stage container), not yet running. */
-  async function placedOnTaskPage(tab: "chat" | "sessions" | "overview") {
+  async function placedOnTaskPage(tab: "chat" | "sessions" | "overview", patch: Partial<ReturnType<typeof run>> = {}) {
     const client = new FixtureClient("a");
     const placed = run({ id: "run_placed", phase: "implement", role: "implementer", status: "scheduled", startedAt: null,
-      conductorRunId: "run_conductor", startStage: { stage: "container", since: null, epoch: 1 } });
+      conductorRunId: "run_conductor", model: "fake/scripted", startStage: { stage: "container", since: null, epoch: 1 }, ...patch });
     const getTask = client.getTask.bind(client);
     client.getTask = async (id) => ({ ...(await getTask(id)), decider: "conductor",
       runs: [run({ id: "run_conductor", role: "conductor", phase: null, status: "running" }), placed] });
@@ -374,6 +374,33 @@ describe("a task's Run page", () => {
     const overview = await placedOnTaskPage("overview");
     const step = await until(() => overview.querySelector<HTMLElement>("[data-testid=phase][data-phase=implement]"), "the pipeline step");
     expect(step.getAttribute("data-status")).toBe("starting");
+  });
+
+  for (const stage of ["image", "container"] as const) {
+    test(`the task's Sessions subtitle agrees with Starting at ${stage}`, async () => {
+      const page = await placedOnTaskPage("sessions", { startStage: { stage, since: null, epoch: 1 } });
+      const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
+      expect(row.querySelector("[data-status]")!.textContent).toBe("Starting");
+      expect(row.textContent).toContain("fake/scripted · starting");
+      expect(row.textContent).not.toContain("not started");
+    });
+  }
+
+  for (const status of ["pending", "scheduled"] as const) {
+    test(`the task's Sessions subtitle remains not started while ${status} and waiting for placement`, async () => {
+      const page = await placedOnTaskPage("sessions", { status, startStage: { stage: "waiting", since: null, epoch: 1 } });
+      const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the waiting Sessions row");
+      expect(row.querySelector("[data-status]")!.getAttribute("data-status")).toBe(status);
+      expect(row.textContent).toContain("fake/scripted · not started");
+    });
+  }
+
+  test("the task's Sessions subtitle keeps the elapsed duration after running starts", async () => {
+    const page = await placedOnTaskPage("sessions", { status: "running", startedAt: new Date(Date.now() - 24_000).toISOString(), startStage: null });
+    const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the running Sessions row");
+    expect(row.querySelector("[data-status]")!.textContent).toBe("Running");
+    expect(row.querySelector("[data-live-dot]")!.textContent).toMatch(/2[4-6]s/);
+    expect(row.textContent).not.toContain("not started");
   });
 
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {
