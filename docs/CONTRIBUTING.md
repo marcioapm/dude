@@ -206,10 +206,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   else pushed on top. Best effort, recorded as
   `pull_request.review_rerequested` with whom GitHub took and refused. It
   runs before the fix opens a pull request for a newly changed repository,
-  so nothing that opening waits on leaves the open ones unasked. Once per
-  pull request and head: a `pull_request_rerequests` row claimed before
-  GitHub is contacted, its outcome and event written under the claim's
-  token (see `RerequestReviews` for an interrupted claim).
+  so nothing that opening waits on leaves the open ones unasked. One
+  caller per pull request and head at a time: a session advisory lock held
+  across the whole GitHub sequence, and a `pull_request_rerequests` row
+  written before GitHub is contacted and finished with its event (see
+  `RerequestReviews` for what an interrupted holder can still repeat).
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that

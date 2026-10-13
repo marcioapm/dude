@@ -2,16 +2,16 @@
 -- request, it asks the reviewers of the older head again, once per pull
 -- request and head (delivery.RerequestReviews).
 --
--- One row per (task, repository, number, head), inserted before GitHub is
--- contacted: the caller whose INSERT lands is the only one that asks for
--- that head. `token` fences its holder: the outcome and its event are
--- recorded only under the token that holds the row. A holder that failed
--- releases the row (claimed_at '-infinity'); one that crashed lapses after
--- the holder's bound; either is taken over by writing a new token.
+-- One row per (task, repository, number, head). Callers for one head are
+-- serialized by a session advisory lock held across the whole GitHub
+-- sequence; the row is what outlives a holder: written before GitHub is
+-- contacted, finished with the outcome and its event in one transaction.
+-- A row left unfinished (its holder's session ended) is taken over by the
+-- next lock holder, which writes a new `token`; writes are fenced by it.
 -- `asking` is who the holder is about to ask, written before its POST: a
 -- takeover records whichever of them GitHub now holds as requested instead
 -- of asking them again. `outcome` is the event's payload, NULL when nobody
--- was asked.
+-- was asked. `claimed_at` is when the current token took the row.
 --
 -- A new table only: nothing existing is rewritten or locked.
 

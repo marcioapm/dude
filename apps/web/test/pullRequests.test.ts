@@ -58,6 +58,11 @@ describe("activity", () => {
       .toBe("asked ana to review #41 again after its fix; GitHub would not ask jerv to review #41 again");
     expect(pullRequestActivity(event("pull_request.review_rerequested", { error: "github 502" }), false)?.text)
       .toBe("couldn't read who reviewed #41 to ask them again");
+    expect(pullRequestActivity(event("pull_request.review_rerequested", { reviewersRequested: [], reviewersRefused: [] }), false)).toBeNull();
+    expect(pullRequestActivity(event("pull_request.review_rerequested", { reviewersRefused: ["jerv"], error: "github 403" }), false)?.text)
+      .toBe("GitHub would not ask jerv to review #41 again");
+    expect(pullRequestActivity(event("pull_request.review_rerequested", { reviewersRequested: ["ana"] }), true)?.text)
+      .toBe("asked ana to review web#41 again after its fix");
   });
 
   test("a person on GitHub, by login, with what they said", () => {

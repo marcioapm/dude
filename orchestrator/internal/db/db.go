@@ -66,10 +66,21 @@ func (d *DB) Close() { d.Pool.Close() }
 // set_config(..., true) is transaction-local, so the tenant can never leak to
 // the next user of the pooled connection.
 func (d *DB) InOrg(ctx context.Context, organizationID string, fn func(pgx.Tx) error) error {
+	return InOrgOn(ctx, d.Pool, organizationID, fn)
+}
+
+// Beginner is a pool, or one connection taken from it.
+type Beginner interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+// InOrgOn is InOrg on a given connection: for work that must share a
+// session with something it holds there, such as a session advisory lock.
+func InOrgOn(ctx context.Context, conn Beginner, organizationID string, fn func(pgx.Tx) error) error {
 	if organizationID == "" {
 		return errors.New("InOrg requires an organization id")
 	}
-	return pgx.BeginFunc(ctx, d.Pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
 			return err
 		}

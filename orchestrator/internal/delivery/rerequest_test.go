@@ -332,64 +332,282 @@ func TestConcurrentRerequestsAskOnce(t *testing.T) {
 	}
 }
 
-// A holder that outlives its claim records nothing: its claim lapses
-// while its request hangs, a second caller takes it over and records the
-// outcome, and the first finds it taken when its request returns.
-func TestALapsedRerequestClaimIsTheTakersToRecord(t *testing.T) {
-	f := newRerequestFixture(t, "target")
-	head := f.fix("target")
-	inPOST, release := make(chan struct{}), make(chan struct{})
-	var released sync.Once
-	letGo := func() { released.Do(func() { close(release) }) }
-	t.Cleanup(letGo)
-	var held atomic.Bool
-	f.gh["target"].Set(func(s *fakegithub.Server) {
+// hold makes repo's GitHub hang the nth review request (1-based) until
+// letGo; entered closes once it hangs. Other requests are answered.
+func (f *rerequestFixture) hold(repo string, nth int32) (entered chan struct{}, letGo func()) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	letGo = func() { once.Do(func() { close(release) }) }
+	f.t.Cleanup(letGo) // a failed test must not leave the request held
+	var posts atomic.Int32
+	f.gh[repo].Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method == "POST" && held.CompareAndSwap(false, true) {
-				// Only the first holder's request hangs.
-				close(inPOST)
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/requested_reviewers") && posts.Add(1) == nth {
+				close(entered)
 				<-release
-				return http.StatusBadGateway
 			}
 			return 0
 		}
 	})
-	heads := map[string]string{"target": head}
-	first := make(chan error, 1)
-	go func() { first <- f.rerequest(heads) }()
-	<-inPOST
-	f.exec(`UPDATE pull_request_rerequests SET claimed_at = now() - interval '1 hour' WHERE organization_id = $1`)
-	if err := f.rerequest(heads); err != nil {
-		t.Fatalf("the taker: %v", err)
-	}
-	letGo()
-	if err := <-first; !errors.Is(err, ErrRerequestBusy) {
-		t.Fatalf("the lapsed holder: %v, want ErrRerequestBusy", err)
-	}
-	if e := f.eventFor("target", head); !slices.Equal(names(e["reviewersRequested"]), []string{"jerv"}) {
-		t.Errorf("recorded %v, want the taker's request of jerv", e)
-	}
-	if p := f.gh["target"].Pull(1); !slices.Equal(p.Requested, []string{"jerv"}) {
-		t.Errorf("requested %v", p.Requested)
+	return entered, letGo
+}
+
+func wait(t *testing.T, c chan struct{}) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(30 * time.Second):
+		t.Fatal("no caller reached GitHub")
 	}
 }
 
-// A holder that crashed after its POST and before recording left only who
-// it was asking. The next caller, once the claim lapses, records GitHub's
-// answer to that request without asking again.
-func TestACrashedRerequestIsRecordedNotRepeated(t *testing.T) {
+// ageClaims makes every claim an hour old: no age lets a caller overtake a
+// live holder.
+func (f *rerequestFixture) ageClaims() {
+	f.exec(`UPDATE pull_request_rerequests SET claimed_at = now() - interval '1 hour' WHERE organization_id = $1`)
+}
+
+// A holder whose request is slow is not overtaken, however old its claim:
+// a caller meanwhile asks nobody and comes back. The holder's request
+// lands, jerv approves the head, and the caller come back asks nobody
+// again: jerv is not put back on requested_reviewers after approving.
+func TestASlowRerequestHolderIsNotOvertaken(t *testing.T) {
 	f := newRerequestFixture(t, "target")
 	head := f.fix("target")
-	f.gh["target"].RequestReview(1, "jerv") // the crashed holder's request, which GitHub took
-	f.exec(`INSERT INTO pull_request_rerequests (organization_id, task_id, repo, number, head, token, claimed_at, asking)
-		VALUES ($1, 'wi_q', 'target', 1, $2, 'rrc_dead', now() - interval '1 hour', '{jerv}')`, head)
-	if err := f.rerequest(map[string]string{"target": head}); err != nil {
-		t.Fatal(err)
+	entered, letGo := f.hold("target", 1)
+	heads := map[string]string{"target": head}
+	first := make(chan error, 1)
+	go func() { first <- f.rerequest(heads) }()
+	wait(t, entered)
+	f.ageClaims()
+	if err := f.rerequest(heads); !errors.Is(err, ErrRerequestBusy) {
+		t.Fatalf("a caller during the holder's request: %v, want ErrRerequestBusy", err)
 	}
-	if n := len(f.asks("target")); n != 0 {
-		t.Errorf("%d review requests, want none", n)
+	// The fake records a request once it answers: the held one is not yet.
+	if got := f.asks("target"); len(got) != 0 {
+		t.Fatalf("review requests %v while the holder's hangs, want none", got)
+	}
+	letGo()
+	if err := <-first; err != nil {
+		t.Fatalf("the holder: %v", err)
+	}
+	f.gh["target"].Review(1, "jerv", "APPROVED")
+	if err := f.rerequest(heads); err != nil {
+		t.Fatalf("the caller come back: %v", err)
+	}
+	if n := len(f.asks("target")); n != 1 {
+		t.Errorf("%d review requests, want 1", n)
+	}
+	if p := f.gh["target"].Pull(1); len(p.Requested) != 0 {
+		t.Errorf("requested %v after jerv approved the head", p.Requested)
 	}
 	if e := f.eventFor("target", head); !slices.Equal(names(e["reviewersRequested"]), []string{"jerv"}) {
 		t.Errorf("recorded %v", e)
 	}
+}
+
+// After GitHub refuses the batch (ana is no collaborator: 422), the
+// holder asks each alone; a caller arriving while it is between those
+// requests asks nobody. 403-free, so the count is every POST sent.
+func TestARerequestHolderBetweenItsOneByOneRequestsIsNotOvertaken(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	f.gh["target"].Review(1, "ana", "COMMENTED")
+	f.gh["target"].Set(func(s *fakegithub.Server) { s.Permissions["ana"] = "none" })
+	head := f.fix("target")
+	entered, letGo := f.hold("target", 2) // the first one-by-one request
+	heads := map[string]string{"target": head}
+	first := make(chan error, 1)
+	go func() { first <- f.rerequest(heads) }()
+	wait(t, entered)
+	f.ageClaims()
+	if err := f.rerequest(heads); !errors.Is(err, ErrRerequestBusy) {
+		t.Fatalf("a caller between the holder's requests: %v, want ErrRerequestBusy", err)
+	}
+	letGo()
+	if err := <-first; err != nil {
+		t.Fatalf("the holder: %v", err)
+	}
+	if err := f.rerequest(heads); err != nil {
+		t.Fatalf("the caller come back: %v", err)
+	}
+	if n := len(f.asks("target")); n != 3 {
+		t.Errorf("review requests %v, want the batch and one each", f.asks("target"))
+	}
+	e := f.eventFor("target", head)
+	if !slices.Equal(names(e["reviewersRequested"]), []string{"jerv"}) || !slices.Equal(names(e["reviewersRefused"]), []string{"ana"}) {
+		t.Errorf("recorded %v", e)
+	}
+}
+
+// killHolder ends the database session that holds a re-request's lock, as
+// the holder's process dying or losing Postgres does, and waits until
+// Postgres has (and with it, freed the lock).
+func (f *rerequestFixture) killHolder() {
+	f.t.Helper()
+	var n int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE pg_terminate_backend(pid, 10000)) FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	if n != 1 {
+		f.t.Fatalf("%d lock-holding sessions ended, want 1", n)
+	}
+}
+
+// A holder whose session ended mid-way (here, while GitHub refuses its
+// batch) loses the head at once: the next caller takes it over without
+// waiting, and the old holder, its 422 back, sends none of its one-by-one
+// requests and records nothing.
+func TestARerequestHolderWhoseSessionEndedStopsAndIsTakenOverAtOnce(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	f.gh["target"].Review(1, "ana", "COMMENTED")
+	f.gh["target"].Set(func(s *fakegithub.Server) { s.Permissions["ana"] = "none" })
+	head := f.fix("target")
+	entered, letGo := f.hold("target", 1) // the holder's batch
+	heads := map[string]string{"target": head}
+	first := make(chan error, 1)
+	go func() { first <- f.rerequest(heads) }()
+	wait(t, entered)
+	f.killHolder()
+	if err := f.rerequest(heads); err != nil {
+		t.Fatalf("the taker: %v", err)
+	}
+	if n := len(f.asks("target")); n != 3 {
+		t.Fatalf("review requests %v, want the taker's batch and its two", f.asks("target"))
+	}
+	letGo()
+	if err := <-first; !errors.Is(err, ErrRerequestBusy) {
+		t.Fatalf("the holder: %v, want ErrRerequestBusy", err)
+	}
+	// The holder's batch, answered now, and nothing after it.
+	if n := len(f.asks("target")); n != 4 {
+		t.Errorf("review requests %v: the holder went on asking after its session ended", f.asks("target"))
+	}
+	e := f.eventFor("target", head)
+	if !slices.Equal(names(e["reviewersRequested"]), []string{"jerv"}) || !slices.Equal(names(e["reviewersRefused"]), []string{"ana"}) {
+		t.Errorf("recorded %v", e)
+	}
+}
+
+// A holder that ended at each point leaves a row a later caller finishes.
+// Its logins GitHub now holds are recorded as requested without asking;
+// one GitHub still does not hold (not sent, or refused) is asked once more.
+func TestAnUnfinishedRerequestIsFinishedByTheNextCaller(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		asking    string // the row's asking, as SQL
+		requested bool   // GitHub holds jerv's request
+		refuse    int    // GitHub's status for review requests
+		asks      int
+		recorded  string
+	}{
+		{name: "before writing whom it asks", asking: "NULL", asks: 1, recorded: "reviewersRequested"},
+		{name: "after writing whom, before asking", asking: "'{jerv}'", asks: 1, recorded: "reviewersRequested"},
+		{name: "after GitHub refused", asking: "'{jerv}'", refuse: 403, asks: 1, recorded: "reviewersRefused"},
+		{name: "after GitHub took it", asking: "'{jerv}'", requested: true, asks: 0, recorded: "reviewersRequested"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRerequestFixture(t, "target")
+			head := f.fix("target")
+			if tc.requested {
+				f.gh["target"].RequestReview(1, "jerv")
+			}
+			f.gh["target"].Set(func(s *fakegithub.Server) { s.ReviewRequestStatus = tc.refuse })
+			// Just claimed: an unfinished row needs no age to be taken over.
+			f.exec(`INSERT INTO pull_request_rerequests (organization_id, task_id, repo, number, head, token, asking)
+				VALUES ($1, 'wi_q', 'target', 1, $2, 'rrc_dead', `+tc.asking+`)`, head)
+			for range 2 {
+				if err := f.rerequest(map[string]string{"target": head}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := f.asks("target"); len(got) != tc.asks {
+				t.Errorf("review requests %v, want %d", got, tc.asks)
+			}
+			if e := f.eventFor("target", head); !slices.Equal(names(e[tc.recorded]), []string{"jerv"}) {
+				t.Errorf("recorded %v, want jerv in %s", e, tc.recorded)
+			}
+		})
+	}
+}
+
+// Not knowing who reviewed is recorded once, as an error, and asks
+// nobody; the step goes on, and a replay for that head does nothing more.
+func TestARerequestThatCannotReadReviewsRecordsWhy(t *testing.T) {
+	for _, path := range []string{"/pulls/1", "/pulls/1/reviews"} {
+		t.Run(path, func(t *testing.T) {
+			f := newRerequestFixture(t, "target")
+			head := f.fix("target")
+			f.gh["target"].Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if r.Method == "GET" && strings.HasSuffix(r.URL.Path, path) {
+						return http.StatusInternalServerError
+					}
+					return 0
+				}
+			})
+			for range 2 {
+				if err := f.rerequest(map[string]string{"target": head}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := f.asks("target"); len(got) != 0 {
+				t.Errorf("asked %v", got)
+			}
+			if e := f.eventFor("target", head); e["error"] == nil || e["reviewersRequested"] != nil {
+				t.Errorf("recorded %v, want only the read's error", e)
+			}
+		})
+	}
+}
+
+// A closed or merged pull request is not asked about.
+func TestAClosedPullRequestIsNotAskedAbout(t *testing.T) {
+	for _, state := range []string{"closed", "merged"} {
+		t.Run(state, func(t *testing.T) {
+			f := newRerequestFixture(t, "target")
+			head := f.fix("target")
+			f.exec(`UPDATE pull_requests SET state = $2 WHERE organization_id = $1`, state)
+			if err := f.rerequest(map[string]string{"target": head}); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.asks("target"); len(got) != 0 {
+				t.Errorf("asked %v", got)
+			}
+			if e := f.events(); len(e) != 0 {
+				t.Errorf("recorded %v", e)
+			}
+		})
+	}
+}
+
+// One pull request held by another caller does not hold up the next: a
+// caller asks b's reviewers while a's holder hangs, and is told to come
+// back; nobody is asked twice.
+func TestABusyPullRequestDoesNotHoldUpTheNext(t *testing.T) {
+	f := newRerequestFixture(t, "a", "b")
+	heads := map[string]string{"a": f.fix("a"), "b": f.fix("b")}
+	entered, letGo := f.hold("a", 1)
+	first := make(chan error, 1)
+	go func() { first <- f.rerequest(heads) }()
+	wait(t, entered)
+	if err := f.rerequest(heads); !errors.Is(err, ErrRerequestBusy) {
+		t.Fatalf("the second caller: %v, want ErrRerequestBusy", err)
+	}
+	if n := len(f.asks("b")); n != 1 {
+		t.Fatalf("b asked %d times while a was held, want 1", n)
+	}
+	letGo()
+	if err := <-first; err != nil {
+		t.Fatalf("the holder: %v", err)
+	}
+	if err := f.rerequest(heads); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.asks("a")) != 1 || len(f.asks("b")) != 1 {
+		t.Errorf("a asked %v, b asked %v; want each once", f.asks("a"), f.asks("b"))
+	}
+	f.eventFor("a", heads["a"])
+	f.eventFor("b", heads["b"])
 }
