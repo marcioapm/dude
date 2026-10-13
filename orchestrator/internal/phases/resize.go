@@ -302,6 +302,8 @@ func (p *ResizePlan) keptNote() string {
 		return kept + " (lux did not apply it)."
 	case le.Status == http.StatusConflict:
 		return kept + " (lux said: " + le.Message + "). The next resume tries again."
+	case le.Status == http.StatusBadRequest && p.Pool != "":
+		return kept + ": this lux cannot move a stopped Run to another pool."
 	case le.Status == http.StatusBadRequest:
 		return kept + ": this lux cannot change a stopped Run's CPUs or memory."
 	default:

@@ -504,6 +504,71 @@ func TestASuccessfulMachineRequestEndsTheTurnAndARefusedOneDoesNot(t *testing.T)
 	}
 }
 
+// A lux from before dry runs and pools (lux#93) answers 400 to validateOnly
+// and to placement. The request is not refused for it: the Run is parked
+// and resumed with the same body. In its pool the move applies (resources
+// alone); to another pool lux refuses placement, and the Run resumes where
+// it was, told so, with nothing recorded as moved and the layer put back.
+func TestAnOlderLuxWithoutDryRunsOrPools(t *testing.T) {
+	for _, tc := range []struct {
+		name, size string
+		pool       *string
+	}{{"in its pool", "Bigger", nil}, {"to another pool", "Huge", ptr(bigPool)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.NoPlacement = true
+			task, runID, live := w.liveImplementer()
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_new', $1, $2, 4, 16384, 40, $3)`,
+				w.org, tc.size, tc.pool)
+			status, body := w.requestMachine(runID, `{"size":"`+tc.size+`","reason":"jest killed, exit 137"}`)
+			if status != 200 {
+				t.Fatalf("an older lux's 400 to the dry run refused the request: %d %s", status, body)
+			}
+			w.until("the move settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+			})
+			inputs := w.lux.ResumeInputs(live)
+			if tc.pool == nil {
+				if got := w.machineOf(runID); got["name"] != tc.size || got["cpus"] != 4.0 {
+					t.Fatalf("machine=%v", got)
+				}
+				if len(inputs) != 1 || !strings.HasPrefix(inputs[0], "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB).") ||
+					w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND refused IS NULL`, runID) != 1 {
+					t.Fatalf("inputs %q", inputs)
+				}
+				return
+			}
+			// Refused for good: resumed where it was, without resources or
+			// placement, and told the truth.
+			want := "You asked for Huge; lux kept you on Standard: this lux cannot move a Run between pools yet\n\n"
+			if len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) || strings.Contains(inputs[0], "You now run on") {
+				t.Fatalf("inputs %q", inputs)
+			}
+			if got := w.resumeResources(live); len(got) != 1 || got[0] != nil {
+				t.Fatalf("lux took %v", got)
+			}
+			if got := w.lux.ResumePlacementsOf(live); len(got) != 1 || got[0] != "" {
+				t.Fatalf("placements %v", got)
+			}
+			got := w.machineOf(runID)
+			if got["name"] != "Standard" || got["cpus"] != 2.0 || got["note"] != "Its settings now name Huge, but this resume kept Standard: this lux cannot move a stopped Run to another pool." {
+				t.Fatalf("machine=%v", got)
+			}
+			if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND refused='bad_request'`, runID) != 1 ||
+				w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'code'='bad_request'
+					AND payload->'kept'->>'name'='Standard' AND payload->'to'->>'name'='Huge'`, runID) != 1 {
+				t.Fatal("the refusal was not settled once")
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+				t.Fatal("the refused raise kept its layer")
+			}
+			if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.resized' AND payload->'machine'->>'name' <> 'Standard'`, runID) != 0 {
+				t.Fatal("a resize to the refused size was recorded")
+			}
+		})
+	}
+}
+
 // What a submitted agent is told of its machine: the sizes it may move to,
 // with other pools named, in its prompt; a raised one says why it is on
 // it; the conductor's prompt ends the same way.
