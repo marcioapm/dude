@@ -99,6 +99,19 @@ describe("Activity's started lines", () => {
   test("a Run the page has not read yet is named from its event", () => {
     expect(said([created("r_later", { phase: "simplify", role: "simplifier" })], [])).toEqual(["The simplifier started"]);
   });
+
+  test("the API reviewer keeps its capitals, in its own line and in the round's; other categories stay lower case", () => {
+    const lines = said([
+      created("r_api", { phase: "review", role: "reviewer", category: "api" }),
+      created(null, { phase: "review", reviewers: ["correctness", "api"], iteration: 0 }),
+      created("r_api_unread", { phase: "review", role: "reviewer", category: "api" }),
+    ], [run("r_api", "review", "reviewer", "api")]);
+    expect(lines).toEqual([
+      "The API reviewer started",
+      "A review round started: correctness, API",
+      "The API reviewer started",
+    ]);
+  });
 });
 
 describe("a finding's category", () => {

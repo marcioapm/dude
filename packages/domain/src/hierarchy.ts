@@ -648,15 +648,24 @@ export const PHASE_DOER: Readonly<Record<string, string>> = {
 };
 
 /**
+ * A reviewer category mid-sentence: lower case ("correctness"), but an
+ * acronym keeps its capitals ("API"). An unknown category reads as given.
+ */
+export function reviewerCategoryInSentence(category: string): string {
+  const label: string | undefined = REVIEWER_CATEGORY_LABEL[category as ReviewerCategory];
+  return label !== undefined && label === label.toUpperCase() ? label : category;
+}
+
+/**
  * Who a Run is, in a sentence, lower case: "implementer", "correctness
- * reviewer", "conductor"; "agent" for a Run with no phase or role known.
+ * reviewer", "API reviewer", "conductor"; "agent" for a Run with no phase or role known.
  * runLabel names the stage ("Implement"); this names the actor.
  */
 export function runDoer(run: { phase?: string | null; category?: string | null; kind?: string; role?: string | null }): string {
   if (run.kind === "preview") return "branch preview";
   if (isConductor(run)) return "conductor";
   const doer = run.phase ? (PHASE_DOER[run.phase] ?? run.phase) : "agent";
-  return run.category ? `${run.category} ${doer}` : doer;
+  return run.category ? `${reviewerCategoryInSentence(run.category)} ${doer}` : doer;
 }
 
 export const sessionStatusSchema = z.enum([

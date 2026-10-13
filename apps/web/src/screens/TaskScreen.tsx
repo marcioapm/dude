@@ -47,7 +47,7 @@ import {
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runDoer, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -1173,7 +1173,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         const role = (typeof p.role === "string" ? p.role : p.phase === "review" ? "reviewer" : DEFAULT_RUN_ROLE) as Run["role"] & string;
         // A review round's own event names no Run, only its reviewers, each of whose Runs has a line of its own: the round is a stage.
         const reviewers = !e.runId && Array.isArray(p.reviewers) ? p.reviewers.map(String) : null;
-        const who = reviewers ? <>A <b>review round</b> started: {reviewers.join(", ")}</>
+        const who = reviewers ? <>A <b>review round</b> started: {reviewers.map(reviewerCategoryInSentence).join(", ")}</>
           : <>The <b>{(e.runId && labels.get(e.runId)) || runDoer({ phase: p.phase, category: typeof p.category === "string" ? p.category : null })}</b> started</>;
         out.push({ ...base, who: <AgentAvatar role={role} size="lg" />, text: who, open: session(e.runId) });
         break;
