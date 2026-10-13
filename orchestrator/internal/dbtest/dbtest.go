@@ -98,6 +98,13 @@ func clone() cloned {
 	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s OWNER dude", name, template)); err != nil {
 		return cloned{err: err}
 	}
+	// A test's commit need not wait for its WAL to reach the disk: a
+	// database that a crash would lose is dropped anyway, and what a commit
+	// makes visible to other sessions is the same. Per database, since a
+	// clone does not inherit its template's settings.
+	if _, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET synchronous_commit = off"); err != nil {
+		return cloned{err: err}
+	}
 	return cloned{name: name}
 }
 
