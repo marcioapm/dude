@@ -209,7 +209,7 @@ test("076 builds the Runs index outside a transaction, records it, and runs agai
     expect(outsideTransaction(await file076.contents())).toBe(true);
     await expect(sql.begin(async (tx) => { await tx.unsafe(await file076.contents()); })).rejects.toThrow();
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const valid = async () => (await sql`SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'runs_conductor_run_idx'`).map((r: { indisvalid: boolean }) => r.indisvalid);
     expect(await valid()).toEqual([true]);
@@ -303,6 +303,10 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "112_people_github.sql",
       "113_run_children.sql",
       "114_preview_wake_timeouts.sql",
+      "115_agent_coordination.sql",
+      "116_peer_ended.sql",
+      "117_events_agent_message_idx.sql",
+      "118_accounts.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
@@ -357,7 +361,7 @@ test("094 refuses to apply over two repositories of a project checked out under 
 
     // Renamed: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE repositories SET name = 'web-app' WHERE id = 'repo_2'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE repositories SET name = 'web-29751047' WHERE id = 'repo_2'`))
       .toContain("repositories_lux_name_idx");
@@ -385,7 +389,7 @@ test("095 refuses to apply over two projects of an organisation under one key, i
 
     // Given another key: it applies, and the index refuses the same pair from then on.
     await sql`UPDATE projects SET key_prefix = 'BW' WHERE id = 'prj_worker'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     expect(await refusal(async () => await sql`UPDATE projects SET key_prefix = 'Bill' WHERE id = 'prj_worker'`))
       .toContain("projects_key_idx");
@@ -426,7 +430,7 @@ test("074 gives each task's tray images a place at the end of its goal, so they 
     await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["074_task_inline_images.sql", "075_conductor_decisions.sql", "076_runs_conductor_run_idx.sql", "077_conductor_steer.sql", "078_events_run_lands_idx.sql", "079_conductor_github.sql", "080_webhook_repair.sql", "081_preview_secrets.sql", "082_conductor_edits.sql", "083_finding_topic.sql", "084_escalation_questions.sql", "085_brainstorm_role.sql", "086_sessions.sql", "087_session_memories.sql", "088_session_filings_idx.sql", "089_session_functions_parallel.sql", "090_stalled_runs.sql", "091_brainstorm_stuck_turn.sql", "092_retire_completed_runs.sql", "093_lux_name.sql", "094_repository_lux_name_unique.sql", "095_project_key_unique.sql", "096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },
@@ -462,7 +466,7 @@ test("096 keeps every titled session's name as a person's, and lets a new one st
     }
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_n', 'n', 'n')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_old', 'org_n', 'Usage-based billing')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["096_session_names.sql", "097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     // 097 leaves every check 096 added validated, as if made with the table.
     const checks = await sql`SELECT conname, convalidated FROM pg_constraint
       WHERE conrelid = 'sessions'::regclass AND contype = 'c' AND conname LIKE 'sessions_title%' ORDER BY conname`;
@@ -569,7 +573,7 @@ test("097 validates while another transaction holds a row lock on sessions: it n
     expect(outcome).toBe("097 applied");
     expect((await heldLock)[0].n).toBe(1);
     release();
-    expect(await migrating.then((r) => r.applied)).toEqual(["097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect(await migrating.then((r) => r.applied)).toEqual(["097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
   } finally {
     release();
     await holding.catch(() => {});
@@ -600,7 +604,7 @@ test("097 refuses a session row that breaks 096's checks, naming the check, and 
     expect((await recorded(url)).map((m) => m.version)).not.toContain("097");
 
     await sql`UPDATE sessions SET titled_by = 'person' WHERE id = 'ssn_bad'`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["097_session_names_validate.sql", "098_agent_network.sql", "099_tier_effort.sql", "100_image_containers.sql", "101_run_can_run_containers.sql", "102_artifact_descriptions.sql", "103_harness_state.sql", "104_question_items.sql", "105_session_archived.sql", "106_session_model.sql", "107_sessions_tier_idx.sql", "108_directives_resends_idx.sql", "109_brainstorm_anywhere.sql", "110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     // 096's checks; 106's are NOT VALID on purpose, as 103's.
     expect([...await sql`SELECT conname FROM pg_constraint
       WHERE conrelid = 'sessions'::regclass AND contype = 'c' AND NOT convalidated AND conname LIKE 'sessions_title%'`]).toEqual([]);
@@ -696,7 +700,7 @@ test("110 stores a repository at https://www.github.com/ at https://github.com/,
       ('repo_plain', 'org_g', 'prj_g', 'web', 'https://github.com/acme/web'),
       ('repo_other', 'org_g', 'prj_g', 'co', 'https://www.github.company.com/a/b'),
       ('repo_ssh', 'org_g', 'prj_g', 'ssh', 'git@www.github.com:a/b.git')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["110_repository_github_host.sql", "111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const rows = await sql`SELECT id, url FROM repositories ORDER BY id`;
     expect([...rows]).toEqual([
       { id: "repo_case", url: "https://github.com/acme/sdk.git" },
@@ -713,7 +717,7 @@ test("110 stores a repository at https://www.github.com/ at https://github.com/,
 test("111 adds task_relations and task_auto_starts under forced RLS, and task_blocked_by releases a blocker only once it merged", async () => {
   const { url, sql } = await migratedBefore("111");
   try {
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const rls = await sql`SELECT relname, relrowsecurity AS enabled, relforcerowsecurity AS forced FROM pg_class
       WHERE relname IN ('task_relations', 'task_auto_starts') AND relkind = 'r' ORDER BY relname`;
     expect([...rls]).toEqual([
@@ -752,7 +756,7 @@ test("112 adds a person's GitHub login, id and commit email, empty, without rewr
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_p', 'p', 'p')`;
     await sql`INSERT INTO people (id, organization_id, name, email) VALUES ('per_a', 'org_p', 'Ana', 'Ana@Example.com')`;
     const [before] = await sql`SELECT pg_relation_filenode('people') AS node`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_task_relations.sql", "112_people_github.sql", "113_run_children.sql", "114_preview_wake_timeouts.sql", "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
     const [after] = await sql`SELECT pg_relation_filenode('people') AS node`;
     expect(after.node).toBe(before.node);
     expect([...await sql`SELECT github_login, github_user_id, commit_email FROM people`])
@@ -760,6 +764,43 @@ test("112 adds a person's GitHub login, id and commit email, empty, without rewr
     // commit_email compares as email does, ignoring case.
     await sql`UPDATE people SET commit_email = 'Ana@Users.Example' WHERE id = 'per_a'`;
     expect([...await sql`SELECT id FROM people WHERE commit_email = 'ana@users.example'`]).toEqual([{ id: "per_a" }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+test("a database main left at 114 takes 115 to 117, keeps its relations, and task_peers stays on the epic", async () => {
+  const { url, sql } = await migratedBefore("115");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_u', 'u', 'u')`;
+    await sql`INSERT INTO people (id, organization_id, name) VALUES ('per_u', 'org_u', 'Ana')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_u', 'org_u', 'U', 'u', 'U')`;
+    await sql`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_u', 'org_u', 'prj_u', 'E')`;
+    await sql`INSERT INTO tasks (id, organization_id, project_id, epic_id, number, title) VALUES
+      ('wi_a', 'org_u', 'prj_u', 'epc_u', 1, 'A'), ('wi_b', 'org_u', 'prj_u', 'epc_u', 2, 'B'),
+      ('wi_off', 'org_u', 'prj_u', NULL, 3, 'Off')`;
+    // Edges both ways between an epic task and one off the epic: none makes a peer.
+    await sql`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person) VALUES
+      ('org_u', 'wi_off', 'wi_a', 'blocks', 'per_u'), ('org_u', 'wi_a', 'wi_off', 'related', 'per_u')`;
+
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
+    expect((await recorded(url)).map((m) => m.name).slice(-6)).toEqual(["113_run_children.sql", "114_preview_wake_timeouts.sql",
+      "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql"]);
+    expect([...await sql`SELECT from_task_id, to_task_id, kind::text FROM task_relations ORDER BY kind`]).toEqual([
+      { from_task_id: "wi_off", to_task_id: "wi_a", kind: "blocks" },
+      { from_task_id: "wi_a", to_task_id: "wi_off", kind: "related" },
+    ]);
+    const peers = async (id: string) => (await sql`SELECT peer_id, via FROM task_peers(${id}) ORDER BY peer_id`).map((r: object) => ({ ...r }));
+    expect(await peers("wi_a")).toEqual([{ peer_id: "wi_b", via: "epic" }]);
+    expect(await peers("wi_off")).toEqual([]);
+    const [index] = await sql`SELECT i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname = 'events_agent_message_idx'`;
+    expect(index).toEqual({ valid: true });
+    // 116 rebuilds the tier model check whole: it keeps 113's subagent models beside fake/peer.
+    const tier = (id: string, model: string) =>
+      sql`INSERT INTO model_tiers (id, organization_id, name, model) VALUES (${id}, 'org_u', ${id}, ${model})`;
+    for (const [id, model] of [["t_sub", "fake/subagent"], ["t_ask", "fake/subagent-ask"], ["t_peer", "fake/peer"]]) await tier(id!, model!);
+    expect(await tier("t_bad", "fake/nonesuch").then(() => "inserted", () => "refused")).toBe("refused");
   } finally {
     await sql.end();
   }

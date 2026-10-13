@@ -20,6 +20,7 @@ import {
   merged,
   identityColors,
   neutral,
+  peer,
   roleColors,
   tones,
   white,
@@ -27,6 +28,7 @@ import {
   type ToneName,
 } from "./palette.ts";
 import { oklch, toHex } from "./oklch.ts";
+import { tints } from "./tints.ts";
 
 export type ThemeMode = "light" | "dark";
 
@@ -266,6 +268,11 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
   out["diff-hunk-fg"] = d.hunkFg;
   out["merged-fg"] = merged[mode].fg;
   out["merged-bg"] = merged[mode].bg;
+  // Translucent, as the highlight pattern's color-mix is: the same wash
+  // reads over the transcript's surface and over a thread's raised shade.
+  out["peer-solid"] = peer[mode].solid;
+  out["peer-wash"] = alpha(peer[mode].solid, tints.peer);
+  out["peer-wash-hover"] = alpha(peer[mode].solid, tints.peerHover);
   for (const name of ANSI_COLOR_NAMES) out[`ansi-${name}`] = ansiColors[mode][name];
 
   // Elevation is theme-dependent: light uses shadow, dark uses a lighter

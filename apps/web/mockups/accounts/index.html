@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>dude — Accounts across organisations (mockup)</title>
+    <link rel="icon" href="data:," />
+    <style>
+      /* The switcher above the app; not part of the proposal. */
+      html, body, #root { height: 100%; margin: 0; }
+      .mockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; background: var(--ds-color-sunken); color: var(--ds-color-text-secondary); font-size: 13px; }
+      .mockbar b { color: var(--ds-color-text-strong); font-weight: 600; margin-right: auto; }
+      .mocknote { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 16px; background: var(--ds-color-sunken); color: var(--ds-color-text-muted); font-size: 12px; }
+      .mockurl { font-family: var(--ds-font-mono); color: var(--ds-color-text-secondary); }
+      /* As the welcome mockup: collapsed to a rail on a wide screen; under 1000px the drawer. */
+      .sidebarSlot { display: contents; }
+      .railSlot { display: contents; }
+      @media (min-width: 1000px) { .sidebarSlot.isCollapsed { display: none; } }
+      @media (max-width: 999.98px) { .railSlot { display: none; } .collapseButton { display: none !important; } }
+      @media (max-width: 639.98px) { .mockbar > :not(b) { display: none; } .mocknote > :not(.mockurl) { display: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

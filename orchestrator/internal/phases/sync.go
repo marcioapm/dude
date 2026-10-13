@@ -356,15 +356,17 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
 // (at once), a person it waited on (once nothing is open for them), a
-// conductor parked after its warm period (once someone wrote to it). An idle
+// conductor parked after its warm period (once someone wrote to it), or a
+// Run parked only on a peer's reply that has peer mail to read (its wait
+// stays open, so its next idle waits again). An idle
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
-	OR (r.dude_pause = 'person' AND NOT ask.open)
+	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
 	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
 // that lux does not have yet, and is not held for an answer (HeldBack).
-const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL
+const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ` + delivery.HeldBack + `)`
 
 // limits are runFrom's parameters: the factory's grace before parking, idle
@@ -1038,7 +1040,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
 	var recorded *delivery.Machine
-	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, coordination string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -1097,6 +1099,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
+		}
+		// The task's epic, on submit only: a resume sends no prompt.
+		if stored == nil && !r.conductor() {
+			if coordination, err = delivery.EpicBriefing(ctx, tx, r.Org, r.TaskID, r.ID, settingsRole); err != nil {
+				return err
+			}
 		}
 		// What people decided on this task, across its Runs.
 		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
@@ -1168,6 +1176,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
+		Coordination: coordination,
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -2130,6 +2139,10 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 	return out, nil
 }
 
+// parkedForPeer is a park's reason when what the Run waits on is a peer's
+// reply, not a person.
+const parkedForPeer = "parked while it waits on a peer's reply"
+
 // requestPause asks for a graceful pause, saying why, marked as dude's own
 // (kind is a dude_pause) so the syncer knows when to resume it; a person's
 // later pause or resume wins. A pause other than for a repository is a
@@ -2144,14 +2157,15 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 		// parkedAt: when the park began, on the database's clock, as the
 		// answers and decisions that end it are stamped.
 		var parkedAt time.Time
-		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(),
+			control_reason = CASE WHEN $3 = 'person' AND NOT `+delivery.PersonAsk+` THEN $5 ELSE $2 END,
 			dude_pause = $3
 			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
 			  AND ($3 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
-			RETURNING r.control_requested_at`, r.ID, why, kind, r.QuietSince).Scan(&parkedAt)
+			RETURNING r.control_requested_at, r.control_reason`, r.ID, why, kind, r.QuietSince, parkedForPeer).Scan(&parkedAt, &why)
 		if db.IsNotFound(err) {
 			return nil
 		}

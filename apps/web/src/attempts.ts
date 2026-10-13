@@ -8,7 +8,8 @@
  */
 
 import { firstName } from "@dude/design-system";
-import { isConductor, runLabel, type PersistedEvent } from "@dude/domain";
+import type { Status } from "@dude/design-system/tokens";
+import { TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
 import { instant } from "./instant.ts";
@@ -122,6 +123,25 @@ function attemptEnd(runs: readonly Run[], attempt: number): "aborted" | "failed"
 /** An attempt's status mark: the task's for the current one, how it ended for an earlier one. */
 export const attemptStatus = (task: TaskDetail, attempt: number, current: number) =>
   attempt === current ? task.status : attemptEnd(task.runs, attempt);
+
+/**
+ * The current attempt's mark as the task's header says it. A task its
+ * conductor decides is `running` from Talk it through on, also while the
+ * delivery waits on the conductor's decision with no phase at work and the
+ * conductor parked (or ended): nothing is working, and the next message in
+ * Chat is what moves it. That is said as paused, in those words, rather
+ * than as a spinner. A conductor still running may be mid-turn, which a
+ * task's Runs cannot tell from warm and idle: it stays Running.
+ */
+export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
+  const status = attemptStatus(task, attempt, current);
+  if (attempt !== current || status !== "running" || task.decider !== "conductor" || !task.awaitingDecision) return { status };
+  const working = task.runs.some((r) => (isAttemptWork(r) || isConductor(r)) && r.status !== "paused" && !TERMINAL_RUN_STATUSES.includes(r.status));
+  return working ? { status } : { status: "paused", label: WAITING_ON_CHAT };
+}
+
+/** The task header's word for a conducted task that waits, with nothing working, on what is said in its Chat. */
+export const WAITING_ON_CHAT = "Waiting on Chat";
 
 export interface SetAside {
   /** Who started over, by name; null when the ledger does not say. */

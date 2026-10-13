@@ -10,6 +10,8 @@
   /* What the face sits on, so rings and tiles cut a clean gap. The app
      sets it where faces sit on chrome or raised. */
   --av-bed: var(--ds-avatar-bed, var(--ds-color-surface));
+  /* Outer edge of the online ring, from the face's edge. */
+  --av-online-ring: 3.5px;
 
   position: relative;
   display: inline-grid;
@@ -39,16 +41,20 @@
 }
 
 /* Online: a green ring outside the face, with a gap of the bed colour. */
+.root[data-size="16"],
+.root[data-size="20"] {
+  --av-online-ring: 2.5px;
+}
 .online {
   box-shadow:
     0 0 0 2px var(--av-bed),
-    0 0 0 3.5px var(--ds-color-live);
+    0 0 0 var(--av-online-ring) var(--ds-color-live);
 }
 .root[data-size="16"].online,
 .root[data-size="20"].online {
   box-shadow:
     0 0 0 1.5px var(--av-bed),
-    0 0 0 2.5px var(--ds-color-live);
+    0 0 0 var(--av-online-ring) var(--ds-color-live);
 }
 
 .root[data-identity="0"] { --id-fg: var(--ds-identity-0-fg); --id-bg: var(--ds-identity-0-bg); }
@@ -101,7 +107,13 @@
   font-weight: var(--ds-weight-medium);
 }
 
-/* A stack: overlap by a quarter, earlier faces on top, a gap of the bed colour between them. */
+/*
+ * A stack: overlap by a fifth, earlier faces on top, a gap of the bed colour
+ * between them. A covered face's initials centre in the part that shows:
+ * past the overlap and the outer ring of the face on top (its 1.5px bed gap,
+ * or its online ring). Initials wider than that part start at its edge
+ * (`safe`), so the face and ring on top never cut their first letter.
+ */
 .stack {
   display: inline-flex;
   align-items: center;
@@ -109,7 +121,22 @@
   isolation: isolate;
 }
 .stack > * + * {
-  margin-left: calc(var(--av-size) * -0.25);
+  margin-left: calc(var(--av-size) * -0.2);
+}
+/* Behind an online face the part that shows (10.3px at 16, 13.5px at 20)
+   is narrower than two wide capitals at 0.38×size: every face in a stack
+   takes 0.29, just under the largest ratio at which "WW" fits there at every
+   size in DejaVu Sans (0.293; 16 binds), so the tolerance never decides it. */
+.stack > * {
+  font-size: calc(var(--av-size) * 0.29);
+}
+.stack > * + * > .initials {
+  justify-self: safe center;
+  margin-left: calc(var(--av-size) * 0.2 + 1.5px);
+}
+/* Reads the covered face's own --av-online-ring: faces in a stack share a size. */
+.stack > .online + * > .initials {
+  margin-left: calc(var(--av-size) * 0.2 + var(--av-online-ring));
 }
 .stack > .root:not(.online) {
   box-shadow: 0 0 0 1.5px var(--av-bed);

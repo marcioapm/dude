@@ -31,6 +31,9 @@ const (
 	Epic        = "epc"
 	RepoRequest = "rrq"
 	Memory      = "mem"
+	PeerMessage = "pm"
+	PeerWait    = "pw"
+	EpicNote    = "epn"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

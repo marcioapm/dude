@@ -11,9 +11,9 @@ import type { AskItem } from "./questions.ts";
 export type SessionRole = "owner" | "chat" | "read";
 
 /** What a session is called until its agent or a member names it. */
-export const UNTITLED_SESSION = "New session";
+export const UNTITLED_SESSION = "Untitled session";
 
-/** A session's name as people see it: its title, or "New session" until it has one. */
+/** A session's name as people see it: its title, or "Untitled session" until it has one. */
 export function sessionTitle(s: { title: string | null }): string {
   return s.title ?? UNTITLED_SESSION;
 }
@@ -92,17 +92,23 @@ export interface ProposalRef {
 }
 
 export interface ProposalItem {
-  kind: "epic" | "task" | "edit" | "comment" | "relation";
+  kind: "epic" | "task" | "edit" | "comment" | "note" | "relation";
   project?: string;
+  /** A task's or a note's epic: an existing one's title, or a new epic's of this proposal. */
   epic?: string;
   title?: string;
   goal?: string;
   acceptanceCriteria?: string[];
   description?: string;
+  /** An epic's notes, pinned on it when it is filed, in order. */
+  notes?: string[];
   task?: string;
   before?: { goal?: string; acceptanceCriteria?: string[] };
   after?: { goal?: string; acceptanceCriteria?: string[] };
+  /** A comment's words, or a note's. */
   text?: string;
+  /** A note: the number of the note it replaces on its epic. */
+  replaces?: number;
   /** A task item's relations. */
   blockedBy?: ProposalRef[];
   blocks?: ProposalRef[];

@@ -163,6 +163,10 @@ async function streamEvents({ url, principal, request }: RequestContext): Promis
       // the stream's cursor order holds.
       let checked = Promise.resolve();
       const deliver = (event: PersistedEvent) => {
+        if (event.eventType === "person.removed" && event.payload.personId === principal.personId) {
+          end();
+          return;
+        }
         // Not in the ledger (presence, cursor 0): sent at once and without
         // an id, so a reconnect's Last-Event-ID stays the last ledger
         // event's. Only for streams watching what happens now.

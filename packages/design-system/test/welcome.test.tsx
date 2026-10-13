@@ -212,6 +212,8 @@ describe("Sidebar collapsed", () => {
     await act(async () => byRole(el, "button", "Expand sidebar").click());
     expect(el.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(el.textContent).toContain("full band");
+    // Its DS tooltip names it; no native title doubles it.
+    expect(byRole(el, "button", "Collapse sidebar").hasAttribute("title")).toBe(false);
     await act(async () => byRole(el, "button", "Collapse sidebar").click());
     expect(el.querySelector("[data-testid=sidebar-rail]")).not.toBeNull();
     await act(async () => byRole(el, "button", "Find work").click());

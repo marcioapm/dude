@@ -6,7 +6,6 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
-import { Breadcrumb } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
 import { KeysSection, ProfileSection } from "./YouSections.tsx";
@@ -45,7 +44,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
 
   return (
     <Page data-testid="my-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
+      <PageHeader title="Your settings"
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields

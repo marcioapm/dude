@@ -16,6 +16,16 @@ describe("places", () => {
     expect(formatPlace(place)).toBe("#/task/wi_1");
   });
 
+  test("an epic's Coordination view has its own link; the board is the epic's own", () => {
+    const place = parsePlace("#/epic/ep_1/coordination");
+    expect(place).toEqual({ view: "tree", ref: { kind: "epic", id: "ep_1" }, epicView: "coordination" });
+    expect(formatPlace(place)).toBe("#/epic/ep_1/coordination");
+    expect(formatPlace({ view: "tree", ref: { kind: "epic", id: "ep_1" }, epicView: "board" })).toBe("#/epic/ep_1");
+    expect(parsePlace("#/epic/ep_1")).toEqual({ view: "tree", ref: { kind: "epic", id: "ep_1" } });
+    // Only an epic has the view.
+    expect(parsePlace("#/project/p_1/coordination")).toEqual({ view: "tree", ref: { kind: "project", id: "p_1" } });
+  });
+
   test("a link from before tasks were work items still opens the task", () => {
     expect(parsePlace("#/workItem/wi_1")).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" } });
   });

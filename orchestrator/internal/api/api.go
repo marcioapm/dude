@@ -125,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	s.llmRoutes(mux)
 	s.networkRoutes(mux)
 	s.sessionRoutes(mux)
+	s.noteRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {

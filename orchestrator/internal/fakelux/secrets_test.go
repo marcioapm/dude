@@ -8,8 +8,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -87,6 +90,45 @@ func TestARunnerCredentialNeverReachesAServerEvenAsEnv(t *testing.T) {
 				t.Errorf("the server's environment = %v; want SEED_LLM_KEY", env)
 			}
 		})
+	}
+}
+
+// lux's shim starts a placement's service proxies with the values that
+// placement was given (lux internal/shim/shim.go serveServices), so after a
+// resume with a new value a call through the service carries the new one,
+// never the submit's. dude mints a new tools token on every start of a Run
+// and retires the last, so the old value would be refused.
+func TestAServiceCallAfterAResumeCarriesTheResumesSecretValue(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	tools := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.URL.Path+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+	}))
+	t.Cleanup(tools.Close)
+	fake := fakelux.New(t.TempDir(), "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Conductor: true} })
+	_, c, run := startedWith(t, fake, lux.Spec{
+		Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "opencode", Prompt: "http dude POST /tools/update_task {}\necho Done.",
+			Services: []lux.Service{{Name: "dude", URL: tools.URL, Headers: []lux.Header{{Name: "Authorization", Secret: "DUDE_TOOLS_TOKEN"}}}}},
+		Secrets: []lux.Secret{{Name: "DUDE_TOOLS_TOKEN", Value: "Bearer first-start", As: "none"}},
+	})
+	calls := func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(got) }
+	waitFor(t, "the first turn's call", func() bool { return len(calls()) == 1 })
+	ctx := context.Background()
+	if err := c.Stop(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the Run to stop", func() bool { r, _ := c.Get(ctx, run); return r.State == "stopped" })
+	if _, err := c.Resume(ctx, run, lux.ResumeInput{Input: "tool: start_phase {}",
+		Secrets: []lux.Secret{{Name: "DUDE_TOOLS_TOKEN", Value: "Bearer second-start", As: "none"}}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the resumed turn's call", func() bool { return len(calls()) == 2 })
+	want := []string{"/tools/update_task Bearer first-start", "/tools/start_phase Bearer second-start"}
+	if !slices.Equal(calls(), want) {
+		t.Errorf("the service was called %q; want %q", calls(), want)
 	}
 }
 

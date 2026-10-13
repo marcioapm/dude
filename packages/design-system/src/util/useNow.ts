@@ -16,11 +16,9 @@ export function useNow(active: boolean, intervalMs = 1000): number {
   return now;
 }
 
-export function toMs(v: string | number | Date | null | undefined): number | null {
-  if (v === null || v === undefined) return null;
-  const t = v instanceof Date ? v.getTime() : new Date(v).getTime();
-  return Number.isNaN(t) ? null : t;
-}
+// Kept free of React in instant.ts, so pure view models (navModel.ts) can run on the server.
+export { toMs } from "./instant.ts";
+import { toMs } from "./instant.ts";
 
 export interface ElapsedOptions {
   readonly startedAt?: string | number | Date | null | undefined;

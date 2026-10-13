@@ -1,0 +1,106 @@
+/* Page layout for the mockup's screens: where the proposed parts sit. Layout only. */
+
+/* Screen 1: notes and threads, the epic's tasks beside them; one column when narrow. */
+.coord {
+  container: coord / inline-size;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-main-pad) var(--ds-space-32);
+}
+.coordGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--ds-space-panel-gap);
+  align-items: start;
+}
+@container coord (max-width: 860px) {
+  .coordGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.coordMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  min-width: 0;
+}
+.lead {
+  margin: 0 0 var(--ds-space-4);
+  max-width: var(--ds-measure-message);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.threads {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.noteForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12);
+  background: var(--ds-color-raised);
+}
+.noteFormActions {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.noteFormActions > :first-child {
+  margin-right: auto;
+}
+.headerPad {
+  padding: var(--ds-space-main-pad) var(--ds-space-main-pad) var(--ds-space-12);
+}
+.boardWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Screens 2–5: a session, header, bar, conversation and rail, as RunScreen lays it out. */
+.session {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding-top: var(--ds-space-main-pad);
+}
+.taskTop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-main-pad) var(--ds-space-24) var(--ds-space-8);
+}
+.taskTitle {
+  margin: 0;
+  font-size: var(--ds-text-2xl);
+  font-weight: var(--ds-weight-semibold);
+  line-height: var(--ds-leading-tight);
+  color: var(--ds-color-text-strong);
+}
+
+/* Screen 6: the project's epics above its board. */
+.epicCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--ds-space-16);
+}
+.cardActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}

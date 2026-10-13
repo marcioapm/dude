@@ -31,7 +31,7 @@ import requests
 from build import build, build_gallery, build_web
 from env import TestEnvironment
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, create_organization, execute, wait_until, webhook_secret
+from helpers import ApiClient, create_api_key, create_organization, execute, provision_person, wait_until, webhook_secret
 
 SCRIPTED = {role: "fake/scripted" for role in ("implementer", "reviewer", "fixer", "simplifier")}
 
@@ -103,7 +103,8 @@ def run(env: TestEnvironment, args) -> None:
     org = create_organization(env.owner_dsn, "Acme")
     # Its seeded tiers play the scripted agent: every role is on one of them.
     execute(env.owner_dsn, "UPDATE model_tiers SET model = 'fake/scripted' WHERE organization_id = %s", (org,))
-    # The first admin is provisioned, as a deployment would; the rest are invited through the API.
+    # The first admin is provisioned, as a deployment would; the others are added out of
+    # band too, since people join by invitation link and the demo runs with API keys.
     admin_key = create_api_key(env.owner_dsn, org, name=PEOPLE[0][0])
     ana = ApiClient(env.control_plane_url, admin_key)
     ana.patch("/v1/me", {"name": PEOPLE[0][0]})
@@ -111,12 +112,10 @@ def run(env: TestEnvironment, args) -> None:
     clients = {PEOPLE[0][0]: ana}
     ids = {PEOPLE[0][0]: ana.get("/v1/me").json()["person"]["id"]}
     for name, email, role in PEOPLE[1:]:
-        r = ana.post("/v1/people", {"name": name, "email": email, "role": role})
-        r.raise_for_status()
-        body = r.json()
-        keys[name] = body["key"]
-        clients[name] = ApiClient(env.control_plane_url, body["key"])
-        ids[name] = body["person"]["id"]
+        person, who = provision_person(ana, env, name, email, role)
+        keys[name] = who.api_key
+        clients[name] = who
+        ids[name] = person["id"]
     ben, chloe = clients["Ben Okafor"], clients["Chloé Martin"]
     # Faces: two photos (uploaded, so kept in the demo's bucket) beside two
     # people with initials.

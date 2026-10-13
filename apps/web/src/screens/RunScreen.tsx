@@ -31,6 +31,7 @@ import {
   SessionRail,
   SessionRailBlock,
   ThinkingBlock,
+  ToolCallCard,
   ToolUsage,
   summarizeToolArgs,
   MachineChip,
@@ -52,7 +53,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, TOOL_USAGE_NOTE, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
@@ -74,6 +75,9 @@ import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImage
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
+import {
+  DigestView, NoteToldView, PeerRail, PeerTurnView, PeerWaitView, noPeers, peerTool, useCoordination, usePeerContext, waitWords, type PeerContext,
+} from "../coordination.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -146,8 +150,14 @@ export type StoppedRun =
   | { readonly setAside: "restart" | "retry"; readonly toCurrent?: { readonly attempt: number; readonly go: () => void } | undefined }
   | { readonly onPickUp: (action: RecoverAction) => void; readonly keptUntil: string | null };
 
-/** What a session shows: its conversation, its checkout's changes, or its event ledger. */
+/** A session's view: its conversation, its checkout's changes, or its event ledger. */
 type SessionView = "chat" | "changes" | "events";
+
+/** Events on a Run that change what its epic's notes, threads or tasks say: they are read again. */
+const PEER_EVENTS: ReadonlySet<string> = new Set([
+  EventTypes.AgentMessageSent, EventTypes.AgentMessageReceived, EventTypes.AgentPeerWaiting, EventTypes.AgentPeerWaitEnded,
+  EventTypes.AgentNoteTold, EventTypes.EpicNotePinned, EventTypes.ConductorDigest,
+]);
 
 /**
  * Events that can change a Run's status, and so are worth a re-read.
@@ -270,6 +280,27 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     };
   }, [client, taskId]);
 
+  // The epic the Run's task is on, and its peers, notes and threads: its
+  // transcript's peer turns, its rail and its header read them. Read again
+  // when something of theirs reaches this Run's ledger.
+  const [onEpic, setOnEpic] = useState<{ taskId: string; epicId: string | null; key: string | undefined } | null>(null);
+  const runTask = run?.taskId;
+  useEffect(() => {
+    if (!runTask) return;
+    let cancelled = false;
+    client.getTask(runTask).then((t) => {
+      if (!cancelled) setOnEpic({ taskId: runTask, epicId: t.epicId ?? null, key: t.key });
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, runTask]);
+  const epicId = onEpic?.taskId === runTask ? onEpic?.epicId ?? null : null;
+  const peerEvents = useMemo(() => events.reduce((n, e) => (PEER_EVENTS.has(e.eventType) ? n + 1 : n), 0), [events]);
+  const { value: coordination } = useCoordination(client, epicId, `${peerEvents}:${statusEventCount}:${reconnects}`);
+  const selfKey = task?.key ?? onEpic?.key;
+  const peerContext = usePeerContext(coordination, selfKey, run?.role ?? DEFAULT_RUN_ROLE, people);
+
   /*
    * The projection is folded forward, not rebuilt. `apply` skips events at or
    * below the cursor it already consumed, so each frame costs one event
@@ -364,6 +395,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
   // the same one, appended to and changed in place.
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!conversation.openWait) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [conversation.openWait]);
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // A branch preview is a run with no agent: nothing to steer, pause or abort
@@ -379,8 +416,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
-  // Which tools it called, and how often: for the rail. The projection counts them.
-  const tools = [...conversation.toolCounts].map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count }));
+  // Which tools it called, and how often, dude's own among them: for the rail.
+  const tools = toolUsage(conversation);
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -494,6 +531,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // The agent this Run is. A phase Run carries its role; one created
   // directly through the API runs as an orchestrator.
   const role: AgentRole = run.role ?? DEFAULT_RUN_ROLE;
+  // Waiting on a peer's reply: said beside the status, never in a tone.
+  const openWait = conversation.openWait;
+  const peerWait = openWait ? waitWords(openWait.on, openWait.parksAt, run.status === "paused", now) : null;
 
   const session = {
     id: run.id,
@@ -501,10 +541,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     // Starting once lux has placed it (a stage past waiting), from the live ledger, else the API's last stage.
     status: shownRunStatus(run.status, conversation.start ? conversation.start.stage : run.startStage?.stage),
     statusLabel: runStatusLabel(run),
-    // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's wait for a host.
+    // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's
+    // wait for a host, else a wait on a peer's reply.
     ...(conversation.start && !conversation.start.failed ? { statusNote: <StartHeaderChip start={conversation.start} bare /> }
       : conversation.startFailed ? { statusNote: <StartHeaderChip start={conversation.startFailed} bare /> }
-      : waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
+      : waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> }
+      : peerWait && isLive ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting-peer">{peerWait}</Badge> } : {}),
     ...(owner ? { owner } : {}),
     subtitle: (
       <>
@@ -569,7 +611,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
         taken={turn.taken || retryTaken === turn.id} woken={turn.woken}
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
-    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
+    : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask, peerContext, now);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
   // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its
   // stages and clock without saying the same wait again.
@@ -581,6 +623,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
     ? (chat ? "The conductor" : runLabel(run)) : undefined;
+  // The question you are to answer is what the conversation opens on, whatever was said after it.
+  const keepInView = waitingForYou && asked ? questionTurnSelector(asked.questionId) : undefined;
 
   if (chat) {
     // A task's Chat: the conductor's conversation under the task's history,
@@ -595,6 +639,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -660,6 +705,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
             </SessionRail>}
@@ -752,6 +798,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={keepInView}
               live={isLive}
               revision={events.length}
               turns={conversation.turns.length}
@@ -793,7 +840,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   canInterrupt
-                  landsHint={landsHint(run.status, activeTool, conversation.lands, conversation.start)}
+                  landsHint={openWait && run.status === "running"
+                    ? <>Waiting on <b>{openWait.on}</b>: a steer is read now, and the wait stays open</>
+                    : landsHint(run.status, activeTool, conversation.lands, conversation.start)}
                   attachments={tray.attachments}
                   onAttachFiles={tray.add}
                   onRemoveAttachment={tray.remove}
@@ -846,6 +895,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
                   <ToolUsage tools={tools} />
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
                 </SessionRailBlock>
               ) : null}
               {changed.length > 0 ? (
@@ -856,6 +906,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   }} />
                 </SessionRailBlock>
               ) : null}
+              {coordination ? <PeerRail coordination={coordination} self={selfKey} role={role} phase={run.phase}
+                startedAt={run.startedAt ?? run.createdAt} turns={conversation.turns} /> : null}
             </SessionRail>}
             {childDialog}
           </div>
@@ -1178,8 +1230,16 @@ function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: st
 
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
-  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions) {
+  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions, peer?: PeerContext, now?: number) {
   switch (turn.kind) {
+    case "peer":
+      return <PeerTurnView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
+    case "peerWait":
+      return <PeerWaitView key={turn.id} turn={turn} now={now} />;
+    case "noteTold":
+      return <NoteToldView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
+    case "digest":
+      return <DigestView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
     case "repositoryRequest": {
       // Asked of a person, like a question: approve brings it into the Run.
       const what = `${turn.access === "write" ? "Change" : "Read"} ${turn.repository}`;
@@ -1294,11 +1354,32 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
         />
       );
     }
-    case "tool":
-      // Its child sessions, if it started any, nest under it.
-      return <ToolWithChildren key={turn.id} turn={turn} depth={1} note={toolNote?.(turn)} />;
+    case "tool": {
+      // A coordination tool or a refused message shows its own card; its child sessions, if it started any, nest under it.
+      const coordination = peerTool(turn, peer);
+      const card = coordination || turn.refusal !== undefined ? (
+        <ToolCallCard
+          name={turn.tool}
+          args={turn.args}
+          status={turn.status}
+          startedAt={turn.startedAt}
+          endedAt={turn.endedAt}
+          output={coordination?.result ? undefined : turn.result?.output ?? turn.result?.stdout}
+          stderr={turn.result?.stderr}
+          exitCode={turn.refusal !== undefined ? undefined : turn.result?.exitCode}
+          {...(coordination ? { summary: coordination.summary, icon: coordination.icon } : {})}
+          {...(coordination?.result ? { result: coordination.result } : {})}
+          {...(turn.refusal !== undefined ? { error: turn.refusal } : {})}
+          note={toolNote?.(turn)}
+        />
+      ) : undefined;
+      return <ToolWithChildren key={turn.id} turn={turn} depth={1} note={toolNote?.(turn)} card={card} />;
+    }
   }
 }
+
+/** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
+export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
 
 /** Whom a session's question waits on: none when it is put to you, else their first name. */
 function questionFor(to: { id: string; name: string | null }, people: People): string | undefined {

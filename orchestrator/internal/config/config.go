@@ -135,11 +135,10 @@ type schema struct {
 		Logins any `toml:"logins" env:"DUDE_FACTORY_LOGINS" kind:"list" use:"orchestrator"`
 	} `toml:"factory"`
 	Auth struct {
-		Provider            any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
-		PublicURL           any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"backend"`
-		AutoCreate          any `toml:"auto_create" env:"DUDE_AUTH_AUTO_CREATE" kind:"bool" use:"backend" default:"true"`
-		DefaultOrganization any `toml:"default_organization" env:"DUDE_AUTH_DEFAULT_ORGANIZATION" kind:"string" use:"backend"`
-		CloudflareAccess    struct {
+		Provider         any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
+		PublicURL        any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"backend"`
+		SuperAdmins      any `toml:"super_admins" env:"DUDE_AUTH_SUPER_ADMINS" kind:"list" use:"backend"`
+		CloudflareAccess struct {
 			Team any `toml:"team" env:"DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM" kind:"string" use:"backend"`
 			AUD  any `toml:"aud" env:"DUDE_AUTH_CLOUDFLARE_ACCESS_AUD" kind:"string" use:"backend"`
 		} `toml:"cloudflare_access"`
@@ -199,7 +198,10 @@ type RetiredKey struct {
 
 // retired is every retired setting; tests/fixtures/config/keys.json's
 // "retired" must match it, as the backend's RETIRED must.
-var retired = []RetiredKey{}
+var retired = []RetiredKey{
+	{Name: "auth.auto_create", Env: "DUDE_AUTH_AUTO_CREATE"},
+	{Name: "auth.default_organization", Env: "DUDE_AUTH_DEFAULT_ORGANIZATION"},
+}
 
 // Retired lists the retired settings.
 func Retired() []RetiredKey { return retired }
@@ -566,7 +568,13 @@ func tomlType(v any) string {
 }
 
 // retiredWarning names a retired setting, never its value.
-func retiredWarning(name string) string { return "retired: " + name + "; remove it" }
+func retiredWarning(name string) string {
+	warning := "retired: " + name + "; remove it"
+	if name == "auth.auto_create" || name == "auth.default_organization" || name == "DUDE_AUTH_AUTO_CREATE" || name == "DUDE_AUTH_DEFAULT_ORGANIZATION" {
+		warning += "; ignored: people join by invitation"
+	}
+	return warning
+}
 
 // secretWarning is set when the file others on the host can read holds a
 // secret: it belongs in the environment, or the file must be 0600/0640.

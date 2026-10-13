@@ -14,15 +14,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, type ModelChoice, type ProposalCardItem, type ProposalRelation,
+  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, readWhen, snapshot, steerWait, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
@@ -33,7 +33,7 @@ import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
-import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { EventLog, asides, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, type SteerActions } from "./RunScreen.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
@@ -140,7 +140,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     return snapshot(apply(projection.current, events), status);
   }, [events, sessionId, status]);
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
-
+  // Which tools its agent called, dude's own among them, as a task's session rail says it.
+  const tools = toolUsage(conversation);
   const send = useCallback(async (text: string, aside = false) => {
     setProblem(null);
     try {
@@ -341,6 +342,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           <div className="runChat">
             <ChatTranscript
               fill
+              keepInView={yours ? questionTurnSelector(yours.id) : undefined}
               live={live}
               revision={events.length + (detail.proposals?.length ?? 0)}
               turns={conversation.turns.length}
@@ -415,6 +417,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                     onOpen={setViewing} />
                 ) : <span className="muted">Nothing published yet: documents it writes for you appear here.</span>}
               </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                  {conversation.dudeToolCounts.size > 0 ? <span className="muted">{TOOL_USAGE_NOTE}</span> : null}
+                </SessionRailBlock>
+              ) : null}
               <SessionRailBlock label="It can">
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
@@ -606,7 +614,8 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
   };
   switch (item.kind) {
     case "epic":
-      return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common };
+      return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common,
+        ...(item.notes?.length ? { notes: item.notes } : {}) };
     case "task":
       return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common };
     case "edit":
@@ -614,6 +623,9 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
         before: textOf(item.before), after: textOf(item.after), ...common };
     case "comment":
       return { kind: "comment", title: `Comment on ${item.task ?? ""}`, taskKey: item.task, detail: item.text ? `“${item.text}”` : undefined, ...common };
+    case "note":
+      return { kind: "note", title: item.replaces ? `Replace note ${item.replaces} on ${item.epic ?? ""}` : `Note on ${item.epic ?? ""}`,
+        detail: item.text ? <Markdown source={item.text} unmeasured /> : undefined, project, child: epics.has(item.epic), ...common };
     case "relation":
       return { kind: "relation", title: `${item.from ?? ""} ${item.relationKind === "related" ? "related to" : "blocks"} ${item.to ?? ""}`,
         taskKey: item.to, detail: item.why ? `“${item.why}”` : undefined, ...common };

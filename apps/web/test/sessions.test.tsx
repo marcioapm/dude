@@ -152,6 +152,26 @@ async function menuItem(label: string): Promise<HTMLElement> {
 }
 
 describe("a brainstorm session's page", () => {
+  test("its Tools used rail renders the harness calls and dude's completed actions as separate sources", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), [
+      ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
+      ev("agent.tool.dude", { tool: "name_session", arguments: {}, result: {} }),
+      ev("agent.tool.called", { tool: "mcp__dude__name_session", callId: "c_name" }),
+      ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }),
+    ]));
+    const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
+      .toEqual([["dude name session (completed)", "2"], ["dude name session (called)", "1"], ["dude update task (completed)", "1"]]);
+    expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat dude's completed actions.");
+  });
+
+  test("its Tools used rail has no overlap note when dude completed nothing", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner"), [ev("agent.tool.called", { tool: "read", callId: "c_read" })]));
+    const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    expect(usage.textContent).toContain("Read");
+    expect(usage.parentElement!.textContent).not.toContain("Harness calls");
+  });
+
   test("a stopped turn is visible to readers with its tool and error kind", async () => {
     const client = new SessionClient(detail("read"), [
       ev("session.turn_stopped", { runId: RUN, tool: "bash", openSecs: 660, directiveId: "dir_stopped" }),
@@ -338,6 +358,21 @@ describe("a brainstorm session's page", () => {
         payload: { kind: "agent", questionId: "q_2", prompt: q2.prompt, options: q2.options, to: YOU, toName: ME.name } });
     });
     await until(() => (waiting() === 1 ? true : null), "the composer stepped back for q_2");
+  });
+
+  test("an epic's notes go on its card; a note replacing one says which, with its words", async () => {
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
+        { kind: "epic", project: "BL", title: "Run ingest v2", description: "d", notes: ["Ids are ULIDs.", "Docs live in docs/ingest."] },
+        { kind: "note", epic: "Checkout v2", replaces: 3, text: "**Totals.** Read them with `useTotals(country)`." },
+      ], status: [{ canFile: true }, { canFile: true }] }],
+    }));
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.textContent).toContain("Ids are ULIDs.");
+    expect(card.textContent).toContain("Docs live in docs/ingest.");
+    expect(card.textContent).toContain("Replace note 3 on Checkout v2");
+    expect(card.textContent).toContain("Read them with useTotals(country).");
   });
 
   test("the card files what you tick, as you, and says what was refused", async () => {
@@ -570,11 +605,11 @@ describe("a session's name", () => {
     return { ...d, session: { ...d.session, title: null, titledBy: null, messages: 0 } };
   };
 
-  test("untitled, its header says New session, muted, and a new one opens with the composer focused", async () => {
+  test("untitled, its header says Untitled session, muted, and a new one opens with the composer focused", async () => {
     const client = new SessionClient(untitled("owner"));
     const page = await sessionPage(client);
     const title = page.querySelector("[data-testid=session-title]")!;
-    expect(title.textContent).toBe("New session");
+    expect(title.textContent).toBe("Untitled session");
     expect(title.querySelector("[data-untitled=true]")).not.toBeNull();
     const composer = page.querySelector("[data-testid=session-screen] textarea");
     expect(composer).not.toBeNull();
@@ -607,7 +642,7 @@ describe("a session's name", () => {
     const page = await sessionPage(client);
     const title = page.querySelector("[data-testid=session-title]")!;
     expect(title.tagName).not.toBe("BUTTON");
-    expect(title.textContent).toBe("New session");
+    expect(title.textContent).toBe("Untitled session");
     await click(title);
     expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
     expect(document.activeElement === page.querySelector("[data-testid=session-screen] textarea")).toBe(false);
@@ -627,14 +662,14 @@ describe("a session's name", () => {
     expect(notices[1]!.textContent).toContain(`${ANA.name.split(" ")[0]} renamed it “Billing v2”`);
   });
 
-  test("untitled in the list, the sidebar's list and the inbox: New session", async () => {
+  test("untitled in the list, the sidebar's list and the inbox: Untitled session", async () => {
     const summary = { id: SESSION, title: null, role: "owner" as const, createdAt: at(0), owner: ref(ME), shared: false, projects: [],
       runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(0), archived: false };
     const { SessionsScreen } = await import("../src/screens/SessionsScreen.tsx");
     const client = new SessionClient(detail("owner"));
     const list = await mount(<ToastProvider><SessionsScreen client={client} sessions={[summary]} onOpen={() => {}} onNew={() => {}} /></ToastProvider>);
     mounted.push(list.unmount);
-    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("New session");
+    expect(list.container.querySelector("[data-testid=session-row]")!.textContent).toContain("Untitled session");
 
     const inbox = await mount(
       <PeopleProvider client={client}>
@@ -649,8 +684,8 @@ describe("a session's name", () => {
       </PeopleProvider>,
     );
     mounted.push(inbox.unmount);
-    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: New session");
-    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in New session");
+    expect(inbox.container.querySelector("[data-testid=session-invitation]")!.textContent).toContain("shared a session with you: Untitled session");
+    expect(inbox.container.querySelector("[data-testid=session-question]")!.textContent).toContain("asked you in Untitled session");
   });
 
   test("New session goes to the welcome and makes nothing", async () => {

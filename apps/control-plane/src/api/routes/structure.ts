@@ -432,7 +432,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   if ("shortGoal" in result) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
   if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
-  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);
+  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organisation's people`);
   if ("unchanged" in result) throw badRequest("nothing to change");
   return json(result.task);
 }
@@ -468,7 +468,7 @@ async function putTaskPeople(ctx: RequestContext): Promise<Response> {
     return { task: { id, ...rows[0]! } };
   });
   if ("missing" in result) throw notFound(`task ${id} not found`);
-  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);
+  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organisation's people`);
   return json(result.task);
 }
 

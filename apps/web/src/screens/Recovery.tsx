@@ -15,7 +15,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
 import { Duration, ROLE_LABEL } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
-import { blockedRefusal, runLabel, type PersistedEvent } from "@dude/domain";
+import { blockedRefusal, runDoer, runLabel, type PersistedEvent } from "@dude/domain";
 import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail } from "../api/client.ts";
 import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -61,9 +61,9 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
   return run ? { run, ...howRunStopped(run, events, people) } : { run: null, by: null, why: null };
 }
 
-/** The sentence for how a Run stopped, without when: "Ana aborted the implement: “…”", "The fix failed: …". */
+/** The sentence for how a Run stopped, without when: "Ana aborted the implementer: “…”", "The fixer failed: …". */
 export function stoppedSentence(run: Run, by: string | null, why: string | null, ago: ReactNode = null): ReactNode {
-  const what = runLabel(run).toLowerCase();
+  const what = runDoer(run);
   if (run.status === "failed") return <><strong>The {what} failed</strong>{ago}{why ? `: ${why}` : "."}</>;
   return <><strong>{by ?? "Someone"} aborted the {what}</strong>{ago}{why ? <>: “{why}”</> : "."}</>;
 }
