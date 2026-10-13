@@ -37,17 +37,17 @@ function Playing() {
   );
 }
 
-function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow, failed, open, role = "brainstorm", id }: {
+function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow, failed, plain, open, role = "brainstorm", id }: {
   kind?: StartKind; verb?: string; stage: StartStage | null; since: number; startedAt: number;
   done?: ReadonlyArray<{ stage: StartStage; tookMs: number }>; stages?: readonly StartStage[]; pool?: string;
-  slow?: { note: string; reason?: string }; failed?: string | null; open?: boolean;
+  slow?: { note: string; reason?: string }; failed?: string | null; plain?: boolean; open?: boolean;
   role?: "brainstorm" | "implementer" | "conductor"; id: string;
 }) {
   const steps = startSteps({ stage, since, done, failed: failed !== undefined, stages, pool });
   return (
     <StartProgress kind={kind} verb={verb} steps={steps} startedAt={startedAt} avatar={<AgentAvatar role={role} size="chat" />}
       slowNote={slow?.note} slowReason={slow?.reason} defaultOpen={open} data-testid={id}
-      failure={failed !== undefined ? { reason: failed, onRetry: () => undefined } : undefined} />
+      failure={failed !== undefined ? { reason: failed, plain, onRetry: () => undefined } : undefined} />
   );
 }
 
@@ -80,6 +80,9 @@ export function StartingSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <Example id="start-failure" stage="image" since={ago(47)} startedAt={ago(53)} done={[{ stage: "waiting", tookMs: 5_800 }]}
             failed="pull failed: manifest unknown" role="implementer" open />
+          <Label>before lux, the app's own sentence (plain)</Label>
+          <Example id="start-failure-plain" stage={null} since={ago(2)} startedAt={ago(2)} plain
+            failed="The Brainstorm runs on Fast, which names no model yet. An admin sets it in Models." />
         </Panes>
       </Block>
       <Block id="st-move" title="StartProgress: a move"

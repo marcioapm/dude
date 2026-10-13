@@ -140,6 +140,27 @@ describe("StartProgress", () => {
     expect(html).not.toContain("Try again");
   });
 
+  test("a reason that ends its own sentence gets no second full stop; with no stage there is no 'failed:'", () => {
+    const why = "The Brainstorm runs on Fast, which names no model yet. An admin sets it in Models.";
+    const el = document.createElement("div");
+    el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: null, failed: true })} failure={{ reason: why, plain: true }} />);
+    expect(el.querySelector("[data-testid=start-failed]")!.textContent).toBe(`Did not start: ${why} Nothing was spent on the model.`);
+    for (const end of ["!", "?"]) {
+      el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: "image", failed: true })} failure={{ reason: `pull failed${end}` }} />);
+      expect(el.querySelector("[data-testid=start-failed]")!.textContent)
+        .toBe(`Did not start: failed while getting the image ready: pull failed${end} Nothing was spent on the model.`);
+    }
+  });
+
+  test("lux's raw reason is set in mono; the app's own sentence (plain) in body text", () => {
+    const el = document.createElement("div");
+    el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: "image", failed: true })} failure={{ reason: "pull failed: manifest unknown" }} />);
+    expect(el.querySelector("[data-testid=start-failed] code")!.textContent).toBe("pull failed: manifest unknown");
+    el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: null, failed: true })} failure={{ reason: "No model yet.", plain: true }} />);
+    expect(el.querySelector("[data-testid=start-failed] code")).toBeNull();
+    expect(el.querySelector("[data-testid=start-failed]")!.textContent).toBe("Did not start: No model yet. Nothing was spent on the model.");
+  });
+
   test("the slow line is calm, with lux's reason under it", () => {
     const html = renderToStaticMarkup(<StartProgress steps={steps("waiting")} slowNote="No machine free yet." slowReason="waiting for capacity" />);
     expect(html).toContain('data-testid="start-slow"');
@@ -234,5 +255,8 @@ test("the gallery's Starting blocks render in dark and light, comfortable and co
     expect([...move.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending", "pending", "pending", "pending", "pending"]);
     expect(move.querySelector("li")!.textContent).toContain("Stopped, work kept");
   }
-  expect(el.querySelectorAll("[data-testid=start-failed]").length).toBe(4);
+  expect(el.querySelectorAll("[data-testid=start-failed]").length).toBe(8);
+  for (const plain of el.querySelectorAll("[data-testid=start-failure-plain] [data-testid=start-failed]")) {
+    expect(plain.textContent).toBe("Did not start: The Brainstorm runs on Fast, which names no model yet. An admin sets it in Models. Nothing was spent on the model.");
+  }
 });

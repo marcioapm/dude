@@ -88,7 +88,7 @@ describe("the projection", () => {
     const c = project(events, "failed");
     expect(c.start).toBeNull();
     const ended = c.turns.find((t) => t.kind === "ended")!;
-    expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: "image", failed: { reason: "pull failed: manifest unknown" },
+    expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: "image", failed: { reason: "pull failed: manifest unknown", source: "lux" },
       done: [{ stage: "waiting", tookMs: 5_000 }] });
     const sent = c.turns.find((t) => t.kind === "human")!;
     expect(sent).toMatchObject({ deliveredAt: null, failed: NOT_STARTED });
@@ -210,6 +210,7 @@ describe("a task's Run page", () => {
     const page = await runPage("failed", ledger);
     const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(failed.textContent).toBe("Did not start: failed while getting the image ready: pull failed: manifest unknown. Nothing was spent on the model.");
+    expect(failed.querySelector("code")!.textContent).toBe("pull failed: manifest unknown");
   });
 
   test("a tier with no model fails before lux: its useful error is projected and shown, and Try again still opens restart", async () => {
@@ -218,11 +219,12 @@ describe("a task's Run page", () => {
       let picked: string | null = null;
       const ledger = [created(), ev("run.failed", { status: "failed", error, ...(reason === undefined ? {} : { reason }) }, 1_000)];
       const ended = project(ledger, "failed").turns.find((t) => t.kind === "ended")!;
-      expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error } });
+      expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error, source: "dude" } });
       const page = await runPage("failed", ledger, false, { onPickUp: (a) => { picked = a; }, keptUntil: null });
       const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure before lux");
-      expect(failed.textContent).toContain(error);
-      expect(failed.textContent).toContain("Nothing was spent on the model.");
+      // dude's own sentence, in body text: no "failed:" with no stage, no doubled full stop.
+      expect(failed.textContent).toBe(`Did not start: ${error} Nothing was spent on the model.`);
+      expect(failed.querySelector("code")?.textContent ?? null).toBeNull();
       const retry = page.querySelector<HTMLButtonElement>("[data-testid=start-retry]")!;
       await act(async () => retry.click());
       expect(picked).toBe("retry");

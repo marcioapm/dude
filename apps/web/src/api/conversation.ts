@@ -288,8 +288,8 @@ export interface StartState {
   done: Array<{ stage: StartStage; tookMs: number }>;
   /** lux's reason with its latest stage (why it waits for a machine), when it gave one. */
   luxReason: string | null;
-  /** It failed in `stage`: lux's reason, when it gave one. */
-  failed: { reason: string | null } | null;
+  /** It failed in `stage`: lux's raw reason, or dude's own sentence (`run.failed`'s error) when lux gave none. */
+  failed: { reason: string | null; source: "lux" | "dude" } | null;
 }
 
 export type Turn =
@@ -1145,7 +1145,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const stage = isStartStage(payload.stage) && payload.stage !== "park" ? payload.stage : starting?.stage ?? null;
         if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage) enterStage(starting, stage, event.occurredAt);
-          starting.failed = { reason: typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : ended.why };
+          const luxReason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : null;
+          starting.failed = luxReason ? { reason: luxReason, source: "lux" } : { reason: ended.why, source: "dude" };
           ended.start = starting;
           // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
           // failed resuming for a person's message keeps Try again.

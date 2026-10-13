@@ -93,7 +93,7 @@ export function StartRow({ start, role, onRetry, taken, woken }: {
         avatar={<AgentAvatar role={role} size="chat" />}
         slowNote={slow ?? undefined}
         slowReason={slow ? start.luxReason : undefined}
-        failure={start.failed ? { reason: start.failed.reason, onRetry: taken || woken ? undefined : onRetry } : undefined}
+        failure={start.failed ? { reason: start.failed.reason, plain: start.failed.source === "dude", onRetry: taken || woken ? undefined : onRetry } : undefined}
         data-testid="start-progress"
       />
       {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p>
