@@ -42,20 +42,23 @@ func (w *world) peerRun(task string) delivery.RunRef {
 	return delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: id}
 }
 
-// reply answers a message as task's agent would, with message's tool.
-func (w *world) reply(from delivery.RunRef, toTask, message, text string) {
+// send messages toTask as from's agent would, with message's tool; replyTo
+// "" opens a thread.
+func (w *world) send(from delivery.RunRef, toTask, replyTo, text string) delivery.Sent {
 	w.t.Helper()
 	ctx := context.Background()
+	var sent delivery.Sent
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
 		peer, ok, err := delivery.PeerByKey(ctx, tx, from.TaskID, w.key(toTask))
 		if err != nil || !ok {
 			w.t.Fatalf("%s is not a peer: %v", toTask, err)
 		}
-		_, err = delivery.SendMessageTx(ctx, tx, from, delivery.MessageInput{To: peer, Text: text, ReplyTo: message})
+		sent, err = delivery.SendMessageTx(ctx, tx, from, delivery.MessageInput{To: peer, Text: text, ReplyTo: replyTo})
 		return err
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+	return sent
 }
 
 // An agent that asks a peer and runs `dude wait` waits as on a person: it
@@ -98,7 +101,7 @@ func TestWaitForReplyParksAfterTheGraceAndTheReplyResumesTheRun(t *testing.T) {
 	if w.lux.Runs()[0].Resumed != 0 {
 		t.Fatal("resumed with no reply")
 	}
-	w.reply(w.peerRun(peer), wi, message, "{metric, from, period}")
+	w.send(w.peerRun(peer), wi, message, "{metric, from, period}")
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
@@ -358,19 +361,7 @@ func TestAHeldMessageIsInTheNextRunsPrompt(t *testing.T) {
 	w := newWorld(t)
 	wi, peer := w.task(), w.task()
 	w.onAnEpic(wi, peer)
-	from := w.peerRun(peer)
-	ctx := context.Background()
-	var sent delivery.Sent
-	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-		p, _, err := delivery.PeerByKey(ctx, tx, peer, w.key(wi))
-		if err != nil {
-			return err
-		}
-		sent, err = delivery.SendMessageTx(ctx, tx, from, delivery.MessageInput{To: p, Text: "Use the shared client, please."})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	sent := w.send(w.peerRun(peer), wi, "", "Use the shared client, please.")
 	if sent.Lands != delivery.LandsNextRun {
 		t.Fatalf("lands %s", sent.Lands)
 	}
@@ -379,7 +370,7 @@ func TestAHeldMessageIsInTheNextRunsPrompt(t *testing.T) {
 	// The scripted agent's workload prompt is its script: what its prompt
 	// was briefed with is recorded on the message, and in the ledger.
 	var runID string
-	if err := w.owner.QueryRow(ctx, `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID); err != nil {
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM peer_messages WHERE id = $1 AND briefed_run_id = $2`, sent.ID, runID); n != 1 {

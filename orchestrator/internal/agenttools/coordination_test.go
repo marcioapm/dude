@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -390,23 +391,11 @@ func (f *fixture) toolNames(t *testing.T, token string) []string {
 }
 
 func hasAll(names []string, want ...string) bool {
-	for _, w := range want {
-		if !hasAny(names, w) {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(want, func(w string) bool { return !slices.Contains(names, w) })
 }
 
 func hasAny(names []string, want ...string) bool {
-	for _, n := range names {
-		for _, w := range want {
-			if n == w {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.ContainsFunc(want, func(w string) bool { return slices.Contains(names, w) })
 }
 
 // Notes are numbered per epic and never edited: a replace pins the next

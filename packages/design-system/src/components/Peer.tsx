@@ -15,7 +15,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { formatTimestamp } from "../util/format.ts";
+import { formatTimestamp, plural } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
 import type { AgentRoleName } from "../tokens/palette.ts";
 import type { TaskStatus } from "../tokens/status.ts";
@@ -358,8 +358,6 @@ export function EpicNoteCount({ count, limit }: { readonly count: number; readon
     </span>
   );
 }
-
-const plural = (n: number, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
 
 /** The epic's replaced and retired notes, folded under the current ones to one line. */
 export function EpicNoteHistory({ notes, live, defaultOpen }: {

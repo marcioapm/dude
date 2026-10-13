@@ -209,14 +209,14 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
 		return "", err
 	}
-	var key string
-	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
-		WHERE t.id = $1`, taskID).Scan(&key); err != nil {
+	var key, projectID string
+	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.project_id FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.id = $1`, taskID).Scan(&key, &projectID); err != nil {
 		return "", err
 	}
 	var groups []string
-	// The same items, as data, for conductor.digest.
-	var digestMsgs, digestChanges, digestPeersOut []map[string]any
+	// The same items, as data, for conductor.digest: never null lists.
+	digestMsgs, digestChanges, digestPeersOut := []map[string]any{}, []map[string]any{}, []map[string]any{}
 	more := 0
 
 	// Messages to or from the task, newest first.
@@ -348,26 +348,14 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 		return "", nil
 	}
 	if runID != "" {
-		var projectID string
-		if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
-			return "", err
-		}
 		ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvConductorDigest, ledger.ActorSystem, map[string]any{
-			"since": since, "through": now, "where": where, "task": key, "messages": nonNilItems(digestMsgs), "more": more,
-			"notes": nonNilItems(digestChanges), "peers": nonNilItems(digestPeersOut),
+			"since": since, "through": now, "where": where, "task": key, "messages": digestMsgs, "more": more,
+			"notes": digestChanges, "peers": digestPeersOut,
 		})); err != nil {
 			return "", err
 		}
 	}
 	return fmt.Sprintf("## Since you last looked, on this epic (%s → %s UTC)\n\n%s", since.UTC().Format("15:04"),
 		now.UTC().Format("15:04"), strings.Join(groups, "\n\n")), nil
-}
-
-// nonNilItems is items, or an empty list: a payload's lists are never null.
-func nonNilItems(items []map[string]any) []map[string]any {
-	if items == nil {
-		return []map[string]any{}
-	}
-	return items
 }

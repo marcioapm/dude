@@ -83,11 +83,7 @@ func TestReplyAndIdleTakeTheRunBeforeTheMessage(t *testing.T) {
 				_, err := delivery.WaitOnUnansweredTx(ctx, tx, one)
 				return err
 			}
-			tx, err := w.owner.Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback(context.Background())
+			tx := w.begin(t, ctx)
 			first := lockRun
 			if replyFirst {
 				first = reply
@@ -95,46 +91,15 @@ func TestReplyAndIdleTakeTheRunBeforeTheMessage(t *testing.T) {
 			if err := first(tx); err != nil {
 				t.Fatal(err)
 			}
-			pid := make(chan int, 1)
-			done := make(chan error, 1)
-			go func() {
-				done <- w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-					var id int
-					if err := other.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&id); err != nil {
+			done := w.blockedIn(t, ctx, tx, "second finished before commit", func(other pgx.Tx) error {
+				if replyFirst {
+					if err := lockRun(other); err != nil {
 						return err
 					}
-					pid <- id
-					if replyFirst {
-						if err := lockRun(other); err != nil {
-							return err
-						}
-						return idle(other)
-					}
-					return reply(other)
-				})
-			}()
-			var otherPID int
-			select {
-			case otherPID = <-pid:
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
-			for {
-				var blocked bool
-				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype IN ('tuple','transactionid'))`, otherPID).Scan(&blocked); err != nil {
-					t.Fatal(err)
+					return idle(other)
 				}
-				if blocked {
-					break
-				}
-				select {
-				case err := <-done:
-					t.Fatalf("second finished before commit: %v", err)
-				case <-ctx.Done():
-					t.Fatal(ctx.Err())
-				default:
-				}
-			}
+				return reply(other)
+			})
 			if !replyFirst {
 				if err := idle(tx); err != nil {
 					t.Fatal(err)
@@ -155,48 +120,18 @@ func TestReplyAndIdleTakeTheRunBeforeTheMessage(t *testing.T) {
 
 func TestOpeningAWaitTakesTheRunBeforeTheMessage(t *testing.T) {
 	w := newEpicWorld(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
 	q := w.send(t, one, "ABS-2", "Which path?", "")
-	tx, err := w.owner.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin(t, ctx)
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, one.RunID); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	pid := make(chan int, 1)
-	go func() {
-		done <- w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-			var id int
-			if err := other.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&id); err != nil {
-				return err
-			}
-			pid <- id
-			if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '10s'`); err != nil {
-				return err
-			}
-			_, err := delivery.OpenWaitTx(ctx, other, one, q.ID, "wait")
-			return err
-		})
-	}()
-	otherPID := <-pid
-	for {
-		var blocked bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype IN ('tuple','transactionid'))`, otherPID).Scan(&blocked); err != nil {
-			t.Fatal(err)
-		}
-		if blocked {
-			break
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("wait finished: %v", err)
-		default:
-		}
-	}
+	done := w.blockedIn(t, ctx, tx, "wait finished", func(other pgx.Tx) error {
+		_, err := delivery.OpenWaitTx(ctx, other, one, q.ID, "wait")
+		return err
+	})
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM peer_messages WHERE id = $1 FOR NO KEY UPDATE NOWAIT`, q.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -229,24 +164,11 @@ func TestRepliesAndWaitsSerializeOnTheAskedMessage(t *testing.T) {
 			if replyFirst {
 				first, second = reply, wait
 			}
-			tx, err := w.owner.Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback(ctx)
+			tx := w.begin(t, ctx)
 			if err := first(tx); err != nil {
 				t.Fatal(err)
 			}
-			err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-				if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
-					return err
-				}
-				return second(other)
-			})
-			var blocked *pgconn.PgError
-			if !errors.As(err, &blocked) || blocked.Code != "55P03" {
-				t.Fatalf("second transaction did not block on the message: %v", err)
-			}
+			w.timesOut(t, ctx, "second transaction did not block on the message", second)
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -266,11 +188,7 @@ func TestPeerEndingSerializesWithOpeningAWait(t *testing.T) {
 	ctx := context.Background()
 	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
 	q := w.send(t, one, "ABS-2", "Which path?", "")
-	tx, err := w.owner.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin(t, ctx)
 	if _, err := delivery.OpenWaitTx(ctx, tx, one, q.ID, "wait"); err != nil {
 		t.Fatal(err)
 	}
@@ -278,16 +196,7 @@ func TestPeerEndingSerializesWithOpeningAWait(t *testing.T) {
 		_, err := delivery.SetTaskStatusTx(ctx, other, w.org, w.project, w.tasks["ABS-2"], "", "done", "test")
 		return err
 	}
-	err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-		if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
-			return err
-		}
-		return end(other)
-	})
-	var blocked *pgconn.PgError
-	if !errors.As(err, &blocked) || blocked.Code != "55P03" {
-		t.Fatalf("ending did not wait: %v", err)
-	}
+	w.timesOut(t, ctx, "ending did not wait", end)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -307,47 +216,14 @@ func TestAPeerEndingWaitsForTheWaitingRunsEnd(t *testing.T) {
 	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
 	q := w.send(t, one, "ABS-2", "Which path?", "")
 	w.in(t, func(tx pgx.Tx) error { _, err := delivery.OpenWaitTx(ctx, tx, one, q.ID, "wait"); return err })
-	tx, err := w.owner.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(context.Background())
+	tx := w.begin(t, ctx)
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, one.RunID); err != nil {
 		t.Fatal(err)
 	}
-	pid := make(chan int, 1)
-	done := make(chan error, 1)
-	go func() {
-		done <- w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-			var id int
-			if err := other.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&id); err != nil {
-				return err
-			}
-			pid <- id
-			_, err := delivery.SetTaskStatusTx(ctx, other, w.org, w.project, w.tasks["ABS-2"], "", "done", "test")
-			return err
-		})
-	}()
-	var otherPID int
-	select {
-	case otherPID = <-pid:
-	case err := <-done:
-		t.Fatalf("ending failed before it started: %v", err)
-	}
-	for {
-		var blocked bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype IN ('tuple','transactionid'))`, otherPID).Scan(&blocked); err != nil {
-			t.Fatal(err)
-		}
-		if blocked {
-			break
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("ending finished before the Run's end: %v", err)
-		default:
-		}
-	}
+	done := w.blockedIn(t, ctx, tx, "ending finished before the Run's end", func(other pgx.Tx) error {
+		_, err := delivery.SetTaskStatusTx(ctx, other, w.org, w.project, w.tasks["ABS-2"], "", "done", "test")
+		return err
+	})
 	if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed' WHERE id = $1`, one.RunID); err != nil {
 		t.Fatalf("run end: %v", err)
 	}
@@ -425,7 +301,8 @@ func TestUnreadMailSurvivesAnEndedRunOrFailedSubmit(t *testing.T) {
 
 func TestTheNoteLimitSerializesOnTheEpic(t *testing.T) {
 	w := newEpicWorld(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
 	pin := func(tx pgx.Tx) error {
 		_, err := delivery.PinNoteTx(ctx, tx, w.org, delivery.PinInput{EpicID: w.epic, Text: "fact", Run: one})
@@ -434,46 +311,19 @@ func TestTheNoteLimitSerializesOnTheEpic(t *testing.T) {
 	for range 9 {
 		w.in(t, pin)
 	}
-	tx, err := w.owner.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
+	tx := w.begin(t, ctx)
 	if err := pin(tx); err != nil {
 		t.Fatal(err)
 	}
-	err = w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
-		if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
-			return err
-		}
-		return pin(other)
-	})
-	var blocked *pgconn.PgError
-	if !errors.As(err, &blocked) || blocked.Code != "55P03" {
-		t.Fatalf("pin did not wait for epic lock: %v", err)
-	}
+	w.timesOut(t, ctx, "pin did not wait for epic lock", pin)
 	// With no timeout, tx2 waits on tx1; once tx1 commits it must count ten
 	// and refuse. Without the epic lock it waits on UNIQUE (epic_id, n)
 	// instead and fails with 23505.
-	done := make(chan error, 1)
-	go func() { done <- w.app.InOrg(ctx, w.org, pin) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for w.count(t, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-		WHERE NOT l.granted AND l.locktype IN ('tuple','transactionid') AND a.datname = current_database()`) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("second pin did not block within 10 seconds")
-		}
-		time.Sleep(10 * time.Millisecond)
-		select {
-		case err := <-done:
-			t.Fatalf("second pin finished before tx1 committed: %v", err)
-		default:
-		}
-	}
+	done := w.blockedIn(t, ctx, tx, "second pin finished before tx1 committed", pin)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	err = <-done
+	err := <-done
 	var refused delivery.NoteRefusal
 	if !errors.As(err, &refused) || refused.Reason != "limit" {
 		t.Errorf("after commit: %v", err)
@@ -506,6 +356,76 @@ func (w *epicWorld) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// begin opens an owner transaction, rolled back at the test's end unless
+// committed.
+func (w *epicWorld) begin(t *testing.T, ctx context.Context) pgx.Tx {
+	t.Helper()
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	return tx
+}
+
+// timesOut runs fn in another transaction, which must hit its 200ms lock
+// timeout (55P03) on what tx holds.
+func (w *epicWorld) timesOut(t *testing.T, ctx context.Context, why string, fn func(pgx.Tx) error) {
+	t.Helper()
+	err := w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+		if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '200ms'`); err != nil {
+			return err
+		}
+		return fn(other)
+	})
+	var blocked *pgconn.PgError
+	if !errors.As(err, &blocked) || blocked.Code != "55P03" {
+		t.Fatalf("%s: %v", why, err)
+	}
+}
+
+// blockedIn runs fn in another transaction and returns once its backend
+// waits on a row lock; why fails the test if fn finishes first. The
+// channel has fn's result.
+func (w *epicWorld) blockedIn(t *testing.T, ctx context.Context, tx pgx.Tx, why string, fn func(pgx.Tx) error) <-chan error {
+	t.Helper()
+	pid := make(chan int, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- w.app.InOrg(ctx, w.org, func(other pgx.Tx) error {
+			var id int
+			if err := other.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&id); err != nil {
+				return err
+			}
+			pid <- id
+			return fn(other)
+		})
+	}()
+	var otherPID int
+	select {
+	case otherPID = <-pid:
+	case err := <-done:
+		t.Fatalf("%s: %v", why, err)
+	}
+	for {
+		var blocked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted
+			AND locktype IN ('tuple','transactionid'))`, otherPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return done
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("%s: %v", why, err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		default:
+		}
 	}
 }
 

@@ -356,16 +356,7 @@ func CurrentNotes(ctx context.Context, tx pgx.Tx, epicID string) ([]Note, error)
 	if err != nil {
 		return nil, err
 	}
-	out := []Note{}
-	for rows.Next() {
-		n, err := scanNote(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Note, error) { return scanNote(row) })
 }
 
 // TaskEpic is the epic a task is on, "" for none.

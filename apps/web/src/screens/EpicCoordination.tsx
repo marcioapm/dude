@@ -13,7 +13,7 @@ import { useMemo, useRef, useState } from "react";
 import { EpicNote, EpicNoteHistory, PeerList, PeerMessage, PeerThread, type EpicNoteData } from "@dude/design-system/components";
 import { Button, Callout, Dialog, Section, Spinner, Textarea, useToast } from "@dude/design-system/primitives";
 import { firstName } from "@dude/design-system";
-import { EPIC_NOTE_TEXT_MAX, type EpicNote as EpicNoteRecord, type PeerThread as PeerThreadRecord } from "@dude/domain";
+import { EPIC_NOTE_TEXT_MAX, type EpicNote as EpicNoteRecord, type PeerState, type PeerThread as PeerThreadRecord } from "@dude/domain";
 import type { NavEpic } from "@dude/design-system";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { messageData, noteData, peerRows, peerTask, threadSubject, useCoordination } from "../coordination.tsx";
@@ -168,7 +168,7 @@ export function EpicCoordination({ client, epicId, epic, version, onOpenTask }: 
 }
 
 /** One thread between two tasks' agents: read only. */
-function Thread({ thread, peers }: { thread: PeerThreadRecord; peers: ReadonlyArray<import("@dude/domain").PeerState> }) {
+function Thread({ thread, peers }: { thread: PeerThreadRecord; peers: readonly PeerState[] }) {
   const [asker, asked] = thread.pair;
   const first = thread.messages[0]!;
   const byId = new Map(thread.messages.map((m) => [m.id, m]));

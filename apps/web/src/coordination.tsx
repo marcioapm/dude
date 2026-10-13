@@ -12,7 +12,7 @@ import {
   EpicNoteNotice, PeerList, PeerMessage, PeerWaitLine, SessionFacts, SessionRailBlock, SinceDigest, TaskChip, noteWordChange,
   type EpicNoteData, type PeerMessageData, type PeerRow, type PeerTask, type Person,
 } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
+import { Icon, plural } from "@dude/design-system";
 import {
   ALL_AGENT_ROLES, ALL_TASK_STATUSES, type AgentRole, type EpicNote, type EpicNotes, type EpicPeers, type EpicThreads,
   type PeerMessageView, type PeerState, type TaskStatus,
@@ -60,8 +60,8 @@ export function useCoordination(client: ApiClient, epicId: string | null | undef
 
 const ROLES = new Set<string>(ALL_AGENT_ROLES);
 const STATUSES = new Set<string>(ALL_TASK_STATUSES);
-export const asRole = (r: string | null | undefined): AgentRole | undefined => (r && ROLES.has(r) ? (r as AgentRole) : undefined);
-export const asStatus = (s: string | null | undefined): TaskStatus | undefined => (s && STATUSES.has(s) ? (s as TaskStatus) : undefined);
+const asRole = (r: string | null | undefined): AgentRole | undefined => (r && ROLES.has(r) ? (r as AgentRole) : undefined);
+const asStatus = (s: string | null | undefined): TaskStatus | undefined => (s && STATUSES.has(s) ? (s as TaskStatus) : undefined);
 
 /** The role a phase speaks with, as the API's peer state names it. */
 const PHASE_ROLE: Record<string, AgentRole> = {
@@ -190,8 +190,6 @@ export function NoteToldView({ turn, ctx }: { turn: NoteToldTurn; ctx: PeerConte
       read={{ at: turn.at, after: turn.after ? toolLabel(turn.after) : undefined }} />
   );
 }
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The conductor's digest, folded, as it was told. */
 export function DigestView({ turn, ctx }: { turn: DigestTurn; ctx: PeerContext }) {
