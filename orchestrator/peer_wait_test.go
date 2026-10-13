@@ -241,8 +241,16 @@ func TestTwoScriptedPeersAskAndAnswer(t *testing.T) {
 	if !read {
 		t.Error("A's lux input lacks the peer answer")
 	}
-	if n := w.count(`SELECT count(*) FROM peer_waits WHERE message_id = $1 AND how = 'wait' AND closed_by = 'reply'`, question); n != 1 {
-		t.Errorf("the wait on %s was not closed by the reply", question)
+	// A reply that commits before A's wait_for_reply is returned at once,
+	// with no wait recorded; any wait there is must be A's own, closed by it.
+	var waits []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(array_agg(how || '/' || COALESCE(closed_by, 'open')), '{}')
+		FROM peer_waits WHERE message_id = $1`, question).Scan(&waits); err != nil {
+		t.Fatal(err)
+	}
+	if closed := w.count(`SELECT count(*) FROM peer_waits WHERE message_id = $1
+		AND how = 'wait' AND closed_by = 'reply' AND closed_at IS NOT NULL`, question); len(waits) > 1 || closed != len(waits) {
+		t.Errorf("waits on %s: %v; want none, or one explicit wait closed by the reply", question, waits)
 	}
 	if n := w.count(`SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
 		t.Errorf("%d waits left open", n)

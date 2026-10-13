@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -538,6 +539,74 @@ func TestAClaudeTurnEndsWithTheResultLuxSendsAfterIt(t *testing.T) {
 	}
 	if cost != 0.75 || out != 14 {
 		t.Errorf("run: cost %v output %d, want 0.75 and 14", cost, out)
+	}
+}
+
+// The idle an agent reports before its first busy ends no turn, so it
+// opens no wait on the Run's unanswered question to a peer, even when the
+// follower applies it after the question was sent; the idle after a busy
+// does, as turn_ended.
+func TestAnIdleBeforeTheFirstBusyOpensNoTurnEndWait(t *testing.T) {
+	w := newHarnessWorld(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_peer_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`,
+		`UPDATE runs SET agent_busy_at = NULL WHERE id = 'run_'||$1`,
+		`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+			VALUES ('pm_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'wi_peer_'||$1, 'Which path?')`,
+	} {
+		if _, err := w.owner.Exec(ctx, q, w.run.Org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waits := func() (all int, turnEnded int) {
+		t.Helper()
+		if err := w.owner.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE how = 'turn_ended' AND closed_at IS NULL AND message_id = 'pm_'||$2)
+			FROM peer_waits WHERE run_id = $1`, w.run.ID, w.run.Org).Scan(&all, &turnEnded); err != nil {
+			t.Fatal(err)
+		}
+		return all, turnEnded
+	}
+	w.feed(luxIdle)
+	if all, _ := waits(); all != 0 {
+		t.Fatalf("the idle before the first busy opened %d waits, want none", all)
+	}
+	w.feed(luxBusy, luxIdle)
+	if all, turnEnded := waits(); all != 1 || turnEnded != 1 {
+		t.Errorf("after busy and idle: %d waits, %d open turn_ended on the question; want exactly one", all, turnEnded)
+	}
+}
+
+// A person's resume of a paused Run starts a new process, which reports
+// idle before its first busy: that idle opens no wait on the question the
+// Run left unanswered, though the Run was busy before its pause; the idle
+// after the resumed turn's busy does, as turn_ended.
+func TestAResumedRunsIdleBeforeItsFirstBusyOpensNoTurnEndWait(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_peer_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`, w.run.Org)
+	w.exec(`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+		VALUES ('pm_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'wi_peer_'||$1, 'Which path?')`, w.run.Org)
+	activityIdle := func(epoch int) lux.Frame { return record(epoch, "lux.activity", map[string]any{"activity": "idle"}) }
+	w.follow(busy(1))
+	if _, busyAt := w.runState(); busyAt == nil {
+		t.Fatal("the turn before the pause recorded no busy: the case is not the one under test")
+	}
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	w.s.Lux = &runningAnswerLux{streamLux: newStreamLux(w.lux), base: base}
+	w.whilePaused()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND agent_busy_at IS NULL`); n != 1 {
+		t.Fatal("the resume was not accepted with its busy reset: the case is not the one under test")
+	}
+	const open = `SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`
+	w.follow(activityIdle(2))
+	if n := w.count(open); n != 0 {
+		t.Fatalf("the resumed process's idle before its first busy opened %d waits, want none", n)
+	}
+	w.follow(busy(2), activityIdle(2))
+	if n, turnEnded := w.count(open), w.count(open+` AND how = 'turn_ended' AND message_id = 'pm_'||organization_id`); n != 1 || turnEnded != 1 {
+		t.Errorf("after the resumed busy and idle: %d open waits, %d turn_ended on the question; want exactly one", n, turnEnded)
 	}
 }
 
