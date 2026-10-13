@@ -278,6 +278,21 @@ describe("a conductor's Chat", () => {
     expect(retried).toBe(0);
   });
 
+  test("a conductor dude woke, moved during its first start and then failed before it ran: no Try again; dude wakes a new one", async () => {
+    let retried = 0;
+    const moved = [created(), ev("conductor.briefed", { text: "Conductor, dude woke you; one thing: …" }, 1),
+      ev("conductor.woken", { text: "dude woke you; one thing: …", reasons: ["decision"], started: true }, 2),
+      stage("waiting", 3), stage("image", 1_000), stage("park", 2_000, 1, "preempt"), stage("waiting", 3_000, 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "no capacity" }, 9_000)];
+    const ended = project(moved, "failed").turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && [ended.start?.kind, ended.woken]).toEqual(["move", true]);
+    const page = await runPage("failed", moved, true, undefined, () => { retried += 1; return Promise.resolve(); });
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelector("[data-testid=start-wakes-next]")!.textContent).toBe("dude will wake a new conductor.");
+    expect(retried).toBe(0);
+  });
+
   test("a conductor dude woke that ran, parked, then failed resuming for a person's message: Try again, no wakes-next line", async () => {
     let retried = 0;
     const resumed = [created(), ev("conductor.briefed", { text: "Conductor, dude woke you; one thing: …" }, 1),
