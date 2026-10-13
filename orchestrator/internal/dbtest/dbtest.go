@@ -98,14 +98,24 @@ func clone() cloned {
 	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s OWNER dude", name, template)); err != nil {
 		return cloned{err: err}
 	}
+	if err := configure(ctx, admin, name); err != nil {
+		// Nothing else knows name yet: drop it here or it outlives the run.
+		if _, derr := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); derr != nil {
+			err = fmt.Errorf("%w (and dropping %s: %v)", err, name, derr)
+		}
+		return cloned{err: err}
+	}
+	return cloned{name: name}
+}
+
+// configure sets a new clone up; a variable so a test can make it fail.
+var configure = func(ctx context.Context, admin *pgx.Conn, name string) error {
 	// A test's commit need not wait for its WAL to reach the disk: a
 	// database that a crash would lose is dropped anyway, and what a commit
 	// makes visible to other sessions is the same. Per database, since a
 	// clone does not inherit its template's settings.
-	if _, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET synchronous_commit = off"); err != nil {
-		return cloned{err: err}
-	}
-	return cloned{name: name}
+	_, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET synchronous_commit = off")
+	return err
 }
 
 // cloneForTest is the clone made ahead for this test, if Main made one,
