@@ -132,6 +132,51 @@ func TestAServiceCallAfterAResumeCarriesTheResumesSecretValue(t *testing.T) {
 	}
 }
 
+// A machine move is a resume with resources and another pool: the new
+// placement's service proxy carries the value that resume gave, as any
+// resume's does.
+func TestAServiceCallAfterASizedResumeToAnotherPoolCarriesItsSecretValue(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	tools := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.URL.Path+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+	}))
+	t.Cleanup(tools.Close)
+	const gib = 1 << 30
+	fake := fakelux.New(t.TempDir(), "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Conductor: true} })
+	_, c, run := startedWith(t, fake, lux.Spec{
+		Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "opencode", Prompt: "http dude POST /tools/update_task {}\necho Done.",
+			Services: []lux.Service{{Name: "dude", URL: tools.URL, Headers: []lux.Header{{Name: "Authorization", Secret: "DUDE_TOOLS_TOKEN"}}}}},
+		Resources: &lux.Resources{CPUs: 2, Memory: 8 * gib, Disk: 20 * gib},
+		Secrets:   []lux.Secret{{Name: "DUDE_TOOLS_TOKEN", Value: "Bearer first-start", As: "none"}},
+	})
+	calls := func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(got) }
+	waitFor(t, "the first turn's call", func() bool { return len(calls()) == 1 })
+	ctx := context.Background()
+	if err := c.Stop(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the Run to stop", func() bool { r, _ := c.Get(ctx, run); return r.State == "stopped" })
+	pool := fakelux.DefaultPools()[1].ID
+	larger := lux.Resources{CPUs: 4, Memory: 16 * gib, Disk: 40 * gib}
+	resumed, err := c.Resume(ctx, run, lux.ResumeInput{Input: "tool: start_phase {}", Resources: &larger, Placement: &lux.PlacementSpec{PoolID: pool},
+		Secrets: []lux.Secret{{Name: "DUDE_TOOLS_TOKEN", Value: "Bearer moved", As: "none"}}})
+	if err != nil || resumed.Resize == nil || resumed.Resize.Applied != larger {
+		t.Fatalf("sized resume: %+v %v", resumed, err)
+	}
+	waitFor(t, "the moved turn's call", func() bool { return len(calls()) == 2 })
+	want := []string{"/tools/update_task Bearer first-start", "/tools/start_phase Bearer moved"}
+	if !slices.Equal(calls(), want) {
+		t.Errorf("the service was called %q; want %q", calls(), want)
+	}
+	if r, err := c.Get(ctx, run); err != nil || r.PoolID != pool {
+		t.Errorf("after the move: %+v %v", r, err)
+	}
+}
+
 // lux's shim writes a server's output and its exit's error only through
 // its redactor, keeping stdout and stderr apart: a command that prints its
 // env secrets on both streams and fails leaves none of them in its log.
