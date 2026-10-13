@@ -57,6 +57,18 @@ test("a live thread waiting on a permission says so in its header and marks itse
   expect(done!.querySelector("[data-testid='chat-thread-waiting']")).toBeNull();
 });
 
+test("an open-only row marks its whole root as clickable; a disclosure thread does not", async () => {
+  const el = await mount(
+    <>
+      <ChatThread sessionId="row" role="subagent" status="running" task="Research" openOnly collapsed onOpen={() => undefined} summary="Reading" />
+      <ChatThread sessionId="tree" role="subagent" status="running" task="Inline" summary="Reading"><p>inside</p></ChatThread>
+    </>,
+  );
+  const [row, tree] = [...el.querySelectorAll("section")];
+  expect(row!.getAttribute("data-open-only")).toBe("true");
+  expect(tree!.getAttribute("data-open-only")).toBeNull();
+});
+
 test("the gallery's child-session block draws a live, a waiting, a folded and two side-by-side children in dark and light", async () => {
   const el = await mount(
     <PaneDensityContext.Provider value="comfortable"><ChatSection mode="both" /></PaneDensityContext.Provider>,

@@ -1759,7 +1759,8 @@ MarkdownCheatsheet.
   glyph in its header, `data-waiting="true"`; not an activity kind.
   `openOnly collapsed onOpen={…}` renders a folded row at every depth:
   click, Enter and Space open the separate transcript, never disclose a body.
-  There is no disclosure chevron or nested Open button; waiting detail belongs
+  The whole row, summary included, is `data-open-only="true"` with the
+  pointer cursor and hover wash. There is no disclosure chevron or nested Open button; waiting detail belongs
   in the separate transcript. Other callers retain the depth-aware disclosure.
 - **QuestionCard** — an agent's question (or up to four, `items`) to a
   person as a turn. Waiting it is the loudest turn in the transcript

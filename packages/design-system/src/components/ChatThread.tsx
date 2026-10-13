@@ -138,6 +138,7 @@ export function ChatThread({
       data-status={status}
       data-depth={depth}
       data-waiting={isWaiting ? "true" : undefined}
+      data-open-only={openOnly ? "true" : undefined}
       aria-label={`${ROLE_LABEL[role]} subagent: ${task}`}
       onClick={openOnly ? () => onOpen?.(sessionId) : undefined}
       {...rest}
