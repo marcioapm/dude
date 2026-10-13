@@ -401,7 +401,7 @@ func TestInTheImageARepositorysGitHooksRun(t *testing.T) {
 // Where git would look for hooks without dude's setting, dude's hook looks
 // too: an absolute path (lefthook), the global config's ~/ path, a
 // worktree's own setting over the repository's, and .git/hooks when none
-// is set. A setting naming dude's own directory, directly or through a
+// is set; none when the last is empty, as git. A setting naming dude's own directory, directly or through a
 // symlink, is passed over for .git/hooks and does not loop. All of it
 // with no system config and with the image's.
 func TestDudesHookRunsTheHooksGitWouldHaveRun(t *testing.T) {
@@ -456,11 +456,30 @@ func hooksGitWouldHaveRun(t *testing.T, image bool) {
 	}
 	r.git("config", "--worktree", "--unset", "core.hooksPath")
 
-	// An empty value unsets what comes before it: .git/hooks again.
+	// An empty value, last, makes git run no repository hook (it looks for
+	// /commit-msg), as git itself shows without dude: dude's hook runs none
+	// after adding the trailers.
 	r.git("config", "core.hooksPath", "")
-	if got := commit("empty"); !slices.Equal(got, []string{"dot-git"}) {
-		t.Errorf("an empty setting: ran %v, want .git/hooks", got)
+	gitAlone := append(slices.Clone(r.env), "GIT_CONFIG_COUNT=0", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@localhost",
+		"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@localhost")
+	plain := exec.Command("git", "-C", r.dir, "rev-parse", "--git-path", "hooks/commit-msg")
+	plain.Env = gitAlone
+	if out, err := plain.Output(); err != nil || strings.TrimSpace(string(out)) != "/commit-msg" {
+		t.Errorf("git's own hook path under an empty core.hooksPath: %q %v", out, err)
 	}
+	_ = os.Remove(log)
+	plain = exec.Command("git", "-C", r.dir, "commit", "-q", "--allow-empty", "-m", "git alone")
+	plain.Env = gitAlone
+	if out, err := plain.CombinedOutput(); err != nil {
+		t.Fatalf("git alone: %v\n%s", err, out)
+	}
+	if got := readLog(t, log); len(got) != 0 {
+		t.Errorf("git alone under an empty core.hooksPath ran %v", got)
+	}
+	if got := commit("empty"); len(got) != 0 {
+		t.Errorf("an empty setting: ran %v, want none, as git", got)
+	}
+	r.git("config", "--unset", "core.hooksPath")
 
 	// A setting naming dude's own directory is passed over: the global one
 	// before it, else .git/hooks.

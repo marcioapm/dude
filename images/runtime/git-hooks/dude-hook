@@ -24,7 +24,8 @@
 # directory the last core.hooksPath of any scope but command names (a
 # repository's husky or lefthook, a worktree's, the agent's global one),
 # passing over any that names dude's own directory (the image's system
-# one), else the repository's .git/hooks. So a repository's hook managers keep
+# one), else the repository's .git/hooks; none if that last value is
+# empty, as git runs none then. So a repository's hook managers keep
 # working and its commit-msg sees the trailers, and a hook that refuses
 # still refuses the commit. An explicit `git -c core.hooksPath=…` comes
 # after the Run's setting and wins: that one command bypasses dude.
@@ -65,14 +66,17 @@ rewriting() {
 # own directory (the image's system setting names it), else the
 # repository's .git/hooks. --type=path expands ~/ as git does; a relative
 # path is git's to read from the directory it runs hooks in, which is this
-# script's working directory too. An empty value is no setting. awk marks
+# script's working directory too. If that last value is empty, git runs no
+# repository hook (it looks for /<name>), and repo_hooks fails. awk marks
 # each value with "=", so an empty one is told apart from no output.
 repo_hooks() {
+  set=
   path=
   while IFS= read -r line; do
     case $line in =*) ;; *) continue ;; esac
     v=${line#=}
     [ -n "$v" ] && [ "$(cd "$v" 2>/dev/null && pwd -P)" = "$here" ] && continue
+    set=1
     path=$v
   done <<EOF
 $(git config --show-scope --type=path --get-all core.hooksPath 2>/dev/null |
@@ -80,6 +84,8 @@ $(git config --show-scope --type=path --get-all core.hooksPath 2>/dev/null |
 EOF
   if [ -n "$path" ]; then
     printf '%s\n' "$path"
+  elif [ -n "$set" ]; then
+    return 1
   else
     d=$(git rev-parse --git-common-dir 2>/dev/null) && printf '%s/hooks\n' "$d"
   fi
@@ -98,7 +104,7 @@ if [ "$name" = prepare-commit-msg ] && [ -n "$1" ] && ! rewriting; then
 fi
 
 here=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
-hooks=$(repo_hooks)
+hooks=$(repo_hooks) || exit 0
 there=$(cd "$hooks" 2>/dev/null && pwd -P)
 # Never dude's own directory again, however reached (a symlink included):
 # that would run this script in a loop.
