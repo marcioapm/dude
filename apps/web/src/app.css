@@ -169,6 +169,13 @@ body {
   min-height: 0;
   display: flex;
 }
+/* The child takes at most 40% of the session, not of the surrounding window. */
+.runChildPanel {
+  width: min(40%, 640px);
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
 /* The session, as the drop target for images: header, bar and conversation alike. */
 .runDrop {
   flex: 1;
@@ -187,6 +194,19 @@ body {
 .runRail {
   flex: none;
   width: 260px;
+}
+.runChildQuicklink {
+  display: flex;
+  width: 100%;
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--ds-color-text-primary);
+  cursor: pointer;
+}
+.runChildQuicklink:hover {
+  background: var(--ds-color-hover-wash);
 }
 /* The terminal in the rail, under the session's facts. */
 .runRailTerminal {

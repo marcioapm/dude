@@ -136,7 +136,7 @@ export const EventTypes = {
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
   BrainstormFiled: "session.filed",
-  /** dude briefed the session's agent. Payload: `{ text }`. */
+  /** dude briefed the session's agent. Payload: `{ text, supersedes? }`, `supersedes` the ended agent's directive the briefing hands on. */
   BrainstormBriefed: "session.briefed",
   /** dude told the session's agent something (who owns it now). Payload: `{ text, directiveId }`. */
   BrainstormTold: "session.told",
@@ -268,13 +268,25 @@ export const EventTypes = {
    * `firstOutput`. A phase whose end is unknown is absent, never zero.
    */
   RunResumeTimed: "run.resume.timed",
+  /**
+   * Where an agent's Run is while it starts, as lux announced it, once per
+   * change (about six per start). Payload: `{ stage, since, epoch,
+   * reason? }`: `stage` is lux's (`waiting`, `image`, `volumes`,
+   * `repositories`, `container`, `running` while lux's state is not yet
+   * running), or `park` for a move's stop (a drain, a preemption, a
+   * migrate); `since` lux's `stageSince` in UTC. Written only while the Run
+   * starts. A start that fails says its stage in `run.failed`.
+   */
+  RunStage: "run.stage",
 
   // Run lifecycle
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
   /**
-   * The Run failed. Payload: `{ status, error, kept?, failedTurns? }`.
+   * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
+   * reason? }`. `stage`: a start that failed before the agent ran, the
+   * `run.stage` it was in, with `reason` lux's own (its `stateReason`).
    * `kept`: only a conductor's or session agent's turn failed, and the Run
    * goes on (parked, or stopped by a control already pending), so it reads
    * as the turn's failure, not the Run's; `failedTurns`, how many turns in
@@ -405,6 +417,45 @@ export const EventTypes = {
    */
   NetworkRefused: "agent.network.refused",
 
+  // Child sessions: a subagent the Run's agent started from a tool call
+  // (docs/design/agent-tools.md, "Child sessions"). Every payload carries
+  // `{ childId, callId }`: the harness's id for the child (session, thread
+  // or task) and the `callId` of the parent's `agent.tool.called` that
+  // started it; a child of a child carries `parentChildId` too.
+  /**
+   * Payload: `{ childId, callId, parentChildId?, kind, title, agentType?,
+   * model? }`. `kind` is `task` (OpenCode, Claude Code) or `spawn` (Codex);
+   * `title` the description the parent gave.
+   */
+  ChildStarted: "agent.child.started",
+  /**
+   * A child's tool call, as `agent.tool.called` (`{ tool, callId, input,
+   * title }`, `callId` the child's own) plus `{ childId, parentCallId }`.
+   */
+  ChildToolCalled: "agent.child.tool.called",
+  /** A child's tool call ended, as `agent.tool.completed` plus `{ childId, parentCallId }`. */
+  ChildToolCompleted: "agent.child.tool.completed",
+  /**
+   * A child's completed message. Payload: `{ childId, callId, text,
+   * costUsd?, tokens? }`, text cut at 2 KB. A child's reasoning is not
+   * recorded.
+   */
+  ChildMessage: "agent.child.message",
+  /**
+   * A child waits on something nothing in the Run can answer. Payload:
+   * `{ childId, callId, on: "permission", permission, patterns, answered,
+   * held, childCallId? }`: `held` false for an ask lux answered or one for
+   * a call already over, which holds nothing. The child's next event ends
+   * the wait.
+   */
+  ChildWaiting: "agent.child.waiting",
+  /**
+   * Payload: `{ childId, callId, status, summary, costUsd?, tokens?,
+   * durationSecs }`, status `completed`, `failed` or `interrupted`. A
+   * child's cost is already in `run.cost.reported`: never add it.
+   */
+  ChildEnded: "agent.child.ended",
+
   // Human interaction
   /**
    * An agent asked a person (`kind` `agent`), or the workflow escalated
@@ -425,9 +476,11 @@ export const EventTypes = {
   QuestionClosed: "question.closed",
   /**
    * A message in a task's Chat, on its conductor's Run. Payload:
-   * `{ text, directiveId?, github?, by? }`. A person's: the first has no
+   * `{ text, directiveId?, supersedes?, github?, by? }`. A person's: the first has no
    * `directiveId` (it is the conductor's briefing, with dude's note before
-   * it); each later one is delivered as the directive named. One from a
+   * it); each later one is delivered as the directive named. A message an
+   * ended agent never read, handed on to the next, names that agent's
+   * directive as `supersedes`. One from a
    * pull request comment addressed to dude (actor `integration`,
    * `github:<login>`) carries `github: { login, repo, number, feedbackId,
    * kind, url?, path? }`. The conductor's reply on a pull request is `by:

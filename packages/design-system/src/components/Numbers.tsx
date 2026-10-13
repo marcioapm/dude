@@ -132,6 +132,11 @@ export interface DurationProps extends NumberBaseProps {
    * it ticks upward forever, reading as though the work were still going.
    */
   readonly live?: boolean | undefined;
+  /**
+   * The live dot a ticking clock draws (default true). False beside a mark
+   * that is already live, so a line has one breathing thing: the clock still ticks.
+   */
+  readonly dot?: boolean | undefined;
 }
 
 /**
@@ -139,7 +144,7 @@ export interface DurationProps extends NumberBaseProps {
  * live-ticking otherwise. Tick rate is 1s — nothing in this product needs
  * sub-second live timers, and they read as noise.
  */
-export function Duration({ ms, since, until, live, format, mono, tone = "default", className, ...rest }: DurationProps) {
+export function Duration({ ms, since, until, live, dot = true, format, mono, tone = "default", className, ...rest }: DurationProps) {
   const running = live ?? (until === undefined || until === null);
   const isLive = since !== undefined && running;
   const [now, setNow] = useState(() => Date.now());
@@ -168,10 +173,11 @@ export function Duration({ ms, since, until, live, format, mono, tone = "default
         mono && styles["mono"],
         tone === "muted" && styles["muted"],
         tone === "secondary" && styles["secondary"],
-        isLive && styles["live"],
+        isLive && dot && styles["live"],
         className,
       )}
       title={`${INT.format(elapsed)} ms`}
+      data-live-dot={isLive && dot ? "" : undefined}
       {...rest}
     >
       {formatDuration(elapsed, format !== undefined ? { style: format } : {})}

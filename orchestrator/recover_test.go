@@ -87,15 +87,16 @@ func TestAnAbortedTaskOffersEveryWayBack(t *testing.T) {
 func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 	w := newWorld(t)
 	wi, runID := w.aborted()
+	w.lux.HoldPushes = true
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume", "note": "Keep the API."}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
 	if s := w.taskStatus(wi); s != "running" {
 		t.Errorf("a resumed task is %s", s)
 	}
-	w.until("the resumed run to finish, and review to start", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
-			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
+	// Hold the publishing boundary so cancellation is checked before completion cleanup.
+	w.until("the resumed run to push its work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND push_request_id IS NOT NULL`, runID) == 1
 	})
 	r := w.lux.Runs()[0]
 	if r.Resumed != 1 || r.Cancelled {
@@ -103,6 +104,16 @@ func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 	}
 	if len(r.Inputs) == 0 || r.Inputs[0] != "Keep the API." {
 		t.Errorf("the note was not the agent's next message: %v", r.Inputs)
+	}
+	w.lux.HoldPushes = false
+	w.lux.ReleasePushes()
+	w.until("the resumed run to finish, and review to start", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
+	})
+	w.until("the completed resumed run to be retired", func() bool { return w.lux.Runs()[0].Cancelled })
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND lux_stop_reason = 'cancel' AND artifacts_due_at IS NULL`, runID); n != 1 {
+		t.Errorf("the resumed run was cancelled without completed artifact collection")
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi); n != 1 {
 		t.Errorf("%d implementers: a resume made a new one", n)

@@ -6,7 +6,8 @@
  * distance × 100.
  *
  * Roles that wear one colour by design (the brainstorm wears the
- * conductor's) are one slot: identity between them is the glyph's job.
+ * conductor's, the subagent the investigator's) are one slot: identity
+ * between them is the glyph's job.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -93,11 +94,13 @@ function roleSlots(mode: (typeof MODES)[number]): Array<{ name: string; fg: stri
 }
 
 describe("role colour slots", () => {
-  // The one alias by design is the brainstorm wearing the conductor's colour;
-  // any other alias would silently drop that role from the pair checks.
-  test("every role but the brainstorm owns its colour, and the brainstorm wears the conductor's", () => {
-    const resolved = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, roleColourSlot(r)]));
-    const expected = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, r === "brainstorm" ? "conductor" : r]));
+  // The aliases by design are the brainstorm wearing the conductor's colour
+  // and the subagent the investigator's; any other alias would silently drop
+  // that role from the pair checks.
+  test("every role owns its colour but the brainstorm (the conductor's) and the subagent (the investigator's)", () => {
+    const resolved: Record<string, string> = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, roleColourSlot(r)]));
+    const alias: Record<string, string> = { brainstorm: "conductor", subagent: "investigator" };
+    const expected: Record<string, string> = Object.fromEntries(AGENT_ROLE_NAMES.map((r) => [r, alias[r] ?? r]));
     expect(resolved).toEqual(expected);
   });
 

@@ -12,7 +12,7 @@ test("accounts backfill preserves ids, shares emails, leaves email-less people, 
   try {
     await db`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text, checksum text)`;
     for (const file of await listMigrationFiles()) {
-      if (file.version === "113") break;
+      if (file.version === "114") break;
       await db.unsafe(await file.contents());
     }
     await db`INSERT INTO organizations (id, name, slug) VALUES ('org_a','A','a'), ('org_b','B','b'), ('org_c','C','c')`;
@@ -23,7 +23,7 @@ test("accounts backfill preserves ids, shares emails, leaves email-less people, 
       ('per_gone','org_b','gone@example.test','Gone',NULL,NULL,NULL,NULL,now()),
       ('per_null','org_a',NULL,'Key only',NULL,NULL,NULL,NULL,NULL)`;
     const snapshot = (await db`SELECT name, email::text, photo_url, photo_key, photo_token FROM people WHERE id='per_snapshot'`)[0];
-    await db.unsafe(await readFile("migrations/113_accounts.sql", "utf8"));
+    await db.unsafe(await readFile("migrations/114_accounts.sql", "utf8"));
     expect((await db`SELECT email::text, name FROM accounts ORDER BY email`).map((r: Record<string, unknown>) => ({ ...r })))
       .toEqual([{ email: "a@example.test", name: "Latest" }, { email: "gone@example.test", name: "Gone" }]);
     const rows = await db`SELECT id, account_id FROM people ORDER BY id`;
