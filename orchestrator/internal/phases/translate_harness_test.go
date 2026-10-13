@@ -541,6 +541,41 @@ func TestAClaudeTurnEndsWithTheResultLuxSendsAfterIt(t *testing.T) {
 	}
 }
 
+// The idle an agent reports before its first busy ends no turn, so it
+// opens no wait on the Run's unanswered question to a peer, even when the
+// follower applies it after the question was sent; the idle after a busy
+// does, as turn_ended.
+func TestAnIdleBeforeTheFirstBusyOpensNoTurnEndWait(t *testing.T) {
+	w := newHarnessWorld(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_peer_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`,
+		`UPDATE runs SET agent_busy_at = NULL WHERE id = 'run_'||$1`,
+		`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+			VALUES ('pm_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'wi_peer_'||$1, 'Which path?')`,
+	} {
+		if _, err := w.owner.Exec(ctx, q, w.run.Org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waits := func() (all int, turnEnded int) {
+		t.Helper()
+		if err := w.owner.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE how = 'turn_ended' AND closed_at IS NULL AND message_id = 'pm_'||$2)
+			FROM peer_waits WHERE run_id = $1`, w.run.ID, w.run.Org).Scan(&all, &turnEnded); err != nil {
+			t.Fatal(err)
+		}
+		return all, turnEnded
+	}
+	w.feed(luxIdle)
+	if all, _ := waits(); all != 0 {
+		t.Fatalf("the idle before the first busy opened %d waits, want none", all)
+	}
+	w.feed(luxBusy, luxIdle)
+	if all, turnEnded := waits(); all != 1 || turnEnded != 1 {
+		t.Errorf("after busy and idle: %d waits, %d open turn_ended on the question; want exactly one", all, turnEnded)
+	}
+}
+
 // A failure only the result line carries (an API error mid-turn:
 // error_during_execution, no synthetic reply before it) fails its own
 // turn, never done, and not the next. One an interrupt caused does not.
