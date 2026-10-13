@@ -7,8 +7,8 @@
 
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  ChatComposer, EntityLine, PersonAvatar, PersonAvatarStack, ProjectAvatar, RecentSessions, Segmented, SettingRow, SettingsHeader, SettingsLayout,
-  SettingsNote, SettingsSection, StarterPills, Switch, WELCOME_STARTERS, Welcome, type SettingsNavItem,
+  ChatComposer, EntityLine, PersonAvatar, PersonAvatarStack, ProjectAvatar, RecentSessions, Segmented, SettingsHeader, SettingsLayout,
+  SettingsNote, SettingsSection, StarterPills, WELCOME_STARTERS, Welcome, type SettingsNavItem,
 } from "@dude/design-system/components";
 import { Icon, type IconName } from "@dude/design-system";
 import {
@@ -18,7 +18,7 @@ import { projectCounts } from "../../../../packages/design-system/src/util/navMo
 import type { Person } from "../../../../packages/design-system/src/components/PersonAvatar.tsx";
 import {
   ACME, ACME_INVITATIONS, ACME_MEMBERS, ALL_ORGS, CHIP_EXAMPLE, CHLOE_EMAIL, CHLOE_INVITES, CHLOE_OTHER, HOST, HOW, MEMBERSHIPS, MY_INVITATIONS, MY_KEYS, NEW_CODES,
-  NEW_KEY, NORTHWIND, NORTHWIND_INVITATIONS, NORTHWIND_MEMBERS, OPERATOR, P, chipStates, inviteUrl, parsePaste, pendingOf,
+  NEW_KEY, NORTHWIND, NORTHWIND_INVITATIONS, NORTHWIND_MEMBERS, P, SUPER_ADMINS, chipStates, inviteUrl, parsePaste, pendingOf,
   type ChipState, type Entry, type Invitation, type InvitationRow, type InvitationStatus, type MadeLink, type Member, type Org, type Role,
 } from "./data.ts";
 import { Mark, OrgFace, roleWord } from "./Shell.tsx";
@@ -75,7 +75,7 @@ export function FirstOne({ invitation, onStart }: { invitation: Invitation; onSt
         <header className={s.hero}>
           <OrgFace org={org} size={48} />
           <h1 className={s.heroTitle}>Welcome to {org.name}, Chloé</h1>
-          <p className={s.heroLine}>You joined from {invitation.by?.name ?? "the operator"}'s invitation link, as {invitation.role === "admin" ? "an admin" : "a member"}. You're in Acme too: everyone who signs in to this dude is.</p>
+          <p className={s.heroLine}>You joined from {invitation.by?.name ?? "the operator"}'s invitation link, as {invitation.role === "admin" ? "an admin" : "a member"}. Your account was made when you joined, with the name and photo Cloudflare Access gave.</p>
         </header>
         <Card>
           <CardHeader title="You" />
@@ -125,19 +125,17 @@ function SignedInAs({ email }: { email: string }) {
 
 /**
  * Screen 1, second variant: Chloé signs in at the bare address while two
- * invitations wait for her email (she lost the links, or opened one and the
- * other was sent too). She is already in Acme, which is open to everyone;
- * the other two wait for her answer.
+ * invitations wait for her email (she lost the links, or was sent two). She
+ * is in no organisation, so the gate lets her in only to answer them.
  */
-export function FirstTwo({ onJoin, onContinue }: { onJoin: (org: Org) => void; onContinue: () => void }) {
+export function FirstTwo({ onJoin }: { onJoin: (org: Org) => void }) {
   const [state, setState] = useState<Record<string, "joined" | "later">>({});
   return (
     <Outside testId="first-two">
       <header className={s.hero}>
         <h1 className={s.heroTitle}>You're invited, Chloé</h1>
-        <p className={s.heroLine}>Two organisations on this dude sent you an invitation link. Join either here; the other waits in your menu.</p>
+        <p className={s.heroLine}>Two organisations on this dude sent you an invitation link. dude lets people in by invitation: join one to start; the other waits in your menu.</p>
       </header>
-      <Callout tone="info">You're already in Acme: everyone who signs in to this dude joins it as a member.</Callout>
       <Card>
         <CardHeader title="You" />
         <CardBody><ProfileStrip person={P.chloe} email={CHLOE_EMAIL} /></CardBody>
@@ -146,7 +144,7 @@ export function FirstTwo({ onJoin, onContinue }: { onJoin: (org: Org) => void; o
         {CHLOE_INVITES.map((i) => <InviteCard key={i.id} i={i} state={state[i.id]} onJoin={() => { setState((x) => ({ ...x, [i.id]: "joined" })); onJoin(i.org); }}
           onLater={() => setState((x) => ({ ...x, [i.id]: "later" }))} />)}
       </ul>
-      <div className={s.next}><Button variant="secondary" trailingIcon="arrow-right" onClick={onContinue}>Continue to Acme</Button></div>
+      <p className={s.fine} data-testid="first-two-note">Until you join one, this is all dude shows you. Joining makes your account, with the name and photo above.</p>
       <SignedInAs email={CHLOE_EMAIL} />
     </Outside>
   );
@@ -177,13 +175,16 @@ function InviteCard({ i, state, onJoin, onLater }: { i: Invitation; state?: "joi
   );
 }
 
-/** Screen 2: signed in, in no organisation: none is open to everyone and no invitation waits. */
+/**
+ * Screen 2: Access proved the email, and the gate found no membership, no
+ * pending invitation and no super-admin. Nothing is recorded.
+ */
 export function NoOrg({ expired }: { expired: boolean }) {
   return (
     <Outside testId="no-org">
       <header className={s.hero}>
         <h1 className={s.heroTitle}>Your email isn't in any organisation on this dude</h1>
-        <p className={s.heroLine}>You signed in as <b>{CHLOE_EMAIL}</b>. Ask an admin of the organisation you work with for an invitation link.</p>
+        <p className={s.heroLine}>You signed in as <b>{CHLOE_EMAIL}</b>. dude lets people in by invitation: an admin of the organisation you work with invites you and sends you a link.</p>
       </header>
       {expired ? (
         <Callout tone="attention">Your invitation to Northwind expired on 2 October. Ask Gus Lindqvist for a new link.</Callout>
@@ -192,8 +193,16 @@ export function NoOrg({ expired }: { expired: boolean }) {
         <CardHeader title="Who to ask" />
         <CardBody>
           <FormStack>
-            <p className="muted">An admin of the organisation can invite you from its Members page and send you the link. If you don't know who that is, ask whoever runs this dude:</p>
-            <EntityLine lead={<PersonAvatar person={OPERATOR.person} size={32} />} name={OPERATOR.person.name} detail={OPERATOR.email} />
+            <p className="muted">If you don't know who the organisation's admins are, ask this dude's super-admins. They make the organisations and can invite you to one.</p>
+            <ul className={s.rows} data-testid="super-admins">
+              {SUPER_ADMINS.map((a) => (
+                <li key={a.email} className={s.row}>
+                  {a.person
+                    ? <EntityLine lead={<PersonAvatar person={a.person} size={32} />} name={a.person.name} detail={a.email} />
+                    : <EntityLine lead={<span className={s.envelope}><Icon name="human" size={14} /></span>} name={a.email} detail="Super-admin" />}
+                </li>
+              ))}
+            </ul>
             <p className="muted">Signed in with the wrong address? Sign out, then sign in with the one you were invited with.</p>
           </FormStack>
         </CardBody>
@@ -202,6 +211,7 @@ export function NoOrg({ expired }: { expired: boolean }) {
           <Button variant="quiet" leadingIcon="arrow-right">Sign out</Button>
         </CardFooter>
       </Card>
+      <p className={s.fine}>dude keeps no record of this visit. Cloudflare Access decides who reaches this page; dude decides who gets past it.</p>
     </Outside>
   );
 }
@@ -224,8 +234,8 @@ export type AcceptState = "join" | "first" | "wrong" | "member" | "invalid";
 
 /**
  * Every state of `#/invite/<code>`, outside any organisation. Chloé's link
- * is Gus's, to Northwind; Ana's older one is to Acme, which Chloé joined on
- * her first sign-in because Acme is open to everyone.
+ * is Gus's, to Northwind. "Already in" is the same link opened again after
+ * she joined.
  */
 export function AcceptPage({ state, onJoin, onOpen }: { state: AcceptState; onJoin: (org: Org) => void; onOpen: (org: Org) => void }) {
   const gus = CHLOE_INVITES[0]!;
@@ -272,12 +282,12 @@ export function AcceptPage({ state, onJoin, onOpen }: { state: AcceptState; onJo
         <Card>
           <CardBody>
             <div className={s.accept}>
-              <OrgFace org={ACME} size={48} />
-              <h1 className={s.acceptTitle}>You're already in Acme</h1>
-              <p className={s.acceptLine}>Ana Ribeiro's invitation is marked accepted; you joined Acme when you first signed in. Your role stays Member.</p>
+              <OrgFace org={NORTHWIND} size={48} />
+              <h1 className={s.acceptTitle}>You're already in Northwind</h1>
+              <p className={s.acceptLine}>You joined from this link on 11 October. Your role stays Member.</p>
             </div>
           </CardBody>
-          <CardFooter><Button variant="primary" onClick={() => onOpen(ACME)} data-testid="open-org">Open Acme</Button></CardFooter>
+          <CardFooter><Button variant="primary" onClick={() => onOpen(NORTHWIND)} data-testid="open-org">Open Northwind</Button></CardFooter>
         </Card>
         <SignedInAs email={CHLOE_EMAIL} />
       </Outside>
@@ -301,7 +311,7 @@ export function AcceptPage({ state, onJoin, onOpen }: { state: AcceptState; onJo
         </CardBody>
         {state === "first" ? (
           <CardBody>
-            <Callout tone="info">You're in Acme already: anyone who signs in to this dude joins it as a member. Not now leaves you in Acme only, with this invitation in your menu.</Callout>
+            <Callout tone="info">You aren't in any organisation on this dude yet. Join makes your account, with the name and photo Cloudflare Access gave; you can change both after. Not now keeps this invitation waiting for you until it expires.</Callout>
           </CardBody>
         ) : null}
         <CardFooter>
@@ -472,7 +482,7 @@ export function MembersPage({ dialog, onDialog, onPage }: { dialog: MembersDialo
     <SettingsLayout data-testid="org-members" scope={{ title: "Acme", subtitle: "Organisation settings", leading: <OrgFace org={ACME} size={32} /> }}
       items={orgNav(pendingOf(ACME_INVITATIONS).length)} current="members" onSelect={onPage}>
       <SettingsNote>Everyone here can create, deliver and steer tasks. Admins manage the organisation: its members, invitations and settings.</SettingsNote>
-      <SettingsHeader title="Members" description="Who is in Acme. Anyone who signs in to this dude joins Acme as a member; invite someone to make them an admin, to bring back someone removed, or to send them a link."
+      <SettingsHeader title="Members" description="Who is in Acme. People join Acme by invitation. Cloudflare Access must also let them in; dude doesn't manage that."
         actions={<Button variant="primary" leadingIcon="plus" onClick={() => onDialog("invite")} data-testid="invite">Invite people</Button>} />
       <SettingsSection title={`Members · ${ACME_MEMBERS.length}`}>
         <MembersTable members={ACME_MEMBERS} you={P.marcio.id} admin onRemove={(m) => { setRemoving(m); onDialog("remove"); }} />
@@ -485,7 +495,7 @@ export function MembersPage({ dialog, onDialog, onPage }: { dialog: MembersDialo
         <Dialog open onOpenChange={(o) => !o && onDialog("none")} tone="danger" size="sm" title={`Remove ${removing.person.name} from Acme?`}
           description={<>
             Their keys for Acme stop working at once, and so does their next page in Acme. Tasks they own pass to the next person on them; what they did keeps their name.
-            {" "}<b>Anyone who signs in joins Acme, but not someone removed:</b> only an invitation brings them back, and their old keys stay revoked.
+            {" "}To bring them back, invite them again; their old keys stay revoked. If Acme is their only organisation, dude stops letting them in.
           </>}
           footer={<><Button variant="quiet" onClick={() => onDialog("none")}>Cancel</Button><Button variant="danger" solid>Remove {removing.person.name.split(" ")[0]}</Button></>} />
       ) : null}
@@ -762,13 +772,12 @@ const ADMIN_NAV: SettingsNavItem[] = [
   { id: "orgs", label: "Organisations", icon: "building", note: String(ALL_ORGS.length) },
 ];
 
-export type AdminView = "list" | "create" | "org" | "open";
+export type AdminView = "list" | "create" | "org";
 
 export function AdminPage({ view, onView, onBack }: { view: AdminView; onView: (v: AdminView) => void; onBack: () => void }) {
   const [inviting, setInviting] = useState<false | "invite" | "links">(false);
   const [filter, setFilter] = useState<Filter>("pending");
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
   const nw = NORTHWIND;
   return (
     <SettingsLayout data-testid="admin" className={s.admin}
@@ -778,28 +787,17 @@ export function AdminPage({ view, onView, onBack }: { view: AdminView; onView: (
         <p className="muted">Outside every organisation: this page shows no organisation's work. You're here because your email is in <code>auth.super_admins</code>.</p>
         <Button size="sm" variant="secondary" leadingIcon="arrow-right" onClick={onBack}>Back to Acme</Button>
       </div>}>
-      {view === "org" || view === "open" ? (
+      {view === "org" ? (
         <>
           <SettingsHeader title={<span className={s.inline}><OrgFace org={nw} size={24} />Northwind</span>}
-            description={`${HOST}/#/o/northwind · made in September 2026 · 4 members`}
+            description={`${HOST}/#/o/northwind · made in September 2026 · 4 members · joined by invitation`}
             actions={<><Button variant="quiet" onClick={() => onView("list")}>All organisations</Button><Button variant="primary" leadingIcon="plus" onClick={() => setInviting("invite")}>Invite people</Button></>} />
           <Callout tone="info">You can see who is in Northwind, invite and remove people. Its projects, tasks and settings are its members'; to work in it, invite yourself.</Callout>
-          <SettingsSection title="Who can join">
-            <SettingRow label="Anyone who signs in joins" htmlFor="open-to-everyone"
-              help={<>Everyone Cloudflare Access lets in to this dude joins Northwind as a member on their next visit. People removed from Northwind stay out: only an invitation brings them back.</>}>
-              <Switch id="open-to-everyone" checked={open} onCheckedChange={(c) => (c ? onView("open") : setOpen(false))} label={open ? "On" : "Off: by invitation only"} testId="open-switch" />
-            </SettingRow>
-          </SettingsSection>
           <SettingsSection title="Members · 4"><MembersTable members={NORTHWIND_MEMBERS} admin keyOnly /></SettingsSection>
           <SettingsSection title="Invitations">
             <InvitationsList org={nw} rows={NORTHWIND_INVITATIONS} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery}
               onRevoke={() => undefined} onInvite={() => setInviting("invite")} />
           </SettingsSection>
-          {view === "open" ? (
-            <Dialog open onOpenChange={(o) => !o && onView("org")} size="sm" title="Let anyone who signs in join Northwind?"
-              description="Everyone who has signed in to this dude (23 people) joins Northwind as a member on their next visit, and so does anyone Cloudflare Access lets in later. They can see all of Northwind's projects and tasks. People removed from Northwind stay out; turning this off later removes nobody."
-              footer={<><Button variant="quiet" onClick={() => onView("org")}>Cancel</Button><Button variant="primary" onClick={() => { setOpen(true); onView("org"); }} data-testid="open-confirm">Let everyone join</Button></>} />
-          ) : null}
           {inviting ? <InviteDialog org={nw} admin members={NORTHWIND_MEMBERS} invitations={NORTHWIND_INVITATIONS} done={inviting === "links"}
             onDone={(d) => setInviting(d ? "links" : "invite")} onClose={() => setInviting(false)} /> : null}
         </>
@@ -808,12 +806,11 @@ export function AdminPage({ view, onView, onBack }: { view: AdminView; onView: (
           <SettingsHeader title="Organisations" description="Every organisation on this dude. Nobody makes their own: you make it and send its first admin their link; they invite the rest."
             actions={<Button variant="primary" leadingIcon="plus" onClick={() => onView("create")} data-testid="create-org">Create organisation</Button>} />
           <Table density="comfortable" data-testid="orgs">
-            <THead><Tr><Th>Organisation</Th><Th>Who can join</Th><Th>Members</Th><Th>Admins</Th><Th>Made</Th><Th align="right"><span className="ds-sr-only">Open</span></Th></Tr></THead>
+            <THead><Tr><Th>Organisation</Th><Th>Members</Th><Th>Admins</Th><Th>Made</Th><Th align="right"><span className="ds-sr-only">Open</span></Th></Tr></THead>
             <TBody>
               {ALL_ORGS.map(({ org, members, admins, pending }) => (
                 <Tr key={org.id} interactive onClick={() => org.slug === "northwind" && onView("org")}>
                   <Td><EntityLine lead={<OrgFace org={org} size={28} />} name={org.name} detail={<span className="ds-mono">/o/{org.slug}</span>} /></Td>
-                  <Td>{org.open ? <Badge tone="info" icon="globe">Anyone who signs in</Badge> : <span className="muted">By invitation</span>}</Td>
                   <Td>{members}{pending ? <span className="muted"> · {pending} pending</span> : null}</Td>
                   <Td>{admins.length ? <span className={s.inline}><PersonAvatarStack people={admins} size={24} max={3} />{admins.map((a) => a.name.split(" ")[0]).join(", ")}</span>
                     : <Badge tone="attention" icon="warning">No admin yet</Badge>}</Td>
@@ -850,12 +847,12 @@ function CreateOrg({ onClose }: { onClose: () => void }) {
   }
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} size="sm" title="Create organisation"
-      description="It starts with dude's default model tiers and machine sizes, by invitation only. Its first admin sets up the rest."
+      description="It starts with dude's default model tiers and machine sizes. People join it by invitation; its first admin, who may be you, invites the rest."
       footer={<><Button variant="quiet" onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!name.trim() || !shown || !email.includes("@")} onClick={() => setMade(true)} data-testid="create-submit">Create and get the link</Button></>}>
       <FormStack>
         <Input label="Name" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
         <Input label="Slug" mono value={shown} onChange={(e) => setSlug(e.target.value)} hint={`In every link: ${HOST}/#/o/${shown || "…"}. It can't be changed later.`} />
-        <Input label="First admin's email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} hint="You get their invitation link to send them." />
+        <Input label="First admin's email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} hint="You get their invitation link to send them. Yours, if you'll be its first admin." />
       </FormStack>
     </Dialog>
   );

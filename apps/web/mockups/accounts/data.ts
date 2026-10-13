@@ -1,7 +1,7 @@
 /*
  * The mockup's world: Márcio, admin of Acme, member of Northwind and the
- * deployment's super-admin; Chloé, new, invited to Acme by a link (and, in
- * the second variant, to Northwind too); and the people, keys and
+ * deployment's super-admin; Chloé, new, in no organisation, invited to
+ * Northwind by Gus's link and to Globex by Lin's; and the people, keys and
  * invitations each organisation's pages show. Deterministic.
  */
 
@@ -38,8 +38,6 @@ export interface Org {
   readonly colorSlot: number;
   readonly projects: readonly NavProject[];
   readonly created: string;
-  /** "Anyone who signs in joins": `organizations.open_to_everyone`. */
-  readonly open: boolean;
 }
 
 let n = 7100;
@@ -48,8 +46,8 @@ function task(title: string, status: NavTask["status"], people: Person[]): NavTa
   return { id: `wi_${n}`, key: `PORT-${n - 7100}`, title, status, people };
 }
 
-/** The deployment's first organisation: open, as `auth.auto_create` made it. */
-export const ACME: Org = { id: "org_acme", name: "Acme", slug: "acme", colorSlot: 2, projects: navProjects, created: "March 2026", open: true };
+/** The deployment's first organisation. */
+export const ACME: Org = { id: "org_acme", name: "Acme", slug: "acme", colorSlot: 2, projects: navProjects, created: "March 2026" };
 
 export const NORTHWIND: Org = {
   id: "org_northwind",
@@ -57,7 +55,6 @@ export const NORTHWIND: Org = {
   slug: "northwind",
   colorSlot: 5,
   created: "September 2026",
-  open: false,
   projects: [
     {
       id: "p_portal",
@@ -73,7 +70,7 @@ export const NORTHWIND: Org = {
   ],
 };
 
-export const GLOBEX: Org = { id: "org_globex", name: "Globex", slug: "globex", colorSlot: 0, projects: [], created: "October 2026", open: false };
+export const GLOBEX: Org = { id: "org_globex", name: "Globex", slug: "globex", colorSlot: 0, projects: [], created: "October 2026" };
 
 /** Márcio's memberships, as the switcher lists them. */
 export const MEMBERSHIPS: readonly { org: Org; role: Role; waiting: number }[] = [
@@ -102,33 +99,36 @@ export const CHLOE_EMAIL = "chloe.durand@hey.com";
 export const CHLOE_OTHER = "chloe.d@gmail.com";
 
 /**
- * Chloé's: Gus's link to Northwind, Lin's to Globex. Acme is open to
- * everyone, so she is in Acme from her first sign-in without one.
+ * Chloé's: Gus's link to Northwind, Lin's to Globex. She is in no
+ * organisation until she joins one of them.
  */
 export const CHLOE_INVITES: readonly Invitation[] = [
   { id: "inv_2", code: "Nw5hT2cJ8rFq6zMe1uVd4x", org: NORTHWIND, role: "member", by: P.gus, sent: "11 October", expires: "in 12 days" },
   { id: "inv_3", code: "Gc8wQ3eR6tY9uI2oP5aS1d", org: GLOBEX, role: "member", by: P.lin, sent: "12 October", expires: "in 13 days" },
 ];
 
-/** Ana's, from before Chloé first signed in: opening it later finds her already in Acme. */
-export const ANA_TO_CHLOE: Invitation = { id: "inv_1", code: "k7Qm2vX9pL4sN8wR1tYb3c", org: ACME, role: "member", by: P.ana, sent: "9 October", expires: "in 10 days" };
-
-/** The first super-admin in the configuration: who the No organisation page names. */
-export const OPERATOR = { person: P.marcio, email: "marcio@acme.dev" };
+/**
+ * `auth.super_admins`: who the No organisation page names. A super-admin
+ * with no account yet is shown by email only.
+ */
+export const SUPER_ADMINS: readonly { person: Person | null; email: string }[] = [
+  { person: P.marcio, email: "marcio@acme.dev" },
+  { person: null, email: "ops@acme.dev" },
+];
 
 export interface Member {
   readonly person: Person;
   readonly email: string | null;
   readonly role: Role;
   readonly seen: string;
-  /** How they came in: an invitation, or "Anyone who signs in joins". */
+  /** How they came in, read from the invitation accepted into the row. */
   readonly joined?: string;
 }
 
 export const ACME_MEMBERS: readonly Member[] = [
   { person: P.marcio, email: "marcio@acme.dev", role: "admin", seen: "online", joined: "first admin" },
   { person: P.ana, email: "ana@acme.dev", role: "admin", seen: "online", joined: "invited by Márcio" },
-  { person: P.tom, email: "tom@acme.dev", role: "member", seen: "active yesterday on CP-41", joined: "joined on sign-in" },
+  { person: P.tom, email: "tom@acme.dev", role: "member", seen: "active yesterday on CP-41", joined: "joined before invitations" },
   { person: P.lin, email: "lin@acme.dev", role: "member", seen: "active 3 days ago", joined: "invited by Márcio" },
   { person: P.eli, email: "eli@northwind.io", role: "member", seen: "active last week", joined: "invited by Ana" },
 ];
@@ -154,7 +154,7 @@ export interface InvitationRow {
 }
 
 export const ACME_INVITATIONS: readonly InvitationRow[] = [
-  { id: "i1", code: "k7Qm2vX9pL4sN8wR1tYb3c", email: CHLOE_EMAIL, name: "Chloé Durand", role: "member", by: P.ana, created: "4 days ago", status: "pending", expires: "in 10 days" },
+  { id: "i1", code: "k7Qm2vX9pL4sN8wR1tYb3c", email: "jo.becker@acme.dev", name: "Jo Becker", role: "member", by: P.ana, created: "4 days ago", status: "pending", expires: "in 10 days" },
   { id: "i2", code: "Sa3pW7nK1xD5gH9qT2mR6e", email: "sam@acme.dev", role: "admin", by: P.marcio, created: "yesterday", status: "pending", expires: "in 13 days" },
   { id: "i3", code: "Jm8bY4uC6vE2kP0wL5sF1z", email: "jules@acme.dev", name: "Jules Moreau", role: "member", by: P.ana, created: "today", status: "pending", expires: "in 14 days" },
   { id: "i4", code: "Kn2rZ6tB9yH3mQ7cX4vA8d", email: "kai.nakamura@acme.dev", name: "Kai Nakamura", role: "member", by: P.ana, created: "16 days ago", status: "expired", expires: "2 days ago" },

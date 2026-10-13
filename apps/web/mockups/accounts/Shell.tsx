@@ -45,8 +45,6 @@ export interface SwitchProps {
   onSwitch: (org: Org) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Each organisation's waiting count beside it. */
-  counts: boolean;
   onAdmin: () => void;
   onSettings: () => void;
   onJoin: (i: Invitation) => void;
@@ -65,7 +63,7 @@ function menuItems(p: SwitchProps): RowMenuItem[] {
       onValueChange: (id) => { const m = p.memberships.find((x) => x.org.id === id); if (m) p.onSwitch(m.org); },
       items: p.memberships.map((m) => ({
         id: m.org.id, label: m.org.name,
-        description: p.counts && m.waiting ? `${roleWord(m.role)} · ${m.waiting} waiting on you` : roleWord(m.role),
+        description: m.waiting ? `${roleWord(m.role)} · ${m.waiting} waiting on you` : roleWord(m.role),
       })),
     },
     { kind: "separator" },

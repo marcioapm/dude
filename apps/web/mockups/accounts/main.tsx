@@ -17,12 +17,12 @@ import "../../src/app.css";
 import { ThemeProvider, useTheme, type ThemePreference } from "@dude/design-system";
 import { Segmented } from "@dude/design-system/components";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { ACME, ANA_TO_CHLOE, CHLOE_INVITES, HOST, MEMBERSHIPS, MY_INVITATIONS, NORTHWIND, P, type Org } from "./data.ts";
+import { ACME, CHLOE_INVITES, HOST, MEMBERSHIPS, MY_INVITATIONS, NORTHWIND, P, type Org } from "./data.ts";
 import {
   AcceptPage, AdminPage, FirstOne, FirstTwo, InvitationsPage, MembersPage, NoOrg, OrgWelcome, YourSettings,
   type AcceptState, type AdminView, type InvitationsView, type MembersDialog,
 } from "./Pages.tsx";
-import { Shell, type SwitchProps } from "./Shell.tsx";
+import { Shell, type Membership, type SwitchProps } from "./Shell.tsx";
 
 type Screen = "first" | "none" | "switcher" | "settings" | "members" | "invitations" | "accept" | "admin";
 
@@ -37,7 +37,7 @@ const VARIANTS: Record<Screen, readonly { value: string; label: string }[]> = {
     { value: "join", label: "Join" }, { value: "first", label: "First sign-in" }, { value: "wrong", label: "Other email" },
     { value: "member", label: "Already in" }, { value: "invalid", label: "Can't be used" },
   ],
-  admin: [{ value: "list", label: "Organisations" }, { value: "create", label: "Create" }, { value: "org", label: "One organisation" }, { value: "open", label: "Open to everyone" }],
+  admin: [{ value: "list", label: "Organisations" }, { value: "create", label: "Create" }, { value: "org", label: "One organisation" }],
 };
 
 const SCREENS: readonly { value: Screen; label: string }[] = [
@@ -52,14 +52,14 @@ const SCREENS: readonly { value: Screen; label: string }[] = [
 ];
 
 const NOTES: Record<Screen, string> = {
-  first: "Chloé signs in for the first time. Acme lets anyone who signs in join, so she is in Acme already. From Gus's link she joins Northwind and its welcome opens; at the bare address, the invitations waiting for her email are listed.",
-  none: "Access let them in, but no organisation is open to everyone and no invitation waits for their email. No key prompt: an honest page, who to ask, Sign out.",
-  switcher: "Your face at the bottom of the sidebar opens the menu (click, or Tab to it and press Enter; arrows move, Escape closes). Pick Northwind: the URL, the sidebar and Waiting on you change.",
+  first: "Chloé signs in for the first time, in no organisation, holding invitations: dude lets her in only to answer them. From Gus's link she joins Northwind and its welcome opens; at the bare address, every invitation waiting for her email is listed.",
+  none: "Access proved who they are, but they are in no organisation, hold no pending invitation and are not a super-admin. dude lets them in nowhere and records nothing: who to ask, Sign out.",
+  switcher: "Your face at the bottom of the sidebar opens the menu (click, or Tab to it and press Enter; arrows move, Escape closes). Each organisation shows what waits on you there. Pick Northwind: the URL, the sidebar and Waiting on you change.",
   settings: "Your profile is the same in every organisation; email comes from Access. Keys are grouped by organisation: New key for Acme.",
-  members: "Invite people: type or paste emails; each chip says what will happen to it. Invite gives a link per person to send them yourself.",
+  members: "People join by invitation only. Invite people: type or paste emails; each chip says what will happen to it. Invite gives a link per person to send them yourself.",
   invitations: "Every invitation and what became of it. Filtering by status and search run on the server, so a pending one never hides past a page.",
   accept: "What #/invite/<code> shows. A link works only for the email it was made for, which Cloudflare Access has proved.",
-  admin: "Outside every organisation: Márcio's email is in auth.super_admins. Reached from your menu's All organisations, or #/admin.",
+  admin: "Outside every organisation: Márcio's email is in auth.super_admins. Reached from your menu's All organisations, or #/admin; a super-admin in no organisation lands here.",
 };
 
 const params = new URLSearchParams(location.search);
@@ -71,7 +71,6 @@ function Mock() {
   const [variant, setVariant] = useState<string>(() => param("v", VARIANTS[screen].map((x) => x.value), VARIANTS[screen][0]!.value));
   const [collapsed, setCollapsed] = useState(params.get("rail") === "1");
   const [menu, setMenu] = useState(params.get("menu") === "1");
-  const [counts, setCounts] = useState(params.get("counts") !== "0");
   const [navOpen, setNavOpen] = useState(params.get("drawer") === "1");
   const [org, setOrg] = useState<Org>(variant === "after" ? NORTHWIND : ACME);
   // Chloé, after Join on a link or on the two-invitations page; null: still deciding.
@@ -105,10 +104,12 @@ function Mock() {
   };
 
   // Chloé on the first-sign-in and accept screens, Márcio everywhere else.
+  // Chloé is in no organisation until she joins one; "Joined from a link" starts in Northwind.
   const chloe = screen === "first" || screen === "accept";
   const gus = CHLOE_INVITES[0]!;
-  const chloeOrgs = [{ org: ACME, role: "member" as const, waiting: 0 }, ...(joined && joined.id !== ACME.id ? [{ org: joined, role: "member" as const, waiting: 0 }] : [])];
-  const chloeCurrent = joined ?? (screen === "first" && variant === "one" ? NORTHWIND : ACME);
+  const chloeIn = joined ?? (screen === "first" && variant === "one" ? NORTHWIND : null);
+  const chloeOrgs: Membership[] = chloeIn ? [{ org: chloeIn, role: "member", waiting: 0 }] : [];
+  const chloeCurrent = chloeIn ?? NORTHWIND;
   const sw: SwitchProps = {
     current: chloe ? chloeCurrent : org,
     onSwitch: (o) => {
@@ -118,14 +119,11 @@ function Mock() {
     },
     open: menu,
     onOpenChange: setMenu,
-    counts,
     onAdmin: () => go("admin"),
     onSettings: () => go("settings"),
     onJoin: () => go("accept", "join"),
-    memberships: chloe
-      ? (screen === "first" && variant === "one" ? [{ org: ACME, role: "member", waiting: 0 }, { org: NORTHWIND, role: "member", waiting: 0 }] : chloeOrgs)
-      : MEMBERSHIPS,
-    invitations: chloe ? CHLOE_INVITES.filter((i) => i.org.id !== chloeCurrent.id && !(screen === "first" && variant === "one" && i.org.id === NORTHWIND.id)) : MY_INVITATIONS,
+    memberships: chloe ? chloeOrgs : MEMBERSHIPS,
+    invitations: chloe ? CHLOE_INVITES.filter((i) => i.org.id !== chloeIn?.id) : MY_INVITATIONS,
     superAdmin: !chloe,
   };
 
@@ -135,12 +133,12 @@ function Mock() {
   let hash: string;
   if (screen === "none") hash = "#/";
   else if (screen === "admin") hash = variant === "list" || variant === "create" ? "#/admin" : "#/admin/o/northwind";
-  else if (acceptOutside) hash = `#/invite/${variant === "member" ? ANA_TO_CHLOE.code : variant === "invalid" ? "Zr0bQ9xW1eC4vT7yN2mK5p" : gus.code}`;
+  else if (acceptOutside) hash = `#/invite/${variant === "invalid" ? "Zr0bQ9xW1eC4vT7yN2mK5p" : gus.code}`;
   else if (screen === "first" && variant === "two" && !joined) hash = "#/invitations";
   else if (screen === "settings") hash = "#/me/settings";
   else if (screen === "members") hash = `#/o/${current.slug}/settings/members`;
   else if (screen === "invitations") hash = `#/o/${current.slug}/settings/invitations`;
-  else if (chloe && current.id !== ACME.id) hash = `#/o/${current.slug}/welcome`;
+  else if (chloe) hash = `#/o/${current.slug}/welcome`;
   else hash = `#/o/${current.slug}/`;
 
   const orgPage = (id: string) => (id === "members" ? go("members") : id === "invitations" ? go("invitations") : undefined);
@@ -149,12 +147,12 @@ function Mock() {
   if (screen === "none") body = <NoOrg expired={variant === "expired"} />;
   else if (screen === "admin") body = <AdminPage view={variant as AdminView} onView={(v) => setVariant(v)} onBack={() => go("switcher")} />;
   else if (acceptOutside) body = <AcceptPage key={variant} state={variant as AcceptState} onJoin={(o) => setJoined(o)} onOpen={(o) => setJoined(o)} />;
-  else if (screen === "first" && variant === "two" && !joined) body = <FirstTwo onJoin={(o) => setJoined(o)} onContinue={() => setJoined(ACME)} />;
+  else if (screen === "first" && variant === "two" && !joined) body = <FirstTwo onJoin={(o) => setJoined(o)} />;
 
-  const shellChild = screen === "first" || screen === "accept"
-    ? (joined && joined.id === NORTHWIND.id) || (screen === "first" && variant === "one" && !joined)
+  const shellChild = chloe
+    ? chloeCurrent.id === NORTHWIND.id && !(screen === "accept" && variant === "member")
       ? <FirstOne invitation={gus} onStart={() => go("switcher")} />
-      : <OrgWelcome org={joined ?? ACME} greeting="Afternoon, Chloé" />
+      : <OrgWelcome org={chloeCurrent} greeting="Afternoon, Chloé" />
     : screen === "settings" ? <YourSettings reveal={variant === "reveal" ? ACME : null} onReveal={(o) => setVariant(o ? "reveal" : "keys")} />
     : screen === "members" ? <MembersPage dialog={variant === "list" ? "none" : variant as MembersDialog} onDialog={(d) => setVariant(d === "none" ? "list" : d)} onPage={orgPage} />
     : screen === "invitations" ? <InvitationsPage key={variant === "revoke" ? "pending" : variant} view={variant as InvitationsView} onView={(v) => setVariant(v)} onPage={orgPage} />
@@ -168,8 +166,6 @@ function Mock() {
         <Segmented size="sm" label="Variant" value={variant} onChange={pick} options={VARIANTS[screen]} />
         <Segmented size="sm" label="Sidebar" value={collapsed ? "rail" : "full"} onChange={(v) => setCollapsed(v === "rail")}
           options={[{ value: "full", label: "Expanded" }, { value: "rail", label: "Collapsed" }]} />
-        <Segmented size="sm" label="Counts in menu" value={counts ? "on" : "off"} onChange={(v) => setCounts(v === "on")}
-          options={[{ value: "on", label: "Counts" }, { value: "off", label: "No counts" }]} />
         <Segmented size="sm" label="Density" value={theme.density} onChange={(d) => theme.setDensity(d)}
           options={[{ value: "comfortable", label: "Comfortable" }, { value: "compact", label: "Compact" }]} />
         <Segmented size="sm" label="Theme" value={theme.resolved} onChange={(t) => theme.setPreference(t as ThemePreference)}
