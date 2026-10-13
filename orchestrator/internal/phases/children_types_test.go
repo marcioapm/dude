@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
-// The rows packages/domain/test/childEvents.test.ts reads too: the event
-// types the translator writes for child sessions are the browser's.
-func TestChildEventTypesMatchTheSharedFixture(t *testing.T) {
+// A vocabulary check, not behaviour: packages/domain/test/childEvents.test.ts
+// reads the same rows, so an event type name changed on one side only fails.
+// What the events carry is pinned by the replay tests.
+func TestChildEventTypeNamesEqualTheSharedFixture(t *testing.T) {
 	raw, err := os.ReadFile("../../../packages/domain/test/child-event-types.json")
 	if err != nil {
 		t.Fatal(err)
