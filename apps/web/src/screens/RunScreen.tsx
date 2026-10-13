@@ -42,16 +42,17 @@ import {
   ImageViewer,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, IconButton, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
 import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { WaitingForHost } from "../waiting.tsx";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
@@ -106,6 +107,8 @@ export interface ChatVariant {
   send: (text: string, aside?: boolean) => Promise<unknown>;
   /** The conductor's question answered through its form. */
   answer: (questionId: string, answers: ReadonlyArray<QuestionAnswer>, note: string) => Promise<unknown>;
+  /** Try again on a conductor that failed: a fresh one takes what it never read. */
+  retry?: (() => Promise<unknown>) | undefined;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
@@ -121,6 +124,8 @@ export interface ChatVariant {
   above?: ReactNode;
   /** The conductor only reads and answers, though there is a line above (Deliver decides). */
   readOnly?: boolean;
+  /** The briefing of the failed conductor this one retries (Try again), from that Run's ledger. */
+  briefedBefore?: string | undefined;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -192,6 +197,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // It remembers the status it was about: once the Run moves on, it has said its piece.
   const [notice, setNotice] = useState<(Notice & { about: RunDetail["status"] | undefined }) | null>(null);
   const [confirmAbort, setConfirmAbort] = useState(false);
+  // The failed start whose Try again a newer conductor had already made moot.
+  const [retryTaken, setRetryTaken] = useState<string | null>(null);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
   // A task's Chat keeps its draft by task, as ChatSection does before the
@@ -271,14 +278,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
    */
   const projection = useRef(emptyProjection());
   const projectedRun = useRef(runId);
+  const briefedBefore = chat?.briefedBefore;
+  const projectedBefore = useRef<string | undefined>(undefined);
   const conversation = useMemo(() => {
-    // The stream clears its buffer for a new Run; the fold must forget too.
-    if (projectedRun.current !== runId) {
-      projection.current = emptyProjection();
+    // The stream clears its buffer for a new Run; the fold must forget too. The retried Run's briefing,
+    // read apart from this Run's ledger, can arrive after the fold began: folded again from the start.
+    if (projectedRun.current !== runId || projectedBefore.current !== briefedBefore) {
+      projection.current = emptyProjection(briefedBefore);
       projectedRun.current = runId;
+      projectedBefore.current = briefedBefore;
     }
     return snapshot(apply(projection.current, events), run?.status);
-  }, [events, runId, run?.status]);
+  }, [events, runId, run?.status, briefedBefore]);
   const [childPath, setChildPath] = useState<string[]>([]);
   const childOpener = useRef<{ id: string; rail: boolean } | null>(null);
   const pendingChildFocus = useRef<{ id: string; rail: boolean; panel: boolean } | null>(null);
@@ -487,9 +498,13 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const session = {
     id: run.id,
     role,
-    status: run.status,
+    // Starting once lux has placed it (a stage past waiting), from the live ledger, else the API's last stage.
+    status: shownRunStatus(run.status, conversation.start ? conversation.start.stage : run.startStage?.stage),
     statusLabel: runStatusLabel(run),
-    ...(waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
+    // Starting: where (the chip, bare beside the status that already says so); failed, where it failed; else lux's wait for a host.
+    ...(conversation.start && !conversation.start.failed ? { statusNote: <StartHeaderChip start={conversation.start} bare /> }
+      : conversation.startFailed ? { statusNote: <StartHeaderChip start={conversation.startFailed} bare /> }
+      : waitingReason ? { statusNote: <Badge size="sm" icon="clock" data-testid="run-waiting">Waiting for a host</Badge> } : {}),
     ...(owner ? { owner } : {}),
     subtitle: (
       <>
@@ -529,15 +544,39 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // A set-aside session is ended to its transcript too, though its Run may
   // still be recorded as running: no decisions, no Interrupt now or Retry.
   const steer: SteerActions | undefined = isLive && !readOnly ? {
-    wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands),
+    wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands, conversation.start),
     resend: resteer,
   } : undefined;
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const restartedText = runRestartedText(run, events, people);
+  // Try again on a phase that did not start: the task's own way back (its restart dialog), where the page offers one.
+  // A conductor's: a fresh conductor takes what it never read; refused once a newer one took it, and not offered again.
+  // Not on one dude woke: its reasons wake the next conductor.
+  const retryConductor = chat?.retry;
+  const conductorRetry = (turnId: string) => retryConductor && !readOnly ? () => {
+    setBusy(true);
+    setProblem(null);
+    void retryConductor().catch((err: unknown) => {
+      const refused = retryRefusal(err, (e) => (e instanceof ApiError ? e.message : "the request failed"));
+      if (refused.taken) setRetryTaken(turnId);
+      else setProblem(refused.text);
+    }).finally(() => setBusy(false));
+  } : undefined;
+  const onStartRetry = stopped && "onPickUp" in stopped ? () => stopped.onPickUp("retry") : undefined;
   // The question's form, while the Run can still hear it.
   const ask: AskActions | undefined = isLive && !readOnly ? { answer: answerQuestion, tray: chat ? undefined : tray } : undefined;
   const render = (turn: Turn) => turn.kind === "ended" && turn.outcome === "aborted" && restartedText ? null
+    : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
+        taken={turn.taken || retryTaken === turn.id} woken={turn.woken}
+        onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask);
+  // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
+  // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its
+  // stages and clock without saying the same wait again.
+  const pinnedWait = !run.preparingImage && Boolean(waitingReason) && (!conversation.start || waitsForContainerHost(waitingReason));
+  const startRow = conversation.start ? <StartRow start={{ ...conversation.start, luxReason: conversation.start.luxReason ?? waitingReason }} role={role}
+    quiet={pinnedWait} /> : null;
+  const startHint = readWhen(conversation.start);
   // The agent waits on the reader's answer: the composer steps back to one line.
   const asked = conversation.openQuestion;
   const waitingForYou = asked !== null && waitingOn === undefined && (asked.to === null || asked.to.id === people.you)
@@ -573,6 +612,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
+                  toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
                 />
                 </>
               }
@@ -584,6 +624,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 : Array.isArray(item.group)
                   ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
                   : render(item.group))}
+              {startRow}
               {conversation.activity ? (
                 <ChatMessage role={role} activity={conversation.activity}
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
@@ -717,7 +758,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               pinned={
                 run.preparingImage ? (
                   <PreparingImage preparing={run.preparingImage} />
-                ) : waitingReason ? (
+                ) : pinnedWait && waitingReason ? (
+                  // While the row says where the start is, lux's reason is its slow note; a pool that cannot run
+                  // this Run at all stays pinned, since only an admin can change it.
                   <WaitingForHost reason={waitingReason} onRunPage />
                 ) : conversation.plan.length > 0 ? (
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
@@ -750,7 +793,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   canInterrupt
-                  landsHint={landsHint(run.status, activeTool, conversation.lands)}
+                  landsHint={landsHint(run.status, activeTool, conversation.lands, conversation.start)}
                   attachments={tray.attachments}
                   onAttachFiles={tray.add}
                   onRemoveAttachment={tray.remove}
@@ -764,6 +807,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {grouped.map((group) => Array.isArray(group)
                 ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
                 : render(group))}
+              {startRow}
               {conversation.activity ? (
                 <ChatMessage
                   role={role}
@@ -985,7 +1029,7 @@ export function pendingReason(wait: SteerWait) {
     case "next_step": return "Lands at the agent's next step.";
     case "next_turn": return "This agent reads messages only between turns — lands when this turn ends.";
     case "paused": return "Lands when the run resumes.";
-    case "starting": return "Lands when the agent starts.";
+    case "starting": return wait.back ? READ_WHEN_BACK : READ_WHEN_STARTED;
   }
 }
 
@@ -994,12 +1038,14 @@ export function pendingReason(wait: SteerWait) {
  * conversation, read once for the task's page (EndedLedgers), with nothing
  * to answer or steer; its images shown, and opened in the viewer, as the
  * live one's are. A read that failed says so, with a retry. A line says
- * where it ended; the latest conductor takes what is written next.
+ * where it ended; the latest conductor takes what is written next. One a
+ * later conductor retries (Try again) says its unstarted message went there.
  */
-export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status }: {
+export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status, retried = false }: {
   ledgers: EndedLedgers;
   runId: string;
   status: RunDetail["status"];
+  retried?: boolean;
 }) {
   const people = usePeople();
   const images = useSentImages(ledgers.client);
@@ -1020,7 +1066,12 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
       cancelled = true;
     };
   }, [ledgers, runId, attempt]);
-  const turns = useMemo(() => (events ? asides(project(events, status).turns) : []), [events, status]);
+  const turns = useMemo(() => {
+    if (!events) return [];
+    const all = project(events, status).turns;
+    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
+    return asides(all);
+  }, [events, status, retried]);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
@@ -1081,6 +1132,24 @@ function dropWhen(hint: string | null): string {
   if (!hint) return "It reads them at its next step.";
   return `It reads them ${hint.replace(/^Lands /, "")}.`;
 }
+
+/** A briefing Try again repeated to the fresh agent: one quiet line that opens to the full card. */
+function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; shown: ShownImages | undefined }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-testid="chat-briefed-again">
+      <Button size="sm" variant="quiet" leadingIcon="retry" aria-expanded={open} onClick={() => setOpen(!open)} data-testid="briefed-again-toggle">
+        {BRIEFED_AGAIN}
+      </Button>
+      {open ? (
+        <ChatMessage role="system" name={dude} avatar={<DudeMark size="fill" />} intent="briefing" content={turn.text} startedAt={turn.at}
+          data-testid="chat-briefing" {...turnImages(turn, shown)} />
+      ) : null}
+    </div>
+  );
+}
+
+export const BRIEFED_AGAIN = "Briefed again with the same message";
 
 /** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
 function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
@@ -1157,6 +1226,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       // A Run that ended on an unanswered question will never hear back.
       return <AskTurn key={turn.id} turn={turn} role={role} ended={ended} people={people} waitingOn={waitingOn} ask={ask} />;
     case "prompt":
+      // Try again's fresh agent, briefed with the failed one's words: one line, the briefing a click away.
+      if (turn.again) return <BriefedAgain key={turn.id} turn={turn} dude={dude} shown={shown} />;
       // Written by the factory, not a person: the avatar and name say so.
       // A conductor's is dude's briefing of it, tagged so.
       return (

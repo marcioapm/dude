@@ -1105,6 +1105,11 @@ export class ApiClient {
     return this.#request("POST", `/v1/tasks/${taskId}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
   }
 
+  /** Try again on a task whose conductor failed: a fresh conductor takes what it never read. */
+  retryConductor(taskId: string): Promise<{ runId: string; taskId: string; created: boolean }> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/retry`, {});
+  }
+
   /** The conductor's question answered through its form, in the task's Chat. */
   chatAnswer(taskId: string, questionId: string, answers: ReadonlyArray<SentAnswer>, note = ""): Promise<ChatSent> {
     return this.#request("POST", `/v1/tasks/${taskId}/chat`, { questionId, answers, ...(note ? { note } : {}) });
@@ -1151,6 +1156,11 @@ export class ApiClient {
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
   sessionChat(id: string, text: string, opts: { aside?: boolean } = {}): Promise<{ runId: string; created: boolean; questionId?: string }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
+  }
+
+  /** Try again on a session whose agent failed, to start or to resume: a fresh agent takes what it never read. */
+  retrySessionAgent(id: string): Promise<{ runId: string; created: boolean }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/retry`, {});
   }
 
   /** The session agent's question answered through its form. */

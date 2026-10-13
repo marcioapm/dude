@@ -330,6 +330,37 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   harness does not report is `costUsd={null}` and renders as `—` with a
   title, never as `$0.00`: zero is a price, unknown is not. Tokens still
   show when cost is unknown.
+- **An agent that is starting says where it is**, where its first turn
+  will be: `StartProgress` on the turn grid, its face in the gutter, the
+  `starting` mark with its `verb` — "Starting" for a fresh agent or
+  "Resuming" for one taken back up (the default, from `kind`), or a move's
+  own, such as "Moving to another machine" — the stage in words ("Checking
+  out repositories"), the stage's clock and, once a stage has passed, the
+  total ("00:31 in all"). Its `steps` come from `startSteps`, which takes
+  lux's stage and a **stage list** from the caller and the words from one
+  map, `START_STAGE_WORDS` in `@dude/domain`, shared with branch previews:
+  `FRESH_START_STAGES` (waiting, image, volumes, repositories, container,
+  running), `RESUME_STAGES` (the same six, as lux announces each on every
+  resume) or `MOVE_STAGES`
+  (led by `park`, "Stopping it, keeping its work" / "Stopped, work kept");
+  a stage lux reports that the list leaves out is drawn in its place. An
+  optional `pool` names where it waits: `waiting` reads "Waiting for a
+  machine in highmem" while it is current, and "Machine found" once done. Its line opens the stages as a
+  stepper (done with their times, the current one live, the rest hollow,
+  `aria-current="step"`). With no stage (an older lux) it is the verb and
+  the total clock, nothing to open. Past the app's threshold, one calm
+  line in secondary ink says why it can take a while, with lux's reason in
+  muted mono; never amber. A failed start is the transcript's danger
+  `Callout` naming the stage and lux's reason, with Try again, the stages
+  folded under it, the failed one crossed: "Did not start: failed while
+  getting the image ready: `pull failed`. Nothing was spent on the
+  model." With no stage it is "Did not start: <reason>", and a reason
+  that already ends in `.`, `!` or `?` gets no second stop. The reason is
+  the runtime's raw words, in mono; `failure.plain` (optional) sets it in
+  body text, for a sentence the app wrote itself. A polite live region says each
+  stage once; the clocks are `Duration dot={false}` timers outside it. It
+  is replaced by the agent's first turn, and the finished start is the
+  resume line's tooltip, in the same words.
 
 ### Human intervention
 
@@ -1418,6 +1449,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Time via `Duration` / `formatDuration`: two units maximum (`3m 12s`,
   `2h 04m`). Live durations tick once a second, never faster. `format="age"`
   is one coarse unit (`4h`) for how long something has sat in a state.
+  A live `Duration` draws the breathing dot; `dot={false}` beside a mark
+  that is already live, so a line has one.
 - Timestamps in event streams are `HH:MM:SS.mmm`; events within one second
   are common.
 - IDs, SHAs, paths, event types, model names: monospace. The mono stack sets
@@ -1621,8 +1654,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `PreparingImage` sits (pinned over the transcript; under
   `PreviewStages` on a task's Servers tab), the lead bold, lux's reason
   in dude's words when it is about nested containers, else as lux wrote
-  it, one period at its end. The Run's header shows a `Badge icon="clock"`
-  "Waiting for a host" beside its status (`ChatTranscriptSession.statusNote`),
+  it, one period at its end. The Run's header says where its start is
+  with a bare `StartChip` beside its status (`ChatTranscriptSession.statusNote`),
   never among the facts under the title.
 
 ### Do / Don't
@@ -1894,7 +1927,8 @@ MarkdownCheatsheet.
   Stop all leaves it live.
 - **PreviewStages / ServersMoved** — a branch preview's stages, and the
   notice with Start all after a run moved host. Infrastructure uses lux's
-  stage: Preparing image, Restoring volumes, Cloning, Starting container;
+  stage in the agents' words (`START_STAGE_WORDS`): Getting the image
+  ready, Restoring its workspace, Cloning, Starting the container;
   Stopping is a single step, not a completed startup. The active step has
   `aria-current="step"`. Elapsed is optional: only supply it with an
   authoritative stage timestamp, never the Run's original start.
@@ -1983,6 +2017,15 @@ MarkdownCheatsheet.
 - **SessionHeader** — the transcript's header on its own, for an agent
   session whose views sit under it. `statusNote` sits beside the status;
   the title row and the facts under it wrap rather than clip each other.
+- **While its agent starts, the header says where**: `StartChip` in a
+  session's meta ("◐ Resuming · Checking out repositories · 00:12") and
+  as a Run's `statusNote`, `bare` beside its Starting status. It replaces
+  the "Waiting for a host" badge; lux's capacity reason is the
+  transcript's slow note. Failed, it reads "✕ Did not start · Failed
+  while …". It takes the same `verb`/`kind` and step as `StartProgress`.
+- **StartProgress / StartChip / startSteps** — an agent starting, resuming
+  or moving (*Activity*): the row where its first turn will be, and the
+  header's line.
 - **`.ds-live-dot`** (base.css) — the one breathing dot, on
   `--ds-color-live`: beside what is changing now (a view's name, a label).
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
