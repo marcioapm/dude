@@ -75,6 +75,38 @@ describe("agent.child.started", () => {
     expect(only(call.children).id).toBe("ses_grand");
   });
 
+  // A harness that reports a call only once finished never sends its call event.
+  test("that call heard only as its completion fills in the same turn", () => {
+    const state = apply(emptyProjection(), [started()]);
+    const made = only(state.turns) as ToolTurn;
+    apply(state, [ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed", input: { description: "Actual" } })]);
+    const call = only(snapshot(state).turns) as ToolTurn;
+    expect(call).toBe(made);
+    expect(call).toMatchObject({ id: "c1", tool: "task", args: { description: "Actual" }, status: "completed" });
+    expect(only(call.children).id).toBe("ses_kid");
+    expect(state.placeholderCalls.size).toBe(0);
+  });
+
+  test("a grandchild's call heard only as its completion fills in the same turn", () => {
+    const state = apply(emptyProjection(), [parentCall(), started(),
+      ev(EventTypes.ChildStarted, { childId: "ses_grand", callId: "k2", parentChildId: "ses_kid", kind: "task", title: "Deeper" })]);
+    const made = only(childOf(state.turns).turns) as ToolTurn;
+    apply(state, [ev(EventTypes.ChildToolCompleted, { ...kid, parentCallId: "c1", callId: "k2", tool: "task", status: "completed",
+      input: { description: "Actual" } })]);
+    const call = only(childOf(snapshot(state).turns).turns) as ToolTurn;
+    expect(call).toBe(made);
+    expect(call).toMatchObject({ tool: "task", args: { description: "Actual" }, status: "completed" });
+    expect(only(call.children).id).toBe("ses_grand");
+    expect(state.placeholderCalls.size).toBe(0);
+  });
+
+  test("a completion with no input keeps the args its call gave", () => {
+    const state = apply(emptyProjection(), [started(), parentCall(),
+      ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })]);
+    expect(only(state.turns)).toMatchObject({ args: { description: "Inspect test capture setup", subagent_type: "explore" }, status: "completed" });
+    expect(state.placeholderCalls.size).toBe(0);
+  });
+
   test("several children of one turn each hang under their own call", () => {
     const { turns } = project([
       ev(EventTypes.ToolCalled, { tool: "task", callId: "s1" }), ev(EventTypes.ToolCalled, { tool: "task", callId: "s2" }),

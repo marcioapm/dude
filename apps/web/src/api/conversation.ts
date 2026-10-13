@@ -648,7 +648,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const callId = String(payload.callId ?? event.eventId);
         const placeholder = toolsByCall.get(callId);
         if (placeholder && state.placeholderCalls.has(placeholder)) {
-          fillPlaceholder(state, placeholder, tool, payload, event.occurredAt);
+          claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
         } else {
           const turn = toolTurn(callId, tool, payload, event.occurredAt);
           toolsByCall.set(callId, turn);
@@ -664,6 +664,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const callId = String(payload.callId ?? "");
         const existing = toolsByCall.get(callId);
         if (existing) {
+          claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
           endTool(existing, payload, event.occurredAt);
         } else {
           // The harness buffers some tools and only reports them once
@@ -698,8 +699,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           turn = toolTurn(callId, childTool, payload, event.occurredAt);
           state.childToolsByCall.set(`${child.id}/${callId}`, turn);
           child.turns.push(turn);
-        } else if (event.eventType === EventTypes.ChildToolCalled && state.placeholderCalls.has(turn)) {
-          fillPlaceholder(state, turn, childTool, payload, event.occurredAt);
+        } else {
+          claimPlaceholder(state, turn, childTool, payload, event.occurredAt, event.eventType === EventTypes.ChildToolCalled);
         }
         if (event.eventType === EventTypes.ChildToolCompleted) endTool(turn, payload, event.occurredAt);
         touch(state, child);
@@ -1262,13 +1263,16 @@ function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): 
 
 /**
  * A call made for a child before its own call event, filled in by that
- * event in place: the same object keeps its id, its place and its children.
+ * call's first event — its call, or its completion from a harness that
+ * reports a call only once finished — in place: the same object keeps its
+ * id, its place and its children. A completion carries no start, so the
+ * child's start stays the call's; args it omits keep what the call had.
  */
-function fillPlaceholder(state: Projection, turn: ToolTurn, tool: string, payload: Record<string, unknown>, at: string): void {
-  state.placeholderCalls.delete(turn);
+function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, payload: Record<string, unknown>, at: string, called: boolean): void {
+  if (!state.placeholderCalls.delete(turn)) return;
   turn.tool = tool;
-  turn.args = payload.input ?? null;
-  turn.startedAt = at;
+  turn.args = payload.input ?? turn.args;
+  if (called) turn.startedAt = at;
 }
 
 /** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
