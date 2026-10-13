@@ -11,6 +11,7 @@ import { TokensSection } from "./sections/Tokens.tsx";
 import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
 import { ChatSection } from "./sections/Chat.tsx";
+import { PeersSection } from "./sections/Peers.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { RelationsSection } from "./sections/Relations.tsx";
@@ -125,6 +126,20 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-images", "Images"],
       ["ch-realistic", "A real session (static)"],
       ["ch-transcript", "ChatTranscript (live)"],
+    ],
+  ],
+  [
+    "Peers",
+    [
+      ["pe-chip", "TaskChip"],
+      ["pe-message", "PeerMessage"],
+      ["pe-wait", "PeerWaitLine"],
+      ["pe-note", "EpicNote"],
+      ["pe-notice", "EpicNoteNotice"],
+      ["pe-thread", "PeerThread"],
+      ["pe-digest", "SinceDigest"],
+      ["pe-mark", "PeerWaitMark"],
+      ["pe-list", "PeerList"],
     ],
   ],
   [
@@ -326,6 +341,7 @@ function Shell() {
           <CalmerSection mode={panes} />
           <ComponentsSection mode={panes} />
           <ChatSection mode={panes} />
+          <PeersSection mode={panes} />
           <StartingSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />

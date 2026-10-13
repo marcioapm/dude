@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { EpicCard, EpicRow, type EpicSummary } from "@dude/design-system/components";
+import { EpicCard, EpicRow, PeerWaitMark, type EpicSummary } from "@dude/design-system/components";
 import { formatTimestamp, formatUsd, plural } from "@dude/design-system";
 import { Callout, RowMenu, Section, useToast } from "@dude/design-system/primitives";
 import { EPIC_STATES, type EpicState } from "@dude/domain";
@@ -92,7 +92,8 @@ export function ProjectEpics({ client, projectId, version, onOpenEpic }: {
         <Section title="In progress" count={active.length} data-epic-state="active">
           <div className="epicCards">
             {active.map((e) => (
-              <EpicCard key={e.id} epic={summary(e, updated(e))} onOpen={() => onOpenEpic(e.id)} actions={menu(e)} />
+              <EpicCard key={e.id} epic={summary(e, updated(e))} onOpen={() => onOpenEpic(e.id)} actions={menu(e)}
+                waiting={e.waiting?.length ? <PeerWaitMark pairs={e.waiting} /> : undefined} />
             ))}
           </div>
         </Section>

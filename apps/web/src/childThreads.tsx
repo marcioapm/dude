@@ -45,11 +45,14 @@ export function SubagentsBlock({ turns, onOpen }: { turns: readonly Turn[]; onOp
   </SessionRailBlock>;
 }
 
-/** A tool call's card, and under it the threads of the children it started, at depth. */
-export function ToolWithChildren({ turn, depth, note }: { turn: ToolTurn; depth: number; note?: ReactNode }) {
+/**
+ * A tool call's card, and under it the threads of the children it started, at depth. `card` replaces the plain
+ * card for a call the caller renders its own way (a coordination tool's summary, a refusal).
+ */
+export function ToolWithChildren({ turn, depth, note, card }: { turn: ToolTurn; depth: number; note?: ReactNode; card?: ReactElement | undefined }) {
   return (
     <>
-      <ToolCallCard
+      {card ?? <ToolCallCard
         name={turn.tool}
         args={turn.args}
         status={turn.status}
@@ -59,7 +62,7 @@ export function ToolWithChildren({ turn, depth, note }: { turn: ToolTurn; depth:
         stderr={turn.result?.stderr}
         exitCode={turn.result?.exitCode}
         note={note}
-      />
+      />}
       {turn.children.map((child) => <ChildThread key={child.id} child={child} revision={child.revision} settled={child.settled} depth={depth} />)}
     </>
   );

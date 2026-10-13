@@ -654,7 +654,7 @@ type fileBlock struct {
 func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) fileBlock {
 	var t taskFacts
 	switch item.Kind {
-	case "epic", "task":
+	case "epic", "task", "note":
 		if !f.projects[strings.ToUpper(strings.TrimSpace(item.Project))] {
 			return fileBlock{why: fmt.Sprintf("project %s is not linked to this session", item.Project), by: "unlinked"}
 		}
@@ -858,7 +858,12 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
 				continue
 			}
-			key, taskID, epicID, err := fileItem(r.Context(), tx, org, body.ProposalID, proposalRunID, linked, facts, item, f)
+			key, taskID, epicID, err := fileItem(r.Context(), tx, org, id, body.ProposalID, proposalRunID, linked, facts, item, f)
+			var refused delivery.NoteRefusal
+			if errors.As(err, &refused) {
+				results = append(results, map[string]any{"item": n, "status": "refused", "why": refused.Msg})
+				continue
+			}
 			if err != nil {
 				var refused delivery.RelationRefusal
 				if errors.As(err, &refused) {
@@ -904,10 +909,8 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 	return nil
 }
 
-// fileItem files one item as f; returns what it made: a task's key (or an
-// epic's title), and the task or epic. runID is the brainstorm's Run that
-// proposed it, "" for none.
-func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID, runID string, linked []string, facts fileFacts,
+// fileItem files one item as f; sessionID attributes notes, runID attributes relations.
+func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID string, linked []string, facts fileFacts,
 	item delivery.ProposalItem, f delivery.Filer) (key, taskID, epicID string, err error) {
 	projectOf := func(k string) (string, error) {
 		// At most one: keys are unique in the organisation (projects_key_idx).
@@ -922,7 +925,35 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID, runID string, lin
 			return "", "", "", err
 		}
 		epicID, err := delivery.CreateEpicTx(ctx, tx, org, project, f, item.Title, item.Description)
-		return item.Title, "", epicID, err
+		if err != nil {
+			return "", "", "", err
+		}
+		// Its notes, pinned as the filer's from the session, in order.
+		for _, text := range item.Notes {
+			if _, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epicID, Text: text, Person: f.Person,
+				Session: sessionID, ActorType: f.ActorType, Actor: f.ActorID}); err != nil {
+				return "", "", "", err
+			}
+		}
+		return item.Title, "", epicID, nil
+	case "note":
+		project, err := projectOf(item.Project)
+		if err != nil {
+			return "", "", "", err
+		}
+		epic, err := proposedEpic(ctx, tx, proposalID, project, item.Epic)
+		if err != nil {
+			return "", "", "", err
+		}
+		if epic == "" {
+			return "", "", "", delivery.NoteRefusal{Reason: "no_epic", Msg: fmt.Sprintf("no epic %q in %s", item.Epic, item.Project)}
+		}
+		pinned, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epic, Text: item.Text, Replaces: item.Replaces,
+			Person: f.Person, Session: sessionID, ActorType: f.ActorType, Actor: f.ActorID})
+		if err != nil {
+			return "", "", "", err
+		}
+		return fmt.Sprintf("note %d", pinned.N), "", epic, nil
 	case "task":
 		project, err := projectOf(item.Project)
 		if err != nil {
@@ -930,14 +961,7 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID, runID string, lin
 		}
 		epic := ""
 		if t := strings.TrimSpace(item.Epic); t != "" {
-			// A new epic of this proposal, filed already; else one the project has.
-			err := tx.QueryRow(ctx, `SELECT f.epic_id FROM session_filings f JOIN epics e ON e.id = f.epic_id
-				WHERE f.proposal_id = $1 AND e.project_id = $2 AND lower(e.title) = lower($3) LIMIT 1`, proposalID, project, t).Scan(&epic)
-			if db.IsNotFound(err) {
-				err = tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2)
-					ORDER BY created_at LIMIT 1`, project, t).Scan(&epic)
-			}
-			if err != nil && !db.IsNotFound(err) {
+			if epic, err = proposedEpic(ctx, tx, proposalID, project, t); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -970,6 +994,22 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, proposalID, runID string, lin
 		return fk + " " + item.RelationKind + " " + tk, "", "", err
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
+}
+
+// proposedEpic is the epic an item names by title in project: a new epic
+// of this proposal, filed already; else one the project has; "" for none.
+func proposedEpic(ctx context.Context, tx pgx.Tx, proposalID, project, title string) (string, error) {
+	var epic string
+	err := tx.QueryRow(ctx, `SELECT f.epic_id FROM session_filings f JOIN epics e ON e.id = f.epic_id
+		WHERE f.proposal_id = $1 AND e.project_id = $2 AND lower(e.title) = lower($3) LIMIT 1`, proposalID, project, title).Scan(&epic)
+	if db.IsNotFound(err) {
+		err = tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2)
+			ORDER BY created_at LIMIT 1`, project, title).Scan(&epic)
+	}
+	if db.IsNotFound(err) {
+		return "", nil
+	}
+	return epic, err
 }
 
 // fileItemRelations writes the relations of task item n, just filed as

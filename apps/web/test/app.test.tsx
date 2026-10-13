@@ -47,6 +47,30 @@ async function onServers(page: HTMLElement) {
   await until(() => panel.querySelector("[data-testid=servers-panel]"), "the servers in the selected panel");
 }
 
+describe("an epic's page reads its open waits cheaply", () => {
+  test("the Board tab counts waits without loading threads; Coordination loads them once a reload", async () => {
+    localStorage.setItem("dude.fixtures.run", "peers");
+    const client = new FixtureClient("a");
+    const calls = { threads: 0, waiting: 0 };
+    const threads = client.epicThreads.bind(client);
+    const waiting = client.epicWaiting.bind(client);
+    client.epicThreads = (id) => { calls.threads++; return threads(id); };
+    client.epicWaiting = (id) => { calls.waiting++; return waiting(id); };
+    const { EPIC } = await import("../src/fixtures/data.ts");
+    const page = await app(`#/epic/${EPIC.id}`, client);
+    const count = await until(() => page.querySelector("[data-testid=epic-view] .runCount"), "the open-wait count");
+    expect(count.textContent).toBe("1");
+    await settle();
+    expect(calls.threads).toBe(0);
+    expect(calls.waiting).toBeGreaterThan(0);
+    window.history.replaceState(null, "", `#/epic/${EPIC.id}/coordination`);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await until(() => page.querySelector("[data-testid=coordination]"), "the Coordination view");
+    await settle();
+    expect(calls.threads).toBe(1);
+  });
+});
+
 describe("the shell's routes to a task's servers", () => {
   test("#/task/<id>/servers opens the task on its Servers tab", async () => {
     const page = await app(`#/task/${TASK_ID}/servers`, new FixtureClient("a"));

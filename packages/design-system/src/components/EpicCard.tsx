@@ -86,10 +86,12 @@ export interface EpicCardProps extends Omit<HTMLAttributes<HTMLDivElement>, "tit
   readonly onOpen?: (() => void) | undefined;
   /** In the corner: its state control, a menu. */
   readonly actions?: ReactNode;
+  /** After the title, where needs-you sits: its agents waiting on each other (a `PeerWaitMark`). */
+  readonly waiting?: ReactNode;
 }
 
 /** An epic being worked on: how far along, its pull requests, its people and cost. */
-export function EpicCard({ epic, onOpen, actions, className, ...rest }: EpicCardProps) {
+export function EpicCard({ epic, onOpen, actions, waiting, className, ...rest }: EpicCardProps) {
   return (
     <article className={cx(styles["card"], className)} data-epic={epic.id} {...rest}>
       <div className={styles["head"]}>
@@ -99,6 +101,7 @@ export function EpicCard({ epic, onOpen, actions, className, ...rest }: EpicCard
         {epic.needsYou ? (
           <NeedsYouCount count={epic.needsYou} verbose />
         ) : null}
+        {waiting}
         <span className={styles["spacer"]} />
         {actions}
       </div>
