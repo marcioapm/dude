@@ -265,6 +265,12 @@ func (t *translator) codexCall(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	if it.Type == "collabAgentToolCall" && it.Tool == "spawnAgent" {
 		t.codexSpawned(c, it)
 	}
+	if _, seen := t.seenCalls[it.ID]; c == nil && !seen && it.Type == "collabAgentToolCall" && it.Tool == "wait" {
+		if t.waitsOn == nil {
+			t.waitsOn = map[string][]string{}
+		}
+		t.waitsOn[it.ID] = slices.Clone(it.ReceiverThreadIDs)
+	}
 	return t.callStarted(ctx, tx, s, c, map[string]any{"tool": name, "callId": it.ID, "input": codexArgs(it), "title": it.Type})
 }
 

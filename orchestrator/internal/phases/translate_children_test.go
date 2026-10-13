@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http/httptest"
 	"reflect"
 	"slices"
@@ -386,6 +387,117 @@ func TestTwoConcurrentCodexAgentsAreEachTheirOwnCallsChild(t *testing.T) {
 	}
 	if len(w.children()) != 0 {
 		t.Errorf("children left: %v", w.children())
+	}
+}
+
+// codexNote is a Codex app-server notification as lux relays it.
+func codexNote(method string, params map[string]any) map[string]any {
+	return map[string]any{"type": "codex." + method, "data": params}
+}
+
+// codexTwoAgents spawns agents thr_a (call spawn_a) and thr_b (spawn_b)
+// from the Run's thread thr_run, each started and bound.
+func codexTwoAgents() []map[string]any {
+	out := []map[string]any{codexNote("thread/started", map[string]any{"thread": map[string]any{"id": "thr_run", "parentThreadId": nil}})}
+	for _, x := range []struct{ call, thread, prompt string }{{"spawn_a", "thr_a", "Run the browser tests"},
+		{"spawn_b", "thr_b", "Find the chart fixture dataset"}} {
+		item := map[string]any{"type": "collabAgentToolCall", "id": x.call, "tool": "spawnAgent", "senderThreadId": "thr_run",
+			"receiverThreadIds": []any{}, "prompt": x.prompt}
+		done := maps.Clone(item)
+		done["status"], done["receiverThreadIds"] = "completed", []any{x.thread}
+		out = append(out, codexNote("item/started", map[string]any{"threadId": "thr_run", "item": item}),
+			codexNote("item/completed", map[string]any{"threadId": "thr_run", "item": map[string]any{"type": "subAgentActivity",
+				"id": x.call, "kind": "started", "agentThreadId": x.thread, "agentPath": "/root/" + x.thread}}),
+			codexNote("item/completed", map[string]any{"threadId": "thr_run", "item": done}),
+			codexNote("turn/started", map[string]any{"threadId": x.thread, "turn": map[string]any{"status": "inProgress"}}))
+	}
+	return out
+}
+
+// codexWait is the Run's wait call id on the agents named, started or
+// completed.
+func codexWait(id string, done bool, agents ...string) map[string]any {
+	r := []any{}
+	for _, a := range agents {
+		r = append(r, a)
+	}
+	method, status := "item/started", "inProgress"
+	if done {
+		method, status = "item/completed", "completed"
+	}
+	return codexNote(method, map[string]any{"threadId": "thr_run", "item": map[string]any{"type": "collabAgentToolCall", "id": id,
+		"tool": "wait", "status": status, "senderThreadId": "thr_run", "receiverThreadIds": r}})
+}
+
+// codexBash is a command an agent's thread started.
+func codexBash(thread, id, line string) map[string]any {
+	return codexNote("item/started", map[string]any{"threadId": thread, "item": map[string]any{"type": "commandExecution",
+		"id": id, "command": line, "status": "inProgress"}})
+}
+
+// entryOf fails unless the children entry of call names child with a last
+// event starting with last.
+func entryOf(t *testing.T, children map[string]map[string]any, call, child, last string) {
+	t.Helper()
+	e := children[call]
+	if e["childId"] != child || !strings.HasPrefix(fmt.Sprint(e["lastEvent"]), last) {
+		t.Errorf("runs.children[%s] = %v, want child %s, last event %q…", call, e, child, last)
+	}
+}
+
+// Two agents live at once, each waited on by its own wait call: each
+// call's runs.children entry names its own agent, and after one agent
+// ends and its wait completes, the other's still names the live agent and
+// its open command — also when the Run's following restarts in between.
+func TestEachCodexWaitCallIsKeptBusyOnlyByTheAgentItWaitsOn(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(append(codexTwoAgents(),
+		codexWait("wait_a", false, "thr_a"),
+		codexWait("wait_b", false, "thr_b"),
+		codexBash("thr_a", "ca", "pip show pytest-playwright"),
+		codexBash("thr_b", "cb", "ls fixtures"),
+	)...)
+	got := w.children()
+	entryOf(t, got, "wait_a", "thr_a", "bash pip show pytest-playwright")
+	entryOf(t, got, "wait_b", "thr_b", "bash ls fixtures")
+	w.restart()
+	w.feed(codexNote("turn/completed", map[string]any{"threadId": "thr_b", "turn": map[string]any{"status": "completed"}}))
+	got = w.children()
+	entryOf(t, got, "wait_a", "thr_a", "bash pip show pytest-playwright")
+	entryOf(t, got, "wait_b", "thr_b", "ended completed")
+	w.feed(codexWait("wait_b", true, "thr_b"),
+		codexNote("item/completed", map[string]any{"threadId": "thr_b", "item": map[string]any{"type": "reasoning", "id": "rb"}}))
+	got = w.children()
+	if len(got) != 1 {
+		t.Errorf("runs.children %v, want wait_a's entry only", got)
+	}
+	entryOf(t, got, "wait_a", "thr_a", "bash pip show pytest-playwright")
+}
+
+// A wait on both agents is kept busy by either; one on agents that are
+// neither is kept busy by none; one naming none (as Codex 0.144.1 sends
+// every wait, testdata/codex-child.jsonl) waits on all of them.
+func TestACodexWaitOnSeveralAgentsIsKeptBusyByEach(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(append(codexTwoAgents(),
+		codexWait("wait_both", false, "thr_a", "thr_b"),
+		codexWait("wait_other", false, "thr_c"),
+		codexWait("wait_all", false),
+		codexBash("thr_a", "ca", "pytest -k chart"),
+	)...)
+	got := w.children()
+	entryOf(t, got, "wait_both", "thr_a", "bash pytest -k chart")
+	entryOf(t, got, "wait_all", "thr_a", "bash pytest -k chart")
+	if e, ok := got["wait_other"]; ok {
+		t.Errorf("a wait on neither agent has an entry: %v", e)
+	}
+	w.restart()
+	w.feed(codexBash("thr_b", "cb", "ls fixtures"))
+	got = w.children()
+	entryOf(t, got, "wait_both", "thr_b", "bash ls fixtures")
+	entryOf(t, got, "wait_all", "thr_b", "bash ls fixtures")
+	if e, ok := got["wait_other"]; ok {
+		t.Errorf("a wait on neither agent has an entry: %v", e)
 	}
 }
 

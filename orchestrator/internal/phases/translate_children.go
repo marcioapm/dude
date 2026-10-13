@@ -157,7 +157,8 @@ func (t *translator) touchChild(c *childState, last string, waitingOn map[string
 
 // busyCalls are the Run's own open calls a child's activity keeps busy:
 // the call that started it, or its ancestor's; and for a Codex agent,
-// whose spawn call ends at once, the Run's agent's wait calls open on it.
+// whose spawn call ends at once, the Run's agent's open wait calls that
+// wait on it (waitsOn).
 func (t *translator) busyCalls(c *childState) []string {
 	root := c
 	for seen := 0; root.ParentChildID != "" && seen < maxChildren; seen++ {
@@ -172,8 +173,9 @@ func (t *translator) busyCalls(c *childState) []string {
 		calls = append(calls, root.CallID)
 	}
 	if root.Kind == childSpawn {
-		for _, id := range slices.Sorted(maps.Keys(t.openCalls)) {
-			if t.seenCalls[id] == "wait" {
+		for _, id := range slices.Sorted(maps.Keys(t.waitsOn)) {
+			on := t.waitsOn[id]
+			if t.openCalls[id] && (len(on) == 0 || slices.Contains(on, root.ID)) {
 				calls = append(calls, id)
 			}
 		}
@@ -250,6 +252,7 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 			name = seen
 		}
 		delete(t.openCalls, id)
+		delete(t.waitsOn, id)
 		payload["tool"] = name
 		if isEdit(name) {
 			s.pokeDiff(t.run.ID)

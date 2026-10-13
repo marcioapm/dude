@@ -84,6 +84,10 @@ type translator struct {
 	// Tool calls started and not yet finished, by id, written with the
 	// cursor: an agent in a long command is working, however quiet.
 	openCalls map[string]bool
+	// The Run's own Codex wait calls, by id, with the child ids each waits
+	// on (receiverThreadIds); empty is all its spawned agents, as Codex
+	// 0.144.1 sends it. Rebuilt by load from the calls' recorded input.
+	waitsOn map[string][]string
 	// The epochs whose first busy and first output were looked for and
 	// settled, so each is looked for once per placement and not on every
 	// chunk; and those looked for in this batch and not settled yet, looked
@@ -244,17 +248,25 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	for _, id := range open {
 		t.openCalls[id] = true
 	}
-	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'callId', ''), COALESCE(payload->>'tool', '')
+	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'callId', ''), COALESCE(payload->>'tool', ''),
+		COALESCE(payload->'input'->'agents', '[]')
 		FROM events WHERE run_id = $1 AND event_type IN ($2, $3, $4)`, t.run.ID, evToolCalled, evPlanUpdated, evPromptDelivered)
 	if err != nil {
 		return err
 	}
-	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, ID, Tool string }])
+	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Type, ID, Tool string
+		Agents         []string
+	}])
 	t.seenCalls = make(map[string]string, len(seen))
+	t.waitsOn = map[string][]string{}
 	for _, e := range seen {
 		switch e.Type {
 		case evToolCalled:
 			t.seenCalls[e.ID] = e.Tool
+			if e.Tool == "wait" && t.openCalls[e.ID] {
+				t.waitsOn[e.ID] = e.Agents
+			}
 		case evPlanUpdated:
 			t.seenCalls[e.ID] = planCall
 		case evPromptDelivered:
@@ -926,6 +938,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// quiet is counted from its start — but only the model doing
 		// something answers a nudge, not a turn the nudge itself started.
 		clear(t.openCalls)
+		clear(t.waitsOn)
 		t.facts = childFacts{clear: true}
 		t.resumeBusy(ctx, tx, s, epoch)
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL,
@@ -948,6 +961,7 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 		return err
 	}
 	clear(t.openCalls)
+	clear(t.waitsOn)
 	t.facts = childFacts{clear: true}
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
