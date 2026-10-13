@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,29 +30,34 @@ import (
 // say who reviewed, never fails the step; what was asked, and what was
 // not, is recorded as pull_request.review_rerequested.
 //
-// One caller at a time per (task, repository, number, head): each holds a
-// session advisory lock on a connection of its own from before it reads
-// the pull_request_rerequests row until after it records the outcome, and
-// does every GitHub read and request for that head inside it. A caller that
-// finds the lock held skips that pull request, finishes the others, and
-// returns ErrRerequestBusy, so its step runs again later. A live holder
-// keeps the lock however long its GitHub calls take, or while its process
-// is suspended; only its session ending (the process dying, or the
-// connection to Postgres breaking) frees the lock early. The holder checks
-// that session before every POST, the per-login retries after a 422
-// included, and records the outcome and its event in one transaction on it.
+// One caller at a time per (task, repository, number, head) while the
+// holder's Postgres session lives: each holds a session advisory lock on a
+// connection of its own from before it reads the pull_request_rerequests
+// row until after it records the outcome, and does every GitHub read and
+// request for that head inside it. A caller that finds the lock held, or
+// every re-request slot taken (admit: holders are bounded so they cannot
+// take the whole pool while GitHub answers), skips that pull request,
+// finishes the others, and returns ErrRerequestBusy, so its step runs
+// again later. A live holder keeps the lock however long its GitHub calls
+// take, or while its process is suspended; only its session ending (the
+// process dying, or the connection to Postgres breaking) frees the lock
+// early. Before every POST, the per-login retries after a 422 included,
+// the holder pings that session, and it records the outcome and its event
+// in one transaction on it. This needs one Postgres session per
+// connection: direct Postgres or session-mode pooling.
 //
-// Not guaranteed: GitHub and the database cannot commit together, so this
-// is at most one caller's requests in flight at a time, not exactly one
-// request per head. Before asking, the holder writes who it is asking
-// (`asking`); a holder that ends without finishing leaves the row
-// unfinished, and the next to take the lock starts from what GitHub says
-// then. Of the lost holder's logins, one GitHub no longer counts as owing a
-// review is recorded as requested without asking again; one it still does
-// (refused, or never sent: the two cannot be told apart) is asked once
-// more, with anyone else stale. A request already on the wire when its
-// holder's session broke can still reach GitHub after the next holder has
-// asked: a second request to that login, at most.
+// Not guaranteed: a ping is a check at an instant, not a fence around the
+// POST after it, and GitHub and the database cannot commit together, so
+// this is not exactly one request per head. Before asking, the holder
+// writes who it is asking (`asking`); a holder that ends without finishing
+// leaves the row unfinished, and the next to take the lock starts from
+// what GitHub says then. Of the lost holder's logins, one GitHub no longer
+// counts as owing a review is recorded as requested without asking again;
+// one it still does (refused, or never sent: the two cannot be told apart)
+// is asked once more, with anyone else stale. A lost holder can still send
+// the POST that followed its last successful ping, and it can reach GitHub
+// after the next holder has asked; each session lost that way can add one
+// such request, so repeated losses can repeat a login's request.
 func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh *forge.GitHub, heads map[string]string) error {
 	if gh == nil || len(heads) == 0 {
 		return nil
@@ -82,12 +89,13 @@ func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh 
 }
 
 // ErrRerequestBusy: another caller holds a pull request's re-request for
-// its head; the step runs again shortly and finds it finished.
+// its head, or every re-request slot is taken; the step runs again shortly.
 var ErrRerequestBusy = workflow.Wait{After: 5 * time.Second,
-	Why: "another worker is asking this pull request's reviewers again; waiting for it"}
+	Why: "another worker is asking reviewers again, for this pull request or others; waiting for it"}
 
-// errClaimBusy: another session holds the head's lock, or this caller's
-// own session, and with it the lock, ended mid-way.
+// errClaimBusy: another session holds the head's lock, every re-request
+// slot is taken, or this caller's own session, and with it the lock, ended
+// mid-way.
 var errClaimBusy = errors.New("re-request held by another caller")
 
 type rerequestClaim struct {
@@ -119,10 +127,21 @@ func (c *rerequestClaim) run(ctx context.Context, st *State, gh *forge.GitHub, s
 	return c.finish(ctx, st, payload)
 }
 
-// lock takes a pool connection and the head's lock on it, or returns
-// errClaimBusy. unlock frees both; a connection whose unlock failed is
-// closed rather than pooled, which frees the lock too.
+// lock admits the caller (admit), takes a pool connection and the head's
+// lock on it, or returns errClaimBusy. unlock frees all three; a
+// connection whose unlock failed is closed rather than pooled, which frees
+// the lock too.
 func (c *rerequestClaim) lock(ctx context.Context) (unlock func(), err error) {
+	leave, ok := c.s.admit()
+	if !ok {
+		return nil, errClaimBusy
+	}
+	locked := false
+	defer func() {
+		if !locked {
+			leave()
+		}
+	}()
 	conn, err := c.s.DB.Pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -139,16 +158,52 @@ func (c *rerequestClaim) lock(ctx context.Context) (unlock func(), err error) {
 		}
 		return nil, err
 	}
-	c.conn = conn
+	c.conn, locked = conn, true
 	return func() {
+		defer leave()
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		if _, err := conn.Exec(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, key); err != nil {
+		var freed bool
+		err := conn.QueryRow(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, key).Scan(&freed)
+		if err == nil && !freed {
+			// This session does not hold the lock it took: the connection
+			// is not one Postgres session (a transaction-mode pooler).
+			slog.Warn("re-request lock was not held by its own session at unlock; the database URL needs direct Postgres or session-mode pooling",
+				"key", key)
+		}
+		if err != nil || !freed {
 			_ = conn.Hijack().Close(uctx)
 			return
 		}
 		conn.Release()
 	}, nil
+}
+
+// Admission bound for re-requests. Each holds a pool connection while
+// GitHub answers, so at most a quarter of the pool (rerequestMaxSlots at
+// most) does; the rest stays free for leases, sweeps and API work.
+const rerequestMaxSlots = 8
+
+func rerequestSlotCount(maxConns int32) int {
+	// A pool of 1 to 3 still admits one: none would hold delivery waiting
+	// forever. With 1, that one holder leaves nothing free while GitHub
+	// answers; such a pool is for tests, not a deployment.
+	return int(min(max(1, maxConns/4), rerequestMaxSlots))
+}
+
+// admit takes a re-request slot without waiting; ok false when every slot
+// is taken, and then the caller is busy rather than queued on the pool.
+func (s *Store) admit() (leave func(), ok bool) {
+	s.rerequestOnce.Do(func() {
+		s.rerequestSlots = make(chan struct{}, rerequestSlotCount(s.DB.Pool.Config().MaxConns))
+	})
+	select {
+	case s.rerequestSlots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-s.rerequestSlots }) }, true
+	default:
+		return nil, false
+	}
 }
 
 // lockKey is the head's advisory lock, as text for hashtextextended.

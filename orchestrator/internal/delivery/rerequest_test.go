@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -71,6 +74,8 @@ func newRerequestFixture(t *testing.T, repos ...string) *rerequestFixture {
 	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	// Not the host's CPU count: the re-request slots are sized from it.
+	f.usePool(16)
 	f.client = forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})
 	for _, name := range repos {
 		if _, err := f.client.OpenPullRequest(f.ctx, forge.OpenPullRequest{Slug: "acme/" + name, Title: "Greet", Head: "feature", Base: "main"}); err != nil {
@@ -86,6 +91,19 @@ func (f *rerequestFixture) exec(sql string, args ...any) {
 	if _, err := f.owner.Exec(f.ctx, sql, append([]any{f.org}, args...)...); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// usePool gives the store a fresh app-role pool of maxConns connections.
+func (f *rerequestFixture) usePool(maxConns int32) {
+	f.t.Helper()
+	cfg := f.s.DB.Pool.Config()
+	cfg.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(f.ctx, cfg)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.t.Cleanup(pool.Close)
+	f.s = &Store{DB: &db.DB{Pool: pool}}
 }
 
 // fix pushes dude's fix onto repo's pull request head; its commit, which
@@ -555,8 +573,9 @@ func TestARerequestThatCannotReadReviewsRecordsWhy(t *testing.T) {
 			if got := f.asks("target"); len(got) != 0 {
 				t.Errorf("asked %v", got)
 			}
-			if e := f.eventFor("target", head); e["error"] == nil || e["reviewersRequested"] != nil {
-				t.Errorf("recorded %v, want only the read's error", e)
+			want := map[string]any{"number": float64(1), "repo": "target", "head": head, "error": "github 500: Internal Server Error"}
+			if e := f.eventFor("target", head); !reflect.DeepEqual(e, want) {
+				t.Errorf("recorded %#v, want only the read's error %#v", e, want)
 			}
 		})
 	}
@@ -610,4 +629,165 @@ func TestABusyPullRequestDoesNotHoldUpTheNext(t *testing.T) {
 	}
 	f.eventFor("a", heads["a"])
 	f.eventFor("b", heads["b"])
+}
+
+// Re-requests hold a pool connection while GitHub answers; with a pool of
+// four, one holder is admitted, so a slow GitHub cannot take every
+// connection. Callers past the bound, and the held head's own caller, are
+// busy at once without reaching GitHub, and unrelated work still gets a
+// connection within a short deadline.
+func TestHeldRerequestsLeaveThePoolToOtherWork(t *testing.T) {
+	repos := []string{"a", "b", "c", "d"}
+	f := newRerequestFixture(t, repos...)
+	f.usePool(4)
+	holders := rerequestSlotCount(4)
+	if holders >= len(repos) {
+		t.Fatalf("%d slots for a pool of 4 leave no connection free", holders)
+	}
+	heads := map[string]string{}
+	entered := map[string]chan struct{}{}
+	var letGo []func()
+	for _, r := range repos {
+		heads[r] = f.fix(r)
+		e, g := f.hold(r, 1)
+		entered[r], letGo = e, append(letGo, g)
+	}
+	held := make(chan error, holders)
+	for _, r := range repos[:holders] {
+		go func() { held <- f.rerequest(map[string]string{r: heads[r]}) }()
+		wait(t, entered[r])
+	}
+	// Without the bound each of these would take a connection and hang in
+	// its own held POST; with it each returns at once.
+	for _, r := range append(slices.Clone(repos[holders:]), repos[0]) {
+		got := make(chan error, 1)
+		go func() { got <- f.rerequest(map[string]string{r: heads[r]}) }()
+		select {
+		case err := <-got:
+			if !errors.Is(err, ErrRerequestBusy) {
+				t.Fatalf("%s while the slots are held: %v, want ErrRerequestBusy", r, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s waited for the held re-requests instead of being busy", r)
+		}
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, time.Second)
+	defer cancel()
+	var prs int
+	err := f.s.DB.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM pull_requests`).Scan(&prs)
+	})
+	if err != nil || prs != len(repos) {
+		t.Fatalf("unrelated work while re-requests are held: %d pull requests, %v", prs, err)
+	}
+	for _, r := range repos[holders:] {
+		select {
+		case <-entered[r]:
+			t.Fatalf("%s reached GitHub past the bound", r)
+		default:
+		}
+	}
+	for _, g := range letGo {
+		g()
+	}
+	for range holders {
+		if err := <-held; err != nil {
+			t.Fatalf("a holder: %v", err)
+		}
+	}
+	for _, r := range repos {
+		if err := f.rerequest(map[string]string{r: heads[r]}); err != nil {
+			t.Fatalf("%s come back: %v", r, err)
+		}
+		if n := len(f.asks(r)); n != 1 {
+			t.Errorf("%s asked %d times, want 1", r, n)
+		}
+		f.eventFor(r, heads[r])
+	}
+}
+
+// A pool too small to spare a quarter still admits one re-request, so
+// delivery is never refused forever; larger pools keep three quarters free.
+func TestRerequestSlotsLeaveMostOfThePool(t *testing.T) {
+	for maxConns, want := range map[int32]int{1: 1, 2: 1, 4: 1, 8: 2, 16: 4, 32: 8, 100: 8} {
+		if got := rerequestSlotCount(maxConns); got != want {
+			t.Errorf("pool of %d: %d slots, want %d", maxConns, got, want)
+		}
+	}
+}
+
+// advisoryLocks is how many advisory locks the test database's sessions hold.
+func (f *rerequestFixture) advisoryLocks() int {
+	f.t.Helper()
+	var n int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// However a holder ends after taking the lock, its slot and lock are
+// freed: a pool of four admits one holder, and the next re-request of the
+// same head, on whichever session, runs. A connection whose lock could not
+// be released normally (its session ended, or it no longer held the lock)
+// is closed, not pooled.
+func TestARerequestHolderFreesItsSlotAndLockHoweverItEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		end    func(f *rerequestFixture, c *rerequestClaim, cancel func(), unlock func())
+		closed bool
+	}{
+		{name: "context canceled", end: func(_ *rerequestFixture, _ *rerequestClaim, cancel, unlock func()) {
+			cancel()
+			unlock()
+		}},
+		{name: "panic", end: func(_ *rerequestFixture, _ *rerequestClaim, _, unlock func()) {
+			defer func() { _ = recover() }()
+			defer unlock()
+			panic("in the holder")
+		}},
+		{name: "session ended", closed: true, end: func(f *rerequestFixture, _ *rerequestClaim, _, unlock func()) {
+			f.killHolder()
+			unlock()
+		}},
+		{name: "lock gone from its session", closed: true, end: func(f *rerequestFixture, c *rerequestClaim, _, unlock func()) {
+			if _, err := c.conn.Exec(f.ctx, `SELECT pg_advisory_unlock_all()`); err != nil {
+				f.t.Fatal(err)
+			}
+			unlock()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRerequestFixture(t, "target")
+			f.usePool(4)
+			head := f.fix("target")
+			c := &rerequestClaim{s: f.s, org: f.org, taskID: f.st.TaskID, repo: "target", number: 1, head: head}
+			ctx, cancel := context.WithCancel(f.ctx)
+			defer cancel()
+			unlock, err := c.lock(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.rerequest(map[string]string{"target": head}); !errors.Is(err, ErrRerequestBusy) {
+				t.Fatalf("while held: %v, want ErrRerequestBusy", err)
+			}
+			total := f.s.DB.Pool.Stat().TotalConns()
+			tc.end(f, c, cancel, unlock)
+			stat := f.s.DB.Pool.Stat()
+			if n := f.advisoryLocks(); n != 0 || stat.AcquiredConns() != 0 {
+				t.Fatalf("after the holder ended: %d advisory locks, %d connections out", n, stat.AcquiredConns())
+			}
+			if tc.closed && stat.TotalConns() != total-1 {
+				t.Errorf("pool has %d connections, had %d: the holder's went back to it", stat.TotalConns(), total)
+			}
+			if err := f.rerequest(map[string]string{"target": head}); err != nil {
+				t.Fatalf("the next caller: %v", err)
+			}
+			if n := len(f.asks("target")); n != 1 {
+				t.Errorf("%d review requests, want 1", n)
+			}
+			f.eventFor("target", head)
+		})
+	}
 }

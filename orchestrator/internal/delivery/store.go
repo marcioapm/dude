@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -60,6 +61,11 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
+
+	// Admission for re-requests, each of which holds a pool connection
+	// across GitHub calls; sized from the pool on first use (rerequestSlots).
+	rerequestOnce  sync.Once
+	rerequestSlots chan struct{}
 }
 
 // runByKey finds the Run a workflow step already created, or "".
