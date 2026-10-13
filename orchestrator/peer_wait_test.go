@@ -123,16 +123,18 @@ func TestWaitForReplyParksAfterTheGraceAndTheReplyResumesTheRun(t *testing.T) {
 	}
 }
 
-// An agent that waits on a peer and then moves machine keeps waiting: the
-// move's resume and settlement leave the wait open and the turn held, and
-// the reply after the move reaches the agent once.
-func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T) {
-	w := newWorld(t)
+// askingAPeer is a world whose implementer, on a task on an epic with peer,
+// asks peer and waits on its reply, parked after 300ms; asking for machine
+// first when it is not "".
+func askingAPeer(t *testing.T, machine string) (w *world, wi, peer string) {
+	w = newWorld(t)
 	w.withTools()
 	w.syncer.ParkAfter = 300 * time.Millisecond
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
-		w.org, fakeagent.MachineSize)
-	wi, peer := w.task(), w.task()
+	if machine != "" {
+		mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+			w.org, fakeagent.MachineSize)
+	}
+	wi, peer = w.task(), w.task()
 	w.onAnEpic(wi, peer)
 	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -140,9 +142,28 @@ func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T
 			return fakelux.Behaviour{Hang: true}
 		}
 		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
-			Machine: fakeagent.MachineRequest, Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+			Machine: machine, Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	w.deliver(wi)
+	return w, wi, peer
+}
+
+// told is how many times text reached the agent of lux Run live as input.
+func (w *world) told(live, text string) int {
+	n := 0
+	for _, lr := range w.lux.Runs() {
+		if lr.ID == live {
+			n += strings.Count(strings.Join(lr.Inputs, "\n"), text)
+		}
+	}
+	return n
+}
+
+// An agent that waits on a peer and then moves machine keeps waiting: the
+// move's resume and settlement leave the wait open and the turn held, and
+// the reply after the move reaches the agent once.
+func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T) {
+	w, wi, peer := askingAPeer(t, fakeagent.MachineRequest)
 	var runID, message string
 	w.until("the agent to wait on its peer and ask to move", func() bool {
 		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id, w.message_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
@@ -175,23 +196,62 @@ func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T
 		t.Errorf("%d received events on the waiting Run, want 1", n)
 	}
 	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
-	for _, lr := range w.lux.Runs() {
-		if lr.ID != live {
-			continue
-		}
-		if n := strings.Count(strings.Join(lr.Inputs, "\n"), reply); n != 1 {
-			t.Errorf("the reply reached the agent %d times: %q", n, lr.Inputs)
-		}
+	if n := w.told(live, reply); n != 1 {
+		t.Errorf("the reply reached the agent %d times", n)
 	}
 }
 
-// raised records the task's implementer, and its Run, as raised to Bigger,
-// so a Reset moves the Run back to Standard.
-func (w *world) raised(task, runID string) {
+// raised records the task's role, and its Run, as raised to Bigger, so a
+// Reset moves the Run back to the role's default size.
+func (w *world) raised(task, role, runID string) {
 	w.t.Helper()
 	mustExec(w.t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object($3::text, jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID, role)
 	mustExec(w.t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+}
+
+// parkedOnItsPeer waits for task's Run to be parked as 'person' with a peer
+// wait open, and for also(runID) when it is not nil: the Run and the
+// message it waits on.
+func (w *world) parkedOnItsPeer(task string, also func(runID string) bool) (runID, message string) {
+	w.t.Helper()
+	w.until("the agent to be parked on its peer", func() bool {
+		runID, message = "", ""
+		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id, w.message_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
+			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'`, task).Scan(&runID, &message)
+		return runID != "" && (also == nil || also(runID))
+	})
+	return runID, message
+}
+
+// resumedForTheMove checks runID's one resume is caused and timed by its
+// machine move.
+func (w *world) resumedForTheMove(runID string) {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN machine_moves m ON m.run_id = rr.run_id
+		WHERE rr.run_id = $1 AND rr.cause = 'machine' AND rr.woken_at = m.created_at`, runID); n != 1 {
+		w.t.Errorf("%d resumes caused and timed by the move", n)
+	}
+}
+
+// parksOnItsPeerAgain waits for runID, resumed for a move, to park on its
+// peer again with its wait still open, and checks five pumps then resume
+// lux Run live no more.
+func (w *world) parksOnItsPeerAgain(runID, live, after string) {
+	w.t.Helper()
+	w.until("the Run to park on its peer again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
+		w.t.Errorf("%d open waits after the %s, want 1", n, after)
+	}
+	resumed := w.luxCalls(live, "resume")
+	for range 5 {
+		w.pump()
+	}
+	if n := w.luxCalls(live, "resume"); n != resumed {
+		w.t.Fatalf("resumed %d more times after the %s", n-resumed, after)
+	}
 }
 
 // A Run parked only on a peer's reply is resumed for a person's Reset at
@@ -200,27 +260,9 @@ func (w *world) raised(task, runID string) {
 // again, and is not resumed again for the settled move; the reply then
 // resumes it once.
 func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	w.syncer.ParkAfter = 300 * time.Millisecond
-	wi, peer := w.task(), w.task()
-	w.onAnEpic(wi, peer)
-	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
-			Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
-	}
-	w.deliver(wi)
-	var runID, message string
-	w.until("the agent to be parked on its peer", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id, w.message_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
-			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'`, wi).Scan(&runID, &message)
-		return runID != ""
-	})
-	w.raised(wi, runID)
+	w, wi, peer := askingAPeer(t, "")
+	runID, message := w.parkedOnItsPeer(wi, nil)
+	w.raised(wi, "implementer", runID)
 	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
 	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": wi, "role": "implementer", "note": "smaller"}); status != 200 {
 		t.Fatalf("reset: %d %v", status, out)
@@ -234,19 +276,8 @@ func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
 	if in := w.lux.ResumeInputs(live); len(in) != 1 || in[0] != "Moved back to Standard by Resetter: smaller" {
 		t.Errorf("resume inputs %q, want the Reset's words alone", in)
 	}
-	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN machine_moves m ON m.run_id = rr.run_id
-		WHERE rr.run_id = $1 AND rr.cause = 'machine' AND rr.woken_at = m.created_at`, runID); n != 1 {
-		t.Errorf("%d resumes caused and timed by the move", n)
-	}
-	w.until("the agent to park on its peer again", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, runID) == 1
-	})
-	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
-		t.Errorf("%d open waits after the move, want 1", n)
-	}
-	for range 5 {
-		w.pump()
-	}
+	w.resumedForTheMove(runID)
+	w.parksOnItsPeerAgain(runID, live, "move")
 	if n := w.luxCalls(live, "resume"); n != 1 {
 		t.Fatalf("resumed %d times before the reply, want the move's alone", n)
 	}
@@ -261,12 +292,8 @@ func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
 		t.Errorf("%d received events, want 1", n)
 	}
-	for _, lr := range w.lux.Runs() {
-		if lr.ID == live {
-			if n := strings.Count(strings.Join(lr.Inputs, "\n"), reply); n != 1 {
-				t.Errorf("the reply reached the agent %d times: %q", n, lr.Inputs)
-			}
-		}
+	if n := w.told(live, reply); n != 1 {
+		t.Errorf("the reply reached the agent %d times", n)
 	}
 }
 
@@ -289,9 +316,7 @@ func TestAResetResumesAConductorParkedOnlyOnAPeersReply(t *testing.T) {
 			AND EXISTS (SELECT 1 FROM peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL AND pw.how = 'wait')`, conductor) == 1
 	})
 	resumesBefore := len(w.lux.ResumeInputs(live))
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
-	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('conductor', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, conductor)
-	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, conductor)
+	w.raised(task, "conductor", conductor)
 	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "conductor", "note": "smaller"}); status != 200 || out["moved"] != true {
 		t.Fatalf("reset: %d %v", status, out)
 	}
@@ -304,23 +329,8 @@ func TestAResetResumesAConductorParkedOnlyOnAPeersReply(t *testing.T) {
 	if in := w.lux.ResumeInputs(live)[resumesBefore:]; len(in) != 1 || in[0] != "Moved back to Small by Resetter: smaller" {
 		t.Errorf("resume inputs %q, want the Reset's words alone", in)
 	}
-	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN machine_moves m ON m.run_id = rr.run_id
-		WHERE rr.run_id = $1 AND rr.cause = 'machine' AND rr.woken_at = m.created_at`, conductor); n != 1 {
-		t.Errorf("%d resumes caused and timed by the move", n)
-	}
-	w.until("the conductor to park on its peer again", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, conductor) == 1
-	})
-	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, conductor); n != 1 {
-		t.Errorf("%d open waits after the move, want 1", n)
-	}
-	resumed := w.luxCalls(live, "resume")
-	for range 5 {
-		w.pump()
-	}
-	if n := w.luxCalls(live, "resume"); n != resumed {
-		t.Fatalf("resumed %d more times before the reply", n-resumed)
-	}
+	w.resumedForTheMove(conductor)
+	w.parksOnItsPeerAgain(conductor, live, "move")
 }
 
 // lux refuses a Reset's resume of a Run parked only on a peer's reply (the
@@ -328,29 +338,10 @@ func TestAResetResumesAConductorParkedOnlyOnAPeersReply(t *testing.T) {
 // settled, the agent is told in the refusal's words alone, and it parks on
 // the peer again without being resumed for the move again.
 func TestALuxRefusedResetOfAPeerParkedRunSettlesAndParksAgain(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	w.syncer.ParkAfter = 300 * time.Millisecond
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
-		w.org, fakeagent.MachineSize)
-	wi, peer := w.task(), w.task()
-	w.onAnEpic(wi, peer)
-	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
 	// Raised on lux too, so lux's own record of the Run is on Bigger.
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
-			Machine: fakeagent.MachineRequest, Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
-	}
-	w.deliver(wi)
-	var runID string
-	w.until("the agent raised and parked on its peer", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
-			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'
-			AND EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.kind = 'raise' AND m.settled_at IS NOT NULL AND m.refused IS NULL)`, wi).Scan(&runID)
-		return runID != ""
+	w, wi, _ := askingAPeer(t, fakeagent.MachineRequest)
+	runID, _ := w.parkedOnItsPeer(wi, func(runID string) bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND kind = 'raise' AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
 	})
 	if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
 		t.Fatalf("raised to %v", got)
@@ -380,19 +371,7 @@ func TestALuxRefusedResetOfAPeerParkedRunSettlesAndParksAgain(t *testing.T) {
 	if in := w.lux.ResumeInputs(live)[before:]; len(in) != 1 || in[0] != want {
 		t.Errorf("resume inputs %q, want %q", in, want)
 	}
-	w.until("the agent to park on its peer again", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, runID) == 1
-	})
-	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
-		t.Errorf("%d open waits after the refusal, want 1", n)
-	}
-	resumed := w.luxCalls(live, "resume")
-	for range 5 {
-		w.pump()
-	}
-	if n := w.luxCalls(live, "resume"); n != resumed {
-		t.Fatalf("resumed %d more times after the refusal", n-resumed)
-	}
+	w.parksOnItsPeerAgain(runID, live, "refusal")
 	if in := w.lux.ResumeInputs(live)[before:]; len(in) != 1 {
 		t.Errorf("resume inputs %q, want the refusal's alone", in)
 	}
@@ -418,7 +397,7 @@ func TestAResetWaitsForAPersonsAnswer(t *testing.T) {
 		runID = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'paused' AND dude_pause = 'person'), '')`, wi)
 		return runID != ""
 	})
-	w.raised(wi, runID)
+	w.raised(wi, "implementer", runID)
 	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
 	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": wi, "role": "implementer", "note": "smaller"}); status != 200 {
 		t.Fatalf("reset: %d %v", status, out)
