@@ -40,12 +40,21 @@ def test_every_section_is_reachable_and_renders(gallery_page: Page, console_erro
         assert console_errors == [], f"console errors after opening {name!r}: {console_errors}"
 
 
-@pytest.mark.parametrize("anchor", ["st-play", "st-states", "st-failed", "st-move", "st-chip"])
-def test_starting_nav_reaches_an_unmounted_example(gallery_page: Page, anchor: str):
+@pytest.mark.parametrize("anchor,name", [
+    ("st-play", "A fresh start"),
+    ("st-states", "Resumed, slow, older lux"),
+    ("st-failed", "Failed"),
+    ("st-move", "A move"),
+    ("st-chip", "StartChip"),
+])
+def test_starting_nav_reaches_an_unmounted_example(gallery_page: Page, anchor: str, name: str):
     """A far-off section must mount and scroll when its example is selected."""
     expect(gallery_page.locator("#st-play")).to_have_count(0)
-    gallery_page.locator(f'nav a[href="#{anchor}"]').click()
+    gallery_page.get_by_role("link", name=name, exact=True).click()
     expect(gallery_page.locator(f"#{anchor}")).to_be_in_viewport()
+    gallery_page.get_by_role("link", name="Status vocabulary", exact=True).click()
+    gallery_page.get_by_role("link", name="StartChip", exact=True).click()
+    expect(gallery_page.locator("#st-chip")).to_be_in_viewport()
 
 
 def test_starting_deep_link_mounts_and_scrolls(gallery_page: Page):
