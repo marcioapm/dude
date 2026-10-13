@@ -5,7 +5,7 @@
  * header, on its stuck call and in a notice.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { EventTypes } from "@dude/domain";
@@ -185,30 +185,73 @@ test("the header of a depth-3 child opens it too", async () => {
   expect(document.querySelector("[role='dialog'] [data-testid='child-session']")?.getAttribute("data-child")).toBe("ses_great");
 });
 
-test("an event for one child redraws it and every child above it, and skips its siblings", async () => {
-  const state = apply(emptyProjection(), [
-    ev(EventTypes.ToolCalled, { tool: "task", callId: "s1", input: { description: "First" } }),
-    ev(EventTypes.ToolCalled, { tool: "task", callId: "s2", input: { description: "Second" } }),
-    ev(EventTypes.ChildStarted, { childId: "a", callId: "s1", kind: "task", title: "Alpha" }),
-    ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "task", title: "Beta" }),
-    ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a1", tool: "task", input: {} }),
-    ev(EventTypes.ChildStarted, { childId: "a-grand", callId: "a1", parentChildId: "a", kind: "task", title: "Alpha's own" }),
-  ]);
-  const draw = () => act(async () => root!.render(<>{snapshot(state).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await draw();
-  // Changed behind the projection's back: drawn only if b is rendered again.
-  state.childrenById.get("b")!.title = "Beta, renamed unseen";
-  apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
-  await draw();
-  expect(threadOf(host, "b")!.textContent).toContain("Beta");
-  expect(threadOf(host, "b")!.textContent).not.toContain("renamed unseen");
-  // The grandchild is at depth 2, collapsed: its new message reaches a's open body through its header's turn count.
-  expect(threadOf(host, "a-grand")!.textContent).toContain("1 turns");
-  apply(state, [ev(EventTypes.ChildMessage, { childId: "b", callId: "s2", text: "Beta speaks." })]);
-  await draw();
-  expect(threadOf(host, "b")!.textContent).toContain("Beta speaks.");
-  expect(threadOf(host, "b")!.textContent).toContain("renamed unseen");
+describe("a child's thread is drawn again only when it or a child under it changed", () => {
+  const ids = ["a", "b", "a-grand"] as const;
+  let state: ReturnType<typeof emptyProjection>;
+  // How many times each child's thread body ran during one draw: every run reads its `turns`.
+  let runs: Record<(typeof ids)[number], number>;
+
+  async function draw(): Promise<typeof runs> {
+    for (const id of ids) runs[id] = 0;
+    await act(async () => root!.render(<>{snapshot(state).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
+    return { ...runs };
+  }
+
+  beforeEach(async () => {
+    state = apply(emptyProjection(), [
+      ev(EventTypes.ToolCalled, { tool: "task", callId: "s1", input: { description: "First" } }),
+      ev(EventTypes.ToolCalled, { tool: "task", callId: "s2", input: { description: "Second" } }),
+      ev(EventTypes.ChildStarted, { childId: "a", callId: "s1", kind: "task", title: "Alpha" }),
+      ev(EventTypes.ChildStarted, { childId: "b", callId: "s2", kind: "task", title: "Beta" }),
+      ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a1", tool: "task", input: {} }),
+      ev(EventTypes.ChildStarted, { childId: "a-grand", callId: "a1", parentChildId: "a", kind: "task", title: "Alpha's own" }),
+    ]);
+    runs = { a: 0, b: 0, "a-grand": 0 };
+    for (const id of ids) {
+      const child = state.childrenById.get(id)!;
+      let turns = child.turns;
+      Object.defineProperty(child, "turns", {
+        configurable: true, enumerable: true,
+        get: () => { runs[id] += 1; return turns; },
+        set: (v) => { turns = v; },
+      });
+    }
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await draw();
+  });
+
+  test("an event on b runs b's thread and neither a's nor a's grandchild's", async () => {
+    apply(state, [ev(EventTypes.ChildMessage, { childId: "b", callId: "s2", text: "Beta speaks." })]);
+    const ran = await draw();
+    expect(ran.b).toBeGreaterThan(0);
+    expect(ran.a).toBe(0);
+    expect(ran["a-grand"]).toBe(0);
+    expect(threadOf(host!, "b")!.textContent).toContain("Beta speaks.");
+  });
+
+  test("an event on a's grandchild runs it and a, and not b", async () => {
+    apply(state, [ev(EventTypes.ChildMessage, { childId: "a-grand", callId: "a1", text: "Grandchild speaks." })]);
+    const ran = await draw();
+    expect(ran["a-grand"]).toBeGreaterThan(0);
+    expect(ran.a).toBeGreaterThan(0);
+    expect(ran.b).toBe(0);
+    // Depth 2 starts collapsed: the new message shows in its header's turn count.
+    expect(threadOf(host!, "a-grand")!.textContent).toContain("1 turns");
+  });
+
+  test("a waiting on a permission, then its next call clearing it, runs a both times and never b", async () => {
+    apply(state, [ev(EventTypes.ChildWaiting, { childId: "a", callId: "s1", permission: "bash", patterns: ["cat /etc/hostname"], answered: "none" })]);
+    let ran = await draw();
+    expect(ran.a).toBeGreaterThan(0);
+    expect(ran.b).toBe(0);
+    expect(threadOf(host!, "a")!.getAttribute("data-waiting")).toBe("true");
+
+    apply(state, [ev(EventTypes.ChildToolCalled, { childId: "a", parentCallId: "s1", callId: "a2", tool: "bash", input: { command: "cat /etc/hostname" } })]);
+    ran = await draw();
+    expect(ran.a).toBeGreaterThan(0);
+    expect(ran.b).toBe(0);
+    expect(threadOf(host!, "a")!.getAttribute("data-waiting")).toBeNull();
+  });
 });
