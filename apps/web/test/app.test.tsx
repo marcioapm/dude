@@ -5,9 +5,10 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
+import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, emitForTest, mount, settle, until } from "./dom.ts";
-import { EventTypes } from "@dude/domain";
+import { EventTypes, type SessionsList } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
@@ -27,13 +28,15 @@ afterEach(async () => {
 async function app(hash: string, client: FixtureClient) {
   window.history.replaceState(null, "", hash);
   const { container, unmount } = await mount(
-    <TooltipProvider>
-      <ToastProvider>
-        <PeopleProvider client={client}>
-          <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
-        </PeopleProvider>
-      </ToastProvider>
-    </TooltipProvider>,
+    <ThemeProvider>
+      <TooltipProvider>
+        <ToastProvider>
+          <PeopleProvider client={client}>
+            <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+          </PeopleProvider>
+        </ToastProvider>
+      </TooltipProvider>
+    </ThemeProvider>,
   );
   mounted.push(unmount);
   return container;
@@ -109,6 +112,41 @@ describe("the shell's routes to a task's servers", () => {
     await click(button);
     expect(window.location.hash).toBe(`#/task/${TASK_ID}/servers`);
     await onServers(page);
+  });
+});
+
+describe("settings pages", () => {
+  test("yours has one heading, Your settings, and no You crumb above it; its sections keep their names", async () => {
+    const page = await app("#/me/settings", new FixtureClient("a"));
+    const screen = await until(() => page.querySelector<HTMLElement>("[data-testid=my-settings]"), "your settings");
+    await until(() => screen.querySelector("[data-testid=profile]"), "the profile");
+    expect([...screen.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Your settings"]);
+    expect(screen.querySelector("nav[aria-label=Breadcrumb]")).toBeNull();
+    expect(document.title).toBe("Your settings — dude");
+    expect(screen.querySelector("[data-testid=profile]")!.textContent).toContain("Organisation admin");
+  });
+
+  test("the organisation's tab title is spelt as its page is", async () => {
+    await app("#/org/settings", new FixtureClient("a"));
+    await until(() => (document.title === "Organisation settings — dude" ? true : null), "the tab title");
+  });
+});
+
+describe("the sidebar's profile band", () => {
+  test("Sign out and your settings each say what they do in a tooltip on keyboard focus, not only to a screen reader", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const signOut = await until(() => page.querySelector<HTMLElement>("[data-testid=sign-out]"), "Sign out");
+    expect(signOut.getAttribute("aria-label")).toBe("Sign out");
+    // The DS tooltip is its only one: no native title beside it.
+    expect(signOut.hasAttribute("title")).toBe(false);
+    await settle(50);
+    await act(async () => signOut.focus());
+    expect((await until(() => document.querySelector("[role=tooltip]"), "Sign out's tooltip")).textContent).toBe("Sign out");
+    await act(async () => signOut.blur());
+    await until(() => (document.querySelector("[role=tooltip]") ? null : true), "its tooltip gone");
+    const settings = page.querySelector<HTMLElement>("[data-testid=my-settings-button]")!;
+    await act(async () => settings.focus());
+    expect((await until(() => document.querySelector("[role=tooltip]"), "the settings tooltip")).textContent).toBe("Your settings");
   });
 });
 
@@ -195,6 +233,23 @@ describe("home", () => {
     await click(await until(() => page.querySelector("[data-testid=sidebar-sessions] [data-testid=new-session]"), "New session"));
     await until(() => page.querySelector("[data-testid=welcome]"), "the welcome");
     expect(client.made).toBe(0);
+  });
+
+  test("an untitled session in the sidebar reads Untitled session, apart from the New session action", async () => {
+    class OneUntitled extends FixtureClient {
+      override sessions(): Promise<SessionsList> {
+        return Promise.resolve({
+          sessions: [{ id: "bs_untitled", title: null, role: "owner", createdAt: new Date().toISOString(), owner: { id: YOU, name: "Márcio Martins", photoUrl: null },
+            shared: false, projects: [], runStatus: null, dudePause: null, filed: 0, lastActivityAt: new Date().toISOString(), archived: false }],
+          invitations: [], questions: [],
+        });
+      }
+    }
+    const page = await app(`#/project/${PROJECT.id}`, new OneUntitled("a"));
+    const row = await until(() => page.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [data-session=bs_untitled]"), "the untitled row");
+    expect(row.textContent).toBe("Untitled session");
+    const action = page.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [data-testid=new-session]")!;
+    expect(action.textContent).toBe("New session");
   });
 
   test("an organisation with no projects gets the welcome, with New project in it for an admin", async () => {

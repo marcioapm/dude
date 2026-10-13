@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type BoardCard, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
 import { Board, Breadcrumb, ScreenHeader, Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, Tooltip, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
@@ -680,7 +680,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             </SidebarLink>
             {you ? (
               <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
-                actions={<IconButton size="sm" icon="arrow-right" label="Sign out" onClick={onSignOut} data-testid="sign-out" />} />
+                actions={<Tooltip content="Sign out"><IconButton size="sm" icon="arrow-right" label="Sign out" title={undefined} onClick={onSignOut} data-testid="sign-out" /></Tooltip>} />
             ) : (
               <>
                 <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
@@ -769,7 +769,7 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
     case "welcome":
       return "";
     case "orgSettings":
-      return "Organization settings";
+      return "Organisation settings";
     case "mySettings":
       return "Your settings";
     case "inbox":

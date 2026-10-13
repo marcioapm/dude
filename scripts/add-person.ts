@@ -12,7 +12,7 @@
  */
 
 import { SQL } from "bun";
-import { insertPerson } from "../apps/control-plane/src/api/auth.ts";
+import { insertApiKey, insertPerson } from "../apps/control-plane/src/api/auth.ts";
 import { closePool, setPool, withOrg } from "../apps/control-plane/src/db/client.ts";
 
 const [organizationId, name, email, role = "member"] = process.argv.slice(2);
@@ -26,7 +26,10 @@ if (!appDsn || !organizationId || !name || !email || (role !== "admin" && role !
 // Through the app role, so row-level security holds here as in the API.
 setPool(new SQL(appDsn));
 try {
-  const made = await withOrg(organizationId, (scope) => insertPerson(scope, { name, email, role }));
+  const made = await withOrg(organizationId, async (scope) => {
+    const person = await insertPerson(scope, { name, email, role });
+    return person ? { ...person, ...await insertApiKey(scope, { name, personId: person.personId }) } : null;
+  });
   if (!made) throw new Error(`${email} is already a member of ${organizationId}`);
   console.log(JSON.stringify({ personId: made.personId, name, email, role, key: made.key }));
 } catch (err) {

@@ -15,7 +15,7 @@ import type { PersistedEvent, Run } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
-import { attemptStarts, attemptStatus, attemptsOf, eventAttempts, setAsideOf } from "../src/attempts.ts";
+import { attemptMark, attemptStarts, attemptStatus, attemptsOf, eventAttempts, setAsideOf } from "../src/attempts.ts";
 import { formatPlace, inTree, parsePlace } from "../src/place.ts";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -110,7 +110,59 @@ describe("a conductor's Run and the attempts", () => {
   });
 });
 
+describe("the header's mark of a task its conductor decides", () => {
+  // Talk it through: running from the start, waiting on the conductor to start building, no phase yet.
+  const talked = (...runs: Run[]) => ({ status: "running", decider: "conductor", awaitingDecision: { point: "start" }, runs } as unknown as Task);
+
+  test("waiting on a parked conductor, nothing working: paused, waiting on Chat", () => {
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" })), 1, 1))
+      .toEqual({ status: "paused", label: "Waiting on Chat" });
+    // Its conductor ended: the next message starts another.
+    expect(attemptMark(talked(conductor(1, { status: "failed" })), 1, 1).status).toBe("paused");
+    // A phase it started that ended, and is not at work.
+    const implemented = { ...RESTARTED_RUNS.find((r) => r.id === "run_a2_fix")!, attempt: 1, phase: "implement", role: "implementer",
+      status: "completed" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), implemented), 1, 1).status).toBe("paused");
+  });
+
+  test("a conductor or a phase at work keeps it running", () => {
+    expect(attemptMark(talked(conductor(1)), 1, 1)).toEqual({ status: "running" });
+    const fixing = { ...RESTARTED_RUNS.find((r) => r.id === "run_a2_fix")!, attempt: 1, status: "running" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), fixing), 1, 1)).toEqual({ status: "running" });
+    const reviewing = { ...fixing, phase: "review", role: "reviewer" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), reviewing), 1, 1))
+      .toEqual({ status: "running" });
+  });
+
+  test("a historical attempt keeps its original status while the current one waits on Chat", () => {
+    const task = talked(...RESTARTED_RUNS.filter((r) => r.attempt === 1), conductor(2, { status: "paused", dudePause: "conductor" }));
+    expect(attemptMark(task, 2, 2)).toEqual({ status: "paused", label: "Waiting on Chat" });
+    expect(attemptMark(task, 1, 2)).toEqual({ status: "aborted" });
+  });
+
+  test("Deliver's task, or one waiting on no decision, keeps its status", () => {
+    const parked = conductor(1, { status: "paused", dudePause: "conductor" });
+    expect(attemptMark({ ...talked(parked), decider: "policy" }, 1, 1)).toEqual({ status: "running" });
+    expect(attemptMark({ ...talked(parked), awaitingDecision: null }, 1, 1)).toEqual({ status: "running" });
+    expect(attemptMark({ ...talked(parked), status: "review" }, 1, 1)).toEqual({ status: "review" });
+  });
+});
+
 describe("the task page with a conductor", () => {
+  test("the current header renders Waiting on Chat, not Running, when its conductor is parked", async () => {
+    const client = restartedWith(conductor(2, { status: "paused", dudePause: "conductor" }));
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => {
+      const task = await getTask(id);
+      return { ...task, status: "running", decider: "conductor", awaitingDecision: { point: "start" },
+        runs: task.runs.filter((r) => r.role === "conductor" || r.attempt === 1) } as Task;
+    };
+    const page = await taskPage(client);
+    const status = await until(() => page.querySelector<HTMLElement>("[data-testid=header-status]"), "the header status");
+    expect(status.getAttribute("data-status")).toBe("paused");
+    expect(status.textContent).toBe("Waiting on Chat");
+  });
+
   test("a conductor on a later attempt column makes no attempt in the picker", async () => {
     const page = await taskPage(restartedWith(conductor(3)));
     await until(() => (shown(page) === "2" ? true : null), "attempt 2, the current one");
@@ -152,7 +204,7 @@ describe("the task page with a conductor", () => {
     expect(line.hasAttribute("data-attempt")).toBe(false);
     expect(line.textContent).not.toContain("· attempt");
     // The fix's line beside it is still attempt 1's.
-    const fix = [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes("aborted the fix"))!;
+    const fix = [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes("aborted the fixer"))!;
     expect(fix.getAttribute("data-attempt")).toBe("1");
   });
 

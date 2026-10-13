@@ -290,7 +290,7 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       title="Connect GitHub"
       description={app
         ? "A GitHub App: commits are the App's; pull requests require the task owner's authorization. Secrets are never shown again."
-        : "A personal access token with repository access. It is stored for this organization and never shown again."}
+        : "A personal access token with repository access. It is stored for this organisation and never shown again."}
       submitLabel="Save"
       submitTestId="forge-save"
       canSubmit={!busy && ready}

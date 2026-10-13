@@ -33,11 +33,11 @@ export interface SessionTitleProps {
 }
 
 /**
- * A session's name in its header. Untitled, it reads "New session" in
+ * A session's name in its header. Untitled, it reads "Untitled session" in
  * muted ink. With `onRename`, the name is a button: pressing it edits the
  * name in place, Enter saves, Escape (or an unchanged name) cancels.
  */
-export function SessionTitle({ title, untitled = "New session", onRename, maxLength = 200 }: SessionTitleProps) {
+export function SessionTitle({ title, untitled = "Untitled session", onRename, maxLength = 200 }: SessionTitleProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);

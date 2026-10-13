@@ -6,17 +6,9 @@ import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { EntityLine } from "./EntityLine.tsx";
 import styles from "./PersonAvatar.module.css";
+import type { Person } from "../util/viewTypes.ts";
 
-/** Anyone with a face: a name, and a photo when there is one. */
-export interface Person {
-  /** Stable identity for colour and keys; falls back to `name`. */
-  readonly id?: string | undefined;
-  readonly name: string;
-  /** A photo. Without one, initials on the person's identity colour. */
-  readonly photoUrl?: string | null | undefined;
-  /** Acted in the last five minutes. Unknown (undefined) draws no ring. */
-  readonly online?: boolean | undefined;
-}
+export type { Person };
 
 /** Face sizes in px, 16–56. The named ones match the avatar tokens. */
 export type PersonAvatarSize = 16 | 20 | 24 | 28 | 32 | 40 | 56;
@@ -112,7 +104,7 @@ export interface PersonAvatarStackProps extends Omit<HTMLAttributes<HTMLSpanElem
 }
 
 /**
- * Faces overlapping by a quarter, the first on top: order by relevance
+ * Faces overlapping by a fifth, the first on top: order by relevance
  * (the owner, then everyone else on the task). Past `max`, a "+N" in the
  * same shape stands for the rest; every name is in the group's label.
  */
@@ -135,7 +127,7 @@ export function PersonAvatarStack({ people, size = 20, max = 4, agents, classNam
         );
       })}
       {more > 0 ? (
-        <span className={cx(styles["root"], styles["overflow"])} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
+        <span className={cx(styles["root"], styles["overflow"])} data-size={size} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
           <span className={styles["initials"]}>+{more}</span>
         </span>
       ) : null}

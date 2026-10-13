@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTheme } from "@dude/design-system";
-import { Breadcrumb, Duration } from "@dude/design-system/components";
+import { Duration } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardFooter, CardHeader, Dialog, FormActions, FormStack, KeyValueList, Page, PageHeader, Select,
   type CalloutTone } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
@@ -172,7 +172,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
 
   return (
     <Page data-testid="my-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
+      <PageHeader title="Your settings"
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields

@@ -65,7 +65,7 @@ export function ProfileSection({ client, me, onChanged }: { client: ApiClient; m
           </p>
           <KeyValueList items={[
             { label: "Email", value: me.email ?? "—" },
-            { label: "Role", value: me.role === "admin" ? "Organization admin" : "Member" },
+            { label: "Role", value: me.role === "admin" ? "Organisation admin" : "Member" },
           ]} />
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
         </FormStack>

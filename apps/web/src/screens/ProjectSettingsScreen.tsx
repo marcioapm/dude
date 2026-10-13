@@ -405,7 +405,7 @@ function RepositoryDialog(props: {
         checked={external}
         onCheckedChange={(c) => setExternal(c === true)}
         label="External (untrusted)"
-        description="Code from outside the organization: agents get no credentials and restricted network."
+        description="Code from outside the organisation: agents get no credentials and restricted network."
       />
     </FormDialog>
   );

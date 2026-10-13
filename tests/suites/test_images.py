@@ -25,7 +25,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from env import TEST_LAYER
-from helpers import ApiClient, execute, query, sign_in, wait_until
+from helpers import ApiClient, execute, provision_person, query, sign_in, wait_until
 
 # dude-image-builder's heartbeat, as it writes it every 30 s; the suite
 # says it is alive unless a test is about it being offline.
@@ -345,7 +345,7 @@ def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page,
 @pytest.mark.ui
 def test_a_member_reads_the_library_and_changes_nothing(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, env, console_errors: list):
     _publish_first(client, owner_dsn, "acme-base")
-    member = client.post("/v1/people", {"name": "Bo", "email": f"bo-{os.urandom(2).hex()}@acme.dev", "role": "member"}).json()["key"]
+    member = provision_person(client, env, "Bo", f"bo-{os.urandom(2).hex()}@acme.dev")[1].api_key
     sign_in(page, web_url, member, at="#/org/settings/images")
     rows = page.get_by_role("table").get_by_role("row", name=re.compile(r"^acme-base"))
     expect(rows).to_have_count(1)

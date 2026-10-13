@@ -48,7 +48,7 @@ const (
 )
 
 // UntitledSession is what a session is called until it is named.
-const UntitledSession = "New session"
+const UntitledSession = "Untitled session"
 
 // AgentTitleMax bounds the title the agent gives a session (name_session),
 // in characters; a person's may run to the schema's 200.
