@@ -745,13 +745,12 @@ test("111 adds task_relations and task_auto_starts under forced RLS, and task_bl
 }, 120_000);
 
 test("112 adds a person's GitHub login, id and commit email, empty, without rewriting people", async () => {
-  const { sql } = await migratedBefore("112");
+  const { url, sql } = await migratedBefore("111");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_p', 'p', 'p')`;
     await sql`INSERT INTO people (id, organization_id, name, email) VALUES ('per_a', 'org_p', 'Ana', 'Ana@Example.com')`;
     const [before] = await sql`SELECT pg_relation_filenode('people') AS node`;
-    const contents = await (await listMigrationFiles()).find((f) => f.version === "112")!.contents();
-    await sql.begin((tx) => tx.unsafe(contents));
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["111_task_relations.sql", "112_people_github.sql"]);
     const [after] = await sql`SELECT pg_relation_filenode('people') AS node`;
     expect(after.node).toBe(before.node);
     expect([...await sql`SELECT github_login, github_user_id, commit_email FROM people`])
