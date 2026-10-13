@@ -119,10 +119,17 @@ type MachineMove struct {
 	ID, Org, TaskID, SessionID, RunID string
 	// Settings role, and "raise" or "reset".
 	Role, Kind, ToSizeID string
-	// runs.machine before the move; a raise's carries previousRaise.
+	// runs.machine before the move; a raise's is a MoveFrom.
 	From any
 	// The agent's reason, or a Reset's note; ByPerson is a Reset's.
 	Reason, ByPerson string
+}
+
+// MoveFrom is a raise's from_size: the machine it left, and the layer it
+// replaced, put back if lux refuses the move.
+type MoveFrom struct {
+	Machine
+	PreviousRaise *Raise `json:"previousRaise"`
 }
 
 // StartMove records a move and, with park, parks its running Run for it

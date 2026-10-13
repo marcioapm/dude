@@ -323,10 +323,7 @@ func (p *ResizePlan) keptNote() string {
 // pendingMove is a Run's unsettled machine move.
 type pendingMove struct {
 	ID, Role, Kind, To string
-	From               struct {
-		delivery.Machine
-		PreviousRaise *delivery.Raise `json:"previousRaise"`
-	}
+	From               delivery.MoveFrom
 	// lux's definitive refusal, kept before the fallback resume.
 	Code, Message string
 	// A Reset's person and note.
