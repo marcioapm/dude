@@ -104,14 +104,16 @@ test("after a save the form shows what was saved, and has nothing left to save",
 });
 
 // The shell has your name from the people list, which it reads again after a
-// save, later than /v1/me: here it arrives only once /v1/me already has.
+// save, later than /v1/me: here it arrives only once /v1/me already has. Its
+// own until (a separate act) lands the name in a render after /v1/me's; waiting
+// without act would flush both in one render and hide the order under test.
 function Shell({ client }: { client: ProfileClient }) {
   const [me, setMe] = useState(ME);
   const onChanged = () => {
     void (async () => {
       await until(() => client.reads >= 2 ? true : null, "the re-read of /v1/me");
       setMe({ ...ME, name: client.name });
-    })();
+    })().catch(() => {}); // the test's own until reports a missing re-read
   };
   return <MySettingsScreen client={client} me={me} onChanged={onChanged} />;
 }

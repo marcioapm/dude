@@ -49,8 +49,8 @@ export function MySettingsScreen({ client, me, onChanged }: {
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields
-        // from /v1/me): the form starts again only once a save's values arrive,
-        // in whichever order the two reads land, so it never starts from old ones.
+        // from /v1/me): after a save the form starts again as each read lands,
+        // so it ends on the saved values whichever lands first.
         <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
           onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
       ) : null}
