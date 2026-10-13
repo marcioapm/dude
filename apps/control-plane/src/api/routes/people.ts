@@ -366,14 +366,21 @@ const createKeyInput = z.object({ name: z.string().trim().min(1).max(100), organ
 
 async function createMyKey(ctx: RequestContext): Promise<Response> {
   const { name, organizationId } = await parseBody(ctx.request, createKeyInput);
-  const selected = organizationId ?? ctx.request.headers.get("x-dude-organization") ??
-    (ctx.principal.access?.memberships.length === 1 ? ctx.principal.access.memberships[0]!.organization_id : undefined);
-  if (ctx.principal.access && !selected) throw new HttpError(400, "organization_required", "organization_required");
-  const membership = ctx.principal.access?.memberships.find((m) => m.organization_id === selected);
-  if (ctx.principal.access && !membership) throw new HttpError(403, "not_a_member", "not_a_member");
-  if (!ctx.principal.access && organizationId && organizationId !== ctx.principal.organizationId) throw new HttpError(403, "not_a_member", "not_a_member");
-  const made = await withOrg(membership?.organization_id ?? ctx.principal.organizationId, (scope) =>
-    insertApiKey(scope, { name, personId: membership?.person_id ?? ctx.principal.personId }));
+  const access = ctx.principal.access;
+  let target: { organizationId: string; personId: string };
+  if (access) {
+    // Body, then header, then the only membership; never a guess among several.
+    const selected = organizationId ?? ctx.request.headers.get("x-dude-organization") ??
+      (access.memberships.length === 1 ? access.memberships[0]!.organization_id : undefined);
+    if (!selected) throw new HttpError(400, "organization_required", "organization_required");
+    const membership = access.memberships.find((m) => m.organization_id === selected);
+    if (!membership) throw new HttpError(403, "not_a_member", "not_a_member");
+    target = { organizationId: membership.organization_id, personId: membership.person_id };
+  } else {
+    if (organizationId && organizationId !== ctx.principal.organizationId) throw new HttpError(403, "not_a_member", "not_a_member");
+    target = { organizationId: ctx.principal.organizationId, personId: ctx.principal.personId };
+  }
+  const made = await withOrg(target.organizationId, (scope) => insertApiKey(scope, { name, personId: target.personId }));
   // The plaintext, this once; only its hash is kept.
   return json({ id: made.id, name, prefix: made.keyPrefix, key: made.key }, 201);
 }

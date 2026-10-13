@@ -188,13 +188,22 @@ describe("your keys, in each organisation", () => {
   test("legacy create selects one membership or a header, but never an ambiguous first member", async () => {
     const email = at("legacy-key");
     await member(owner, acme, email);
-    expect((await as(email, "POST", "/v1/me/keys", { name: "Single" }, null)).status).toBe(201);
+    const single = await as(email, "POST", "/v1/me/keys", { name: "Single" }, null);
+    expect(single.status).toBe(201);
     await member(owner, northwind, email);
     expect(await as(email, "POST", "/v1/me/keys", { name: "Ambiguous" }, null))
       .toMatchObject({ status: 400, body: { error: { code: "organization_required" } } });
-    expect((await as(email, "POST", "/v1/me/keys", { name: "Header" }, northwind)).status).toBe(201);
-    expect((await as(email, "POST", "/v1/me/keys", { name: "Explicit", organizationId: acme }, null)).status).toBe(201);
+    const header = await as(email, "POST", "/v1/me/keys", { name: "Header" }, northwind);
+    expect(header.status).toBe(201);
+    const explicit = await as(email, "POST", "/v1/me/keys", { name: "Explicit", organizationId: acme }, null);
+    expect(explicit.status).toBe(201);
+    // The body's organisation wins over a header naming the other one.
+    const both = await as(email, "POST", "/v1/me/keys", { name: "Both", organizationId: acme }, northwind);
+    expect(both.status).toBe(201);
     expect((await as(email, "POST", "/v1/me/keys", { name: "Foreign", organizationId: `${acme}_foreign` }, null)).status).toBe(403);
+    const listed = (await as(email, "GET", "/v1/me/keys", undefined, null)).body.keys as Json[];
+    const orgOf = (id: string) => listed.find((k) => k.id === id)?.organizationId;
+    expect([single, header, explicit, both].map((k) => orgOf(k.body.id))).toEqual([acme, northwind, acme, acme]);
   });
 
   test("no-header revoke finds the caller's B key, and cannot revoke a foreign key", async () => {
