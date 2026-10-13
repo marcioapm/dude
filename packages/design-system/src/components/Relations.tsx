@@ -1,6 +1,6 @@
 import { forwardRef, useId, useState, type ReactNode } from "react";
 import type { AgentRole } from "@dude/domain";
-import { blockerList, blockerStateWord, keyList, onceMerged, startsWhen } from "@dude/domain";
+import { AUTO_START_HOW_LABEL, blockerList, blockerStateWord, keyList, onceMerged, startsWhen } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Button, IconButton, type ButtonProps } from "../primitives/Button.tsx";
@@ -114,7 +114,7 @@ export interface AutoStartView {
   readonly onCancel?: (() => void) | undefined;
 }
 
-export const HOW_LABEL: Record<AutoStartView["how"], string> = { deliver: "Deliver", talk: "Talk it through" };
+export { AUTO_START_HOW_LABEL as HOW_LABEL };
 
 export interface AutoStartMarkProps {
   readonly auto: AutoStartView;
@@ -130,7 +130,7 @@ export interface AutoStartMarkProps {
  * A promise about a start, not a status: no tone, no count.
  */
 export function AutoStartMark({ auto, blockers, compact }: AutoStartMarkProps) {
-  const words = `${startsWhen(blockers)} · ${HOW_LABEL[auto.how]}`;
+  const words = `${startsWhen(blockers)} · ${AUTO_START_HOW_LABEL[auto.how]}`;
   const who = `${auto.by} set it ${auto.ago} ago. Every blocker is checked again when it fires: if one is open, nothing starts.`;
   return (
     <span className={styles["autoWrap"]} data-testid="auto-start-mark">
@@ -257,7 +257,7 @@ export function StartMenu({ taskKey, blockers, onStart, onStartAnyway, auto, onS
   const around: RowMenuItem[] = !blocked ? [] : [
     { kind: "separator" },
     ...(auto ? [
-      { kind: "note" as const, id: "auto-note", text: `${startsWhen(blockers)} · ${HOW_LABEL[auto.how]}, as ${auto.by} set ${auto.ago} ago.` },
+      { kind: "note" as const, id: "auto-note", text: `${startsWhen(blockers)} · ${AUTO_START_HOW_LABEL[auto.how]}, as ${auto.by} set ${auto.ago} ago.` },
       auto.onCancel
         ? { id: "auto-cancel", label: "Cancel start when unblocked", icon: "close" as const, onSelect: auto.onCancel }
         : { id: "auto-cancel", label: "Cancel start when unblocked", icon: "close" as const, disabled: true, disabledReason: `Only ${ownerName}, its owner, can cancel this.` },

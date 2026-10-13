@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { AgentRole } from "@dude/domain";
-import { keyList } from "@dude/domain";
+import { AUTO_START_HOW_LABEL, keyList } from "@dude/domain";
 import { Icon } from "../icons/index.tsx";
 import { Button } from "../primitives/Button.tsx";
 import { ChoiceList } from "../primitives/ChoiceList.tsx";
@@ -127,7 +127,7 @@ export function AutoStartDialog({ open, onOpenChange, taskKey, blockers, onConfi
           <Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button variant="primary" leadingIcon="play" disabled={!how || busy} aria-describedby={how ? undefined : footId}
             onClick={() => how && void onConfirm(how)} data-testid="confirm-auto-start">
-            {how ? `${how === "deliver" ? "Deliver" : "Talk it through"} when ${one ? "it merges" : "they merge"}` : "Set"}
+            {how ? `${AUTO_START_HOW_LABEL[how]} when ${one ? "it merges" : "they merge"}` : "Set"}
           </Button>
         </>
       }>
