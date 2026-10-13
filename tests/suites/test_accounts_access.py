@@ -10,14 +10,17 @@ The flows are docs/design/accounts.md's: the super-admin makes an
 organisation and gets its first admin's link; that admin joins and invites
 two people with the chip editor; an invitee joins; another email sees only
 the generic mismatch; an uninvited email sees No organisation; a person in
-two organisations switches between them, each with its own address; and
-keys are made per organisation.
+two organisations switches between them, each with its own address, and
+an image uploads in the one the tab is in; keys are made per organisation;
+and a forged token and a write from another origin are refused.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import struct
+import zlib
 
 import pytest
 import requests
@@ -47,6 +50,29 @@ def _join(access, email: str, code: str, name: str | None = None) -> dict:
     resp = access.session(email, name).post(f"/v1/invitations/{code}/accept", json={})
     assert resp.status_code == 200, resp.text
     return resp.json()
+
+
+def _png(width: int, height: int) -> bytes:
+    """A real PNG, solid, made with the standard library."""
+    raw = b"".join(b"\x00" + bytes((40, 120, 200)) * width for _ in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def _task(access, email: str, org: dict, title: str) -> dict:
+    """A task in a new project of `org`, made through the API as `email`, naming the organisation."""
+    s = access.session(email)
+    s.headers["x-dude-organization"] = org["id"]
+    project = s.post("/v1/projects", json={"name": "Web", "slug": f"web-{_suffix()}"})
+    assert project.status_code == 201, project.text
+    task = s.post("/v1/tasks", json={"projectId": project.json()["id"], "title": title,
+                                       "goal": "The header overlaps the menu on a narrow window, at any width."})
+    assert task.status_code == 201, task.text
+    return task.json()
 
 
 def _not_loading_errors(errors: list[str]) -> list[str]:
@@ -186,7 +212,7 @@ def test_a_link_opened_with_another_email_shows_only_the_generic_page_and_accept
     accepts: list[str] = []
     page.on("request", lambda r: accepts.append(r.url) if r.method == "POST" and "/accept" in r.url else None)
     page.get_by_test_id("switch-account").click()
-    page.wait_for_url(re.compile(r"/$|/#"))
+    expect(page).to_have_url(f"{access.url}/")
     assert accepts == []
     assert not any(c["name"] == "CF_Authorization" and c["value"] for c in page.context.cookies())
     assert query(owner_dsn, "SELECT accepted_at FROM invitations WHERE code = %s", (code,)) == [{"accepted_at": None}]
@@ -214,6 +240,16 @@ def test_an_uninvited_email_sees_no_organisation_and_nothing_is_recorded(page: P
     assert console_errors == []
 
 
+def test_access_verifies_the_token_and_a_write_from_another_origin_is_refused(access):
+    # A token whose signature was altered is not Access's: refused before the gate.
+    forged = access.token(f"stranger-{_suffix()}@elsewhere.test")[:-6] + "AAAAAA"
+    assert requests.get(f"{access.url}/v1/me", cookies={"CF_Authorization": forged}, timeout=10).status_code == 401
+    # The operator's own cookie, sent from another site's page: a write is refused.
+    s = access.session(ACCESS_OPERATOR)
+    s.headers["origin"] = "https://evil.test"
+    assert s.post("/v1/admin/organizations", json={"name": "X", "slug": f"x-{_suffix()}", "email": "x@x.test"}).status_code == 403
+
+
 def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page: Page, access, console_errors: list):
     s = _suffix()
     person = f"ana-{s}@both.test"
@@ -221,6 +257,7 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     northwind = _organisation(access, "Northwind", f"northwind-{s}", person)
     _join(access, person, initech["code"], "Ana Ribeiro")
     _join(access, person, northwind["code"])
+    task = _task(access, person, northwind, "Header overlaps the menu")
 
     sent: list[tuple[str, str | None]] = []
     page.on("request", lambda r: sent.append((r.url, r.headers.get("x-dude-organization"))) if "/v1/navigation" in r.url or "/v1/events/stream" in r.url else None)
@@ -232,10 +269,11 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     menu = page.get_by_role("menu")
     expect(menu.get_by_role("menuitemradio")).to_have_count(2)
     expect(menu.get_by_role("menuitemradio", name=re.compile("^Initech"))).to_have_attribute("aria-checked", "true")
-    menu.get_by_role("menuitemradio", name=re.compile("^Northwind")).click()
+    with page.expect_request(lambda r: "/v1/events/stream" in r.url and f"org={northwind['id']}" in r.url), \
+            page.expect_request(lambda r: "/v1/navigation" in r.url and r.headers.get("x-dude-organization") == northwind["id"]):
+        menu.get_by_role("menuitemradio", name=re.compile("^Northwind")).click()
     expect(page).to_have_url(re.compile(rf"#/o/{northwind['slug']}/$"))
     expect(page.get_by_test_id("switcher")).to_contain_text("Northwind · Admin")
-    page.wait_for_timeout(300)
     nav = [h for u, h in sent if "/v1/navigation" in u]
     assert nav[0] == initech["id"] and nav[-1] == northwind["id"], sent
     streams = [u for u, _ in sent if "/v1/events/stream" in u]
@@ -250,6 +288,15 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     assert page.url != other.url
     assert page.url.endswith(f"#/o/{northwind['slug']}/") and other.url.endswith(f"#/o/{initech['slug']}/")
     other.close()
+
+    # An image attached to a Northwind task uploads there: the XHR names the organisation too.
+    page.goto(f"{access.url}/#/o/{northwind['slug']}/task/{task['id']}")
+    page.get_by_test_id("edit-task").click()
+    with page.expect_response(lambda r: r.url.endswith(f"/v1/tasks/{task['id']}/attachments") and r.request.method == "POST") as uploaded:
+        page.get_by_test_id("task-attach-input").set_input_files([{"name": "header.png", "mimeType": "image/png", "buffer": _png(400, 120)}])
+    assert 200 <= uploaded.value.status < 300, uploaded.value.text()
+    assert uploaded.value.request.headers.get("x-dude-organization") == northwind["id"]
+    expect(page.get_by_test_id("task-goal")).to_have_value(re.compile(r"attachment:att_(?!local)"), timeout=20_000)
     assert console_errors == []
 
 
@@ -273,7 +320,9 @@ def test_keys_are_made_per_organisation(page: Page, access, console_errors: list
     page.get_by_test_id("key-name").fill("Laptop")
     page.get_by_test_id("key-create").click()
     secret = page.get_by_test_id("key-secret").input_value()
-    expect(page.get_by_test_id("key-usage")).to_contain_text(f'the CLI keeps it as "{northwind["slug"]}"')
+    expect(page.get_by_test_id("key-usage")).to_have_text(
+        f'curl -H "authorization: Bearer {secret}" {access.url}/v1/me\n'
+        "# acts as you in Northwind; its answer names the organisation and your role")
     page.get_by_test_id("key-done").click()
     expect(group.get_by_test_id("key-row")).to_have_count(1)
     expect(keys.locator(f"[data-testid=key-group][data-org='{initech['slug']}'] [data-testid=key-row]")).to_have_count(0)
