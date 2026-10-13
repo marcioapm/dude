@@ -20,9 +20,13 @@ import {
   type MachineSizeWithUse,
   type Run,
   type SettingsRole,
+  type AgentMachine,
+  type Machine,
+  type MachineMove,
+  type MachineResetPayload,
+  type Raise,
 } from "@dude/domain";
 
-import type { AgentMachine, Machine, MachineMove, MachineResetPayload, Raise, SessionDetail } from "@dude/domain";
 import type { MachineRaise } from "@dude/design-system/components";
 import { formatDuration } from "@dude/design-system";
 import type { TaskDetail } from "./api/client.ts";
@@ -32,11 +36,6 @@ export type RaisedMachine = NonNullable<Run["machine"]>;
 
 export function taskRaisedMachines(detail: Pick<TaskDetail, "agentMachines">): AgentMachine[] {
   return detail.agentMachines ?? [];
-}
-
-/** A session's one raise (role `brainstorm`), or null. */
-export function sessionRaisedMachine(detail: Pick<SessionDetail, "agentMachines">): AgentMachine | null {
-  return detail.agentMachines?.[0] ?? null;
 }
 
 /** "Asked for by run_7f3k (the implementer), 1h ago: <reason>". `role` is the asking Run's, when known. */
@@ -69,10 +68,10 @@ export function raisedRows(machines: readonly AgentMachine[], reset: (machine: A
     const size = m.size;
     if (!size) return [];
     const settings = m.settings;
-    const own: MachineRaise = { role: avatarOf(m.role), label: roleLabel(m.role), size, settings: { name: settings?.name ?? "its settings' size" },
-      detail: raisedProvenance(m.raise, m.askedBy.role ?? m.raise.role), onReset: settings ? () => reset(m, size, settings) : undefined };
-    const followers = m.followedBy.map((role): MachineRaise => ({ role: avatarOf(role), label: roleLabel(role), size,
-      settings: { name: settings?.name ?? "its settings' size" }, detail: null, follows: roleLabel(m.role).toLowerCase() }));
+    const row = (role: string) => ({ role: avatarOf(role), label: roleLabel(role), size, settings: { name: settings?.name ?? "its settings' size" } });
+    const own: MachineRaise = { ...row(m.role), detail: raisedProvenance(m.raise, m.askedBy.role ?? m.raise.role),
+      onReset: settings ? () => reset(m, size, settings) : undefined };
+    const followers = m.followedBy.map((role): MachineRaise => ({ ...row(role), detail: null, follows: roleLabel(m.role).toLowerCase() }));
     return [own, ...followers];
   });
 }
