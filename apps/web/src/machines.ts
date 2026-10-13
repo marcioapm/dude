@@ -42,6 +42,31 @@ export function raisedProvenance(machine: RaisedMachine, now = Date.now()): stri
   return `Asked for by ${r.askedBy}${r.role ? ` (the ${roleLabel(r.role).toLowerCase()})` : ""}, ${when}: ${r.reason}`;
 }
 
+export function sessionRaisedMachine(detail: unknown): RaisedMachine | null {
+  const d = detail as { agentMachine?: RaisedMachine | null };
+  return d.agentMachine ?? null;
+}
+
+export interface MachineEventView {
+  role: string;
+  from: string;
+  to: string;
+  pool: string | null;
+  reason: string;
+  note: string;
+  by: string;
+  moveId: string | null;
+}
+
+export function machineEventView(p: Record<string, unknown>): MachineEventView {
+  const name = (v: unknown): string => typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { name?: unknown }).name === "string" ? (v as { name: string }).name : "its requested size";
+  const pool = p.pool && typeof p.pool === "object" ? (p.pool as { to?: unknown }).to : p.pool;
+  return { role: typeof p.role === "string" ? p.role : "brainstorm", from: name(p.from), to: name(p.to),
+    pool: typeof pool === "string" ? pool : null, reason: typeof p.message === "string" ? p.message : typeof p.reason === "string" ? p.reason : typeof p.refused === "string" ? p.refused : "",
+    note: typeof p.note === "string" ? p.note : "", by: typeof p.by === "string" ? p.by : "Someone",
+    moveId: typeof p.moveId === "string" ? p.moveId : null };
+}
+
 export function raisedRows(machines: Partial<Record<SettingsRole, RaisedMachine>>, settings: SettingsResponse, sizes: readonly MachineSize[],
   reset: (role: SettingsRole, from: RaisedMachine, to: MachineSize) => void): MachineRaise[] {
   return Object.entries(machines).flatMap(([key, machine]) => {

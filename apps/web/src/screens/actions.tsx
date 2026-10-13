@@ -9,9 +9,9 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { MachineRaises } from "@dude/design-system/components";
+import { MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock } from "@dude/design-system/components";
 import type { MachineSize, SettingsResponse, SettingsRole } from "@dude/domain";
-import { raisedRows, taskRaisedMachines, type RaisedMachine } from "../machines.ts";
+import { raisedProvenance, raisedRows, taskRaisedMachines, type RaisedMachine } from "../machines.ts";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { Dialog, Button, Callout, Input, Textarea } from "@dude/design-system/primitives";
@@ -56,6 +56,30 @@ export function ResetMachineConfirm({ label, from, to, by, session, onConfirm, o
       {problem ? <Callout tone="danger" role="alert" data-testid="reset-error">{problem}</Callout> : null}
     </Dialog>
   );
+}
+
+export function SessionMachineBlock({ client, id, machine, by, canReset, onChanged }: {
+  client: ApiClient; id: string; machine: RaisedMachine; by: string; canReset: boolean; onChanged: () => void;
+}) {
+  const [to, setTo] = useState<MachineSize | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => {
+    let current = true;
+    void Promise.all([client.organizationSettings(), client.machineSizes()]).then(([settings, sizes]) => {
+      if (current) setTo(sizes.sizes.find((s) => s.id === settings.roles.brainstorm.machineSize.value) ?? sizes.sizes.find((s) => s.isDefault) ?? null);
+    }, (err: unknown) => current && setProblem(errorText(err)));
+    return () => { current = false; };
+  }, [client]);
+  return <SessionRailBlock label="Machine">
+    <MachineChip name={machine.name} spec={`${machine.cpus} CPUs · ${machine.memoryMiB / 1024} GiB`} raised="for this session"
+      tooltip={<MachineTip name={machine.name}>{raisedProvenance(machine)}. {to ? `Settings name ${to.name}.` : ""}</MachineTip>} />
+    <SessionFacts facts={[{ label: "Pool", value: machine.pool ?? "Default pool" }, { label: "Settings' size", value: to?.name ?? "Loading…" }]} />
+    {problem ? <Callout tone="danger" role="alert">{problem}</Callout> : null}
+    {canReset && to ? <Button size="sm" variant="quiet" onClick={() => setConfirm(true)}>Reset</Button> : null}
+    {confirm && to ? <ResetMachineConfirm label="brainstorm" from={machine.name} to={to.name} by={by} session
+      onClose={() => setConfirm(false)} onConfirm={async (note) => { await client.resetSessionMachine(id, note); onChanged(); }} /> : null}
+  </SessionRailBlock>;
 }
 
 export function TaskMachineRaises({ client, task, by, onChanged }: {

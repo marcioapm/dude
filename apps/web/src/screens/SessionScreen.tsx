@@ -34,6 +34,8 @@ import { usePeople, type People } from "../people.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, conversationOption, eventsOption, interleaved, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { SessionMachineBlock } from "./actions.tsx";
+import { sessionRaisedMachine } from "../machines.ts";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
@@ -47,6 +49,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
+  "machine.requested", "machine.raised", "machine.refused", "machine.reset",
   EventTypes.BrainstormModelApplied,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
@@ -411,6 +414,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
               </SessionRailBlock>
+              {sessionRaisedMachine(detail) ? <SessionMachineBlock client={client} id={sessionId} machine={sessionRaisedMachine(detail)!}
+                by={firstName(people.names.get(you.id) ?? "you")} canReset={!reader} onChanged={() => void load()} /> : null}
               <SessionRailBlock label="Cost">
                 <SessionFacts facts={[{ label: "Session", value: <CostDisplay usd={session.costUsd} /> }]} />
               </SessionRailBlock>

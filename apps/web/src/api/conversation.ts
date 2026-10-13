@@ -19,6 +19,7 @@ import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStart
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
+import { machineEventView, roleLabel } from "../machines.ts";
 import { instant } from "../instant.ts";
 
 /**
@@ -42,6 +43,7 @@ export interface ToolTurn {
   startedAt: string;
   endedAt: string | null;
   result: ToolResult | null;
+  machine?: { from: string; to: string; pool: string | null; answer?: string; error?: string };
 }
 
 export interface MessageTurn {
@@ -280,6 +282,7 @@ export interface EndedTurn {
  */
 export interface StartState {
   kind: "start" | "resume" | "move";
+  machine?: { to: string; pool: string | null; moveId: string | null };
   stage: StartStage | null;
   stageSince: string | null;
   /** When this start began: the Run's creation, the resume's request, or the move's stop. */
@@ -635,7 +638,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     const ask = state.pendingAsk;
     if (isToolEvent) state.pendingAsk = null;
     // The agent's own records (or lux reporting it running) end a start: it is up.
-    if (AGENT_UP.has(event.eventType)) endStart(state, event);
+    if (AGENT_UP.has(event.eventType) && !(state.start?.machine &&
+      (event.eventType === EventTypes.ToolCompleted && dudeToolName(tool) === "request_machine"))) endStart(state, event);
 
     switch (event.eventType) {
       case EventTypes.RunCreated:
@@ -679,7 +683,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         let start = state.start;
         if (stage === "park") {
           // A move: stopped with its work kept, then started on another machine.
-          start = newStart("move", since);
+          start = state.start?.machine ? state.start : newStart("move", since);
         } else if (!start) {
           start = newStart(state.ran ? "resume" : "start", event.occurredAt);
         }
@@ -720,6 +724,44 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     }
 
     switch (event.eventType) {
+      case "machine.requested": {
+        const m = machineEventView(payload);
+        if (typeof payload.refused === "string") {
+          turns.push({ kind: "notice", id: event.eventId, notice: "notice", text: m.reason, at: event.occurredAt });
+          break;
+        }
+        state.start = newStart("move", event.occurredAt);
+        state.start.machine = { to: m.to, pool: m.pool, moveId: m.moveId };
+        enterStage(state.start, "park", event.occurredAt);
+        state.activity = null;
+        const called = turns.findLast((t): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "request_machine");
+        if (called) called.machine = { from: m.from, to: m.to, pool: m.pool };
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
+          text: `Moving the ${roleLabel(m.role).toLowerCase()} to ${m.to}${m.pool ? `, in the ${m.pool} pool` : ""}: it keeps its conversation and checkout; running processes stop.${event.taskId ? ` Later ${roleLabel(m.role).toLowerCase()} Runs in this task run on ${m.to} too.` : ""}` });
+        break;
+      }
+      case "machine.raised": {
+        const m = machineEventView(payload);
+        const to = state.start?.machine?.to ?? m.to;
+        turns.push({ kind: "notice", id: event.eventId, notice: "unparked", at: event.occurredAt,
+          text: `The ${roleLabel(m.role).toLowerCase()} moved to ${to}, with its conversation and work.` });
+        break;
+      }
+      case "machine.refused": {
+        const m = machineEventView(payload);
+        if (!m.moveId || state.start?.machine?.moveId === m.moveId) state.start = null;
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: m.reason });
+        break;
+      }
+      case "machine.reset": {
+        const m = machineEventView(payload);
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
+          text: `${m.by} moved the ${roleLabel(m.role).toLowerCase()} back to ${m.to}${m.note ? `: “${m.note}”` : "."}` });
+        state.start = newStart("move", event.occurredAt);
+        state.start.machine = { to: m.to, pool: m.pool, moveId: m.moveId };
+        enterStage(state.start, "park", event.occurredAt);
+        break;
+      }
       case EventTypes.PlanUpdated: {
         // The harness adapter already decided this was a plan rather than a
         // tool call, so nothing here needs to know what the tool was named.
@@ -778,6 +820,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
 
         const result = resultFrom(payload);
+        const machineCall = dudeToolName(existing?.tool ?? tool) === "request_machine";
+        const raw = result?.output?.head ?? result?.stdout?.head;
+        let answer: string | undefined;
+        if (machineCall && raw) {
+          try { const out = JSON.parse(raw); answer = typeof out.answer === "string" ? out.answer : typeof out.error === "string" ? out.error : raw; }
+          catch { answer = raw; }
+        }
+        if (existing && machineCall && answer) {
+          existing.machine = { from: existing.machine?.from ?? "its current size", to: existing.machine?.to ?? String((existing.args as { size?: unknown })?.size ?? "a larger machine"),
+            pool: existing.machine?.pool ?? null, ...(status === "failed" ? { error: answer } : { answer }) };
+        }
         if (existing) {
           existing.status = status;
           existing.endedAt = event.occurredAt;
@@ -1080,7 +1133,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = null;
           state.activeTool = null;
           state.untimedUnpark = null;
-          state.start = null;
+          if (!state.start?.machine) state.start = null;
         }
         if (notice === "unparked") {
           if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);

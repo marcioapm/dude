@@ -1170,10 +1170,13 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           key={turn.id}
           name={turn.tool}
           args={turn.args}
+          summary={turn.machine ? <>Asked for a larger machine: {turn.machine.from} → <b>{turn.machine.to}</b>{turn.machine.pool ? ` · ${turn.machine.pool} pool` : ""}</> : undefined}
+          result={turn.machine?.answer}
+          error={turn.machine?.error}
           status={turn.status}
           startedAt={turn.startedAt}
           endedAt={turn.endedAt}
-          output={turn.result?.output ?? turn.result?.stdout}
+          output={turn.machine?.answer || turn.machine?.error ? undefined : turn.result?.output ?? turn.result?.stdout}
           stderr={turn.result?.stderr}
           exitCode={turn.result?.exitCode}
           note={toolNote?.(turn)}
