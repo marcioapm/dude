@@ -300,22 +300,27 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
 
   const saved = await withOrg(organizationId, async (scope) => {
     const [oauth] = await scope.sql`SELECT auth, app_id, oauth_client_id, oauth_client_secret FROM forge_credentials WHERE forge = 'github' FOR UPDATE`;
+    // Only a GitHub App keeps an OAuth client, and an explicit clear drops it.
+    const keepsOAuth = input.auth === "github_app" && !input.clearOauthClientSecret;
+    let clientId: string | null = null;
+    let clientSecret: string | null = null;
+    if (keepsOAuth) {
+      clientId = input.oauthClientId === undefined ? oauth?.oauth_client_id ?? null : input.oauthClientId;
+      clientSecret = input.oauthClientSecret || oauth?.oauth_client_secret || null;
+    }
     const switchingApp = oauth && (oauth.auth !== input.auth || oauth.app_id !== input.appId);
-    const clientId = input.auth !== 'github_app' || input.clearOauthClientSecret
-      ? null : input.oauthClientId === undefined ? oauth?.oauth_client_id ?? null : input.oauthClientId;
     const changingIdentity = switchingApp || (oauth && clientId !== oauth.oauth_client_id);
-    if (input.auth === 'github_app' && changingIdentity && (clientId || oauth?.oauth_client_secret)
-      && !input.clearOauthClientSecret && (!input.oauthClientId || !input.oauthClientSecret?.trim())) {
+    if (keepsOAuth && changingIdentity && (clientId || oauth?.oauth_client_secret)
+      && (!input.oauthClientId || !input.oauthClientSecret?.trim())) {
       throw badRequest("Changing the App or OAuth Client ID requires a freshly supplied Client ID and Client secret, or explicit clear");
     }
-    const clientSecret = input.auth !== 'github_app' || input.clearOauthClientSecret ? null : input.oauthClientSecret || oauth?.oauth_client_secret || null;
     const rows = (await scope.sql`
       INSERT INTO forge_credentials (
         id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url, webhook_secret,
         oauth_client_id, oauth_client_secret)
       VALUES (${newId("forgeCredential")}, ${organizationId}, 'github', ${input.auth}::forge_auth_kind,
               ${input.secret}, ${input.appId}, ${input.installationId}, ${input.apiBaseUrl},
-               ${randomBytes(32).toString("hex")}, ${clientId}, ${clientSecret})
+              ${randomBytes(32).toString("hex")}, ${clientId}, ${clientSecret})
       ON CONFLICT (organization_id, forge) DO UPDATE SET
         auth            = EXCLUDED.auth,
         secret          = EXCLUDED.secret,
