@@ -137,6 +137,22 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const before = useMemo(() => earlier.length === 0 ? null
     : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />),
   [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids and whether each was retried
+  // The failed conductor this one retries: its briefing, which Try again repeats, is in its own ledger.
+  const retries = events.find((e) => e.eventType === EventTypes.RunCreated && e.runId === conductorId)?.payload.retries;
+  const retriedRun = typeof retries === "string" ? retries : null;
+  const [briefedBefore, setBriefedBefore] = useState<{ run: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!retriedRun) return;
+    let cancelled = false;
+    void Promise.resolve(ledgers.cached(retriedRun) ?? ledgers.read(retriedRun, () => cancelled)).then((read) => {
+      const text = read?.findLast((e) => e.eventType === EventTypes.ConductorBriefed)?.payload.text;
+      if (!cancelled && typeof text === "string") setBriefedBefore({ run: retriedRun, text });
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgers, retriedRun]);
+  const briefedAgain = briefedBefore && briefedBefore.run === retriedRun ? briefedBefore.text : undefined;
 
   // The Runs the conductor started, decisions waited on, dude's notices.
   const dude = dudeName(task.id);
@@ -191,8 +207,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       action={setAside ? undefined
         : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
   }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld,
+    briefedBefore: briefedAgain }),
+    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, briefedAgain]);
 
   if (conductorId) {
     return (

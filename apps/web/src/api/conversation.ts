@@ -549,8 +549,8 @@ export interface Projection {
   pendingAsk: { tool: string; question: QuestionTurn } | null;
   /** dude briefed this Run (a conductor): the prompt its harness echoes is that briefing, already shown. */
   briefed: boolean;
-  /** The last briefing shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
-  lastBriefing: PromptTurn | null;
+  /** The last briefing's text as shown, and whether the current Run is Try again's (run.created with retries), which repeats it. */
+  lastBriefing: string | null;
   retryRun: boolean;
   /** Where the current Run's agent is while it starts; null once it runs. */
   start: StartState | null;
@@ -573,7 +573,11 @@ export interface Projection {
   cursor: number;
 }
 
-export function emptyProjection(): Projection {
+/**
+ * `briefedBefore`: the briefing of the Run this ledger's first Run retries, when that Run's ledger is
+ * another (a task's conductors): Try again's briefing repeating it is then one line, as within one ledger.
+ */
+export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
@@ -597,7 +601,7 @@ export function emptyProjection(): Projection {
     heldUnpark: null,
     pendingAsk: null,
     briefed: false,
-    lastBriefing: null,
+    lastBriefing: briefedBefore ? withoutMessage(briefedBefore) : null,
     retryRun: false,
     start: null,
     startStaged: false,
@@ -853,8 +857,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (!text.trim()) break;
         const briefing: PromptTurn = { kind: "prompt", id: event.eventId, text: withoutMessage(text), at: event.occurredAt, briefing: true, attachments: [] };
         // Try again briefs the fresh agent with the failed one's briefing: the same words, said once in full.
-        if (state.retryRun && state.lastBriefing?.text === briefing.text) briefing.again = true;
-        else state.lastBriefing = briefing;
+        if (state.retryRun && state.lastBriefing === briefing.text) briefing.again = true;
+        else state.lastBriefing = briefing.text;
         turns.push(briefing);
         break;
       }

@@ -121,6 +121,8 @@ export interface ChatVariant {
   above?: ReactNode;
   /** The conductor only reads and answers, though there is a line above (Deliver decides). */
   readOnly?: boolean;
+  /** The briefing of the failed conductor this one retries (Try again), from that Run's ledger. */
+  briefedBefore?: string | undefined;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -272,14 +274,18 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
    */
   const projection = useRef(emptyProjection());
   const projectedRun = useRef(runId);
+  const briefedBefore = chat?.briefedBefore;
+  const projectedBefore = useRef<string | undefined>(undefined);
   const conversation = useMemo(() => {
-    // The stream clears its buffer for a new Run; the fold must forget too.
-    if (projectedRun.current !== runId) {
-      projection.current = emptyProjection();
+    // The stream clears its buffer for a new Run; the fold must forget too. The retried Run's briefing,
+    // read apart from this Run's ledger, can arrive after the fold began: folded again from the start.
+    if (projectedRun.current !== runId || projectedBefore.current !== briefedBefore) {
+      projection.current = emptyProjection(briefedBefore);
       projectedRun.current = runId;
+      projectedBefore.current = briefedBefore;
     }
     return snapshot(apply(projection.current, events), run?.status);
-  }, [events, runId, run?.status]);
+  }, [events, runId, run?.status, briefedBefore]);
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
   // the same one, appended to and changed in place.
