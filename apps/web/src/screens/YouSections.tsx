@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Duration, PersonAvatar } from "@dude/design-system/components";
+import { Duration, KeyShownOnce, PersonAvatar } from "@dude/design-system/components";
 import {
   Button,
   Callout,
@@ -160,28 +160,6 @@ function NewKeyDialog({ client, onClose, onMade }: {
       }}>
       <Input label="Name" autoFocus value={name} placeholder="Laptop CLI" onChange={(e) => setName(e.target.value)} data-testid="key-name" />
     </FormDialog>
-  );
-}
-
-/** A secret, shown this once, with a way to copy it. */
-export function KeyShownOnce({ title, secret, onClose, description }: {
-  title: string;
-  secret: string;
-  onClose: () => void;
-  description?: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} size="sm" title={title}
-      description={description ?? "Copy it now: it is not shown again."}
-      footer={<Button variant="primary" onClick={onClose} data-testid="key-done">Done</Button>}>
-      <FormStack>
-        <Input label="Key" mono readOnly value={secret} onFocus={(e) => e.currentTarget.select()} data-testid="key-secret" />
-        <Button variant="secondary" leadingIcon="copy" onClick={() => void navigator.clipboard?.writeText(secret).then(() => setCopied(true))}>
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </FormStack>
-    </Dialog>
   );
 }
 

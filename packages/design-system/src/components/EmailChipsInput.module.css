@@ -1,0 +1,158 @@
+/*
+ * The invite's email field: Input's field box holding chips and a bare
+ * input. Each chip's tone is told by its glyph and words too.
+ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.label {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: 88px;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--ds-space-6);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  cursor: text;
+}
+.box:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.box:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.box[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chips {
+  display: contents;
+  list-style: none;
+}
+.input {
+  flex: 1;
+  min-width: 180px;
+  height: var(--ds-size-chip);
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.input::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  max-width: 100%;
+  min-height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-2) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+}
+.chip[data-tone="bad"] {
+  background: var(--ds-tone-danger-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-danger-border);
+}
+.chip[data-tone="info"] {
+  background: var(--ds-tone-info-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+}
+.chip[data-tone="skip"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+  color: var(--ds-color-text-muted);
+}
+.chip[data-tone="skip"] .mail {
+  text-decoration: line-through;
+}
+.icon {
+  flex: none;
+}
+.chip[data-tone="ok"] .icon {
+  color: var(--ds-tone-success-fg);
+}
+.chip[data-tone="bad"] .icon {
+  color: var(--ds-tone-danger-fg);
+}
+.chip[data-tone="info"] .icon {
+  color: var(--ds-tone-info-fg);
+}
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name {
+  font-weight: var(--ds-weight-semibold);
+}
+.name + .mail {
+  color: var(--ds-color-text-muted);
+}
+.note {
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+.note::before {
+  content: "· ";
+}
+.chip[data-tone="bad"] .note {
+  color: var(--ds-tone-danger-fg);
+}
+.action {
+  padding: 0 var(--ds-space-4);
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  color: var(--ds-color-accent-text);
+  font: inherit;
+  font-weight: var(--ds-weight-semibold);
+  white-space: nowrap;
+}
+.action:hover {
+  text-decoration: underline;
+}
+.action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.remove {
+  --btn-h: 18px;
+  width: 18px;
+  --btn-fg: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-full);
+}
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.summary {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.summary:empty {
+  display: none;
+}

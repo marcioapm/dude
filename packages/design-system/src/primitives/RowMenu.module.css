@@ -63,6 +63,11 @@
   display: inline-flex;
   flex-shrink: 0;
 }
+.trailing {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: var(--ds-space-8);
+}
 .label {
   flex: 1;
   min-width: 0;

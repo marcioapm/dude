@@ -23,6 +23,7 @@ import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
+import { AccountsSection } from "./sections/Accounts.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -226,6 +227,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["sv-recipes", "ServerRecipeTable / Dialog"],
     ],
   ],
+  [
+    "Accounts",
+    [
+      ["ac-face", "OrgFace"],
+      ["ac-switcher", "OrgSwitcher"],
+      ["ac-chips", "EmailChipsInput"],
+      ["ac-links", "InvitationLinkList"],
+      ["ac-key", "KeyShownOnce"],
+    ],
+  ],
 ];
 
 const PANE_DENSITY_KEY = "dude.gallery.paneDensity";
@@ -335,6 +346,7 @@ function Shell() {
           <LiveSection mode={panes} />
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
+          <AccountsSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

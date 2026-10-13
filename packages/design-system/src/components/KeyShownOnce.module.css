@@ -1,0 +1,23 @@
+/* The CLI lines under a key shown once: a square sunken well, as a code block. */
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.code {
+  margin: 0;
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
+  border-radius: var(--ds-radius-none);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: var(--ds-leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.note {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}

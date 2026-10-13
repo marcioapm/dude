@@ -1,0 +1,107 @@
+/*
+ * The switcher: SidebarProfile's anatomy as a menu trigger in the profile
+ * band, and the rail's face with the organisation's in its corner.
+ */
+
+.band {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--ds-space-6);
+  padding: var(--ds-space-4) var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.band:hover,
+.band[data-state="open"] {
+  background: var(--ds-color-hover-wash);
+}
+.band:focus-visible,
+.railTrigger:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.name {
+  font-size: var(--ds-text-nav);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.org {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.orgName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* An invitation waits in the menu. */
+.dot,
+.railDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-info-fg);
+}
+.chevron {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
+
+.railSlot {
+  display: inline-flex;
+}
+.railTrigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--ds-size-row-comfortable);
+  height: var(--ds-size-row-comfortable);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+}
+.railTrigger:hover,
+.railTrigger[data-state="open"] {
+  background: var(--ds-color-hover-wash);
+}
+.railOrg {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  border-radius: var(--ds-radius-face-project);
+  box-shadow: 0 0 0 2px var(--ds-color-chrome);
+}
+.railDot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  box-shadow: 0 0 0 2px var(--ds-color-chrome);
+}
+
+.menu {
+  min-width: 260px;
+}

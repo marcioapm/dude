@@ -35,6 +35,11 @@ const ALLOWED: Record<string, Record<string, string>> = {
     ".field:hover": "a field's edge",
     ".field:focus-within, .fieldOpen": "focus",
   },
+  "packages/design-system/src/components/EmailChipsInput.module.css": {
+    ".box": "a field's edge",
+    ".box:hover": "a field's edge",
+    ".box:focus-within": "focus",
+  },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
   "packages/design-system/src/primitives/ChoiceList.module.css": { ".dot": "a radio is its outline", ".chosen .dot": "a radio is its outline" },
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },
