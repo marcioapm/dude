@@ -327,6 +327,10 @@ chip's tooltip reads that, so history stays true after a Reset.
   implementer's Reset covers it.
 - Only the newest live Run of the role is moved now; another (a second
   reviewer) takes the settings' size at its next resume.
+- A paused Run moves at its next resume. A Run parked only on a peer's
+  reply is resumed for the move at once, and its wait stays open, so it
+  parks on the peer again. A Run waiting on a person's question still waits
+  for the answer (decided by Márcio 2026-10-13).
 
 ## Data, API and migration
 

@@ -58,6 +58,10 @@ func resumeCause(r phaseRun) string {
 		return causePerson
 	case r.DudePause == "machine":
 		return causeMachine
+	case r.DudePause == "person" && r.Waiting && r.Moving && !r.HasDirectives:
+		// Still waiting, so parked only on a peer's reply (resumable), and
+		// no mail to read: resumed for its machine move.
+		return causeMachine
 	case r.DudePause == "repository":
 		return causeRepository
 	case r.DudePause == "conductor":

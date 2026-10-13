@@ -184,6 +184,151 @@ func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T
 	}
 }
 
+// raised records the task's implementer, and its Run, as raised to Bigger,
+// so a Reset moves the Run back to Standard.
+func (w *world) raised(task, runID string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+}
+
+// A Run parked only on a peer's reply is resumed for a person's Reset at
+// once: the move applies, timed and caused as a move, and the agent is told
+// of it and of nothing else. Its wait stays open, so it parks on the peer
+// again, and is not resumed again for the settled move; the reply then
+// resumes it once.
+func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	wi, peer := w.task(), w.task()
+	w.onAnEpic(wi, peer)
+	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
+			Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	w.deliver(wi)
+	var runID, message string
+	w.until("the agent to be parked on its peer", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id, w.message_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
+			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'`, wi).Scan(&runID, &message)
+		return runID != ""
+	})
+	w.raised(wi, runID)
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": wi, "role": "implementer", "note": "smaller"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.until("the Reset to move the parked Run", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND kind = 'reset' AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != "Standard" {
+		t.Errorf("machine=%v", got)
+	}
+	if in := w.lux.ResumeInputs(live); len(in) != 1 || in[0] != "Moved back to Standard by Resetter: smaller" {
+		t.Errorf("resume inputs %q, want the Reset's words alone", in)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes rr JOIN machine_moves m ON m.run_id = rr.run_id
+		WHERE rr.run_id = $1 AND rr.cause = 'machine' AND rr.woken_at = m.created_at`, runID); n != 1 {
+		t.Errorf("%d resumes caused and timed by the move", n)
+	}
+	w.until("the agent to park on its peer again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
+		t.Errorf("%d open waits after the move, want 1", n)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if n := w.luxCalls(live, "resume"); n != 1 {
+		t.Fatalf("resumed %d times before the reply, want the move's alone", n)
+	}
+	const reply = "{metric, from, period}"
+	w.send(w.peerRun(peer), wi, message, reply)
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.luxCalls(live, "resume"); n != 2 {
+		t.Errorf("resumed %d times, want the move's and the reply's", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
+		t.Errorf("%d received events, want 1", n)
+	}
+	for _, lr := range w.lux.Runs() {
+		if lr.ID == live {
+			if n := strings.Count(strings.Join(lr.Inputs, "\n"), reply); n != 1 {
+				t.Errorf("the reply reached the agent %d times: %q", n, lr.Inputs)
+			}
+		}
+	}
+}
+
+// A Run parked on a person's question is not resumed for a Reset: the move
+// waits for the answer, and applies at the resume the answer starts.
+func TestAResetWaitsForAPersonsAnswer(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: `{"question":"Should the table be sorted?","choices":["yes","no"]}`, Reply: "Sorted it, as asked.",
+			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	runID := ""
+	w.until("the agent to be parked on its question", func() bool {
+		runID = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'paused' AND dude_pause = 'person'), '')`, wi)
+		return runID != ""
+	})
+	w.raised(wi, runID)
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": wi, "role": "implementer", "note": "smaller"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	for range 5 {
+		w.pump()
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := w.luxCalls(live, "resume"); n != 0 {
+		t.Fatalf("resumed %d times with the person's question open", n)
+	}
+	if n := w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID); n != 1 {
+		t.Fatalf("%d pending moves, want the Reset's", n)
+	}
+	qid := w.str(`SELECT id FROM questions WHERE run_id = $1`, runID)
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the answer to resume it and the move to settle", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != "Standard" {
+		t.Errorf("machine=%v", got)
+	}
+	if in := w.lux.ResumeInputs(live); len(in) != 1 || in[0] != "Moved back to Standard by Resetter: smaller" {
+		t.Errorf("resume inputs %q, want the Reset's words", in)
+	}
+	w.until("the implementer to finish on the answer", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	for _, lr := range w.lux.Runs() {
+		if lr.ID == live && !slices.ContainsFunc(lr.Inputs, func(s string) bool {
+			return strings.Contains(s, "Should the table be sorted?") && strings.HasSuffix(s, "yes")
+		}) {
+			t.Errorf("the agent was given %q, want the answer", lr.Inputs)
+		}
+	}
+}
+
 func TestMutualPeerWaitsResumeToReadQueuedQuestions(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()

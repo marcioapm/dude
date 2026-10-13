@@ -332,7 +332,8 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if active {
 			moved = true
 			// A paused Run keeps its pause, person's or dude's: the move
-			// applies at whichever resume comes next.
+			// applies at whichever resume comes next. Except a Run parked
+			// only on a peer's reply: the syncer resumes it for the move.
 			err := delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: org, TaskID: body.TaskID, SessionID: body.SessionID, RunID: runID,
 				Role: body.Role, Kind: "reset", ToSizeID: target.SizeID, From: from, Reason: body.Note, ByPerson: p.Person}, status == "running")
 			if errors.Is(err, delivery.ErrMoveUnavailable) {
