@@ -85,7 +85,7 @@ test("an open-only thread stays folded and opens by click, Enter and Space", asy
 });
 
 const start = () => [
-  ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Inspect test capture setup", subagent_type: "explore" } }, 120),
+  ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Inspect test capture setup", subagent_type: "explore", prompt: "Read the browser fixtures and report the configured viewport." } }, 120),
   ev(EventTypes.ChildStarted, { ...kid, kind: "task", title: "Inspect test capture setup", agentType: "explore", model: "claude-haiku-4.5" }, 120),
 ];
 
@@ -100,7 +100,7 @@ test("a live child is a folded subagent row under the call's card, without its t
   expect(thread.querySelector("[data-role='subagent']")).toBeTruthy();
   expect(thread.getAttribute("aria-label")).toBe("Subagent subagent: Inspect test capture setup · explore");
   // Under the parent's card, not inside it.
-  expect(threadsUnder(card(el, "Inspect test capture setup"))).toEqual(["ses_kid"]);
+  expect(threadsUnder(el.querySelector("[data-tool='task']")!)).toEqual(["ses_kid"]);
   expect(thread.querySelector("[role='group']")).toBeNull();
   expect(el.querySelector("[data-tool='grep']")).toBeNull();
   expect(thread.getAttribute("data-waiting")).toBeNull();
@@ -305,11 +305,16 @@ test("the screen opens a child beside its transcript, navigates children and ret
   await act(async () => header(threadOf(el, "ses_kid")!).click());
   const panel = () => el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
-  expect(panel().textContent).toContain("Inspect test capture setup");
+  expect(panel().querySelector("[data-intent='prompt']")!.textContent).toContain("Read the browser fixtures and report the configured viewport.");
   expect(panel().querySelector("[data-tool='task']")).toBeTruthy();
   expect(el.querySelector("[data-testid='session-rail']")).toBeNull();
   expect(threadOf(panel(), "ses_grand")!.querySelector("[role='group']")).toBeNull();
   await act(async () => header(threadOf(panel(), "ses_grand")!).click());
+  expect(panel().getAttribute("data-child")).toBe("ses_grand");
+  await act(async () => header(threadOf(panel(), "ses_great")!).click());
+  expect(panel().getAttribute("data-child")).toBe("ses_great");
+  expect(panel().textContent).toContain("Found it at depth three.");
+  await act(async () => [...panel().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Deeper")!.click());
   expect(panel().getAttribute("data-child")).toBe("ses_grand");
   const back = [...panel().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Inspect test capture setup")!;
   await act(async () => back.click());
@@ -318,6 +323,15 @@ test("the screen opens a child beside its transcript, navigates children and ret
   expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
   await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button")!.click());
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
+});
+
+test("a description-only call is the child's prompt turn fallback", async () => {
+  const el = await screen([
+    ev(EventTypes.ToolCalled, { tool: "task", callId: "c1", input: { description: "Read the test defaults." } }),
+    ev(EventTypes.ChildStarted, { ...kid, kind: "task", title: "Capture defaults" }),
+  ]);
+  const panel = await openPanel(el, "ses_kid");
+  expect(panel.querySelector("[data-intent='prompt']")!.textContent).toContain("Read the test defaults.");
 });
 
 test("permission waiting stays on the row and rail, with the notice and stuck call only in the panel", async () => {
