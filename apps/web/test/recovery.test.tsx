@@ -68,7 +68,7 @@ describe("a stopped task", () => {
     const page = await taskPage(client);
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
     expect(notice.textContent).toContain("Delivery stopped");
-    expect(notice.textContent).not.toContain("Someone aborted the implement");
+    expect(notice.textContent).not.toContain("Someone aborted the implementer");
   });
 
   for (const status of ["aborted", "failed"] as const) {
@@ -86,14 +86,14 @@ describe("a stopped task", () => {
       const opened: string[] = [];
       const page = await taskPage(client, { onOpenRun: (id) => { opened.push(id); } });
       const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the replacement stop");
-      expect(notice.textContent).toContain(status === "failed" ? "The implement failed" : "Ana Ribeiro aborted the implement");
+      expect(notice.textContent).toContain(status === "failed" ? "The implementer failed" : "Ana Ribeiro aborted the implementer");
       expect(notice.textContent).toContain(status === "failed" ? "replacement host lost" : "Stop the replacement.");
       await click(notice.querySelector("[data-testid=stopped-run]")!);
       expect(opened).toEqual([runId]);
 
       const plain = await taskPage(stoppedAs("aborted"));
       const plainNotice = await until(() => plain.querySelector<HTMLElement>("[data-testid=stopped]"), "the plain abort");
-      expect(plainNotice.textContent).toContain("Ana Ribeiro aborted the implement");
+      expect(plainNotice.textContent).toContain("Ana Ribeiro aborted the implementer");
       expect(plainNotice.textContent).toContain("rewriting the checkout's routing");
     });
   }
@@ -102,7 +102,7 @@ describe("a stopped task", () => {
     const page = await taskPage(stoppedAs("aborted"));
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
     await until(() => page.querySelector("[data-testid=recover-resume]"), "the ways back");
-    expect(notice.textContent).toContain("Ana Ribeiro aborted the implement");
+    expect(notice.textContent).toContain("Ana Ribeiro aborted the implementer");
     expect(notice.textContent).toContain("rewriting the checkout's routing");
     expect(notice.textContent).toContain("3f2a9c1");
     expect(notice.textContent).toContain("kept until");
@@ -113,7 +113,7 @@ describe("a stopped task", () => {
   test("a failure says so in its own words", async () => {
     const page = await taskPage(stoppedAs("failed"));
     const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
-    expect(notice.textContent).toContain("The implement failed");
+    expect(notice.textContent).toContain("The implementer failed");
     expect(notice.textContent).toContain("host lost");
   });
 
@@ -858,7 +858,7 @@ describe("a task started over", () => {
     await until(() => (texts(page, "[data-testid=finding]").length === 3 ? true : null), "attempt 1's findings");
     // A session's line opens that session, whose attempt it is.
     await openTab(page, "Activity");
-    const aborted = await activityLine(page, "aborted the fix");
+    const aborted = await activityLine(page, "aborted the fixer");
     await click(aborted.querySelector("[data-testid=activity-open]")!);
     expect(opened).toEqual(["run_a1_fix"]);
   });

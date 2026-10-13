@@ -637,6 +637,28 @@ export function runLabel(run: { phase?: string | null; category?: string | null;
   return run.category ? `${phase} · ${run.category}` : phase;
 }
 
+/** Each phase as a person names who does it: a fix is the implementer's role, but its Run is "the fixer". */
+export const PHASE_DOER: Readonly<Record<string, string>> = {
+  investigate: "investigator",
+  implement: "implementer",
+  review: "reviewer",
+  fix: "fixer",
+  simplify: "simplifier",
+  test: "tester",
+};
+
+/**
+ * Who a Run is, in a sentence, lower case: "implementer", "correctness
+ * reviewer", "conductor"; "agent" for a Run with no phase or role known.
+ * runLabel names the stage ("Implement"); this names the actor.
+ */
+export function runDoer(run: { phase?: string | null; category?: string | null; kind?: string; role?: string | null }): string {
+  if (run.kind === "preview") return "branch preview";
+  if (isConductor(run)) return "conductor";
+  const doer = run.phase ? (PHASE_DOER[run.phase] ?? run.phase) : "agent";
+  return run.category ? `${run.category} ${doer}` : doer;
+}
+
 export const sessionStatusSchema = z.enum([
   "pending",
   "running",

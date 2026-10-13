@@ -47,7 +47,7 @@ import {
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, runDoer, runLabel, type PersistedEvent, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -518,7 +518,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         <div className="taskPeople">
           {owner ? (
             <PersonLine person={owner} size={56} {...(working ? { agent: working.role ?? DEFAULT_RUN_ROLE, live: true } : {})}
-              detail={working ? `Owner · ${firstName(owner.name)}'s ${runLabel(working).toLowerCase()} is working` : "Owner"} />
+              detail={working ? `Owner · ${firstName(owner.name)}'s ${runDoer(working)} is working` : "Owner"} />
           ) : null}
           <OwnerSelect client={client} task={item} onChanged={() => void load()} onProblem={setProblem} />
         </div>
@@ -1075,11 +1075,12 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   const attemptOf = eventAttempts(runs, prs, current);
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
-  const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
+  const labels = new Map(runs.map((r) => [r.id, runDoer(r)]));
   // One task's events: dude goes by the same name throughout.
   const taskId = events.find((e) => e.taskId)?.taskId;
   const dude = dudeName(taskId ?? "");
-  const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
+  // Who a Run is ("implementer", "correctness reviewer"), not its stage.
+  const doer = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   const session = (runId: string | null) => (runId && labels.has(runId) ? { label: "Open session", runId, tab: "sessions" } : undefined);
   for (const e of events) {
     const by = humanActor(e);
@@ -1098,19 +1099,19 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       case "run.steered":
         out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
-          text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {phase(e.runId)}</>, quote: String(p.text ?? "") });
+          text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {doer(e.runId)}</>, quote: String(p.text ?? "") });
         break;
       case "question.answered":
-        out.push({ ...base, who: face, text: <>{person} answered the {phase(e.runId)}</>, quote: String(p.answer ?? "") });
+        out.push({ ...base, who: face, text: <>{person} answered the {doer(e.runId)}</>, quote: String(p.answer ?? "") });
         break;
       case "run.paused":
-        if (by) out.push({ ...base, who: face, text: <>{person} paused the {phase(e.runId)}</> });
+        if (by) out.push({ ...base, who: face, text: <>{person} paused the {doer(e.runId)}</> });
         break;
       case "run.resumed":
-        if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
+        if (by) out.push({ ...base, who: face, text: <>{person} resumed the {doer(e.runId)}</> });
         break;
       case "run.aborted":
-        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {phase(e.runId)}</>,
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {doer(e.runId)}</>,
           quote: p.reason ? String(p.reason) : undefined, open: session(e.runId) });
         break;
       case "task.recovered":
@@ -1165,19 +1166,26 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           text: <>{person} started it anyway, past {blockerKeys(p.blockers, true)} — {HOW[String(p.how)] ?? String(p.how ?? "")}</> });
         break;
       case "question.asked":
-        if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
+        if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{doer(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
         break;
-      case "run.created":
-        if (typeof p.phase === "string") out.push({ ...base, who: <AgentAvatar role={(typeof p.role === "string" ? p.role : DEFAULT_RUN_ROLE) as Run["role"] & string} size="lg" />, text: <>The <b>{phase(e.runId)}</b> started</>, open: session(e.runId) });
+      case "run.created": {
+        if (typeof p.phase !== "string") break;
+        const role = (typeof p.role === "string" ? p.role : p.phase === "review" ? "reviewer" : DEFAULT_RUN_ROLE) as Run["role"] & string;
+        // A review round's own event names no Run, only its reviewers, each of whose Runs has a line of its own: the round is a stage.
+        const reviewers = !e.runId && Array.isArray(p.reviewers) ? p.reviewers.map(String) : null;
+        const who = reviewers ? <>A <b>review round</b> started: {reviewers.join(", ")}</>
+          : <>The <b>{(e.runId && labels.get(e.runId)) || runDoer({ phase: p.phase, category: typeof p.category === "string" ? p.category : null })}</b> started</>;
+        out.push({ ...base, who: <AgentAvatar role={role} size="lg" />, text: who, open: session(e.runId) });
         break;
+      }
       case "review.completed": {
         const count = Number(p.count ?? 0);
-        if (count > 0) out.push({ ...base, who: <AgentAvatar role="reviewer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> raised {plural(count, "finding")}</>, open: { label: "Show findings", tab: "findings" }, attemptOnly: true });
+        if (count > 0) out.push({ ...base, who: <AgentAvatar role="reviewer" size="lg" />, text: <>The <b>{doer(e.runId)}</b> raised {plural(count, "finding")}</>, open: { label: "Show findings", tab: "findings" }, attemptOnly: true });
         break;
       }
       case "artifact.created":
         out.push({ ...base, who: <AgentAvatar role={(runs.find((r) => r.id === e.runId)?.role ?? DEFAULT_RUN_ROLE)} size="lg" />,
-          text: <>The <b>{phase(e.runId)}</b> saved <span className="ds-mono">{String(p.name ?? "a file")}</span></>, open: { label: "Show file", tab: "files" }, attemptOnly: true });
+          text: <>The <b>{doer(e.runId)}</b> saved <span className="ds-mono">{String(p.name ?? "a file")}</span></>, open: { label: "Show file", tab: "files" }, attemptOnly: true });
         break;
       default: {
         // What happened to a pull request: by the GitHub login that did it,
