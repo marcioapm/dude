@@ -53,6 +53,7 @@ CREATE INDEX peer_messages_from_run_idx ON peer_messages (from_run_id, created_a
 CREATE INDEX peer_messages_directive_idx ON peer_messages (directive_id) WHERE directive_id IS NOT NULL;
 -- "Has this been answered?": the replies to a message.
 CREATE INDEX peer_messages_reply_idx ON peer_messages (reply_to) WHERE reply_to IS NOT NULL;
+CREATE INDEX events_agent_message_idx ON events (run_id, cursor) WHERE event_type = 'agent.message';
 
 -- A Run's wait on the reply to one of its messages: `wait` from
 -- wait_for_reply, `turn_ended` from a turn that ended with its question

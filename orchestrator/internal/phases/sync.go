@@ -354,7 +354,7 @@ const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_paus
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
 // that lux does not have yet, and is not held for an answer (HeldBack).
-const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL
+const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ` + delivery.HeldBack + `)`
 
 // limits are runFrom's parameters: the factory's grace before parking, idle
