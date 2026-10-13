@@ -501,6 +501,17 @@ func (g *GitHub) FindPullRequest(ctx context.Context, slug, head, base string) (
 	return &ref, nil
 }
 
+func (g *GitHub) UsesApp() bool { return g.cred.Auth == "github_app" }
+
+func (g *GitHub) OpenPullRequestAs(ctx context.Context, in OpenPullRequest, token string) (PullRequestRef, error) {
+	if token == "" {
+		return PullRequestRef{}, &Error{Status: 401, Message: "The task owner needs Connect GitHub"}
+	}
+	creation := NewGitHub(Credential{Auth: "pat", Secret: token, APIBaseURL: g.cred.APIBaseURL})
+	creation.http = g.http
+	return creation.OpenPullRequest(ctx, in)
+}
+
 func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullRequestRef, error) {
 	var p ghPull
 	err := g.do(ctx, "POST", "/repos/"+in.Slug+"/pulls", map[string]any{

@@ -846,8 +846,25 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	if err != nil {
 		return nil, err
 	}
+	var owner string
+	if gh.UsesApp() {
+		err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO pr_publications (organization_id, task_id, branch, owner_person_id)
+				SELECT $1, t.id, $2, (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
+					WHERE tp.task_id = t.id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)
+				FROM tasks t WHERE t.id = $3 ON CONFLICT DO NOTHING`, org, st.Branch, st.TaskID)
+			if err != nil {
+				return err
+			}
+			return tx.QueryRow(ctx, `SELECT COALESCE(owner_person_id, '') FROM pr_publications
+				WHERE task_id = $1 AND branch = $2`, st.TaskID, st.Branch).Scan(&owner)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, r := range todo {
-		id, err := s.openPullRequest(ctx, org, st, gh, r, changed, title, body)
+		id, err := s.openPullRequest(ctx, org, st, gh, r, changed, title, body, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -887,7 +904,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 }
 
 func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *forge.GitHub, repo Repository,
-	all []Repository, title, body string) (string, error) {
+	all []Repository, title, body, owner string) (string, error) {
 	slug := forge.SlugFromURL(repo.URL)
 	if slug == "" {
 		return "", fmt.Errorf("cannot derive owner/repo from %s", repo.URL)
@@ -903,9 +920,29 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
 	draft := gh.Settings.OpenAs == "draft" || st.Draft
-	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch,
-		Base: repo.DefaultBranch, Draft: draft})
-	fresh := err == nil
+	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch, Draft: draft}
+	var ref forge.PullRequestRef
+	var err error
+	fresh := false
+	if gh.UsesApp() {
+		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		if existing != nil {
+			ref = *existing
+		} else {
+			token, tokenErr := forge.OwnerToken(ctx, s.DB, org, owner)
+			if tokenErr != nil {
+				return "", tokenErr
+			}
+			ref, err = gh.OpenPullRequestAs(ctx, in, token)
+			fresh = err == nil
+		}
+	} else {
+		ref, err = gh.OpenPullRequest(ctx, in)
+		fresh = err == nil
+	}
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.

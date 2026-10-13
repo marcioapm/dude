@@ -25,6 +25,7 @@ import { registerRelationRoutes } from "./api/routes/relations.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { registerPushRoutes } from "./api/routes/push.ts";
+import { registerGithubOAuthRoutes } from "./api/routes/githubOAuth.ts";
 import { registerPeopleRoutes } from "./api/routes/people.ts";
 import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { registerSettingsRoutes } from "./api/routes/settings.ts";
@@ -72,6 +73,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerInterventionRoutes(router);
   registerPushRoutes(router);
   registerPeopleRoutes(router);
+  registerGithubOAuthRoutes(router);
   registerMetricsRoutes(router);
   registerSettingsRoutes(router);
   registerProjectPageRoutes(router);

@@ -271,6 +271,9 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
   const [token, setToken] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [appId, setAppId] = useState("");
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
+  const [clearOauthClientSecret, setClearOauthClientSecret] = useState(false);
   const [installationId, setInstallationId] = useState("");
   const [apiBase, setApiBase] = useState("");
   const { busy, problem, save } = useSave();
@@ -283,7 +286,7 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       onOpenChange={props.onOpenChange}
       title="Connect GitHub"
       description={app
-        ? "A GitHub App: pull requests and commits are the App's. Its private key is stored for this organization and never shown again."
+        ? "A GitHub App: commits are the App's; pull requests require the task owner's authorization. Secrets are never shown again."
         : "A personal access token with repository access. It is stored for this organization and never shown again."}
       submitLabel="Save"
       submitTestId="forge-save"
@@ -292,7 +295,8 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       onSubmit={() =>
         void save(
           () => app
-            ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim() },
+            ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim(),
+                ...(oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}), oauthClientSecret, clearOauthClientSecret },
               apiBase.trim() || undefined)
             : props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {
@@ -315,6 +319,13 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           <SecretField label="Private key" value={privateKey} onChange={setPrivateKey}
             placeholder="Paste the whole .pem file" hint="The whole .pem file GitHub generated for the App."
             data-testid="forge-private-key" />
+          <Input label="OAuth Client ID" value={oauthClientId} autoComplete="off"
+            onChange={(e) => setOauthClientId(e.target.value)} />
+          <Input label="OAuth Client secret" type="password" value={oauthClientSecret} autoComplete="off"
+            hint="Blank keeps the saved secret. This is not the App's private key."
+            onChange={(e) => setOauthClientSecret(e.target.value)} />
+          <label><input type="checkbox" checked={clearOauthClientSecret}
+            onChange={(e) => setClearOauthClientSecret(e.target.checked)} /> Clear saved OAuth Client secret</label>
         </>
       ) : (
         <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}

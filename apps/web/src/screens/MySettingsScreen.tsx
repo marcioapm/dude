@@ -31,6 +31,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
   const { busy, problem, save } = useSave();
   // Who you are on GitHub is only on your own /v1/me, not the people list.
   const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
+  const [authorization, setAuthorization] = useState<Awaited<ReturnType<ApiClient["githubAuthorization"]>> | null>(null);
   const [read, setRead] = useState(0);
 
   useEffect(() => {
@@ -39,6 +40,10 @@ export function MySettingsScreen({ client, me, onChanged }: {
   useEffect(() => {
     void client.me().then((r) => setGithub({ githubLogin: r.person.githubLogin ?? null, commitEmail: r.person.commitEmail ?? null }),
       () => setGithub({ githubLogin: null, commitEmail: null }));
+  }, [client, read]);
+
+  useEffect(() => {
+    void client.githubAuthorization().then(setAuthorization, () => setAuthorization(null));
   }, [client, read]);
 
   const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
@@ -54,6 +59,26 @@ export function MySettingsScreen({ client, me, onChanged }: {
         <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
           onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
       ) : null}
+      {authorization?.available ? <Card data-testid="github-authorization">
+        <CardHeader title="GitHub authorization" />
+        <CardBody>
+          <p>{authorization.connection ? `Connected as ${authorization.connection.login}` : "Not connected"}</p>
+          {authorization.connection ? <p className="muted">Access expires {authorization.connection.expiresAt}.
+            {authorization.connection.reconnectRequired || new Date(authorization.connection.refreshExpiresAt).getTime() <= Date.now()
+              ? " Connect GitHub again to open pull requests." : " Refreshed automatically while authorized."}</p> : null}
+          <p className="muted">Connect to open your tasks' pull requests as you. Git and monitoring still use the App.</p>
+          {problem ? <Callout tone="danger">{problem}</Callout> : null}
+          <FormActions>
+            <Button disabled={busy} onClick={() => void save(async () => {
+              const { url } = await client.connectGithub();
+              window.location.assign(url);
+            })}>Connect GitHub</Button>
+            {authorization.connection ? <Button disabled={busy} variant="quiet" onClick={() => void save(async () => {
+              await client.disconnectGithub(); setRead((n) => n + 1);
+            })}>Disconnect GitHub</Button> : null}
+          </FormActions>
+        </CardBody>
+      </Card> : null}
       <KeysSection client={client} />
       <Card>
         <CardHeader title="Appearance" />
