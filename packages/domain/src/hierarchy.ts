@@ -160,6 +160,11 @@ export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   performance: "Performance",
 };
 
+/** Mid-sentence casing where the category id is not it: acronyms. */
+export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, string>> = {
+  api: "API",
+};
+
 /**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
@@ -648,12 +653,11 @@ export const PHASE_DOER: Readonly<Record<string, string>> = {
 };
 
 /**
- * A reviewer category mid-sentence: lower case ("correctness"), but an
- * acronym keeps its capitals ("API"). An unknown category reads as given.
+ * A reviewer category mid-sentence: the category as written ("correctness"),
+ * unless it is listed in `REVIEWER_CATEGORY_IN_SENTENCE` ("API").
  */
 export function reviewerCategoryInSentence(category: string): string {
-  const label: string | undefined = REVIEWER_CATEGORY_LABEL[category as ReviewerCategory];
-  return label !== undefined && label === label.toUpperCase() ? label : category;
+  return REVIEWER_CATEGORY_IN_SENTENCE[category as ReviewerCategory] ?? category;
 }
 
 /**
