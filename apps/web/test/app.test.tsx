@@ -23,6 +23,8 @@ afterEach(async () => {
   mounted = [];
   window.history.replaceState(null, "", " ");
   localStorage.clear();
+  // ThemeProvider stamps the root and leaves it stamped; later files' panes read it.
+  for (const a of ["data-theme", "data-density", "data-reduced-motion"]) document.documentElement.removeAttribute(a);
 });
 
 async function app(hash: string, client: FixtureClient) {
