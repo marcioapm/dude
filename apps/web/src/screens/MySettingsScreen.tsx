@@ -43,12 +43,11 @@ type GithubAuthorization = NonNullable<Awaited<ReturnType<ApiClient["githubAutho
  * token's end is shown as how long the authorization may sit unused. The
  * access token's end appears only once it has ended and a reconnect is needed.
  */
-function GithubAuthorizationCard({ client, connection, outcome, onChanged, onDisconnected }: {
+function GithubAuthorizationCard({ client, connection, outcome, onDisconnected }: {
   client: ApiClient;
   connection: GithubAuthorization | null;
   /** The callback's `?github=` value; anything not in the table reads as a failure. */
   outcome: string | null;
-  onChanged: () => void;
   onDisconnected: () => void;
 }) {
   const { busy, problem, save } = useSave();
@@ -93,8 +92,7 @@ function GithubAuthorizationCard({ client, connection, outcome, onChanged, onDis
         ) : null}
       </CardFooter>
       {disconnecting ? (
-        <DisconnectGithubDialog client={client} onClose={() => setDisconnecting(false)} connect={connect}
-          onDisconnected={() => { onDisconnected(); onChanged(); }} />
+        <DisconnectGithubDialog client={client} onClose={() => setDisconnecting(false)} connect={connect} onDisconnected={onDisconnected} />
       ) : null}
     </Card>
   );
@@ -185,7 +183,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
       ) : null}
       {authorization?.available ? (
         <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
-          onChanged={() => setRead((n) => n + 1)} onDisconnected={() => setGithubOutcome(null)} />
+          onDisconnected={() => { setGithubOutcome(null); setRead((n) => n + 1); }} />
       ) : null}
       <KeysSection client={client} />
       <Card>
