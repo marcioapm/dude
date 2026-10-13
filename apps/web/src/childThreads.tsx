@@ -1,7 +1,7 @@
 /** Folded child rows under their spawning calls, and the rail's quicklinks. */
 
 import { createContext, memo, useContext, type ReactNode } from "react";
-import { AgentAvatar, Duration, SessionRailBlock, ToolCallCard } from "@dude/design-system/components";
+import { AgentAvatar, Duration, EntityLine, SessionRailBlock, ToolCallCard } from "@dude/design-system/components";
 import { childSummary, ChildThreadView, type ChildThreadProps } from "./childThreadView.tsx";
 import type { ChildTurn, ToolTurn, Turn } from "./api/conversation.ts";
 
@@ -30,12 +30,9 @@ export function SubagentsBlock({ turns, onOpen }: { turns: readonly Turn[]; onOp
     .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
   return <SessionRailBlock label={`Subagents · ${entries.length}`} live={entries.some(({ child }) => child.status === "running")} data-testid="rail-subagents">
     {children.map((child) => <button key={child.id} type="button" data-child={child.id} onClick={() => onOpen(child.id)}
-      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 8px", border: 0, background: "transparent", textAlign: "left", color: "var(--ds-color-text-primary)" }}>
-      <AgentAvatar role="subagent" size="xs" live={child.status === "running"} />
-      <span style={{ display: "flex", flexDirection: "column", minWidth: 0, fontSize: "var(--ds-text-xs)" }}>
-        <span title={child.title} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{child.title}</span>
-        <ChildStatus child={child} />
-      </span>
+      className="runChildQuicklink">
+      <EntityLine size="sm" lead={<AgentAvatar role="subagent" size="xs" live={child.status === "running"} />}
+        name={child.title} detail={<ChildStatus child={child} />} />
     </button>)}
   </SessionRailBlock>;
 }
