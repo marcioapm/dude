@@ -492,7 +492,9 @@ export class Config {
     });
     if (!parsed.success) {
       const issues = parsed.error.issues.map((i) => {
-        const k = byName.get(`auth.${i.path.join(".")}`);
+        // A list element's issue (super_admins.0) is named by its list's key.
+        const names = i.path.map((_, n) => `auth.${i.path.slice(0, i.path.length - n).join(".")}`);
+        const k = names.map((n) => byName.get(n)).find((found) => found !== undefined);
         const message = i.code === z.ZodIssueCode.invalid_type && i.received === "undefined" ? "required with cloudflare_access" : i.message;
         return `${k ? label(k) : `auth.${i.path.join(".")}`}: ${message}`;
       });

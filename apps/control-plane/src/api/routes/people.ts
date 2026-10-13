@@ -264,6 +264,22 @@ async function updateMe(ctx: RequestContext): Promise<Response> {
   const setLogin = input.githubLogin !== undefined;
   const login = input.githubLogin || null;
   const setCommitEmail = input.commitEmail !== undefined;
+  const access = ctx.principal.access;
+  if (access && !ctx.principal.organizationId) {
+    // No organisation named: only what lives on the account. GitHub identity is per membership.
+    if (setLogin || setCommitEmail) throw new HttpError(400, "organization_required", "organization_required");
+    if (!access.account) throw badRequest("nothing to change");
+    const [account] = await withoutTenant(({ sql }) => sql`
+      WITH before AS (SELECT photo_key AS old_key FROM accounts WHERE id = ${access.account!.id} FOR UPDATE)
+      UPDATE accounts SET name = COALESCE(${input.name ?? null}, name),
+        photo_url = CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
+        photo_key = CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
+        photo_token = CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END
+      FROM before WHERE id = ${access.account!.id}
+      RETURNING id, email::text, name, photo_url AS "photoUrl", before.old_key AS "oldKey"`);
+    if (setPhoto && account?.oldKey) await deleteObject(account.oldKey);
+    return json({ account: { id: account.id, email: account.email, name: account.name, photoUrl: account.photoUrl } });
+  }
   // Asked before the transaction: a GitHub call holds no row lock.
   const githubId = login ? await githubUserId(ctx, login) : null;
   const { person, old } = await withOrg(ctx.principal.organizationId, async (scope) => {
@@ -515,16 +531,17 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
 }
 
 async function locate(ctx: RequestContext): Promise<Response> {
-  const memberships = ctx.principal.access?.memberships ?? [{ organization_id:ctx.principal.organizationId }];
+  const memberships = ctx.principal.access?.memberships ??
+    [{ organization_id: ctx.principal.organizationId, person_id: ctx.principal.personId }];
   for (const m of memberships) {
     const found = await withOrg(m.organization_id, async ({ sql }) => {
       const [row] = await sql`SELECT 'task' AS kind FROM tasks WHERE id=${ctx.params.id!}
         UNION ALL SELECT 'project' FROM projects WHERE id=${ctx.params.id!}
         UNION ALL SELECT 'epic' FROM epics WHERE id=${ctx.params.id!}
         UNION ALL SELECT 'run' FROM runs WHERE id=${ctx.params.id!}
-          AND (session_id IS NULL OR session_role(session_id,${ctx.principal.personId}) IS NOT NULL)
+          AND (session_id IS NULL OR session_role(session_id,${m.person_id}) IS NOT NULL)
         UNION ALL SELECT 'brainstorm' FROM sessions WHERE id=${ctx.params.id!}
-          AND session_role(id,${ctx.principal.personId}) IS NOT NULL LIMIT 1`;
+          AND session_role(id,${m.person_id}) IS NOT NULL LIMIT 1`;
       if (!row) return null;
       const [organization] = await sql`SELECT id,name,slug FROM organizations WHERE id=${m.organization_id}`;
       return { organization,kind:row.kind,id:ctx.params.id };

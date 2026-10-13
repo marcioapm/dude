@@ -38,7 +38,10 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION copy_account_profile() FROM PUBLIC;
 CREATE TRIGGER accounts_profile AFTER UPDATE OF name, email, photo_url, photo_key, photo_token
-  ON accounts FOR EACH ROW EXECUTE FUNCTION copy_account_profile();
+  ON accounts FOR EACH ROW
+  WHEN ((OLD.name, OLD.email, OLD.photo_url, OLD.photo_key, OLD.photo_token)
+        IS DISTINCT FROM (NEW.name, NEW.email, NEW.photo_url, NEW.photo_key, NEW.photo_token))
+  EXECUTE FUNCTION copy_account_profile();
 
 CREATE TABLE invitations (
   id text PRIMARY KEY,
