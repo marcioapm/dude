@@ -20,6 +20,7 @@ func TestEndedPeersAcceptNeitherMessagesNorWaits(t *testing.T) {
 			w := newEpicWorld(t)
 			ctx := context.Background()
 			me := w.run(t, "run_me", "ABS-1", "implement", "implementer", "running")
+			w.exec(t, `UPDATE runs SET agent_busy_at = now() WHERE id = 'run_me'`)
 			q := w.send(t, me, "ABS-2", "Which path?", "")
 			w.in(t, func(tx pgx.Tx) error {
 				_, err := delivery.SetTaskStatusTx(ctx, tx, w.org, w.project, w.tasks["ABS-2"], "", status, "test")
@@ -68,6 +69,7 @@ func TestReplyAndIdleTakeTheRunBeforeTheMessage(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+			w.exec(t, `UPDATE runs SET agent_busy_at = now() WHERE id = 'run_one'`)
 			two := w.run(t, "run_two", "ABS-2", "implement", "implementer", "running")
 			q := w.send(t, one, "ABS-2", "Which path?", "")
 			peer := w.peer(t, "ABS-2", "ABS-1")
@@ -676,6 +678,7 @@ func TestAPersonRetiresANoteAndAgentsAreTold(t *testing.T) {
 func TestATurnEndingOnAnUnansweredQuestionWaitsUntilASelfReply(t *testing.T) {
 	w := newEpicWorld(t)
 	me := w.run(t, "run_me", "ABS-1", "implement", "implementer", "running")
+	w.exec(t, `UPDATE runs SET agent_busy_at = now() WHERE id = 'run_me'`)
 	ctx := context.Background()
 	ends := func() bool {
 		var waits bool

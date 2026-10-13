@@ -437,12 +437,12 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 // peer — a message opening a thread — has no reply in it, its own or the
 // peer's, waits on it as if it had run `dude wait`, unless it already
 // waits. Returns whether it waits now. Conductors are not held: their
-// turns end nothing.
+// turns end nothing, nor does an idle before the turn's first busy.
 func WaitOnUnansweredTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error) {
 	var message string
 	err := tx.QueryRow(ctx, `SELECT m.id FROM peer_messages m JOIN runs r ON r.id = m.from_run_id
 		JOIN tasks t ON t.id = m.to_task_id
-		WHERE m.from_run_id = $1 AND m.reply_to IS NULL AND r.phase IS NOT NULL
+		WHERE m.from_run_id = $1 AND m.reply_to IS NULL AND r.phase IS NOT NULL AND r.agent_busy_at IS NOT NULL
 		  AND t.status NOT IN ('done', 'failed', 'aborted')
 		  AND NOT EXISTS (SELECT 1 FROM peer_messages a WHERE a.reply_to = m.id)
 		  AND NOT EXISTS (SELECT 1 FROM peer_waits w WHERE w.run_id = $1 AND w.closed_at IS NULL)
