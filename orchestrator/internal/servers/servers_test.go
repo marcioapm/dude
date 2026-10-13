@@ -12,6 +12,34 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+type timeoutLux struct {
+	lux.Client
+	created lux.CreateServer
+}
+
+func (l *timeoutLux) ListServers(context.Context, string, ...string) ([]lux.TenantServer, error) {
+	return nil, nil
+}
+func (l *timeoutLux) CreateServer(_ context.Context, in lux.CreateServer) (lux.TenantServer, error) {
+	l.created = in
+	return lux.TenantServer{ID: "srv_test"}, nil
+}
+
+func TestCreateServerSendsTheChosenWakeTimeout(t *testing.T) {
+	l := &timeoutLux{}
+	p := &Previews{Service: &Service{Lux: l, PreviewDomain: "preview.test"}}
+	for _, minutes := range []int{15, 25, 5, 7} {
+		_, err := p.createServer(context.Background(), wakeRun{}, PreviewOf{TaskKey: "TEST-1", ProjectSlug: "test"}, lux.ServerInput{Name: "web", Port: 3000}, PreviewSettings{}, time.Duration(minutes)*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := time.ParseDuration(l.created.WakeTimeout)
+		if err != nil || got != time.Duration(minutes)*time.Minute {
+			t.Fatalf("create timeout %q, want %dm", l.created.WakeTimeout, minutes)
+		}
+	}
+}
+
 func TestWakeTimeoutChoiceAndOpenWakeProtection(t *testing.T) {
 	settings := PreviewSettings{FirstWakeTimeoutMinutes: 25, WakeTimeoutMinutes: 7}
 	for _, tc := range []struct {
