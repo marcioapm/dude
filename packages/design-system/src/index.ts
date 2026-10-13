@@ -65,6 +65,9 @@ export type {
   NavRow,
   NavFilter,
   NavOverrides,
+  NavRelated,
+  NavEdges,
+  NavAutoStart,
   AttentionItem,
 } from "./util/navModel.ts";
 export {
@@ -80,8 +83,15 @@ export {
   boardSwimlanes,
   liveActivity,
   NO_EPIC_LANE,
+  boardFilter,
+  boardFilterCounts,
+  dependencySteps,
+  isBlocked,
+  isStartable,
+  neighbourKeys,
+  scopeTasks,
 } from "./util/boardModel.ts";
-export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
+export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardFilter, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
 export { ThemeProvider, useDensity, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";
 export { describeServer, summarizeServers, summarizeTaskServers, isOn, canStart, canStop, isMoving, canStartAny, canStopAny, anyMoving, bareUrl, safeServerUrl, serverLogLines, serverNameProblem, serverPortProblem, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "./util/servers.ts";

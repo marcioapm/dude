@@ -4,7 +4,7 @@
  * (its Runs, findings and pull requests, and its cost), nothing new.
  */
 
-import { TERMINAL_RUN_STATUSES, type Finding, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
+import { EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, type Finding, type PersistedEvent, type PullRequest, type Run, type TaskStatus } from "@dude/domain";
 
 export interface TaskHistoryLine {
   lead: string;
@@ -28,7 +28,7 @@ const DOER: Record<string, string> = {
  * then the findings and how they stand, and the cost when known.
  */
 export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string }, findings: readonly Finding[],
-  pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string): TaskHistoryLine {
+  pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string, events?: readonly PersistedEvent[]): TaskHistoryLine {
   const phases = task.runs.filter((r) => r.phase);
   const attempt = Math.max(0, ...phases.map((r) => r.attempt));
   const ran = phases.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -57,7 +57,27 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; de
   if (costUsd !== null && costUsd > 0) facts.push(format(costUsd));
 
   const byConductor = task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
-  return { lead: leadFor(task.status, ran, byConductor), steps, facts };
+  const line = { lead: leadFor(task.status, ran, byConductor), steps, facts };
+  return events ? withRelations(line, task.status, ran.length > 0, events) : line;
+}
+
+/**
+ * What its blockers did to the line: a task released by a merge says so —
+ * "Started when unblocked · Deliver", or, not started, "ready to start" —
+ * and which merge released it ("was blocked by CP-41").
+ */
+function withRelations(line: TaskHistoryLine, status: TaskStatus, ran: boolean, events: readonly PersistedEvent[]): TaskHistoryLine {
+  const unblocked = events.findLast((e) => e.eventType === EventTypes.TaskUnblocked);
+  const auto = events.findLast((e) => e.eventType === EventTypes.TaskAutoStarted);
+  if (!unblocked && !auto) return line;
+  const by = String(((auto ?? unblocked)!.payload as { by?: unknown }).by ?? "");
+  const was = by ? [`was blocked by ${by}`] : [];
+  if (auto && ran) {
+    const how = (auto.payload as { how?: unknown }).how === "talk" ? "Talk it through" : "Deliver";
+    return { lead: "Started when unblocked", steps: [how, ...line.steps], facts: [...was, ...line.facts] };
+  }
+  if (!ran && NOT_STARTED_STATUSES.includes(status)) return { lead: "Not started", steps: ["ready to start", ...line.steps], facts: [...was, ...line.facts] };
+  return line;
 }
 
 function leadFor(status: TaskStatus, ran: readonly Run[], byConductor: boolean): string {

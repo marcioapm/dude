@@ -18,7 +18,7 @@
  * it can be a blank column.
  */
 
-import type { AgentRole, TaskStatus } from "@dude/domain";
+import { notStarted, type AgentRole, type TaskStatus } from "@dude/domain";
 import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, sumTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
 import { askingSession, currentRun, taskTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavTask } from "./navModel.ts";
 
@@ -65,6 +65,8 @@ export interface BoardCard {
   readonly triage: TriageKind;
   /** The session asking, when the block is at session level. */
   readonly asking: NavSession | null;
+  /** Not started, with an open blocker: it can't start until that merges. */
+  readonly blocked: boolean;
 }
 
 export interface BoardColumn {
@@ -84,7 +86,94 @@ function toCard(task: NavTask, epic: NavEpic | null, you?: string | null): Board
     column: boardColumnOf(task.status),
     triage: taskTriage(task, you),
     asking: run ? askingSession(run.sessions) : null,
+    blocked: isBlocked(task),
   };
+}
+
+/** A status before any start: Backlog's (the domain's list). */
+export function notStartedStatus(status: TaskStatus): boolean {
+  return notStarted(status);
+}
+
+/** Not started, with an open blocker. */
+export function isBlocked(task: NavTask): boolean {
+  return notStartedStatus(task.status) && (task.blockedBy?.length ?? 0) > 0;
+}
+
+/** Not started, nothing open in front of it. */
+export function isStartable(task: NavTask): boolean {
+  return task.startable ?? (notStartedStatus(task.status) && !isBlocked(task));
+}
+
+export type BoardFilter = "all" | "startable" | "blocked";
+
+/** The columns with only the cards the filter keeps, counts and spend recounted. */
+export function boardFilter(columns: ReadonlyArray<BoardColumn>, filter: BoardFilter): BoardColumn[] {
+  if (filter === "all") return [...columns];
+  const keep = (c: BoardCard) => (filter === "blocked" ? c.blocked : isStartable(c.task));
+  return columnsOf(columns.flatMap((c) => c.cards.filter(keep)));
+}
+
+/** How many tasks of a scope each filter keeps, for the filter's labels. */
+export function boardFilterCounts(tasks: ReadonlyArray<NavTask>): Record<BoardFilter, number> {
+  return { all: tasks.length, startable: tasks.filter(isStartable).length, blocked: tasks.filter(isBlocked).length };
+}
+
+/** The tasks in a board's scope: the epic's, or the whole project's. */
+export function scopeTasks(project: NavProject, epic?: NavEpic | null): NavTask[] {
+  if (epic) return [...epic.tasks];
+  return [...(project.epics ?? []).flatMap((e) => e.tasks), ...(project.tasks ?? [])];
+}
+
+/** A task and the keys of every task it relates to: what hovering its card lights. */
+export function neighbourKeys(task: NavTask): ReadonlySet<string> {
+  const e = task.edges;
+  const keys = new Set<string>([...(e?.blockedBy ?? []), ...(e?.blocks ?? []), ...(e?.related ?? [])]);
+  for (const r of [...(task.blockedBy ?? []), ...(task.blocks ?? [])]) keys.add(r.key);
+  return keys;
+}
+
+/**
+ * An epic's tasks in the order their relations put them: each task one
+ * step after the last of its in-epic blockers (merged or not — the order is
+ * the plan's, not what is left). A task whose in-epic edges form a loop
+ * (refused when written, defended against here) goes in the last step.
+ */
+export function dependencySteps(epic: NavEpic): NavTask[][] {
+  const byKey = new Map(epic.tasks.filter((t) => t.key).map((t) => [t.key!, t]));
+  const blockersOf = (t: NavTask) => [...new Set([...(t.edges?.blockedBy ?? []), ...(t.blockedBy ?? []).map((b) => b.key)])]
+    .filter((k) => byKey.has(k));
+  const depth = new Map<string, number>();
+  const looped = new Set<string>();
+  const level = (t: NavTask, path: Set<string>): number => {
+    const key = t.key ?? t.id;
+    const known = depth.get(key);
+    if (known !== undefined) return known;
+    if (path.has(key)) {
+      for (const k of path) looped.add(k);
+      return 0;
+    }
+    path.add(key);
+    const blockers = blockersOf(t);
+    const d = blockers.length ? Math.max(...blockers.map((k) => level(byKey.get(k)!, path))) + 1 : 0;
+    path.delete(key);
+    depth.set(key, d);
+    return d;
+  };
+  for (const t of epic.tasks) level(t, new Set());
+  const steps: NavTask[][] = [];
+  const last: NavTask[] = [];
+  for (const t of epic.tasks) {
+    const key = t.key ?? t.id;
+    if (looped.has(key)) {
+      last.push(t);
+      continue;
+    }
+    (steps[depth.get(key)!] ??= []).push(t);
+  }
+  const out = steps.filter(Boolean);
+  if (last.length) out.push(last);
+  return out;
 }
 
 /**
