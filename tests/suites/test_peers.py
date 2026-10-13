@@ -1,9 +1,9 @@
 """Two agents on one epic coordinating, end to end through the deployed
 backend, orchestrator, tool server and fake lux.
 
-Both tasks' implementers play fakeagent's fake/peer. B is delivered first
-and, with no peer live, hangs answering what it reads. A finds B live, so
-it messages B and runs wait_for_reply on that message. B reads the
+Both tasks' implementers play fakeagent's fake/peer. The lower-numbered
+A asks the higher-numbered B, which hangs answering what it reads.
+A messages B and runs wait_for_reply on that message. B reads the
 question at its next step and replies to it ({{inbox.last}}). The reply
 resumes A, which completes. Through the public API the thread is
 answered, its wait closed by the reply, and the project page's epic card
@@ -48,6 +48,7 @@ def test_a_question_waited_on_is_answered_and_the_asker_completes(client: ApiCli
     assert thread["pair"][0]["taskId"] == a["id"] and thread["pair"][1]["taskId"] == b["id"]
     assert thread["wait"]["how"] == "wait" and thread["wait"]["closedBy"] == "reply", thread["wait"]
     assert thread["messages"][1]["readAt"] is not None
+    assert received[0]["message"] == thread["messages"][1]["id"]
 
     assert client.get(f"/v1/epics/{epic['id']}/waiting").json()["waiting"] == 0
     overview = client.get(f"/v1/projects/{pid}/overview").json()

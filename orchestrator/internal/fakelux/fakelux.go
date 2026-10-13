@@ -1695,15 +1695,14 @@ func (s *Server) withDude(run *Run, fn func(send func(tool, args string) (*http.
 	}
 }
 
-// choosePeerPart decides fakeagent.PeerModel's part from what list_tasks
-// with peers says now: asker of the first peer with a live Run, else
-// answerer. Callers hold s.mu.
+// choosePeerPart makes the lower-numbered task ask the higher-numbered
+// peer, independently of which Run starts first. Callers hold s.mu.
 func (s *Server) choosePeerPart(run *Run) {
 	b := &run.behavior
 	b.Peer = false
 	var live string
 	s.withDude(run, func(send func(tool, args string) (*http.Response, error)) {
-		live = peerWhere(send, func(run string) bool { return run == "live" })
+		live = higherPeer(send)
 	})
 	if live != "" {
 		b.CallTools = append([][2]string{
@@ -1717,7 +1716,7 @@ func (s *Server) choosePeerPart(run *Run) {
 }
 
 // peerInput is how a peer's message opens as the recipient reads it
-// (delivery.messageDirective): "Message pm_… from ABS-1's …" or
+// (delivery.MessageDirective): "Message pm_… from ABS-1's …" or
 // "Reply to pm_… pm_… from ABS-1's …".
 var peerInput = regexp.MustCompile(`^(?:Message|Reply to \S+) (pm_\S+) from ([A-Za-z0-9]+-\d+)'s `)
 
@@ -1733,10 +1732,8 @@ func InboxLast(inputs []string) (id, from string) {
 	return "", ""
 }
 
-// peerWhere is the key of the first task list_tasks with peers names that
-// is not the caller's own and whose Run state ok accepts; "" when none
-// does or the call fails.
-func peerWhere(send func(tool, args string) (*http.Response, error), ok func(run string) bool) string {
+// higherPeer is the first peer with a greater task number than self.
+func higherPeer(send func(tool, args string) (*http.Response, error)) string {
 	res, err := send("list_tasks", `{"peers":true}`)
 	if err != nil {
 		return ""
@@ -1752,8 +1749,19 @@ func peerWhere(send func(tool, args string) (*http.Response, error), ok func(run
 	if res.StatusCode >= 300 || json.NewDecoder(res.Body).Decode(&out) != nil {
 		return ""
 	}
+	number := func(key string) int {
+		parts := strings.Split(key, "-")
+		n, _ := strconv.Atoi(parts[len(parts)-1])
+		return n
+	}
+	self := 0
 	for _, t := range out.Tasks {
-		if !t.Self && ok(t.Run) {
+		if t.Self {
+			self = number(t.Key)
+		}
+	}
+	for _, t := range out.Tasks {
+		if !t.Self && number(t.Key) > self {
 			return t.Key
 		}
 	}

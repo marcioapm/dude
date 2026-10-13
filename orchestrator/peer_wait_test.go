@@ -164,10 +164,28 @@ func TestMutualPeerWaitsResumeToReadQueuedQuestions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var parkedAt time.Time
+	if err := w.owner.QueryRow(ctx, `SELECT now()`).Scan(&parkedAt); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
+		SELECT 'evt_park_' || id, organization_id, id, 'run.parked', 'system', 'test', 'orchestrator', jsonb_build_object('parkedAt', $2::timestamptz)
+		FROM runs WHERE id = ANY($1)`, []string{ar, br}, parkedAt)
 	mustExec(t, w.owner, `UPDATE runs SET dude_pause = 'person', waiting_since = now(), turn_done_at = NULL
 		WHERE id = ANY($1)`, []string{ar, br})
+	for _, id := range []string{ar, br} {
+		if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			_, _, err := delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: w.org, RunID: id}, delivery.Directive{Text: "Read your peer's question.", Scope: "run"})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	w.until("both questions to be read", func() bool {
 		return w.count(`SELECT count(*) FROM peer_messages WHERE read_at IS NOT NULL`) == 2
+	})
+	w.until("both Runs to wait again after reading", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND (waiting_since IS NOT NULL OR status = 'paused')`, []string{ar, br}) == 2
 	})
 	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = ANY($1) AND sent_at IS NULL`, []string{ar, br}); n != 0 {
 		t.Errorf("%d unsent questions", n)
@@ -175,7 +193,7 @@ func TestMutualPeerWaitsResumeToReadQueuedQuestions(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 2 {
 		t.Errorf("%d open waits, want two", n)
 	}
-	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = ANY($1) AND woken_at IS NOT NULL`, []string{ar, br}); n != 2 {
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = ANY($1) AND woken_at >= $2`, []string{ar, br}, parkedAt); n != 2 {
 		t.Errorf("%d timed resumes", n)
 	}
 }
@@ -207,7 +225,20 @@ func TestTwoScriptedPeersAskAndAnswer(t *testing.T) {
 	if answer != fakeagent.PeerAnswer {
 		t.Errorf("B answered %q", answer)
 	}
-	if n := w.count(`SELECT count(*) FROM peer_waits WHERE message_id = $1 AND closed_by = 'reply'`, question); n != 1 {
+	var ar string
+	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'`, a).Scan(&ar); err != nil {
+		t.Fatal(err)
+	}
+	read := false
+	for _, lr := range w.lux.Runs() {
+		if lr.ID == ar {
+			read = len(lr.Inputs) > 0 && strings.Contains(lr.Inputs[0], fakeagent.PeerAnswer)
+		}
+	}
+	if !read {
+		t.Error("A's lux input lacks the peer answer")
+	}
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE message_id = $1 AND how = 'wait' AND closed_by = 'reply'`, question); n != 1 {
 		t.Errorf("the wait on %s was not closed by the reply", question)
 	}
 	if n := w.count(`SELECT count(*) FROM peer_waits WHERE closed_at IS NULL`); n != 0 {
