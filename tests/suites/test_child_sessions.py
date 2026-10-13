@@ -83,7 +83,7 @@ def test_a_child_session_is_recorded_and_drawn_under_its_call(page: Page, web_ur
 
     expect(thread.locator("[data-tool]")).to_have_count(0)
     expect(page.get_by_test_id("child-panel")).to_have_count(0)
-    thread.locator(":scope > [role=button]").click()
+    thread.get_by_role("button").click()
     panel = page.get_by_test_id("child-panel")
     expect(panel).to_have_attribute("data-child", CHILD)
     expect(panel.locator("[data-tool=bash]")).to_be_visible()
@@ -151,7 +151,9 @@ def test_the_scripted_subagents_ask_is_answered_by_lux_and_its_child_ends(page: 
     expect(thread).not_to_have_attribute("data-waiting", "true")
     expect(thread).to_contain_text("the child read a.txt: hello")
     expect(thread.locator("[data-tool]")).to_have_count(0)
-    page.get_by_test_id("rail-subagents").locator("button[data-child]").click()
+    page.get_by_test_id("rail-subagents").get_by_role("button").filter(
+        has=page.get_by_text("fake subagent (@general subagent)", exact=True)
+    ).click()
     panel = page.get_by_test_id("child-panel")
     expect(panel.locator("[data-tool=bash]")).to_be_visible()
     expect(panel).to_contain_text("the child read a.txt: hello")
