@@ -112,7 +112,7 @@ export interface PersonAvatarStackProps extends Omit<HTMLAttributes<HTMLSpanElem
 }
 
 /**
- * Faces overlapping by a quarter, the first on top: order by relevance
+ * Faces overlapping by a fifth, the first on top: order by relevance
  * (the owner, then everyone else on the task). Past `max`, a "+N" in the
  * same shape stands for the rest; every name is in the group's label.
  */
