@@ -174,6 +174,8 @@ export interface RelationPickerProps {
   readonly initialSide?: RelationSide | undefined;
   /** A loop shown from the start (the gallery's static picture). */
   readonly initialLoop?: ReadonlyArray<string> | undefined;
+  /** Focus the search on mount (default). Off in the gallery: a static picture must not take focus or scroll the page. */
+  readonly autoFocus?: boolean | undefined;
 }
 
 const SIDE_OPTIONS = [
@@ -190,7 +192,7 @@ const SIDE_OPTIONS = [
  * closes the list, then the picker. A loop is refused in words that name
  * it, with the one fix offered: make it Related instead.
  */
-export function RelationPicker({ here, find, related, onAdd, onClose, initialSide, initialLoop }: RelationPickerProps) {
+export function RelationPicker({ here, find, related, onAdd, onClose, initialSide, initialLoop, autoFocus = true }: RelationPickerProps) {
   const [side, setSide] = useState<RelationSide>(initialSide ?? "blocked_by");
   const [loop, setLoop] = useState<{ keys: ReadonlyArray<string>; key: string } | null>(initialLoop ? { keys: initialLoop, key: initialLoop[1] ?? "" } : null);
   const [error, setError] = useState<string | null>(null);
@@ -224,7 +226,7 @@ export function RelationPicker({ here, find, related, onAdd, onClose, initialSid
           <Select label={`${here.key} is`} value={side} onValueChange={(v) => setSide(v)} options={SIDE_OPTIONS} size="sm" />
         </div>
         <div className={styles["pickerFind"]}>
-          <SearchPicker<PickableTask> label="Task" size="sm" autoFocus findOnEmpty clearOnPick placeholder="Search by key or title"
+          <SearchPicker<PickableTask> label="Task" size="sm" autoFocus={autoFocus} findOnEmpty clearOnPick placeholder="Search by key or title"
             find={find} optionKey={(t) => t.key} group={(t) => t.group ?? ""}
             optionDisabled={(t) => (t.key === here.key ? "This task" : related.has(t.key) ? "Already related" : null)}
             renderOption={(t) => (

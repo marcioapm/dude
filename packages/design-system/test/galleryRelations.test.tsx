@@ -18,7 +18,41 @@ afterEach(async () => {
   root = host = null;
 });
 
+/** An IntersectionObserver that reports every target as on screen at once, as a scrolled-to section is. */
+class OnScreen {
+  readonly #callback: IntersectionObserverCallback;
+  constructor(callback: IntersectionObserverCallback) { this.#callback = callback; }
+  observe(target: Element) { this.#callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return []; }
+}
+
+/** An IntersectionObserver that never reports: the section is far off screen. */
+class OffScreen {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return []; }
+}
+
+const realObserver = globalThis.IntersectionObserver;
+afterEach(() => { globalThis.IntersectionObserver = realObserver; });
+
+test("the Task relations blocks wait until the section nears the screen", async () => {
+  globalThis.IntersectionObserver = OffScreen as unknown as typeof IntersectionObserver;
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root!.render(
+    <TooltipProvider><PaneDensityContext.Provider value="both"><RelationsSection mode="both" /></PaneDensityContext.Provider></TooltipProvider>,
+  ));
+  expect(host.querySelector("section#relations [id^='rel-']")).toBeNull();
+  expect(host.querySelector("[data-testid='relations-pending']")).not.toBeNull();
+});
+
 test("every Task relations block renders in dark and light, comfortable and compact", async () => {
+  globalThis.IntersectionObserver = OnScreen as unknown as typeof IntersectionObserver;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Block, Col, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { Board } from "../../components/Board.tsx";
 import { ProposalCard, type ProposalCardItem } from "../../components/Brainstorm.tsx";
@@ -130,10 +130,32 @@ const proposal: ProposalCardItem[] = [
     project: { key: "CP", name: "control-plane" }, canFile: true, relations: [{ kind: "blocked-by", item: 1 }, { kind: "related", task: { key: "CP-44", status: "received" } }] },
 ];
 
+/**
+ * Mounts its children once they near the viewport. The section's blocks are
+ * about 8,000 elements and 190 running animations: drawn from the start they
+ * slow every other section's animations, enough that a tooltip elsewhere in the
+ * gallery could take seconds to fade in. A gallery without IntersectionObserver
+ * draws them at once.
+ */
+function WhenNear({ children }: { readonly children: ReactNode }) {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  const placeholder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (near || !placeholder.current) return undefined;
+    const seen = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setNear(true);
+    }, { rootMargin: "1500px 0px" });
+    seen.observe(placeholder.current);
+    return () => seen.disconnect();
+  }, [near]);
+  return near ? <>{children}</> : <div ref={placeholder} data-testid="relations-pending" style={{ minHeight: 6000 }} />;
+}
+
 export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="relations" title="Task relations: blocked by, blocks, related"
       intro="A task that can't start until another is merged says so, in one verb pair everywhere — Blocked by, Blocks — and every way to start it refuses for the same reason. Blocked waits on work, not a person: neutral ink with a lock and words, never the attention wash, and never a triage bucket.">
+      <WhenNear>
       <Block id="rel-icons" title="Icons: lock, blocks, link"
         note="lock marks a task that can't start until another is merged, blocks one that holds another up, link a relation that gates nothing. They take the ink of their words, never a tone.">
         <Panes mode={mode}>
@@ -241,9 +263,9 @@ export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
         note="Empty with suggestions (type to see groups and disabled options), and the loop refused with Make it Related instead.">
         <Panes mode={mode} surface>
           <Col style={{ gap: 16 }}>
-            <RelationPicker here={{ key: "CP-44" }} related={new Set(["CP-41"])} find={find} onAdd={async () => undefined} onClose={() => undefined} />
+            <RelationPicker here={{ key: "CP-44" }} related={new Set(["CP-41"])} find={find} onAdd={async () => undefined} onClose={() => undefined} autoFocus={false} />
             <RelationPicker here={{ key: "CP-40" }} related={new Set()} find={find} onAdd={async () => undefined} onClose={() => undefined}
-              initialLoop={["CP-40", "CP-41", "CP-44", "CP-40"]} />
+              initialLoop={["CP-40", "CP-41", "CP-44", "CP-40"]} autoFocus={false} />
           </Col>
         </Panes>
       </Block>
@@ -270,6 +292,7 @@ export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
+      </WhenNear>
     </Section>
   );
 }

@@ -898,7 +898,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   a settled blocker stays listed, struck through as merged. A row its reader
   may not remove says whose it is (`removeHint`) instead of a disabled ✕.
   `RelationPicker` refuses a loop and names it ("That would make a loop:
-  CP-40 → CP-41 → CP-40"), offering Make it Related instead.
+  CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
+  takes the focus when it opens; the gallery passes `autoFocus={false}`, so a
+  static picture never takes the focus. The gallery mounts the Task relations
+  section's blocks only once it nears the screen (`WhenNear`): drawn from the
+  start, its 8,000 elements and 190 running animations held other sections'
+  animations back, enough that a tooltip elsewhere took seconds to fade in.
 - `DependencyStrip` is an epic's order, in steps, with what can start now;
   a single step draws nothing.
 - `ProposalCard` numbers items in dependency order and lists each item's
