@@ -115,7 +115,7 @@ for (const path of paths) {
     let inherited: string | null = null;
     if (path !== paths[0]) {
       inherited = tiers.find((t: { name: string }) => t.name !== "Fast").id;
-      expect((await call("PATCH", paths[0], { roles: { implementer: { tier: inherited } } })).status).toBe(200);
+      expect((await call("PATCH", "/v1/settings/organization", { roles: { implementer: { tier: inherited } } })).status).toBe(200);
     }
     const reset = await call("PATCH", path, { roles: { implementer: { tier: null } } });
     expect(reset.status).toBe(200);
