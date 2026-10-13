@@ -13,9 +13,6 @@ import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
 import { byInstant } from "./instant.ts";
 import { resetNotice } from "./machines.ts";
 
-// A conductor that may still take a Reset's move: its transcript shows it.
-const LIVE: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
-
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
   | { kind: "decision" | "notice"; id: string; at: string; text: string }
@@ -33,14 +30,14 @@ export type ConductorSteer = Pick<HumanTurn, "text" | "at" | "lands" | "delivere
  * The task's conducted lines, oldest first: a line for each Run the
  * conductor started or steered; none for a task its conductor never
  * decided for nor steered. A person's machine Reset is a line whoever
- * decides: on the task, not on the conductor's Run, unless it moved that
- * live conductor, whose own transcript then says it.
+ * decides: on the task, not on the conductor's Run, unless it moved a
+ * conductor, whose own transcript (live or ended) then says it.
  */
 export function conductedLines(task: { decider: string; runs: readonly Run[] }, events: readonly PersistedEvent[]): ConductedLine[] {
   const resets: ConductedLine[] = events.flatMap((e) => {
     if (e.eventType !== EventTypes.MachineReset) return [];
     const moved = e.runId ? task.runs.find((r) => r.id === e.runId) : undefined;
-    if (moved && isConductor(moved) && LIVE.has(moved.status)) return [];
+    if (moved && isConductor(moved)) return [];
     return [{ kind: "notice", id: e.eventId, at: e.occurredAt, text: resetNotice(e.payload as unknown as MachineResetPayload) }];
   });
   const steers = conductorSteers(events);
