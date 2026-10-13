@@ -204,7 +204,7 @@ describe("the task page with a conductor", () => {
     expect(line.hasAttribute("data-attempt")).toBe(false);
     expect(line.textContent).not.toContain("· attempt");
     // The fix's line beside it is still attempt 1's.
-    const fix = [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes("aborted the fix"))!;
+    const fix = [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes("aborted the fixer"))!;
     expect(fix.getAttribute("data-attempt")).toBe("1");
   });
 

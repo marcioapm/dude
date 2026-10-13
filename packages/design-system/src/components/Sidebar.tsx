@@ -376,7 +376,7 @@ export function Sidebar({
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
           {onCollapsedChange ? (
             <Tooltip content="Collapse sidebar" shortcut="[" side="right">
-              <IconButton icon="chevron-left" label="Collapse sidebar" size="sm" className={styles["collapse"]}
+              <IconButton icon="chevron-left" label="Collapse sidebar" title={undefined} size="sm" className={styles["collapse"]}
                 onClick={() => onCollapsedChange(true)} data-testid="sidebar-collapse" />
             </Tooltip>
           ) : null}
@@ -583,23 +583,25 @@ export interface SidebarProfileProps extends Omit<HTMLAttributes<HTMLDivElement>
   readonly detail?: ReactNode;
   /** Open your settings. */
   readonly onOpen: () => void;
-  /** At the end: a sign-out button. */
+  /** At the end: a sign-out button, in its own `Tooltip`. */
   readonly actions?: ReactNode;
   readonly openProps?: Record<string, string> | undefined;
 }
 
-/** You, at the bottom of the sidebar: your face, your name, and the way to your settings. */
+/** You, at the bottom of the sidebar: your face, your name, and the way to your settings, named in a tooltip on hover and focus. */
 export function SidebarProfile({ person, detail, onOpen, actions, openProps, className, ...rest }: SidebarProfileProps) {
   return (
     <div className={cx(styles["profile"], className)} {...rest}>
-      <button type="button" className={styles["profileOpen"]} onClick={onOpen} title="Your settings" {...openProps}>
-        <PersonAvatar person={person} size={40} aria-hidden title="" />
-        <span className={styles["profileText"]}>
-          <span className={styles["profileName"]}>{person.name}</span>
-          {detail ? <span className={styles["profileDetail"]}>{detail}</span> : null}
-        </span>
-        <Icon name="settings" size={14} className={styles["profileGear"]} />
-      </button>
+      <Tooltip content="Your settings">
+        <button type="button" className={styles["profileOpen"]} onClick={onOpen} {...openProps}>
+          <PersonAvatar person={person} size={40} aria-hidden title="" />
+          <span className={styles["profileText"]}>
+            <span className={styles["profileName"]}>{person.name}</span>
+            {detail ? <span className={styles["profileDetail"]}>{detail}</span> : null}
+          </span>
+          <Icon name="settings" size={14} className={styles["profileGear"]} />
+        </button>
+      </Tooltip>
       {actions}
     </div>
   );

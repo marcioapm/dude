@@ -160,6 +160,11 @@ export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   performance: "Performance",
 };
 
+/** A category whose mid-sentence form is not its id, e.g. an acronym. */
+export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, string>> = {
+  api: "API",
+};
+
 /**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
@@ -635,6 +640,36 @@ export function runLabel(run: { phase?: string | null; category?: string | null;
   if (!run.phase) return "Agent";
   const phase = run.phase.charAt(0).toUpperCase() + run.phase.slice(1);
   return run.category ? `${phase} · ${run.category}` : phase;
+}
+
+/** Each phase as a person names who does it: a fix is the implementer's role, but its Run is "the fixer". */
+export const PHASE_DOER: Readonly<Record<string, string>> = {
+  investigate: "investigator",
+  implement: "implementer",
+  review: "reviewer",
+  fix: "fixer",
+  simplify: "simplifier",
+  test: "tester",
+};
+
+/**
+ * A reviewer category mid-sentence: the category as written ("correctness"),
+ * unless it is listed in `REVIEWER_CATEGORY_IN_SENTENCE` ("API").
+ */
+export function reviewerCategoryInSentence(category: string): string {
+  return REVIEWER_CATEGORY_IN_SENTENCE[category as ReviewerCategory] ?? category;
+}
+
+/**
+ * Who a Run is, in a sentence, lower case: "implementer", "correctness
+ * reviewer", "API reviewer", "conductor"; "agent" for a Run with no phase or role known.
+ * runLabel names the stage ("Implement"); this names the actor.
+ */
+export function runDoer(run: { phase?: string | null; category?: string | null; kind?: string; role?: string | null }): string {
+  if (run.kind === "preview") return "branch preview";
+  if (isConductor(run)) return "conductor";
+  const doer = run.phase ? (PHASE_DOER[run.phase] ?? run.phase) : "agent";
+  return run.category ? `${reviewerCategoryInSentence(run.category)} ${doer}` : doer;
 }
 
 export const sessionStatusSchema = z.enum([

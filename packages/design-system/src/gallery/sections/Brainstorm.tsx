@@ -131,7 +131,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-title" title="SessionTitle"
-        note="A session's name in its header. Untitled until its agent or a member names it: “New session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
+        note="A session's name in its header. Untitled until its agent or a member names it: “Untitled session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
         <Panes mode={mode}>
           <Col>
             <Label>untitled, can chat</Label>

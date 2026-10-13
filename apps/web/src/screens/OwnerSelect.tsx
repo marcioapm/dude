@@ -42,10 +42,11 @@ export function OwnerSelect({ client, task, onChanged, onProblem }: {
 
   return (
     <div className="ownerField" data-testid="task-owner" data-owner={task.owner?.name ?? ""}>
-      <span className="muted" aria-hidden>Owner</span>
+      {/* The action, not a second "Owner": the face beside it already says who owns it. */}
+      <span className="muted" aria-hidden>Change owner</span>
       <Select
         size="sm"
-        aria-label="Owner"
+        aria-label="Change owner"
         placeholder="Nobody owns it"
         value={task.owner?.id}
         disabled={busy || people === null}

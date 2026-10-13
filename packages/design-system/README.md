@@ -537,7 +537,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Deliver finish it.
 - **Starting is a choice.** **`StartChoice`** lays the ways to start side
   by side, equal cards on the raised shade, each its own button: no
-  primary, nothing preselected. Narrow, they stack.
+  primary, nothing preselected. Narrow, they stack. Where the cards show
+  (a task's Overview), its header does not repeat them; on any other tab
+  the header carries the same two, equal.
 - **The composer is `mode="chat"`**: "Ask about this task…", Send, the
   accent's focus, no interrupt (a message starts the conductor's next
   turn, never cuts one short), and `to` — "To **Conductor** · read-only" —
@@ -640,7 +642,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   payload. Its members' alone: anyone else is told the session does not
   exist.
 - **A session starts untitled and names itself.** Until it is named it
-  reads **"New session"** everywhere it is listed or headed (`sessionTitle`
+  reads **"Untitled session"** everywhere it is listed or headed (`sessionTitle`
   in `@dude/domain`). Its agent names it once the subject is clear
   (`name_session`, one line of at most 60 characters), and again only if
   the subject clearly changes.
@@ -705,7 +707,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shared session's marker, model and Share cannot squeeze it to nothing.
   The wash behind a nameable title sits past
   its edge by a translate, not a negative margin, which would lay the
-  button out narrower than its words and cut even "New session". The Chat says who named it, a
+  button out narrower than its words and cut even "Untitled session". The Chat says who named it, a
   `ChatNotice kind="renamed"`: signed **Brainstorm**, "Named it “…”", or
   unsigned, "Ana renamed it “…”".
 - **`ProposalCard`** is what the agent proposes: epics, tasks, edits and
@@ -790,7 +792,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   "Waiting on you" count, so one number answers "what needs me".
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
-  title — named or "New session" — because a private session's name must
+  title — named or "Untitled session" — because a private session's name must
   not reach people outside it. The same words stand for where a question
   waits in the inbox.
 
@@ -971,7 +973,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Failed sits in Closed with its danger mark; aborted stays neutral.
 - A card is three lines and nothing more: status dot, mono key, epic (project
   boards only) and time in lane; the title, clamped to two lines; who and
-  what it cost. Running cards show the working roles and the
+  what it cost. The epic keeps at least 8ch: on a card too narrow for it
+  beside the key and a needs-you mark, the mark wraps under them. Running cards show the working roles and the
   deepest live activity. Needs-you cards show the asker and the question in
   attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
@@ -1364,9 +1367,14 @@ here.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
   person is the same colour on every screen with no profile record. A
   `photoUrl` replaces the initials and nothing else changes.
-- `PersonAvatarStack` overlaps by a quarter and puts the *first* person on
+- `PersonAvatarStack` overlaps by a fifth and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
-  requester). Past `max`, a "+N" chip in the same shape stands for the rest
+  requester). A covered face's initials clear the face on top and its ring
+  (the online ring too) and centre in the part of the face that shows. In
+  a stack, initials are set at 0.29×size so two wide capitals ("WW") fit
+  behind an online face and its ring; alone, 0.38×size. An agent
+  tile on the face on top can still cover the next face's initials. Past
+  `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
 
 ### Markdown
@@ -1989,6 +1997,10 @@ MarkdownCheatsheet.
   is a project's `projectCounts` in words.
 - **SidebarRailItem** — one square of the rail, named, its words in a
   tooltip to the right.
+- **SidebarProfile** — you, at the foot of the sidebar: face, name, a gear,
+  the whole row opening your settings, said in a `Tooltip` on hover and
+  focus; `actions` after it (an icon-only sign-out, given its own `Tooltip`
+  by the app, as every icon-only action in a band is).
 - **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
@@ -2187,7 +2199,7 @@ sessions*):
   the card read only (`defaultOpen` starts it open). An item nobody can
   file keeps the card open. An epic item's `notes` are drawn under it,
   pinned when it is filed; a `note` item adds or replaces one.
-- **SessionTitle** — the session's name in its header: "New session"
+- **SessionTitle** — the session's name in its header: "Untitled session"
   muted until named, renamed in place by a member who can chat.
 - **SessionPeople / LinkedProjects / Capabilities** — the rail's parts:
   who is in it, what it reads, what it can do.

@@ -41,11 +41,11 @@ test("every Brainstorm block renders in dark and light, comfortable and compact"
   }
 });
 
-test("SessionTitle: untitled reads New session, muted; one who can chat renames in place, Enter saves and Escape cancels; a reader cannot", async () => {
+test("SessionTitle: untitled reads Untitled session, muted; one who can chat renames in place, Enter saves and Escape cancels; a reader cannot", async () => {
   const el = await mount();
   const pane = el.querySelector("#bs-title [data-theme]")!;
   const [untitled, named, reader] = [...pane.querySelectorAll("[data-testid='session-title']")];
-  expect(untitled!.textContent).toBe("New session");
+  expect(untitled!.textContent).toBe("Untitled session");
   expect(untitled!.querySelector("[data-untitled='true']")).toBeTruthy();
   expect(reader!.tagName).toBe("SPAN");
   expect(named!.tagName).toBe("BUTTON");
