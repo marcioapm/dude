@@ -356,10 +356,11 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // or dude paused it itself and its reason is over — a repository to bring
 // (at once), a person it waited on (once nothing is open for them), a
 // conductor parked after its warm period (once someone wrote to it), or a
-// Run parked only on a peer's reply that has peer mail to read, or a
-// machine move to make (its wait stays open, so its next idle waits
-// again). An idle
-// park, like a person's own pause, waits for a person's Resume.
+// Run parked only on a peer's reply, not waiting on a person (a question,
+// or a repository it cannot go on without), that has peer mail to read or
+// a machine move to make (its wait stays open, so its next idle waits
+// again). An idle park, like a person's own pause, waits for a person's
+// Resume.
 // Known limit: a Run resumed only for its move whose orchestrator dies
 // between settleMachine's commit and whilePaused's UPDATE stays
 // paused/person in dude until the peer replies or a person resumes it.

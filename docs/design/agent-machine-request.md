@@ -329,8 +329,9 @@ chip's tooltip reads that, so history stays true after a Reset.
   reviewer) takes the settings' size at its next resume.
 - A paused Run moves at its next resume. A Run parked only on a peer's
   reply is resumed for the move at once, and its wait stays open, so it
-  parks on the peer again. A Run waiting on a person's question still waits
-  for the answer (decided by Márcio 2026-10-13).
+  parks on the peer again. A Run waiting on a person (a question, or a
+  repository it cannot go on without) still waits for the answer (decided
+  by Márcio 2026-10-13).
 
 ## Data, API and migration
 
