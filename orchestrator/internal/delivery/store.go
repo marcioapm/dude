@@ -937,6 +937,16 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				return "", tokenErr
 			}
 			ref, err = gh.OpenPullRequestAs(ctx, in, token)
+			if refusal, ok := err.(*forge.Error); ok && refusal.Status == 401 {
+				if invalidateErr := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					_, updateErr := tx.Exec(ctx, `UPDATE github_user_authorizations SET reconnect_required = true
+						WHERE person_id = $1 AND access_token = $2`, owner, token)
+					return updateErr
+				}); invalidateErr != nil {
+					return "", invalidateErr
+				}
+				return "", forge.OwnerAuthorizationError{}
+			}
 			fresh = err == nil
 		}
 	} else {

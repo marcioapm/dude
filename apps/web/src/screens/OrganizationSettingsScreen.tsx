@@ -296,7 +296,8 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
         void save(
           () => app
             ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim(),
-                ...(oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}), oauthClientSecret, clearOauthClientSecret },
+                ...(oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}),
+                ...(oauthClientSecret ? { oauthClientSecret } : {}), ...(clearOauthClientSecret ? { clearOauthClientSecret } : {}) },
               apiBase.trim() || undefined)
             : props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {

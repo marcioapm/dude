@@ -26,6 +26,10 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => 
     expect(body.code_verifier).toHaveLength(43); expect(body.redirect_uri).toBe("https://dude.example/v1/me/github/callback");
     return Response.json({ access_token: "hidden-access", refresh_token: "hidden-refresh", expires_in: 28800, refresh_token_expires_in: 15552000 });
   }
+  if (init?.method === "DELETE") {
+    expect(target).toBe("https://api.github.com/applications/client/token");
+    return new Response(null, { status: 204 });
+  }
   expect(target).toBe("https://api.github.com/user");
   expect((init?.headers as Record<string,string>).authorization).toBe("Bearer hidden-access");
   return denied ? Response.json({}, { status: 401 }) : Response.json({ id: 123, login: "CanonicalOwner" });

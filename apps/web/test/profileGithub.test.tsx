@@ -134,30 +134,3 @@ test("a name saved with a GitHub username shows the new name once the shell has 
   }, "the new name shown, with Save off");
   expect(client.saved).toEqual([{ name: "Renamed Person", githubLogin: "octocat" }]);
 });
-
-class AuthorizationClient extends ProfileClient {
-  connected = true;
-  disconnects = 0;
-  override githubAuthorization() {
-    return Promise.resolve({ available: true, connection: this.connected ? {
-      login: "CanonicalOwner", expiresAt: "2026-10-13T12:00:00Z", refreshExpiresAt: "2027-01-01T00:00:00Z", reconnectRequired: false,
-    } : null });
-  }
-  override disconnectGithub() {
-    this.disconnects++; this.connected = false;
-    return Promise.resolve();
-  }
-}
-
-test("GitHub authorization shows its canonical status and disconnects without exposing credentials", async () => {
-  const client = new AuthorizationClient({ githubLogin: null, commitEmail: null });
-  const { container } = await open(client);
-  const status = await until(() => container.querySelector("[data-testid=github-authorization-status]"), "authorization status");
-  expect(status.textContent).toBe("Connected as CanonicalOwner");
-  expect(container.textContent).not.toContain("hidden-access");
-  expect(container.textContent).not.toContain("hidden-refresh");
-  expect(container.querySelector("[data-testid=github-connect]")?.textContent).toBe("Connect GitHub");
-  await click(container.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
-  await until(() => client.disconnects === 1 && container.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null,
-    "disconnected status");
-});

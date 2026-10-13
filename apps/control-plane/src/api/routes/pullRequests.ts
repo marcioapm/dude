@@ -120,7 +120,12 @@ async function getCredential(ctx: RequestContext): Promise<Response> {
   const webhook = await webhookHealth(organizationId);
   // A PEM ends in its armour: a key's last characters tell no key apart.
   const secretHint = cred.auth === "github_app" ? "" : secret.slice(-4);
-  return json({ connected: true, ...shown, secretHint, webhookPath: webhookPath(organizationId), webhook });
+  const oauth = await withOrg(organizationId, async ({ sql }) => {
+    const [row] = await sql`SELECT oauth_client_id AS "oauthClientId", oauth_client_secret IS NOT NULL AS "oauthClientSecretConfigured"
+      FROM forge_credentials WHERE forge = 'github'`;
+    return row;
+  });
+  return json({ connected: true, ...shown, ...oauth, secretHint, webhookPath: webhookPath(organizationId), webhook });
 }
 
 const webhookPath = (organizationId: string) => `/v1/webhooks/github/${organizationId}`;
@@ -389,21 +394,21 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
   await noteDelivery(organizationId, signed ? null : "signature did not match: the secret GitHub has is not dude's");
   if (!signed) throw unauthorized("webhook signature does not match");
   if (event === "ping") return json({ ok: true });
-   if (event === "github_app_authorization") {
-     let revoked: { action?: string; sender?: { id?: number }; installation?: { app_id?: number } };
-     try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
-     if (revoked.action === "revoked" && Number.isSafeInteger(revoked.sender?.id)) {
-       await withOrg(organizationId, async ({ sql }) => {
-         await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
-           WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
-             AND c.auth = 'github_app' AND a.github_user_id = ${revoked.sender!.id!}
-             AND (${revoked.installation?.app_id?.toString() ?? null}::text IS NULL
-               OR c.app_id = ${revoked.installation?.app_id?.toString() ?? null})`;
-       });
-     }
-     return json({ ok: true });
-   }
-   if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
+  if (event === "github_app_authorization") {
+    let revoked: { action?: string; sender?: { id?: number }; installation?: { app_id?: number } };
+    try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
+    if (revoked.action === "revoked" && Number.isSafeInteger(revoked.sender?.id)) {
+      await withOrg(organizationId, async ({ sql }) => {
+        await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
+          WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
+            AND c.auth = 'github_app' AND a.github_user_id = ${revoked.sender!.id!}
+            AND (${revoked.installation?.app_id?.toString() ?? null}::text IS NULL
+              OR c.app_id = ${revoked.installation?.app_id?.toString() ?? null})`;
+      });
+    }
+    return json({ ok: true });
+  }
+  if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
 
   let payload: unknown;
   try {

@@ -115,6 +115,23 @@ test("a GitHub App connects with its App ID alone; the installation is found per
   expect(JSON.stringify(body)).not.toContain("BEGIN");
 });
 
+test("OAuth client secret is write-only, blank preserves it, and explicit clear removes it", async () => {
+  const post = (extra: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/forge/credential", {
+    method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" },
+    body: JSON.stringify({ auth: "github_app", secret: "pem", appId: "9001", ...extra }),
+  }));
+  const saved = await post({ oauthClientId: "client", oauthClientSecret: "never-return-this-secret" });
+  expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("never-return-this-secret");
+  expect((await post({ oauthClientSecret: "" })).status).toBe(200);
+  const [kept] = await owner`SELECT oauth_client_secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(kept.oauth_client_secret).toBe("never-return-this-secret");
+  const shown = await router.handle(new Request("http://dude.test/v1/forge/credential", { headers: { authorization: `Bearer ${key.key}` } }));
+  expect(await shown.text()).not.toContain("never-return-this-secret");
+  expect((await post({ clearOauthClientSecret: true })).status).toBe(200);
+  const [cleared] = await owner`SELECT oauth_client_secret FROM forge_credentials WHERE organization_id = ${ORG}`;
+  expect(cleared.oauth_client_secret).toBeNull();
+});
+
 test("Verify asks the orchestrator to mint an App's token, and says what it answered", async () => {
   const verify = async () => {
     const res = await router.handle(new Request("http://dude.test/v1/forge/credential/verify", {

@@ -128,10 +128,25 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
   });
   router.delete("/v1/me/github", async (ctx) => {
     const { organizationId, personId } = session(ctx);
-    await withOrg(organizationId, async ({ sql }) => {
+    const revoked = await withOrg(organizationId, async ({ sql }) => {
+      const [connection] = await sql`SELECT a.access_token, c.oauth_client_id, c.oauth_client_secret, c.api_base_url
+        FROM github_user_authorizations a JOIN forge_credentials c ON c.id = a.credential_id
+        WHERE a.person_id = ${personId} AND a.credential_version = c.oauth_version`;
       await sql`DELETE FROM github_user_authorizations WHERE person_id = ${personId}`;
       await sql`DELETE FROM github_oauth_transactions WHERE person_id = ${personId}`;
+      return connection;
     });
+    if (revoked?.oauth_client_id && revoked.oauth_client_secret) {
+      try {
+        await fetchImpl(`${String(revoked.api_base_url).replace(/\/+$/, "")}/applications/${encodeURIComponent(revoked.oauth_client_id)}/token`, {
+          method: "DELETE", headers: { accept: "application/vnd.github+json", "content-type": "application/json",
+            authorization: `Basic ${Buffer.from(`${revoked.oauth_client_id}:${revoked.oauth_client_secret}`).toString("base64")}` },
+          body: JSON.stringify({ access_token: revoked.access_token }), signal: AbortSignal.timeout(10_000),
+        });
+      } catch {
+        // Local invalidation has already committed; GitHub revocation is best effort.
+      }
+    }
     return noContent();
   });
 }

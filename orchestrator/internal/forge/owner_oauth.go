@@ -33,7 +33,7 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
      a.reconnect_required, c.oauth_client_id, c.oauth_client_secret, c.id, c.oauth_version
      FROM github_user_authorizations a JOIN forge_credentials c ON c.id = a.credential_id
      JOIN people p ON p.id = a.person_id AND p.organization_id = a.organization_id AND p.removed_at IS NULL
-     WHERE a.person_id = $1 AND a.credential_version = c.oauth_version AND c.auth = 'github_app'`, person).
+      WHERE a.person_id = $1 AND a.credential_version = c.oauth_version AND c.auth = 'github_app' FOR UPDATE OF a`, person).
 				Scan(&token, &refresh, &expires, &refreshExpires, &required, &clientID, &clientSecret, &credential, &version)
 			if err != nil {
 				return err
