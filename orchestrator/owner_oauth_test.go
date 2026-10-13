@@ -1,12 +1,19 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -28,6 +35,163 @@ func (w *world) connectOwner(person, token string, githubID int) {
 		FROM forge_credentials WHERE organization_id = $1
 		ON CONFLICT (organization_id, person_id, credential_id) DO UPDATE SET access_token = EXCLUDED.access_token`,
 		w.org, person, token, githubID)
+}
+
+func (w *world) taskOwners(task string, people ...string) {
+	for i, p := range people {
+		mustExec(w.t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, $4)`, task, p, w.org, i)
+	}
+}
+
+func (w *world) authorizeAgain(task, person string) {
+	var wf string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM workflow_runs WHERE task_id = $1`, task).Scan(&wf); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalGitHubAuthorized, map[string]string{"personId": person}, ""); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *world) attempts(task string) int {
+	return w.count(`SELECT attempt FROM workflow_runs WHERE task_id = $1`, task)
+}
+
+func (w *world) chatAs(task, person, text string) (int, map[string]any) {
+	w.t.Helper()
+	b, _ := json.Marshal(map[string]any{"text": text})
+	req, _ := http.NewRequest("POST", w.api+"/internal/tasks/"+task+"/chat", bytes.NewReader(b))
+	for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": w.org,
+		"X-Dude-Person": person, "X-Dude-Actor": person, "X-Dude-Credential-Kind": "person", "Content-Type": "application/json"} {
+		req.Header.Set(k, v)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+func TestAnApprovedGateFreezesItsAuthorBeforeExecution(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	task := w.task()
+	w.taskOwners(task, ana, bo)
+	w.connectOwner(ana, "ana-token", 1)
+	w.connectOwner(bo, "bo-token", 2)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana); n != 1 {
+		t.Fatalf("gate answer froze %d Ana snapshots", n)
+	}
+	mustExec(t, w.owner, `UPDATE task_people SET position = CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id = $1`, task, bo)
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if len(w.gh.OpenAuth) != 1 || w.gh.OpenAuth[0] != "Bearer ana-token" {
+		t.Fatalf("authorization %v, want Ana frozen at the gate", w.gh.OpenAuth)
+	}
+}
+
+func TestAnOrdinaryApprovedTransitionFreezesItsAuthorBeforeExecution(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	w.connectOwner(ana, "ana-token", 1)
+	w.connectOwner(bo, "bo-token", 2)
+	task := w.task()
+	w.taskOwners(task, ana, bo)
+	w.deliver(task)
+	w.stepTo(task, "openPullRequest")
+	if n := w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana); n != 1 {
+		t.Fatalf("approved transition froze %d Ana snapshots", n)
+	}
+	mustExec(t, w.owner, `UPDATE task_people SET position = CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id = $1`, task, bo)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if len(w.gh.OpenAuth) != 1 || w.gh.OpenAuth[0] != "Bearer ana-token" {
+		t.Fatalf("authorization %v, want Ana", w.gh.OpenAuth)
+	}
+}
+
+func TestAFrozenOwnerWithoutAuthorizationIsNotReplacedByTheNewPrimary(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	task := w.task()
+	w.taskOwners(task, ana, bo)
+	w.connectOwner(ana, "ana-token", 1)
+	w.connectOwner(bo, "bo-token", 2)
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error { return delivery.FreezePublicationTx(ctx, tx, task, delivery.BranchFor(task, 1)) }); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `DELETE FROM github_user_authorizations WHERE person_id = $1`, ana)
+	mustExec(t, w.owner, `UPDATE task_people SET position = CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id = $1`, task, bo)
+	st := &delivery.State{TaskID: task, ProjectID: w.project, Branch: delivery.BranchFor(task, 1), Heads: map[string]string{"target": "main"}}
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error { return delivery.NameOnlyRepository(ctx, tx, task) }); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (&delivery.Store{DB: w.app}).OpenPullRequests(ctx, w.org, st, forge.Resolver{DB: w.app})
+	if !errorsAsOwner(err) || len(w.gh.OpenAuth) != 0 {
+		t.Fatalf("missing frozen owner err=%v auth=%v", err, w.gh.OpenAuth)
+	}
+}
+
+func errorsAsOwner(err error) bool {
+	return errors.As(err, new(forge.OwnerAuthorizationError))
+}
+
+func TestARevokedOwnerTokenRequiresReconnectThenOpensOnce(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.connectOwner(ana, "revoked-token", 1)
+	w.gh.OpenRefuse = map[string]int{"revoked-token": 401}
+	w.deliver(task)
+	w.until("reconnect required", func() bool {
+		return w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND reconnect_required`, ana) == 1 &&
+			w.taskStatus(task) == "awaiting_input"
+	})
+	if w.attempts(task) != 0 || len(w.gh.Pulls()) != 0 {
+		t.Fatalf("revocation spent retries or opened: attempt=%d pulls=%d", w.attempts(task), len(w.gh.Pulls()))
+	}
+	mustExec(t, w.owner, `UPDATE github_user_authorizations SET access_token = 'fresh-token', reconnect_required = false WHERE person_id = $1`, ana)
+	w.authorizeAgain(task, ana)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var secrets int
+	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE payload::text LIKE '%fresh-token%' OR payload::text LIKE '%revoked-token%'`).Scan(&secrets)
+	leaked := w.count(`SELECT count(*) FROM workflow_runs WHERE COALESCE(last_error,'') LIKE '%-token%' OR state::text LIKE '%-token%'`)
+	if secrets != 0 || leaked != 0 {
+		t.Fatalf("token reached events=%d workflow=%d", secrets, leaked)
+	}
+	if got := w.gh.OpenAuth; len(got) != 2 || got[1] != "Bearer fresh-token" {
+		t.Fatalf("creation auth %v", got)
+	}
+}
+
+func TestALostCreateResponseIsAdoptedOnReplay(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.connectOwner(ana, "ana-token", 1)
+	w.gh.Set(func(s *fakegithub.Server) { s.LoseOpenResponses = 1 })
+	w.deliver(task)
+	w.until("adopted pull request", func() bool {
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1`, task) == 1
+	})
+	if len(w.gh.Pulls()) != 1 || len(w.gh.OpenAuth) != 1 || w.gh.OpenAuth[0] != "Bearer ana-token" {
+		t.Fatalf("GitHub has %d pulls, creation auth %v", len(w.gh.Pulls()), w.gh.OpenAuth)
+	}
 }
 
 func TestAnAppPullRequestWaitsForTheFrozenOwnerThenOpensOnceAsThem(t *testing.T) {

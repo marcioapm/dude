@@ -849,7 +849,11 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	st.PullRequestIDs, st.PRIteration = prIDs, 0
+	// A PR fix parked for owner authorization keeps its feedback-loop budget.
+	if len(st.PullRequestIDs) == 0 {
+		st.PRIteration = 0
+	}
+	st.PullRequestIDs = prIDs
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done.
@@ -1114,6 +1118,12 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// The fix may have changed a repository no pull request is open for yet:
 	// that one gets its own, alongside the others.
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
+	if errors.As(err, new(forge.OwnerAuthorizationError)) {
+		if statusErr := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", err.Error()); statusErr != nil {
+			return workflow.Result{}, statusErr
+		}
+		return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}

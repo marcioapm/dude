@@ -485,8 +485,22 @@ func GateAnswered(ctx context.Context, tx pgx.Tx, org, questionID string) error 
 		return err
 	}
 	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil || !d.AtGate() {
+	if err != nil || d == nil {
 		return err
+	}
+	// An Open or Draft answer is the person's publication request: its author is frozen now.
+	if _, err := GateAnswer(ctx, tx, &d.State); err == nil {
+		if err := FreezePublicationTx(ctx, tx, d.State.TaskID, d.State.Branch); err != nil {
+			return err
+		}
+	} else {
+		var refused Refusal
+		if !errors.As(err, &refused) {
+			return err
+		}
+	}
+	if !d.AtGate() {
+		return nil
 	}
 	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalConductorDecision, map[string]any{"action": "answered"}, "")
 }

@@ -779,6 +779,15 @@ func NameOnlyRepository(ctx context.Context, tx pgx.Tx, taskID string) error {
 	return err
 }
 
+func FreezePublicationTx(ctx context.Context, tx pgx.Tx, taskID, branch string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO pr_publications (organization_id, task_id, branch, owner_person_id)
+		SELECT t.organization_id, t.id, $2, (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = t.id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)
+		FROM tasks t WHERE t.id = $1 AND EXISTS (SELECT 1 FROM forge_credentials WHERE auth = 'github_app')
+		ON CONFLICT DO NOTHING`, taskID, branch)
+	return err
+}
+
 // OpenPullRequests opens a pull request in each repository the work changed
 // that has none yet, and returns every one the task has, oldest first.
 // Idempotent: one already recorded is kept, and one GitHub already has for
@@ -849,10 +858,7 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	var owner string
 	if gh.UsesApp() {
 		err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO pr_publications (organization_id, task_id, branch, owner_person_id)
-				SELECT $1, t.id, $2, (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
-					WHERE tp.task_id = t.id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)
-				FROM tasks t WHERE t.id = $3 ON CONFLICT DO NOTHING`, org, st.Branch, st.TaskID)
+			err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch)
 			if err != nil {
 				return err
 			}

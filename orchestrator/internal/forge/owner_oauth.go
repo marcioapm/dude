@@ -47,7 +47,7 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
 			claim = ids.New("oauth")
 			tag, err := tx.Exec(ctx, `UPDATE github_user_authorizations SET refresh_claim = $1, refresh_claim_until = now() + interval '30 seconds'
      WHERE person_id = $2 AND credential_id = $3 AND credential_version = $4
-       				AND expires_at <= now() + interval '1 minute'
+      AND expires_at <= now() + interval '1 minute'
 				AND (refresh_claim_until IS NULL OR refresh_claim_until <= now())`, claim, person, credential, version)
 			if err != nil {
 				return err
@@ -79,9 +79,12 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
 		retry := false
 		persistErr := database.InOrg(ctx, org, func(tx pgx.Tx) error {
 			if exchangeErr != nil {
-				_, err := tx.Exec(ctx, `UPDATE github_user_authorizations SET reconnect_required = $1,
+				tag, err := tx.Exec(ctx, `UPDATE github_user_authorizations SET reconnect_required = $1,
       refresh_claim = NULL, refresh_claim_until = NULL WHERE person_id = $2 AND credential_id = $3
       AND credential_version = $4 AND refresh_claim = $5`, invalid, person, credential, version, claim)
+				if err == nil && tag.RowsAffected() == 0 {
+					retry = true
+				}
 				return err
 			}
 			tag, err := tx.Exec(ctx, `UPDATE github_user_authorizations SET access_token = $1, refresh_token = $2,

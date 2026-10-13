@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
@@ -127,16 +128,95 @@ func TestOwnerRefreshFailureKindsArePersisted(t *testing.T) {
 	if required {
 		t.Fatal("transient failure required reconnect")
 	}
-	status = 200
 	if _, err := owner.Exec(ctx, `UPDATE github_user_authorizations SET expires_at = now() - interval '1 second'`); err != nil {
 		t.Fatal(err)
 	}
+	if token, err := OwnerToken(ctx, database, "org_fail", "per_fail"); err == nil || token != "" {
+		t.Fatalf("expired access returned on transient failure: %q %v", token, err)
+	}
+	status = 200
 	if _, err := OwnerToken(ctx, database, "org_fail", "per_fail"); err == nil || err.Error() == "" || strings.Contains(err.Error(), "bad_refresh_token") {
 		t.Fatalf("invalid grant error %v", err)
 	}
 	_ = owner.QueryRow(ctx, `SELECT reconnect_required FROM github_user_authorizations`).Scan(&required)
 	if !required {
 		t.Fatal("invalid grant did not require reconnect")
+	}
+}
+
+func TestExpiredRefreshClaimCannotOverwriteATakeover(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		t.Run(map[bool]string{false: "late rotation", true: "late invalid grant"}[invalid], func(t *testing.T) {
+			database, owner := dbtest.Open(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_, err := owner.Exec(ctx, `INSERT INTO organizations (id,name,slug) VALUES ('org_lease','Lease','lease');
+				INSERT INTO people (id,organization_id,name,email) VALUES ('per_lease','org_lease','Owner','lease@example.com');
+				INSERT INTO forge_credentials (id,organization_id,forge,auth,secret,app_id,oauth_client_id,oauth_client_secret)
+				VALUES ('fc_lease','org_lease','github','github_app','pem','1','client','secret');
+				INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
+				access_token,refresh_token,expires_at,refresh_expires_at)
+				VALUES ('org_lease','per_lease','fc_lease',1,123,'owner','expired','refresh',now()-interval '1 second',now()+interval '1 day')`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if calls.Add(1) == 1 {
+					close(entered)
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+					if invalid {
+						json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+						return
+					}
+					json.NewEncoder(w).Encode(map[string]any{"access_token": "late-A", "refresh_token": "late-A-refresh", "expires_in": 3600, "refresh_token_expires_in": 86400})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{"access_token": "takeover-B", "refresh_token": "takeover-B-refresh", "expires_in": 3600, "refresh_token_expires_in": 86400})
+			}))
+			defer server.Close()
+			previous := http.DefaultTransport
+			http.DefaultTransport = oauthTransport{server.URL, previous}
+			defer func() { http.DefaultTransport = previous }()
+			type answer struct {
+				token string
+				err   error
+			}
+			done := make(chan answer, 1)
+			go func() { token, err := OwnerToken(ctx, database, "org_lease", "per_lease"); done <- answer{token, err} }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if _, err := owner.Exec(ctx, `UPDATE github_user_authorizations SET refresh_claim_until=now()-interval '1 second'`); err != nil {
+				close(release)
+				t.Fatal(err)
+			}
+			token, err := OwnerToken(ctx, database, "org_lease", "per_lease")
+			close(release)
+			if err != nil || token != "takeover-B" {
+				t.Fatalf("takeover %q %v", token, err)
+			}
+			late := <-done
+			if late.err != nil || late.token != "takeover-B" {
+				t.Fatalf("late worker %q %v", late.token, late.err)
+			}
+			var access, refresh string
+			var required bool
+			if err := owner.QueryRow(ctx, `SELECT access_token,refresh_token,reconnect_required FROM github_user_authorizations`).Scan(&access, &refresh, &required); err != nil {
+				t.Fatal(err)
+			}
+			if access != "takeover-B" || refresh != "takeover-B-refresh" || required || calls.Load() != 2 {
+				t.Fatalf("stored %q %q reconnect=%v calls=%d", access, refresh, required, calls.Load())
+			}
+		})
 	}
 }
 

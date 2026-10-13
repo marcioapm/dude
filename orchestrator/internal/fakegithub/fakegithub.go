@@ -93,8 +93,10 @@ type Server struct {
 	// no rate-limit headers, as GitHub's abuse-detection limit does.
 	CheckRunsForbiddenMessage string
 	// Authorization headers on POST /pulls, and an optional refusal by token.
-	OpenAuth          []string
-	OpenRefuse        map[string]int
+	OpenAuth   []string
+	OpenRefuse map[string]int
+	// LoseOpenResponses creates the pull request, then answers 502.
+	LoseOpenResponses int
 	ReceiveStatus     int
 	ReceiveBody       string
 	ReceiveHeaders    http.Header
@@ -534,7 +536,15 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft}
 	s.pulls[p.Number] = p
 	out := s.pullJSON(p)
+	lost := s.LoseOpenResponses > 0
+	if lost {
+		s.LoseOpenResponses--
+	}
 	s.mu.Unlock()
+	if lost {
+		fail(w, http.StatusBadGateway, "response lost")
+		return
+	}
 	write(w, 201, out)
 }
 
