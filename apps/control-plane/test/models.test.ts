@@ -110,10 +110,14 @@ for (const path of paths) {
     const res = await call("PATCH", path, { roles: { implementer: { tier: fast.id } } });
     expect(res.status).toBe(200);
     expect((await body(res)).roles.implementer.tier.value).toBe(fast.id);
+    // A project's reset falls back to the organization's tier, which the
+    // organization's own case may or may not have reset before this one.
+    const inherited = path === paths[0] ? null : (await body(await call("GET", paths[0]))).roles.implementer.tier.value;
+    expect(inherited).not.toBe(fast.id);
     const reset = await call("PATCH", path, { roles: { implementer: { tier: null } } });
     expect(reset.status).toBe(200);
-    // The organization's reset ran first: neither layer names a tier for it now.
-    expect((await body(reset)).roles.implementer.tier.value).toBeNull();
+    const tier = (await body(reset)).roles.implementer.tier;
+    expect([tier.value, tier.source]).toEqual([inherited, "organization"]);
   });
 }
 
