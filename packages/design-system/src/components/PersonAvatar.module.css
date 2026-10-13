@@ -125,7 +125,8 @@
 }
 /* Behind an online face the part that shows (10.3px at 16, 13.5px at 20)
    is narrower than two wide capitals at 0.38×size: every face in a stack
-   takes the largest ratio at which "WW" fits there at every size (16 binds). */
+   takes 0.29, just under the largest ratio at which "WW" fits there at every
+   size in DejaVu Sans (0.293; 16 binds), so the tolerance never decides it. */
 .stack > * {
   font-size: calc(var(--av-size) * 0.29);
 }

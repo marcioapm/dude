@@ -160,7 +160,7 @@ export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   performance: "Performance",
 };
 
-/** Mid-sentence casing where the category id is not it: acronyms. */
+/** A category whose mid-sentence form is not its id, e.g. an acronym. */
 export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, string>> = {
   api: "API",
 };

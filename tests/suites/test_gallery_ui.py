@@ -497,7 +497,9 @@ def test_a_stack_keeps_every_letter_on_its_face(gallery_page: Page, console_erro
     """At 16, 20, 24 and 28: each covered face's initials' ink sits right of the face on top of it and
     that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the online ring
     around it), and left of its own right edge. Ink bounds come from canvas metrics taken at 40x the
-    font size and scaled down, since at 6px they round to whole pixels."""
+    font size and scaled down, since at 6px they round to whole pixels. The ratio and these margins
+    are calibrated in DejaVu Sans, the headless fallback: a narrower sans keeps every letter on its
+    face too, but leaves this probe less able to notice a regression in the ring or margin rules."""
     gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
     cut, behind_online = [], {}
     for size in (16, 20, 24, 28):
