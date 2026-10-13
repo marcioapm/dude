@@ -349,6 +349,15 @@ describe("a task's Run page", () => {
     expect(line.getAttribute("data-status")).toBe("starting");
   });
 
+  test("the task's Sessions list and pipeline step for a Run lux placed read Starting", async () => {
+    const sessions = await placedOnTaskPage("sessions");
+    const row = await until(() => sessions.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
+    expect(row.querySelector("[data-status]")!.getAttribute("data-status")).toBe("starting");
+    const overview = await placedOnTaskPage("overview");
+    const step = await until(() => overview.querySelector<HTMLElement>("[data-testid=phase][data-phase=implement]"), "the pipeline step");
+    expect(step.getAttribute("data-status")).toBe("starting");
+  });
+
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {
     const ledger = [created(), stage("waiting", 0), stage("image", 5_000),
       ev("run.failed", { status: "failed", error: "x", stage: "image", reason: "pull failed: manifest unknown" }, 50_000)];
