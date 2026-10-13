@@ -225,6 +225,11 @@ describe("your keys, in each organisation", () => {
     expect(await status(b.key)).toBe(401);
     expect(await status(a.key)).toBe(200);
     expect(await status(foreign.key)).toBe(200);
+    // A key acts in its own organisation only: it can't make a key for another.
+    const keyed = await router.handle(new Request(`${ORIGIN}/v1/me/keys`, { method: "POST",
+      headers: { authorization: `Bearer ${a.key}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Other", organizationId: northwind }) }));
+    expect(keyed.status).toBe(403);
   });
 
   test("listed across memberships, made for one, and removal revokes only that organisation's", async () => {
