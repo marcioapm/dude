@@ -111,6 +111,29 @@ func TestARepositoryResumeWakesFromItsApprovalNotALaterRejection(t *testing.T) {
 	}
 }
 
+// A Run waiting on a peer that moves machine is resumed for the move: its
+// resume woke when the move was asked for, not when peer mail was queued
+// for it during the park.
+func TestAMoveResumeWakesFromTheMoveNotThePeerMail(t *testing.T) {
+	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	sec := func(n int) time.Time { return base.Add(time.Duration(n) * time.Second) }
+	w := wokenWorld(t, base)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi2_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`, w.run.Org)
+	w.exec(`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text, created_at)
+		VALUES ('pm_'||$1, $1, $2, $3, 'wi2_'||$1, 'Which body?', $4)`, w.run.Org, w.run.TaskID, w.run.ID, sec(-10))
+	w.exec(`INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, since) VALUES ('pw_'||$1, $1, $2, 'pm_'||$1, 'wait', $3)`,
+		w.run.Org, w.run.ID, sec(-10))
+	w.exec(`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, apply, created_at)
+		VALUES ('mmv_'||$1, $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old"}', 'resize', $4)`, w.run.Org, w.run.TaskID, w.run.ID, sec(2))
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at) VALUES ('dir_'||$1, $1, $2, $3, 'From P-2: hello', $4)`,
+		w.run.Org, w.run.TaskID, w.run.ID, sec(5))
+	r := w.run
+	r.DudePause = "machine"
+	if cause, got := w.wokenAt(r); cause != causeMachine || !got.Equal(sec(2)) {
+		t.Errorf("%s at %v, want machine at the move's %v (the mail was at %v)", cause, got, sec(2), sec(5))
+	}
+}
+
 func TestAPersonsResumeOfAParkWakesFromTheirResume(t *testing.T) {
 	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	w := wokenWorld(t, base)
