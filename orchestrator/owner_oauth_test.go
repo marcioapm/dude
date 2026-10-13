@@ -75,6 +75,50 @@ func (w *world) chatAs(task, person, text string) (int, map[string]any) {
 	return res.StatusCode, out
 }
 
+// A fix may need a new PR after the original closes. Missing authorization
+// parks this secondary publication path without spending its fix budget.
+func TestAPRFixPublicationParksForTheFrozenOwner(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	w.connectOwner(ana, "ana-token", 1)
+	w.connectOwner(bo, "bo-token", 2)
+	task := w.task()
+	w.taskOwners(task, ana, bo)
+	w.deliver(task)
+	w.until("the target pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	armed := w.gated(func(step, next string) {
+		if step == "prFix" && next == "awaitPRFix" {
+			w.gh.Close(1)
+			mustExec(t, w.owner, `UPDATE pull_requests SET state='closed' WHERE task_id=$1`, task)
+			mustExec(t, w.owner, `DELETE FROM github_user_authorizations WHERE person_id=$1`, ana)
+			mustExec(t, w.owner, `UPDATE task_people SET position=CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id=$1`, task, bo)
+		}
+	})
+	armed.Store(true)
+	w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please rename the helper.")
+	w.sync()
+	w.until("parked for Ana", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	armed.Store(false)
+	if len(w.gh.Pulls()) != 1 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+	if w.gh.SHA(delivery.BranchFor(task, 1)) == "" {
+		t.Fatal("the fix's branch was not kept")
+	}
+	w.connectOwner(ana, "ana-again", 1)
+	w.authorizeAgain(task, ana)
+	w.until("the new pull request", func() bool { return len(w.gh.Pulls()) == 2 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 2 || got[1] != "Bearer ana-again" {
+		t.Fatalf("new creation auth %v", got)
+	}
+	var iteration int
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE((state->>'prIteration')::int,0) FROM workflow_runs WHERE task_id=$1`, task).Scan(&iteration)
+	if iteration != 1 {
+		t.Fatalf("PR fix budget reset to %d", iteration)
+	}
+}
+
 func TestAnApprovedGateFreezesItsAuthorBeforeExecution(t *testing.T) {
 	w := conducting(t)
 	w.asApp()

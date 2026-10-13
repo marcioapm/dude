@@ -849,7 +849,6 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	// A PR fix parked for owner authorization keeps its feedback-loop budget.
 	if len(st.PullRequestIDs) == 0 {
 		st.PRIteration = 0
 	}

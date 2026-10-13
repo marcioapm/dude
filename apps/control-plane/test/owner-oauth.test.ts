@@ -130,6 +130,22 @@ test("latest initiated Connect wins when the older exchange finishes last", asyn
   } finally { release(); exchangeHook = null; }
 });
 
+test("callback authentication is not bypassed and unexpected middleware failures do not log the callback URL", async () => {
+  const logs = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const middlewareFailure = new Router(async (_credential, req) => { throw new Error(`DB failed for ${req?.url}`); });
+    registerGithubOAuthRoutes(middlewareFailure, fakeFetch);
+    const deniedRouter = new Router(async () => null);
+    registerGithubOAuthRoutes(deniedRouter, fakeFetch);
+    const req = new Request("https://dude.example/v1/me/github/callback?state=secret-state&code=secret-code");
+    expect((await deniedRouter.handle(req)).status).toBe(401);
+    const outcome = await middlewareFailure.handle(req);
+    expect(outcome.status).toBe(303);
+    expect(outcome.headers.get("location")).toBe("/?github=authorization_failed#/me/settings");
+    expect(logs.mock.calls).toEqual([]);
+  } finally { logs.mockRestore(); }
+});
+
 test("callback consume DB errors and invalid grants return fixed outcomes without sensitive logging", async () => {
   const state = await start();
   const logs = spyOn(console, "error").mockImplementation(() => {});
