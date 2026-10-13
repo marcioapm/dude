@@ -376,7 +376,7 @@ export function Sidebar({
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
           {onCollapsedChange ? (
             <Tooltip content="Collapse sidebar" shortcut="[" side="right">
-              <IconButton icon="chevron-left" label="Collapse sidebar" size="sm" className={styles["collapse"]}
+              <IconButton icon="chevron-left" label="Collapse sidebar" title={undefined} size="sm" className={styles["collapse"]}
                 onClick={() => onCollapsedChange(true)} data-testid="sidebar-collapse" />
             </Tooltip>
           ) : null}

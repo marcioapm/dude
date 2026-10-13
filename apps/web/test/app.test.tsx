@@ -139,6 +139,8 @@ describe("the sidebar's profile band", () => {
     const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
     const signOut = await until(() => page.querySelector<HTMLElement>("[data-testid=sign-out]"), "Sign out");
     expect(signOut.getAttribute("aria-label")).toBe("Sign out");
+    // The DS tooltip is its only one: no native title beside it.
+    expect(signOut.hasAttribute("title")).toBe(false);
     await settle(50);
     await act(async () => signOut.focus());
     expect((await until(() => document.querySelector("[role=tooltip]"), "Sign out's tooltip")).textContent).toBe("Sign out");

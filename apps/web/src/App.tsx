@@ -680,7 +680,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             </SidebarLink>
             {you ? (
               <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
-                actions={<Tooltip content="Sign out"><IconButton size="sm" icon="arrow-right" label="Sign out" onClick={onSignOut} data-testid="sign-out" /></Tooltip>} />
+                actions={<Tooltip content="Sign out"><IconButton size="sm" icon="arrow-right" label="Sign out" title={undefined} onClick={onSignOut} data-testid="sign-out" /></Tooltip>} />
             ) : (
               <>
                 <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
