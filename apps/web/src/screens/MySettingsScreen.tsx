@@ -62,18 +62,18 @@ export function MySettingsScreen({ client, me, onChanged }: {
       {authorization?.available ? <Card data-testid="github-authorization">
         <CardHeader title="GitHub authorization" />
         <CardBody>
-          <p>{authorization.connection ? `Connected as ${authorization.connection.login}` : "Not connected"}</p>
+          <p data-testid="github-authorization-status">{authorization.connection ? `Connected as ${authorization.connection.login}` : "Not connected"}</p>
           {authorization.connection ? <p className="muted">Access expires {authorization.connection.expiresAt}.
             {authorization.connection.reconnectRequired || new Date(authorization.connection.refreshExpiresAt).getTime() <= Date.now()
               ? " Connect GitHub again to open pull requests." : " Refreshed automatically while authorized."}</p> : null}
           <p className="muted">Connect to open your tasks' pull requests as you. Git and monitoring still use the App.</p>
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           <FormActions>
-            <Button disabled={busy} onClick={() => void save(async () => {
+            <Button data-testid="github-connect" disabled={busy} onClick={() => void save(async () => {
               const { url } = await client.connectGithub();
               window.location.assign(url);
             })}>Connect GitHub</Button>
-            {authorization.connection ? <Button disabled={busy} variant="quiet" onClick={() => void save(async () => {
+            {authorization.connection ? <Button data-testid="github-disconnect" disabled={busy} variant="quiet" onClick={() => void save(async () => {
               await client.disconnectGithub(); setRead((n) => n + 1);
             })}>Disconnect GitHub</Button> : null}
           </FormActions>
