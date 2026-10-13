@@ -165,7 +165,7 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
           FROM peer_waits w JOIN peer_messages m ON m.id = w.message_id JOIN tasks wt ON wt.id = m.to_task_id
           JOIN projects wp ON wp.id = wt.project_id
           WHERE w.run_id = r.id AND w.closed_at IS NULL AND r.status IN ${scope.sql.unsafe(LIVE)}) AS "waitingOn",
-          r.branch, heads.sha AS head,
+          heads.branch, heads.sha AS head,
          COALESCE((SELECT jsonb_agg(f.file ORDER BY f.churn DESC, f.path) FROM (
            SELECT jsonb_build_object('path', f->>'path', 'additions', COALESCE((f->>'additions')::int, 0),
              'deletions', COALESCE((f->>'deletions')::int, 0)) AS file, f->>'path' AS path,
@@ -181,7 +181,7 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
            WHERE sr.task_id = t.id AND sr.phase IS NOT NULL ORDER BY last.cursor DESC LIMIT 1) AS "lastSaid",
          (SELECT count(*)::int FROM peer_messages m WHERE m.to_task_id = t.id AND m.read_at IS NULL AND m.briefed_run_id IS NULL) AS inbox
       FROM tasks t JOIN projects p ON p.id = t.project_id
-      LEFT JOIN LATERAL (SELECT r.id, r.branch, r.heads, r.phase::text AS phase,
+      LEFT JOIN LATERAL (SELECT r.id, r.heads, r.phase::text AS phase,
           -- delivery.PromptRoleForPhase in Go; repeated here because the role is read in this one statement
           -- and neither process can import the other's constants.
           (CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
@@ -198,7 +198,10 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
              UNION ALL
              SELECT cp.heads->repo.name->>'sha', cp.settled_at FROM conductor_publishes cp
                WHERE cp.task_id = t.id AND cp.status = 'published' AND cp.heads ? repo.name) h
-             ORDER BY h.at DESC NULLS LAST LIMIT 1), '') AS sha
+             ORDER BY h.at DESC NULLS LAST LIMIT 1), '') AS sha,
+           -- delivery.TaskHeads' branch: the newest Run that has heads here, not the latest phase Run.
+           (SELECT rr.branch FROM runs rr WHERE rr.task_id = t.id AND rr.heads ? repo.name AND rr.branch IS NOT NULL
+             ORDER BY rr.ended_at DESC NULLS LAST LIMIT 1) AS branch
          FROM task_repositories tr JOIN repositories repo ON repo.id = tr.repository_id
          WHERE tr.task_id = t.id ORDER BY repo.name LIMIT 1) heads ON true
        WHERE t.epic_id = ${epicId} ORDER BY p.key_prefix, t.number`) as Array<Record<string, unknown>>;

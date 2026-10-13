@@ -204,6 +204,18 @@ test("peer heads prefer the PR over the phase and conductor heads", async () => 
   }
 });
 
+test("a peer's branch is its newest Run with heads, while a reviewer with no branch is its latest Run", async () => {
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, created_at) VALUES
+    ('run_2_rev', ${ORG}, 'prj_c', 'wi_2', 1, 'running', 'review', 'reviewer', 'agent', now() + interval '1 minute')`;
+  try {
+    const body = await (await call("GET", "/v1/epics/epc_c/peers")).json() as EpicPeers;
+    expect(body.tasks.find((t) => t.taskId === "wi_2")).toMatchObject({ runId: "run_2_rev", role: "reviewer",
+      branch: "dude/wi_2/attempt-1", head: "abcdef123" });
+  } finally {
+    await owner`DELETE FROM runs WHERE id = 'run_2_rev'`;
+  }
+});
+
 test("another organisation's epic is not found, and nothing reads without a key", async () => {
   for (const path of ["/v1/epics/epc_o/notes", "/v1/epics/epc_o/threads", "/v1/epics/epc_o/peers", "/v1/epics/nope/notes"]) {
     expect((await call("GET", path)).status).toBe(404);
