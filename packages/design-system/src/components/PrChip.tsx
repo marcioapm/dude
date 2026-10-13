@@ -1,21 +1,12 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrDisplayInput, type PrDisplayState } from "@dude/domain";
+import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrDisplayState } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
+import type { PrChipPullRequest } from "../util/viewTypes.ts";
 import styles from "./PrChip.module.css";
 
-/** A pull request as the chip reads it: the display state's inputs, where it is, and what it is called. */
-export interface PrChipPullRequest extends PrDisplayInput {
-  readonly number: number;
-  readonly url: string;
-  /** "acme/dashboard", or the repository's name; in the tooltip. */
-  readonly repositoryName?: string | undefined;
-  readonly baseBranch?: string | undefined;
-  readonly behindBy?: number | null | undefined;
-  /** The state, when the API computed it (`display`); otherwise it is computed here. */
-  readonly display?: PrDisplayState | undefined;
-}
+export type { PrChipPullRequest };
 
 export interface PrDisplaySpec {
   readonly label: string;

@@ -57,10 +57,12 @@
     {"name": "factory.logins", "env": "DUDE_FACTORY_LOGINS", "kind": "list", "use": "orchestrator", "default": "", "secret": false},
     {"name": "auth.provider", "env": "DUDE_AUTH_PROVIDER", "kind": "string", "use": "backend", "default": "api_key", "secret": false},
     {"name": "auth.public_url", "env": "DUDE_AUTH_PUBLIC_URL", "kind": "string", "use": "backend", "default": "", "secret": false},
-    {"name": "auth.auto_create", "env": "DUDE_AUTH_AUTO_CREATE", "kind": "bool", "use": "backend", "default": "true", "secret": false},
-    {"name": "auth.default_organization", "env": "DUDE_AUTH_DEFAULT_ORGANIZATION", "kind": "string", "use": "backend", "default": "", "secret": false},
+    {"name": "auth.super_admins", "env": "DUDE_AUTH_SUPER_ADMINS", "kind": "list", "use": "backend", "default": "", "secret": false},
     {"name": "auth.cloudflare_access.team", "env": "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM", "kind": "string", "use": "backend", "default": "", "secret": false},
     {"name": "auth.cloudflare_access.aud", "env": "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD", "kind": "string", "use": "backend", "default": "", "secret": false}
   ],
-  "retired": []
+  "retired": [
+    {"name": "auth.auto_create", "env": "DUDE_AUTH_AUTO_CREATE"},
+    {"name": "auth.default_organization", "env": "DUDE_AUTH_DEFAULT_ORGANIZATION"}
+  ]
 }

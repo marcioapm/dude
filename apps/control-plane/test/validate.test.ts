@@ -41,7 +41,7 @@ endpoint = "http://${addr}"
 const access = `[auth]
 provider = "cloudflare_access"
 public_url = "https://dude.example.com"
-default_organization = "acme"
+super_admins = ["operator@example.test"]
 [auth.cloudflare_access]
 team = "acme"
 aud = "aud-tag"
@@ -97,7 +97,7 @@ describe("dude-backend validate", () => {
 
   test("Access settings: checked, but not whether the organization exists", async () => {
     const path = file(good + access);
-    expect(await run(path)).toEqual({ exit: 0, stdout: `ok: ${path}\n`, stderr: "not checked: default_organization exists\n" });
+    expect(await run(path)).toEqual({ exit: 0, stdout: `ok: ${path}\n`, stderr: "not checked: organisations or super_admins permit sign-in\n" });
   });
 
   test("an unknown key: exit 1 naming it, as startup does", async () => {

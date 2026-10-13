@@ -56,8 +56,7 @@
   "DUDE_FACTORY_LOGINS": ["dude-bot", "dude-factory"],
   "DUDE_AUTH_PROVIDER": "cloudflare_access",
   "DUDE_AUTH_PUBLIC_URL": "https://dude.example.com",
-  "DUDE_AUTH_AUTO_CREATE": false,
-  "DUDE_AUTH_DEFAULT_ORGANIZATION": "example",
+  "DUDE_AUTH_SUPER_ADMINS": ["operator@example.com"],
   "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM": "example",
   "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD": "application-audience"
 }

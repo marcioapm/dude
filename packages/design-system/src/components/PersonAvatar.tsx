@@ -6,17 +6,9 @@ import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { EntityLine } from "./EntityLine.tsx";
 import styles from "./PersonAvatar.module.css";
+import type { Person } from "../util/viewTypes.ts";
 
-/** Anyone with a face: a name, and a photo when there is one. */
-export interface Person {
-  /** Stable identity for colour and keys; falls back to `name`. */
-  readonly id?: string | undefined;
-  readonly name: string;
-  /** A photo. Without one, initials on the person's identity colour. */
-  readonly photoUrl?: string | null | undefined;
-  /** Acted in the last five minutes. Unknown (undefined) draws no ring. */
-  readonly online?: boolean | undefined;
-}
+export type { Person };
 
 /** Face sizes in px, 16–56. The named ones match the avatar tokens. */
 export type PersonAvatarSize = 16 | 20 | 24 | 28 | 32 | 40 | 56;

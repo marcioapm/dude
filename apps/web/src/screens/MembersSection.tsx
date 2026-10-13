@@ -1,9 +1,4 @@
-/**
- * The organization's members: everyone, by face, with their role; for an
- * admin, inviting (a key shown once — the invitation, until there is
- * sign-in), changing roles, and removing (every key of theirs stops at
- * once). Anyone else sees the list.
- */
+/** The organization's members, with admin role and removal controls. */
 
 import { useState } from "react";
 import { EntityLine, PersonAvatar } from "@dude/design-system/components";
@@ -15,7 +10,6 @@ import {
   CardBody,
   CardHeader,
   Dialog,
-  Input,
   Select,
   Table,
   TBody,
@@ -26,9 +20,8 @@ import {
 } from "@dude/design-system/primitives";
 import type { PersonRole } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
-import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { errorText, useSave } from "../hooks/useSave.tsx";
 import { whereWords } from "../people.tsx";
-import { KeyShownOnce } from "./YouSections.tsx";
 
 const ROLES = [
   { value: "member", label: "Member" },
@@ -43,8 +36,6 @@ export function MembersSection({ client, me, people, onChanged }: {
   onChanged: () => void;
 }) {
   const [problem, setProblem] = useState<string | null>(null);
-  const [inviting, setInviting] = useState(false);
-  const [invited, setInvited] = useState<{ name: string; key: string } | null>(null);
   const [removing, setRemoving] = useState<Member | null>(null);
   const admin = me?.role === "admin";
 
@@ -56,17 +47,14 @@ export function MembersSection({ client, me, people, onChanged }: {
 
   return (
     <Card data-testid="members">
-      <CardHeader
-        title="Members"
-        actions={admin ? (
-          <Button variant="primary" leadingIcon="plus" size="sm" onClick={() => setInviting(true)} data-testid="invite">
-            Invite people
-          </Button>
-        ) : null}
-      />
+      <CardHeader title="Members" />
       <CardBody>
         <p className="muted">
           Everyone here can create, deliver and steer tasks. Admins manage the organisation: its members and its settings.
+        </p>
+        <p className="muted">
+          People join this organisation by invitation. Cloudflare Access must also let them in; dude doesn't manage that.
+          Inviting people from this screen is not available yet.
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {people.length > 0 ? (
@@ -109,47 +97,10 @@ export function MembersSection({ client, me, people, onChanged }: {
           </Table>
         ) : null}
       </CardBody>
-      {inviting ? (
-        <InviteDialog client={client} onClose={() => setInviting(false)} onInvited={(made) => {
-          setInviting(false);
-          setInvited(made);
-          onChanged();
-        }} />
-      ) : null}
-      {invited ? (
-        <KeyShownOnce title={`${invited.name} is invited`} secret={invited.key} onClose={() => setInvited(null)}
-          description={`Give ${invited.name} this key to sign in with. It is not shown again.`} />
-      ) : null}
       {removing ? (
         <RemoveDialog client={client} person={removing} onClose={() => setRemoving(null)} onRemoved={onChanged} />
       ) : null}
     </Card>
-  );
-}
-
-function InviteDialog({ client, onClose, onInvited }: {
-  client: ApiClient;
-  onClose: () => void;
-  onInvited: (made: { name: string; key: string }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<PersonRole>("member");
-  const { busy, problem, save } = useSave();
-  return (
-    <FormDialog open onOpenChange={(o) => !o && onClose()} title="Invite someone"
-      description="They get a key to sign in with, shown to you once."
-      submitLabel="Invite" submitTestId="invite-submit" canSubmit={!busy && Boolean(name.trim()) && email.includes("@")}
-      problem={problem}
-      onSubmit={() => {
-        let key = "";
-        void save(async () => { key = (await client.invitePerson({ name: name.trim(), email: email.trim(), role })).key; },
-          () => onInvited({ name: name.trim(), key }));
-      }}>
-      <Input label="Name" autoFocus value={name} onChange={(e) => setName(e.target.value)} data-testid="invite-name" />
-      <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="invite-email" />
-      <Select label="Role" value={role} options={ROLES} onValueChange={(v) => setRole(v as PersonRole)} />
-    </FormDialog>
   );
 }
 

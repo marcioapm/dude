@@ -14,13 +14,15 @@ import { EventTypes, personRoleSchema, type PersonRef } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { auditActor, insertApiKey, insertPerson } from "../auth.ts";
+import { auditActor, insertApiKey } from "../auth.ts";
 import { ACCESS_LOGOUT_PATH } from "../cloudflareAccess.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
+import { getNavigation } from "./navigation.ts";
+import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
@@ -117,8 +119,9 @@ async function myDetail(scope: OrgScope, id: string) {
  * members take turns (a transaction-scoped lock), so two admins demoting
  * each other at once cannot both pass the last-admin check.
  */
-async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promise<void> {
+export async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promise<void> {
   await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
+  if (ctx.principal.access?.superAdmin && ctx.url.pathname.startsWith("/v1/admin/")) return;
   const rows = (await scope.sql`
     SELECT role FROM people WHERE id = ${ctx.principal.personId} AND removed_at IS NULL`) as Array<{ role: string }>;
   if (rows[0]?.role !== "admin") {
@@ -157,7 +160,38 @@ export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string
 // You
 // ---------------------------------------------------------------------------
 
+async function membershipOrganizations(ctx: RequestContext) {
+  const organizations = [];
+  for (const m of ctx.principal.access?.memberships ?? []) {
+    const navigation = await getNavigation({ ...ctx, principal: { ...ctx.principal, organizationId:m.organization_id,personId:m.person_id } });
+    const tree = await navigation.json() as { projects: NavProject[] };
+    const taskCount = waitingSplit(attentionItems(tree.projects),m.person_id).yours.length;
+    const waitingOnYou = await withOrg(m.organization_id, async ({ sql }) => {
+      const [sessions] = await sql`SELECT count(*)::int AS n FROM session_people WHERE person_id=${m.person_id} AND accepted_at IS NULL`;
+      const [questions] = await sql`SELECT count(*)::int AS n FROM questions q JOIN runs r ON r.id=q.run_id
+        JOIN sessions s ON s.id=r.session_id WHERE q.status='open' AND session_role(s.id,${m.person_id}) IN ('owner','chat')
+          AND (q.to_person=${m.person_id} OR (q.to_person IS NULL AND session_role(s.id,${m.person_id})='owner'))`;
+      return taskCount + sessions.n + questions.n;
+    });
+    organizations.push({ id:m.organization_id,name:m.organization_name,slug:m.organization_slug,
+      role:m.role,personId:m.person_id,welcomedAt:m.welcomed_at,waitingOnYou });
+  }
+  return organizations;
+}
+
 async function getMe(ctx: RequestContext): Promise<Response> {
+  const access = ctx.principal.access;
+  if (access && access.gate !== "member") {
+    const identity = { email: access.email, name: access.profile?.name ?? null, photoUrl: access.profile?.picture ?? null };
+    if (access.gate === "none") return json({ gate: "none", ...identity });
+    return json({ gate: access.gate, ...identity, superAdmin: access.superAdmin,
+      ...(access.gate === "invited" ? { invitations: access.invitations } : {}) });
+  }
+  if (access && !ctx.principal.organizationId) {
+    return json({ gate: "member", account: access.account, organizations: await membershipOrganizations(ctx),
+      invitations: access.invitations, organization: null, superAdmin: access.superAdmin,
+      authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH });
+  }
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const person = await myDetail(scope, ctx.principal.personId);
     // organizations is not a tenant table; the row is the caller's own.
@@ -170,7 +204,8 @@ async function getMe(ctx: RequestContext): Promise<Response> {
   const auth = ctx.principal.credentialKind === "api_key"
     ? { authMethod: "api_key" }
     : { authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH };
-  return json({ ...out, ...auth });
+  return json({ ...out, ...auth, ...(access ? { gate: access.gate, account: access.account,
+    organizations: await membershipOrganizations(ctx), invitations: access.invitations, superAdmin: access.superAdmin } : { gate: "member" }) });
 }
 
 /** A photo someone keeps elsewhere: an https URL. Uploads go to PUT /v1/me/photo. */
@@ -229,9 +264,32 @@ async function updateMe(ctx: RequestContext): Promise<Response> {
   const setLogin = input.githubLogin !== undefined;
   const login = input.githubLogin || null;
   const setCommitEmail = input.commitEmail !== undefined;
+  const access = ctx.principal.access;
+  if (access && !ctx.principal.organizationId) {
+    // No organisation named: only what lives on the account. GitHub identity is per membership.
+    if (setLogin || setCommitEmail) throw new HttpError(400, "organization_required", "organization_required");
+    if (!access.account) throw badRequest("nothing to change");
+    const [account] = await withoutTenant(({ sql }) => sql`
+      WITH before AS (SELECT photo_key AS old_key FROM accounts WHERE id = ${access.account!.id} FOR UPDATE)
+      UPDATE accounts SET name = COALESCE(${input.name ?? null}, name),
+        photo_url = CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
+        photo_key = CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
+        photo_token = CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END
+      FROM before WHERE id = ${access.account!.id}
+      RETURNING id, email::text, name, photo_url AS "photoUrl", before.old_key AS "oldKey"`);
+    if (setPhoto && account?.oldKey) await deleteObject(account.oldKey);
+    return json({ account: { id: account.id, email: account.email, name: account.name, photoUrl: account.photoUrl } });
+  }
   // Asked before the transaction: a GitHub call holds no row lock.
   const githubId = login ? await githubUserId(ctx, login) : null;
   const { person, old } = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [membership] = await scope.sql`SELECT account_id FROM people WHERE id=${ctx.principal.personId}`;
+    if (membership?.account_id && (input.name !== undefined || setPhoto)) {
+      await scope.sql`UPDATE accounts SET name=COALESCE(${input.name ?? null},name),
+        photo_url=CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
+        photo_key=CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
+        photo_token=CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END WHERE id=${membership.account_id}`;
+    }
     const [before] = (await scope.sql`
       SELECT photo_key AS key FROM people WHERE id = ${ctx.principal.personId} FOR UPDATE`) as Array<{ key: string | null }>;
     // A photo by URL, or none, replaces an uploaded one.
@@ -259,8 +317,12 @@ async function uploadMyPhoto(ctx: RequestContext): Promise<Response> {
     withOrg(organizationId, async (scope) => {
       const [before] = (await scope.sql`
         SELECT photo_key AS key FROM people WHERE id = ${personId} FOR UPDATE`) as Array<{ key: string | null }>;
-      await scope.sql`
-        UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
+       const [membership] = await scope.sql`SELECT account_id FROM people WHERE id=${personId}`;
+       if (membership?.account_id) {
+         await scope.sql`UPDATE accounts SET photo_key=${key}, photo_token=${token}, photo_url=NULL WHERE id=${membership.account_id}`;
+       }
+       await scope.sql`
+         UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
       return { result: await personDetail(scope, personId), old: before?.key };
     }));
   return json({ person });
@@ -281,6 +343,15 @@ async function getPhoto(ctx: PublicContext): Promise<Response> {
 const KEY_SELECT = `id, name, key_prefix AS prefix, created_at AS "createdAt", last_used_at AS "lastUsedAt"`;
 
 async function listMyKeys(ctx: RequestContext): Promise<Response> {
+  if (ctx.principal.access) {
+    const keys = [];
+    for (const membership of ctx.principal.access.memberships) {
+      const rows = await withOrg(membership.organization_id, ({ sql }) => sql`
+        SELECT ${sql.unsafe(KEY_SELECT)} FROM api_keys WHERE person_id=${membership.person_id} AND revoked_at IS NULL ORDER BY created_at`);
+      keys.push(...rows.map((k: Record<string, unknown>) => ({ ...k, organizationId: membership.organization_id, current: false })));
+    }
+    return json({ keys });
+  }
   const keys = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(KEY_SELECT)} FROM api_keys
@@ -291,31 +362,48 @@ async function listMyKeys(ctx: RequestContext): Promise<Response> {
   return json({ keys });
 }
 
-const createKeyInput = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+const createKeyInput = z.object({ name: z.string().trim().min(1).max(100), organizationId: z.string().optional() }).strict();
 
 async function createMyKey(ctx: RequestContext): Promise<Response> {
-  const { name } = await parseBody(ctx.request, createKeyInput);
-  const made = await withOrg(ctx.principal.organizationId, (scope) =>
-    insertApiKey(scope, { name, personId: ctx.principal.personId }));
+  const { name, organizationId } = await parseBody(ctx.request, createKeyInput);
+  const access = ctx.principal.access;
+  let target: { organizationId: string; personId: string };
+  if (access) {
+    // Body, then header, then the only membership; never a guess among several.
+    const selected = organizationId ?? ctx.request.headers.get("x-dude-organization") ??
+      (access.memberships.length === 1 ? access.memberships[0]!.organization_id : undefined);
+    if (!selected) throw new HttpError(400, "organization_required", "organization_required");
+    const membership = access.memberships.find((m) => m.organization_id === selected);
+    if (!membership) throw new HttpError(403, "not_a_member", "not_a_member");
+    target = { organizationId: membership.organization_id, personId: membership.person_id };
+  } else {
+    if (organizationId && organizationId !== ctx.principal.organizationId) throw new HttpError(403, "not_a_member", "not_a_member");
+    target = { organizationId: ctx.principal.organizationId, personId: ctx.principal.personId };
+  }
+  const made = await withOrg(target.organizationId, (scope) => insertApiKey(scope, { name, personId: target.personId }));
   // The plaintext, this once; only its hash is kept.
   return json({ id: made.id, name, prefix: made.keyPrefix, key: made.key }, 201);
 }
 
 async function revokeMyKey(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
-  const result = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT id FROM api_keys WHERE person_id = ${ctx.principal.personId} AND revoked_at IS NULL
-      FOR UPDATE`) as Array<{ id: string }>;
-    if (!rows.some((k) => k.id === id)) return "missing";
-    // A verified person credential remains usable without an API key.
-    if (rows.length === 1 && ctx.principal.credentialKind !== "person") return "last";
-    await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${id}`;
-    return "revoked";
-  });
-  if (result === "missing") throw notFound(`key ${id} is not one of yours`);
-  if (result === "last") throw conflict("that is your only key; make another before revoking it");
-  return noContent();
+  const memberships = ctx.principal.access?.memberships ??
+    [{ organization_id: ctx.principal.organizationId, person_id: ctx.principal.personId }];
+  for (const membership of memberships) {
+    const result = await withOrg(membership.organization_id, async (scope) => {
+      const rows = (await scope.sql`
+        SELECT id FROM api_keys WHERE person_id = ${membership.person_id} AND revoked_at IS NULL
+        FOR UPDATE`) as Array<{ id: string }>;
+      if (!rows.some((k) => k.id === id)) return "missing";
+      // A verified person credential remains usable without an API key.
+      if (rows.length === 1 && ctx.principal.credentialKind !== "person") return "last";
+      await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${id}`;
+      return "revoked";
+    });
+    if (result === "last") throw conflict("that is your only key; make another before revoking it");
+    if (result === "revoked") return noContent();
+  }
+  throw notFound("key not found");
 }
 
 // ---------------------------------------------------------------------------
@@ -333,38 +421,12 @@ async function listPeople(ctx: RequestContext): Promise<Response> {
   return json({ people, you: ctx.principal.personId });
 }
 
-const inviteInput = z
-  .object({
-    name: z.string().trim().min(1).max(100),
-    email: z.string().trim().email().max(320),
-    role: personRoleSchema.default("member"),
-  })
-  .strict();
-
-/**
- * Invite someone: they become one of the organization's people, with a
- * key shown this once. There is no sign-in by email yet, so the key is
- * the invitation — the admin hands it over.
- */
-async function invite(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, inviteInput);
-  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
-    await requireAdmin(scope, ctx);
-    const made = await insertPerson(scope, input);
-    if (!made) return null;
-    await recordAs(scope, ctx, EventTypes.PersonInvited, { personId: made.personId, role: input.role });
-    return { person: await personDetail(scope, made.personId), key: made.key };
-  });
-  if (!out) throw conflict(`${input.email} is already a member`);
-  return json(out, 201);
-}
-
 const updatePersonInput = z
   .object({ name: z.string().trim().min(1).max(100), role: personRoleSchema })
   .partial()
   .strict();
 
-async function updatePerson(ctx: RequestContext): Promise<Response> {
+export async function updatePerson(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updatePersonInput);
   if (input.name === undefined && input.role === undefined) throw badRequest("nothing to change");
   const id = ctx.params.id!;
@@ -373,6 +435,9 @@ async function updatePerson(ctx: RequestContext): Promise<Response> {
     const rows = (await scope.sql`
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing" as const;
+    if (id === ctx.principal.personId && input.role === "member" && rows[0].role === "admin") {
+      throw conflict("you cannot demote yourself; ask another admin");
+    }
     if (input.role === "member" && rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) {
       return "lastAdmin" as const;
     }
@@ -422,7 +487,7 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
  * leave the organization's lists. Their row stays, so what they did keeps
  * their name; their tasks pass on (see `passOnTasks`).
  */
-async function removePerson(ctx: RequestContext): Promise<Response> {
+export async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
@@ -453,7 +518,29 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
   return noContent();
 }
 
+async function locate(ctx: RequestContext): Promise<Response> {
+  const memberships = ctx.principal.access?.memberships ??
+    [{ organization_id: ctx.principal.organizationId, person_id: ctx.principal.personId }];
+  for (const m of memberships) {
+    const found = await withOrg(m.organization_id, async ({ sql }) => {
+      const [row] = await sql`SELECT 'task' AS kind FROM tasks WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'project' FROM projects WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'epic' FROM epics WHERE id=${ctx.params.id!}
+        UNION ALL SELECT 'run' FROM runs WHERE id=${ctx.params.id!}
+          AND (session_id IS NULL OR session_role(session_id,${m.person_id}) IS NOT NULL)
+        UNION ALL SELECT 'brainstorm' FROM sessions WHERE id=${ctx.params.id!}
+          AND session_role(id,${m.person_id}) IS NOT NULL LIMIT 1`;
+      if (!row) return null;
+      const [organization] = await sql`SELECT id,name,slug FROM organizations WHERE id=${m.organization_id}`;
+      return { organization,kind:row.kind,id:ctx.params.id };
+    });
+    if (found) return json(found);
+  }
+  throw notFound("not found");
+}
+
 export function registerPeopleRoutes(router: Router): void {
+  router.get("/v1/locate/:id", locate);
   router.get("/v1/me", getMe);
   router.patch("/v1/me", updateMe);
   router.put("/v1/me/photo", uploadMyPhoto);
@@ -462,7 +549,9 @@ export function registerPeopleRoutes(router: Router): void {
   router.delete("/v1/me/keys/:id", revokeMyKey);
 
   router.get("/v1/people", listPeople);
-  router.post("/v1/people", invite);
+  router.post("/v1/people", () => {
+    throw new HttpError(410, "people now join by invitation link: POST /v1/organization/invitations", "route_retired");
+  });
   router.patch("/v1/people/:id", updatePerson);
   router.delete("/v1/people/:id", removePerson);
   router.publicRoute("GET", "/v1/people/:id/photo", getPhoto);

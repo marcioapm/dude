@@ -68,7 +68,8 @@ egress = ["file.example"]
       DUDE_CONFIG: path, DUDE_WEB_DIR: "/env", PORT: "4002", DUDE_AUTH_AUTO_CREATE: "false",
       DUDE_TOOLS_SERVICE: "off", DUDE_AGENT_EGRESS: "a.example, b.example,",
     });
-    expect([c.webDir, c.port, c.bool("DUDE_AUTH_AUTO_CREATE")]).toEqual(["/env", 4002, false]);
+    expect([c.webDir, c.port]).toEqual(["/env", 4002]);
+    expect(c.warnings).toContain("retired: DUDE_AUTH_AUTO_CREATE; remove it; ignored: people join by invitation");
     // The orchestrator's variables are parsed only by it; its file keys are still read and typed.
     expect(c.set().DUDE_TOOLS_SERVICE).toBe(true);
     expect(c.set().DUDE_AGENT_EGRESS).toEqual(["file.example"]);
@@ -125,7 +126,7 @@ describe("strictness", () => {
     ["[backend]\nport = \"3000\"\n", "backend.port (PORT)"],
     ["[backend]\nport = 3000.5\n", "backend.port (PORT)"],
     ["[backend]\nweb_dir = 1\n", "backend.web_dir (DUDE_WEB_DIR)"],
-    ["[auth]\nauto_create = \"yes\"\n", "auth.auto_create (DUDE_AUTH_AUTO_CREATE)"],
+    ["[auth]\nsuper_admins = \"yes\"\n", "auth.super_admins (DUDE_AUTH_SUPER_ADMINS)"],
     ["[s3]\nbucket = [\"b\"]\n", "s3.bucket (DUDE_S3_BUCKET)"],
     ["backend = 1\n", "backend"],
   ])("a wrong type is refused by name: %j", (text, name) => {
@@ -135,7 +136,8 @@ describe("strictness", () => {
   test("an invalid variable is refused by name", () => {
     expect(() => load({ PORT: "http" })).toThrow("PORT");
     expect(() => load({ PORT: "70000" })).toThrow("PORT");
-    expect(() => load({ DUDE_AUTH_AUTO_CREATE: "maybe" })).toThrow("DUDE_AUTH_AUTO_CREATE");
+    expect(load({ DUDE_AUTH_AUTO_CREATE: "maybe" }).warnings)
+      .toContain("retired: DUDE_AUTH_AUTO_CREATE; remove it; ignored: people join by invitation");
   });
 
   test("a non-finite rate is never resolved; it is the orchestrator's to refuse", () => {
