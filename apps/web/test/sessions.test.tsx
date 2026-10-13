@@ -1814,6 +1814,20 @@ describe("Try again hands each unread message on as the directive it replaces, n
     ]);
   });
 
+  test("a sweep's hand-over that names the directive it replaces, without Try again, stays a turn of its own", () => {
+    const ledger = [
+      ...failedWith(() => [], () => [ev("chat.message", { text: "ok", directiveId: "dir_a" }, by(YOU))]),
+      on(ev("run.created", { role: "brainstorm", publishes: false })),
+      on(ev("chat.message", { text: "ok", supersedes: "dir_a" }, by(YOU))),
+      on(ev("session.briefed", { text: "Brainstorm, …", supersedes: "dir_a" })),
+      settled("dir_a"),
+    ];
+    expect(humans(ledger)).toEqual([
+      [YOU, "ok", "dir_a", false, HAS_IT],
+      [YOU, "ok", null, false, null],
+    ]);
+  });
+
   // An aside held for the question the agent put to Ana, and a message the old harness accepted but never
   // read; the resume fails, and Try again hands the aside on as the fresh agent's briefing, the other queued.
   const heldThenRetried = () => [
