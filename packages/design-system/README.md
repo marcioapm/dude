@@ -1370,7 +1370,8 @@ here.
 - `PersonAvatarStack` overlaps by a fifth and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
   requester). A covered face's initials centre in the part of it that
-  shows, so none loses a letter. Past `max`, a "+N" chip in the same shape stands for the rest
+  shows, past the face on top and its ring (the online ring too), so none
+  loses a letter. Past `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
 
 ### Markdown

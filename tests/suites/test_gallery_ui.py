@@ -494,18 +494,31 @@ def test_a_needs_you_card_at_1440_keeps_its_epic_readable_beside_the_mark(galler
 
 
 def test_a_stack_of_initials_at_20px_never_covers_a_letter(gallery_page: Page, console_errors: list):
-    """The sidebar's 20px stacks: each covered face's initials sit right of the face on top of it and
-    its 1.5px bed ring. A text box carries about a pixel of side bearing, which may sit under the ring."""
+    """The sidebar's 20px stacks: each covered face's first letter's ink sits right of the face on top
+    of it and that face's outermost ring (the largest spread in its box-shadow: the bed gap, or the
+    online ring around it). The ink edge is the text box's left less the font's own left bearing."""
     gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
+    rings = []
     for stack in gallery_page.get_by_test_id("stack-initials-20").all():
-        cut = stack.evaluate("""s => {
+        faces = stack.evaluate("""s => {
+            const ring = (el) => Math.max(0, ...getComputedStyle(el).boxShadow.replace(/[a-z]+\\([^)]*\\)/gi, '')
+                .split(',').map(sh => Number((sh.match(/-?[\\d.]+px/g) ?? [])[3]?.slice(0, -2) ?? 0)));
+            const ctx = document.createElement('canvas').getContext('2d');
             const faces = [...s.children];
             return faces.slice(1).map((f, i) => {
-                const t = f.querySelector('span').getBoundingClientRect(), on = faces[i].getBoundingClientRect();
-                return {text: f.textContent, covered: on.right + 1.5 - t.left};
-            }).filter(x => x.covered > 1);
+                const span = f.querySelector('span'), t = span.getBoundingClientRect();
+                const cs = getComputedStyle(span);
+                ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+                const ink = t.left - ctx.measureText(span.textContent).actualBoundingBoxLeft;
+                const on = faces[i], r = ring(on);
+                return {text: f.textContent, ring: r, covered: on.getBoundingClientRect().right + r - ink};
+            });
         }""")
-        assert cut == [], cut
+        rings += [f["ring"] for f in faces]
+        cut = [f for f in faces if f["covered"] > 0]
+        assert cut == [], faces
+    # The fixture puts an online face on top of another, so the wider ring is the one measured.
+    assert max(rings) > 1.5, rings
     assert console_errors == []
 
 

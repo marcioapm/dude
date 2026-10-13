@@ -39,16 +39,23 @@
 }
 
 /* Online: a green ring outside the face, with a gap of the bed colour. */
+.root {
+  --av-online-ring: 3.5px;
+}
+.root[data-size="16"],
+.root[data-size="20"] {
+  --av-online-ring: 2.5px;
+}
 .online {
   box-shadow:
     0 0 0 2px var(--av-bed),
-    0 0 0 3.5px var(--ds-color-live);
+    0 0 0 var(--av-online-ring) var(--ds-color-live);
 }
 .root[data-size="16"].online,
 .root[data-size="20"].online {
   box-shadow:
     0 0 0 1.5px var(--av-bed),
-    0 0 0 2.5px var(--ds-color-live);
+    0 0 0 var(--av-online-ring) var(--ds-color-live);
 }
 
 .root[data-identity="0"] { --id-fg: var(--ds-identity-0-fg); --id-bg: var(--ds-identity-0-bg); }
@@ -103,8 +110,10 @@
 
 /*
  * A stack: overlap by a fifth, earlier faces on top, a gap of the bed colour
- * between them. A covered face's initials centre in the part that shows, so
- * the face and ring on top never cut their first letter.
+ * between them. A covered face's initials centre in the part that shows:
+ * past the overlap and the outer ring of the face on top (its 1.5px bed gap,
+ * or its online ring). Initials wider than that part start at its edge
+ * (`safe`), so the face and ring on top never cut their first letter.
  */
 .stack {
   display: inline-flex;
@@ -116,7 +125,11 @@
   margin-left: calc(var(--av-size) * -0.2);
 }
 .stack > * + * > .initials {
-  translate: calc(var(--av-size) * 0.1) 0;
+  justify-self: safe center;
+  margin-left: calc(var(--av-size) * 0.2 + 1.5px);
+}
+.stack > .online + * > .initials {
+  margin-left: calc(var(--av-size) * 0.2 + var(--av-online-ring));
 }
 .stack > .root:not(.online) {
   box-shadow: 0 0 0 1.5px var(--av-bed);

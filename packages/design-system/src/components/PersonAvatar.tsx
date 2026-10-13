@@ -135,7 +135,7 @@ export function PersonAvatarStack({ people, size = 20, max = 4, agents, classNam
         );
       })}
       {more > 0 ? (
-        <span className={cx(styles["root"], styles["overflow"])} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
+        <span className={cx(styles["root"], styles["overflow"])} data-size={size} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
           <span className={styles["initials"]}>+{more}</span>
         </span>
       ) : null}
