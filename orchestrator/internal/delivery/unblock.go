@@ -180,16 +180,22 @@ func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by st
 // saying why (task.auto_start_cancelled): "owner", "started",
 // "owner_changed", "unblocked_by_removal", "failed". Nothing when none is set.
 func EndAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, why, actorType, actorID string) error {
-	_, err := endAutoStartTx(ctx, tx, org, taskID, why, actorType, actorID, nil)
+	_, err := endAutoStartTx(ctx, tx, org, taskID, "", why, actorType, actorID, nil)
 	return err
 }
 
-// endAutoStartTx is EndAutoStartTx with more for the event's payload; it
-// says whether there was a request to end.
-func endAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, why, actorType, actorID string, extra map[string]any) (bool, error) {
+// endAutoStartTx is EndAutoStartTx with more for the event's payload, and
+// limited to one request generation when generation is not ""; it says
+// whether there was a request to end.
+func endAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, generation, why, actorType, actorID string, extra map[string]any) (bool, error) {
+	q := `DELETE FROM task_auto_starts a USING tasks t WHERE a.task_id = $1 AND t.id = a.task_id`
+	args := []any{taskID}
+	if generation != "" {
+		q += ` AND a.generation = $2::uuid`
+		args = append(args, generation)
+	}
 	var how, projectID string
-	err := tx.QueryRow(ctx, `DELETE FROM task_auto_starts a USING tasks t WHERE a.task_id = $1 AND t.id = a.task_id
-		RETURNING a.how, t.project_id`, taskID).Scan(&how, &projectID)
+	err := tx.QueryRow(ctx, q+` RETURNING a.how, t.project_id`, args...).Scan(&how, &projectID)
 	if db.IsNotFound(err) {
 		return false, nil
 	}
@@ -243,9 +249,6 @@ func (a *AutoStarts) Sweep(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		if generation == "" {
-			continue
-		}
 		if ferr := a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error { return a.notFired(ctx, tx, d.Org, d.TaskID, generation, err) }); ferr != nil {
 			return 0, ferr
 		}
@@ -264,14 +267,14 @@ const fireRetryAfter = 5 * time.Second
 // notFired settles a fire that failed with cause. The start's own refusal
 // ends the request (failed); a transient failure leaves it due for a later
 // sweep; anything else does too, counted, and ends it at maxFireAttempts.
+// Only the claimed generation is settled: an owner reset is a different
+// request, and every write below is scoped to generation as well as locked.
 func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID, generation string, cause error) error {
 	if generation == "" {
 		return nil
 	}
-	// Hold the claimed request through settlement; an owner reset is a different request.
-	var current string
-	err := tx.QueryRow(ctx, `SELECT generation::text FROM task_auto_starts
-		WHERE task_id = $1 AND generation = $2::uuid FOR UPDATE`, taskID, generation).Scan(&current)
+	err := tx.QueryRow(ctx, `SELECT 1 FROM task_auto_starts
+		WHERE task_id = $1 AND generation = $2::uuid FOR UPDATE`, taskID, generation).Scan(new(int))
 	if db.IsNotFound(err) {
 		return nil
 	}
@@ -279,24 +282,25 @@ func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID, gener
 		return err
 	}
 	if startRefused(cause) {
-		return a.failed(ctx, tx, org, taskID, cause)
+		return a.failed(ctx, tx, org, taskID, generation, cause)
 	}
 	if transient(cause) {
 		_, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = now() + make_interval(secs => $2)
-			WHERE task_id = $1 AND due_at IS NOT NULL`, taskID, fireRetryAfter.Seconds())
+			WHERE task_id = $1 AND generation = $3::uuid AND due_at IS NOT NULL`, taskID, fireRetryAfter.Seconds(), generation)
 		return err
 	}
 	var attempts int
 	err = tx.QueryRow(ctx, `UPDATE task_auto_starts SET fire_attempts = fire_attempts + 1,
 			due_at = now() + make_interval(secs => $2 * (fire_attempts + 1))
-		WHERE task_id = $1 AND due_at IS NOT NULL RETURNING fire_attempts`, taskID, fireRetryAfter.Seconds()).Scan(&attempts)
+		WHERE task_id = $1 AND generation = $3::uuid AND due_at IS NOT NULL RETURNING fire_attempts`,
+		taskID, fireRetryAfter.Seconds(), generation).Scan(&attempts)
 	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil || attempts < maxFireAttempts {
 		return err
 	}
-	return a.failed(ctx, tx, org, taskID, cause)
+	return a.failed(ctx, tx, org, taskID, generation, cause)
 }
 
 // startRefused says err is the start's own deterministic refusal, which
@@ -456,9 +460,9 @@ func lastUnblock(ctx context.Context, tx pgx.Tx, taskID string) (string, *int, e
 // failed ends a request that will not fire (task.auto_start_cancelled, why
 // "failed", with the error), and says so in the task's Chat, so none is
 // left standing to fire unexpectedly on some later merge.
-func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID string, cause error) error {
+func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID, generation string, cause error) error {
 	msg := clip(cause.Error(), 500)
-	ended, err := endAutoStartTx(ctx, tx, org, taskID, AutoStartEndFailed, "", "", map[string]any{"error": msg})
+	ended, err := endAutoStartTx(ctx, tx, org, taskID, generation, AutoStartEndFailed, "", "", map[string]any{"error": msg})
 	if err != nil || !ended {
 		return err
 	}

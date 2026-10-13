@@ -259,6 +259,82 @@ func TestStaleAutoStartSettlementLeavesReplacementUntouched(t *testing.T) {
 	}
 }
 
+// A stale settlement that reads its generation while the owner's reset is
+// still uncommitted waits for it, then leaves the replacement alone, whether
+// the lock or the writes' own generation predicate is what stops it.
+func TestStaleAutoStartSettlementRacingAResetLeavesReplacementUntouched(t *testing.T) {
+	for _, cause := range []error{errors.New("unknown start failure"), PolicyError{errors.New("invalid policy")}, &pgconn.PgError{Code: "40001"}} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			w, in := newRelWorld(t, 1)
+			ctx := context.Background()
+			w.exec(`INSERT INTO task_auto_starts (task_id, organization_id, how, set_by_person, due_at)
+				VALUES ($1||'_1', $1, 'deliver', 'per_'||$1, now())`)
+			var stale string
+			if err := w.owner.QueryRow(ctx, `SELECT generation::text FROM task_auto_starts WHERE task_id = $1`, w.id(1)).Scan(&stale); err != nil {
+				t.Fatal(err)
+			}
+			var resetPID uint32
+			if err := w.owner.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&resetPID); err != nil {
+				t.Fatal(err)
+			}
+			reset, err := w.owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reset.Rollback(ctx)
+			type request struct {
+				how, generation string
+				setAt, dueAt    time.Time
+				attempts        int
+			}
+			var want request
+			// due_at stays set, so a write scoped by task alone would match the replacement.
+			if err := reset.QueryRow(ctx, `UPDATE task_auto_starts SET how = 'talk', generation = gen_random_uuid(),
+				set_at = now(), due_at = now() + interval '1 hour', fire_attempts = 0 WHERE task_id = $1
+				RETURNING how, generation::text, set_at, due_at, fire_attempts`, w.id(1)).Scan(
+				&want.how, &want.generation, &want.setAt, &want.dueAt, &want.attempts); err != nil {
+				t.Fatal(err)
+			}
+			a := &AutoStarts{}
+			settled := make(chan error, 1)
+			go func() {
+				settled <- in(func(tx pgx.Tx) error { return a.notFired(ctx, tx, w.org, w.id(1), stale, cause) })
+			}()
+			deadline := time.Now().Add(10 * time.Second)
+			for waiting := false; !waiting; {
+				if err := in(func(tx pgx.Tx) error {
+					return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid)))`,
+						resetPID).Scan(&waiting)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if !waiting && time.Now().After(deadline) {
+					t.Fatal("the stale settlement never waited on the reset")
+				}
+			}
+			if err := reset.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-settled; err != nil {
+				t.Fatal(err)
+			}
+			var got request
+			if err := w.owner.QueryRow(ctx, `SELECT how, generation::text, set_at, due_at, fire_attempts
+				FROM task_auto_starts WHERE task_id = $1`, w.id(1)).Scan(&got.how, &got.generation, &got.setAt, &got.dueAt, &got.attempts); err != nil {
+				t.Fatalf("replacement: %v", err)
+			}
+			if got != want {
+				t.Fatalf("stale settlement changed replacement: want %+v got %+v", want, got)
+			}
+			var notices int
+			if err := w.owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE task_id = $1
+				AND (event_type = 'task.auto_start_cancelled' OR payload->>'about' = 'auto_start_failed')`, w.id(1)).Scan(&notices); err != nil || notices != 0 {
+				t.Fatalf("failure events: %d, %v", notices, err)
+			}
+		})
+	}
+}
+
 func TestAutoStartFireBeforeClaimDoesNotSettle(t *testing.T) {
 	w, in := newRelWorld(t, 1)
 	ctx := context.Background()
