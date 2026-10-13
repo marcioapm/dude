@@ -40,7 +40,7 @@ Do not confuse the classic `workflow` scope with the fine-grained Workflows perm
 
 ## GitHub App
 
-An organization can connect dude as a GitHub App instead of with a token (Organization settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
+An organization can connect dude as a GitHub App instead of with a token (Organisation settings → GitHub → Connect GitHub → **GitHub App**). Pull requests are then opened by the App (`<slug>[bot]`), not by whoever owns a token, and the agents' commits are authored and committed by the App's bot, `<slug>[bot] <<id>+<slug>[bot]@users.noreply.github.com>`. A token keeps working as before; the choice is per organization.
 
 ### Creating the App
 
