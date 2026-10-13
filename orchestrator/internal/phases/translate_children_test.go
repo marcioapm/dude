@@ -681,48 +681,103 @@ func TestAnOpenCodeAskThatArrivesLateHoldsNothing(t *testing.T) {
 	}
 }
 
-// The scripted subagent-ask implementer on the fake lux (lux-fake's
-// `subagent ask`, as lux plays it on OpenCode): a child with lux's ids, its
-// read done, its bash call held on an ask nothing answers.
-func TestTheScriptedSubagentAskWaitsOnBash(t *testing.T) {
-	fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour {
-		return fakelux.Behaviour{Hang: true, Subagent: "subagent ask"}
-	})
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(func() { srv.Close(); fake.Close() })
-	lr, err := lux.New(srv.URL, "k").Submit(context.Background(), lux.Spec{Name: "t", Image: lux.Image{Ref: "img"},
-		Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "subagent-ask")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var recs []map[string]any
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		recs = fake.Records(lr.ID)
-		if slices.ContainsFunc(recs, func(r map[string]any) bool { return r["type"] == "opencode.permission" }) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the subagent never asked")
-		}
-	}
-	w := newHarnessWorld(t)
-	w.feed(recs...)
-	var session string
-	for _, r := range recs {
-		if r["type"] == "lux.session" {
-			session = r["data"].(map[string]any)["sessionId"].(string)
-		}
-	}
-	got := w.children()["toolu_task1"]
-	on, _ := got["waitingOn"].(map[string]any)
-	if got["childId"] != session+"_child1" || on["permission"] != "bash" || on["patterns"].([]any)[0] != "cat /etc/hostname" {
-		t.Errorf("children %v", w.children())
-	}
-	events := w.events()
-	if calls := ofType(events, evChildToolCompleted); len(calls) != 1 || calls[0].Payload["callId"] != "toolu_read1" {
-		t.Errorf("child calls done %v", calls)
-	}
-	if ofType(events, evAgentWarning) == nil || len(ofType(events, evChildEnded)) != 0 {
-		t.Errorf("events %v", types(events))
+// lux-fake's subagent lines as a real lux relayed them (lux-fake under
+// lux's opencode adapter, testdata/luxfake-subagent*.jsonl), and the same
+// lines as the fake lux plays them: on the wire a part's input is a JSON
+// string and a task's model is {modelID, providerID}; recorded, each is
+// the same child life with lux-fake's ids. lux answers the ask itself, so
+// it holds nothing and the child goes on to its end.
+func TestLuxFakesSubagentIsRecordedTheSameFromRealLuxAndTheFake(t *testing.T) {
+	for line, file := range map[string]string{"subagent": "luxfake-subagent.jsonl", "subagent ask": "luxfake-subagent-ask.jsonl"} {
+		t.Run(line, func(t *testing.T) {
+			real := recorded(t, file)
+			for _, r := range real {
+				d := r["data"].(map[string]any)
+				switch r["type"] {
+				case "opencode.part":
+					if _, ok := d["input"].(string); !ok {
+						t.Errorf("a part's input on the wire is %T, not a JSON string: %v", d["input"], d)
+					}
+				case "opencode.task":
+					if m, _ := d["model"].(map[string]any); len(m) != 2 || m["modelID"] != "lux-fake" || m["providerID"] != "lux-fake" {
+						t.Errorf("a task's model on the wire is %v, not {modelID, providerID}", d["model"])
+					}
+				}
+			}
+			const child = "ses_fake-1_child1"
+			from := func(t *testing.T, recs []map[string]any) ([]harnessEvent, map[string]map[string]any) {
+				w := newHarnessWorld(t)
+				w.feed(recs...)
+				return w.events(), w.children()
+			}
+			events, children := from(t, real)
+			want := []map[string]any{
+				{"type": evChildStarted, "childId": child, "callId": "toolu_task1", "kind": "task", "title": "fake subagent (@general subagent)",
+					"model": "lux-fake/lux-fake"},
+				{"type": evChildToolCalled, "childId": child, "callId": "toolu_read1", "parentCallId": "toolu_task1", "tool": "read",
+					"input": map[string]any{"filePath": "a.txt"}},
+				{"type": evChildToolCompleted, "childId": child, "callId": "toolu_read1", "parentCallId": "toolu_task1", "tool": "read",
+					"status": "completed", "output": "<path>a.txt</path>\n<content>\n1: hello\n</content>"},
+				{"type": evChildToolCalled, "childId": child, "callId": "toolu_bash1", "parentCallId": "toolu_task1", "tool": "bash",
+					"input": map[string]any{"command": "cat /etc/hostname", "description": "Read the hostname"}},
+			}
+			if line == "subagent ask" {
+				want = append(want, map[string]any{"type": evChildWaiting, "childId": child, "callId": "toolu_task1", "permission": "bash",
+					"patterns": []any{"cat /etc/hostname"}, "held": false, "childCallId": "toolu_bash1"})
+			}
+			want = append(want,
+				map[string]any{"type": evChildToolCompleted, "childId": child, "callId": "toolu_bash1", "parentCallId": "toolu_task1", "tool": "bash",
+					"status": "completed", "output": "fakehost\n"},
+				map[string]any{"type": evChildMessage, "childId": child, "callId": "toolu_task1", "text": "the child read a.txt: hello"},
+				map[string]any{"type": evChildEnded, "childId": child, "callId": "toolu_task1", "status": "completed",
+					"summary": "the child read a.txt: hello"})
+			sameLife(t, childLife(events), want)
+			noChildCallAsTheParents(t, events)
+			if line == "subagent ask" {
+				if w := ofType(events, evAgentWarning); len(w) != 1 || !strings.Contains(fmt.Sprint(w[0].Payload["message"]), "lux allowed it") {
+					t.Errorf("warnings %v", w)
+				}
+			}
+			if len(children) != 0 {
+				t.Errorf("an ended child is still the Run's: %v", children)
+			}
+
+			fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true, Subagent: line} })
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(func() { srv.Close(); fake.Close() })
+			lr, err := lux.New(srv.URL, "k").Submit(context.Background(), lux.Spec{Name: "t", Image: lux.Image{Ref: "img"},
+				Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, line)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recs []map[string]any
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				recs = fake.Records(lr.ID)
+				if slices.ContainsFunc(recs, func(r map[string]any) bool {
+					d, _ := r["data"].(map[string]any)
+					return r["type"] == "opencode.task" && d["status"] == "completed"
+				}) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the fake lux's subagent never ended")
+				}
+			}
+			var session string
+			for _, r := range recs {
+				if r["type"] == "lux.session" {
+					session = r["data"].(map[string]any)["sessionId"].(string)
+				}
+			}
+			fakeEvents, _ := from(t, recs)
+			got := childLife(fakeEvents)
+			for _, e := range got {
+				if e["childId"] != "ses_"+session+"_child1" {
+					t.Errorf("the fake's child %v, want ses_%s_child1", e["childId"], session)
+				}
+				e["childId"] = child
+			}
+			sameLife(t, got, want)
+		})
 	}
 }

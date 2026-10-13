@@ -3,7 +3,9 @@ package fakelux
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"time"
 	"unicode/utf8"
 )
 
@@ -121,7 +123,7 @@ func (s *Server) opencodeChild(run *Run, st ChildStep) {
 		}
 	case "message":
 		oc("message", map[string]any{"sessionID": st.ChildID, "messageID": "msg_" + st.ChildID, "role": "assistant", "text": st.Text,
-			"cost": 0.002, "tokens": map[string]any{"input": 5, "output": 4, "cache": map[string]any{"read": 7979, "write": 137}}})
+			"cost": 0.002, "tokens": map[string]any{"input": 5, "output": 4, "reasoning": 0, "cacheRead": 7979, "cacheWrite": 137}})
 	case "wait":
 		// lux says an ask nothing answered twice, together: the record, and
 		// a warning for a person.
@@ -256,33 +258,51 @@ func (s *Server) codexChild(run *Run, st ChildStep) {
 	}
 }
 
-// playSubagent is lux-fake's script line `subagent` or `subagent ask`, as
-// lux plays it: a task subagent, ids as lux's (ses_<parent>_child<n>,
-// toolu_task<n>, toolu_read<n>, toolu_bash<n>), that reads a file and runs
-// a command, then ends; with ask, it asks permission bash for "cat
-// /etc/hostname" before its command and waits for good. Callers hold s.mu.
+// playSubagent is lux-fake's script line `subagent` or `subagent ask` as
+// lux relays it from lux-fake's OpenCode bus (lux cmd/lux-fake/subagent.go
+// and internal/adapter/opencode_children.go), record for record: no ACP
+// call for the task (lux-fake says none), a child that reads a.txt and
+// runs bash, then the task's completion. Ids are lux-fake's:
+// ses_<parent>_child<n>, toolu_task<n>, toolu_read<n>, toolu_bash<n>. With
+// ask, the bash call asks permission bash for "cat /etc/hostname"; lux
+// answers a child's ask itself, so it is recorded allowed, with its
+// warning, and the call completes. Callers hold s.mu.
 func (s *Server) playSubagent(run *Run, line string) {
 	if line == "" {
 		return
 	}
 	run.children++
 	n := run.children
-	step := func(st ChildStep) {
-		st.CallID, st.ChildID = fmt.Sprintf("toolu_task%d", n), fmt.Sprintf("%s_child%d", run.SessionID, n)
-		st.Title, st.AgentType = "Read the hostname", "general"
-		s.childStep(run, st)
+	parent := run.SessionID
+	child, task := fmt.Sprintf("ses_%s_child%d", parent, n), fmt.Sprintf("toolu_task%d", n)
+	read, bash, msg := fmt.Sprintf("toolu_read%d", n), fmt.Sprintf("toolu_bash%d", n), fmt.Sprintf("msg_%s_%d", parent, n)
+	now := time.Now().UnixMilli()
+	oc := func(typ string, data map[string]any) { s.recordEvent(run, "opencode."+typ, data) }
+	model := map[string]any{"modelID": "lux-fake", "providerID": "lux-fake"}
+	part := func(call, tool, status, input string, done map[string]any) {
+		p := map[string]any{"sessionID": child, "messageID": msg, "callID": call, "tool": tool, "status": status, "input": input,
+			"time": map[string]any{"start": now}}
+		if done != nil {
+			p["time"] = map[string]any{"start": now, "end": now}
+			maps.Copy(p, done)
+		}
+		oc("part", p)
 	}
-	step(ChildStep{Op: "start"})
-	step(ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_read%d", n), Tool: "read", Input: map[string]any{"filePath": "/etc/hostname"},
-		Done: true, Output: "box"})
-	bash := ChildStep{Op: "tool", ToolCallID: fmt.Sprintf("toolu_bash%d", n), Tool: "bash", Input: map[string]any{"command": "cat /etc/hostname"}}
+	readIn, bashIn := `{"filePath":"a.txt"}`, `{"command":"cat /etc/hostname","description":"Read the hostname"}`
+
+	oc("session", map[string]any{"id": child, "parentID": parent, "title": "fake subagent (@general subagent)", "createdAt": now})
+	oc("task", map[string]any{"sessionID": parent, "callID": task, "childSessionID": child, "model": model, "status": "running"})
+	part(read, "read", "running", readIn, nil)
+	part(read, "read", "completed", readIn, map[string]any{"title": "a.txt", "output": "<path>a.txt</path>\n<content>\n1: hello\n</content>"})
+	part(bash, "bash", "running", bashIn, nil)
 	if line == "subagent ask" {
-		step(bash)
-		step(ChildStep{Op: "wait", ToolCallID: bash.ToolCallID, Permission: "bash", Patterns: []string{"cat /etc/hostname"}})
-		return
+		oc("permission", map[string]any{"sessionID": child, "permissionID": fmt.Sprintf("per_fake%d", n), "permission": "bash",
+			"patterns": []any{"cat /etc/hostname"}, "callID": bash, "answered": "allow"})
+		s.recordEvent(run, "lux.warning", map[string]any{"message": fmt.Sprintf(
+			"opencode: a subagent session %s asked for bash on cat /etc/hostname; lux allowed it", child)})
 	}
-	bash.Done, bash.Output = true, "box"
-	step(bash)
-	step(ChildStep{Op: "message", Text: "The hostname is box."})
-	step(ChildStep{Op: "end", Text: "The hostname is box."})
+	part(bash, "bash", "completed", bashIn, map[string]any{"title": "Read the hostname", "output": "fakehost\n"})
+	oc("message", map[string]any{"sessionID": child, "messageID": msg, "role": "assistant", "text": "the child read a.txt: hello",
+		"cost": 0.001, "tokens": map[string]any{"input": 10, "output": 5, "reasoning": 0, "cacheRead": 2, "cacheWrite": 1}, "completed": now})
+	oc("task", map[string]any{"sessionID": parent, "callID": task, "childSessionID": child, "model": model, "status": "completed"})
 }

@@ -104,33 +104,38 @@ def test_a_child_session_is_recorded_and_drawn_under_its_call(page: Page, web_ur
     assert console_errors == []
 
 
-def test_the_scripted_subagent_waits_on_a_permission_nothing_answers(page: Page, web_url: str, client: ApiClient, org: dict,
-                                                                    forge_project: dict, owner_dsn: str, console_errors: list):
-    """fake/subagent-ask, lux-fake's `subagent ask` as lux plays it on
-    OpenCode: a child with lux's ids reads a file, then its bash call asks
-    permission bash for "cat /etc/hostname", relayed with lux's warning, and
-    nothing answers. The Run's open task call is kept busy by the child; its
-    thread waits."""
+def test_the_scripted_subagents_ask_is_answered_by_lux_and_its_child_ends(page: Page, web_url: str, client: ApiClient, org: dict,
+                                                                         forge_project: dict, owner_dsn: str, console_errors: list):
+    """fake/subagent-ask, lux-fake's `subagent ask` as lux relays it: a
+    child with lux-fake's ids reads a file, its bash call asks permission
+    bash for "cat /etc/hostname", lux allows it and warns, and the child
+    runs the command and ends. The ask holds nothing; the thread folds."""
     models = {**forge_project["agentModels"], **client.on_models({"implementer": "fake/subagent-ask"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], "Delegate and wait")
+    task = client.create_task(forge_project["id"], "Delegate and ask")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
                      timeout=60, message="the implementer never ran")
-    waiting = wait_until(lambda: [e for e in _events(client, run["id"]) if e["eventType"] == "agent.child.waiting"],
-                         timeout=30, message="the child's ask never reached the ledger")
-    p = waiting[0]["payload"]
-    assert p["permission"] == "bash" and p["patterns"] == ["cat /etc/hostname"] and p["held"] is True, p
+    def ended():
+        events = _events(client, run["id"], "agent.child.")
+        return events if any(e["eventType"] == "agent.child.ended" for e in events) else None
+
+    child = wait_until(ended, timeout=30, message="the child never ended")
+    assert [e["eventType"] for e in child] == [
+        "agent.child.started", "agent.child.tool.called", "agent.child.tool.completed", "agent.child.tool.called",
+        "agent.child.waiting", "agent.child.tool.completed", "agent.child.message", "agent.child.ended"], child
+    p = child[4]["payload"]
+    assert (p["permission"], p["patterns"], p["held"], p["answered"], p["childCallId"]) == \
+        ("bash", ["cat /etc/hostname"], False, "allow", "toolu_bash1"), p
     assert p["callId"] == "toolu_task1" and p["childId"].endswith("_child1"), p
-    assert any(e["eventType"] == "agent.warning" for e in _events(client, run["id"]))
-    children = query(owner_dsn, "SELECT children FROM runs WHERE id = %s", (run["id"],))[0]["children"]
-    assert children["toolu_task1"]["waitingOn"] == {"permission": "bash", "patterns": ["cat /etc/hostname"]}, children
+    warnings = [e["payload"]["message"] for e in _events(client, run["id"]) if e["eventType"] == "agent.warning"]
+    assert any("lux allowed it" in w for w in warnings), warnings
+    assert query(owner_dsn, "SELECT children FROM runs WHERE id = %s", (run["id"],))[0]["children"] == {}
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     thread = page.get_by_test_id("child-thread")
-    expect(thread).to_have_attribute("data-waiting", "true", timeout=30_000)
-    expect(thread.get_by_test_id("chat-thread-waiting")).to_contain_text("on a permission")
-    expect(thread.get_by_test_id("child-waiting-notice")).to_contain_text(
-        "Waiting on a permission: bash for cat /etc/hostname. Nothing in this Run can answer it.")
+    expect(thread).to_have_attribute("data-status", "completed", timeout=30_000)
+    expect(thread).not_to_have_attribute("data-waiting", "true")
+    expect(thread).to_contain_text("the child read a.txt: hello")
     assert console_errors == []

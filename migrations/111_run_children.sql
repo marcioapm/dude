@@ -24,8 +24,8 @@ CREATE OR REPLACE FUNCTION run_stalled(r runs) RETURNS boolean LANGUAGE sql STAB
 $$;
 
 -- The scripted agent's fake/subagent and fake/subagent-ask (its
--- implementer starts a task subagent, which with -ask waits on a
--- permission nothing answers) are test models a tier may request.
+-- implementer starts a task subagent, which with -ask asks a permission
+-- lux answers) are test models a tier may request.
 ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
 ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
   CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',

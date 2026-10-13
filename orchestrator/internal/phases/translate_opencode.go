@@ -98,9 +98,9 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 		}
 		var tokens map[string]any
 		if tk := e.Tokens; tk != nil {
-			tokens = map[string]any{"input": tk.Input, "output": tk.Output, "cacheRead": tk.Cache.Read, "cacheWrite": tk.Cache.Write}
-			c.Tokens.Input += tk.Input + tk.Cache.Read
-			c.Tokens.Cached += tk.Cache.Read
+			tokens = map[string]any{"input": tk.Input, "output": tk.Output, "cacheRead": tk.CacheRead, "cacheWrite": tk.CacheWrite}
+			c.Tokens.Input += tk.Input + tk.CacheRead
+			c.Tokens.Cached += tk.CacheRead
 			c.Tokens.Output += tk.Output
 		}
 		return t.childMessage(ctx, tx, s, c, e.Text, e.Cost, tokens, e.Truncated)
@@ -132,13 +132,12 @@ type opencodeRecord struct {
 	Error          string        `json:"error"`
 	Text           string        `json:"text"`
 	Cost           float64       `json:"cost"`
-	Tokens         *struct {
-		Input  int64 `json:"input"`
-		Output int64 `json:"output"`
-		Cache  struct {
-			Read  int64 `json:"read"`
-			Write int64 `json:"write"`
-		} `json:"cache"`
+	// lux flattens OpenCode's tokens.cache.{read,write} (proto.OpenCodeTokens).
+	Tokens *struct {
+		Input      int64 `json:"input"`
+		Output     int64 `json:"output"`
+		CacheRead  int64 `json:"cacheRead"`
+		CacheWrite int64 `json:"cacheWrite"`
 	} `json:"tokens"`
 	Permission string   `json:"permission"`
 	Patterns   []string `json:"patterns"`

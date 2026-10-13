@@ -173,7 +173,10 @@ it again.
   `task`. A part's `input` is its JSON cut at 300 bytes: recorded as the
   object when it still parses, else as the string, with `truncated`. A
   task's `model` is OpenCode's `{modelID, providerID}`, recorded as
-  `providerID/modelID`. lux relays an ask nothing answered with a
+  `providerID/modelID`. A message's `tokens` are lux's flattened
+  `{input, output, reasoning, cacheRead, cacheWrite}`. lux answers a
+  child's ask itself (`answered: allow`, with a `lux.warning`); one it
+  could not answer (`answered: none`) is relayed with a
   `lux.warning`, after child records that may already follow it. An ask
   is held only while nothing answered it and the call it names is still
   open. An ask for a call already completed (or of a child already

@@ -131,13 +131,17 @@ const ConductorQuestion = `{"question":"Make it a follow-up task?","choices":["Y
 
 // SubagentModel's implementer starts a task subagent (lux-fake's
 // `subagent`: it reads a file and runs a command, then ends), and keeps
-// working; SubagentAskModel's subagent asks a permission nothing answers
-// (`subagent ask`: bash for "cat /etc/hostname") before its command, and
-// never ends. Both hang: a Run whose child a test watches.
+// working; SubagentAskModel's subagent first asks permission bash for "cat
+// /etc/hostname" (`subagent ask`), which lux answers itself and relays
+// with a warning. Both hang: a Run whose child a test watches. On OpenCode
+// they run under lux's opencode adapter, the one that relays children.
 const (
 	SubagentModel    = "fake/subagent"
 	SubagentAskModel = "fake/subagent-ask"
 )
+
+// Subagents says whether model is one of the subagent models.
+func Subagents(model string) bool { return model == SubagentModel || model == SubagentAskModel }
 
 // AskSeveralModel is AskModel asking Questions: several in one ask_person.
 const AskSeveralModel = "fake/ask-several"
@@ -389,7 +393,7 @@ func For(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
 	}
-	if (model == SubagentModel || model == SubagentAskModel) && phase == "implement" {
+	if Subagents(model) && phase == "implement" {
 		line := "subagent"
 		if model == SubagentAskModel {
 			line = "subagent ask"
