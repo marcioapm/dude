@@ -143,7 +143,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, refuse("no size named %s; you may move to: %s", in.Size, choices.List())
 	}
 	target := choices.Named(found)
-	names := delivery.LoadPoolNames(ctx, c.env.lux)
+	names := delivery.PoolNamesOf(pools)
 	// A refusal once both sizes are known is recorded as machine.requested
 	// with refused and no moveId, so who asked for what has one source.
 	refusedAs := func(msg, code, recorded string) error {

@@ -38,23 +38,14 @@ type MoveRefusal struct {
 // list (nil when unread) and its record of the Run.
 func RefusalOf(le *lux.Error, size Machine, pools []lux.Pool, run lux.Run) MoveRefusal {
 	out := MoveRefusal{Status: le.Status, Code: le.Code, Size: size, luxMessage: le.Message}
-	names := PoolNames{ByID: map[string]string{}}
 	poolID := ""
 	if size.PoolID != nil {
 		poolID = *size.PoolID
 	}
-	for _, p := range pools {
-		names.ByID[p.ID] = p.Name
-		if p.IsDefault {
-			names.Default = p.Name
-			if poolID == "" {
-				poolID = p.ID
-			}
-		}
+	if i := slices.IndexFunc(pools, func(p lux.Pool) bool { return p.IsDefault }); poolID == "" && i >= 0 {
+		poolID = pools[i].ID
 	}
-	if out.Size.Pool == nil {
-		names.Name(&out.Size)
-	}
+	PoolNamesOf(pools).Name(&out.Size)
 	out.OtherPool = poolID != "" && run.PoolID != "" && poolID != run.PoolID
 	if i := slices.IndexFunc(pools, func(p lux.Pool) bool { return p.ID == poolID }); i >= 0 {
 		pool := pools[i]

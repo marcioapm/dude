@@ -170,21 +170,25 @@ func LoadPoolNames(ctx context.Context, c lux.Client) PoolNames {
 // LoadPools reads lux's pools once, with their names; lux out of reach is
 // neither.
 func LoadPools(ctx context.Context, c lux.Client) ([]lux.Pool, PoolNames) {
+	var pools []lux.Pool
+	if c != nil {
+		if read, err := c.Pools(ctx); err == nil {
+			pools = read
+		}
+	}
+	return pools, PoolNamesOf(pools)
+}
+
+// PoolNamesOf names pools already read; nil names none.
+func PoolNamesOf(pools []lux.Pool) PoolNames {
 	out := PoolNames{ByID: map[string]string{}}
-	if c == nil {
-		return nil, out
-	}
-	pools, err := c.Pools(ctx)
-	if err != nil {
-		return nil, out
-	}
 	for _, p := range pools {
 		out.ByID[p.ID] = p.Name
 		if p.IsDefault {
 			out.Default = p.Name
 		}
 	}
-	return pools, out
+	return out
 }
 
 // Name fills m.Pool from the names when lux named its pool.
