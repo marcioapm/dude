@@ -9,6 +9,7 @@
  * were written for.
  */
 
+import { afterEach } from "bun:test";
 import { Window } from "happy-dom";
 
 const target = globalThis as Record<string, unknown>;
@@ -31,3 +32,9 @@ if (!("document" in target)) {
   target["document"] = window.document;
 }
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// ThemeProvider stamps the root and leaves it stamped on unmount; a later
+// test that reads [data-theme] from its own panes must not see the last one's.
+afterEach(() => {
+  for (const a of ["data-theme", "data-density", "data-reduced-motion"]) document.documentElement.removeAttribute(a);
+});

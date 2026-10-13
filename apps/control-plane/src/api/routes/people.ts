@@ -125,7 +125,7 @@ export async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promis
   const rows = (await scope.sql`
     SELECT role FROM people WHERE id = ${ctx.principal.personId} AND removed_at IS NULL`) as Array<{ role: string }>;
   if (rows[0]?.role !== "admin") {
-    throw new HttpError(403, "only an organization admin can manage its members", "not_admin");
+    throw new HttpError(403, "only an organisation admin can manage its members", "not_admin");
   }
 }
 
@@ -450,7 +450,7 @@ export async function updatePerson(ctx: RequestContext): Promise<Response> {
     return { person: await personDetail(scope, id) };
   });
   if (out === "missing") throw notFound(`person ${id} not found`);
-  if (out === "lastAdmin") throw conflict("the organization needs an admin; make someone else one first");
+  if (out === "lastAdmin") throw conflict("the organisation needs an admin; make someone else one first");
   return json(out);
 }
 
@@ -514,7 +514,7 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
   });
   if (out === "yourself") throw conflict("you cannot remove yourself; ask another admin");
   if (out === "missing") throw notFound(`person ${id} not found`);
-  if (out === "lastAdmin") throw conflict("the organization needs an admin; make someone else one first");
+  if (out === "lastAdmin") throw conflict("the organisation needs an admin; make someone else one first");
   return noContent();
 }
 

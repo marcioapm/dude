@@ -108,6 +108,7 @@ describe("a blocked task's start", () => {
     const p = await page(new RelationsClient(rels({ blockedBy: [view("CP-41", "review"), view("CP-43", "running")] })));
     await until(() => p.querySelector("[data-testid=start-gate]"), "the gate");
     expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+    expect(p.querySelector("[data-testid=start-deliver]")).toBeNull();
     const ways = [...p.querySelectorAll<HTMLButtonElement>("[data-testid=start-gate] [data-testid^=gate-] button")];
     expect(ways.map((b) => [b.textContent, b.disabled])).toEqual([["Talk it through", true], ["Deliver", true]]);
     expect(p.querySelector("[data-testid=blocked-notice]")!.textContent).toContain("Blocked by CP-41 (in review) and CP-43 (in progress).");
@@ -116,7 +117,8 @@ describe("a blocked task's start", () => {
 
   test("merged blockers don't block: the ways are offered as on any task", async () => {
     const p = await page(new RelationsClient(rels({ blockedBy: [view("CP-40", "done", { merged: true })] })));
-    await until(() => p.querySelector("[data-testid=deliver]"), "Deliver");
+    // On the Overview the ways are its StartChoice cards; the header does not repeat them.
+    await until(() => p.querySelector("[data-testid=start-deliver]"), "Deliver");
     expect(p.querySelector("[data-testid=start-gate]")).toBeNull();
     expect(p.querySelector("[data-testid=blocked-notice]")).toBeNull();
   });
@@ -174,7 +176,7 @@ describe("a blocked task's start", () => {
     client.refuseStart = new ApiError(409, "blocked", "CP-44 is blocked by CP-41 (in review): it can start once that's merged.",
       { blockers: [{ key: "CP-41", status: "review" }] });
     const p = await page(client);
-    await click(await until(() => p.querySelector<HTMLElement>("[data-testid=deliver]"), "Deliver"));
+    await click(await until(() => p.querySelector<HTMLElement>("[data-testid=start-deliver]"), "Deliver"));
     await until(() => p.textContent?.includes("CP-44 is blocked by CP-41 (in review): it can start once that's merged.") || null, "the refusal");
   });
 });

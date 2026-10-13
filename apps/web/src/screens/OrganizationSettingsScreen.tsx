@@ -325,8 +325,8 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       onOpenChange={props.onOpenChange}
       title="Connect GitHub"
       description={app
-        ? "A GitHub App: pull requests and commits are the App's. Its private key is stored for this organization and never shown again."
-        : "A personal access token with repository access. It is stored for this organization and never shown again."}
+        ? "A GitHub App: pull requests and commits are the App's. Its private key is stored for this organisation and never shown again."
+        : "A personal access token with repository access. It is stored for this organisation and never shown again."}
       submitLabel="Save"
       submitTestId="forge-save"
       canSubmit={!busy && ready}

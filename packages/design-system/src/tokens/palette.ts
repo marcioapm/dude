@@ -405,6 +405,26 @@ export const merged = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Peer — a message between two agents. Not a tone and not a role: it is
+// drawn only as a wash (`tints.peer`) under the sender's role-coloured rail.
+// Hue 192 is the free band between the implementer (170) and the
+// investigator (232), clear of the accent's steer wash, attention, danger
+// and the success green; the violet band near 320 was the other candidate
+// and lost: its wash falls within ΔE 0.4 of the steer wash for protans, and
+// it sits on the merged and conductor violets. Lightness and chroma were
+// found by search against `test/paletteDistance.test.ts`'s bars.
+// ---------------------------------------------------------------------------
+
+export interface PeerColor {
+  readonly solid: string;
+}
+
+export const peer: Record<"light" | "dark", PeerColor> = {
+  light: { solid: toHex(oklch(0.66, 0.11, 192)) },
+  dark: { solid: toHex(oklch(0.6, 0.12, 192)) },
+};
+
+// ---------------------------------------------------------------------------
 // ANSI terminal colours — for tool output that arrives with escape codes.
 // The tool's own colours are the content (pytest's red FAILED, git's green
 // `+`), so they are rendered, not mapped onto the status tones: a green

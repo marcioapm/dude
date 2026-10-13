@@ -104,7 +104,7 @@ export interface PersonAvatarStackProps extends Omit<HTMLAttributes<HTMLSpanElem
 }
 
 /**
- * Faces overlapping by a quarter, the first on top: order by relevance
+ * Faces overlapping by a fifth, the first on top: order by relevance
  * (the owner, then everyone else on the task). Past `max`, a "+N" in the
  * same shape stands for the rest; every name is in the group's label.
  */
@@ -127,7 +127,7 @@ export function PersonAvatarStack({ people, size = 20, max = 4, agents, classNam
         );
       })}
       {more > 0 ? (
-        <span className={cx(styles["root"], styles["overflow"])} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
+        <span className={cx(styles["root"], styles["overflow"])} data-size={size} style={{ ["--av-size" as string]: `${size}px` }} title={names} aria-hidden>
           <span className={styles["initials"]}>+{more}</span>
         </span>
       ) : null}

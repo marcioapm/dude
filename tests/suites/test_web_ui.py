@@ -36,7 +36,7 @@ def test_the_board_shows_projects_and_opens_tasks(
 
     card.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
-    expect(page.get_by_test_id("deliver")).to_be_visible()
+    expect(page.get_by_test_id("start-deliver")).to_be_visible()
     assert console_errors == []
 
 
@@ -1552,7 +1552,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     page.goto(f"{web_url}#/task/{item['id']}")
     owner = page.get_by_test_id("task-owner")
     expect(owner).to_have_attribute("data-owner", "e2e user")
-    owner.get_by_role("combobox", name="Owner").click()
+    owner.get_by_role("combobox", name="Change owner").click()
     page.get_by_role("listbox").get_by_text("Bo").click()
     expect(owner).to_have_attribute("data-owner", "Bo")
     assert client.get(f"/v1/tasks/{item['id']}").json()["owner"]["name"] == "Bo"

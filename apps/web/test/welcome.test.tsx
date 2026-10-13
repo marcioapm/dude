@@ -196,7 +196,7 @@ describe("recent sessions", () => {
     const rows = [...page.querySelectorAll<HTMLElement>("[data-testid=recent-session]")];
     expect(rows.map((r) => r.getAttribute("data-session"))).toEqual(["s1", "s2", "s3", "s4"]);
     expect(rows[0]!.textContent).toContain("Filed 5");
-    expect(rows[1]!.textContent).toContain("New session");
+    expect(rows[1]!.textContent).toContain("Untitled session");
     expect(rows[1]!.textContent).toContain("Nothing filed yet");
     await click(rows[1]!);
     await click(page.querySelector("[data-testid=all-sessions]")!);

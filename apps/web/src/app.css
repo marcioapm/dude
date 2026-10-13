@@ -213,6 +213,14 @@ body {
   display: flex;
   margin-top: var(--ds-space-8);
 }
+/* One line of a rail block with its glyph: the epic's notes. */
+.railLine {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
 /* The header's terminal is the fallback for where the rail is not: on the
    conversation, with room for the rail, the rail has it. */
 .runScreen[data-view="chat"] .runTerminalFallback {
@@ -392,6 +400,90 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--ds-space-32);
 }
+
+/* An epic's page: its header line, then its board or its Coordination view. */
+.epicScreen {
+  height: 100%;
+}
+.epicHeader {
+  padding: var(--ds-space-main-pad) var(--ds-space-24) var(--ds-space-12);
+  flex-shrink: 0;
+}
+/* The Coordination view: notes and threads, the epic's tasks beside them; one column when narrow. */
+.coord {
+  container: coord / inline-size;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-24) var(--ds-space-32);
+}
+.coordGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--ds-space-panel-gap);
+  align-items: start;
+}
+@container coord (max-width: 860px) {
+  .coordGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.coordMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  min-width: 0;
+}
+.coordLead {
+  margin: 0 0 var(--ds-space-4);
+  max-width: var(--ds-measure-message);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.coordEmpty {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.coordNotes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.coordThreads {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.coordNoteForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12);
+  background: var(--ds-color-raised);
+}
+.coordNoteActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.coordNoteActions > :first-child {
+  flex: 1 1 240px;
+}
+@media (max-width: 640px) {
+  .epicHeader,
+  .coord {
+    padding-left: var(--ds-space-12);
+    padding-right: var(--ds-space-12);
+  }
+}
+
 
 /* A settings page that is one form: its sections spaced as the page's are. */
 .settingsForm {

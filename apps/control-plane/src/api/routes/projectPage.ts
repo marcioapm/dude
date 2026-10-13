@@ -43,6 +43,7 @@ interface EpicRow {
   machineUsd: number;
   lastActivity: string | null;
   needsYou: number;
+  waiting: Array<[string, string]>;
 }
 
 async function projectOverview(ctx: RequestContext): Promise<Response> {
@@ -71,7 +72,15 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
              -- What it cost, tokens and machine time, as its metrics count it.
              m.cost_usd AS "costUsd", m.machine_usd AS "machineUsd",
              (SELECT max(t.updated_at) FROM tasks t WHERE t.epic_id = e.id) AS "lastActivity",
-             (SELECT count(*)::int FROM tasks t WHERE t.epic_id = e.id AND t.status IN ('awaiting_input', 'awaiting_confirmation')) AS "needsYou"
+             (SELECT count(*)::int FROM tasks t WHERE t.epic_id = e.id AND t.status IN ('awaiting_input', 'awaiting_confirmation')) AS "needsYou",
+             -- Its agents waiting on each other: [the waiting task's key, the key it waits on], from live Runs' open waits.
+             COALESCE((SELECT json_agg(json_build_array(fp.key_prefix || '-' || ft.number, tp.key_prefix || '-' || tt.number) ORDER BY w.since)
+                       FROM peer_waits w JOIN runs r ON r.id = w.run_id
+                       JOIN peer_messages m ON m.id = w.message_id
+                       JOIN tasks ft ON ft.id = m.from_task_id JOIN projects fp ON fp.id = ft.project_id
+                       JOIN tasks tt ON tt.id = m.to_task_id JOIN projects tp ON tp.id = tt.project_id
+                       WHERE ft.epic_id = e.id AND w.closed_at IS NULL
+                         AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')), '[]') AS waiting
       FROM epics e CROSS JOIN LATERAL epic_metrics(e.id) m WHERE e.project_id = ${projectId}
       ORDER BY e.position, e.created_at`) as EpicRow[];
 

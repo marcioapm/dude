@@ -172,3 +172,11 @@ export { KeyShownOnce } from "./KeyShownOnce.tsx";
 export type { KeyShownOnceProps } from "./KeyShownOnce.tsx";
 export { FrontDoor, FrontDoorLink, FrontDoorMessage, HowList } from "./FrontDoor.tsx";
 export type { FrontDoorMessageProps, FrontDoorProps, HowItem } from "./FrontDoor.tsx";
+export {
+  EpicNote, EpicNoteCount, EpicNoteHistory, EpicNoteNotice, EpicNoteRow, PeerList, PeerMessage, PeerThread, PeerWaitLine, PeerWaitMark,
+  SinceDigest, TaskChip, noteLine, noteTitle, noteWordChange,
+} from "./Peer.tsx";
+export type {
+  DigestItem, EpicNoteAuthor, EpicNoteData, EpicNoteNoticeProps, EpicNoteProps, PeerDelivery, PeerListProps, PeerMessageData,
+  PeerMessageProps, PeerRow, PeerTask, PeerThreadProps, PeerThreadState, PeerWaitEnd, PeerWaitLineProps, SinceDigestProps, TaskChipProps,
+} from "./Peer.tsx";

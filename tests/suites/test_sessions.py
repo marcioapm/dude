@@ -436,10 +436,10 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     # The first message makes the session with it and opens it, untitled. The scripted agent's
     # reply names the untitled session (never an empty task); once its turn is over nothing thinks.
     session = _welcome_send(page, "where would metering live?")
-    expect(page.get_by_test_id("session-title")).to_have_text("New session")
+    expect(page.get_by_test_id("session-title")).to_have_text("Untitled session")
     _title_uncut(page)
     expect(page.get_by_test_id("human-turn").first).to_contain_text("where would metering live?")
-    reply = page.get_by_text('In the session "New session". You asked:')
+    reply = page.get_by_text('In the session "Untitled session". You asked:')
     expect(reply).to_be_visible(timeout=60_000)
     expect(page.get_by_text('Briefed on ""')).to_have_count(0)
     expect(page.get_by_test_id("session-screen").locator("[data-activity]")).to_have_count(0, timeout=15_000)
@@ -447,13 +447,13 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     expect(page.get_by_test_id("session-composer").locator("textarea")).to_have_attribute("placeholder", "Message the brainstorm…")
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
     assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == [session]
-    expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("New session")
+    expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("Untitled session")
 
     # Escape cancels; Enter saves, and the Chat says who named it.
     page.get_by_test_id("session-title").click()
     page.get_by_test_id("session-title-input").fill("Throwaway")
     page.keyboard.press("Escape")
-    expect(page.get_by_test_id("session-title")).to_have_text("New session")
+    expect(page.get_by_test_id("session-title")).to_have_text("Untitled session")
     page.get_by_test_id("session-title").click()
     page.get_by_test_id("session-title-input").fill("Billing v2")
     page.keyboard.press("Enter")
@@ -590,7 +590,7 @@ def test_the_owner_changes_the_model_in_the_rail_and_the_next_start_uses_it(
 def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
         client: ApiClient, env, page: Page, web_url: str, org: dict):
     """At 375px the shared marker, the model and Share wrap under the name, which keeps a line with
-    room for at least "New session"."""
+    room for at least "Untitled session"."""
     _scripted_brainstorm(client)
     ana, ana_client = _person(client, env, "Ana Nunes")
     session = client.post("/v1/brainstorms", {}).json()["id"]
@@ -609,7 +609,7 @@ def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
     m = header.evaluate("""h => {
         const title = h.querySelector('h1'), words = h.querySelector('[data-title-words]');
         const probe = words.cloneNode(false);
-        probe.textContent = 'New session';
+        probe.textContent = 'Untitled session';
         probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content';
         h.append(probe);
         const r = {header: h.getBoundingClientRect().width, overflow: h.scrollWidth - h.clientWidth,
@@ -622,7 +622,7 @@ def test_a_shared_sessions_header_on_a_phone_shows_its_name_above_the_meta(
         return r;
     }""")
     assert m["overflow"] <= 0, m
-    assert (m["text"], m["cut"]) == ("New session", False) and m["words"] > 0, m
+    assert (m["text"], m["cut"]) == ("Untitled session", False) and m["words"] > 0, m
     assert m["room"] > m["need"] > 0, m
     assert m["metaTop"] >= m["titleBottom"] and m["shareRight"] <= m["header"], m
 

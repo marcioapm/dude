@@ -67,6 +67,19 @@ const BLOCKED_FOR_EVERYONE: ProposalCardItem[] = [...LEFT_FOR_OTHERS,
     before: "Keep meter rows for 90 days.", after: "Keep meter rows for 400 days, for annual invoices.",
     canFile: false, blockedFor: "everyone", why: "BL-55 has started (running): its text can no longer change" }];
 
+/** An epic proposed with the notes its agents follow, and a note replacing one on an existing epic. */
+const NOTES: ProposalCardItem[] = [
+  { kind: "epic", title: "Metric preview in the metric form", project: { key: "ABS", name: "abs" }, canFile: true,
+    detail: "Preview a metric's history and histogram in the metric form, from a sample, before saving it.",
+    notes: [
+      "**Preview API (ABS-2).** ABS-2 serves `POST /v1/metrics/preview/history` and `/histogram`; ABS-4 calls them. The engine's estimate histogram is ABS-1's.",
+      "Read `.ai/personal/marcio/docs/llm-agent/INDEX.md` for how to run tests here.",
+    ] },
+  { kind: "task", child: true, title: "Backend: metric preview endpoints", project: { key: "ABS", name: "abs" }, canFile: true },
+  { kind: "note", title: "Replace note 3 on Experiment exports", project: { key: "ABS", name: "abs" }, canFile: true,
+    before: "Exports are CSV only.", after: "Exports are CSV and Parquet; Parquet for more than 100k rows." },
+];
+
 function NothingTicked() {
   return <ProposalCard items={FRESH} selected={new Set()} filingAs="Ana" onToggle={() => undefined} onFile={() => undefined} />;
 }
@@ -118,7 +131,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-title" title="SessionTitle"
-        note="A session's name in its header. Untitled until its agent or a member names it: “New session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
+        note="A session's name in its header. Untitled until its agent or a member names it: “Untitled session” in muted ink. A member who can chat presses it to rename in place — Enter saves, Escape cancels; a reader's is plain words. The Chat says who named it, signed by the agent or naming the person.">
         <Panes mode={mode}>
           <Col>
             <Label>untitled, can chat</Label>
@@ -169,6 +182,10 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <Card items={ALL_FILED} defaultOpen />
             <Label>a reader: nothing is theirs to file, so it folds</Label>
             <Card readOnly />
+            <Label>a proposed epic with its notes, and a note on an existing epic: pinned only when filed</Label>
+            <Card items={NOTES} />
+            <Label>folded: the epic and its notes filed</Label>
+            <Card items={NOTES.map((it) => ({ ...it, filed: filedBy("Márcio Martins", "") }))} />
           </Col>
         </Panes>
       </Block>

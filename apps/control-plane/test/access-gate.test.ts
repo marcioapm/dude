@@ -102,6 +102,13 @@ describe("the organisation of a request", () => {
     const stream = await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1&org=${other}`,
       { headers: cookie(await sign(signer, { email: at("member") })) }));
     expect(stream.status).toBe(403);
+    // A header and org= together: the header names the organisation.
+    const both = await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1&org=${other}`,
+      { headers: { ...cookie(await sign(signer, { email: at("member") })), "x-dude-organization": org } }));
+    expect(both.status).not.toBe(403);
+    await both.body?.cancel();
+    // An empty header is no header: the only membership is used.
+    expect((await call(at("member"), "/v1/people", { "x-dude-organization": "" })).status).toBe(200);
   });
 
   test("with several memberships a missing header is organization_required", async () => {

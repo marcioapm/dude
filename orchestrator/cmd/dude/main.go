@@ -17,6 +17,11 @@
 //	dude event TYPE [--data JSON]         record an event on this run
 //	dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
 //	                                      what a Run of this task changed
+//	dude diff --task KEY [PATH...]        a peer's stored diff
+//	dude task list --peers                the tasks on this task's epic
+//	dude message KEY TEXT [--reply-to MSG]
+//	dude wait MSG                         end the turn until MSG's reply
+//	dude note TEXT [--replaces N]         pin a note on the epic
 //	dude findings [ID...]                 a conductor's: the task's findings
 //	dude prs                              a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
@@ -124,11 +129,15 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, get("/tools"))
 	case "task list":
 		text := fs.String("text", "", "only work mentioning this")
+		peers := fs.Bool("peers", false, "your peers: the other tasks on your epic, and what each is doing")
 		startable := fs.Bool("startable", false, "only tasks that can start: not started, nothing unmerged in front of them")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		body := map[string]any{"text": *text}
+		if *peers {
+			body["peers"] = true
+		}
 		if *startable {
 			body["startable"] = true
 		}
@@ -280,12 +289,15 @@ func run(args []string, out io.Writer) error {
 		nameStatus := fs.Bool("name-status", false, "each file's path and status only")
 		limit := fs.Int("limit", 0, "files per page, 1 to 1000 (default 200)")
 		offset := fs.Int("offset", 0, "files to skip, for the next page")
+		task := fs.String("task", "", "a peer's key (ABS-2): its code as dude last stored it")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		body := map[string]any{}
-		if len(args) > 0 && runID.MatchString(args[0]) {
+		if *task != "" {
+			body["task"] = *task
+		} else if len(args) > 0 && runID.MatchString(args[0]) {
 			body["run"], args = args[0], args[1:]
 		}
 		if len(args) > 0 {
@@ -301,6 +313,43 @@ func run(args []string, out io.Writer) error {
 			body["offset"] = *offset
 		}
 		return show(out, *asJSON, call("run_diff", body))
+	case "message":
+		replyTo := fs.String("reply-to", "", "the message (pm_…) this answers")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) < 2 {
+			return errors.New(`usage: dude message KEY "what you need from it" [--reply-to MSG]`)
+		}
+		body := map[string]any{"to": args[0], "text": strings.Join(args[1:], " ")}
+		if *replyTo != "" {
+			body["replyTo"] = *replyTo
+		}
+		return show(out, *asJSON, call("message", body))
+	case "wait":
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude wait MSG")
+		}
+		return show(out, *asJSON, call("wait_for_reply", map[string]any{"message": args[0]}))
+	case "note":
+		replaces := fs.Int("replaces", 0, "the number of the note this one replaces")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) == 0 {
+			return errors.New(`usage: dude note "a fact every agent on the epic must follow" [--replaces N]`)
+		}
+		body := map[string]any{"text": strings.Join(args, " ")}
+		if *replaces != 0 {
+			body["replaces"] = *replaces
+		}
+		return show(out, *asJSON, call("note", body))
 	case "findings":
 		args, err := parse(fs, rest)
 		if err != nil {
@@ -737,6 +786,13 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              another page); --name-status, path and status only.
                                              With PATHs (exact, as listed) their changes as
                                              unified diff text, at most 2,000 lines a call
+  dude diff --task KEY [PATH...]             a peer's code (a task on your epic), as dude last stored it
+  dude task list --peers                     your peers: each one's phase, Run, branch, files,
+                                             last words, and its messages waiting for you
+  dude message KEY "…" [--reply-to MSG]      ask a peer something (never blocks; at most 5 an hour);
+                                             the reply lands at your next step
+  dude wait MSG                              end your turn until the reply to your message MSG comes
+  dude note "…" [--replaces N]               pin a note every agent on your epic must follow
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
   dude prs                                   a conductor's: the task's pull requests, their checks,

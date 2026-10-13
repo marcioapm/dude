@@ -315,7 +315,9 @@ func find(name, role string) (tool, bool) {
 
 // allTools are every role's tools: the task agents', then the session
 // agent's.
-func allTools() []tool { return append(slices.Clone(tools), brainstormTools...) }
+func allTools() []tool {
+	return slices.Concat(tools, coordinationTools, brainstormTools)
+}
 
 // define makes a tool from a typed function: its input schema from In,
 // its arguments decoded strictly into In.
@@ -419,13 +421,20 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
-	var r refusal
-	if errors.As(err, &r) && r.blocked != nil {
-		// Path 4's refusal rolled the call back: kept in a transaction of
-		// its own, so refusals stay auditable. Best effort, as the API's.
-		_ = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, r.blocked.Blockers)
-		})
+	var refused refusal
+	if errors.As(err, &refused) {
+		if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			if refused.event != nil {
+				_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+				return err
+			}
+			if refused.blocked != nil {
+				return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+			}
+			return nil
+		}); logged != nil {
+			s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
+		}
 	}
 	if err != nil || t.outside == nil {
 		return out, err
@@ -476,16 +485,26 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	return nil
 }
 
-// refusal is a tool declining a request, with the reason for the caller.
+// refusal is a tool declining a request, optionally recorded after rollback.
 type refusal struct {
-	msg string
-	// A start refused as blocked: recorded after the call rolls back.
+	msg     string
+	event   *refusedEvent
 	blocked *delivery.BlockedError
+}
+
+type refusedEvent struct {
+	typ     string
+	payload map[string]any
 }
 
 func (r refusal) Error() string { return r.msg }
 
 func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
+
+// refuseRecorded is refuse with the event that records the refusal.
+func refuseRecorded(typ string, payload map[string]any, msg string) error {
+	return refusal{msg: msg, event: &refusedEvent{typ, payload}}
+}
 
 // structured is a tool's result as MCP structured content, which must be a
 // JSON object: a list is given as {"items": [...]}. (The text content, and

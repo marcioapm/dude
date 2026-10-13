@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,6 +94,14 @@ type Behaviour struct {
 	TurnError string
 	// A Hang is woken by any input, not only one after a resume.
 	WakeOnInput bool
+	// dude tools to call each time the agent reads input, after reading it:
+	// {{inbox.last}} names the newest peer message among its inputs. Such an
+	// agent reads input at its next step even while its turn hangs.
+	InputTools [][2]string
+	// fakeagent.PeerModel: on its first turn, a peer with a live Run is
+	// asked fakeagent.PeerQuestion and waited on (CallTools); with none, the
+	// agent hangs and answers each peer message it reads (InputTools).
+	Peer bool
 	// A task's conductor: each turn's reply quotes its briefing and the
 	// input it answers (fakeagent.ConductorReply), in place of Reply.
 	Conductor bool
@@ -140,7 +149,10 @@ type Run struct {
 	// Some repository got a commit from a push.
 	Pushed bool
 	// dude tools the agent called: "tool status".
-	ToolCalls   []string
+	ToolCalls []string
+	// The id the agent's last dude tool call answered with: CallTools'
+	// arguments name it as {{last.id}} (a message it then waits on).
+	lastID      string
 	Cancelled   bool
 	Stopped     int
 	Resumed     int
@@ -299,6 +311,7 @@ func (s *Server) completeOpenTools(run *Run) {
 // consume is the agent's step reading everything queued: its read receipt
 // (or, from a legacy lux, its one acknowledgement). Callers hold s.mu.
 func (s *Server) consume(run *Run) {
+	read := len(run.queued) > 0
 	for _, in := range run.queued {
 		run.Inputs = append(run.Inputs, in.text)
 		if s.LegacyInput {
@@ -308,6 +321,17 @@ func (s *Server) consume(run *Run) {
 		}
 	}
 	run.queued = nil
+	if read && len(run.behavior.InputTools) > 0 {
+		// After the receipt is out, as an agent acts on what it read at a
+		// later step: never inside the request that delivered it.
+		go func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for _, c := range run.behavior.InputTools {
+				s.callTool(run, c[0], c[1])
+			}
+		}()
+	}
 }
 
 // FinishTools completes the Run's open tool calls (KeepToolsOpen), as a
@@ -796,7 +820,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
+		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
 
@@ -1508,6 +1532,10 @@ func (s *Server) turn(run *Run) {
 	// Its tools are part of its first turn's work, not repeated on every
 	// turn after; asking a person is one of them, and ends that turn.
 	first := len(run.Inputs) == 0
+	if first && b.Peer {
+		s.choosePeerPart(run)
+		b = run.behavior
+	}
 	asking := b.Ask != "" && first
 	if first {
 		for _, c := range b.CallTools {
@@ -1621,39 +1649,20 @@ func conductorAsked(input string, first bool) string {
 
 // callTool calls one of dude's tools as the agent's container would through
 // lux's service proxy: the spec's "dude" service, its header filled in from
-// the spec's secret. (The CLI's own path through a socket is tested in
-// agenttools.) Callers hold s.mu; the call is made without it, since dude
-// may be slow. A failure is said in the agent's reply.
+// the secret's value lux holds for the current placement, which a resume
+// replaces, as lux's shim starts its service proxies with the placement's
+// values. (The CLI's own path through a socket is tested in agenttools.)
+// Callers hold s.mu; the call is made without it, since dude may be slow. A
+// failure is said in the agent's reply.
 func (s *Server) callTool(run *Run, tool, args string) {
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
 		return
 	}
-	var spec struct {
-		Secrets  []lux.Secret `json:"secrets"`
-		Workload struct {
-			Services []lux.Service `json:"services"`
-		} `json:"workload"`
-	}
-	_ = json.Unmarshal(run.Spec, &spec)
-	for _, svc := range spec.Workload.Services {
-		if svc.Name != "dude" {
-			continue
-		}
-		req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
-		if err != nil {
-			return
-		}
-		for _, h := range svc.Headers {
-			for _, sec := range spec.Secrets {
-				if sec.Name == h.Secret {
-					req.Header.Set(h.Name, sec.Value)
-				}
-			}
-		}
-		s.mu.Unlock()
-		res, err := http.DefaultClient.Do(req)
-		s.mu.Lock()
+	s.withDude(run, func(send func(tool, args string) (*http.Response, error)) {
+		id, from := InboxLast(run.Inputs)
+		args := strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
+		res, err := send(tool, args)
 		// Said in the agent's reply, as an agent would report a tool it ran.
 		switch {
 		case err != nil:
@@ -1664,9 +1673,118 @@ func (s *Server) callTool(run *Run, tool, args string) {
 			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
 				"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, res.StatusCode)}})
 		default:
+			var answer struct{ ID string }
+			_ = json.NewDecoder(res.Body).Decode(&answer)
+			run.lastID = answer.ID
 			res.Body.Close()
 		}
+	})
+}
+
+// withDude gives fn a way to call dude's tools as the Run's container
+// would, through the spec's "dude" service with its header filled in from
+// the secret's value lux holds for the current placement; nothing when the
+// spec has no such service. Callers
+// hold s.mu; each call is made without it.
+func (s *Server) withDude(run *Run, fn func(send func(tool, args string) (*http.Response, error))) {
+	var spec struct {
+		Workload struct {
+			Services []lux.Service `json:"services"`
+		} `json:"workload"`
 	}
+	_ = json.Unmarshal(run.Spec, &spec)
+	for _, svc := range spec.Workload.Services {
+		if svc.Name != "dude" {
+			continue
+		}
+		fn(func(tool, args string) (*http.Response, error) {
+			req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
+			if err != nil {
+				return nil, err
+			}
+			for _, h := range svc.Headers {
+				if v, ok := run.secretValues[h.Secret]; ok {
+					req.Header.Set(h.Name, v)
+				}
+			}
+			s.mu.Unlock()
+			defer s.mu.Lock()
+			return http.DefaultClient.Do(req)
+		})
+	}
+}
+
+// choosePeerPart makes the lower-numbered task ask the higher-numbered
+// peer, independently of which Run starts first. Callers hold s.mu.
+func (s *Server) choosePeerPart(run *Run) {
+	b := &run.behavior
+	b.Peer = false
+	var live string
+	s.withDude(run, func(send func(tool, args string) (*http.Response, error)) {
+		live = higherPeer(send)
+	})
+	if live != "" {
+		b.CallTools = append([][2]string{
+			{"message", fmt.Sprintf(`{"to":%q,"text":%q}`, live, fakeagent.PeerQuestion)},
+			{"wait_for_reply", `{"message":"{{last.id}}"}`},
+		}, b.CallTools...)
+		return
+	}
+	b.Hang = true
+	b.InputTools = [][2]string{{"message", fmt.Sprintf(`{"to":"{{inbox.from}}","text":%q,"replyTo":"{{inbox.last}}"}`, fakeagent.PeerAnswer)}}
+}
+
+// peerInput is how a peer's message opens as the recipient reads it
+// (delivery.MessageDirective): "Message pm_… from ABS-1's …" or
+// "Reply to pm_… pm_… from ABS-1's …".
+var peerInput = regexp.MustCompile(`^(?:Message|Reply to \S+) (pm_\S+) from ([A-Za-z0-9]+-\d+)'s `)
+
+// InboxLast is the newest peer message the agent has read among its
+// inputs, by id, and the task that sent it: what CallTools and InputTools
+// name as {{inbox.last}} and {{inbox.from}}. "" when it has read none.
+func InboxLast(inputs []string) (id, from string) {
+	for i := len(inputs) - 1; i >= 0; i-- {
+		if m := peerInput.FindStringSubmatch(inputs[i]); m != nil {
+			return m[1], m[2]
+		}
+	}
+	return "", ""
+}
+
+// higherPeer is the first peer with a greater task number than self.
+func higherPeer(send func(tool, args string) (*http.Response, error)) string {
+	res, err := send("list_tasks", `{"peers":true}`)
+	if err != nil {
+		return ""
+	}
+	defer res.Body.Close()
+	var out struct {
+		Tasks []struct {
+			Key  string
+			Self bool
+			Run  string
+		}
+	}
+	if res.StatusCode >= 300 || json.NewDecoder(res.Body).Decode(&out) != nil {
+		return ""
+	}
+	number := func(key string) int {
+		parts := strings.Split(key, "-")
+		n, _ := strconv.Atoi(parts[len(parts)-1])
+		return n
+	}
+	self := 0
+	for _, t := range out.Tasks {
+		if t.Self {
+			self = number(t.Key)
+		}
+	}
+	for _, t := range out.Tasks {
+		if !t.Self && number(t.Key) > self {
+			return t.Key
+		}
+	}
+	return ""
 }
 
 // Prompt is what the Run's agent was told.
@@ -2037,6 +2155,10 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID, attachments: images})
 		if run.busy && run.State == "running" {
 			s.accept(run, &run.queued[len(run.queued)-1])
+			// An agent that acts on what it reads takes it at its next step.
+			if len(run.behavior.InputTools) > 0 && !s.NextTurnInput && !s.LegacyInput {
+				s.consume(run)
+			}
 		}
 	}
 	if in.Interrupt && run.busy && run.State == "running" {

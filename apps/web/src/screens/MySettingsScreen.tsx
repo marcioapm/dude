@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
-import { Breadcrumb, EntityLine, OrgFace } from "@dude/design-system/components";
+import { EntityLine, OrgFace } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
 import { KeysSection, ProfileSection, type KeyGroup } from "./YouSections.tsx";
@@ -53,7 +53,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
 
   return (
     <Page data-testid="my-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Your settings"
+      <PageHeader title="Your settings"
         description="Only you see these. Your profile and keys are yours in every organisation; how dude looks is this browser's." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields

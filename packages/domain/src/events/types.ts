@@ -527,6 +527,59 @@ export const EventTypes = {
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
+  /**
+   * What a conductor's digest told it of its epic, item by item, on its
+   * Run, in the transaction that briefed or woke it. Payload: `{ since,
+   * through, where: "briefing" | "wake", task, messages: [{ message, at,
+   * from, to, text, replyTo, answeredAt }], more, notes: [{ at, n, change,
+   * was?, line }], peers: [{ task, status, at }] }`.
+   */
+  ConductorDigest: "conductor.digest",
+
+  // Agents coordinating on an epic (docs/design/agent-coordination.md)
+  /**
+   * A Run sent a peer task a message. On the sender's Run. Payload:
+   * `{ message, to, toTaskId, reply_to, lands, text, notice? }`: `to` the
+   * task's key; `lands` `next_step` or `next_run` (held, with `notice`).
+   */
+  AgentMessageSent: "agent.message.sent",
+  /**
+   * A Run read a peer's message. On the reading Run. Payload: `{ message,
+   * from, directive, after }` at a step (`after`, the tool it had just
+   * run); `{ message, from, via: "briefing" }` in its first prompt.
+   */
+  AgentMessageReceived: "agent.message.received",
+  /**
+   * A message refused. On the sender's Run. Payload: `{ reason: "rate" |
+   * "not_a_peer" | "too_long" | …, to, retry_at }`.
+   */
+  AgentMessageRefused: "agent.message.refused",
+  /**
+   * A Run waits on a peer's reply. Payload: `{ message, on, how: "wait" |
+   * "turn_ended", parks_at }`.
+   */
+  AgentPeerWaiting: "agent.peer.waiting",
+  /**
+   * A Run's wait ended. Payload: `{ message, on, by: "reply" | "self" |
+   * "run_ended" | "peer_ended", status? }`: `status` the peer task's, when it
+   * ended without replying.
+   */
+  AgentPeerWaitEnded: "agent.peer.wait_ended",
+  /**
+   * A note was pinned on an epic (on the pinning Run for an agent's; the
+   * epic's correlation for a person's). Payload: `{ note, n, epicId, by,
+   * text, replaces, from_session }`.
+   */
+  EpicNotePinned: "epic.note.pinned",
+  /** A person retired a note. Payload: `{ note, n, epicId, by }`. */
+  EpicNoteRetired: "epic.note.retired",
+  /** A note refused past the limit. Payload: `{ reason: "limit", current, epicId }`. */
+  EpicNoteRefused: "epic.note.refused",
+  /**
+   * A Run read a note change at its step: the EpicNoteNotice. Payload:
+   * `{ note, n, change: "added" | "replaced" | "retired", was, after, directive }`.
+   */
+  AgentNoteTold: "agent.note.told",
 
   // Artifacts
   ArtifactCreated: "artifact.created",
