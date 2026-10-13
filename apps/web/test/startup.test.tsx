@@ -8,8 +8,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, RunStatus, TaskServers } from "@dude/domain";
 import { act, mount, until } from "./dom.ts";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
-import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
+import { RUN_ID, TASK_ID, run } from "../src/fixtures/data.ts";
+import { PeopleProvider } from "../src/people.tsx";
+import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
 import { runStatusShown } from "../src/runPresentation.tsx";
@@ -317,6 +320,33 @@ describe("a task's Run page", () => {
     expect(runStatusShown(run)).toBe("starting");
     expect(runStatusShown({ ...run, startStage: { stage: "waiting", since: null, epoch: 1 } })).toBe("scheduled");
     expect(runStatusShown({ ...run, startStage: null })).toBe("scheduled");
+  });
+
+  /** The task page on `tab`, with a conductor and a phase Run it started that lux placed (stage container), not yet running. */
+  async function placedOnTaskPage(tab: "chat" | "sessions" | "overview") {
+    const client = new FixtureClient("a");
+    const placed = run({ id: "run_placed", phase: "implement", role: "implementer", status: "scheduled", startedAt: null,
+      conductorRunId: "run_conductor", startStage: { stage: "container", since: null, epoch: 1 } });
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...(await getTask(id)), decider: "conductor",
+      runs: [run({ id: "run_conductor", role: "conductor", phase: null, status: "running" }), placed] });
+    const getRun = client.getRun.bind(client);
+    client.getRun = async (id) => id === "run_conductor"
+      ? { ...(await getRun(RUN_ID)), id, role: "conductor", phase: null, status: "running", endedAt: null }
+      : getRun(id);
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} tab={tab} onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    return container;
+  }
+
+  test("the conductor's Chat line for a Run lux placed reads Starting", async () => {
+    const page = await placedOnTaskPage("chat");
+    const line = await until(() => page.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_placed]"), "the Chat Run line");
+    expect(line.getAttribute("data-status")).toBe("starting");
   });
 
   test("failed in a stage: the row is the danger Callout naming the stage and lux's reason", async () => {

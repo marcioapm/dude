@@ -22,7 +22,7 @@ import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
-import { RunReplacement, runStatusLabel } from "../runPresentation.tsx";
+import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 
 export interface ChatSectionProps {
@@ -158,12 +158,12 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const dude = dudeName(task.id);
   const conducted = useMemo(() => conductedLines(task, events), [task.decider, task.runs, events]); // eslint-disable-line react-hooks/exhaustive-deps -- what the lines are made of
   const linesKey = conducted.map((l) => l.kind === "run"
-    ? `${l.id}:${l.run.status}:${l.run.replacedBy}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
+    ? `${l.id}:${l.run.status}:${l.run.startStage?.stage}:${l.run.replacedBy}:${l.steers.map((s) => `${s.directiveId}/${s.lands}/${s.deliveredAt}/${s.failed}`).join(";")}` : l.id).join(",");
   const lines = useMemo(() => {
     function lineNode(l: ConductedLine): ReactNode {
       switch (l.kind) {
         case "run":
-          return <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={l.run.status}
+          return <ChatRunLine data-testid="chat-run" data-run={l.run.id} role={l.run.role ?? "implementer"} status={runStatusShown(l.run)}
             statusLabel={runStatusLabel(l.run)} replacement={<RunReplacement run={l.run} />}
             what={runWhat(l.run)} facts={runFacts(l.run, runCosts.get(l.run.id))} onOpen={() => onOpenRun(l.run.id)}
             steers={l.steers.length > 0 ? l.steers.map((s) => <ConductorSteerTurn key={s.directiveId} steer={s} runStatus={l.run.status} />) : undefined} />;
