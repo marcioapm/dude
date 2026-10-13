@@ -4,7 +4,7 @@
  * by the design system's ThemeProvider; reduced motion follows the system.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTheme } from "@dude/design-system";
 import { Breadcrumb, Duration } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardFooter, CardHeader, Dialog, FormActions, FormStack, KeyValueList, Page, PageHeader, Select,
@@ -38,45 +38,49 @@ type GithubAuthorization = NonNullable<Awaited<ReturnType<ApiClient["githubAutho
 
 /**
  * Your own GitHub authorization, which opens your tasks' pull requests as
- * you. The access token refreshes on its own, so only the refresh token's
- * end is shown; the access token's appears once a reconnect is needed.
+ * you. Both tokens renew each time dude uses them, so the refresh token's
+ * end is shown only as how long it may sit unused; the access token's
+ * appears only once it has ended and a reconnect is needed.
  */
-function GithubAuthorizationCard({ client, connection, outcome, onChanged }: {
+function GithubAuthorizationCard({ client, connection, outcome, onChanged, onDisconnected }: {
   client: ApiClient;
   connection: GithubAuthorization | null;
   /** The callback's `?github=` value; anything not in the table reads as a failure. */
   outcome: string | null;
   onChanged: () => void;
+  onDisconnected: () => void;
 }) {
   const { busy, problem, save } = useSave();
   const [disconnecting, setDisconnecting] = useState(false);
+  const connect = useRef<HTMLButtonElement>(null);
   const now = Date.now();
   const refreshLeft = connection ? Date.parse(connection.refreshExpiresAt) - now : 0;
   const accessLeft = connection ? Date.parse(connection.expiresAt) - now : 0;
   const reconnect = connection !== null && (connection.reconnectRequired || !(refreshLeft > 0));
   const shown = outcome ? GITHUB_OUTCOME[outcome] ?? GITHUB_OUTCOME_FAILED : null;
+  const connectVariant = connection && !reconnect ? "secondary" : "primary";
   return (
     <Card data-testid="github-authorization">
       <CardHeader title="GitHub authorization" />
       <CardBody>
         <FormStack>
           {shown ? <Callout tone={shown.tone} data-testid="github-outcome">{shown.text}</Callout> : null}
-          <p>Connect to open your tasks' pull requests as you. Git and monitoring still use the App.</p>
+          <p className="muted">Connect to open your tasks' pull requests as you. Git and monitoring still use the App.</p>
           <KeyValueList items={[
             { label: "Status", value: <span data-testid="github-authorization-status">
               {connection ? `Connected as ${connection.login}` : "Not connected"}</span> },
             ...(connection ? [{ label: "Reconnect", value: <span data-testid="github-authorization-reconnect">
-              {reconnect ? "Needed now: pull requests wait until you connect again" : <>Needed in <Duration ms={refreshLeft} format="age" /></>}
+              {reconnect ? "Needed now: pull requests wait until you connect again"
+                : <>Not needed while dude uses it; lapses after <Duration ms={refreshLeft} format="age" /> unused</>}
             </span> }] : []),
-            ...(connection && reconnect ? [{ label: "Access", value: accessLeft > 0
-              ? <>Ends in <Duration ms={accessLeft} format="age" /></>
-              : <>Ended <Duration ms={-accessLeft} format="age" /> ago</> }] : []),
+            ...(reconnect && accessLeft <= 0 ? [{ label: "Access", value: <span data-testid="github-authorization-access">
+              Ended <Duration ms={-accessLeft} format="age" /> ago</span> }] : []),
           ]} />
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
         </FormStack>
       </CardBody>
       <CardFooter>
-        <Button data-testid="github-connect" variant={connection && !reconnect ? "secondary" : "primary"} disabled={busy}
+        <Button ref={connect} data-testid="github-connect" variant={connectVariant} data-variant={connectVariant} disabled={busy}
           onClick={() => void save(async () => {
             const { url } = await client.connectGithub();
             window.location.assign(url);
@@ -88,26 +92,36 @@ function GithubAuthorizationCard({ client, connection, outcome, onChanged }: {
         ) : null}
       </CardFooter>
       {disconnecting ? (
-        <DisconnectGithubDialog client={client} onClose={() => setDisconnecting(false)} onDisconnected={onChanged} />
+        <DisconnectGithubDialog client={client} onClose={() => setDisconnecting(false)} connect={connect}
+          onDisconnected={() => { onDisconnected(); onChanged(); }} />
       ) : null}
     </Card>
   );
 }
 
-function DisconnectGithubDialog({ client, onClose, onDisconnected }: {
+function DisconnectGithubDialog({ client, connect, onClose, onDisconnected }: {
   client: ApiClient;
+  /** Where focus goes after a disconnect: the button that opened the dialog is about to go. */
+  connect: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onDisconnected: () => void;
 }) {
   const { busy, problem, save } = useSave();
+  const done = useRef(false);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} tone="danger" size="sm" title="Disconnect GitHub?"
       description="dude forgets your GitHub authorization. Your tasks' pull requests wait until you connect again."
+      onCloseAutoFocus={(e) => {
+        if (!done.current || !connect.current) return;
+        e.preventDefault();
+        connect.current.focus();
+      }}
       footer={
         <>
           <Button variant="quiet" onClick={onClose}>Cancel</Button>
           <Button variant="danger" solid disabled={busy} data-testid="github-disconnect-confirm"
             onClick={() => void save(() => client.disconnectGithub(), () => {
+              done.current = true;
               onClose();
               onDisconnected();
             }, "GitHub disconnected")}>
@@ -148,7 +162,14 @@ export function MySettingsScreen({ client, me, onChanged }: {
 
   const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
   // The callback lands here with a fixed outcome; anything else reads as a failure.
-  const githubOutcome = new URLSearchParams(window.location.search).get("github");
+  const [githubOutcome, setGithubOutcome] = useState(() => new URLSearchParams(window.location.search).get("github"));
+  // Read once: off the address, so neither a reload nor a later Disconnect shows it again.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("github")) return;
+    url.searchParams.delete("github");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   return (
     <Page data-testid="my-settings">
@@ -163,7 +184,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
       ) : null}
       {authorization?.available ? (
         <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
-          onChanged={() => setRead((n) => n + 1)} />
+          onChanged={() => setRead((n) => n + 1)} onDisconnected={() => setGithubOutcome(null)} />
       ) : null}
       <KeysSection client={client} />
       <Card>
