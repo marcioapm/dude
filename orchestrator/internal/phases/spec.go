@@ -781,6 +781,19 @@ func (s *Syncer) logIgnoredOptions(r phaseRun, in specInput) {
 // sends on every request (an agent's variant does not take effect, and the
 // AI SDK drops keys it does not know without a word); its headers in the
 // model's headers, likewise sent on every request.
+//
+// Every permission is allowed (openCodePermissions): the Run is unattended,
+// and a child session (the task tool's subagent) cannot be answered at all.
+// openCodePermissions: OpenCode asks before a read outside the worktree
+// (external_directory), a read of a .env file, and a tool call it judges
+// repetitive (doom_loop); "*" covers every other tool. lux answers the
+// Run's own session's asks (allow, once), but OpenCode's ACP bridge drops
+// an ask from a session it did not open over ACP, and a subagent's session
+// is one: its ask hangs the parent's task call for good (2026-10-13, 2h20
+// on a grep of a site-packages path). Allowing in the config answers
+// every session before it asks. The keys are OpenCode's permission config.
+var openCodePermissions = map[string]any{"*": "allow", "external_directory": "allow", "doom_loop": "allow", "read": "allow"}
+
 func openCodeConfig(model, effort string, options map[string]any, headers map[string]string) string {
 	provider := llm.Provider(model)
 	entry := map[string]any{"options": llm.ModelOptions(model, effort, options)}
@@ -788,8 +801,9 @@ func openCodeConfig(model, effort string, options map[string]any, headers map[st
 		entry["headers"] = headers
 	}
 	config := map[string]any{
-		"model":    provider + "/" + model,
-		"provider": map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
+		"model":      provider + "/" + model,
+		"permission": openCodePermissions,
+		"provider":   map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
 	}
 	b, _ := json.Marshal(config)
 	return string(b)

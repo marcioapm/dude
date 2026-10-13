@@ -53,18 +53,40 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 // A Run's OpenCode config names the model under the provider its name goes
 // through, and declares it there, so a model the image's file does not list
 // still resolves; the tier's effort is the model's options.
+// permissions is the permission block every OpenCode config carries, as
+// JSON marshals it (keys sorted).
+const permissions = `"permission":{"*":"allow","doom_loop":"allow","external_directory":"allow","read":"allow"}`
+
+// A Run's OpenCode config allows every permission, the ones OpenCode asks
+// for by default named one by one: a read outside the worktree, a .env
+// read, a repeated call. A subagent's ask cannot be answered by anyone, so
+// it must never be asked (an ask from a child session hung a Run for 2h20).
+func TestAnOpenCodeRunAllowsEveryPermissionBeforeItIsAsked(t *testing.T) {
+	var got struct {
+		Permission map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(openCodeConfig("claude-opus-5-5", "", nil, nil)), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"*", "external_directory", "doom_loop", "read"} {
+		if got.Permission[key] != "allow" {
+			t.Errorf("permission %q = %q, want allow (asked by default; a child session's ask is never answered)", key, got.Permission[key])
+		}
+	}
+}
+
 func TestTheModelAndEffortAreInlineOpenCodeConfig(t *testing.T) {
 	for _, tc := range []struct {
 		model, effort string
 		want          string
 	}{
-		{"claude-opus-5-5", "high", `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
+		{"claude-opus-5-5", "high", `{"model":"llm-anthropic/claude-opus-5-5",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":{"effort":"high","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
 		// Not in the image's opencode.json: declared all the same.
-		{"claude-nova-7", "low", `{"model":"llm-anthropic/claude-nova-7","provider":{"llm-anthropic":{"models":{"claude-nova-7":{"options":{"effort":"low","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
-		{"gpt-5.6-sol", "max", `{"model":"llm-openai/gpt-5.6-sol","provider":{"llm-openai":{"models":{"gpt-5.6-sol":{"options":{"reasoningEffort":"max","reasoningSummary":"auto"}}}}}}`},
-		{"gemini-3.8-pro", "", `{"model":"llm-openai/gemini-3.8-pro","provider":{"llm-openai":{"models":{"gemini-3.8-pro":{"options":{"reasoningSummary":"auto"}}}}}}`},
+		{"claude-nova-7", "low", `{"model":"llm-anthropic/claude-nova-7",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-nova-7":{"options":{"effort":"low","thinking":{"display":"summarized","type":"adaptive"}}}}}}}`},
+		{"gpt-5.6-sol", "max", `{"model":"llm-openai/gpt-5.6-sol",` + permissions + `,"provider":{"llm-openai":{"models":{"gpt-5.6-sol":{"options":{"reasoningEffort":"max","reasoningSummary":"auto"}}}}}}`},
+		{"gemini-3.8-pro", "", `{"model":"llm-openai/gemini-3.8-pro",` + permissions + `,"provider":{"llm-openai":{"models":{"gemini-3.8-pro":{"options":{"reasoningSummary":"auto"}}}}}}`},
 		// Only a name starting claude- is Anthropic's.
-		{"my-claude-proxy", "", `{"model":"llm-openai/my-claude-proxy","provider":{"llm-openai":{"models":{"my-claude-proxy":{"options":{"reasoningSummary":"auto"}}}}}}`},
+		{"my-claude-proxy", "", `{"model":"llm-openai/my-claude-proxy",` + permissions + `,"provider":{"llm-openai":{"models":{"my-claude-proxy":{"options":{"reasoningSummary":"auto"}}}}}}`},
 	} {
 		spec := llmSpec(tc.model, tc.effort)
 		if got := spec.Env["OPENCODE_CONFIG_CONTENT"]; got != tc.want {
@@ -94,7 +116,7 @@ func TestATiersEffortIsItsProvidersModelOptions(t *testing.T) {
 		{"gpt-6-sol", "high", `{"reasoningEffort":"high","reasoningSummary":"auto"}`},
 		{"gpt-6-sol", "max", `{"reasoningEffort":"max","reasoningSummary":"auto"}`},
 	} {
-		want := `{"model":"` + llm.Provider(tc.model) + `/` + tc.model + `","provider":{"` + llm.Provider(tc.model) +
+		want := `{"model":"` + llm.Provider(tc.model) + `/` + tc.model + `",` + permissions + `,"provider":{"` + llm.Provider(tc.model) +
 			`":{"models":{"` + tc.model + `":{"options":` + tc.options + `}}}}}`
 		if got := openCodeConfig(tc.model, tc.effort, nil, nil); got != want {
 			t.Errorf("%s at %q:\n got %s\nwant %s", tc.model, tc.effort, got, want)
@@ -107,14 +129,14 @@ func TestATiersEffortIsItsProvidersModelOptions(t *testing.T) {
 func TestATiersOptionsWinAndItsHeadersAreTheModels(t *testing.T) {
 	options := map[string]any{"effort": "xhigh", "thinking": map[string]any{"display": "omitted"}, "sendReasoning": true}
 	got := openCodeConfig("claude-opus-5-5", "high", options, nil)
-	want := `{"model":"llm-anthropic/claude-opus-5-5","provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":` +
+	want := `{"model":"llm-anthropic/claude-opus-5-5",` + permissions + `,"provider":{"llm-anthropic":{"models":{"claude-opus-5-5":{"options":` +
 		`{"effort":"xhigh","sendReasoning":true,"thinking":{"display":"omitted","type":"adaptive"}}}}}}}`
 	if got != want {
 		t.Errorf("options over effort:\n got %s\nwant %s", got, want)
 	}
 	got = openCodeConfig("gpt-6-sol", "low", map[string]any{"reasoningSummary": "detailed"},
 		map[string]string{"X-Team": "dude", "anthropic-beta": "context-1m"})
-	want = `{"model":"llm-openai/gpt-6-sol","provider":{"llm-openai":{"models":{"gpt-6-sol":{` +
+	want = `{"model":"llm-openai/gpt-6-sol",` + permissions + `,"provider":{"llm-openai":{"models":{"gpt-6-sol":{` +
 		`"headers":{"X-Team":"dude","anthropic-beta":"context-1m"},"options":{"reasoningEffort":"low","reasoningSummary":"detailed"}}}}}}`
 	if got != want {
 		t.Errorf("headers:\n got %s\nwant %s", got, want)
