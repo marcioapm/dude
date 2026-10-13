@@ -198,6 +198,22 @@ func NamePool(ctx context.Context, c lux.Client, m *delivery.Machine) {
 	}
 }
 
+// machineLine is the prompt's paragraph on the agent's machine and the
+// sizes it may move to, filtered as list_machine_sizes filters them (no
+// Run in lux yet: its image's platforms filter nothing). "" without dude's
+// tools, or without a machine.
+func (s *Syncer) machineLine(ctx context.Context, m *delivery.Machine, sizes delivery.Sizes, org string, cli bool) string {
+	if m == nil || s.Agent.ToolsURL == "" {
+		return ""
+	}
+	pools, err := s.Lux.Pools(ctx)
+	if err != nil {
+		// Unread, the pools filter nothing and are not named.
+		pools = nil
+	}
+	return sizes.Choices(*m, org, pools, lux.Run{}).Line(cli)
+}
+
 // PoolGone is the reason a Run fails when lux refuses its size's pool as
 // unknown (422 unknown_pool): the pool was deleted after the size named it.
 // "" for any other error, or with no machine (only a machine places a Run).

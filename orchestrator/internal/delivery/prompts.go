@@ -59,6 +59,10 @@ type PromptInput struct {
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
 	Images []PromptImage
+	// Where the agent runs and the sizes it may move to
+	// (MachineChoices.Line), last in a phase's prompt; "" says nothing. A
+	// conductor's and a session agent's prompt get it after, at submit.
+	Machine string
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -641,6 +645,9 @@ func Prompt(phase string, in PromptInput) string {
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
 		add("## Project notes\n\n" + c)
+	}
+	if in.Machine != "" {
+		add(in.Machine)
 	}
 	return strings.Join(sections, "\n\n")
 }

@@ -47,6 +47,48 @@ type ResizePlan struct {
 	// Records a refusal durably before the fallback resume is asked for,
 	// so a process that dies in between resumes the same way.
 	onRefused func(*lux.Error) error
+	// The Run's pending machine move: what its agent is told when the
+	// move applies, which kind it is ("raise" or "reset", "" none) and the
+	// name of the size it asked for (a refused raise's layer is restored
+	// before a restart's resume, so Target may no longer be it).
+	moveTold, moveKind, moveTo string
+}
+
+// movedInput puts what the agent is told of its move before input.
+func (p *ResizePlan) movedInput(input string) string {
+	if p == nil || p.moveTold == "" {
+		return input
+	}
+	return joinInput(p.moveTold, input)
+}
+
+// keptInput is what the agent is told when lux refused the move for good:
+// the size asked for, the one it kept, and why, in place of input's claim
+// that it moved. A plan with no move says lux's words alone, as before.
+func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
+	if p.moveKind == "" || le.Status == http.StatusConflict {
+		return le.Message
+	}
+	why := le.Message
+	if le.Status == http.StatusBadRequest {
+		// An older lux's unknown field: its own words name a JSON field.
+		why = "this lux cannot change a stopped Run's CPUs or memory"
+		if p.Pool != "" {
+			why = "this lux cannot move a Run between pools yet"
+		}
+	}
+	told := fmt.Sprintf("You asked for %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, why)
+	if p.moveKind == "reset" {
+		told = fmt.Sprintf("You were to move back to %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, why)
+	}
+	return joinInput(told, input)
+}
+
+func joinInput(first, rest string) string {
+	if rest == "" {
+		return first
+	}
+	return first + "\n\n" + rest
 }
 
 // PlanResize compares the recorded size and pool with the target. A pool
@@ -143,12 +185,16 @@ func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *Resiz
 func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeInput, plan *ResizePlan) (lux.Run, error) {
 	if plan == nil || plan.Send == nil || plan.refused != nil {
 		in.Resources, in.Placement = nil, nil
-		if plan != nil && plan.refused != nil && plan.refused.Status != http.StatusConflict {
-			in.Input = plan.refused.Message
+		switch {
+		case plan != nil && plan.refused != nil && plan.refused.Status != http.StatusConflict:
+			in.Input = plan.keptInput(plan.refused, in.Input)
+		case plan != nil && plan.refused == nil:
+			in.Input = plan.movedInput(in.Input)
 		}
 		return c.Resume(ctx, runID, in)
 	}
-	in.Resources = plan.Send
+	asked := in.Input
+	in.Resources, in.Input = plan.Send, plan.movedInput(asked)
 	if plan.Pool != "" {
 		in.Placement = &lux.PlacementSpec{PoolID: plan.Pool}
 	}
@@ -165,7 +211,7 @@ func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeI
 			}
 		}
 		in.Resources, in.Placement = nil, nil
-		in.Input = le.Message
+		in.Input = plan.keptInput(le, asked)
 		return c.Resume(ctx, runID, in)
 	}
 	return res, err
@@ -272,34 +318,78 @@ type pendingMove struct {
 	}
 	// lux's definitive refusal, kept before the fallback resume.
 	Code, Message string
+	// A Reset's person and note.
+	By, Note string
 }
 
 func loadPendingMove(ctx context.Context, tx pgx.Tx, runID string) (*pendingMove, error) {
 	var m pendingMove
-	err := tx.QueryRow(ctx, `SELECT id, role, kind, COALESCE(to_size_id, ''), from_size, COALESCE(refused, ''), COALESCE(refused_message, '')
-		FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID).Scan(&m.ID, &m.Role, &m.Kind, &m.To, &m.From, &m.Code, &m.Message)
+	err := tx.QueryRow(ctx, `SELECT id, role, kind, COALESCE(to_size_id, ''), from_size, COALESCE(refused, ''), COALESCE(refused_message, ''),
+			COALESCE(by_person, ''), COALESCE(reason, '')
+		FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID).Scan(&m.ID, &m.Role, &m.Kind, &m.To, &m.From, &m.Code, &m.Message, &m.By, &m.Note)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}
 	return &m, err
 }
 
-// movePlan ties a resume's plan to its Run's pending move: a refusal kept
-// by an earlier attempt resumes without resources and with its message,
-// and a new refusal is kept before the fallback resume is asked for.
+// movePlan ties a resume's plan to its Run's pending move: what the agent
+// is told when it applies, a refusal kept by an earlier attempt (resumed
+// without resources, told why), and a new refusal kept before the
+// fallback resume is asked for.
 func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) error {
 	if plan == nil {
 		return nil
 	}
 	var move *pendingMove
+	var person string
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		move, err = loadPendingMove(ctx, tx, r.ID)
+		if move, err = loadPendingMove(ctx, tx, r.ID); err != nil || move == nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT name FROM machine_sizes WHERE id = $1), '')`, move.To).Scan(&plan.moveTo); err != nil {
+			return err
+		}
+		if move.Kind != "reset" {
+			return nil
+		}
+		person, err = delivery.PersonName(ctx, tx, move.By)
 		return err
 	}); err != nil || move == nil {
 		return err
 	}
+	if plan.moveTo == "" && plan.Target != nil {
+		plan.moveTo = plan.Target.Name
+	}
+	plan.moveKind = move.Kind
+	// Told only of a move this resume asks lux for.
+	if plan.Target != nil && !plan.unknown && plan.Note == "" {
+		if move.Kind == "reset" {
+			plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + "."
+			if move.Note != "" {
+				plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + ": " + move.Note
+			}
+		} else {
+			where := ""
+			if plan.Pool != "" {
+				target := *plan.Target
+				target.Pool = nil
+				delivery.LoadPoolNames(ctx, s.Lux).Name(&target)
+				if target.Pool != nil {
+					where = " in " + *target.Pool
+				}
+			}
+			plan.moveTold = fmt.Sprintf("You now run on %s (%s)%s. Start again any server or watcher you had running. Carry on.",
+				plan.Target.Name, plan.Target.Spec(), where)
+		}
+	}
 	if move.Code != "" || move.Message != "" {
-		plan.refused = &lux.Error{Status: http.StatusUnprocessableEntity, Code: move.Code, Message: move.Message}
+		status := http.StatusUnprocessableEntity
+		if move.Code == "bad_request" {
+			// An older lux's unknown field, kept: told as one.
+			status = http.StatusBadRequest
+		}
+		plan.refused = &lux.Error{Status: status, Code: move.Code, Message: move.Message}
 	}
 	plan.onRefused = func(le *lux.Error) error {
 		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {

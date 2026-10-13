@@ -1027,7 +1027,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var sizes delivery.Sizes
 	var raised delivery.Raises
 	var recorded *delivery.Machine
-	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -1040,12 +1040,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
 				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.tier_override, ''),
-				o.agent_egress, p.agent_egress, p.agent_egress_mode
+				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
 			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &tierOverride,
-				&orgEgress, &projectEgress, &egressMode); err != nil {
+				&orgEgress, &projectEgress, &egressMode, &orgName); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -1164,9 +1164,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	if len(in.Repos) > 0 {
 		promptIn.BaseRef = in.Repos[0].Ref
 	}
+	if stored == nil {
+		// A resume sends no prompt: only a submit's says where it runs.
+		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI)
+	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
+		// The conductor's prompt, made in the transaction above, ends with
+		// the machine's paragraph as a phase's does.
 		in.Prompt = conductorPrompt
+		if promptIn.Machine != "" {
+			in.Prompt += "\n\n" + promptIn.Machine
+		}
 	}
 	// Pushed only by a phase that publishes, or a conductor, which
 	// publishes when it asks to. Even with nowhere to change
@@ -2026,35 +2035,6 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
 	if err := s.movePlan(ctx, r, plan); err != nil {
-		return lux.Run{}, 0, err
-	}
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var note, person string
-		err := tx.QueryRow(ctx, `SELECT COALESCE(reason,''), COALESCE(by_person,'') FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NULL`, r.ID).Scan(&note, &person)
-		if db.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		name, err := delivery.PersonName(ctx, tx, person)
-		if err != nil {
-			return err
-		}
-		if sizes.Now != nil {
-			told := "Moved back to " + sizes.Now.Name + " by " + name
-			if note != "" {
-				told += ": " + note
-			} else {
-				told += "."
-			}
-			if input != "" {
-				told += "\n\n" + input
-			}
-			input = told
-		}
-		return nil
-	}); err != nil {
 		return lux.Run{}, 0, err
 	}
 	secrets, err := s.resumeSecrets(ctx, r, lr.Spec, spec.Secrets)

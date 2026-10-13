@@ -55,14 +55,14 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var sizes delivery.Sizes
 	var raised delivery.Raises
 	var recorded *delivery.Machine
-	var prompt string
+	var prompt, orgName string
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// A session spans projects: its organisation's list alone, or any
 		// host when the brainstorm may reach any (brainstormAnywhere).
-		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, ''), o.agent_egress FROM runs r
-			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models, COALESCE(r.prompt, ''), o.agent_egress, o.name FROM runs r
+			JOIN organizations o ON o.id = r.organization_id WHERE r.id = $1`, r.ID).Scan(&orgModels, &briefing, &in.Egress, &orgName); err != nil {
 			return fmt.Errorf("load the session's run: %w", err)
 		}
 		var err error
@@ -129,6 +129,12 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		return lux.Spec{}, runSizes{}, err
 	}
 	in.Prompt = prompt
+	if stored == nil {
+		// A session agent has no CLI: it calls request_machine itself.
+		if line := s.machineLine(ctx, in.Machine, sizes, orgName, false); line != "" {
+			in.Prompt += "\n\n" + line
+		}
+	}
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
 		return lux.Spec{}, runSizes{}, errForge{err}

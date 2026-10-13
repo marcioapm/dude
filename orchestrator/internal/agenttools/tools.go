@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf16"
 
 	"github.com/jackc/pgx/v5"
@@ -17,7 +16,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
-	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // Who may create work: the roles whose job can turn up more of it.
@@ -31,8 +29,9 @@ const maxPendingRequests = 3
 
 // The tools, and which roles have them (docs/design/agent-tools.md).
 var tools = []tool{
-	define("list_machine_sizes", "List larger organization machine sizes this Run may request, with pools. lux validates the move before parking.", machineRoles, listMachineSizes),
-	define("request_machine", "Move to a larger machine with a reason naming the command, exit or error. Use list_machine_sizes to see targets. Every successful request ends your turn: conversation and checkout are kept, but processes and /tmp are not.", machineRoles, requestMachine),
+	define("list_machine_sizes", "The larger machine sizes this Run may move to, with their pools.", machineRoles, listMachineSizes).
+		describe(machineOffer(false)),
+	define("request_machine", "Move to a larger machine.", machineRoles, requestMachine).describe(machineOffer(true)),
 	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
 		"asked for them — optionally only those mentioning some text. Use it before creating work, to find what "+
 		"already exists.", nil, listTasks),
@@ -119,208 +118,6 @@ var tools = []tool{
 		"and files (then delegate: start_phase implement). Answers at once; you are woken when it is published or "+
 		"refused. Run a review before the pull request: the gate refuses an unreviewed commit of yours.",
 		conductors, publish),
-}
-
-var machineRoles = []string{"implementer", "fixer", "simplifier", "qa_browser", "reviewer", "conductor", "brainstorm", "investigator"}
-
-const machineMovesPerRun = 3
-
-type requestMachineIn struct {
-	Size   string `json:"size"`
-	Reason string `json:"reason"`
-}
-
-type requestMachineOut struct {
-	Size   string `json:"size"`
-	Pool   string `json:"pool,omitempty"`
-	Answer string `json:"answer"`
-}
-
-func largerMachine(target, current delivery.Machine) bool {
-	return target.MemoryMiB > current.MemoryMiB || target.MemoryMiB == current.MemoryMiB && target.CPUs > current.CPUs
-}
-
-func listMachineSizes(ctx context.Context, tx pgx.Tx, c Caller, _ struct{}) ([]delivery.Machine, error) {
-	out := []delivery.Machine{}
-	var current *delivery.Machine
-	if err := tx.QueryRow(ctx, `SELECT machine FROM runs WHERE id = $1`, c.RunID).Scan(&current); err != nil {
-		return nil, err
-	}
-	if current == nil {
-		return out, nil
-	}
-	var pools []lux.Pool
-	var before lux.Run
-	if c.env.lux != nil {
-		pools, _ = c.env.lux.Pools(ctx)
-		var live string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, c.RunID).Scan(&live); err != nil {
-			return nil, err
-		}
-		if live != "" {
-			before, _ = c.env.lux.Get(ctx, live)
-		}
-	}
-	sizes, err := delivery.LoadSizes(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	for _, target := range sizes.ByID {
-		if largerMachine(target, *current) && machineFits(target, pools, before) {
-			out = append(out, target)
-		}
-	}
-	slices.SortFunc(out, func(a, b delivery.Machine) int { return strings.Compare(a.Name, b.Name) })
-	return out, nil
-}
-
-func machineFits(size delivery.Machine, pools []lux.Pool, before lux.Run) bool {
-	for _, pool := range pools {
-		if size.PoolID != nil && *size.PoolID != pool.ID || size.PoolID == nil && !pool.IsDefault {
-			continue
-		}
-		if pool.HostSize != nil && (size.CPUs > pool.HostSize.CPUs || size.MemoryMiB<<20 > pool.HostSize.Memory || pool.HostSize.Disk > 0 && size.DiskGiB<<30 > pool.HostSize.Disk) {
-			return false
-		}
-		if before.Spec.Sandbox != nil && before.Spec.Sandbox.NestedContainers && pool.Capabilities != nil && pool.Capabilities.NestedContainers != nil && !*pool.Capabilities.NestedContainers {
-			return false
-		}
-		for i := len(before.Placements) - 1; i >= 0; i-- {
-			image := before.Placements[i].ImagePlatforms
-			if len(image) == 0 {
-				continue
-			}
-			if len(pool.Platforms) > 0 {
-				matched := false
-				for _, platform := range image {
-					if slices.Contains(pool.Platforms, platform) {
-						matched = true
-					}
-				}
-				if !matched {
-					return false
-				}
-			}
-			break
-		}
-		return true
-	}
-	return true
-}
-
-func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineIn) (requestMachineOut, error) {
-	var out requestMachineOut
-	reason := strings.TrimSpace(in.Reason)
-	if reason == "" || len([]rune(reason)) > 2000 {
-		return out, refuse("say what ran out: the command, its error or exit code (at most 2000 characters)")
-	}
-	var current *delivery.Machine
-	var live, status, control string
-	if err := tx.QueryRow(ctx, `SELECT machine, COALESCE(lux_run_id, ''), status::text, control FROM runs WHERE id = $1`, c.RunID).Scan(&current, &live, &status, &control); err != nil {
-		return out, err
-	}
-	var pending, used int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE settled_at IS NULL), count(*) FILTER (WHERE kind = 'raise' AND refused IS NULL) FROM machine_moves WHERE run_id = $1`, c.RunID).Scan(&pending, &used); err != nil {
-		return out, err
-	}
-	if pending > 0 {
-		return out, refuse("a machine move is under way; ask again once you are there")
-	}
-	if used >= machineMovesPerRun {
-		return out, refuse("This Run has moved 3 times, the limit for one Run; a Reset does not give a move back.")
-	}
-	if current == nil || live == "" || status != "running" || control != "none" {
-		return out, refuse("this Run is not live and available for a machine move")
-	}
-	sizes, err := delivery.LoadSizes(ctx, tx)
-	if err != nil {
-		return out, err
-	}
-	var target *delivery.Machine
-	for _, size := range sizes.ByID {
-		if strings.EqualFold(size.Name, strings.TrimSpace(in.Size)) {
-			copy := size
-			target = &copy
-			break
-		}
-	}
-	if target == nil {
-		return out, refuse("no size named %s; use dude machine sizes", in.Size)
-	}
-	names := delivery.LoadPoolNames(ctx, c.env.lux)
-	// A refusal once both sizes are known is recorded as machine.requested
-	// with refused and no moveId, so who asked for what has one source.
-	refusedAs := func(msg, code, recorded string) error {
-		payload := delivery.MovePayload("", c.Role, *current, *target, names)
-		payload["reason"], payload["refused"], payload["message"] = reason, recorded, msg
-		ev := c.event(delivery.EvMachineRequested, payload)
-		return refusal{msg: msg, code: code, record: &ev}
-	}
-	if !largerMachine(*target, *current) {
-		return out, refusedAs(fmt.Sprintf("you run on %s; ask for a size with more memory, or equal memory and more CPUs", current.Name), "", "not_larger")
-	}
-	if c.env.lux == nil || c.env.validateMachine == nil {
-		return out, refuse("machine validation is unavailable")
-	}
-	before, err := c.env.lux.Get(ctx, live)
-	if err != nil {
-		return out, err
-	}
-	if err := c.env.validateMachine(ctx, live, current, target, before); err != nil {
-		if le, ok := lux.AsError(err); ok {
-			return out, refusedAs(le.Message, le.Code, le.Code)
-		}
-		return out, err
-	}
-	id := "mmv_" + strings.TrimPrefix(ids.New(ids.Run), "run_")
-	raise := delivery.Raise{SizeID: target.SizeID, MoveID: id, AskedBy: c.RunID, Role: c.Role, Reason: reason, At: time.Now().UTC()}
-	var previous *delivery.Raise
-	if c.SessionID != "" {
-		if err := tx.QueryRow(ctx, `SELECT agent_machine FROM sessions WHERE id = $1`, c.SessionID).Scan(&previous); err != nil {
-			return out, err
-		}
-	} else {
-		if err := tx.QueryRow(ctx, `SELECT agent_machines->$2 FROM tasks WHERE id = $1`, c.TaskID, c.Role).Scan(&previous); err != nil {
-			return out, err
-		}
-	}
-	fromFields := map[string]any{}
-	encoded, _ := json.Marshal(current)
-	_ = json.Unmarshal(encoded, &fromFields)
-	fromFields["previousRaise"] = previous
-	from, _ := json.Marshal(fromFields)
-	layer, _ := json.Marshal(raise)
-	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = 'machine move', dude_pause = 'machine' WHERE id = $1 AND status = 'running' AND control = 'none'`, c.RunID)
-	if err != nil {
-		return out, err
-	}
-	if tag.RowsAffected() == 0 {
-		return out, refuse("this Run is no longer available for a machine move")
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO machine_moves (id, organization_id, task_id, session_id, run_id, role, kind, from_size, to_size_id, apply, reason) VALUES ($1, $2, $3, $4, $5, $6, 'raise', $7, $8, 'resize', $9)`, id, c.Org, db.Nullable(c.TaskID), db.Nullable(c.SessionID), c.RunID, c.Role, from, target.SizeID, reason)
-	if err != nil {
-		return out, err
-	}
-	if c.SessionID != "" {
-		_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = $2 WHERE id = $1`, c.SessionID, layer)
-	} else {
-		_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) WHERE id = $1`, c.TaskID, c.Role, layer)
-	}
-	if err != nil {
-		return out, err
-	}
-	payload := delivery.MovePayload(id, c.Role, *current, *target, names)
-	payload["reason"] = reason
-	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRequested, payload)); err != nil {
-		return out, err
-	}
-	// The layer is written and the move starts: the notice and the
-	// stepper's pool come from this, whole Machines and pool names.
-	raised := delivery.MovePayload(id, c.Role, *current, *target, names)
-	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvMachineRaised, raised)); err != nil {
-		return out, err
-	}
-	return requestMachineOut{Size: target.Name, Answer: "End your turn now; you are resumed on " + target.Name + ". Your conversation and checkout are kept; running processes and /tmp are not. Start servers and watchers again."}, nil
 }
 
 // ---- list_tasks --------------------------------------------------------------

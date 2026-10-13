@@ -330,7 +330,7 @@ func TestMachineMoveRefusalSurvivesRestartBeforeFallback(t *testing.T) {
 	}
 	told := 0
 	for _, in := range w.lux.ResumeInputs(live) {
-		if in == message {
+		if strings.HasPrefix(in, "You asked for Bigger; lux kept you on Standard: "+message+"\n\n") {
 			told++
 		}
 	}
@@ -424,6 +424,54 @@ func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
 	}
 	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
 		t.Fatal("missing raised settlement")
+	}
+	want := "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on.\n\n"
+	if inputs := w.lux.ResumeInputs(liveID); len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) {
+		t.Fatalf("resume inputs %q", inputs)
+	}
+}
+
+// What a submitted agent is told of its machine: the sizes it may move to,
+// with other pools named, in its prompt; a raised one says why it is on
+// it; the conductor's prompt ends the same way.
+func TestTheSubmittedPromptNamesTheSizesTheAgentMayMoveTo(t *testing.T) {
+	// Real models, so each prompt is the one a real agent reads.
+	w := conductorWorld(t, "llm-conductor")
+	w.onModel("implementer", "llm-implementer")
+	w.withTools()
+	w.syncer.Agent.ToolsService = true
+	w.lux.Decide = hang
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES
+		('msz_big', $1, 'Bigger', 4, 16384, 40, NULL), ('msz_huge', $1, 'Huge', 8, 32768, 80, $2), ('msz_vast', $1, 'Vast', 64, 262144, 80, $2)`, w.org, bigPool)
+	task := w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_x","askedBy":"run_x","role":"implementer","reason":"jest killed, exit 137","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	w.deliver(task)
+	impl := ""
+	w.until("the implementer on lux", func() bool {
+		impl = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='implement'), '')`, task)
+		return impl != "" && w.promptOf(impl) != ""
+	})
+	prompt := w.promptOf(impl)
+	want := "## Your machine\n\nYou run on Bigger (4 CPUs · 16 GiB · 40 GiB), raised for this task after the implementer asked: " +
+		"\"jest killed, exit 137\". Larger sizes you may move to: Huge (8 · 32, big pool). "
+	if !strings.Contains(prompt, want) || !strings.Contains(prompt, "dude machine request SIZE --reason") || strings.Contains(prompt, "Vast") {
+		t.Fatalf("implementer's prompt:\n%s", prompt)
+	}
+	// The conductor of another task, on its Small: every larger size that
+	// fits a host of its pool.
+	other := w.task()
+	status, out := w.call("/internal/tasks/"+other+"/talk", map[string]any{})
+	conductor, _ := out["runId"].(string)
+	if status != 201 || conductor == "" {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("the conductor on lux", func() bool { return w.promptOf(conductor) != "" })
+	if p := w.promptOf(conductor); !strings.HasSuffix(p, "\n\n## Your machine\n\nYou run on Small (0.5 CPUs · 1 GiB · 10 GiB). Larger sizes you may move to: "+
+		"Standard (2 · 8), Bigger (4 · 16), Huge (8 · 32, big pool). If something you need to run is killed for memory (exit 137, "+
+		"\"Killed\", an out-of-memory error) or is far too slow for its CPUs, do not call it flaky: run it again with fewer workers "+
+		"if that is enough, and otherwise move with `dude machine request SIZE --reason \"…\"`, saying what ran out. A move keeps "+
+		"your conversation and checkout; running processes and /tmp are not kept.") {
+		t.Fatalf("conductor's prompt:\n%s", p)
 	}
 }
 
