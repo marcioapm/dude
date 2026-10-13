@@ -791,7 +791,7 @@ func TestAMoveWhosePoolsCannotBeReadAtTheResumeIsRetried(t *testing.T) {
 	w.until("parked", func() bool { return w.lux.State(live) == "stopped" })
 	for range 10 {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
-		w.pump()
+		w.sweep()
 	}
 	if w.luxCalls(live, "resume") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='machine'`, runID) != 1 ||
 		w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL`, runID) != 1 {
