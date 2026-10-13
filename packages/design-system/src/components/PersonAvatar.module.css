@@ -101,7 +101,11 @@
   font-weight: var(--ds-weight-medium);
 }
 
-/* A stack: overlap by a quarter, earlier faces on top, a gap of the bed colour between them. */
+/*
+ * A stack: overlap by a fifth, earlier faces on top, a gap of the bed colour
+ * between them. A covered face's initials centre in the part that shows, so
+ * the face and ring on top never cut their first letter.
+ */
 .stack {
   display: inline-flex;
   align-items: center;
@@ -109,7 +113,10 @@
   isolation: isolate;
 }
 .stack > * + * {
-  margin-left: calc(var(--av-size) * -0.25);
+  margin-left: calc(var(--av-size) * -0.2);
+}
+.stack > * + * > .initials {
+  translate: calc(var(--av-size) * 0.1) 0;
 }
 .stack > .root:not(.online) {
   box-shadow: 0 0 0 1.5px var(--av-bed);

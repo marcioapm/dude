@@ -463,6 +463,52 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
     assert console_errors == [], f"console errors on the board: {console_errors}"
 
 
+def test_a_needs_you_card_at_1440_keeps_its_epic_readable_beside_the_mark(gallery_page: Page, console_errors: list):
+    """At 1440x900 a lane is about 180px: the key, the epic and "Needs you" do not fit one line.
+    The epic keeps at least 8ch and the mark wraps under it, rather than the epic shrinking to a letter."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 900})
+    gallery_page.get_by_role("link", name="Project board (realistic)").click()
+    board = gallery_page.locator("#board-project").get_by_role("region", name="control-plane board").first
+    board.wait_for(state="visible")
+    cards = board.locator("[data-board-key][data-triage=needs_you]")
+    assert cards.count() > 0
+    for i in range(cards.count()):
+        m = cards.nth(i).evaluate("""c => {
+            const top = c.firstElementChild, epic = [...top.children].find(e => e.title);
+            if (!epic) return null;
+            const probe = document.createElement('span');
+            probe.style.cssText = 'position:absolute;visibility:hidden;font:inherit';
+            probe.textContent = 'MMMMMMMM'.slice(0, Math.min(8, epic.textContent.length));
+            epic.append(probe);
+            const r = {shown: epic.getBoundingClientRect().width, need: Math.min(probe.getBoundingClientRect().width,
+                       epic.scrollWidth), overflow: top.scrollWidth - top.clientWidth};
+            probe.remove();
+            return r;
+        }""")
+        if m is None:
+            continue
+        assert m["overflow"] <= 0, m
+        # Proportional text: 8ch of "M" bounds 8 real characters from above, so allow half of it.
+        assert m["shown"] >= m["need"] / 2, m
+    assert console_errors == []
+
+
+def test_a_stack_of_initials_at_20px_never_covers_a_letter(gallery_page: Page, console_errors: list):
+    """The sidebar's 20px stacks: each covered face's initials sit right of the face on top of it and
+    its 1.5px bed ring. A text box carries about a pixel of side bearing, which may sit under the ring."""
+    gallery_page.get_by_role("link", name="PersonAvatar / ProjectAvatar").click()
+    for stack in gallery_page.get_by_test_id("stack-initials-20").all():
+        cut = stack.evaluate("""s => {
+            const faces = [...s.children];
+            return faces.slice(1).map((f, i) => {
+                const t = f.querySelector('span').getBoundingClientRect(), on = faces[i].getBoundingClientRect();
+                return {text: f.textContent, covered: on.right + 1.5 - t.left};
+            }).filter(x => x.covered > 1);
+        }""")
+        assert cut == [], cut
+    assert console_errors == []
+
+
 def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page, console_errors: list):
     """Quote hides when the editor narrows. If it held the toolbar's one Tab
     stop, the stop and focus move to a button still shown, so the toolbar

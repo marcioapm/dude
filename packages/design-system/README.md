@@ -973,7 +973,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Failed sits in Closed with its danger mark; aborted stays neutral.
 - A card is three lines and nothing more: status dot, mono key, epic (project
   boards only) and time in lane; the title, clamped to two lines; who and
-  what it cost. Running cards show the working roles and the
+  what it cost. The epic keeps at least 8ch: on a card too narrow for it
+  beside the key and a needs-you mark, the mark wraps under them. Running cards show the working roles and the
   deepest live activity. Needs-you cards show the asker and the question in
   attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
@@ -1366,9 +1367,10 @@ here.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
   person is the same colour on every screen with no profile record. A
   `photoUrl` replaces the initials and nothing else changes.
-- `PersonAvatarStack` overlaps by a quarter and puts the *first* person on
+- `PersonAvatarStack` overlaps by a fifth and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
-  requester). Past `max`, a "+N" chip in the same shape stands for the rest
+  requester). A covered face's initials centre in the part of it that
+  shows, so none loses a letter. Past `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
 
 ### Markdown

@@ -405,8 +405,9 @@
 
 .top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-4) var(--ds-space-8);
   min-width: 0;
   min-height: var(--ds-size-badge-md);
   font-size: var(--ds-text-xs);
@@ -418,13 +419,14 @@
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
+/* Never squeezed to a letter: below 8ch the mark at the end wraps under it, and the epic takes the line. */
 .epic {
   color: var(--ds-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
-  flex: 0 1 auto;
+  min-width: min(8ch, 100%);
+  flex: 1 1 0;
 }
 .topEnd {
   display: inline-flex;

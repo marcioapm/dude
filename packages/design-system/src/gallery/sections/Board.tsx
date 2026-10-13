@@ -43,7 +43,7 @@ export function BoardSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="board-project"
         title="Project board — realistic"
-        note="control-plane: three epics and three loose items, twenty cards. A card is three lines: status mark, key, epic and time in lane; the title, clamped to two lines; then who is on it and what it cost. A running card shows the working roles and the deepest live activity; a needs-you card shows the asker and the question in attention ink, with the tree row's wash and bar, and clicking it lands on the asking session. Everything else is quiet: hairline, mono key, muted numbers. Try ↑↓ ←→ Home End Enter."
+        note="control-plane: three epics and three loose items, twenty cards. A card is three lines: status mark, key, epic and time in lane (a narrow card wraps the mark under the key and epic rather than cut the epic to a letter); the title, clamped to two lines; then who is on it and what it cost. A running card shows the working roles and the deepest live activity; a needs-you card shows the asker and the question in attention ink, with the tree row's wash and bar, and clicking it lands on the asking session. Everything else is quiet: hairline, mono key, muted numbers. Try ↑↓ ←→ Home End Enter."
       >
         <Panes mode={mode}>
           <ProjectDemo />
