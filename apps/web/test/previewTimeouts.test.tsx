@@ -28,10 +28,17 @@ test("preview form shows both defaults and saves each timeout without replacing 
   const page = await until(() => mounted.container.querySelector<HTMLElement>("[data-testid=preview-settings]"), "previews");
   expect(byRole(page, "combobox", "First wake timeout").textContent).toBe("15 minutes");
   expect(byRole(page, "combobox", "Wake timeout").textContent).toBe("5 minutes");
-  for (const label of ["First wake timeout", "Wake timeout"]) {
+  // Each offers every minute the settings take, 1 to 120; the bounds are saved.
+  const minutes = Array.from({ length: 120 }, (_, i) => String(i + 1));
+  for (const [label, pick] of [["First wake timeout", "120"], ["Wake timeout", "1"]] as const) {
     await click(byRole(page, "combobox", label));
-    await click(await until(() => document.querySelector<HTMLElement>('[role=option][data-value="20"]') ?? [...document.querySelectorAll<HTMLElement>('[role=option]')].find(e => e.textContent === "20 minutes"), "20 minutes"));
-    await until(() => byRole(page, "combobox", label).textContent === "20 minutes" && !byRole<HTMLButtonElement>(page, "combobox", label).disabled, "saved");
+    const options = await until(() => {
+      const all = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      return all.length ? all : undefined;
+    }, "options");
+    expect(options.map((o) => o.dataset["value"])).toEqual(minutes);
+    await click(options.find((o) => o.dataset["value"] === pick)!);
+    await until(() => byRole(page, "combobox", label).textContent === `${pick} minute${pick === "1" ? "" : "s"}` && !byRole<HTMLButtonElement>(page, "combobox", label).disabled, "saved");
   }
-  expect(client.saved.map(s => [s.firstWakeTimeoutMinutes, s.wakeTimeoutMinutes])).toEqual([[20, 5], [20, 20]]);
+  expect(client.saved.map(s => [s.firstWakeTimeoutMinutes, s.wakeTimeoutMinutes])).toEqual([[120, 5], [120, 1]]);
 });

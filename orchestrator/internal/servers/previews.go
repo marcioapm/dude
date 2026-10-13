@@ -66,8 +66,6 @@ type Previews struct {
 	// How long a resume or replacement holds its preview's row reserved
 	// while it calls lux (operation.go); zero is 90 seconds.
 	OperationFor time.Duration
-	// The clock an open wake in lux is measured on; nil is time.Now.
-	Now func() time.Time
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc

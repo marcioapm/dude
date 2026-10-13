@@ -194,6 +194,35 @@ func isLux(err error, status int, code string) bool {
 	return ok && le.Status == status && le.Code == code
 }
 
+// A PATCH's wakeTimeout takes lux's bounds, 1s to 24h inclusive; one
+// outside them is refused and leaves the timeout as it was.
+func TestAPatchedWakeTimeoutIsWithinLuxsBounds(t *testing.T) {
+	ctx := context.Background()
+	_, c, _ := started(t, servesOnly)
+	sv, err := c.CreateServer(ctx, lux.CreateServer{Name: "web", Port: 3000, Hostname: "web-b.lux.test", Wake: "request", WakeTimeout: "15m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		timeout string
+		want    time.Duration
+		ok      bool
+	}{
+		{"999ms", 15 * time.Minute, false},
+		{"1s", time.Second, true},
+		{"24h", 24 * time.Hour, true},
+		{"24h0m1s", 24 * time.Hour, false},
+	} {
+		got, err := c.PatchServer(ctx, sv.ID, lux.PatchServer{WakeTimeout: &tc.timeout})
+		if tc.ok != (err == nil) || (err != nil && !isLux(err, 422, "invalid_server")) {
+			t.Fatalf("PATCH wakeTimeout %s: %v", tc.timeout, err)
+		}
+		if now, _ := c.GetServer(ctx, sv.ID); now.WakeTimeoutDuration() != tc.want || (tc.ok && got.WakeTimeoutDuration() != tc.want) {
+			t.Errorf("after PATCH %s: %v, want %v", tc.timeout, now.WakeTimeoutDuration(), tc.want)
+		}
+	}
+}
+
 // Attach refusals carry lux's codes and messages: a Run it does not have
 // (not_found "not found", no ids), a server another Run holds (attached),
 // a name the Run has (name_taken), a Run that is over (finished). A resume

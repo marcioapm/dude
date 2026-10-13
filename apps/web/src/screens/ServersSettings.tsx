@@ -169,7 +169,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
           <SettingRow key={field} label={label} help={help}>
             <Select aria-label={label} value={String(previews[field])} disabled={!canEdit || previewSave.busy}
               onValueChange={(v) => savePreviews({ [field]: Number(v) }, `${label} saved`)}
-              options={Array.from({ length: 120 }, (_, i) => ({ value: String(i + 1), label: `${i + 1} minutes` }))} />
+              options={Array.from({ length: 120 }, (_, i) => ({ value: String(i + 1), label: i === 0 ? "1 minute" : `${i + 1} minutes` }))} />
           </SettingRow>
         ))}
         <SettingRow label="Access" help="Who can open a preview.">

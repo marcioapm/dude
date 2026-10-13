@@ -167,7 +167,7 @@ type recordedServer struct {
 func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantServer, in lux.ServerInput, timeout time.Duration) error {
 	var patch lux.PatchServer
 	var changed []string
-	if t := wakeTimeoutPatch(cur, timeout, p.now()); t != nil {
+	if t := wakeTimeoutPatch(cur, timeout, time.Now()); t != nil {
 		patch.WakeTimeout = t
 		changed = append(changed, "wakeTimeout")
 	}
@@ -235,13 +235,6 @@ func wakeTimeoutPatch(cur lux.TenantServer, want time.Duration, now time.Time) *
 	return &s
 }
 
-func (p *Previews) now() time.Time {
-	if p.Now != nil {
-		return p.Now()
-	}
-	return time.Now()
-}
-
 // recordWakeTimeout keeps the wake timeout lux reports for a preview
 // server, so the sweep (wakeTimeoutsDue) knows which servers to patch.
 func (p *Previews) recordWakeTimeout(ctx context.Context, r wakeRun, sv lux.TenantServer) error {
@@ -274,7 +267,7 @@ func (p *Previews) applyWakeTimeouts(ctx context.Context, r wakeRun) error {
 		return err
 	}
 	for _, cur := range list {
-		if timeout := wakeTimeoutPatch(cur, wakeTimeout(settings, servedOnce), p.now()); timeout != nil {
+		if timeout := wakeTimeoutPatch(cur, wakeTimeout(settings, servedOnce), time.Now()); timeout != nil {
 			got, err := p.Lux.PatchServer(ctx, cur.ID, lux.PatchServer{WakeTimeout: timeout})
 			if lux.IsNotFound(err) {
 				continue
