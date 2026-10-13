@@ -42,6 +42,11 @@ export interface OrgSwitcherProps {
   readonly onSignOut: () => void;
   /** What signing out does here: "Of Cloudflare Access, on this browser". */
   readonly signOutNote?: string | undefined;
+  /** The settings item's label. */
+  readonly settingsLabel?: string | undefined;
+  /** The super-admin item's label, and the line under it. */
+  readonly adminLabel?: string | undefined;
+  readonly adminNote?: string | undefined;
   /** `band`: the expanded sidebar's profile band. `rail`: the collapsed rail's face. */
   readonly variant?: "band" | "rail" | undefined;
   readonly open?: boolean | undefined;
@@ -79,9 +84,10 @@ export function switcherItems(p: OrgSwitcherProps): RowMenuItem[] {
     });
   }
   if (invitations.length) items.push({ kind: "separator" });
-  items.push({ id: "settings", label: "Your settings", icon: "settings", onSelect: p.onSettings });
+  items.push({ id: "settings", label: p.settingsLabel ?? "Your settings", icon: "settings", onSelect: p.onSettings });
   if (p.superAdmin && p.onAdmin) {
-    items.push({ id: "admin", label: "All organisations", icon: "building", description: "Super-admin: this dude's organisations", onSelect: p.onAdmin });
+    items.push({ id: "admin", label: p.adminLabel ?? "All organisations", icon: "building", onSelect: p.onAdmin,
+      ...(p.adminNote ? { description: p.adminNote } : {}) });
   }
   items.push({ kind: "separator" }, {
     id: "signout", label: "Sign out", icon: "arrow-right", onSelect: p.onSignOut,

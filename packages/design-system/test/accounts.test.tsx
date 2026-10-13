@@ -92,7 +92,7 @@ describe("OrgSwitcher", () => {
   });
 
   test("the menu: your organisations with role and waiting, the current ticked; Join…; settings; All organisations; Sign out", async () => {
-    const el = await mount(<OrgSwitcher {...props} />);
+    const el = await mount(<OrgSwitcher {...props} adminNote="Super-admin: this dude's organisations" />);
     await open(el.querySelector("[data-testid=switcher]")!);
     const radios = allByRole(document, "menuitemradio");
     expect(radios.map((r) => [spoken(r), r.getAttribute("aria-checked")])).toEqual([
@@ -105,6 +105,16 @@ describe("OrgSwitcher", () => {
       "Join Globex… Invited by Lin Zhao · expires in 9 days", "Your settings", "All organisations Super-admin: this dude's organisations",
       "Sign out Of Cloudflare Access, on this browser",
     ]);
+  });
+
+  test("the product's words for settings and the super-admin item come from props; without them, neutral ones and no note", async () => {
+    const el = await mount(<OrgSwitcher {...props} settingsLabel="Preferences" adminLabel="Every workspace" />);
+    await open(el.querySelector("[data-testid=switcher]")!);
+    expect(allByRole(document, "menuitem").map(spoken).slice(1, 3)).toEqual(["Preferences", "Every workspace"]);
+    await act(async () => root?.unmount());
+    const plain = await mount(<OrgSwitcher {...props} />);
+    await open(plain.querySelector("[data-testid=switcher]")!);
+    expect(allByRole(document, "menuitem").map(spoken).slice(1, 3)).toEqual(["Your settings", "All organisations"]);
   });
 
   test("picking another organisation switches to it; picking the current one does nothing", async () => {
@@ -294,16 +304,22 @@ describe("InvitationLinkList", () => {
 });
 
 describe("KeyShownOnce", () => {
-  test("the key, Copy that says Copied, and the usage lines", async () => {
+  test("the key, Copy that says Copied, and the usage lines under How to use it", async () => {
     const written: string[] = [];
     await mount(<KeyShownOnce title="Key “Laptop” for Acme" secret="dude_sk_x" onClose={() => undefined}
-      usage={"dude login https://dude.acme.dev"} copy={async (s) => void written.push(s)} />);
+      usage={"curl https://dude.acme.dev/v1/me"} copy={async (s) => void written.push(s)} />);
     const dialog = byRole(document, "dialog", "Key “Laptop” for Acme");
     expect((byRole(dialog, "textbox", "Key") as HTMLInputElement).value).toBe("dude_sk_x");
-    expect(dialog.querySelector("[data-testid=key-usage]")!.textContent).toBe("dude login https://dude.acme.dev");
+    expect(dialog.querySelector("[data-testid=key-usage]")!.textContent).toBe("curl https://dude.acme.dev/v1/me");
+    expect(dialog.querySelector(".ds-label")!.textContent).toBe("How to use it");
     await act(async () => byRole(dialog, "button", "Copy").click());
     expect(written).toEqual(["dude_sk_x"]);
     expect(byRole(dialog, "button", "Copied")).toBeTruthy();
+  });
+
+  test("the usage heading is the caller's when given", async () => {
+    await mount(<KeyShownOnce title="Key" secret="s" onClose={() => undefined} usage="x" usageHeading="Send it as a bearer token" />);
+    expect(byRole(document, "dialog", "Key").querySelector(".ds-label")!.textContent).toBe("Send it as a bearer token");
   });
 });
 

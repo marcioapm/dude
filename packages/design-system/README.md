@@ -2262,8 +2262,9 @@ are in `docs/design/accounts.md`):
   `kind: "radio"` items, each with its face (`leading`), your role and
   what waits on you there as the description and the needs-you pill at
   the end (`trailing`), the current one ticked; **Join <org>…** per
-  invitation (`onJoin`); **Your settings**; **All organisations** with
-  `superAdmin`; **Sign out** with `signOutNote`. The trigger's name says
+  invitation (`onJoin`); **Your settings** (`settingsLabel`); **All
+  organisations** with `superAdmin` (`adminLabel`, and `adminNote` under
+  it); **Sign out** with `signOutNote`. The trigger's name says
   who, where, your role and what it opens. Enter or Space opens, arrows
   move, Enter picks, Escape closes and returns focus. Picking the current
   organisation does nothing; switching is the app's navigation
@@ -2293,8 +2294,9 @@ are in `docs/design/accounts.md`):
   Used by an invite's result and by Create organisation.
 - **KeyShownOnce** — a secret, shown this once (moved from the web app): the
   key in a read-only mono field that selects itself on focus, Copy
-  (Copied) at its end, and a `usage` slot for the CLI lines (a string is
-  set in a square sunken well) with a muted `usageNote`. Done closes it;
+  (Copied) at its end, and a `usage` slot for how to use it (a string is
+  set in a square sunken well) under `usageHeading` ("How to use it"),
+  with a muted `usageNote`. Done closes it;
   nothing shows it again. `copy` replaces the clipboard write in tests.
 - **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
   is one centred column: the app's `mark`, a heading (the page's `h1`) and

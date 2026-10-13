@@ -54,6 +54,7 @@ function OpenSwitcher({ variant }: { readonly variant: "band" | "rail" }) {
     <div ref={setHost} style={{ position: "relative", minHeight: 420, display: "flex", alignItems: "flex-end", width: variant === "band" ? 284 : 56 }}>
       {host ? <OrgSwitcher you={YOU} current={ACME} memberships={MEMBERSHIPS} invitations={INVITES} superAdmin variant={variant}
         onSwitch={() => undefined} onJoin={() => undefined} onSettings={() => undefined} onAdmin={() => undefined} onSignOut={() => undefined}
+        adminNote="Super-admin: this dude's organisations"
         signOutNote="Of Cloudflare Access, on this browser" open forceMount container={host} /> : null}
     </div>
   );
@@ -65,8 +66,7 @@ function KeyDemo() {
     <>
       <Button onClick={() => setOpen(true)}>Show a new key</Button>
       {open ? <KeyShownOnce title="Key “Laptop” for Acme" secret="dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo" onClose={() => setOpen(false)}
-        usage={"dude login https://dude.acme.dev\n# paste the key; the CLI keeps it as \"acme\"\ndude whoami"}
-        usageNote="With keys for several organisations, the CLI uses the last one you logged in with; --org acme picks one." /> : null}
+        usage={"curl -H \"authorization: Bearer dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo\" https://dude.acme.dev/v1/me\n# acts as you in Acme; its answer names the organisation and your role"} /> : null}
     </>
   );
 }

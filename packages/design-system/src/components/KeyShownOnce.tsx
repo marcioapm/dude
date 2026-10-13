@@ -10,8 +10,10 @@ export interface KeyShownOnceProps {
   readonly secret: string;
   readonly onClose: () => void;
   readonly description?: string | undefined;
-  /** How to use it, under the key: the CLI lines. Strings are set as a code block. */
+  /** How to use it, under the key. Strings are set as a code block. */
   readonly usage?: ReactNode;
+  /** The label over `usage`. */
+  readonly usageHeading?: string | undefined;
   /** Under the usage, in muted ink. */
   readonly usageNote?: ReactNode;
   /** Writes `secret` to the clipboard; the browser's by default. */
@@ -23,7 +25,7 @@ export interface KeyShownOnceProps {
  * selects itself on focus, Copy (which says Copied), and how to use it.
  * Done closes it; it is never shown again.
  */
-export function KeyShownOnce({ title, secret, onClose, description, usage, usageNote, copy }: KeyShownOnceProps) {
+export function KeyShownOnce({ title, secret, onClose, description, usage, usageHeading = "How to use it", usageNote, copy }: KeyShownOnceProps) {
   const [copied, setCopied] = useState(false);
   const write = copy ?? ((s: string) => navigator.clipboard?.writeText(s) ?? Promise.resolve());
   return (
@@ -36,7 +38,7 @@ export function KeyShownOnce({ title, secret, onClose, description, usage, usage
             onClick={() => void write(secret).then(() => setCopied(true), () => undefined)}>{copied ? "Copied" : "Copy"}</Button>} />
         {usage ? (
           <div className={styles["usage"]}>
-            <span className="ds-label">Use it with the CLI</span>
+            <span className="ds-label">{usageHeading}</span>
             {typeof usage === "string" ? <pre className={styles["code"]} data-testid="key-usage"><code>{usage}</code></pre> : usage}
             {usageNote ? <p className={styles["note"]}>{usageNote}</p> : null}
           </div>
