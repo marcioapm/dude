@@ -181,6 +181,31 @@ func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
 	}
 }
 
+// Another caller with no bound (a submit's spec build) already looking up
+// the bot on a slow GitHub holds it: a commit's co-authors still come
+// within the endpoint's bound.
+func TestACommitsCoauthorsDoNotWaitBehindAnotherBotLookup(t *testing.T) {
+	forges := newAppForges(t, 6*time.Second)
+	f := setupWith(t, &agenttools.Server{Forges: forges})
+	f.coauthorTask(t)
+	token := f.run(t, "run_co_behind", "implementer", "running")
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_, _ = forges.gh.Bot(context.Background())
+	}()
+	t.Cleanup(func() { <-first })
+	time.Sleep(300 * time.Millisecond)
+	start := time.Now()
+	status, body := f.getCoauthors(t, token)
+	if took := time.Since(start); took >= 3*time.Second {
+		t.Errorf("the endpoint took %s behind another lookup, want under 3s", took)
+	}
+	if status != 200 || body != "Co-authored-by: Ana Lima <ana@corp.example>\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>\n" {
+		t.Errorf("behind another lookup: %d %q, want both people", status, body)
+	}
+}
+
 // hookRepo is a repository whose hooks are dude's image's (its git-config,
 // setting core.hooksPath at a copy of its hook directory, included in
 // command scope as a Run includes it), committing with the dude CLI on

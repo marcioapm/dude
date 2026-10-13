@@ -106,13 +106,24 @@ func (s *Server) coauthors(w http.ResponseWriter, r *http.Request) {
 	// The bot commits with a GitHub App: never its own co-author. Not known
 	// (no forge, GitHub down or slow) leaves nobody out on its account: a
 	// commit waits at most botLookup on GitHub, well inside the CLI's own
-	// timeout, so its people are never lost to a slow GitHub.
+	// timeout, so its people are never lost to a slow GitHub. gh.Bot can
+	// wait on a lock another caller holds without heeding ctx, so the
+	// handler waits on the lookup's answer rather than on the call; the
+	// buffered channel lets the goroutine finish once that caller does.
 	bot := ""
 	if s.Forges != nil && len(people) > 0 {
 		if gh, err := s.Forges.For(r.Context(), c.Org); err == nil && gh != nil && gh.IsApp() {
 			ctx, cancel := context.WithTimeout(r.Context(), botLookup)
-			if id, err := gh.Bot(ctx); err == nil {
-				bot = id.Email
+			found := make(chan string, 1)
+			go func() {
+				if id, err := gh.Bot(ctx); err == nil {
+					found <- id.Email
+				}
+				close(found)
+			}()
+			select {
+			case bot = <-found:
+			case <-ctx.Done():
 			}
 			cancel()
 		}
