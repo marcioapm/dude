@@ -592,6 +592,38 @@ func TestMachineMoveRefusalSurvivesRestartBeforeFallback(t *testing.T) {
 	}
 }
 
+// lux refuses a Reset's real resume after its dry run passed (the pool went
+// in between): the agent resumes where it was, told in the Reset's words
+// that it was to move back and where lux kept it, and the notice says so.
+func TestALuxRefusedResetIsToldAsAMoveBack(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("raised on lux", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1 && w.lux.State(live) == "running"
+	})
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id=$2 WHERE organization_id=$1 AND name='Standard'`, w.org, bigPool)
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 || out["moved"] != true {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	w.until("settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
+	})
+	inputs := w.lux.ResumeInputs(live)
+	if len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], "You were to move back to Standard; lux kept you on Bigger: Standard's pool has no host it fits.\n\n") {
+		t.Fatalf("inputs %q", inputs)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'kind'='reset'
+		AND payload->>'message'='Standard''s pool has no host it fits' AND payload->'kept'->>'name'='Bigger'`, runID) != 1 {
+		t.Fatal("machine.refused not recorded once for the Reset")
+	}
+}
+
 // A refused raise puts back the layer it replaced only while the layer is
 // still its own: another Run of the role (two reviewers share one) that
 // raised it since keeps its raise.
@@ -792,6 +824,16 @@ func TestAMoveWhosePoolsCannotBeReadAtTheResumeIsRetried(t *testing.T) {
 	for range 10 {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
 		w.sweep()
+		// Each failed read spaces the next attempt, so pools that never
+		// answer are not asked on every sweep.
+		if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND next_attempt_at > now() + interval '3 seconds'`, runID) != 1 {
+			t.Fatalf("the retry was not spaced:\n%s", w.describeRuns())
+		}
+	}
+	reads := pools.calls.Load()
+	w.sweep()
+	if got := pools.calls.Load(); got != reads {
+		t.Fatalf("a sweep inside the back-off read lux's pools: %d reads, was %d", got, reads)
 	}
 	if w.luxCalls(live, "resume") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='machine'`, runID) != 1 ||
 		w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL`, runID) != 1 {
