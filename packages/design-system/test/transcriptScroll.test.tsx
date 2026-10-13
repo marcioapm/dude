@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
+import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { ChatTranscript } from "../src/components/ChatTranscript.tsx";
 import { QuestionCard } from "../src/components/QuestionCard.tsx";
@@ -27,6 +28,7 @@ const HEIGHT = 300;
 /** Gives the transcript's viewport a layout: each turn TURN tall, stacked in order, and scrollTo moving it. */
 function laidOut(page: HTMLElement): HTMLElement {
   const viewport = page.querySelector<HTMLElement>("[role=log]")!;
+  viewport.style.overflowY = "auto";
   let top = 0;
   const turns = () => [...viewport.querySelectorAll<HTMLElement>("[data-turn]")];
   Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => turns().length * TURN });
@@ -54,6 +56,11 @@ function Transcript({ turns, held }: { turns: string[]; held?: string | undefine
           <select><option>One</option></select><div role="textbox" tabIndex={0} />
           {t === "t3" ? <QuestionCard role="conductor" text="" items={ITEMS} askedAt={new Date()} answeredAt={null} onSubmit={async () => {}} /> : null}
           <pre data-scroll="tall" style={{ overflowY: "auto" }}><code>output</code></pre>
+          {t === "t3" ? createPortal(<button data-portaled>Viewer control</button>, document.body) : null}
+          <div data-scroll="outer" style={{ overflowY: "auto" }}>
+            <pre data-scroll="nested" style={{ overflowY: "auto" }}><code>nested output</code></pre>
+          </div>
+          <pre data-scroll="horizontal" style={{ overflowX: "auto", overflowY: "auto" }}><code>long line</code></pre>
           <pre data-scroll="visible"><code>short</code></pre>
         </div>
       ))}
@@ -205,22 +212,51 @@ describe("ChatTranscript keepInView", () => {
     });
   }
 
-  for (const [name, selector, at] of [
-    ["already at its end", "pre[data-scroll=tall]", 300],
-    ["that overflows without scrolling", "pre[data-scroll=visible]", 0],
+  for (const [name, selector, at, key] of [
+    ["already at its end", "pre[data-scroll=tall]", 300, "PageDown"],
+    ["already at its top", "pre[data-scroll=tall]", 0, "PageUp"],
+    ["already at its top", "pre[data-scroll=tall]", 0, "Home"],
+    ["that overflows without scrolling", "pre[data-scroll=visible]", 0, "PageDown"],
+    ["with horizontal-only subpixel overflow", "pre[data-scroll=horizontal]", 0, "PageDown"],
   ] as const) {
-    test(`PageDown in a code block ${name} releases: the browser scrolls the log`, async () => {
+    test(`${key} in a code block ${name} releases: the browser scrolls the log`, async () => {
       const viewport = await mount(turns(8), "[data-turn=t3]");
       scrollers(viewport, at);
+      if (selector === "pre[data-scroll=horizontal]") {
+        Object.defineProperty(viewport.querySelector(`[data-turn=t3] ${selector}`)!, "scrollHeight", { configurable: true, get: () => 101 });
+      }
+      const up = key === "PageUp" || key === "Home";
       await act(async () => {
-        viewport.querySelector<HTMLElement>(`[data-turn=t3] ${selector}`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true }));
-        viewport.scrollTop = viewport.scrollHeight - HEIGHT;
+        viewport.querySelector<HTMLElement>(`[data-turn=t3] ${selector}`)!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        viewport.scrollTop = up ? TURN : viewport.scrollHeight - HEIGHT;
         viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
       });
       await render(turns(9), "[data-turn=t3]");
-      expect(viewport.scrollTop).toBe(9 * TURN - HEIGHT);
+      expect(viewport.scrollTop).toBe(up ? TURN : 9 * TURN - HEIGHT);
     });
   }
+
+  test("PageDown walks past an inner scroller at its end when its outer scroller can move", async () => {
+    const viewport = await mount(turns(8), "[data-turn=t3]");
+    scrollers(viewport, 300);
+    const outer = viewport.querySelector<HTMLElement>("[data-turn=t3] [data-scroll=outer]")!;
+    Object.defineProperty(outer, "clientHeight", { configurable: true, get: () => 100 });
+    Object.defineProperty(outer, "scrollHeight", { configurable: true, get: () => 400 });
+    await act(async () => {
+      outer.querySelector("code")!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true }));
+    });
+    await render(turns(9), "[data-turn=t3]");
+    expect(viewport.scrollTop).toBe(3 * TURN - 12);
+  });
+
+  test("End on a button portaled from a turn keeps the question hold", async () => {
+    const viewport = await mount(turns(8), "[data-turn=t3]");
+    await act(async () => {
+      document.querySelector("[data-portaled]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+    });
+    await render(turns(9), "[data-turn=t3]");
+    expect(viewport.scrollTop).toBe(3 * TURN - 12);
+  });
 
   test("scroll keys on the viewport still release while clicks on choices do not", async () => {
     const viewport = await mount(turns(8), "[data-turn=t3]");

@@ -234,6 +234,7 @@ export function ChatTranscript({
       <div className={styles["scroller"]}>
         <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} onWheel={release} onTouchMove={release}
           onKeyDown={(e) => {
+            if (!e.currentTarget.contains(e.target as Node)) return;
             if (e.defaultPrevented || !SCROLL_KEYS.has(e.key)) return;
             const target = e.target as HTMLElement;
             const own = target === e.currentTarget;
