@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -26,9 +27,13 @@ type Machine struct {
 	// The pool's name in lux when the Run was submitted; filled in by the
 	// submit from lux's list, nil when it names none or lux did not say.
 	Pool *string `json:"pool"`
-	// Where the size came from: "project", "organization", "implementer"
-	// (a fixer with none of its own), or "default".
+	// Where the size came from: "task" or "session" (a size an agent
+	// raised), "project", "organization", "implementer" (a fixer with
+	// none of its own), or "default".
 	From string `json:"from"`
+	// The raise it runs on, copied from the task's or session's layer:
+	// the chip's tooltip reads it, so history stays true after a Reset.
+	Raised *Raise `json:"raised,omitempty"`
 	// Why the Run is not on the size its settings name, said at a resume
 	// that could not resize it (phases.PlanResize); "" when it is.
 	Note string `json:"note,omitempty"`
@@ -39,13 +44,44 @@ type Machine struct {
 	// the submit's. A memory limit of an earlier placement is not this
 	// size's (phases.RecordMemoryLimit).
 	SinceEpoch int `json:"sinceEpoch,omitempty"`
-	// The size id a resume did not apply because lux's pool list said the
-	// Run's pool is not lux's default and the size names none: a later
-	// resume to the same size does not ask lux again.
-	OtherPool string `json:"otherPool,omitempty"`
 	// Not recorded: the size id the settings name that no longer exists,
 	// when the default was taken because of it.
 	Missing string `json:"-"`
+}
+
+// Raise is a size an agent asked for, kept on its task per role
+// (tasks.agent_machines) or on its session (sessions.agent_machine).
+type Raise struct {
+	SizeID string `json:"sizeId"`
+	MoveID string `json:"moveId"`
+	// The Run that asked, and its settings role.
+	AskedBy string    `json:"askedBy"`
+	Role    string    `json:"role,omitempty"`
+	Reason  string    `json:"reason"`
+	At      time.Time `json:"at"`
+}
+
+// Raises are a task's raised sizes by settings role; a session's is the
+// one under its agent's role.
+type Raises map[string]Raise
+
+// LoadTaskRaises reads a task's raised sizes.
+func LoadTaskRaises(ctx context.Context, tx pgx.Tx, taskID string) (Raises, error) {
+	var out Raises
+	if taskID == "" {
+		return out, nil
+	}
+	err := tx.QueryRow(ctx, `SELECT agent_machines FROM tasks WHERE id = $1`, taskID).Scan(&out)
+	return out, err
+}
+
+// LoadSessionRaise reads a session's raised size, as Raises under role.
+func LoadSessionRaise(ctx context.Context, tx pgx.Tx, sessionID, role string) (Raises, error) {
+	var r *Raise
+	if err := tx.QueryRow(ctx, `SELECT agent_machine FROM sessions WHERE id = $1`, sessionID).Scan(&r); err != nil || r == nil {
+		return nil, err
+	}
+	return Raises{role: *r}, nil
 }
 
 // DiskKept is lux refusing to shrink a Run's disk at a resume: the disk
@@ -89,11 +125,13 @@ func LoadSizes(ctx context.Context, tx pgx.Tx) (Sizes, error) {
 	return out, rows.Err()
 }
 
-// ForRole is the size role runs on over a project's agent_models and its
-// organization's: the first that names one of the sizes, the fixer then
-// following the implementer (modelFallback), else the default. false when
-// the organization has no size at all.
-func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool) {
+// ForRole is the size role runs on over the sizes its agents raised in
+// the task (or session), a project's agent_models and its organization's:
+// the first that names one of the sizes, the fixer then following the
+// implementer (modelFallback) over the same layers, else the default.
+// So implementer@task reaches the fixer unless the fixer names a size at
+// some layer. false when the organization has no size at all.
+func (s Sizes) ForRole(role string, raised Raises, project, org json.RawMessage) (Machine, bool) {
 	chain := []string{role}
 	if f, ok := modelFallback[role]; ok {
 		chain = append(chain, f)
@@ -102,10 +140,17 @@ func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool
 		name  string
 		roles map[string]roleLayer
 	}
-	layers := []layer{{name: "project"}, {name: "organization"}}
+	layers := []layer{{name: "task"}, {name: "project"}, {name: "organization"}}
+	if len(raised) > 0 {
+		layers[0].roles = map[string]roleLayer{}
+		for r, raise := range raised {
+			id := raise.SizeID
+			layers[0].roles[r] = roleLayer{MachineSize: &id}
+		}
+	}
 	for i, raw := range []json.RawMessage{project, org} {
-		if json.Unmarshal(raw, &layers[i].roles) != nil {
-			layers[i].roles = nil
+		if json.Unmarshal(raw, &layers[i+1].roles) != nil {
+			layers[i+1].roles = nil
 		}
 	}
 	missing := ""
@@ -117,7 +162,10 @@ func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool
 			}
 			if size, ok := s.ByID[*id]; ok {
 				size.From = l.name
-				if r != role {
+				if l.name == "task" {
+					raise := raised[r]
+					size.Raised = &raise
+				} else if r != role {
 					size.From = r
 				}
 				return size, true

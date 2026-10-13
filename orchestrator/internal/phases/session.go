@@ -53,6 +53,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var tier delivery.Tier
 	var noTier string
 	var sizes delivery.Sizes
+	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var prompt string
 	role := delivery.RoleBrainstorm
@@ -88,6 +89,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
+		if raised, err = delivery.LoadSessionRaise(ctx, tx, r.SessionID, role); err != nil {
+			return fmt.Errorf("load the session's raised machine: %w", err)
+		}
 		// A resume sends no prompt: lux keeps the submitted one.
 		if stored == nil {
 			if prompt, err = s.talkerPrompt(ctx, tx, r, briefing, nil); err != nil {
@@ -111,7 +115,10 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 	in.Harness = settings.HarnessName()
 	s.logIgnoredOptions(r, in)
-	if m, ok := sizes.ForRole(role, nil, orgModels); ok {
+	if m, ok := sizes.ForRole(role, raised, nil, orgModels); ok {
+		if m.Raised != nil {
+			m.From = "session"
+		}
 		in.Machine = &m
 	}
 	in.Image, in.NestedContainers = image.Ref, image.Nested

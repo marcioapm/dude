@@ -1025,6 +1025,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt string
 	var tier delivery.Tier
@@ -1076,6 +1077,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
+		}
+		if raised, err = delivery.LoadTaskRaises(ctx, tx, r.TaskID); err != nil {
+			return fmt.Errorf("load the task's raised machines: %w", err)
 		}
 		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, settingsRole); err != nil {
 			return err
@@ -1135,7 +1139,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	in.Harness = settings.HarnessName()
 	s.logIgnoredOptions(r, in)
 	in.Egress = RunEgress(orgEgress, projectEgress, egressMode)
-	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
+	if m, ok := sizes.ForRole(settingsRole, raised, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
 	in.Image, in.NestedContainers = image.Ref, image.Nested

@@ -245,11 +245,8 @@ func (w *world) sleepAgain(runID, web string) {
 	})
 }
 
-// A size in another pool cannot be had by a resume: lux binds a Run to the
-// pool it was submitted to. The preview wakes on the size it has, nothing
-// is sent, and its record says why, naming both; the memory limit lux gave
-// it, still its size's, is kept.
-func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
+// A settings-driven wake sends the other pool and records lux's binding.
+func TestAWakeIntoASizeInAnotherPoolMovesToThatPool(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.lux.MemoryShare = 0.95
@@ -261,20 +258,22 @@ func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_big"}' WHERE id = $1`, w.project)
 	w.wakeAgain(runID, web)
 
-	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] != nil {
-		t.Errorf("the wake sent %v, want nothing", got)
+	want := lux.Resources{CPUs: 8, Memory: 16 * gibB, Disk: 40 * gibB}
+	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] == nil || *got[0] != want {
+		t.Fatalf("resources: %v", got)
 	}
-	if got := w.luxResources(luxRun); got.CPUs != 2 {
-		t.Errorf("lux's spec = %+v, want Standard's", got)
+	if got := w.lux.ResumePlacementsOf(luxRun); len(got) != 1 || got[0] != bigPool {
+		t.Fatalf("placement: %v", got)
+	}
+	if got := w.luxResources(luxRun); got != want {
+		t.Fatalf("lux's spec: %+v", got)
 	}
 	m := w.machineOf(runID)
-	want := "Its settings now name Big, in another pool: a stopped Run cannot change pools, so it keeps Standard. A new Run gets Big."
-	// Standard's 8 GiB, of which the container gets 95%, to a MiB.
-	if m["name"] != "Standard" || m["cpus"] != 2.0 || m["note"] != want || m["memoryLimit"] != float64(int64(7782)<<20) {
-		t.Errorf("runs.machine = %v, want Standard kept with the reason and its memory limit", m)
+	if m["name"] != "Big" || m["poolId"] != bigPool || m["note"] != nil {
+		t.Fatalf("record: %v", m)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized' AND payload->'machine'->>'note' = $2`, runID, want); n != 1 {
-		t.Errorf("%d run.resized with the reason, want 1", n)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
+		t.Fatalf("run.resized: %d", n)
 	}
 }
 
@@ -337,12 +336,8 @@ func (c *poolsFailing) Pools(ctx context.Context) ([]lux.Pool, error) {
 	return c.Client.Pools(ctx)
 }
 
-// A preview in a named pool whose settings move to a size naming none
-// (lux's default) needs lux's pool list to tell. While it fails, the wake
-// goes on on the Run's size and nothing is recorded: not knowing is not
-// "another pool". Once lux answers, the record says the size is in
-// another pool; later wakes to the same size do not ask lux again, and
-// record nothing new.
+// An unavailable default pool list preserves the size; once readable,
+// the next wake moves to that default and subsequent wakes send no resize.
 func TestAWakeWhenLuxsPoolsCannotBeReadSendsAndRecordsNothing(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
@@ -375,19 +370,13 @@ func TestAWakeWhenLuxsPoolsCannotBeReadSendsAndRecordsNothing(t *testing.T) {
 	pools.fail.Store(false)
 	w.sleepAgain(runID, web)
 	w.wakeAgain(runID, web)
-	want := "Its settings now name Tiny, in another pool: a stopped Run cannot change pools, so it keeps Big. A new Run gets Tiny."
-	if m := w.machineOf(runID); m["name"] != "Big" || m["note"] != want {
-		t.Errorf("runs.machine = %v, want Big with note %q", m, want)
+	if m := w.machineOf(runID); m["name"] != "Tiny" || m["poolId"] != defaultPool || m["note"] != nil {
+		t.Fatalf("record after pools recovered: %v", m)
 	}
-	asked := pools.calls.Load()
-
 	w.sleepAgain(runID, web)
 	w.wakeAgain(runID, web)
-	if got := w.resumeResources(luxRun); len(got) != 3 || got[1] != nil || got[2] != nil {
-		t.Errorf("the wakes sent %v, want nothing", got)
-	}
-	if n := pools.calls.Load(); n != asked {
-		t.Errorf("lux's pools were asked for %d more times for a size already found elsewhere", n-asked)
+	if got := w.resumeResources(luxRun); len(got) != 3 || got[1] == nil || got[2] != nil {
+		t.Errorf("the wakes sent %v, want unchanged, Tiny, unchanged", got)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
 		t.Errorf("%d run.resized, want 1", n)
