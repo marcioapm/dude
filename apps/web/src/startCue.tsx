@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
-import { AgentAvatar, StartChip, StartProgress, StatusMark, startSteps, type StartStep } from "@dude/design-system/components";
+import { AgentAvatar, StartChip, StartProgress, StatusMark, didNot, startSteps, type StartStep } from "@dude/design-system/components";
 import type { StartState } from "./api/conversation.ts";
 import { ApiError } from "./api/client.ts";
 import { instant } from "./instant.ts";
@@ -111,7 +111,7 @@ export function StartHeaderChip({ start, bare }: { start: StartState; bare?: boo
   if (start.failed && !step) {
     // Failed before lux named a stage: StartChip's failed mark alone. A Run's status beside it already says Failed.
     return bare ? null : (
-      <span data-testid="start-chip"><StatusMark status="failed" size="sm" label={start.kind === "start" ? "Did not start" : "Did not resume"} /></span>
+      <span data-testid="start-chip"><StatusMark status="failed" size="sm" label={didNot(start.kind)} /></span>
     );
   }
   return <StartChip kind={start.kind} verb={startVerbOf(start)} step={step} startedAt={start.startedAt} bare={bare} data-testid="start-chip" />;

@@ -71,7 +71,8 @@ export function startVerb(kind: StartKind = "start"): string {
   return kind === "start" ? "Starting" : "Resuming";
 }
 
-function didNot(kind: StartKind): string {
+/** What a failed start's mark says: "Did not start", or "Did not resume" for a resume or a move. */
+export function didNot(kind: StartKind): string {
   return kind === "start" ? "Did not start" : "Did not resume";
 }
 
