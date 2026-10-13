@@ -568,13 +568,11 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
-    # Members says how people join and offers Invite people, which opens the chip editor; no key is issued.
-    expect(members).to_contain_text("by invitation. Cloudflare Access must also let them in; dude doesn't manage that.")
+    # Signed in with a key, people are added through the API: Members neither invites nor speaks of Cloudflare Access.
+    expect(members).to_contain_text("Who is in")
+    expect(members).not_to_contain_text("Cloudflare")
     expect(members).not_to_contain_text("not available yet")
-    page.get_by_test_id("invite").click()
-    expect(page.get_by_role("textbox", name="Emails")).to_be_visible()
-    page.keyboard.press("Escape")
-    expect(page.get_by_test_id("invite-submit")).to_have_count(0)
+    expect(page.get_by_test_id("invite")).to_have_count(0)
     assert len(client.get("/v1/people").json()["people"]) == 1
     assert console_errors == []
 
