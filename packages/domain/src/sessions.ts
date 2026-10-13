@@ -6,6 +6,7 @@
 import type { Harness } from "./harnesses.ts";
 import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
+import type { AgentMachine } from "./machines.ts";
 
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
@@ -147,6 +148,8 @@ export interface SessionDetail {
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
   /** The model its agent runs on; absent from an older orchestrator. */
   model?: SessionModel;
+  /** The machine its agent raised (role `brainstorm`), names resolved by the control plane; empty when none. */
+  agentMachines: AgentMachine[];
 }
 
 /** A tier as a session's model names it. */
