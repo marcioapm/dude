@@ -466,8 +466,12 @@ func (w *world) diffsSettled(runs []string) {
 // and wakes the conductor once, and each stalled Run is reported once,
 // saying lux did not answer.
 func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
-	const budget, margin = 15 * time.Second, 5 * time.Second
+	// The budget is production's 15 s scaled down; budget + margin stays
+	// under one exec's own timeout (psTimeout, 10 s), so a sweep that asked
+	// lux Run by Run without the shared budget still fails.
+	const budget, margin = 2 * time.Second, 5 * time.Second
 	w := conducting(t)
+	w.syncer.StallLuxBudget = budget
 	stop := make(chan struct{})
 	never := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
