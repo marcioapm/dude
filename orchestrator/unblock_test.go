@@ -717,23 +717,59 @@ func TestAParkedDeliveryResumesWhenItsConductorRemovesTheLastBlocker(t *testing.
 // The backend's removal of a last blocker (relations.ts releasedByRemoval)
 // writes its signal by hand: the same row workflow.SignalTx writes (a sig_
 // id, the name, an object payload, no idempotency key) and the same wake.
-// A parked delivery resumes on exactly that row.
+// A parked delivery resumes on exactly that row, consuming it.
 func TestAParkedDeliveryResumesOnTheBackendsSignal(t *testing.T) {
 	w := newWorld(t)
-	blocker, task := w.task(), w.task()
+	task, wf := w.parkedAndUnblocked()
+	w.backendSignal(wf)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'running', wake_at = NULL
+		WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? 'relations.unblocked' AND (wait_until IS NULL OR wait_until <= now())`, wf)
+	w.until("the parked delivery's implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+	w.backendSignalConsumed()
+}
+
+// The backend's row alone, without its wake, resumes the delivery too: the
+// claim takes a waiting run with an unconsumed signal it awaits. The park's
+// own recheck is minutes away, so nothing else resumes it in the test.
+func TestAParkedDeliveryResumesOnTheBackendsSignalRowAlone(t *testing.T) {
+	w := newWorld(t)
+	task, wf := w.parkedAndUnblocked()
+	w.backendSignal(wf)
+	w.until("the parked delivery's implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+	w.backendSignalConsumed()
+}
+
+// parkedAndUnblocked is a delivery parked at its implement step on a
+// blocker whose edge is then removed, with no signal: its task and its
+// delivery.
+func (w *world) parkedAndUnblocked() (task, wf string) {
+	w.t.Helper()
+	blocker := w.task()
+	task = w.task()
 	w.deliver(task)
 	w.blocks(blocker, task)
 	w.until("the delivery to park", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'implementRun' AND status = 'waiting'`, task) == 1
 	})
-	mustExec(t, w.owner, `DELETE FROM task_relations WHERE from_task_id = $1 AND to_task_id = $2`, blocker, task)
-	var wf string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM workflow_runs WHERE task_id = $1`, task).Scan(&wf)
-	mustExec(t, w.owner, `INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
-		VALUES ('sig_0mv5thr4sdb3067ee91a44dca', $1, $2, 'relations.unblocked', '{"removed": true}'::jsonb, NULL)`, w.org, wf)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'running', wake_at = NULL
-		WHERE id = $1 AND status = 'waiting' AND awaiting_signals ? 'relations.unblocked' AND (wait_until IS NULL OR wait_until <= now())`, wf)
-	w.until("the parked delivery's implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+	mustExec(w.t, w.owner, `DELETE FROM task_relations WHERE from_task_id = $1 AND to_task_id = $2`, blocker, task)
+	wf = w.str(`SELECT id FROM workflow_runs WHERE task_id = $1`, task)
+	return task, wf
+}
+
+const backendSignalID = "sig_0mv5thr4sdb3067ee91a44dca"
+
+// backendSignal inserts the row releasedByRemoval writes.
+func (w *world) backendSignal(wf string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+		VALUES ($1, $2, $3, 'relations.unblocked', '{"removed": true}'::jsonb, NULL)`, backendSignalID, w.org, wf)
+}
+
+func (w *world) backendSignalConsumed() {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM workflow_signals WHERE id = $1 AND consumed_at IS NOT NULL`, backendSignalID); n != 1 {
+		w.t.Fatal("the backend's signal was not consumed by the resumed delivery")
+	}
 }
 
 // The owner cancels while the worker takes the request: the worker skips
