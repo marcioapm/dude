@@ -16,6 +16,7 @@ import { z } from "zod";
 import { withOrg } from "../../db/client.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { json, notFound, parseBody } from "../http.ts";
+import { agentMachines } from "./machines.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 // The orchestrator's bound (delivery.ChatMessageMax) is UTF-8 bytes, not characters.
@@ -96,12 +97,24 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
   return json({ open: input.open });
 }
 
+/**
+ * A session as its members see it, with the machine its agent raised, names
+ * resolved (`agentMachines`, empty when none). The orchestrator checks
+ * membership; its refusal is passed on as it is.
+ */
+async function getBrainstorm(ctx: RequestContext): Promise<Response> {
+  const res = await orchestrator(ctx.principal.organizationId, "GET", at()(ctx), "{}", ctx.principal);
+  if (!res.ok) return res;
+  const body = (await res.json()) as Record<string, unknown>;
+  return json({ ...body, agentMachines: await agentMachines(ctx, { sessionId: ctx.params.id! }) });
+}
+
 export function registerSessionRoutes(router: Router): void {
   // ?archived=1 also lists the sessions the person archived; nothing else of the query travels.
   router.get("/v1/brainstorms", forward("GET", (ctx) =>
     ctx.url.searchParams.get("archived") === "1" ? "/internal/sessions?archived=1" : "/internal/sessions"));
   router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
-  router.get("/v1/brainstorms/:id", forward("GET", at()));
+  router.get("/v1/brainstorms/:id", getBrainstorm);
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
   router.post("/v1/brainstorms/:id/questions/:question/answer",

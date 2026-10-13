@@ -217,6 +217,8 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 	if p.Person == "" {
 		return errNoPerson
 	}
+	names := delivery.LoadPoolNames(r.Context(), s.Lux)
+	moved := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		ctx := r.Context()
 		var raise *delivery.Raise
@@ -298,6 +300,7 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 			from = *current
 		}
 		if active {
+			moved = true
 			if _, err := tx.Exec(ctx, `INSERT INTO machine_moves(id,organization_id,task_id,session_id,run_id,role,kind,from_size,to_size_id,apply,reason,by_person) VALUES($1,$2,$3,$4,$5,$6,'reset',$7,$8,'resize',$9,$10)`, id, org, db.Nullable(body.TaskID), db.Nullable(body.SessionID), runID, body.Role, from, target.SizeID, db.Nullable(body.Note), p.Person); err != nil {
 				return err
 			}
@@ -314,16 +317,20 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 		if err != nil {
 			return err
 		}
-		payload := map[string]any{"moveId": id, "role": body.Role, "from": from, "to": target, "by": map[string]string{"id": p.Person, "name": name}, "note": body.Note}
+		payload := delivery.MovePayload("", body.Role, from, target, names)
+		payload["moveId"], payload["by"], payload["note"] = "", map[string]string{"id": p.Person, "name": name}, body.Note
+		if active {
+			payload["moveId"] = id
+		}
 		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: body.TaskID, SessionID: body.SessionID}
-		_, err = ledger.Append(ctx, tx, ref.Event("machine.reset", p.ActorType, payload))
+		_, err = ledger.Append(ctx, tx, ref.Event(delivery.EvMachineReset, p.ActorType, payload))
 		return err
 	})
 	if err != nil {
 		return err
 	}
 	s.kick()
-	write(w, 200, map[string]bool{"ok": true})
+	write(w, 200, map[string]any{"ok": true, "moved": moved})
 	return nil
 }
 

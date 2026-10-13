@@ -9,7 +9,7 @@
  * Reading directives stays here: it changes nothing.
  */
 
-import { z } from "zod";
+import { resetMachineSchema } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -101,13 +101,8 @@ async function decideRepositoryRequest(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
-// A Reset's note to the agent, at most 2000 code points as the orchestrator counts them.
-const machineReset = z.object({
-  note: z.string().refine((s) => [...s].length <= 2000, "at most 2000 characters").optional(),
-}).strict();
-
 async function resetMachine(ctx: RequestContext): Promise<Response> {
-  const body = await parseBody(ctx.request, machineReset);
+  const body = await parseBody(ctx.request, resetMachineSchema);
   return orchestrator(ctx.principal.organizationId, "POST", "/internal/agent-machines/reset",
     JSON.stringify({ ...body, ...(ctx.params.role
       ? { taskId: ctx.params.id, role: ctx.params.role }

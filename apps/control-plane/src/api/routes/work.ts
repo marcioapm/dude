@@ -23,6 +23,7 @@ import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
+import { agentMachines } from "./machines.ts";
 import { answers as answersInput, text as messageInput } from "./sessions.ts";
 import type { RequestContext, Router } from "../router.ts";
 
@@ -284,7 +285,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
   });
 
   if (!task) throw notFound(`task ${id} not found`);
-  return json(task);
+  return json({ ...task, agentMachines: await agentMachines(ctx, { taskId: id }) });
 }
 
 // ---------------------------------------------------------------------------
