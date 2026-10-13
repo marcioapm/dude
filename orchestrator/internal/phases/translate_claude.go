@@ -27,7 +27,13 @@ func (t *translator) claudeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ 
 	}
 	var line claudeLine
 	_ = json.Unmarshal(f.Event.Data, &line)
+	// A subagent's own line: its parent's Agent call names it.
+	if line.ParentToolUseID != "" {
+		return t.claudeChildLine(ctx, tx, s, typ, line, f.Epoch)
+	}
 	switch typ {
+	case "system":
+		return t.claudeTask(ctx, tx, s, line)
 	case "assistant":
 		t.active = true
 		t.resumeOutput(ctx, tx, s, f.Epoch)
@@ -93,6 +99,25 @@ type claudeLine struct {
 	Errors       []string `json:"errors"`
 	TerminalWhy  string   `json:"terminal_reason"`
 	TotalCostUSD float64  `json:"total_cost_usd"`
+	// A subagent's: on each of its lines, the parent's Agent call and what
+	// it was asked; on the system task_* lines, its task and how it went.
+	ParentToolUseID string        `json:"parent_tool_use_id"`
+	SubagentType    string        `json:"subagent_type"`
+	TaskDescription string        `json:"task_description"`
+	TaskID          string        `json:"task_id"`
+	ToolUseID       string        `json:"tool_use_id"`
+	Description     string        `json:"description"`
+	Status          string        `json:"status"`
+	Summary         string        `json:"summary"`
+	LastToolName    string        `json:"last_tool_name"`
+	TaskUsage       claudeTaskUse `json:"usage"`
+}
+
+// claudeTaskUse is a system task_* line's usage. A result line's usage
+// (another shape) is read from claude.turn_end, not here.
+type claudeTaskUse struct {
+	TotalTokens int64   `json:"total_tokens"`
+	DurationMS  float64 `json:"duration_ms"`
 }
 
 // failure is why a result line says its turn failed, "" for one that did
@@ -163,38 +188,24 @@ func (t *translator) claudeBlock(ctx context.Context, tx pgx.Tx, s *Syncer, b cl
 			}
 			return s.event(ctx, tx, t.run, evPlanUpdated, ledger.ActorAgent, map[string]any{"todos": todos, "callId": b.ID})
 		}
-		if _, seen := t.seenCalls[b.ID]; seen {
-			return nil
-		}
 		name := claudeToolName(b.Name)
-		t.seenCalls[b.ID] = name
-		t.openCalls[b.ID] = true
-		return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
-			map[string]any{"tool": name, "callId": b.ID, "input": input, "title": b.Name})
+		return t.callStarted(ctx, tx, s, nil, map[string]any{"tool": name, "callId": b.ID, "input": input, "title": b.Name})
 	}
 	return nil
 }
 
 // claudeResult records a tool's result: the end of the call it answers.
 func (t *translator) claudeResult(ctx context.Context, tx pgx.Tx, s *Syncer, b claudeBlock, raw json.RawMessage) error {
-	name, seen := t.seenCalls[b.ToolUseID]
-	if name == planCall {
+	if t.seenCalls[b.ToolUseID] == planCall {
 		return nil
-	}
-	delete(t.openCalls, b.ToolUseID)
-	if !seen {
-		name = "tool"
 	}
 	st := "completed"
 	if b.IsError {
 		st = "error"
 	}
-	payload := map[string]any{"tool": name, "callId": b.ToolUseID, "status": st}
+	payload := map[string]any{"tool": "tool", "callId": b.ToolUseID, "status": st}
 	maps.Copy(payload, claudeOutput(b, raw))
-	if isEdit(name) {
-		s.pokeDiff(t.run.ID)
-	}
-	return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
+	return t.callEnded(ctx, tx, s, nil, payload)
 }
 
 // claudeOutput is a tool result in dude's vocabulary (toolResult's): Bash's
@@ -387,6 +398,117 @@ func (t *translator) claudeTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer) er
 	}
 	if idle {
 		return t.idle(ctx, tx, s)
+	}
+	return nil
+}
+
+// claudeChildOf is the subagent the parent's call callID started, made
+// from what its line says when task_started has not named it yet.
+func (t *translator) claudeChildOf(callID string, line claudeLine) *childState {
+	if c := t.childOfCall(callID); c != nil {
+		return c
+	}
+	c := &childState{ID: cmp.Or(line.TaskID, callID), CallID: callID, Kind: childTask,
+		Title: cmp.Or(line.Description, line.TaskDescription), AgentType: line.SubagentType}
+	// A subagent's own Agent call starts a child of that subagent.
+	for _, p := range t.Children {
+		if _, ok := p.Calls[callID]; ok {
+			c.ParentChildID = p.ID
+		}
+	}
+	return t.addChild(c)
+}
+
+// claudeTask reads Claude Code's system lines about a subagent:
+// task_started names it, task_progress says it works, task_notification
+// ends it. task_updated repeats the end and adds nothing.
+func (t *translator) claudeTask(ctx context.Context, tx pgx.Tx, s *Syncer, line claudeLine) error {
+	if line.ToolUseID == "" {
+		return nil
+	}
+	switch line.Subtype {
+	case "task_started":
+		return t.startChild(ctx, tx, s, t.claudeChildOf(line.ToolUseID, line))
+	case "task_progress":
+		c := t.claudeChildOf(line.ToolUseID, line)
+		if err := t.startChild(ctx, tx, s, c); err != nil {
+			return err
+		}
+		t.touchChild(c, strings.TrimSpace(line.LastToolName+" "+line.Description), nil)
+	case "task_notification":
+		var tokens map[string]any
+		if n := line.TaskUsage.TotalTokens; n > 0 {
+			tokens = map[string]any{"total": n}
+		}
+		return t.endChild(ctx, tx, s, t.claudeChildOf(line.ToolUseID, line), claudeTaskStatus(line.Status), line.Summary,
+			tokens, line.TaskUsage.DurationMS/1000)
+	}
+	return nil
+}
+
+// claudeTaskStatus is a subagent's end in dude's words.
+func claudeTaskStatus(status string) string {
+	switch status {
+	case "completed":
+		return "completed"
+	case "failed", "error":
+		return "failed"
+	}
+	return "interrupted"
+}
+
+// claudePlanTools are the tools claudePlan reads as the agent's plan.
+var claudePlanTools = []string{"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
+
+// claudeChildLine translates a subagent's own line as the parent's are,
+// nested under it: its tool calls, their results, its replies. Its
+// thinking, its plan and its prompt (the user line that starts it) are
+// not recorded.
+func (t *translator) claudeChildLine(ctx context.Context, tx pgx.Tx, s *Syncer, typ string, line claudeLine, epoch int) error {
+	c := t.claudeChildOf(line.ParentToolUseID, line)
+	if err := t.startChild(ctx, tx, s, c); err != nil {
+		return err
+	}
+	switch typ {
+	case "assistant":
+		t.resumeOutput(ctx, tx, s, epoch)
+		var text strings.Builder
+		for _, b := range line.Message.Content {
+			switch {
+			case b.Type == "text":
+				text.WriteString(b.Text)
+			case b.Type == "tool_use" && !slices.Contains(claudePlanTools, b.Name):
+				var input map[string]any
+				_ = json.Unmarshal(b.Input, &input)
+				if err := t.callStarted(ctx, tx, s, c, map[string]any{"tool": claudeToolName(b.Name), "callId": b.ID,
+					"input": input, "title": b.Name}); err != nil {
+					return err
+				}
+			}
+		}
+		if text.Len() == 0 {
+			return nil
+		}
+		var tokens map[string]any
+		if u := line.Message.Usage; u != nil {
+			tokens = map[string]any{"input": u.InputTokens, "output": u.OutputTokens, "cacheRead": u.CacheRead, "cacheWrite": u.CacheWrite}
+		}
+		return t.childMessage(ctx, tx, s, c, text.String(), 0, tokens)
+	case "user":
+		for _, b := range line.Message.Content {
+			if _, open := c.Calls[b.ToolUseID]; b.Type != "tool_result" || !open {
+				continue // a plan call's result, or the subagent's prompt
+			}
+			st := "completed"
+			if b.IsError {
+				st = "error"
+			}
+			payload := map[string]any{"callId": b.ToolUseID, "status": st}
+			maps.Copy(payload, claudeOutput(b, line.ToolUseResult))
+			if err := t.callEnded(ctx, tx, s, c, payload); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

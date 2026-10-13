@@ -197,7 +197,7 @@ func openCalls(ctx context.Context, tx pgx.Tx, r stallRow, s *delivery.Stall) er
 func callInput(raw json.RawMessage) string {
 	var m map[string]any
 	if json.Unmarshal(raw, &m) == nil {
-		for _, k := range []string{"command", "cmd", "description", "prompt", "filePath", "pattern"} {
+		for _, k := range []string{"command", "cmd", "description", "prompt", "filePath", "file_path", "pattern", "query"} {
 			if v, ok := m[k].(string); ok && v != "" {
 				return cut(oneLine(v), inputChars)
 			}

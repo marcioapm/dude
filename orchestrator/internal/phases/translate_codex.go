@@ -319,3 +319,10 @@ func (t *translator) codexTurnEnd(ctx context.Context, tx pgx.Tx, s *Syncer, sta
 	}
 	return t.turnFailed(ctx, tx, s, e)
 }
+
+// codexSpawn is a spawnAgent call whose agent's thread is not known yet.
+type codexSpawn struct {
+	CallID string `json:"callId"`
+	Title  string `json:"title,omitempty"`
+	Model  string `json:"model,omitempty"`
+}
