@@ -379,6 +379,29 @@ func TestTheRunsIncludeOfDudesGitConfig(t *testing.T) {
 	}
 }
 
+// A commit in a linked worktree (git worktree add) runs the main
+// repository's .git/hooks, where git looks for them, and gets the
+// co-authors, under the image's system config.
+func TestACommitInALinkedWorktreeRunsTheRepositorysHooks(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_worktree", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t), asImage)
+	log := filepath.Join(t.TempDir(), "log")
+	r.repoHook("pre-commit", ran(log, "pre-commit"))
+	r.git("commit", "-q", "--allow-empty", "-m", "Base")
+	_ = os.Remove(log)
+	wt := filepath.Join(t.TempDir(), "side")
+	r.git("worktree", "add", "-q", "-b", "side", wt)
+	r.git("-C", wt, "commit", "-q", "--allow-empty", "-m", "In the worktree")
+	if got := readLog(t, log); !slices.Equal(got, []string{"pre-commit"}) {
+		t.Errorf("the main repository's .git/hooks/pre-commit ran %v, want once", got)
+	}
+	if got := r.git("-C", wt, "log", "-1", "--format=%B"); got != "In the worktree\n\nCo-authored-by: Ana Lima <ana@corp.example>\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>" {
+		t.Errorf("message:\n%s", got)
+	}
+}
+
 // In the runtime image, whose system config names dude's directory as
 // core.hooksPath, a repository with no setting of its own still runs its
 // .git/hooks, and its commits get the co-authors.
@@ -612,9 +635,14 @@ func TestTheCommitHookRunsTheRepositorysOwnHooks(t *testing.T) {
 	token := f.run(t, "run_hook_chain", "implementer", "running")
 	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
 	seen := filepath.Join(t.TempDir(), "seen")
+	pre := filepath.Join(t.TempDir(), "pre")
 	r.repoHook("commit-msg", `cp "$1" "`+seen+`"`+"\n")
-	r.repoHook("prepare-commit-msg", `printf '\nRefs: TEXT-1\n' >> "$1"`+"\n")
+	// Copied before it appends: the trailers are in the message already.
+	r.repoHook("prepare-commit-msg", `cp "$1" "`+pre+`"`+"\n"+`printf '\nRefs: TEXT-1\n' >> "$1"`+"\n")
 	r.git("commit", "-q", "--allow-empty", "-m", "Chained")
+	if b, err := os.ReadFile(pre); err != nil || !strings.Contains(string(b), "Co-authored-by: Ana Lima") {
+		t.Errorf("the repository's prepare-commit-msg saw %q (%v), want the trailers added before it ran", b, err)
+	}
 	b, err := os.ReadFile(seen)
 	if err != nil || !strings.Contains(string(b), "Co-authored-by: Bo Chen") {
 		t.Errorf("the repository's commit-msg saw %q (%v), want the trailers", b, err)
