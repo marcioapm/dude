@@ -64,12 +64,13 @@ async function start() {
   return state;
 }
 const callback = (state: string, extra = "code=code") => request(`/v1/me/github/callback?state=${state}&${extra}`);
+const landed = (status: string) => `/?github=${status}#/me/settings`;
 
 test("state is person/org-bound, single-use, and verifies identity without exposing secrets", async () => {
   const state = await start();
-  expect((await callback("wrong")).headers.get("location")).toContain("invalid_or_expired");
-  person = "per_other"; expect((await callback(state)).headers.get("location")).toContain("invalid_or_expired");
-  person = "per_otherorg"; org = "org_other"; expect((await callback(state)).headers.get("location")).toContain("invalid_or_expired");
+  expect((await callback("wrong")).headers.get("location")).toBe(landed("invalid_or_expired"));
+  person = "per_other"; expect((await callback(state)).headers.get("location")).toBe(landed("invalid_or_expired"));
+  person = "per_otherorg"; org = "org_other"; expect((await callback(state)).headers.get("location")).toBe(landed("invalid_or_expired"));
   person = "per_owner"; org = "org_owner";
   expect((await callback(state)).headers.get("location")).toBe("/?github=connected#/me/settings");
   const [profile] = await owner`SELECT github_login,github_user_id::int AS id,commit_email::text FROM people WHERE id='per_owner'`;
@@ -79,23 +80,26 @@ test("state is person/org-bound, single-use, and verifies identity without expos
   expect(Object.keys(shown).sort()).toEqual(["available", "connection"]);
   expect(Object.keys(shown.connection).sort()).toEqual(["expiresAt", "login", "reconnectRequired", "refreshExpiresAt"]);
   expect(text).toContain("CanonicalOwner"); for (const secret of ["hidden-secret","hidden-access","hidden-refresh"]) expect(text).not.toContain(secret);
-  const before = exchanged; expect((await callback(state)).headers.get("location")).toContain("invalid_or_expired"); expect(exchanged).toBe(before);
+  const before = exchanged; expect((await callback(state)).headers.get("location")).toBe(landed("invalid_or_expired")); expect(exchanged).toBe(before);
 });
 test("expired, denied, failed identity and replaced credentials do not store a connection", async () => {
   await request("/v1/me/github","DELETE");
   const expired = await start(); await owner`UPDATE github_oauth_transactions SET expires_at=now()-interval '1 second'`;
-  expect((await callback(expired)).headers.get("location")).toContain("invalid_or_expired");
-  const rejected = await start(); expect((await callback(rejected,"error=access_denied")).headers.get("location")).toContain("authorization_denied");
-  expect((await callback(rejected)).headers.get("location")).toContain("invalid_or_expired");
-  const identity = await start(); denied=true; expect((await callback(identity)).headers.get("location")).toContain("identity_failed"); denied=false;
+  expect((await callback(expired)).headers.get("location")).toBe(landed("invalid_or_expired"));
+  const rejected = await start(); expect((await callback(rejected,"error=access_denied")).headers.get("location")).toBe(landed("authorization_denied"));
+  expect((await callback(rejected)).headers.get("location")).toBe(landed("invalid_or_expired"));
+  const identity = await start(); denied=true; expect((await callback(identity)).headers.get("location")).toBe(landed("identity_failed")); denied=false;
+  exchangeHook = async () => Response.json({ access_token: "hidden-access", token_type: "bearer", scope: "" });
+  try { expect((await callback(await start())).headers.get("location")).toBe(landed("enable_expiring_tokens")); }
+  finally { exchangeHook = null; }
   const replaced=await start(); await owner`UPDATE forge_credentials SET app_id='2' WHERE id='fc_owner'`;
-  expect((await callback(replaced)).headers.get("location")).toContain("invalid_or_expired");
+  expect((await callback(replaced)).headers.get("location")).toBe(landed("invalid_or_expired"));
   const [{count}] = await owner`SELECT count(*)::int AS count FROM github_user_authorizations`; expect(count).toBe(0);
 });
 test("disconnect removes connections and outstanding transactions immediately",async()=>{
-  const state=await start(); expect((await callback(state)).headers.get("location")).toContain("connected");
+  const state=await start(); expect((await callback(state)).headers.get("location")).toBe(landed("connected"));
   const pending=await start(); expect((await request("/v1/me/github","DELETE")).status).toBe(204);
-  expect((await callback(pending)).headers.get("location")).toContain("invalid_or_expired");
+  expect((await callback(pending)).headers.get("location")).toBe(landed("invalid_or_expired"));
 });
 
 test("disconnect fences an already consumed callback even without a stored authorization", async () => {
@@ -108,7 +112,7 @@ test("disconnect fences an already consumed callback even without a stored autho
   try {
     const pending = callback(state); await held;
     expect((await request("/v1/me/github", "DELETE")).status).toBe(204);
-    release(); expect((await pending).headers.get("location")).toContain("superseded");
+    release(); expect((await pending).headers.get("location")).toBe(landed("superseded"));
     expect(await (await request("/v1/me/github")).json()).toEqual({ available: true, connection: null });
   } finally { release(); exchangeHook = null; }
 });
@@ -123,8 +127,8 @@ test("latest initiated Connect wins when the older exchange finishes last", asyn
   };
   try {
     const a = await start(); const pending = callback(a, "code=older"); await held;
-    const b = await start(); expect((await callback(b, "code=newer")).headers.get("location")).toContain("connected");
-    release(); expect((await pending).headers.get("location")).toContain("superseded");
+    const b = await start(); expect((await callback(b, "code=newer")).headers.get("location")).toBe(landed("connected"));
+    release(); expect((await pending).headers.get("location")).toBe(landed("superseded"));
     const [stored] = await owner`SELECT refresh_token FROM github_user_authorizations WHERE person_id='per_owner'`;
     expect(stored.refresh_token).toBe("newer");
   } finally { release(); exchangeHook = null; }
@@ -162,3 +166,4 @@ test("callback consume DB errors and invalid grants return fixed outcomes withou
     exchangeHook = null; logs.mockRestore();
   }
 });
+

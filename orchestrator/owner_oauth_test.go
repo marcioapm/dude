@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -16,6 +15,30 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+// "Let Deliver finish it" with openPullRequest confirmed authorizes the
+// gate; the author is frozen then, not when the step later executes.
+func TestAManualOpenConfirmationFreezesItsAuthorBeforeExecution(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	task := w.task()
+	w.taskOwners(task, ana, bo)
+	w.connectOwner(ana, "ana-token", 1)
+	w.connectOwner(bo, "bo-token", 2)
+	w.reachGate(task)
+	if status, out := w.postAsPerson("/internal/tasks/"+task+"/decider", ana, map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+		t.Fatalf("hand back with confirmation: %d %v", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana); n != 1 {
+		t.Fatalf("confirmation froze %d Ana snapshots", n)
+	}
+	mustExec(t, w.owner, `UPDATE task_people SET position = CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id = $1`, task, bo)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
+		t.Fatalf("authorization %v, want Ana frozen at confirmation", got)
+	}
+}
 
 func (w *world) ownerPerson(name string) string {
 	w.t.Helper()
@@ -58,9 +81,14 @@ func (w *world) attempts(task string) int {
 }
 
 func (w *world) chatAs(task, person, text string) (int, map[string]any) {
+	return w.postAsPerson("/internal/tasks/"+task+"/chat", person, map[string]any{"text": text})
+}
+
+// postAsPerson posts to the internal API as the backend does for a signed-in person.
+func (w *world) postAsPerson(path, person string, body any) (int, map[string]any) {
 	w.t.Helper()
-	b, _ := json.Marshal(map[string]any{"text": text})
-	req, _ := http.NewRequest("POST", w.api+"/internal/tasks/"+task+"/chat", bytes.NewReader(b))
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", w.api+path, bytes.NewReader(b))
 	for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": w.org,
 		"X-Dude-Person": person, "X-Dude-Actor": person, "X-Dude-Credential-Kind": "person", "Content-Type": "application/json"} {
 		req.Header.Set(k, v)
@@ -292,7 +320,6 @@ func TestAnAppPullRequestWaitsForTheFrozenOwnerThenOpensOnceAsThem(t *testing.T)
 		t.Fatal(err)
 	}
 	w.pump()
-	time.Sleep(50 * time.Millisecond)
 	if len(w.gh.Pulls()) != 1 || len(w.gh.OpenAuth) != 1 {
 		t.Fatalf("replay opened again: pulls=%d auth=%v", len(w.gh.Pulls()), w.gh.OpenAuth)
 	}
