@@ -171,6 +171,11 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 			return out, refuse("lux's pools could not be read; ask again shortly")
 		}
 		if le, ok := lux.AsError(err); ok {
+			// Unread before, the pools are read once more so the sentence can name them.
+			if pools == nil {
+				pools, _ = c.env.lux.Pools(ctx)
+				names = delivery.PoolNamesOf(pools)
+			}
 			// lux's code in dude's words; its own message names pools by id.
 			return out, refusedAs(delivery.RefusalOf(le, target, pools, before).ForAgent(), le.Code, le.Code)
 		}

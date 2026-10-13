@@ -929,6 +929,48 @@ func TestARefusedMoveReadsLuxsPoolsNoMoreThanItsCallDid(t *testing.T) {
 	}
 }
 
+// A call whose first read of lux's pools failed reads them once more when
+// lux refuses, so a platform_mismatch still names the pool and platforms:
+// the target names its own pool, so planning read none in between.
+func TestARefusalAfterAFailedPoolsReadNamesThePool(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Pools = append(fakelux.DefaultPools(), lux.Pool{ID: "pool_arm", Name: "armpool", Platforms: []string{"linux/arm64"}})
+	w.lux.ImagePlatforms = map[string][]string{"agent:test": {"linux/amd64"}}
+	task, runID, _ := w.liveImplementer()
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_arm', $1, 'Arm', 4, 16384, 40, 'pool_arm')`, w.org)
+	pools.failNext.Store(1)
+	reads := pools.calls.Load()
+	status, body := w.requestMachine(runID, `{"size":"Arm","reason":"oom"}`)
+	var out struct{ Code, Error string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if want := "Arm is in armpool, whose machines are linux/arm64; this agent's image is linux/amd64 only. Ask for another size, or ask a person to add an arm64 image."; status != 422 || out.Code != "platform_mismatch" || out.Error != want {
+		t.Fatalf("request: %d %s\nwant %q", status, body, want)
+	}
+	if got := pools.calls.Load() - reads; got != 2 {
+		t.Fatalf("a refused request whose first read failed read lux's pools %d times, want 2", got)
+	}
+
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_arm' WHERE organization_id=$1 AND is_default`, w.org)
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	w.api = srv.URL
+	pools.failNext.Store(1)
+	reads = pools.calls.Load()
+	code, res := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := res["error"].(map[string]any); code != 422 || e["code"] != "platform_mismatch" ||
+		e["message"] != "Standard is in armpool, whose machines are linux/arm64; this agent's image is linux/amd64 only" {
+		t.Fatalf("reset: %d %v", code, res)
+	}
+	if got := pools.calls.Load() - reads; got != 2 {
+		t.Fatalf("a refused Reset whose first read failed read lux's pools %d times, want 2", got)
+	}
+}
+
 // lux's dry run refuses the agent's move (its size's pool is gone): the
 // agent gets lux's words and code at once, and nothing stops or changes.
 func TestADryRunRefusalStopsNothing(t *testing.T) {
@@ -1368,17 +1410,18 @@ func TestASizeNamingTheDefaultPoolByIdIsTheSamePoolAsNone(t *testing.T) {
 	}
 }
 
-// poolsFailing is a lux whose pool list fails while fail is set; calls
-// counts the lists asked for.
+// poolsFailing is a lux whose pool list fails while fail is set, and for
+// the next failNext lists; calls counts the lists asked for.
 type poolsFailing struct {
 	lux.Client
-	fail  atomic.Bool
-	calls atomic.Int32
+	fail     atomic.Bool
+	failNext atomic.Int32
+	calls    atomic.Int32
 }
 
 func (c *poolsFailing) Pools(ctx context.Context) ([]lux.Pool, error) {
 	c.calls.Add(1)
-	if c.fail.Load() {
+	if n := c.failNext.Load(); c.fail.Load() || n > 0 && c.failNext.CompareAndSwap(n, n-1) {
 		return nil, &lux.Error{Status: 503, Code: "unavailable", Message: "down"}
 	}
 	return c.Client.Pools(ctx)

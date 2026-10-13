@@ -309,6 +309,10 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
 				}
 				if le, ok := lux.AsError(err); ok {
+					// Unread before, the pools are read once more so the sentence can name them.
+					if pools == nil {
+						pools, _ = delivery.LoadPools(ctx, s.Lux)
+					}
 					// lux's code in dude's words; its own message names pools by id.
 					return fail(le.Status, le.Code, "%s", delivery.RefusalOf(le, target, pools, before).ForPerson())
 				}
