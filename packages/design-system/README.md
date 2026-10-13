@@ -748,6 +748,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   description the parent gave and the subagent type; inside, its tool calls
   and messages (never its thinking). Live it stays open; done, it folds to
   its summary, turns, cost and duration.
+  The gallery's child-session examples mount only once they near the screen,
+  so offscreen examples add no animation load to unrelated examples.
 - **Waiting.** A live child blocked on something nothing in the Run can
   answer (a permission its harness never forwarded) is the thread's one
   attention area: `waiting` turns the rail and wash to the attention mark
