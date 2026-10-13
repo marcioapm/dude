@@ -1,0 +1,585 @@
+/*
+ * What the design system does not lay out yet, for the accounts mockup:
+ * the switcher in the profile band, the first-sign-in and accept pages, the
+ * email chips, the invitation links and the key groups. Tokens only;
+ * regions by shade, no new borders.
+ * docs/design/accounts.md names which of these should become components.
+ */
+
+/* -- The switcher, in the profile band -- */
+.bandTrigger {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex: 1;
+  min-width: 0;
+  margin-top: var(--ds-space-6);
+  padding: var(--ds-space-4) var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.bandTrigger:hover,
+.bandTrigger[data-state="open"] {
+  background: var(--ds-color-hover-wash);
+}
+.bandTrigger:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.orgText {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.bandName {
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* An invitation waits in the menu. */
+.bandDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-info-fg);
+}
+/* The rail's face carries the organisation's in its corner. */
+.railFace {
+  position: relative;
+}
+.railOrg {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  border-radius: var(--ds-radius-face-project);
+  box-shadow: 0 0 0 2px var(--ds-color-chrome);
+}
+.bandOrg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chev {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
+
+/* -- Pages inside an organisation: a centred column -- */
+.page,
+.outside {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: var(--ds-space-48) var(--ds-space-24);
+  background: var(--ds-color-surface);
+}
+.outside {
+  background: var(--ds-color-canvas);
+}
+.column,
+.outsideColumn {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+}
+.outsideColumn {
+  max-width: 640px;
+}
+.outsideMark {
+  display: flex;
+  justify-content: center;
+}
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+  text-align: center;
+}
+.heroTitle {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-3xl);
+  line-height: var(--ds-leading-tight);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  color: var(--ds-color-text-strong);
+}
+.heroLine {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-secondary);
+}
+.profileStrip {
+  display: flex;
+  gap: var(--ds-space-24);
+  align-items: flex-start;
+}
+.profileFace {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.profileFields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-row-comfortable);
+  padding: var(--ds-space-6) var(--ds-space-card-pad);
+}
+.row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.row + .row {
+  box-shadow: inset 0 1px 0 var(--ds-color-border-subtle);
+}
+.rowActions {
+  display: inline-flex;
+  gap: var(--ds-space-4);
+  justify-content: flex-end;
+}
+.howBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.how {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.howItem {
+  display: flex;
+  gap: var(--ds-space-12);
+  align-items: baseline;
+  line-height: var(--ds-leading-normal);
+}
+.howIcon {
+  flex: none;
+  position: relative;
+  top: 2px;
+  color: var(--ds-color-text-secondary);
+}
+.next {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-16);
+  flex-wrap: wrap;
+  padding-top: var(--ds-space-8);
+}
+.invites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.invite {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-16);
+  padding: var(--ds-space-card-pad);
+}
+.inviteText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-text-sm);
+}
+.inviteName {
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+}
+.inviteActions {
+  display: flex;
+  gap: var(--ds-space-8);
+  flex: none;
+}
+.fine {
+  margin: 0;
+  text-align: center;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent-text);
+  font: inherit;
+  text-decoration: underline;
+}
+
+/* -- Your settings -- */
+.settingsPage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  width: 100%;
+  max-width: var(--ds-measure-page);
+}
+.keyGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.keyHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.spacer {
+  flex: 1;
+}
+.none {
+  margin: 0;
+  padding: var(--ds-space-8) 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.cli {
+  margin: var(--ds-space-4) 0 var(--ds-space-8);
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  white-space: pre-wrap;
+}
+
+/* -- Members -- */
+.roleSelect {
+  min-width: max-content;
+  width: fit-content;
+}
+.roleSelect [role="combobox"] {
+  min-width: calc(8ch + var(--ds-space-8) + var(--ds-space-6) + var(--ds-space-8) + 14px);
+}
+.envelope {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-muted);
+}
+.statusCell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+}
+.filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-12);
+}
+.search {
+  width: 260px;
+}
+
+/* -- The email chips: a field as an Input's, holding chips and a bare input -- */
+.chipField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.chipBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: 88px;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--ds-space-6);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  cursor: text;
+}
+.chipBox:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.chipInput {
+  flex: 1;
+  min-width: 180px;
+  height: var(--ds-size-chip);
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  max-width: 100%;
+  min-height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-2) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+}
+.chip[data-tone="bad"] {
+  background: var(--ds-tone-danger-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-danger-border);
+}
+.chip[data-tone="info"] {
+  background: var(--ds-tone-info-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+}
+.chip[data-tone="skip"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+  color: var(--ds-color-text-muted);
+}
+.chip[data-tone="skip"] .chipMail {
+  text-decoration: line-through;
+}
+.chipIcon {
+  flex: none;
+}
+.chip[data-tone="ok"] .chipIcon {
+  color: var(--ds-tone-success-fg);
+}
+.chip[data-tone="bad"] .chipIcon {
+  color: var(--ds-tone-danger-fg);
+}
+.chip[data-tone="info"] .chipIcon {
+  color: var(--ds-tone-info-fg);
+}
+.chipText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chipText b {
+  font-weight: var(--ds-weight-semibold);
+}
+.chipMail {
+  color: inherit;
+}
+.chipText b + .chipMail {
+  color: var(--ds-color-text-muted);
+}
+.chipWhy {
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+.chipWhy::before {
+  content: "· ";
+}
+.chip[data-tone="bad"] .chipWhy {
+  color: var(--ds-tone-danger-fg);
+}
+.chipAction {
+  padding: 0 var(--ds-space-4);
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent-text);
+  font: inherit;
+  font-weight: var(--ds-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chipX {
+  --btn-h: 18px;
+  width: 18px;
+  --btn-fg: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-full);
+}
+.chipSummary {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+/* -- Each invitee's link -- */
+.linkList {
+  list-style: none;
+  margin: 0 0 var(--ds-space-12);
+  padding: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+}
+.linkRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12);
+}
+.linkRow + .linkRow {
+  box-shadow: inset 0 1px 0 var(--ds-color-border-subtle);
+}
+.linkWho {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+.linkWho > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.linkUrl {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-secondary);
+}
+
+/* -- The accept page -- */
+.accept {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-16) 0 var(--ds-space-8);
+  text-align: center;
+}
+.acceptIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-sunken);
+  color: var(--ds-color-text-muted);
+}
+.acceptTitle {
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-2xl);
+  line-height: var(--ds-leading-tight);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.acceptLine {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--ds-color-text-secondary);
+}
+.acceptActions {
+  justify-content: center;
+}
+.acceptFacts {
+  margin-top: var(--ds-space-8);
+  text-align: left;
+}
+
+/* -- Super-admin: outside every organisation, on the canvas shade -- */
+.admin {
+  padding: var(--ds-space-main-pad) var(--ds-space-32);
+  overflow: auto;
+  background: var(--ds-color-canvas);
+}
+.adminMark {
+  display: grid;
+  place-items: center;
+}
+.adminFoot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.adminFoot p {
+  margin: 0;
+}
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+
+/* -- A phone -- */
+@media (max-width: 639.98px) {
+  .page,
+  .outside {
+    padding: var(--ds-space-24) var(--ds-space-16);
+  }
+  .heroTitle {
+    font-size: var(--ds-text-2xl);
+  }
+  .heroLine {
+    font-size: var(--ds-text-md);
+  }
+  .profileStrip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--ds-space-12);
+  }
+  .profileFace {
+    flex-direction: row;
+  }
+  .invite {
+    flex-wrap: wrap;
+  }
+  .inviteActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .acceptTitle {
+    font-size: var(--ds-text-xl);
+  }
+  .linkRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .linkUrl {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
