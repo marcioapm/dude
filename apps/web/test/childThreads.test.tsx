@@ -229,7 +229,7 @@ test("a child still running when its Run ended shows it settled, then how it end
 let runStatus: "running" | "aborted" = "running";
 afterEach(() => { runStatus = "running"; });
 
-async function screen(events: PersistedEvent[]) {
+async function screen(events: PersistedEvent[], conductor = false) {
   class Client extends FixtureClient {
     override async events() { return { events, nextCursor: events.at(-1)?.cursor ?? 0 }; }
     override async getRun(id: string) { return { ...await super.getRun(id), status: runStatus }; }
@@ -237,8 +237,9 @@ async function screen(events: PersistedEvent[]) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root!.render(<RunScreen client={new Client("a")} runId={RUN_ID} onBack={() => {}} />));
-  await until(() => host!.querySelector("[data-testid='session-rail']"), "session rail");
+  await act(async () => root!.render(<RunScreen client={new Client("a")} runId={RUN_ID} onBack={() => {}}
+    chat={conductor ? { head: null, briefedWith: [], send: async () => {}, answer: async () => {} } : undefined} />));
+  await until(() => host!.querySelector(conductor ? "[data-testid='chat-rail']" : "[data-testid='session-rail']"), "session rail");
   await act(async () => { for (const event of events) emit({ ...event, runId: RUN_ID }); });
   return host;
 }
@@ -379,6 +380,39 @@ test("Escape dismisses Abort above the panel without closing the panel", async (
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   expect(document.querySelector("[role='dialog']") === null).toBe(true);
   expect(el.querySelector("[data-testid='child-panel']") !== null).toBe(true);
+});
+
+test("the conductor opens from its rail and Close restores chat-rail", async () => {
+  const el = await screen(start(), true);
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button[data-child='ses_kid']")!.click());
+  expect(el.querySelector("[data-testid='chat-rail']") === null).toBe(true);
+  const panel = el.querySelector<HTMLElement>("[data-testid='child-panel']")!;
+  expect(panel.getAttribute("data-child")).toBe("ses_kid");
+  await act(async () => panel.querySelector<HTMLButtonElement>("button[aria-label='Close subagent']")!.click());
+  expect(el.querySelector("[data-testid='child-panel']") === null).toBe(true);
+  expect(el.querySelector("[data-testid='chat-rail']") !== null).toBe(true);
+});
+
+test("a conductor without children has no Subagents block", async () => {
+  const el = await screen([], true);
+  expect(el.querySelector("[data-testid='rail-subagents']") === null).toBe(true);
+});
+
+test("the parent's cost does not change while opening and navigating charged children", async () => {
+  const el = await screen([...deep(),
+    ev(EventTypes.RunCostReported, { aiUsd: 1.23, status: "final" }),
+    ev(EventTypes.ChildEnded, { ...kid, status: "completed", costUsd: 4.56 }),
+    ev(EventTypes.ChildEnded, { childId: "ses_grand", callId: "k2", status: "completed", costUsd: 7.89 }),
+  ]);
+  const total = () => el.querySelector("header[data-status]")!.textContent!;
+  expect(total()).toContain("$1.23");
+  const before = total();
+  const panel = await openPanel(el, "ses_kid");
+  expect(total()).toBe(before);
+  await act(async () => header(threadOf(panel, "ses_grand")!).click());
+  expect(total()).toBe(before);
+  await act(async () => panel.querySelector<HTMLButtonElement>("button[aria-label='Close subagent']")!.click());
+  expect(total()).toBe(before);
 });
 
 test("permission waiting stays on the row and rail, with the notice and stuck call only in the panel", async () => {
