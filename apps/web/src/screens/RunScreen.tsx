@@ -343,7 +343,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       </div>
     </div>
   </ChildOpenContext.Provider> : null;
-  const panelSlot = childPanel && !narrow ? <aside aria-label="Subagent" style={{ width: "clamp(480px, 38vw, 640px)", flexShrink: 0, minHeight: 0 }}>{childPanel}</aside> : null;
+  const panelSlot = childPanel && !narrow ? <aside aria-label="Subagent" className="runChildPanel">{childPanel}</aside> : null;
   const childDialog = childPanel && narrow ? <Dialog open size="xl" context="Subagent" title={openedChild!.child.title} onOpenChange={(open) => { if (!open) closeChild(); }}>{childPanel}</Dialog> : null;
   // A run of tool calls and thoughts is one group, worked out once per
   // snapshot: each fold gives a new conversation, though its turns array is
