@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -183,7 +184,9 @@ func TestASlowGitHubDoesNotHoldACommitsCoauthors(t *testing.T) {
 // hookRepo is a repository whose hooks are dude's image's (core.hooksPath
 // at a copy of its hook directory, in command scope as a Run sets it),
 // committing with the dude CLI on PATH reaching the tools as lux's socket
-// would, or reaching nothing. HOME and the global config are its own.
+// would, or reaching nothing. HOME and the global config are its own; the
+// system config is none, or, under asImage, the runtime image's (its
+// core.hooksPath naming dude's directory too).
 type hookRepo struct {
 	t     *testing.T
 	dir   string
@@ -192,7 +195,10 @@ type hookRepo struct {
 	home  string
 }
 
-func newHookRepo(t *testing.T, service string, bin string) *hookRepo {
+// asImage gives a hookRepo the runtime image's system config.
+const asImage = true
+
+func newHookRepo(t *testing.T, service string, bin string, image ...bool) *hookRepo {
 	t.Helper()
 	hooks := t.TempDir()
 	script, err := filepath.Abs("../../../images/runtime/git-hooks/dude-hook")
@@ -209,9 +215,17 @@ func newHookRepo(t *testing.T, service string, bin string) *hookRepo {
 	if err := os.WriteFile(global, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	system := "GIT_CONFIG_NOSYSTEM=1"
+	if len(image) > 0 && image[0] {
+		file := filepath.Join(t.TempDir(), "gitconfig")
+		if err := os.WriteFile(file, []byte("[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		system = "GIT_CONFIG_SYSTEM=" + file
+	}
 	path := filepath.Dir(bin) + string(os.PathListSeparator) + os.Getenv("PATH")
 	r.env = append(os.Environ(), "PATH="+path, "LUX_SERVICE_DUDE="+service, "DUDE_TOOLS_URL=", "DUDE_TOOLS_TOKEN=",
-		"HOME="+r.home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global, "GIT_EDITOR=true",
+		"HOME="+r.home, "GIT_CONFIG_NOSYSTEM=", system, "GIT_CONFIG_GLOBAL="+global, "GIT_EDITOR=true",
 		"GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+hooks,
 		"GIT_CONFIG_KEY_1=user.name", "GIT_CONFIG_VALUE_1=dude", "GIT_CONFIG_KEY_2=user.email", "GIT_CONFIG_VALUE_2=dude@localhost")
 	r.git("init", "-q", "-b", "main")
@@ -268,13 +282,21 @@ func readLog(t *testing.T, log string) []string {
 // its config, a relative path): dude's hook still adds the co-authors and
 // then runs husky's hooks, from a subdirectory too; husky's commit-msg sees
 // the trailers, and its pre-commit's refusal stops the commit with its own
-// status.
+// status. The same with the image's system config, and husky's path wins
+// over .git/hooks.
 func TestARepositorysHookManagerRunsAfterDudesHook(t *testing.T) {
+	for _, image := range []bool{false, asImage} {
+		t.Run(fmt.Sprintf("image=%v", image), func(t *testing.T) { huskyRunsAfterDude(t, image) })
+	}
+}
+
+func huskyRunsAfterDude(t *testing.T, image bool) {
 	f := setup(t)
 	f.coauthorTask(t)
-	token := f.run(t, "run_hook_husky", "implementer", "running")
-	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	token := f.run(t, fmt.Sprintf("run_hook_husky_%v", image), "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t), image)
 	log := filepath.Join(t.TempDir(), "log")
+	r.repoHook("pre-commit", ran(log, "dot-git"))
 	husky := filepath.Join(r.dir, ".husky", "_")
 	writeHook(t, husky, "pre-commit", ran(log, "pre-commit")+"[ -f \"$(git rev-parse --show-toplevel)/REFUSE\" ] && { echo 'husky: lint failed' >&2; exit 7; }\nexit 0\n")
 	writeHook(t, husky, "commit-msg", "grep -q '^Co-authored-by: Ana Lima' \"$1\" || exit 9\n"+ran(log, "commit-msg"))
@@ -309,16 +331,42 @@ func TestARepositorysHookManagerRunsAfterDudesHook(t *testing.T) {
 	}
 }
 
+// In the runtime image, whose system config names dude's directory as
+// core.hooksPath, a repository with no setting of its own still runs its
+// .git/hooks, and its commits get the co-authors.
+func TestInTheImageARepositorysGitHooksRun(t *testing.T) {
+	f := setup(t)
+	f.coauthorTask(t)
+	token := f.run(t, "run_hook_image", "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t), asImage)
+	log := filepath.Join(t.TempDir(), "log")
+	r.repoHook("pre-commit", ran(log, "pre-commit"))
+	r.git("commit", "-q", "--allow-empty", "-m", "In the image")
+	if got := readLog(t, log); !slices.Equal(got, []string{"pre-commit"}) {
+		t.Errorf("the repository's .git/hooks/pre-commit ran %v, want once", got)
+	}
+	if got := r.message(); got != "In the image\n\nCo-authored-by: Ana Lima <ana@corp.example>\nCo-authored-by: Bo Chen <2+bo-dev@users.noreply.github.com>" {
+		t.Errorf("message:\n%s", got)
+	}
+}
+
 // Where git would look for hooks without dude's setting, dude's hook looks
 // too: an absolute path (lefthook), the global config's ~/ path, a
 // worktree's own setting over the repository's, and .git/hooks when none
 // is set. A setting naming dude's own directory, directly or through a
-// symlink, runs nothing more and does not loop.
+// symlink, is passed over for .git/hooks and does not loop. All of it
+// with no system config and with the image's.
 func TestDudesHookRunsTheHooksGitWouldHaveRun(t *testing.T) {
+	for _, image := range []bool{false, asImage} {
+		t.Run(fmt.Sprintf("image=%v", image), func(t *testing.T) { hooksGitWouldHaveRun(t, image) })
+	}
+}
+
+func hooksGitWouldHaveRun(t *testing.T, image bool) {
 	f := setup(t)
 	f.coauthorTask(t)
-	token := f.run(t, "run_hook_where", "implementer", "running")
-	r := newHookRepo(t, luxService(t, f.url, token), cli(t))
+	token := f.run(t, fmt.Sprintf("run_hook_where_%v", image), "implementer", "running")
+	r := newHookRepo(t, luxService(t, f.url, token), cli(t), image)
 	log := filepath.Join(t.TempDir(), "log")
 	commit := func(what string) []string {
 		t.Helper()
@@ -366,21 +414,29 @@ func TestDudesHookRunsTheHooksGitWouldHaveRun(t *testing.T) {
 		t.Errorf("an empty setting: ran %v, want .git/hooks", got)
 	}
 
+	// A setting naming dude's own directory is passed over: the global one
+	// before it, else .git/hooks.
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(r.hooks, link); err != nil {
 		t.Fatal(err)
 	}
-	for _, own := range []string{r.hooks, link} {
-		r.git("config", "core.hooksPath", own)
+	for _, c := range []struct {
+		own, unsetGlobal string
+		want             string
+	}{{r.hooks, "", "global"}, {link, "", "global"}, {r.hooks, "unset", "dot-git"}, {link, "", "dot-git"}} {
+		if c.unsetGlobal != "" {
+			r.git("config", "--global", "--unset", "core.hooksPath")
+		}
+		r.git("config", "core.hooksPath", c.own)
 		done := make(chan []string, 1)
-		go func() { done <- commit("own " + own) }()
+		go func() { done <- commit("own " + c.own) }()
 		select {
 		case got := <-done:
-			if len(got) != 0 || strings.Count(r.message(), "Ana Lima") != 1 {
-				t.Errorf("dude's own directory %s: ran %v, message\n%s", own, got, r.message())
+			if !slices.Equal(got, []string{c.want}) || strings.Count(r.message(), "Ana Lima") != 1 {
+				t.Errorf("dude's own directory %s: ran %v, want %s; message\n%s", c.own, got, c.want, r.message())
 			}
 		case <-time.After(20 * time.Second):
-			t.Fatalf("dude's own directory %s: the commit loops", own)
+			t.Fatalf("dude's own directory %s: the commit loops", c.own)
 		}
 	}
 }
