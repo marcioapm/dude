@@ -1629,6 +1629,16 @@ describe("a session's agent starting", () => {
     expect(page.querySelector("[data-testid=start-progress][data-state=starting]")).not.toBeNull();
   });
 
+  test("failed before lux named a stage: the header still says Did not start, with no stage words", async () => {
+    const created = { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(20_000) };
+    const msg = { ...ev("chat.message", { text: "plan the epic" }, { type: "person", id: YOU } as PersistedEvent["actor"]), occurredAt: ago(19_000) };
+    const page = await sessionPage(new SessionClient(detail("owner"), [created, msg, ev("run.failed", { status: "failed", error: "No model yet." })]));
+    await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    const chip = await until(() => page.querySelector("[data-testid=start-chip]"), "the header's mark");
+    expect(chip.querySelector("[data-status=failed]")!.textContent).toContain("Did not start");
+    expect(chip.textContent).not.toContain("Failed while");
+  });
+
   test("Try again's fresh agent, briefed with the same words: one full briefing card, then one line that opens it; the message read once", async () => {
     const BRIEF = "Brainstorm, you are working with Márcio on billing.\n\n## The first message\n\nMárcio: plan the epic";
     const failedThenRetried = () => [
