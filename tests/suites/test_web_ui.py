@@ -1642,7 +1642,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     ended = page.get_by_test_id("run-ended")
     expect(ended).to_have_attribute("data-outcome", "failed")
     # Why is the transcript's last line, just above; the strip says only how it ended.
-    expect(page.get_by_test_id("chat-ended")).to_contain_text("which names no model yet")
+    expect(page.get_by_test_id("start-failed")).to_contain_text("which names no model yet")
     # No composer: a finished run hears nothing. It is on its task's page,
     # so there is no way back to offer: the task is right there.
     expect(page.get_by_test_id("run-screen").locator("textarea")).to_have_count(0)
