@@ -290,10 +290,11 @@ var stallWindow = fmt.Sprintf(`(CASE WHEN lc.conducted THEN $1::float8 ELSE 60 *
 // window; for a Run that changes code, no change to its files (no new diff,
 // no commit) in it; or, with no tool call open, its agent silent for the
 // whole window (silentSince). An open call is stalledCall's, measured from
-// the call, however long the agent has been silent.
+// the call or its child's last event (callSince), however long the agent
+// has been silent.
 var (
 	stalledCall = `EXISTS (SELECT 1 FROM jsonb_each_text(r.open_tool_calls_at) oc
-		WHERE oc.value::timestamptz <= now() - make_interval(secs => ` + stallWindow + `))`
+		WHERE ` + callSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 	stalledFiles  = `(` + changesCode + ` AND r.files_changed_at <= now() - make_interval(secs => ` + stallWindow + `))`
 	stalledSilent = `(r.open_tool_calls_at = '{}' AND ` + silentSince + ` <= now() - make_interval(secs => ` + stallWindow + `))`
 )
@@ -303,8 +304,14 @@ var (
 // any, files_changed_at. Both are moved on by any time the Run spent not
 // running (luxEvent), so now() minus this is running time alone. A
 // person's resume clears agent_active_at and dates the files then.
-// run_stalled (migration 085) repeats it.
+// run_stalled (migration 090) repeats it.
 const silentSince = `COALESCE(r.agent_active_at, r.files_changed_at, r.started_at)`
+
+// callSince (SQL, over runs r and an open call oc of jsonb_each_text(
+// r.open_tool_calls_at)): when the call last made progress — when it
+// opened, or its child's last event (runs.children), whichever is later.
+// run_stalled (migration 111) repeats it.
+const callSince = `GREATEST(oc.value::timestamptz, (r.children->oc.key->>'lastEventAt')::timestamptz)`
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
 // for its window. One waiting on a person, or whose turn is over, is not
@@ -327,10 +334,12 @@ const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.sessio
 const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
 
 // stallFacts (SQL, over stallFrom) identifies what a report said: the calls
-// open, the diff's checksum and, while it is silent, when its silence began.
-// A Run reported only for its files is busy, and its activity is not a
-// change of facts.
-var stallFacts = `(COALESCE((SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
+// open and what each one's child did last, the diff's checksum and, while
+// it is silent, when its silence began. A Run reported only for its files
+// is busy, and its activity is not a change of facts; a child that moves
+// on to something else is.
+var stallFacts = `(COALESCE((SELECT string_agg(k || COALESCE('=' || (r.children->k->>'lastEvent'), ''), ',' ORDER BY k)
+		FROM jsonb_object_keys(r.open_tool_calls_at) k), '')
 	|| '|' || COALESCE((SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id), '')
 	|| '|' || CASE WHEN ` + stalledSilent + ` THEN COALESCE(extract(epoch FROM ` + silentSince + `)::text, '') ELSE '' END)`
 

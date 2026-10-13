@@ -1,0 +1,10 @@
+{
+  "ChildStarted": "agent.child.started",
+  "ChildToolCalled": "agent.child.tool.called",
+  "ChildToolCompleted": "agent.child.tool.completed",
+  "ChildMessage": "agent.child.message",
+  "ChildWaiting": "agent.child.waiting",
+  "ChildEnded": "agent.child.ended",
+  "ToolCalled": "agent.tool.called",
+  "ToolCompleted": "agent.tool.completed"
+}

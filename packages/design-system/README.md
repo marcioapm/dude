@@ -169,7 +169,7 @@ gallery for every value.
 | Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
-| Roles | `--ds-role-{conductor,investigator,implementer,reviewer,simplifier,qa-browser,brainstorm}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. Six colour slots: `brainstorm` holds the conductor's values. |
+| Roles | `--ds-role-{conductor,investigator,implementer,reviewer,simplifier,qa-browser,brainstorm,subagent}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. Six colour slots: `brainstorm` holds the conductor's values, `subagent` (a child session, a visual role only) the investigator's. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
@@ -195,7 +195,13 @@ six role colour slots: the brainstorm wears the conductor's colour
 chroma and lightness clears the bar against all six in both modes, and the
 free hues near 80 sit on the attention tone, which a role must never read
 as. Both are conversation agents, so they share the round shape too; the
-glyph and the label tell them apart. The six slots clear the same bar
+glyph and the label tell them apart. The subagent (a child session) wears
+the investigator's for the same reason: searched again over every hue at
+chroma 0–0.2 and the full lightness range, only near-white (dark, L 0.95)
+and near-black (light, L 0.30) clear the pair bar, and those read as text,
+not identity; the best chromatic candidates miss it (dark `#ffa332` at
+hue 66 sits next to the attention tone; light `#6c5ec9` is 9.7/7.1 protan/
+deutan from the investigator). It is square, with the fork glyph. The six slots clear the same bar
 across all 15 pairs, and every role `fg` clears 4.5:1 on its theme's
 surface. If you change a hue or a surface, re-run the search; do not nudge
 by eye. `test/paletteDistance.test.ts` enforces the pair bar (OKLab ΔE×100,
@@ -735,6 +741,23 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   coloured rails, not shades of grey. Indent is 12px then 8px; depth 2 starts
   collapsed; depth 3+ shows only its header with an Open action. A collapsed
   live thread keeps its activity in its header.
+- **A tool call's child session** (a task or spawn call's subagent: an
+  explore, general or custom agent, not a dude role) is a `ChatThread`
+  with `role="subagent"` directly under the call's `ToolCallCard`, one per
+  child, side by side when one turn started several. Its title is the
+  description the parent gave and the subagent type; inside, its tool calls
+  and messages (never its thinking). Live it stays open; done, it folds to
+  its summary, turns, cost and duration.
+  The gallery's child-session examples mount only once they near the screen,
+  so offscreen examples add no animation load to unrelated examples.
+- **Waiting.** A live child blocked on something nothing in the Run can
+  answer (a permission its harness never forwarded) is the thread's one
+  attention area: `waiting` turns the rail and wash to the attention mark
+  and bg (`--rail`, `--rail-bg`), and the header reads "waiting 1h 57m on
+  a permission" with the pause glyph. The stuck call's `ToolCallCard` takes
+  a `note` naming the permission, and a `ChatNotice kind="notice"` says
+  "Nothing in this Run can answer it." It is a thread state, not an
+  activity: the thread is live and keeps its live semantics.
 - Only the watched agent session pins its plan (`AgentPlan sticky` under the
   transcript header). A child's plan lives inside its own thread, flat and
   collapsed. Two pinned plans would be two competing answers to "what is it
@@ -1683,7 +1706,9 @@ MarkdownCheatsheet.
   variants.
 - **AgentAvatar** — conductor, investigator, implementer, reviewer,
   simplifier, qa_browser, brainstorm (the conductor's colour and round
-  shape, the bulb glyph), plus human / system / integration actors.
+  shape, the bulb glyph), subagent (a child session: the investigator's
+  colour, square, the fork glyph; a visual role only, not a dude role),
+  plus human / system / integration actors.
 - **CostDisplay, TokenCount, Duration** — the three formatters as components,
   with live ticking and budget colouring.
 - **MetricTile / MetricGroup** — label, big tabular value, delta with a
@@ -1732,7 +1757,11 @@ MarkdownCheatsheet.
   `--plan-pad-x` sets its text's inset (the transcript sets the chat inset,
   so the plan lines up with the turns).
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
-  role-coloured rail, collapsible, depth-aware.
+  role-coloured rail, collapsible, depth-aware. A tool call's child session
+  is `role="subagent"` under the call's `ToolCallCard`. `waiting={{on,
+  since, detail?}}` is a live thread blocked on what nothing in it can
+  answer: attention rail and wash, "waiting <dur> on <on>" with the pause
+  glyph in its header, `data-waiting="true"`; not an activity kind.
 - **QuestionCard** — an agent's question (or up to four, `items`) to a
   person as a turn. Waiting it is the loudest turn in the transcript
   (attention wash and bar, live avatar, a muted ticking wait clock; no badge
