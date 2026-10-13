@@ -1645,6 +1645,34 @@ describe("a session's agent starting", () => {
     ];
   }
 
+  test("a resume: no 'Taken back up' while its row still shows stages; once the agent is back, the timed line alone", async () => {
+    const at = (ms: number) => ago(60_000 - ms);
+    const e = (type: string, payload: Record<string, unknown>, ms: number, actor?: PersistedEvent["actor"]) =>
+      ({ ...ev(type, payload, actor), occurredAt: at(ms) });
+    const ledger = [
+      e("run.created", { role: "brainstorm" }, 0),
+      e("agent.message", { text: "Metering lives in billing." }, 1_000),
+      e("run.parked", { reason: "session", stopped: "stopped" }, 2_000),
+      e("chat.message", { text: "and the tests?", directiveId: "dir_2" }, 3_000, { type: "person", id: YOU } as PersistedEvent["actor"]),
+      e("run.unparked", { reason: "session", epoch: 2 }, 3_100),
+      e("run.stage", { stage: "waiting", since: at(3_100), epoch: 2 }, 3_200),
+      e("run.stage", { stage: "volumes", since: at(9_000), epoch: 2 }, 9_100),
+    ];
+    const client = new SessionClient(detail("owner"), ledger);
+    const page = await sessionPage(client);
+    const row = await until(() => page.querySelector("[data-testid=start-progress][data-state=starting]"), "the Resuming row");
+    expect(row.querySelector("[role=status]")!.textContent).toBe("Resuming: Restoring its workspace.");
+    const said = () => [...page.querySelectorAll("[data-testid=chat-notice]")].map((n) => n.textContent ?? "");
+    expect(said().filter((t) => t.includes("Taken back up"))).toEqual([]);
+    const timed = e("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 33_100);
+    client.ledger.push(timed);
+    await act(async () => emit(timed));
+    await until(() => (page.querySelector("[data-testid=start-progress]") === null ? true : null), "the row gone");
+    const backs = said().filter((t) => t.includes("Taken back up"));
+    expect(backs).toHaveLength(1);
+    expect(backs[0]).toContain("Taken back up in 30s.");
+  });
+
   test("a resume that failed: Did not resume, with Try again, which hands its message to a fresh agent", async () => {
     class Retrying extends SessionClient {
       retried = 0;

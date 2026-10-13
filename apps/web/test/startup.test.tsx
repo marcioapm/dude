@@ -75,6 +75,44 @@ describe("the projection", () => {
     expect(up.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started")).map((t) => t.at)).toEqual([at(10_000)]);
   });
 
+  const notices = (events: PersistedEvent[]) => project(events, "running").turns.flatMap((t) => t.kind === "notice" ? [t.text] : []);
+
+  test("a resume says 'Taken back up' only once the agent is up, timed; never while its start is live", () => {
+    const ran = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000)];
+    const resuming = [...ran, message("and now?", 29_000), ev("run.unparked", { reason: "session", epoch: 2 }, 30_000),
+      stage("waiting", 30_000, 2), stage("volumes", 32_000, 2), stage("running", 40_000, 2)];
+    expect(notices(resuming).filter((n) => n.startsWith("Taken back up"))).toEqual([]);
+    const up = [...resuming, ev("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 60_000), ev("agent.message", { text: "back" }, 60_001)];
+    expect(notices(up).filter((n) => n.startsWith("Taken back up"))).toEqual(["Taken back up in 30s."]);
+    // It sits where the agent came back, before its first words.
+    const turns = project(up, "running").turns;
+    expect(turns.at(-2)).toMatchObject({ kind: "notice", text: "Taken back up in 30s.", at: at(60_000) });
+  });
+
+  test("a move says 'Taken back up' only once the agent is up; never while its start is live", () => {
+    const moving = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
+      stage("park", 20_000, 1, "migrate"), ev("run.unparked", { reason: "migrate", epoch: 2 }, 25_000),
+      stage("waiting", 25_000, 2), stage("running", 30_000, 2)];
+    expect(project(moving, "running").start).toMatchObject({ kind: "move", stage: "running" });
+    expect(notices(moving).filter((n) => n.startsWith("Taken back up"))).toEqual([]);
+    expect(notices([...moving, ev("agent.message", { text: "on Large now" }, 41_000)]).filter((n) => n.startsWith("Taken back up"))).toHaveLength(1);
+  });
+
+  test("a resume or a move that fails shows the failure, never 'Taken back up'", () => {
+    const resumeFailed = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000),
+      ev("run.unparked", { reason: "session", epoch: 2 }, 30_000), stage("waiting", 30_000, 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "terminated" }, 40_000)];
+    const moveFailed = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), stage("park", 20_000, 1, "migrate"),
+      ev("run.unparked", { reason: "migrate", epoch: 2 }, 25_000), stage("waiting", 25_000, 2),
+      ev("run.failed", { status: "failed", error: "x", stage: "waiting", reason: "no capacity" }, 40_000)];
+    for (const [events, kind] of [[resumeFailed, "resume"], [moveFailed, "move"]] as const) {
+      const c = project(events, "failed");
+      expect(c.turns.some((t) => t.kind === "notice" && t.text.startsWith("Taken back up"))).toBe(false);
+      const ended = c.turns.find((t) => t.kind === "ended")!;
+      expect(ended.kind === "ended" && ended.start?.kind).toBe(kind);
+    }
+  });
+
   test("a move: park leads, and it reads as a move", () => {
     const events = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000),
       stage("park", 20_000, 1, "drain"), stage("waiting", 25_000, 1), stage("volumes", 27_000, 2)];

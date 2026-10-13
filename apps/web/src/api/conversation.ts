@@ -537,6 +537,8 @@ export interface Projection {
    * resume): when it comes, the notice becomes that return, not a second one.
    */
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
+  /** A "Taken back up" notice whose start (a resume or a move) is still live: shown once the agent is up, never if it fails. */
+  heldUnpark: NoticeTurn | null;
   /**
    * The question a dude ask tool (`agent.tool.dude`) just asked, by the
    * tool's name, until the next harness tool event: dude records the call
@@ -587,6 +589,7 @@ export function emptyProjection(): Projection {
     untimedUnparks: new Map(),
     untimedUnpark: null,
     standaloneTimings: new Map(),
+    heldUnpark: null,
     pendingAsk: null,
     briefed: false,
     start: null,
@@ -646,6 +649,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.start = newStart("start", event.occurredAt);
         state.startStaged = false;
         state.startWoken = false;
+        state.heldUnpark = null;
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
         state.retrying = new Set();
@@ -713,6 +717,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
         state.start = null;
         state.startMessages = [];
+        state.heldUnpark = null;
         break;
 
       case EventTypes.ConductorWoken:
@@ -1077,7 +1082,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             break;
           }
         }
-        turns.push(turn);
+        // While its start is live the agent is not back yet: the notice waits for it (endStart).
+        if (notice === "parked") placeHeldUnpark(state, event.occurredAt);
+        if (notice === "unparked" && state.start && !state.start.failed) state.heldUnpark = turn;
+        else turns.push(turn);
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;
@@ -1092,6 +1100,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunPaused:
+        placeHeldUnpark(state, event.occurredAt);
         state.untimedUnpark = null;
         if (state.start && !state.start.failed) state.start = null;
         break;
@@ -1158,6 +1167,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.startMessages = [];
         }
         state.start = null;
+        // A failed resume or move shows its failure, never "Taken back up".
+        state.heldUnpark = null;
         turns.push(ended);
         state.activity = null;
         state.activeTool = null;
@@ -1530,6 +1541,7 @@ function endStart(state: Projection, event: PersistedEvent): void {
   state.start = null;
   for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
   state.startMessages = [];
+  placeHeldUnpark(state, event.occurredAt);
   if (start.kind !== "start" || !state.startStaged) return;
   const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
   if (start.stage && start.stageSince) {
@@ -1539,6 +1551,17 @@ function endStart(state: Projection, event: PersistedEvent): void {
     kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
     text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
   });
+}
+
+/**
+ * A held "Taken back up" goes into the transcript at `at`: the agent is up, or was parked or paused again (dude
+ * parks only an agent that ran). A failed or ended start drops it instead.
+ */
+function placeHeldUnpark(state: Projection, at: string): void {
+  if (!state.heldUnpark) return;
+  state.heldUnpark.at = at;
+  state.turns.push(state.heldUnpark);
+  state.heldUnpark = null;
 }
 
 function newStart(kind: StartState["kind"], startedAt: string): StartState {
