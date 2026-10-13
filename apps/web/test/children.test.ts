@@ -234,7 +234,42 @@ test("a Run that ended settles a grandchild still waiting under a child that alr
   expect(settledAgain.turns[0]).not.toBe(live.turns[0]);
   const done = apply(emptyProjection(), [parentCall(), started(), ev(EventTypes.ChildEnded, { ...kid, status: "completed" }),
     ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" })]);
-  expect(snapshot(done, "aborted").turns[0]).toBe(snapshot(done).turns[0]);
+  expect(only(snapshot(done, "aborted").turns)).toMatchObject({ status: "completed" });
+  expect(childOf(snapshot(done, "aborted").turns).status).toBe("completed");
+});
+
+test("a settled transcript keeps what it showed while the live one goes on", () => {
+  const state = apply(emptyProjection(), [parentCall(), started(),
+    ev(EventTypes.ChildMessage, { ...kid, text: "before" }),
+    ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "inner", tool: "task" }),
+    ev(EventTypes.ChildStarted, { childId: "grand", callId: "inner", parentChildId: "ses_kid", kind: "task", title: "Deeper" }),
+    ev(EventTypes.ChildMessage, { childId: "grand", text: "grand before" }),
+    ev(EventTypes.ChildEnded, { ...kid, status: "interrupted" })]);
+  const settled = snapshot(state, "aborted");
+  const shown = JSON.stringify(settled.turns);
+  const said = (child: ChildTurn) => child.turns.map((t) => (t.kind === "message" ? t.text : `${t.tool}:${t.status}`));
+
+  apply(state, [
+    ev(EventTypes.ChildMessage, { ...kid, text: "after" }),
+    ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "late", tool: "grep" }),
+    ev(EventTypes.ChildToolCompleted, { ...kid, parentCallId: "c1", callId: "inner", tool: "task", status: "completed" }),
+    ev(EventTypes.ChildMessage, { childId: "grand", text: "grand after" }),
+    ev(EventTypes.ChildToolCalled, { childId: "grand", parentCallId: "inner", callId: "g1", tool: "read" }),
+    ev(EventTypes.ChildStarted, { childId: "late-grand", callId: "inner", parentChildId: "ses_kid", kind: "task", title: "Late" }),
+  ]);
+
+  expect(JSON.stringify(settled.turns)).toBe(shown);
+  const child = childOf(settled.turns);
+  expect(said(child)).toEqual(["before", "task:aborted"]);
+  const inner = child.turns[1] as ToolTurn;
+  expect(inner.children.map((c) => c.id)).toEqual(["grand"]);
+  expect(said(only(inner.children))).toEqual(["grand before"]);
+
+  const liveChild = childOf(snapshot(state).turns);
+  expect(said(liveChild)).toEqual(["before", "task:completed", "after", "grep:running"]);
+  const liveInner = liveChild.turns[1] as ToolTurn;
+  expect(liveInner.children.map((c) => c.id)).toEqual(["grand", "late-grand"]);
+  expect(said(liveInner.children[0]!)).toEqual(["grand before", "grand after", "read:running"]);
 });
 
 test("folding one event at a time is folding them all at once", () => {

@@ -1161,32 +1161,23 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
    */
   const unfinished: ToolCallStatus = runStatus === "aborted" ? "aborted" : "failed";
   // Settles a call and every child under it, to any depth: an ended child
-  // keeps its status but its descendants are settled too. Only what changes
-  // is cloned; the live projection is never written.
-  const settleChild = (child: ChildTurn): ChildTurn => {
-    const turns = child.turns.map((t) => (t.kind === "tool" ? settle(t) : t));
-    const turnsChanged = turns.some((t, i) => t !== child.turns[i]);
-    const live = child.status === "running";
-    if (!live && !turnsChanged && child.waitingOn === null) return child;
-    return {
-      ...child,
-      revision: child.revision + 1,
-      status: live ? unfinished : child.status,
-      waitingOn: null,
-      endedAt: child.endedAt ?? child.startedAt,
-      turns: turnsChanged ? turns : child.turns,
-    };
-  };
-  const settle = (turn: ToolTurn): ToolTurn => {
-    const children = turn.children.map(settleChild);
-    const childrenChanged = children.some((c, i) => c !== turn.children[i]);
-    if (turn.status !== "running" && !childrenChanged) return turn;
-    return {
-      ...turn,
-      ...(turn.status === "running" ? { status: unfinished, endedAt: turn.endedAt ?? turn.startedAt } : {}),
-      children: childrenChanged ? children : turn.children,
-    };
-  };
+  // keeps its status but its descendants are settled too. Every call, child,
+  // turns and children array is copied, because `apply` keeps writing the
+  // live ones (a late event pushes into them or ends a call); a message turn
+  // is never written after it is pushed, so it is shared.
+  const settleChild = (child: ChildTurn): ChildTurn => ({
+    ...child,
+    revision: child.revision + 1,
+    status: child.status === "running" ? unfinished : child.status,
+    waitingOn: null,
+    endedAt: child.endedAt ?? child.startedAt,
+    turns: child.turns.map((t) => (t.kind === "tool" ? settle(t) : t)),
+  });
+  const settle = (turn: ToolTurn): ToolTurn => ({
+    ...turn,
+    ...(turn.status === "running" ? { status: unfinished, endedAt: turn.endedAt ?? turn.startedAt } : {}),
+    children: turn.children.map(settleChild),
+  });
   return {
     turns: state.turns.map((turn) => (turn.kind === "tool" ? settle(turn) : turn)),
     plan: state.plan,
