@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -319,6 +320,81 @@ func TestAResetResumesAConductorParkedOnlyOnAPeersReply(t *testing.T) {
 	}
 	if n := w.luxCalls(live, "resume"); n != resumed {
 		t.Fatalf("resumed %d more times before the reply", n-resumed)
+	}
+}
+
+// lux refuses a Reset's resume of a Run parked only on a peer's reply (the
+// target's pool went after the dry run): the refusal is kept and the move
+// settled, the agent is told in the refusal's words alone, and it parks on
+// the peer again without being resumed for the move again.
+func TestALuxRefusedResetOfAPeerParkedRunSettlesAndParksAgain(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+		w.org, fakeagent.MachineSize)
+	wi, peer := w.task(), w.task()
+	w.onAnEpic(wi, peer)
+	ask := `{"to":"` + w.key(peer) + `","text":"Which body does your route take?"}`
+	// Raised on lux too, so lux's own record of the Run is on Bigger.
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"message", ask}, {"wait_for_reply", `{"message":"{{last.id}}"}`}},
+			Machine: fakeagent.MachineRequest, Reply: "Wired the client.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	w.deliver(wi)
+	var runID string
+	w.until("the agent raised and parked on its peer", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT w.run_id FROM peer_waits w JOIN runs r ON r.id = w.run_id
+			WHERE r.task_id = $1 AND w.closed_at IS NULL AND r.status = 'paused' AND r.dude_pause = 'person'
+			AND EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.kind = 'raise' AND m.settled_at IS NOT NULL AND m.refused IS NULL)`, wi).Scan(&runID)
+		return runID != ""
+	})
+	if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
+		t.Fatalf("raised to %v", got)
+	}
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
+	before := len(w.lux.ResumeInputs(live))
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id=$2 WHERE organization_id=$1 AND name='Standard'`, w.org, bigPool)
+	// The pool goes after the Reset's dry run, as the real resume arrives.
+	luxAPI := w.lux.Handler()
+	w.lux.OnResume = func(lr string, validateOnly bool) {
+		if lr == live && !validateOnly {
+			req := httptest.NewRequest("DELETE", "/v1/pools/big", nil)
+			req.Header.Set("Authorization", "Bearer lux-key")
+			luxAPI.ServeHTTP(httptest.NewRecorder(), req)
+		}
+	}
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": wi, "role": "implementer"}); status != 200 || out["moved"] != true {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.until("the Reset settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND kind = 'reset' AND settled_at IS NOT NULL AND refused = 'unknown_pool'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'machine.refused'`, runID); n != 1 {
+		t.Errorf("%d machine.refused, want 1", n)
+	}
+	want := "You were to move back to Standard; lux kept you on Bigger: Standard's pool has no host it fits."
+	if in := w.lux.ResumeInputs(live)[before:]; len(in) != 1 || in[0] != want {
+		t.Errorf("resume inputs %q, want %q", in, want)
+	}
+	w.until("the agent to park on its peer again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND waiting_since IS NOT NULL`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM peer_waits WHERE run_id = $1 AND closed_at IS NULL`, runID); n != 1 {
+		t.Errorf("%d open waits after the refusal, want 1", n)
+	}
+	resumed := w.luxCalls(live, "resume")
+	for range 5 {
+		w.pump()
+	}
+	if n := w.luxCalls(live, "resume"); n != resumed {
+		t.Fatalf("resumed %d more times after the refusal", n-resumed)
+	}
+	if in := w.lux.ResumeInputs(live)[before:]; len(in) != 1 {
+		t.Errorf("resume inputs %q, want the refusal's alone", in)
 	}
 }
 
