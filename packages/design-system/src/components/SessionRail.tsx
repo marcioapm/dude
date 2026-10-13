@@ -58,7 +58,7 @@ export function ToolUsage({ tools, max = 6 }: { readonly tools: ReadonlyArray<To
     <div className={styles["bars"]} data-testid="tool-usage">
       {shown.map((t) => (
         <div key={t.name} className={styles["bar"]}>
-          <span className={styles["barName"]} title={t.name}>{t.name}</span>
+          <span className={styles["barName"]}>{t.name}</span>
           <i style={{ width: `${top > 0 ? Math.max(4, (t.count / top) * 100) : 0}%` }} aria-hidden />
           <span className={styles["barCount"]}>{t.count}</span>
         </div>

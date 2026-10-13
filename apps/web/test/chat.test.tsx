@@ -297,7 +297,7 @@ describe("the Chat tab", () => {
   });
 
   test("the conductor's Tools used names its dude actions as called and completed, with the overlap note only when there are some", async () => {
-    const NOTE = "Harness calls include failures and may repeat the completed dude actions listed here.";
+    const NOTE = "Harness calls include failures and may repeat dude's completed actions.";
     const agent = { type: "agent", id: CONDUCTOR } as const;
     const usage = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=chat-screen] [data-testid=tool-usage]");
     const plain = await chatPage(new ChatClient({ status: "running" }, conductorEvents()));
@@ -307,7 +307,7 @@ describe("the Chat tab", () => {
     for (const unmount of mounted) await unmount();
     mounted = [];
     const events = [...conductorEvents(),
-      ev("agent.tool.called", { tool: "mcp__dude__update_task", callId: "c_dude", input: {} }, agent),
+      ev("agent.tool.called", { tool: "update_task", callId: "c_dude", input: {} }, agent),
       ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }, agent)];
     const page = await chatPage(new ChatClient({ status: "running" }, events));
     const rows = await until(() => (usage(page)?.textContent?.includes("(completed)") ? usage(page) : null), "the conductor's dude actions");

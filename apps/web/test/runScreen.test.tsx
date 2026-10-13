@@ -408,11 +408,11 @@ describe("the session's Tools used", () => {
     }
   }
   const usage = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]");
-  const NOTE = "Harness calls include failures and may repeat the completed dude actions listed here.";
+  const NOTE = "Harness calls include failures and may repeat dude's completed actions.";
 
   test("names dude's completed actions beside the harness's call of them, with the note on how they overlap", async () => {
     const page = await session({ client: new Tooled([
-      ["agent.tool.called", { tool: "mcp__dude__update_task", callId: "c_dude", input: {} }],
+      ["agent.tool.called", { tool: "update_task", callId: "c_dude", input: {} }],
       ["agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }],
     ]) });
     const rows = await until(() => {

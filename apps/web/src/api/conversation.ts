@@ -543,18 +543,23 @@ export function toolLabel(name: string): string {
 }
 
 // These sources overlap but have no shared call id: they are not an additive total.
-export const TOOL_USAGE_NOTE = "Harness calls include failures and may repeat the completed dude actions listed here.";
+export const TOOL_USAGE_NOTE = "Harness calls include failures and may repeat dude's completed actions.";
 
-// A harness call to one of dude's tools reads beside its completed row: "dude name session (called)".
-function harnessToolLabel(name: string): string {
+function dudeToolWords(tool: string, source: "called" | "completed"): string {
+  return `dude ${tool.replaceAll("_", " ")} (${source})`;
+}
+
+// Claude Code and Codex record dude's tools without the server prefix, so a bare
+// name counts as dude's when the run also completed a dude action of that name.
+function harnessToolLabel(name: string, dudeTools: ReadonlyMap<string, number>): string {
   const own = dudeToolName(name);
-  return own === name ? toolLabel(name) : `dude ${own.replaceAll("_", " ")} (called)`;
+  return own !== name || dudeTools.has(own) ? dudeToolWords(own, "called") : toolLabel(name);
 }
 
 export function toolUsage(conversation: Pick<Conversation, "toolCounts" | "dudeToolCounts">): { name: string; count: number }[] {
   return [
-    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: harnessToolLabel(name), count })),
-    ...Array.from(conversation.dudeToolCounts, ([name, count]) => ({ name: `dude ${name.replaceAll("_", " ")} (completed)`, count })),
+    ...Array.from(conversation.toolCounts, ([name, count]) => ({ name: harnessToolLabel(name, conversation.dudeToolCounts), count })),
+    ...Array.from(conversation.dudeToolCounts, ([name, count]) => ({ name: dudeToolWords(name, "completed"), count })),
   ];
 }
 

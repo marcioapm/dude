@@ -600,8 +600,14 @@ describe("the tools a Run used, for the session rail", () => {
       .toEqual([{ name: "Read", count: 1 }, { name: "dude update task (completed)", count: 1 }, { name: "dude start phase (completed)", count: 2 }]);
   });
 
-  // A prefixed harness name is dude's tool called; a bare one cannot be told from any other tool.
-  const harnessLabel = { decide: "Decide", dude_decide: "dude decide (called)", mcp__dude__decide: "dude decide (called)" } as const;
+  const harnessLabel = { decide: "dude decide (called)", dude_decide: "dude decide (called)", mcp__dude__decide: "dude decide (called)" } as const;
+
+  test("a bare harness name pairs with its completed dude action, but a refused-only call stays bare", () => {
+    expect(toolUsage(project([called("update_task", "c_1"), dude("update_task")])))
+      .toEqual([{ name: "dude update task (called)", count: 1 }, { name: "dude update task (completed)", count: 1 }]);
+    expect(toolUsage(project([called("update_task", "refused"), ev(EventTypes.ToolCompleted, { callId: "refused", status: "error" })])))
+      .toEqual([{ name: "Update_task", count: 1 }]);
+  });
 
   test("successful MCP overlap stays separately labelled for every harness alias", () => {
     for (const tool of ["decide", "dude_decide", "mcp__dude__decide"] as const) {

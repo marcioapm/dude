@@ -162,7 +162,7 @@ describe("a brainstorm session's page", () => {
     const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
     expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
       .toEqual([["dude name session (completed)", "2"], ["dude name session (called)", "1"], ["dude update task (completed)", "1"]]);
-    expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat the completed dude actions listed here.");
+    expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat dude's completed actions.");
   });
 
   test("its Tools used rail has no overlap note when dude completed nothing", async () => {
@@ -1235,7 +1235,6 @@ describe("a session's model", () => {
       .toBe("Started a fresh agent on gpt-6-sol · Codex; it has the conversation so far.");
   });
 });
-
 
 describe("a session's files", () => {
   const art = (id: string, name: string, version: number, versions: number, contentType = "text/markdown", description = ""): Artifact => ({
