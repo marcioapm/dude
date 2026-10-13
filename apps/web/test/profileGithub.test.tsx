@@ -5,6 +5,7 @@
  */
 
 import { afterEach, expect, test } from "bun:test";
+import { useState } from "react";
 import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, mount, type, until } from "./dom.ts";
@@ -25,6 +26,7 @@ const ME = { ...PEOPLE[0]!, lastSeenWhere: null };
 class ProfileClient extends FixtureClient {
   saved: Array<Record<string, unknown>> = [];
   reads = 0;
+  name = ME.name;
   constructor(private github: Pick<Me, "githubLogin" | "commitEmail">) {
     super("a");
   }
@@ -35,6 +37,7 @@ class ProfileClient extends FixtureClient {
   // Stores what it is sent, as the API does: an empty value clears.
   override updateMe(changes: Record<string, unknown>): Promise<{ person: Me }> {
     this.saved.push(changes);
+    if ("name" in changes) this.name = changes.name as string;
     if ("githubLogin" in changes) this.github = { ...this.github, githubLogin: (changes.githubLogin as string) || null };
     if ("commitEmail" in changes) this.github = { ...this.github, commitEmail: (changes.commitEmail as string) || null };
     return Promise.resolve({ person: { ...ME, ...this.github } });
@@ -84,7 +87,9 @@ test("emptying the username clears it", async () => {
 test("after a save the form shows what was saved, and has nothing left to save", async () => {
   const client = new ProfileClient({ githubLogin: null, commitEmail: null });
   const { container, login } = await open(client);
-  await type(login, "octocat");
+  // Typed with spaces the save trims, so only a form started again from the
+  // saved value shows "octocat": one never started again keeps the spaces.
+  await type(login, "  octocat  ");
   await click(container.querySelector<HTMLButtonElement>("[data-testid=profile-save]")!);
   await until(() => client.saved.length === 1 ? true : null, "the save");
   // Only once the save's re-read has landed: before it, the typed value is
@@ -96,4 +101,42 @@ test("after a save the form shows what was saved, and has nothing left to save",
     return input?.value === "octocat" && button?.disabled ? true : null;
   }, "the saved username shown, with Save off");
   expect(client.saved).toEqual([{ githubLogin: "octocat" }]);
+});
+
+// The shell has your name from the people list, which it reads again after a
+// save, later than /v1/me: here it arrives only once /v1/me already has.
+function Shell({ client }: { client: ProfileClient }) {
+  const [me, setMe] = useState(ME);
+  const onChanged = () => {
+    void (async () => {
+      await until(() => client.reads >= 2 ? true : null, "the re-read of /v1/me");
+      setMe({ ...ME, name: client.name });
+    })();
+  };
+  return <MySettingsScreen client={client} me={me} onChanged={onChanged} />;
+}
+
+test("a name saved with a GitHub username shows the new name once the shell has it, with nothing left to save", async () => {
+  const client = new ProfileClient({ githubLogin: null, commitEmail: null });
+  const { container, unmount } = await mount(
+    <ThemeProvider>
+      <TooltipProvider>
+        <ToastProvider>
+          <Shell client={client} />
+        </ToastProvider>
+      </TooltipProvider>
+    </ThemeProvider>,
+  );
+  mounted.push(unmount);
+  const name = await until(() => container.querySelector<HTMLInputElement>("[data-testid=profile-name]"), "the name");
+  await type(name, "Renamed Person");
+  await type(container.querySelector<HTMLInputElement>("[data-testid=profile-github-login]")!, "octocat");
+  await click(container.querySelector<HTMLButtonElement>("[data-testid=profile-save]")!);
+  await until(() => client.saved.length === 1 ? true : null, "the save");
+  await until(() => {
+    const shown = container.querySelector<HTMLInputElement>("[data-testid=profile-name]");
+    const button = container.querySelector<HTMLButtonElement>("[data-testid=profile-save]");
+    return shown?.value === "Renamed Person" && button?.disabled ? true : null;
+  }, "the new name shown, with Save off");
+  expect(client.saved).toEqual([{ name: "Renamed Person", githubLogin: "octocat" }]);
 });

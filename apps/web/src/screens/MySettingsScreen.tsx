@@ -48,9 +48,10 @@ export function MySettingsScreen({ client, me, onChanged }: {
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
       {me && github ? (
-        // Keyed by what /v1/me said, not by the re-read: a save re-reads, and
-        // the form starts again only once the saved values have arrived.
-        <ProfileSection key={`${me.id}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
+        // Keyed by what is saved (your name from the shell, your GitHub fields
+        // from /v1/me): the form starts again only once a save's values arrive,
+        // in whichever order the two reads land, so it never starts from old ones.
+        <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
           onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
       ) : null}
       <KeysSection client={client} />
