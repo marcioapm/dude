@@ -67,13 +67,7 @@ func (s Sizes) Choices(current Machine, org string, pools []lux.Pool, run lux.Ru
 	if run.PoolID != "" {
 		out.currentPool = run.PoolID
 	}
-	names := PoolNames{ByID: map[string]string{}}
-	for _, p := range pools {
-		names.ByID[p.ID] = p.Name
-		if p.IsDefault {
-			names.Default = p.Name
-		}
-	}
+	names := PoolNamesOf(pools)
 	out.names = names
 	for _, size := range s.ByID {
 		if !Larger(size, current) {

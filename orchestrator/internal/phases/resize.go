@@ -113,32 +113,23 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 		p.Note = fmt.Sprintf("Its settings name a machine size that no longer exists, so it keeps %s.", recorded.Name)
 		return p
 	}
-	match, pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
+	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
 	if err != nil {
 		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
 		p.unknown = true
 		return p
 	}
-	if match != poolSame {
-		p.Pool = pool
-	}
+	p.Pool = pool
 	if !delivery.SameSize(*recorded, *target) || p.Pool != "" {
 		p.Send = &lux.Resources{CPUs: target.CPUs, Memory: target.MemoryMiB << 20, Disk: target.DiskGiB << 30}
 	}
 	return p
 }
 
-type poolMatch int
-
-const (
-	poolSame poolMatch = iota
-	poolOther
-	poolNotDefault
-)
-
-// poolOf resolves a size naming no pool to lux's current default. The Run's
+// poolOf is the pool a resume to target asks lux for, "" for the Run's
+// own, resolving a size naming no pool to lux's current default. The Run's
 // binding wins over the recorded size's submit-time pool when lux says it.
-func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, luxPool string) (poolMatch, string, error) {
+func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, luxPool string) (string, error) {
 	deref := func(s *string) string {
 		if s == nil {
 			return ""
@@ -150,24 +141,24 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 		current = deref(recorded.PoolID)
 	}
 	if want == current {
-		return poolSame, "", nil
+		return "", nil
 	}
 	if want != "" {
-		return poolOther, want, nil
+		return want, nil
 	}
 	pools, err := c.Pools(ctx)
 	if err != nil {
-		return 0, "", err
+		return "", err
 	}
 	for _, p := range pools {
 		if p.IsDefault {
 			if p.ID == current {
-				return poolSame, "", nil
+				return "", nil
 			}
-			return poolNotDefault, p.ID, nil
+			return p.ID, nil
 		}
 	}
-	return 0, "", fmt.Errorf("lux reports no default pool")
+	return "", fmt.Errorf("lux reports no default pool")
 }
 
 // ValidateResize checks the exact sized resume without stopping the Run.
