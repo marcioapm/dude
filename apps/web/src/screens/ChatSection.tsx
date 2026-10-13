@@ -9,7 +9,7 @@
  * the orchestrator wakes, or replaces once it ended.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
@@ -243,7 +243,10 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
               to={first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>}
             />
           }
-        />
+        >
+          {/* With no conductor yet, dude's lines (a person's machine Reset) are the Chat's only turns. */}
+          {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+        </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
     </div>

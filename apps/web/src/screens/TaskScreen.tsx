@@ -47,7 +47,7 @@ import {
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type MachineResetPayload, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -70,7 +70,7 @@ import { ChatSection } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { TaskMachineRaises } from "./actions.tsx";
-import { taskRaisedMachines } from "../machines.ts";
+import { moveWords, roleLabel, taskRaisedMachines } from "../machines.ts";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
@@ -1091,6 +1091,13 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case "task.decided":
         out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;
+      case EventTypes.MachineReset: {
+        // A person's Reset of a raised machine: on the task, with the Run it moved when one was live.
+        const m = moveWords(p as unknown as MachineResetPayload);
+        out.push({ ...base, who: face, text: <>{person} moved the {roleLabel(m.role).toLowerCase()} back to <b>{m.to}</b></>,
+          quote: p.note ? String(p.note) : undefined, open: session(e.runId) });
+        break;
+      }
       case "question.asked":
         if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
         break;

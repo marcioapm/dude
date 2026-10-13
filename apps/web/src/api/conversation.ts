@@ -19,7 +19,7 @@ import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStart
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
-import { moveWords, roleLabel } from "../machines.ts";
+import { moveWords, resetNotice, roleLabel } from "../machines.ts";
 import { instant } from "../instant.ts";
 
 /**
@@ -776,8 +776,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.MachineReset: {
         const p = payload as unknown as MachineResetPayload;
         const m = moveWords(p);
-        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
-          text: `${p.by.name || "Someone"} moved the ${roleLabel(m.role).toLowerCase()} back to ${m.to}${p.note ? `: “${p.note}”` : "."}` });
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: resetNotice(p) });
         // Only a reset that moves a live Run (it has a moveId) has a move to show.
         if (p.moveId) {
           state.start = newStart("move", event.occurredAt);

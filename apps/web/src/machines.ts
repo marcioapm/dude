@@ -22,7 +22,7 @@ import {
   type SettingsRole,
 } from "@dude/domain";
 
-import type { AgentMachine, Machine, MachineMove, Raise, SessionDetail } from "@dude/domain";
+import type { AgentMachine, Machine, MachineMove, MachineResetPayload, Raise, SessionDetail } from "@dude/domain";
 import type { MachineRaise } from "@dude/design-system/components";
 import { formatDuration } from "@dude/design-system";
 import type { TaskDetail } from "./api/client.ts";
@@ -50,6 +50,12 @@ export function raisedProvenance(raise: Pick<Raise, "askedBy" | "reason" | "at">
 export function moveWords(move: MachineMove): { role: string; from: string; to: string; pool: string | null } {
   const pool = move.pool ? move.pool.to.name ?? move.pool.to.id : null;
   return { role: move.role, from: move.from.name, to: move.to.name, pool };
+}
+
+/** A Reset as its notice says it, in a Run's transcript and in the task's Chat: "Márcio moved the implementer back to Standard: “fits”". */
+export function resetNotice(p: MachineResetPayload): string {
+  const m = moveWords(p);
+  return `${p.by.name || "Someone"} moved the ${roleLabel(m.role).toLowerCase()} back to ${m.to}${p.note ? `: “${p.note}”` : "."}`;
 }
 
 /**

@@ -8,9 +8,13 @@
  * which the task page already reads.
  */
 
-import { DECISION_POINT_LABEL, EventTypes, decisionPointSchema, runLabel, type PersistedEvent, type Run } from "@dude/domain";
+import { DECISION_POINT_LABEL, EventTypes, decisionPointSchema, isConductor, runLabel, type MachineResetPayload, type PersistedEvent, type Run } from "@dude/domain";
 import { apply, emptyProjection, type HumanTurn } from "./api/conversation.ts";
 import { byInstant } from "./instant.ts";
+import { resetNotice } from "./machines.ts";
+
+// A conductor that may still take a Reset's move: its transcript shows it.
+const LIVE: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
 
 export type ConductedLine =
   | { kind: "run"; id: string; at: string; run: Run; steers: ConductorSteer[] }
@@ -28,13 +32,21 @@ export type ConductorSteer = Pick<HumanTurn, "text" | "at" | "lands" | "delivere
 /**
  * The task's conducted lines, oldest first: a line for each Run the
  * conductor started or steered; none for a task its conductor never
- * decided for nor steered.
+ * decided for nor steered. A person's machine Reset is a line whoever
+ * decides: on the task, not on the conductor's Run, unless it moved that
+ * live conductor, whose own transcript then says it.
  */
 export function conductedLines(task: { decider: string; runs: readonly Run[] }, events: readonly PersistedEvent[]): ConductedLine[] {
+  const resets: ConductedLine[] = events.flatMap((e) => {
+    if (e.eventType !== EventTypes.MachineReset) return [];
+    const moved = e.runId ? task.runs.find((r) => r.id === e.runId) : undefined;
+    if (moved && isConductor(moved) && LIVE.has(moved.status)) return [];
+    return [{ kind: "notice", id: e.eventId, at: e.occurredAt, text: resetNotice(e.payload as unknown as MachineResetPayload) }];
+  });
   const steers = conductorSteers(events);
   const lined = task.runs.filter((r) => r.conductorRunId || steers.has(r.id));
-  if (task.decider !== "conductor" && lined.length === 0) return [];
-  const out: ConductedLine[] = lined.map((run) => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }));
+  if (task.decider !== "conductor" && lined.length === 0) return resets;
+  const out: ConductedLine[] = [...resets, ...lined.map((run): ConductedLine => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }))];
   for (const e of events) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
     switch (e.eventType) {
