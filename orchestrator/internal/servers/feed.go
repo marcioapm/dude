@@ -235,7 +235,11 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 				WHERE lux_server_id = $1 AND idle_event_id < $2`, e.ServerID, e.ID); err != nil {
 				return err
 			}
-			return nil
+			// Its first ready: the preview has served once, and its servers
+			// take the later wake timeout (the sweep's wake_timeouts_due).
+			tag, err := tx.Exec(ctx, `UPDATE runs SET preview_ready_at = now() WHERE id = $1 AND preview_ready_at IS NULL`, runID)
+			kick = err == nil && tag.RowsAffected() > 0
+			return err
 		case "server.deleted", "server.expired":
 			// Gone in lux, by dude's own delete or lux's expiry: a preview
 			// still live ends with it (its Run cancelled by the sweep).

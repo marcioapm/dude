@@ -42,8 +42,6 @@ import (
 const (
 	// lux's own expiry, the safety net behind dude's reaper.
 	previewExpireAfter = "720h"
-	// How long a wake is held open for dude before lux says "no answer".
-	previewWakeTimeout = "5m"
 	// A wake another orchestrator claimed and has not finished is taken
 	// over after this.
 	wakeClaimFor = 2 * time.Minute
@@ -56,6 +54,9 @@ const (
 	// Starts in a row of a preview's Run that may fail before it runs
 	// before dude stops trying new ones by itself (startFailed).
 	previewStartAttempts = 3
+	// How soon a preview whose servers' wake timeouts were checked is
+	// checked again: one left long because a wake was under way.
+	timeoutCheckEvery = 30 * time.Second
 )
 
 // wakeRun is a wakeable preview as the sweep reads it.
@@ -72,6 +73,9 @@ type wakeRun struct {
 	LuxLeft bool
 	// Its servers are to be checked for idleness (wakeableSelect's park_due).
 	ParkDue bool
+	// A server's wake timeout is not what the settings say now
+	// (wakeableSelect's timeouts_due).
+	TimeoutsDue bool
 	// Starts of its lux Run in a row that failed before running.
 	StartFailures int
 	// lux_start_event before the request this wake's acknowledgement
@@ -88,8 +92,8 @@ type wakeRun struct {
 }
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
-// age, $2 parkCheckEvery, $3 wakeClaimFor and $5 parkSweepEvery, in
-// seconds; $4 the page size. The inner query computes each row's flags once
+// age, $2 parkCheckEvery, $3 wakeClaimFor, $5 parkSweepEvery and $6
+// timeoutCheckEvery, in seconds; $4 the page size. The inner query computes each row's flags once
 // (its servers' counts in one lateral aggregate); the outer one keeps the
 // rows with something to do and sorts them: a wake, a sync or an end due
 // first (someone may be waiting on it), then a park check due, then the
@@ -100,7 +104,8 @@ type wakeRun struct {
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
 const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
-		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures, image_build_id
+		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures, image_build_id,
+		timeouts_due
 	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at, r.start_failures,
 			COALESCE(r.image_build_id, '') AS image_build_id,
 			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
@@ -118,7 +123,17 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 			r.status = 'running' AND ps.live > 0 AND (r.park_checked_at IS NULL
 				OR r.park_checked_at < now() - make_interval(secs => $5)
 				OR (ps.idle > 0 AND (ps.idle = ps.live OR ps.idle_at > r.park_checked_at
-					OR r.park_checked_at < now() - make_interval(secs => $2)))) AS park_due
+					OR r.park_checked_at < now() - make_interval(secs => $2)))) AS park_due,
+			-- A live server whose wake timeout in lux (as dude last set it)
+			-- is not the one the settings say now: the first-wake one until
+			-- the preview has served, then the later one. A wake due
+			-- reconciles its servers itself.
+			r.status IN ('scheduled', 'starting', 'running', 'paused') AND r.wake_wanted_at IS NULL AND ps.live > 0
+				AND (r.wake_timeouts_checked_at IS NULL OR r.wake_timeouts_checked_at < now() - make_interval(secs => $6))
+				AND EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL
+					AND s.wake_timeout_s IS DISTINCT FROM (SELECT (preview_settings(pr)->>(CASE WHEN r.preview_ready_at IS NULL
+						THEN 'firstWakeTimeoutMinutes' ELSE 'wakeTimeoutMinutes' END))::int * 60 FROM projects pr WHERE pr.id = r.project_id))
+				AS timeouts_due
 		FROM runs r JOIN tasks t ON t.id = r.task_id
 		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE s.deleted_at IS NULL) AS live,
 				count(*) FILTER (WHERE s.deleted_at IS NULL AND s.idle_at IS NOT NULL) AS idle,
@@ -129,6 +144,7 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 		  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
 		  AND (r.op_token IS NULL OR r.op_deadline <= now())) w
 	WHERE status IN ('pending', 'completed', 'failed', 'aborted') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL OR reap
+	   OR timeouts_due
 	   OR (status IN ('scheduled', 'starting', 'running') AND lux_run_id <> '')
 	   OR (status = 'paused' AND lux_run_id <> '' AND lux_state NOT IN ('stopped', 'failed', 'lost'))
 	ORDER BY (status NOT IN ('scheduled', 'starting', 'running') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL) DESC,
@@ -160,7 +176,7 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 			return err
 		}
 		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit,
-			parkSweepEvery.Seconds())
+			parkSweepEvery.Seconds(), timeoutCheckEvery.Seconds())
 		if err != nil {
 			return err
 		}
@@ -168,7 +184,7 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 			var r wakeRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
 				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue,
-				&r.StartFailures, &r.ImageBuildID)
+				&r.StartFailures, &r.ImageBuildID, &r.TimeoutsDue)
 		})
 		return err
 	}); err != nil {
@@ -240,6 +256,12 @@ func (p *Previews) advanceWakeable(ctx context.Context, r wakeRun) (bool, error)
 			return did, err
 		}
 	}
+	if r.TimeoutsDue && r.WakeWanted == nil {
+		if err := p.applyWakeTimeouts(ctx, r); err != nil {
+			return true, err
+		}
+		did = true
+	}
 	if r.LuxRunID != "" && (r.Status != "paused" || !lux.Terminal(r.LuxState)) {
 		p.follow(r.previewRun)
 	}
@@ -298,12 +320,12 @@ func deref(s *string) string {
 // the one salted with this preview's id. Each attempt first adopts a server
 // this preview already has, at whatever hostname: a create whose answer was
 // lost, or one another orchestrator made for it meanwhile.
-func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
+func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings, wakeTimeout time.Duration) (lux.TenantServer, error) {
 	labels := map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
-		WakeTimeout: previewWakeTimeout, ExpireAfter: previewExpireAfter}
+		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter}
 	domain := p.PreviewDomain
 	if p.PreviewRelative {
 		domain = ""
@@ -352,6 +374,17 @@ func idleAfter(minutes float64) string {
 		minutes = 30
 	}
 	return (time.Duration(minutes * float64(time.Minute))).String()
+}
+
+// wakeTimeout is how long lux's waking page waits for the preview before
+// it says "no answer": the project's first-wake timeout until the preview
+// has served once (its first start may build everything), else the later
+// one. Unset (0) reads lux's and dude's defaults, 15 and 5 minutes.
+func wakeTimeout(settings PreviewSettings, servedOnce bool) time.Duration {
+	if servedOnce {
+		return time.Duration(cmp.Or(settings.WakeTimeoutMinutes, 5)) * time.Minute
+	}
+	return time.Duration(cmp.Or(settings.FirstWakeTimeoutMinutes, 15)) * time.Minute
 }
 
 func loadSettings(ctx context.Context, tx pgx.Tx, projectID string, out *PreviewSettings) error {
