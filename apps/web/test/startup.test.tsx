@@ -91,6 +91,9 @@ describe("the projection", () => {
     // It sits where the agent came back, before its first words.
     const turns = project(up, "running").turns;
     expect(turns.at(-2)).toMatchObject({ kind: "notice", text: "Taken back up in 30s.", at: at(60_000) });
+    // Parked again once back: the notice was placed when the agent came up, and is not placed a second time.
+    const parkedAgain = [...up, ev("run.parked", { reason: "session" }, 90_000)];
+    expect(notices(parkedAgain).filter((n) => n.startsWith("Taken back up"))).toEqual(["Taken back up in 30s."]);
   });
 
   test("a move says 'Taken back up' only once the agent is up; never while its start is live", () => {
