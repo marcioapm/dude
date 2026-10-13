@@ -79,7 +79,7 @@ func Main(m *testing.M) int {
 	ahead.Unlock()
 	if next != nil {
 		if c := <-next; c.err == nil {
-			dropLater(c.name)
+			drop(c.name)
 		}
 	}
 	ahead.drops.Wait()
@@ -139,10 +139,13 @@ func cloneForTest() cloned {
 }
 
 func drop(name string) {
-	if a, err := adminConn(context.Background()); err == nil {
-		_, _ = a.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
-		a.Close(context.Background())
+	ctx := context.Background()
+	admin, err := adminConn(ctx)
+	if err != nil {
+		return
 	}
+	defer admin.Close(ctx)
+	_, _ = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
 }
 
 // dropLater drops name on a goroutine of its own under Main, which waits
