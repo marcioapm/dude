@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,8 @@ type Review struct {
 	Login       string
 	State, Body string
 	SubmittedAt string
+	// The head it was submitted on.
+	CommitID string
 }
 
 type Comment struct {
@@ -107,6 +110,16 @@ type Server struct {
 	// it, without the fake's lock: it may block (a slow GitHub), or return
 	// a status to fail the request with (0 answers it as usual).
 	Intercept func(r *http.Request) int
+	// Every review request received, refused or not, in order.
+	ReviewRequests []ReviewRequest
+	// When set, review requests are refused with this status.
+	ReviewRequestStatus int
+}
+
+// ReviewRequest is one POST to a pull request's requested_reviewers.
+type ReviewRequest struct {
+	Number int
+	Logins []string
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -246,13 +259,24 @@ func (s *Server) Review(number int, login, verdict string) {
 	s.ReviewSaying(number, login, verdict, "")
 }
 
-// ReviewSaying submits a review with words in its box.
+// ReviewSaying submits a review with words in its box, on the pull
+// request's head. As GitHub does, a submitted review satisfies the request
+// for it: the reviewer leaves requested_reviewers.
 func (s *Server) ReviewSaying(number int, login, verdict, body string) {
+	sha := s.SHA(s.Pull(number).Head)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.pulls[number]
 	p.Reviews = append(p.Reviews, Review{ID: nextID.Add(1), Login: login, State: verdict, Body: body,
-		SubmittedAt: time.Now().UTC().Format(time.RFC3339)})
+		SubmittedAt: time.Now().UTC().Format(time.RFC3339), CommitID: sha})
+	p.Requested = slices.DeleteFunc(p.Requested, func(l string) bool { return strings.EqualFold(l, login) })
+}
+
+// RequestReview asks login for a review, as a person does on GitHub.
+func (s *Server) RequestReview(number int, login string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].Requested = append(s.pulls[number].Requested, login)
 }
 
 // SetChecks sets the combined status of every commit: "success", "failure",
@@ -452,7 +476,27 @@ func (s *Server) Handler() http.Handler {
 		if p := s.number(w, r); p != nil {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			p.Requested = append(p.Requested, in.Reviewers...)
+			s.ReviewRequests = append(s.ReviewRequests, ReviewRequest{Number: p.Number, Logins: in.Reviewers})
+			if s.ReviewRequestStatus != 0 {
+				fail(w, s.ReviewRequestStatus, "Validation Failed")
+				return
+			}
+			// As GitHub: one login it will not ask refuses the whole request.
+			for _, l := range in.Reviewers {
+				switch {
+				case strings.EqualFold(l, s.poster()):
+					fail(w, 422, "Review cannot be requested from pull request author.")
+					return
+				case s.Permissions[l] == "none" || strings.HasSuffix(l, "[bot]"):
+					fail(w, 422, "Reviews may only be requested from collaborators. One or more of the users or teams you specified is not a collaborator of the "+s.Slug+" repository.")
+					return
+				}
+			}
+			for _, l := range in.Reviewers {
+				if !slices.Contains(p.Requested, l) {
+					p.Requested = append(p.Requested, l)
+				}
+			}
 			write(w, 201, s.pullJSON(p))
 		}
 	})
@@ -567,7 +611,18 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
 		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
+		"user": userJSON(s.poster()),
 	}
+}
+
+// userJSON is a GitHub user object: an App's account ("<slug>[bot]") is
+// of type Bot.
+func userJSON(login string) map[string]any {
+	kind := "User"
+	if strings.HasSuffix(login, "[bot]") {
+		kind = "Bot"
+	}
+	return map[string]any{"login": login, "type": kind}
 }
 
 // reviewers is who the fake says can review: the people dude's reviewer
@@ -777,8 +832,8 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
 		for _, rv := range p.Reviews {
-			out = append(out, map[string]any{"id": rv.ID, "user": map[string]any{"login": rv.Login}, "state": rv.State,
-				"body": rv.Body, "submitted_at": rv.SubmittedAt})
+			out = append(out, map[string]any{"id": rv.ID, "user": userJSON(rv.Login), "state": rv.State,
+				"body": rv.Body, "submitted_at": rv.SubmittedAt, "commit_id": rv.CommitID})
 		}
 	}
 	write(w, 200, out)

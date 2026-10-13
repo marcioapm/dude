@@ -50,6 +50,16 @@ describe("activity", () => {
     expect(pullRequestActivity(event("pull_request.opened", {}), false)?.byDude).toBe(true);
   });
 
+  test("dude asking reviewers again after its fix, and what GitHub refused", () => {
+    const asked = pullRequestActivity(event("pull_request.review_rerequested", { reviewersRequested: ["jerv", "ana"], reviewersRefused: [] }), false);
+    expect(asked?.text).toBe("asked jerv and ana to review #41 again after its fix");
+    expect(asked?.byDude).toBe(true);
+    expect(pullRequestActivity(event("pull_request.review_rerequested", { reviewersRequested: ["ana"], reviewersRefused: ["jerv"], error: "github 422" }), false)?.text)
+      .toBe("asked ana to review #41 again after its fix; GitHub would not ask jerv to review #41 again");
+    expect(pullRequestActivity(event("pull_request.review_rerequested", { error: "github 502" }), false)?.text)
+      .toBe("couldn't read who reviewed #41 to ask them again");
+  });
+
   test("a person on GitHub, by login, with what they said", () => {
     const line = pullRequestActivity(event("pull_request.commented", { author: "cy", body: "Please keep fetchRevenue.", kind: "changes_requested" }), true);
     expect(line).toEqual({ who: "cy", actorId: null, text: "cy wrote, requesting changes on web#41", quote: "Please keep fetchRevenue." });

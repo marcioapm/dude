@@ -8,6 +8,7 @@ package forge
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -151,6 +152,68 @@ func (g *GitHub) teamCandidates(ctx context.Context, owner, words string) []Cand
 		// A team GitHub would not show the token comes back null.
 		if t != nil && t.Slug != "" {
 			out = append(out, Candidate{Kind: "team", Login: owner + "/" + t.Slug, Name: t.Name, AvatarURL: t.AvatarURL, Members: t.Members.TotalCount})
+		}
+	}
+	return out
+}
+
+// StaleReviews is who reviewed a pull request on a head older than its
+// current one, as GitHub says now.
+type StaleReviews struct {
+	// The pull request's head as GitHub has it.
+	Head string
+	// Reviewers whose latest review is on another commit and who are not
+	// asked again already, in the order they first reviewed. Never the
+	// author, and never an App's account ("Bot", "<slug>[bot]"): GitHub
+	// refuses to request a review of either, and a review App such as
+	// CodeRabbit reviews every push without being asked.
+	Logins []string
+}
+
+// StaleReviewers reads whose review of pull request `number` no longer
+// covers its head: GitHub drops a reviewer from requested_reviewers when
+// they submit, so after a push nobody owes the new head a look until they
+// are asked again.
+func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int) (StaleReviews, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return StaleReviews{}, err
+	}
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
+		return StaleReviews{}, err
+	}
+	return StaleReviews{Head: p.Head.SHA, Logins: staleReviewers(p, reviews)}, nil
+}
+
+func staleReviewers(p ghPull, reviews []ghReview) []string {
+	skip := map[string]bool{}
+	if p.User != nil {
+		skip[strings.ToLower(p.User.Login)] = true
+	}
+	for _, u := range p.RequestedReviewers {
+		skip[strings.ToLower(u.Login)] = true
+	}
+	var order []string
+	latest := map[string]ghReview{}
+	for _, r := range reviews {
+		// PENDING is a draft review its author has not submitted.
+		if r.User == nil || r.State == "PENDING" {
+			continue
+		}
+		key := strings.ToLower(r.User.Login)
+		if skip[key] || r.User.Type == "Bot" || strings.HasSuffix(key, "[bot]") {
+			continue
+		}
+		if _, seen := latest[key]; !seen {
+			order = append(order, r.User.Login)
+		}
+		latest[key] = r
+	}
+	out := []string{}
+	for _, l := range order {
+		if latest[strings.ToLower(l)].CommitID != p.Head.SHA {
+			out = append(out, l)
 		}
 	}
 	return out

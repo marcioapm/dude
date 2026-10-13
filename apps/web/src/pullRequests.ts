@@ -56,6 +56,16 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       const asked = Array.isArray(p.reviewersRequested) ? (p.reviewersRequested as string[]) : [];
       return { ...system(`opened ${pr}${p.draft ? " as a draft" : ""}${asked.length ? `, asking ${asked.join(" and ")} to review` : ""}`), byDude: true };
     }
+    case "pull_request.review_rerequested": {
+      const asked = Array.isArray(p.reviewersRequested) ? (p.reviewersRequested as string[]) : [];
+      const refused = Array.isArray(p.reviewersRefused) ? (p.reviewersRefused as string[]) : [];
+      const parts = [
+        asked.length ? `asked ${asked.join(" and ")} to review ${pr} again after its fix` : "",
+        refused.length ? `GitHub would not ask ${refused.join(" and ")} to review ${pr} again` : "",
+        !asked.length && !refused.length && p.error ? `couldn't read who reviewed ${pr} to ask them again` : "",
+      ].filter(Boolean);
+      return parts.length ? { ...system(parts.join("; ")), byDude: true } : null;
+    }
     case "pull_request.commented": {
       const ignored = p.ignored === "not_permitted" ? " — not acted on: they may not wake a fixer" : "";
       // A review's body: the verdict has a line of its own (pull_request.reviewed),

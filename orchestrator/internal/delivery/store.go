@@ -45,7 +45,10 @@ const (
 	EvPullRequestAction = "pull_request.action"
 	// Mergeability or distance from the base changed.
 	EvPullRequestMergeable = "pull_request.mergeable_changed"
-	EvGitCommitCreated     = "git.commit_created"
+	// dude pushed a fix to an open pull request and asked again for a
+	// review from whoever had reviewed an older head (rerequestReviews).
+	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
+	EvGitCommitCreated             = "git.commit_created"
 )
 
 // Store is the delivery workflow's side effects. Each is one durable action;

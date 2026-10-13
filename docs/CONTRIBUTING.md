@@ -197,6 +197,14 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   decisions; the conductor answers on the pull request
   (`reply_on_pull_request`, `dude pr reply`), and its replies, marked
   `forge.ReplyMarker`, are its own when read back.
+- **A fix dude pushes goes back to its reviewers.** GitHub takes a reviewer
+  off `requested_reviewers` once they submit, so after the PR loop's fix
+  lands (`awaitPRFix`) dude asks again everyone whose latest review is on
+  an older head and who is not asked already (`forge.StaleReviewers`,
+  `delivery.RerequestReviews`): never the author, never an App's account
+  (`[bot]`, which reviews every push unasked), never after a head someone
+  else pushed on top. Best effort, once per pull request and head, recorded
+  as `pull_request.review_rerequested` with whom GitHub took and refused.
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that

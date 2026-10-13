@@ -460,11 +460,15 @@ type ghPull struct {
 	RequestedTeams     []struct {
 		Slug string `json:"slug"`
 	} `json:"requested_teams"`
+	// The pull request's author.
+	User *ghUser `json:"user"`
 }
 
 type ghUser struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatar_url"`
+	// "User", "Bot" (a GitHub App's account) or "Organization".
+	Type string `json:"type"`
 }
 
 func (p ghPull) ref() PullRequestRef {
@@ -864,6 +868,8 @@ type ghReview struct {
 	SubmittedAt *string `json:"submitted_at"`
 	HTMLURL     string  `json:"html_url"`
 	User        *ghUser `json:"user"`
+	// The head the review was submitted on.
+	CommitID string `json:"commit_id"`
 }
 
 func login(u *ghUser) string {
