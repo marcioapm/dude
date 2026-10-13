@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { EventTypes, type EpicNotes, type EpicPeers, type EpicThreads, type PersistedEvent } from "@dude/domain";
+import { EventTypes, type EpicNotes, type EpicPeers, type EpicThreads, type PeerMessageView, type PersistedEvent, type TaskRef } from "@dude/domain";
 import { act, click, mount, until } from "./dom.ts";
 import { ApiError } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
@@ -161,7 +161,24 @@ describe("the turns, drawn", () => {
     expect(messageData(reply!, moved.tasks, byId)).toMatchObject({ from: { key: "ABS-2", role: "implementer" }, to: { key: "ABS-4", role: "implementer" } });
     // Unanswered yet, the task asked has said nothing here: it keeps its live role.
     const lone = new Map([[question!.id, question!]]);
-    expect(messageData(question!, moved.tasks, lone).to).toMatchObject({ key: "ABS-2", role: "simplifier" });
+    expect(messageData(question!, moved.tasks, lone).to).toMatchObject({ key: "ABS-2", role: "simplifier", live: true });
+    // The role that spoke is not the one running now: no live dot on its face.
+    expect(messageData(question!, moved.tasks, byId).from).toMatchObject({ role: "implementer", live: false });
+    // ABS-4 closes its own question, then ABS-2 answers anyway: the close says nothing of ABS-2's role,
+    // and the question's recipient still takes it from ABS-2's reply.
+    const close = { ...question!, id: "pm_2", replyTo: "pm_1", text: "Going ahead.", sentAt: "2026-10-12T13:45:00Z" };
+    const closed = new Map([[question!.id, question!], [close.id, close], [reply!.id, reply!]]);
+    expect(messageData(close, moved.tasks, closed).to).toMatchObject({ key: "ABS-2", role: "simplifier" });
+    expect(messageData(question!, moved.tasks, closed).to).toMatchObject({ key: "ABS-2", role: "implementer" });
+  });
+
+  test("a message sent here names its recipient as the role that answered it", () => {
+    const moved: PeerContext = { ...CTX, coordination: { ...CTX.coordination!, peers: { epicId: "e", tasks: PEERS.tasks.map((p) =>
+      p.key === "ABS-2" ? { ...p, phase: "simplify", role: "simplifier" } : p) } } };
+    const [turn] = project([ev(EventTypes.AgentMessageSent, { message: "pm_1", to: "ABS-2", lands: "next_step", text: "Which body?" })], "running").turns;
+    const markup = renderToStaticMarkup(renderTurn(turn!, "implementer", 0, false, PEOPLE, "Duder", undefined, undefined, undefined, undefined, undefined, undefined, moved) as never);
+    expect(markup).toContain("ABS-2, Task ABS-2: its implementer");
+    expect(markup).not.toContain("its simplifier");
   });
 
   test("a reply read here: its words from the thread, what it answers, and when it was read", () => {
@@ -265,6 +282,52 @@ describe("an epic's Coordination view", () => {
     await until(() => page.querySelector("[data-testid=coordination]"), "the view");
     return { page, client, opened };
   }
+
+  test("a thread's head names the pair as they spoke, after both tasks moved on", async () => {
+    class MovedOn extends FixtureClient {
+      override async epicPeers(epicId: string) {
+        const peers = await super.epicPeers(epicId);
+        return { ...peers, tasks: peers.tasks.map((p) => p.role === "implementer" ? { ...p, phase: "review", role: "reviewer" } : p) };
+      }
+    }
+    const { page } = await view(new MovedOn("a"));
+    // Answered threads: both tasks spoke there as implementers.
+    const chips = (state: string) => [...page.querySelectorAll(`[data-testid=peer-thread][data-state=${state}] header [role=img]`)]
+      .map((c) => c.getAttribute("aria-label") ?? "").filter((l) => /^WC-\d+, .*: its /.test(l));
+    const heads = chips("answered");
+    expect(new Set(heads.map((l) => l.split(",")[0]))).toEqual(new Set(["WC-212", "WC-214", "WC-215"]));
+    expect(heads.filter((l) => !l.endsWith("its implementer"))).toEqual([]);
+    // The thread still waiting: WC-212 has said nothing there, so it is named as it is now.
+    const waiting = chips("waiting");
+    expect(waiting.find((l) => l.startsWith("WC-212"))).toMatch(/its reviewer$/);
+  });
+
+  test("a thread the asker closed itself still names the task asked as it answered later", async () => {
+    // WC-214 asks WC-212, closes the question itself, then WC-212's implementer answers the close; WC-212 is in review now.
+    const ask = (id: string, from: TaskRef, to: TaskRef, text: string, replyTo: string | null, at: string): PeerMessageView => ({
+      id, from, to, fromRunId: `run_${from.key}`, fromRole: "implementer", fromPhase: "implement", replyTo, text,
+      sentAt: at, readAt: at, deliveredRunId: `run_${to.key}`, briefedRunId: null, lands: "next_step" });
+    class SelfClosed extends FixtureClient {
+      override async epicThreads(epicId: string): Promise<EpicThreads> {
+        const t = await super.epicThreads(epicId);
+        const [asker, asked] = t.threads.find((x) => x.id === "pm_01")!.pair;
+        const messages = [
+          ask("pm_x1", asker, asked, "Blur or submit?", null, "2026-10-12T13:00:00Z"),
+          ask("pm_x2", asker, asked, "Going ahead with blur.", "pm_x1", "2026-10-12T13:05:00Z"),
+          ask("pm_x3", asked, asker, "Blur is right.", "pm_x2", "2026-10-12T13:06:00Z"),
+        ];
+        return { ...t, waiting: 0, threads: [{ id: "pm_x1", pair: [asker, asked], state: "answered", wait: null, messages, lastAt: messages.at(-1)!.sentAt }] };
+      }
+      override async epicPeers(epicId: string) {
+        const peers = await super.epicPeers(epicId);
+        return { ...peers, tasks: peers.tasks.map((p) => p.key === "WC-212" ? { ...p, phase: "review", role: "reviewer" } : p) };
+      }
+    }
+    const { page } = await view(new SelfClosed("a"));
+    const head = [...page.querySelectorAll("[data-testid=peer-thread] header [role=img]")]
+      .map((c) => c.getAttribute("aria-label") ?? "").find((l) => l.startsWith("WC-212, "));
+    expect(head).toMatch(/its implementer$/);
+  });
 
   test("has the epic's notes, its threads newest first, and its tasks; a task opens", async () => {
     const { page, opened } = await view();

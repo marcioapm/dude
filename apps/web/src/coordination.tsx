@@ -118,7 +118,7 @@ export function messagesById(threads: EpicThreads | undefined): ReadonlyMap<stri
 /** A message as `PeerMessage` draws it. */
 export function messageData(m: PeerMessageView, peers: readonly PeerState[] | undefined,
   exchange?: ReadonlyMap<string, PeerMessageView>): PeerMessageData {
-  const from = { ...peerTask(m.from.key, peers, m.from.title), role: sentAs(m) };
+  const from = spokeAs(peerTask(m.from.key, peers, m.from.title), sentAs(m));
   // The task written to, as it took part in this exchange (the message it
   // answers, or its answer): its task's live role is whoever runs now, which
   // after a handover says a reviewer took part when an implementer did.
@@ -127,15 +127,20 @@ export function messageData(m: PeerMessageView, peers: readonly PeerState[] | un
   const to = peerTask(m.to.key, peers, m.to.title);
   const spoke = counterpart && counterpart.from.taskId === m.to.taskId ? sentAs(counterpart) : undefined;
   return {
-    id: m.id, from, to: spoke ? { ...to, role: spoke } : to, text: m.text, sentAt: m.sentAt, replyTo: m.replyTo,
+    id: m.id, from, to: spoke ? spokeAs(to, spoke) : to, text: m.text, sentAt: m.sentAt, replyTo: m.replyTo,
     delivery: m.readAt ? { kind: "read", at: m.readAt } : m.briefedRunId ? { kind: "read", at: m.sentAt, after: "in its briefing" }
       : m.lands === "next_run" ? { kind: "inbox" } : { kind: "queued" },
   };
 }
 
 /** The role whose Run sent a message. */
-function sentAs(m: PeerMessageView): AgentRole | undefined {
+export function sentAs(m: PeerMessageView): AgentRole | undefined {
   return asRole(m.fromRole) ?? (m.fromPhase ? PHASE_ROLE[m.fromPhase] : undefined);
+}
+
+/** A task's chip as the role that spoke: its live dot only while that role is the one running. */
+export function spokeAs(task: PeerTask, role: AgentRole | undefined): PeerTask {
+  return { ...task, role, live: task.live === true && role === task.role };
 }
 
 /** A thread's subject: its first message's first line, clipped. The API has no subject of its own. */
