@@ -307,8 +307,8 @@ func TestAnUnownedAskSkipsRemovedPeople(t *testing.T) {
 	}
 }
 
-// One browser on in two organisations is a row in each; an ask in one
-// reaches it once, as that organisation's, and the other's row is not used.
+// One browser on in two organisations is a row in each; an ask in each
+// reaches it once, as that organisation's, through that organisation's row.
 func TestABrowserOnInTwoOrganisationsHearsOnlyTheAsksOrganisation(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	acme, northwind := dbtest.Org(t, owner), dbtest.Org(t, owner)
@@ -348,9 +348,12 @@ func TestABrowserOnInTwoOrganisationsHearsOnlyTheAsksOrganisation(t *testing.T) 
 		t.Fatal(err)
 	}
 	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
-	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
-		VALUES ($1, $2, 'question.asked', $3, $4, 'system', 'orchestrator', 'orchestrator', '{"kind":"agent","prompt":"Acme asks"}')`,
-		"evt_q_"+acme, acme, "prj_"+acme, "wi_"+acme)
+	// Both organisations ask in the same sweep, so each one's subscriptions are read.
+	for _, ask := range []struct{ org, prompt string }{{acme, "Acme asks"}, {northwind, "Northwind asks"}} {
+		exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ($1, $2, 'question.asked', $3, $4, 'system', 'orchestrator', 'orchestrator', jsonb_build_object('kind', 'agent', 'prompt', $5::text))`,
+			"evt_q_"+ask.org, ask.org, "prj_"+ask.org, "wi_"+ask.org, ask.prompt)
+	}
 	for range 5 {
 		if _, err := n.Sweep(ctx); err != nil {
 			t.Fatal(err)
@@ -360,11 +363,16 @@ func TestABrowserOnInTwoOrganisationsHearsOnlyTheAsksOrganisation(t *testing.T) 
 	defer mu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if hits != 1 || len(b.got) != 1 {
-		t.Fatalf("deliveries = %d, received %+v; want one, Acme's", hits, b.got)
+	if hits != 2 || len(b.got) != 2 {
+		t.Fatalf("deliveries = %d, received %+v; want two, one per organisation's ask", hits, b.got)
 	}
-	if b.got[0].Body != "Acme asks" || b.got[0].URL != "#/o/"+acme+"/task/wi_"+acme {
-		t.Errorf("got %+v, want Acme's ask linking into Acme", b.got[0])
+	got := map[string]string{}
+	for _, m := range b.got {
+		got[m.Body] = m.URL
+	}
+	want := map[string]string{"Acme asks": "#/o/" + acme + "/task/wi_" + acme, "Northwind asks": "#/o/" + northwind + "/task/wi_" + northwind}
+	if len(got) != 2 || got["Acme asks"] != want["Acme asks"] || got["Northwind asks"] != want["Northwind asks"] {
+		t.Errorf("got %+v, want each ask once, linking into its own organisation: %v", b.got, want)
 	}
 	var rows int
 	if err := owner.QueryRow(ctx, `SELECT count(*) FROM push_subscriptions WHERE endpoint = $1`, push.URL+"/browser").Scan(&rows); err != nil || rows != 2 {

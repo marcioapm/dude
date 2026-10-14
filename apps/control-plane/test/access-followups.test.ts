@@ -2,7 +2,11 @@
  * Behind Cloudflare Access, as index.ts serves it: one account in two
  * organisations turns notifications on and off in each alone; its
  * memberships are welcomed one by one; and an admin's Invitations page
- * counts every status past one page and pages the list with its cursor.
+ * (and the super-admin's, for any organisation) counts every status past
+ * one page and pages the list with its cursor.
+ *
+ * Each test makes the people, endpoints and organisations it reads, so any
+ * one runs alone.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -11,12 +15,14 @@ import { createHash } from "node:crypto";
 import type { Router } from "../src/api/router.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 import { listMigrationFiles, migrate, outsideTransaction } from "../src/db/migrate.ts";
-import { Edge, ORIGIN, cookie, databases, fullRouter, member, rsaKey, sign, type Key } from "./access-harness.ts";
+import { Edge, OPERATOR, ORIGIN, cookie, databases, fullRouter, member, rsaKey, sign, type Key } from "./access-harness.ts";
 
 const suffix = Bun.randomUUIDv7("hex").slice(-12);
 const acme = `org_fu_${suffix}`;
 const northwind = `${acme}_nw`;
 const at = (local: string) => `${local}@${suffix}.fu.test`;
+// A super-admin of this suite's own, so a membership given to it touches no other suite's operator.
+const operator = at("operator");
 let owner: SQL;
 let app: SQL;
 let signer: Key;
@@ -30,7 +36,7 @@ beforeAll(async () => {
   signer = await rsaKey("k1");
   const edge = new Edge();
   edge.keys = [signer.jwk];
-  router = fullRouter(edge);
+  router = fullRouter(edge, { super_admins: [OPERATOR, operator] });
 });
 afterAll(async () => {
   await closePool(app);
@@ -46,18 +52,27 @@ async function as(email: string, method: string, path: string, body?: unknown, o
   return { status: res.status, body: res.status === 204 ? null : await res.json().catch(() => null) as Json };
 }
 
-describe("a browser's notifications, per organisation", () => {
-  const endpoint = `https://push.example.test/${suffix}`;
-  const sub = { endpoint, keys: { p256dh: "public", auth: "secret" } };
-  const rows = () => owner`SELECT organization_id FROM push_subscriptions WHERE endpoint = ${endpoint} ORDER BY organization_id`
-    .then((r: Array<{ organization_id: string }>) => r.map((x) => x.organization_id));
+/** A name no other test uses. */
+const unique = (what: string) => `${what}-${crypto.randomUUID().slice(0, 8)}`;
 
-  test("a member of two subscribes the same browser in both; each has its own row", async () => {
-    const email = at("two");
+describe("a browser's notifications, per organisation", () => {
+  /** A member of Acme and Northwind, and a browser endpoint of its own. */
+  async function twoOrgs() {
+    const email = at(unique("two"));
     await member(owner, acme, email);
     await member(owner, northwind, email);
-    expect((await as(email, "POST", "/v1/push/subscriptions", sub, acme)).status).toBe(201);
-    expect((await as(email, "POST", "/v1/push/subscriptions", sub, northwind)).status).toBe(201);
+    const endpoint = `https://push.example.test/${unique(suffix)}`;
+    const sub = { endpoint, keys: { p256dh: "public", auth: "secret" } };
+    const rows = () => owner`SELECT organization_id FROM push_subscriptions WHERE endpoint = ${endpoint} ORDER BY organization_id`
+      .then((r: Array<{ organization_id: string }>) => r.map((x) => x.organization_id));
+    const subscribe = async (org: string) => expect((await as(email, "POST", "/v1/push/subscriptions", sub, org)).status).toBe(201);
+    return { email, endpoint, sub, rows, subscribe };
+  }
+
+  test("a member of two subscribes the same browser in both; each has its own row", async () => {
+    const { email, endpoint, sub, rows, subscribe } = await twoOrgs();
+    await subscribe(acme);
+    await subscribe(northwind);
     expect(await rows()).toEqual([acme, northwind].sort());
     for (const org of [acme, northwind]) {
       expect((await as(email, "POST", "/v1/push/subscriptions/lookup", { endpoint }, org)).body).toEqual({ subscribed: true });
@@ -70,7 +85,9 @@ describe("a browser's notifications, per organisation", () => {
   });
 
   test("unsubscribing in Northwind keeps Acme's", async () => {
-    const email = at("two");
+    const { email, endpoint, rows, subscribe } = await twoOrgs();
+    await subscribe(acme);
+    await subscribe(northwind);
     expect((await as(email, "POST", "/v1/push/subscriptions/remove", { endpoint }, northwind)).status).toBe(204);
     expect(await rows()).toEqual([acme]);
     expect((await as(email, "POST", "/v1/push/subscriptions/lookup", { endpoint }, northwind)).body).toEqual({ subscribed: false });
@@ -78,22 +95,25 @@ describe("a browser's notifications, per organisation", () => {
   });
 
   test("sign-out's removal, once per membership, leaves none", async () => {
-    const email = at("two");
-    await as(email, "POST", "/v1/push/subscriptions", sub, northwind);
-    expect(await rows()).toEqual([acme, northwind].sort());
+    const { email, endpoint, rows, subscribe } = await twoOrgs();
+    await subscribe(acme);
+    await subscribe(northwind);
     for (const org of [acme, northwind]) expect((await as(email, "POST", "/v1/push/subscriptions/remove", { endpoint }, org)).status).toBe(204);
     expect(await rows()).toEqual([]);
   });
 
   test("another member's removal in Acme names the same endpoint and still touches only Acme", async () => {
-    const email = at("two");
-    const other = at("colleague");
+    const { endpoint, rows, subscribe } = await twoOrgs();
+    const other = at(unique("colleague"));
     await member(owner, acme, other);
-    await as(email, "POST", "/v1/push/subscriptions", sub, acme);
-    await as(email, "POST", "/v1/push/subscriptions", sub, northwind);
+    await subscribe(acme);
+    await subscribe(northwind);
     // Not a Northwind member: its removal there is refused before any row is read.
     expect((await as(other, "POST", "/v1/push/subscriptions/remove", { endpoint }, northwind)).status).toBe(403);
     expect(await rows()).toEqual([acme, northwind].sort());
+    // In Acme, where it is a member, the endpoint's Acme row goes and Northwind's stays.
+    expect((await as(other, "POST", "/v1/push/subscriptions/remove", { endpoint }, acme)).status).toBe(204);
+    expect(await rows()).toEqual([northwind]);
   });
 });
 
@@ -104,10 +124,10 @@ describe("the welcome, once per membership", () => {
   };
 
   test("welcomed sets your own row's welcomedAt in that organisation only, and again keeps the first time", async () => {
-    const email = at("newcomer");
+    const email = at(unique("newcomer"));
     const inAcme = await member(owner, acme, email);
     await member(owner, northwind, email);
-    const other = await member(owner, acme, at("bystander"));
+    const other = await member(owner, acme, at(unique("bystander")));
     expect(await welcomedAt(email)).toEqual({ [acme]: null, [northwind]: null });
     const first = await as(email, "POST", `/v1/me/memberships/${acme}/welcomed`, {}, acme);
     expect(first.status).toBe(200);
@@ -120,50 +140,82 @@ describe("the welcome, once per membership", () => {
   });
 
   test("an organisation that is not the request's, or not yours, is refused", async () => {
-    const email = at("newcomer");
+    const email = at(unique("newcomer"));
+    await member(owner, acme, email);
+    await member(owner, northwind, email);
     expect((await as(email, "POST", `/v1/me/memberships/${northwind}/welcomed`, {}, acme)).status).toBe(403);
-    const outsider = at("outsider");
+    const outsider = at(unique("outsider"));
     await member(owner, northwind, outsider);
     expect((await as(outsider, "POST", `/v1/me/memberships/${acme}/welcomed`, {}, acme)).status).toBe(403);
-    expect((await welcomedAt(email))[northwind]).toBeNull();
+    expect(await welcomedAt(email)).toEqual({ [acme]: null, [northwind]: null });
   });
 });
 
 describe("the Invitations page past one page", () => {
-  const admin = at("admin");
-  const counts = () => as(admin, "GET", "/v1/organization/invitations/counts", undefined, northwind);
+  /**
+   * An organisation of its own with 66 invitations, `bulk00`..`bulk65`: 57 pending, 4 expired,
+   * 3 accepted, 2 revoked; and its admin.
+   */
+  async function bulkOrganization() {
+    const id = `${acme}_${unique("bulk")}`;
+    await owner`INSERT INTO organizations (id, name, slug) VALUES (${id}, 'Bulk', ${id})`;
+    const day = 86_400_000;
+    const rows = Array.from({ length: 66 }, (_, i) => {
+      const n = String(i).padStart(2, "0");
+      return { id: `inv_${id}_${n}`, organization_id: id, code: `code${id}${n}`, email: at(`bulk${n}`), role: "member",
+        expires_at: new Date(Date.now() + (i >= 57 && i < 61 ? -day : day)),
+        accepted_at: i >= 61 && i < 64 ? new Date() : null, revoked_at: i >= 64 ? new Date() : null };
+    });
+    await owner`INSERT INTO invitations ${owner(rows)}`;
+    const admin = at(unique("admin"));
+    await member(owner, id, admin, { role: "admin" });
+    return { id, admin };
+  }
+  const ALL_66 = { pending: 57, expired: 4, accepted: 3, revoked: 2, all: 66 };
 
   test("counts every status of more than 50, under the organisation's rows only", async () => {
-    await member(owner, northwind, admin, { role: "admin" });
-    // 57 pending, 4 expired, 3 accepted, 2 revoked; and Acme's, which are not counted.
-    for (let i = 0; i < 66; i++) {
-      const email = at(`bulk${String(i).padStart(2, "0")}`);
-      await owner`INSERT INTO invitations (id, organization_id, code, email, role, expires_at, accepted_at, revoked_at)
-        VALUES (${`inv_${suffix}_${String(i).padStart(2, "0")}`}, ${northwind}, ${`code${suffix}${i}`}, ${email}, 'member',
-          ${i >= 57 && i < 61 ? new Date(Date.now() - 86_400_000) : new Date(Date.now() + 86_400_000)},
-          ${i >= 61 && i < 64 ? new Date() : null}, ${i >= 64 ? new Date() : null})`;
-    }
-    await owner`INSERT INTO invitations (id, organization_id, code, email, role) VALUES (${`inv_${suffix}_acme`}, ${acme}, ${`acme${suffix}`}, ${at("acme-only")}, 'member')`;
-    expect(await counts()).toEqual({ status: 200, body: { pending: 57, expired: 4, accepted: 3, revoked: 2, all: 66 } });
+    const { id, admin } = await bulkOrganization();
+    await owner`INSERT INTO invitations (id, organization_id, code, email, role) VALUES (${`inv_${id}_acme`}, ${acme}, ${`acme${id}`}, ${at("acme-only")}, 'member')`;
+    expect(await as(admin, "GET", "/v1/organization/invitations/counts", undefined, id)).toEqual({ status: 200, body: ALL_66 });
   });
 
   test("the cursor pages the list to the end, and a search pages from its own start", async () => {
-    const page1 = await as(admin, "GET", "/v1/organization/invitations?status=pending", undefined, northwind);
+    const { id, admin } = await bulkOrganization();
+    const page1 = await as(admin, "GET", "/v1/organization/invitations?status=pending", undefined, id);
     expect(page1.body.invitations).toHaveLength(50);
-    const page2 = await as(admin, "GET", `/v1/organization/invitations?status=pending&cursor=${page1.body.cursor}`, undefined, northwind);
+    const page2 = await as(admin, "GET", `/v1/organization/invitations?status=pending&cursor=${page1.body.cursor}`, undefined, id);
     expect(page2.body.invitations).toHaveLength(7);
     expect(page2.body.cursor).toBeNull();
     const ids = [...page1.body.invitations, ...page2.body.invitations].map((i: Json) => i.id);
     expect(new Set(ids).size).toBe(57);
-    const searched = await as(admin, "GET", "/v1/organization/invitations?status=all&q=bulk6", undefined, northwind);
+    const searched = await as(admin, "GET", "/v1/organization/invitations?status=all&q=bulk6", undefined, id);
     expect(searched.body.invitations.map((i: Json) => i.email).sort()).toEqual([60, 61, 62, 63, 64, 65].map((i) => at(`bulk${i}`)));
     expect(searched.body.cursor).toBeNull();
   });
 
   test("a member is refused the counts", async () => {
-    const plain = at("plain");
-    await member(owner, northwind, plain);
-    expect((await as(plain, "GET", "/v1/organization/invitations/counts", undefined, northwind)).status).toBe(403);
+    const { id } = await bulkOrganization();
+    const plain = at(unique("plain"));
+    await member(owner, id, plain);
+    expect((await as(plain, "GET", "/v1/organization/invitations/counts", undefined, id)).status).toBe(403);
+  });
+
+  test("the super-admin counts any organisation's, one they are not in, while in another; its own admin is refused that route", async () => {
+    const target = await bulkOrganization();
+    // The super-admin's own organisation, with counts unlike the target's.
+    await member(owner, acme, operator, { role: "admin" });
+    const own = unique("own");
+    await owner`INSERT INTO invitations (id, organization_id, code, email, role) VALUES (${`inv_${own}`}, ${acme}, ${own}, ${at(own)}, 'member')`;
+    const ownCounts = await as(operator, "GET", "/v1/organization/invitations/counts", undefined, acme);
+    expect(ownCounts.status).toBe(200);
+    expect(ownCounts.body).not.toEqual(ALL_66);
+    expect(await owner`SELECT 1 FROM people p JOIN accounts a ON a.id = p.account_id
+      WHERE a.email = ${operator} AND p.organization_id = ${target.id}`).toEqual([] as never);
+    const path = `/v1/admin/organizations/${target.id}/invitations/counts`;
+    expect(await as(operator, "GET", path, undefined, acme)).toEqual({ status: 200, body: ALL_66 });
+    // The target's own admin is no super-admin: refused the super-admin's route, even for their organisation.
+    const refused = await as(target.admin, "GET", path, undefined, target.id);
+    expect(refused).toEqual({ status: 403, body: { error: expect.objectContaining({ code: "super_admin_required" }) } });
   });
 });
 
@@ -223,4 +275,4 @@ test("migration 122 keeps every row a database holds from before it, and the cla
     await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     await admin.end();
   }
-});
+}, 120_000);

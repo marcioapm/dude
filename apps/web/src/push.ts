@@ -107,7 +107,7 @@ export const pushOffOnSignOut = (organizationIds: readonly string[]) => async (r
   if (!supported()) return "unsupported";
   const sub = await existingSubscription();
   if (!sub) return "off";
-  for (const id of organizationIds) await root.inOrganization(id).unsubscribePush(sub.endpoint).catch(() => {});
+  await Promise.all(organizationIds.map((id) => root.inOrganization(id).unsubscribePush(sub.endpoint).catch(() => {})));
   await sub.unsubscribe();
   return "off";
 };

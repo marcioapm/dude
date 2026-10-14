@@ -57,6 +57,8 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
   // The first page of the shown rows: the server filters and searches; only the latest read lands.
   useEffect(() => {
     const read = ++reads.current;
+    // No Load more until this read's own first page names where the next starts.
+    setCursor(null);
     const timer = setTimeout(() => {
       api.list({ status: filter, q: query.trim() }).then(
         (r) => read === reads.current && (setRows(r.invitations), setCursor(r.cursor), setProblem(null)),

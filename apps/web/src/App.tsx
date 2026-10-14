@@ -193,9 +193,14 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   if (!atJoined && joinedShown !== null) setJoinedShown(null);
   if (atJoined && joinedShown === null) setJoinedShown(welcomedAt == null);
   const refreshAccount = account?.refresh;
+  // One mark per displayed membership: Save, then leaving, sends it once.
+  const welcomeMarked = useRef(false);
   const welcomed = useCallback(() => {
-    if (!membershipId) return;
-    void client.markWelcomed(membershipId).catch(() => undefined).then(() => refreshAccount?.());
+    if (!membershipId || welcomeMarked.current) return;
+    welcomeMarked.current = true;
+    void client.markWelcomed(membershipId).catch(() => {
+      welcomeMarked.current = false;
+    }).then(() => refreshAccount?.());
   }, [client, membershipId, refreshAccount]);
   const welcomedRef = useRef(welcomed);
   welcomedRef.current = welcomed;
@@ -206,6 +211,25 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     if (wasShowingJoined.current && !showingJoined) welcomedRef.current();
     wasShowingJoined.current = showingJoined;
   }, [showingJoined]);
+  // So is leaving with it shown: a switch or front door unmounts this membership's app, and the
+  // document can go (reload, close). A request started on pagehide may still be cancelled.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const showingJoinedRef = useRef(showingJoined);
+  showingJoinedRef.current = showingJoined;
+  useEffect(() => {
+    const shell = shellRef.current;
+    const depart = () => {
+      if (showingJoinedRef.current) welcomedRef.current();
+    };
+    window.addEventListener("pagehide", depart);
+    return () => {
+      window.removeEventListener("pagehide", depart);
+      // StrictMode's replay keeps the shell in the document; an unmount has removed it by then.
+      queueMicrotask(() => {
+        if (!shell?.isConnected) depart();
+      });
+    };
+  }, []);
 
   // Notifications: the service worker, and a clicked one opening its place. Someone in several
   // organisations turns each on with its own Notify me; opening one registers nothing.
@@ -646,7 +670,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   ) : null;
 
   return (
-    <div className="shell" data-testid="shell">
+    <div ref={shellRef} className="shell" data-testid="shell">
       {/* First to take focus: past the sidebar, straight to what is selected. */}
       <a className="skipLink" href="#main" onClick={(e) => {
         e.preventDefault();

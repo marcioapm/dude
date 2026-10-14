@@ -60,6 +60,8 @@ export interface World {
   onAccept?: (code: string) => void;
   /** Rows per page of an invitations list (the API's is 50); a shorter page answers with a cursor. */
   pageSize?: number;
+  /** Holds an invitations list read until the promise it returns settles; undefined answers at once. */
+  holdList?: (params: { status?: InvitationStatus | "all"; q?: string; cursor?: string }) => Promise<void> | undefined;
   /** Addresses already pending on the server but not in `invitations`: inviting one answers `existing`. */
   pendingUnlisted?: Set<string>;
   /** An organisation's people, where it differs from the fixtures'; a promise holds the read until it settles. */
@@ -183,7 +185,9 @@ export class AccountsClient extends FixtureClient {
     const start = params.cursor ? rows.findIndex((r) => r.id === params.cursor) + 1 : 0;
     const size = this.w.pageSize ?? 50;
     const page = rows.slice(start, start + size);
-    return Promise.resolve({ invitations: page, cursor: start + size < rows.length ? page.at(-1)!.id : null });
+    const answer = { invitations: page, cursor: start + size < rows.length ? page.at(-1)!.id : null };
+    const held = this.w.holdList?.(params);
+    return held ? held.then(() => answer) : Promise.resolve(answer);
   }
   override invitationCounts(): Promise<InvitationCounts> {
     this.#log("invitationCounts");
