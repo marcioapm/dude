@@ -147,21 +147,26 @@ describe("a move's notice and what the agent was told", () => {
 
   for (const eventType of [EventTypes.RunFailed, EventTypes.RunAborted]) {
     test(`${eventType} after first words keeps late timing on the move's row, with Told before first words`, () => {
-      const events = raise(false);
+      // Only talkers keep a failed Run; a conductor's ordinary failed turn is followed by its park.
+      const kept = eventType === EventTypes.RunFailed;
+      const events = kept ? conductor() : raise(false);
       const timing = events.find((e) => e.eventType === EventTypes.RunResumeTimed)!;
       const failure = {
         ...timing, eventId: "ev_ended", eventType,
-        payload: eventType === EventTypes.RunFailed ? { error: "model overloaded", kept: true } : { reason: "enough" },
+        payload: kept ? { status: "failed", error: "model overloaded", kept: true, failedTurns: 1 } : { reason: "enough" },
       };
-      const ledger = [...events.filter((e) => e !== timing), failure, timing]
+      const parked = { ...timing, eventId: "ev_parked_after_failure", eventType: "run.parked",
+        payload: { reason: "conductor", message: "its turn failed", failedTurns: 1 } };
+      const ledger = [...events.filter((e) => e !== timing), failure, ...(kept ? [parked] : []), timing]
         .map((e, i) => ({ ...e, cursor: i + 1 }));
-      expect(notices(ledger).filter((n) => n.startsWith("Resumed") || n.includes("moved to"))).toEqual([
-        "The implementer moved to Large in 48s, with its conversation and work.",
-      ]);
+      const moved = kept
+        ? "The conductor moved to Large in 45s, with its conversation and work."
+        : "The implementer moved to Large in 48s, with its conversation and work.";
+      expect(notices(ledger).filter((n) => n.startsWith("Resumed") || n.includes("moved to"))).toEqual([moved]);
       expect(fromTheMove(ledger).slice(0, 3)).toEqual([
-        "notice:The implementer moved to Large in 48s, with its conversation and work.",
+        `notice:${moved}`,
         `told:${toldRaise(LARGE, false)}\n\n${NUDGE}`,
-        "message:On Large now, same c",
+        kept ? "message:On Large now. Runnin" : "message:On Large now, same c",
       ]);
     });
   }
