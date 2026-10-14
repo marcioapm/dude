@@ -1,8 +1,14 @@
 package orchestrator_test
 
 import (
+	"context"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // waitingOnPR says the task's delivery is parked on its pull requests.
@@ -89,4 +95,26 @@ func TestADeliveryDeliverDecidesTakesNoStartWhileThePullRequestWaits(t *testing.
 	}
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', '"policy"') WHERE task_id = $1`, task)
 	w.refused(task, "start_phase", `{"phase":"review"}`, "Deliver takes this task's decisions")
+}
+
+func TestAnEndedConductorCannotStartAtThePullRequestWait(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.conductorSpecOf(task)
+	run, _, _ := w.conductor(task)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, run)
+	err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.ConductStartPhase(context.Background(), tx,
+			delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: run}, delivery.StartPhase{Phase: "review"})
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "no longer this task's conductor") {
+		t.Fatalf("ended conductor start: %v", err)
+	}
+	if !w.waitingOnPR(task) {
+		t.Fatal("a refused start moved the delivery")
+	}
 }

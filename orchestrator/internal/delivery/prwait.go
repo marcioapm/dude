@@ -30,6 +30,9 @@ func (d *Delivery) waitingOnPR() bool {
 // as it would at pull request feedback. The caller holds the task's Chat
 // lock (parked); this locks the delivery's row.
 func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in StartPhase) (string, error) {
+	if err := liveConductor(ctx, tx, ref); err != nil {
+		return "", err
+	}
 	d, err := LoadDelivery(ctx, tx, ref.TaskID)
 	if err != nil {
 		return "", err

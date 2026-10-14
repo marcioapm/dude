@@ -16,8 +16,8 @@ import type { RequestContext } from "../router.ts";
 export const taskSourceInput = taskSourceInputSchema.nullable();
 
 /** The SELECT expression for a task's source, as JSON or null, for `tasks` rows. */
-export const SOURCE_JSON = `(SELECT json_build_object('kind', s.kind, 'repositoryId', s.repository_id, 'repository', r.name,
-    'number', s.number, 'title', s.title, 'headBranch', s.head_branch, 'baseBranch', s.base_branch)
+export const SOURCE_JSON = `(SELECT json_strip_nulls(json_build_object('kind', s.kind, 'repositoryId', s.repository_id, 'repository', r.name,
+    'number', s.number, 'title', s.title, 'headBranch', s.head_branch, 'baseBranch', s.base_branch))
   FROM task_sources s JOIN repositories r ON r.id = s.repository_id WHERE s.task_id = tasks.id) AS source`;
 
 /**
