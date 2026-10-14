@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 
@@ -114,7 +115,15 @@ def gallery_url(env: TestEnvironment) -> str:
 
     wait_until(reachable, timeout=20, interval=0.1, message=f"gallery did not start at {url}")
     yield url
-
+    # This env is the pytest process's own, so run_tests.py's teardown never sees this server.
+    if env.gallery_proc:
+        env.gallery_proc.terminate()
+        try:
+            env.gallery_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            env.gallery_proc.kill()
+            env.gallery_proc.wait()
+        env.gallery_proc = None
 
 @pytest.fixture
 def fake_github(env: TestEnvironment):
@@ -195,5 +204,6 @@ def gallery_page(page: Page, gallery_url: str, console_errors: list[str]) -> Pag
     and catches errors thrown during the first render.
     """
     page.goto(gallery_url, wait_until="networkidle")
-    page.wait_for_timeout(300)
+    # Settled: the first render's effects have run and two frames have painted.
+    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     return page
