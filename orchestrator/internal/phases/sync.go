@@ -452,13 +452,24 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 	return runs, err
 }
 
-// dueIn runs dueQuery in tx for up to limit Runs.
+// dueIn runs dueQuery in tx for up to limit Runs, on a generic plan and
+// without JIT for the rest of tx. Planning a custom plan took ~4 ms on every
+// sweep, ten times the run time on a small factory. The parameters (seconds
+// and a batch size) do not change which plan is best, and a generic plan
+// ran as fast at 5 k and 50 k Runs. From a few thousand Runs on, the
+// correlated subplans' estimated cost passes jit_above_cost, and JIT
+// compilation took 0.25 s (5 k Runs) to 4 s (50 k) of a query that runs in
+// 25–80 ms. The settings ride in the query's round trip; each takes effect
+// before the next statement is bound, which is when its plan is chosen.
 func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, error) {
-	rows, err := tx.Query(ctx, dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
+	var runs []phaseRun
+	b := &pgx.Batch{}
+	b.Queue(`SELECT set_config('plan_cache_mode', 'force_generic_plan', true), set_config('jit', 'off', true)`)
+	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...).Query(func(rows pgx.Rows) (err error) {
+		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
+		return err
+	})
+	return runs, tx.SendBatch(ctx, b).Close()
 }
 
 // dueQuery is due's selection. Its parameters: runFrom's $1–$3, $4 how far
