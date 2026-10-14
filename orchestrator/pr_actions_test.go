@@ -114,6 +114,31 @@ func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
 	})
 }
 
+// A scripted fixer makes the calls its feedback names: through the tool
+// server, it resolves its own batch's thread and none other.
+func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	task := w.reviewing()
+	earlier := w.gh.LineComment(1, "bo", "FACTORY.md", "Not this one.")
+	w.syncs(1)
+	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
+	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\ntool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}\n"+
+		"tool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}", own, earlier))
+	w.until("the thread resolved", func() bool {
+		w.sync()
+		var done bool
+		w.gh.Set(func(s *fakegithub.Server) { done = s.ResolvedThreads[s.ThreadID(own)] })
+		return done
+	})
+	w.gh.Set(func(s *fakegithub.Server) {
+		if s.ResolvedThreads[s.ThreadID(earlier)] {
+			t.Error("resolved a thread outside the fixer's batch")
+		}
+	})
+	_ = task
+}
+
 // Another task's pull request, or one of no task, is not the conductor's to
 // act on; nor is a reviewer who is not a collaborator. Nothing reaches GitHub.
 func TestTheConductorIsRefusedOutsideItsOwnPullRequest(t *testing.T) {

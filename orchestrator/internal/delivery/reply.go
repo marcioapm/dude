@@ -93,7 +93,7 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 			}
 		}
 		switch {
-		case status != "running":
+		case status == "completed" || status == "failed" || status == "aborted":
 			return ReplyPost{}, refusef("your Run is %s: it posts nothing", status)
 		case len(batch) == 0:
 			return ReplyPost{}, refusef("you reply only to the pull request feedback you were given, and you were given none")

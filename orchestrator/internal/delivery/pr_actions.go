@@ -95,7 +95,8 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refusef("you are no longer this task's conductor: another took over from you. Do nothing on GitHub")
 		}
 	} else {
-		if status != "running" {
+		// lux's lifecycle trails the agent's records: a Run acting is live until it ended.
+		if status == "completed" || status == "failed" || status == "aborted" {
 			return c, refusef("your Run is %s: it acts on nothing", status)
 		}
 		var items []forge.ActionableFeedback

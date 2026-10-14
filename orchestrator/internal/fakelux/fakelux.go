@@ -791,6 +791,11 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		return exec.Command("git", "-C", s.repoPath(r.URL), "cat-file", "-e", r.Ref+":"+fakeagent.FixedFile).Run() == nil
 	})
 	step := fakeagent.For(str("dude.phase"), str("dude.model"), str("dude.run"), fixed)
+	if raw := str(fakeagent.CallsLabel); raw != "" {
+		var calls [][2]string
+		_ = json.Unmarshal([]byte(raw), &calls)
+		step.Tools = append(step.Tools, calls...)
+	}
 	if str("dude.phase") == "review" && len(specRepos(spec)) == 0 {
 		// No checkout: the reviewer reads what was published, and the
 		// scripted one is content with it.

@@ -417,6 +417,14 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Workload.Command = []string{"lux-fake", "acp"}
 		}
 		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
+		// A scripted fixer carries out "tool: NAME {json}" lines its feedback
+		// names, as a conductor does in Chat: how a test drives its tool calls.
+		if in.Phase == "fix" {
+			if calls := fakeagent.ConductorCalls(in.Prompt); len(calls) > 0 {
+				raw, _ := json.Marshal(calls)
+				spec.Labels[fakeagent.CallsLabel] = string(raw)
+			}
+		}
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}

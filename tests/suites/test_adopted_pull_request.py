@@ -83,12 +83,21 @@ def test_an_adopted_branch_opens_its_pull_request_into_the_chosen_base(
     assert task["source"]["headBranch"] == "stack/top" and task["source"]["baseBranch"] == "stack/base"
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
+    # A person's branch is never published without their Open or Draft, even under Deliver.
+    wait_until(lambda: _task(client, task["id"])["status"] == "awaiting_input", timeout=90,
+               message="the adopted branch never waited for Open or Draft")
+    assert _pull_requests(client, task["id"]) == [] and len(fake_github.pulls) == 0
+    resp = client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy"})
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "pull_request_gate", resp.text
+    resp = client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy", "openPullRequest": True, "draft": True})
+    assert resp.status_code == 200, resp.text
+
     pr = wait_until(lambda: _pull_requests(client, task["id"]), timeout=90,
                     message="the adopted branch never got a pull request")[0]
     assert pr["headBranch"] == "stack/top"
     assert pr["baseBranch"] == "stack/base"
     forge_pr = fake_github.pulls[pr["number"]]
-    assert (forge_pr.head, forge_pr.base) == ("stack/top", "stack/base")
+    assert (forge_pr.head, forge_pr.base, forge_pr.draft) == ("stack/top", "stack/base", True)
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
     assert "implement" not in phases and phases[0] == "review", phases
     assert "work on stack/top" in fake_github.branch_log("stack/top")
@@ -113,6 +122,10 @@ def test_a_source_dude_must_not_touch_is_refused_with_why(
         ({"kind": "branch", "repositoryId": repo, "branch": "release/2.0"}, 422, "release_branch"),
         ({"kind": "branch", "repositoryId": repo, "branch": "feature/locked"}, 422, "protected"),
         ({"kind": "branch", "repositoryId": "repo_not_here", "branch": "x"}, 422, "not_in_project"),
+        ({"kind": "pr", "repositoryId": repo, "pullRequest": f"{fake_github.api_url}/{fake_github.owner}/other/pull/1"},
+         422, "bad_pull_request"),
+        ({"kind": "pr", "repositoryId": repo, "pullRequest": f"https://example.com/{fake_github.owner}/{fake_github.repo}/pull/1"},
+         422, "bad_pull_request"),
     ]
     before = len(client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"])
     for source, status, code in cases:

@@ -368,6 +368,10 @@ func localScript(name, args string) string {
 // lets a test drive the conductor's decisions through Chat.
 const ConductorCallPrefix = "tool: "
 
+// CallsLabel is the lux label a scripted fixer's spec carries its feedback's
+// ConductorCalls in, as JSON; the fake lux makes them on its first turn.
+const CallsLabel = "dude.calls"
+
 // The scripted conductor's own work in its checkout, named as tools in a
 // message (ConductorCalls) but done in the container rather than called
 // on dude: write {"path","content"} writes a file in its first
