@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import subprocess
 import uuid
@@ -429,21 +430,22 @@ def test_waiting_on_you_is_split_by_whose_it_is(
     _sign_in(page, web_url, bo_client.api_key)
     expect(page.get_by_test_id("waiting-on-you")).to_contain_text("1")
     page.get_by_test_id("waiting-on-you").click()
-    expect(page.get_by_role("region", name="Yours")).to_contain_text("Bo's question")
-    expect(page.get_by_role("region", name="Waiting on others")).to_have_count(0)
+    inbox = page.get_by_test_id("inbox")
+    expect(inbox.get_by_role("tab", name=re.compile(r"^On you"))).to_have_attribute("aria-selected", "true")
+    expect(inbox.get_by_role("list", name="On you")).to_contain_text("Bo's question")
 
     # The first person: not theirs, so calm, under Waiting on others.
     _sign_in(page, web_url, client.api_key)
     expect(page.get_by_test_id("waiting-on-others")).to_contain_text("1")
     page.get_by_test_id("waiting-on-others").click()
-    others = page.get_by_role("region", name="Waiting on others")
+    others = inbox.get_by_role("list", name="On others")
     expect(others).to_contain_text("Bo's question")
     expect(others).to_contain_text("Bo's task")
-    expect(page.get_by_role("region", name="Yours")).not_to_contain_text("Bo's question")
 
     others.get_by_role("button", name="Take over").click()
-    expect(page.get_by_role("region", name="Yours")).to_contain_text("Bo's question")
-    expect(page.get_by_role("region", name="Waiting on others")).to_have_count(0)
+    expect(inbox.get_by_text("Nothing is waiting on others", exact=True)).to_be_visible()
+    inbox.get_by_role("tab", name=re.compile(r"^On you")).click()
+    expect(inbox.get_by_role("list", name="On you")).to_contain_text("Bo's question")
     after = client.get(f"/v1/tasks/{task['id']}").json()
     assert [p["name"] for p in after["people"]] == ["e2e user", "Bo"]
     assert console_errors == []
