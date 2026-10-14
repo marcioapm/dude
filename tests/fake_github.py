@@ -84,6 +84,10 @@ class PullRequest:
     conflicting: bool = False
     # Review threads nobody has resolved (only GraphQL says).
     unresolved_threads: int = 0
+    # The repository its head is in, owner/name, when not this one (a fork).
+    head_repo: str | None = None
+    # Who opened it.
+    author: str = "dude-bot"
 
 
 class FakeGitHub:
@@ -140,6 +144,8 @@ class FakeGitHub:
         self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
         self.receive_requests: list[str] = []
+        # Branches GitHub reports as protected.
+        self.protected: set[str] = set()
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
@@ -364,15 +370,23 @@ class FakeGitHub:
             if status == "completed":
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
-    def open_pull(self, head: str) -> str:
-        """A person's pull request from a new branch off main, opened before
-        dude was watching (no webhook); its head commit."""
-        self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha("main"))
+    def open_pull(self, head: str, base: str = "main", title: str | None = None, author: str = "gus",
+                  head_repo: str | None = None) -> str:
+        """A person's pull request from a new branch off base, opened before
+        dude was watching (no webhook); its head commit. head_repo names a
+        fork's repository its head is in."""
+        self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha(base))
         sha = self.commit(head, f"work on {head}")
         with self._lock:
             number = len(self.pulls) + 1
-            self.pulls[number] = PullRequest(number=number, head=head, base="main", title=head, body="", draft=False)
+            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body="", draft=False,
+                                             head_repo=head_repo, author=author)
         return sha
+
+    def push_branch(self, branch: str, base: str = "main") -> str:
+        """A person pushes a new branch off base, one commit on it; its sha."""
+        self._git_out("update-ref", f"refs/heads/{branch}", self.branch_sha(base))
+        return self.commit(branch, f"work on {branch}")
 
     def add_check_run(self, sha: str, name: str = "ci") -> None:
         """A completed check run on a commit, with no webhook: CI that ran
@@ -455,18 +469,22 @@ class FakeGitHub:
                 return False
 
             def _pull_json(self, pr: PullRequest) -> dict:
+                full = f"{self.github.owner}/{self.github.repo}"
                 return {
                     "number": pr.number,
-                    "node_id": f"PR_{pr.number}",
+                    "node_id": f"PR_{self.github.owner}__{self.github.repo}_{pr.number}",
                     "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/pull/{pr.number}",
+                    "title": pr.title,
                     "draft": pr.draft,
                     "state": pr.state,
                     "merged_at": pr.merged_at,
-                    "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40},
-                    "base": {"ref": pr.base},
+                    "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40, "ref": pr.head,
+                             "repo": {"full_name": pr.head_repo or full}},
+                    "base": {"ref": pr.base, "repo": {"full_name": full}},
                     "mergeable": not pr.conflicting,
                     "mergeable_state": "dirty" if pr.conflicting else "clean",
                     "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
+                    "user": {"login": pr.author, "type": "Bot" if pr.author.endswith("[bot]") else "User"},
                 }
 
             def _body(self) -> dict:
@@ -727,7 +745,21 @@ class FakeGitHub:
                     ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
                     return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0)})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
+                    if int(m[1]) not in self.github.pulls:
+                        return self._send(404, {"message": "Not Found"})
                     return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
+                if m := re.fullmatch(rf"{prefix}/git/ref/heads/(.+)", path):
+                    sha = self.github.branch_sha(m[1])
+                    if not sha:
+                        return self._send(404, {"message": "Not Found"})
+                    return self._send(200, {"ref": f"refs/heads/{m[1]}", "object": {"sha": sha}})
+                if m := re.fullmatch(rf"{prefix}/branches/(.+)", path):
+                    from urllib.parse import unquote
+                    branch = unquote(m[1])
+                    sha = self.github.branch_sha(branch)
+                    if not sha:
+                        return self._send(404, {"message": "Branch not found"})
+                    return self._send(200, {"name": branch, "protected": branch in self.github.protected, "commit": {"sha": sha}})
                 if m := re.fullmatch(rf"/orgs/([^/]+)/members/([^/]+)", path):
                     if m[2] not in root.members:
                         return self._send(404, {"message": "Not Found"})
