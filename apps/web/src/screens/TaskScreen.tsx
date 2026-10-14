@@ -923,7 +923,6 @@ function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: str
           {run.stalled ? <Badge data-testid="session-stalled" tone="attention" size="sm" icon="warning" title={run.stalled.text}>stalled</Badge> : null}
           <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
         </>} />
-      <RunReplacement run={run} />
     </>} />;
 }
 

@@ -159,14 +159,21 @@ describe("a restarted Run's presentation", () => {
       <TooltipProvider><ToastProvider><PeopleProvider client={client}>
         {view === "run" ? <RunScreen client={client} runId={RUN_ID} onBack={() => {}} /> :
           <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}}
-            tab={view === "sessions" ? "sessions" : "overview"} />}
+             tab={view === "sessions" ? "sessions" : "overview"} runId={view === "sessions" ? RUN_ID : undefined} />}
       </PeopleProvider></ToastProvider></TooltipProvider>,
     );
     mounted.push(unmount);
     const selector = view === "run" ? "[data-testid=run-ended]" : view === "sessions"
       ? `[data-testid=session][data-run="${RUN_ID}"]` : "[data-testid=phase][data-status=aborted]";
-    if (view === "sessions") await sessionOptions(container);
-    return await until(() => (view === "sessions" ? document : container).querySelector<HTMLElement>(selector), view);
+    if (view === "sessions") {
+      const list = await sessionOptions(container);
+      expect(list.querySelectorAll('[role="option"] a, [role="option"] button').length).toBe(0);
+      const option = await until(() => document.querySelector<HTMLElement>(selector), view);
+      expect(option.textContent).toContain(restarted ? "Restarted" : "Aborted");
+      await act(async () => { document.querySelector('input[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      return await until(() => container.querySelector<HTMLElement>('[data-testid="run-ended"]'), "the opened run's end strip");
+    }
+    return await until(() => container.querySelector<HTMLElement>(selector), view);
   }
 
   for (const view of ["sessions", "step", "run"] as const) {
