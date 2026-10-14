@@ -93,6 +93,7 @@ import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 import { SourceLine } from "./StartsFrom.tsx";
+import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -489,6 +490,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
   const source = item.source ?? null;
+  // An adopted branch reviewed under Deliver waits on its owner's Open or Draft.
+  const openOrDraft = !earlier && source !== null && heldForOpenOrDraft(item);
   // Existing work starts at review: no implementer is promised.
   const deliverSteps = source === null ? "an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request"
     : source.kind === "pr" ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
@@ -554,10 +557,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
-      {item.escalation || stop || aside || problem || blocked || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
+          {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               onOpenRun={onOpenRun} onDecided={() => void load()} />

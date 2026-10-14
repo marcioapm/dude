@@ -6,11 +6,11 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { PersistedEvent } from "@dude/domain";
+import type { Decider, PersistedEvent } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PULL_REQUEST, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, TASK_ID } from "../src/fixtures/data.ts";
-import type { PullRequest, TaskDetail, TaskSource } from "../src/api/client.ts";
+import { ApiClient, type PullRequest, type TaskDetail, type TaskSource } from "../src/api/client.ts";
 import { eventAttempts } from "../src/attempts.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -150,6 +150,72 @@ describe("the pull request panel", () => {
       expect(page.querySelectorAll("[data-testid=pr-adopted-note]").length).toBe(0);
       expect(page.textContent).not.toContain("Existing pull request");
     }
+  });
+});
+
+describe("an adopted branch waiting for Open or Draft under Deliver", () => {
+  class Held extends AdoptedClient {
+    deciders: Array<{ decider: Decider; openPullRequest: boolean; draft: boolean | undefined }> = [];
+    override async setDecider(taskId: string, decider: Decider, openPullRequest = false, draft?: boolean) {
+      this.deciders.push({ decider, openPullRequest, draft });
+      this.patch = { ...this.patch, awaitingDecision: null, status: "running" };
+      return { taskId, decider };
+    }
+  }
+  const held = (owner?: TaskDetail["owner"]) => new Held({ source: BRANCH_SOURCE, status: "awaiting_input", decider: "policy",
+    awaitingDecision: { point: "before_pull_request" }, ...(owner ? { owner } : {}) }, []);
+
+  for (const [button, draft] of [["Open", false], ["Draft", true]] as const) {
+    test(`${button} hands it to Deliver with openPullRequest and draft ${draft}`, async () => {
+      const client = held();
+      const page = await taskPage(client);
+      const card = page.querySelector<HTMLElement>("[data-testid=open-or-draft]")!;
+      expect(text(card.querySelector("p"))).toBe("Open the pull request? Review is done on stack/top. dude opens its pull request into stack/base once you say how.");
+      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Open", "Draft"]);
+      await click(card.querySelector(`[data-testid=open-or-draft-${draft ? "draft" : "open"}]`)!);
+      await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go once answered");
+      expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft }]);
+    });
+  }
+
+  test("only its owner is offered Open and Draft; anyone else reads whom it waits on", async () => {
+    const client = held({ id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: false });
+    const page = await taskPage(client);
+    const card = page.querySelector<HTMLElement>("[data-testid=open-or-draft]")!;
+    expect(card.querySelectorAll("button").length).toBe(0);
+    expect(text(card.querySelector(".escalationWaiting"))).toBe("Waiting for Ana Ribeiro to decide.");
+    expect(client.deciders).toEqual([]);
+  });
+
+  test("an adopted pull request, new work, or a conductor deciding gets no Open or Draft card", async () => {
+    for (const patch of [{ source: PR_SOURCE }, { source: null }, { source: BRANCH_SOURCE, decider: "conductor" as const }]) {
+      const page = await taskPage(new AdoptedClient({ decider: "policy", awaitingDecision: { point: "before_pull_request" }, ...patch }, []));
+      expect(page.querySelectorAll("[data-testid=open-or-draft]").length).toBe(0);
+    }
+  });
+
+  test("the request carries openPullRequest and draft as the person chose", async () => {
+    const sent: unknown[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push([new URL(String(input), "http://localhost").pathname, JSON.parse(String(init?.body))]);
+      return Response.json({ taskId: "wi_1", decider: "policy" });
+    }) as typeof fetch;
+    try {
+      const api = new ApiClient({ apiKey: "k" });
+      await api.setDecider("wi_1", "policy", true, true);
+      await api.setDecider("wi_1", "policy", true, false);
+      await api.setDecider("wi_1", "policy", true);
+      await api.setDecider("wi_1", "policy");
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(sent).toEqual([
+      ["/v1/tasks/wi_1/decider", { decider: "policy", openPullRequest: true, draft: true }],
+      ["/v1/tasks/wi_1/decider", { decider: "policy", openPullRequest: true, draft: false }],
+      ["/v1/tasks/wi_1/decider", { decider: "policy", openPullRequest: true }],
+      ["/v1/tasks/wi_1/decider", { decider: "policy" }],
+    ]);
   });
 });
 
