@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
+import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
@@ -225,9 +225,7 @@ describe("a task started over", () => {
     client.listArtifacts = async () => ({ artifacts: artifacts.map((a) => a.runId === "run_attempt2" ? { ...a, phase: "fix" } : a) });
     const page = await taskPage(client, { tab: "files" });
     const source = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File source"]'), "publisher facets");
-    const fix = [...source.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("Fix"));
-    expect(fix).toBeDefined();
-    await click(fix!);
+    await click(facetCheckbox(source, "Fix"));
     expect(source.querySelectorAll('[aria-checked="true"]').length).toBe(1);
     await pick(page, 1);
     await until(() => page.querySelector('[data-testid="file-row"]'), "attempt 1's file");

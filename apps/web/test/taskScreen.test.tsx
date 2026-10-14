@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PersistedEvent, Run } from "@dude/domain";
-import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
+import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
@@ -59,11 +59,7 @@ describe("task rail filtering", () => {
     await until(() => page.querySelectorAll('[data-testid="finding"]').length > 0 ? true : null, "findings");
     const severity = page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]')!;
     const counts = status.textContent;
-    const pick = async (group: HTMLElement, label: string) => {
-      const button = [...group.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes(label));
-      expect(button !== undefined).toBe(true);
-      await click(button!);
-    };
+    const pick = (group: HTMLElement, label: string) => click(facetCheckbox(group, label));
     await pick(status, "Open");
     expect(page.querySelectorAll('[data-testid="finding"]').length).toBeGreaterThan(0);
     expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-status") === "open")).toBe(true);
@@ -77,9 +73,7 @@ describe("task rail filtering", () => {
   test("findings filtered to nothing shows one empty state, without the empty group", async () => {
     const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
     const severity = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]'), "severity filters");
-    const high = [...severity.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("High"));
-    expect(high).toBeDefined();
-    await click(high!);
+    await click(facetCheckbox(severity, "High"));
     expect(page.textContent).toContain("No matching findings");
     expect(page.textContent).not.toContain("No findings.");
     expect(page.textContent).not.toContain("Review findings");
@@ -119,11 +113,10 @@ describe("task rail filtering", () => {
     await until(() => reads.length === 2 ? true : null, "the two image thumbnails");
     await settle();
     const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
-    const doc = [...kinds.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("Documents"));
-    expect(doc).toBeDefined();
-    await click(doc!);
+    const doc = facetCheckbox(kinds, "Documents");
+    await click(doc);
     await settle();
-    await click(doc!);
+    await click(doc);
     await settle();
     expect(reads).toEqual(["image-a", "image-b"]);
   });
@@ -204,9 +197,7 @@ describe("task rail filtering", () => {
     await until(() => reads.includes("image") ? true : null, "thumbnail read");
     const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
     const counts = kinds.textContent;
-    const documents = [...kinds.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("Documents"));
-    expect(documents).toBeDefined();
-    await click(documents!);
+    await click(facetCheckbox(kinds, "Documents"));
     expect(kinds.textContent).toBe(counts);
     expect(page.querySelectorAll('[data-testid="file-row"]').length).toBe(1);
     expect(page.querySelectorAll('[data-testid="file-card"]').length).toBe(0);

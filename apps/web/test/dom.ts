@@ -64,6 +64,13 @@ export async function sessionOptions(page: HTMLElement): Promise<HTMLElement> {
   return until(() => document.querySelector<HTMLElement>('[data-testid="sessions"]'), "session options");
 }
 
+/** A rail FacetList's checkbox in `group` whose row mentions `label`; throws when there is none. */
+export function facetCheckbox(group: Element, label: string): HTMLElement {
+  const found = [...group.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes(label));
+  if (!found) throw new Error(`no facet checkbox: ${label}`);
+  return found;
+}
+
 export { act };
 
 /** An event on the fixture Run's stream, as the backend sends one, and what it causes settled. */
