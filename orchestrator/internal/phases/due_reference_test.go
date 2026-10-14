@@ -73,14 +73,7 @@ func TestDueMatchesItsReferenceOverRandomStates(t *testing.T) {
 		if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_sweeper', true), set_config('plan_cache_mode', 'force_custom_plan', true)`); err != nil {
 			t.Fatal(err)
 		}
-		rows, err := tx.Query(ctx, string(ref), append(s.limits(), s.RetryAhead.Seconds(), limit)...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
-		if err != nil {
-			t.Fatal(err)
-		}
+		want := referenceRuns(t, tx, string(ref), s, limit)
 		got, err := s.dueIn(ctx, tx, limit)
 		if err != nil {
 			t.Fatal(err)
@@ -154,14 +147,7 @@ func (g *dueStates) adversarial(owner *pgx.Conn, ref string, cov *dueCoverage) {
 	}
 	s := &Syncer{IdleAfter: time.Minute, ConductorWarm: time.Minute}
 	for _, limit := range []int{9, sweepBatch} {
-		rows, err := tx.Query(ctx, ref, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
-		if err != nil {
-			t.Fatal(err)
-		}
+		want := referenceRuns(t, tx, ref, s, limit)
 		got, err := s.dueIn(ctx, tx, limit)
 		if err != nil {
 			t.Fatal(err)
@@ -200,6 +186,21 @@ func (g *dueStates) adversarial(owner *pgx.Conn, ref string, cov *dueCoverage) {
 		}
 		cov.add(want, limit)
 	}
+}
+
+// referenceRuns runs ref in tx with dueIn's parameters for s and limit.
+func referenceRuns(t *testing.T, tx pgx.Tx, ref string, s *Syncer, limit int) []phaseRun {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := tx.Query(ctx, ref, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return want
 }
 
 func pick[T any](rng *rand.Rand, vs ...T) T { return vs[rng.IntN(len(vs))] }
