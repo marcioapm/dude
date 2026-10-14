@@ -246,7 +246,8 @@ function BranchPicker(props: {
   return (
     <div data-testid={testId}>
       <Input label={label} size="sm" mono readOnly value={value} placeholder={placeholderValue ?? "Pick one below"}
-        error={error ?? problem ?? undefined} hint={more ? `${hint} More branches match: type more of the name.` : hint}
+        error={error ?? problem ?? undefined}
+        hint={more ? `${hint} Not every branch is listed: type a branch's exact name to find it.` : hint}
         data-testid={`${testId}-value`} />
       <SearchPicker<string> key={repositoryId} label={`Find a ${label.toLowerCase()}`} size="sm" find={find} findOnEmpty
         optionKey={(b) => b} renderOption={(b) => <span className="ds-mono">{b}</span>} onPick={onPick}

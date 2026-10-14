@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -92,8 +93,24 @@ const BranchListLimit = 500
 
 // Branches lists slug's branch names, at most BranchListLimit, keeping those
 // containing query (any case) and at most limit of them; more says the list
-// was cut short, by the read limit or by limit.
+// was cut short, by the read limit or by limit. A list cut short without
+// query itself is completed by one read of query as an exact name.
 func (g *GitHub) Branches(ctx context.Context, slug, query string, limit int) (names []string, more bool, err error) {
+	names, more, err = g.scanBranches(ctx, slug, query, limit)
+	exact := strings.TrimSpace(query)
+	// Not a name git allows, or one that would not stay a single API path.
+	if err != nil || !more || exact == "" || slices.Contains(names, exact) ||
+		strings.Contains(exact, "..") || strings.ContainsAny(exact, " ~^:?*[\\#%") {
+		return names, more, err
+	}
+	info, err := g.Branch(ctx, slug, exact)
+	if err != nil || info == nil {
+		return names, more, err
+	}
+	return append([]string{exact}, names[:min(len(names), limit-1)]...), more, nil
+}
+
+func (g *GitHub) scanBranches(ctx context.Context, slug, query string, limit int) (names []string, more bool, err error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	for page, read := 1, 0; read < BranchListLimit; page++ {
 		var batch []struct {

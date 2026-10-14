@@ -601,6 +601,30 @@ describe("where a task starts from", () => {
     expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "stack/top", base: "stack/base" } });
   });
 
+  test("a branch past the listed ones is found by its exact name, picked, and created with it", async () => {
+    class Many extends Sources {
+      override sourceBranches(_projectId: string, _repositoryId: string, q: string) {
+        const listed = Array.from({ length: 50 }, (_, i) => `feature/${String(i).padStart(3, "0")}`).filter((b) => b.includes(q));
+        // As the server answers: the exact name GitHub has, ahead of the bounded scan's matches.
+        return Promise.resolve({ branches: q === "feature/599" ? ["feature/599"] : listed, more: true });
+      }
+    }
+    const client = new Many("a");
+    const d = await open(undefined, client);
+    await d.title("Take over a late branch");
+    await d.goal("Finish the branch the list does not reach.");
+    await pick("Existing branch");
+    await pickBranch("task-source-branch", "feature/599", "feature/599");
+    const value = document.querySelector<HTMLInputElement>("[data-testid=task-source-branch-value]")!;
+    expect(value.value).toBe("feature/599");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("feature/599 → main"), "the branch found");
+    expect(document.getElementById(`${value.id}-hint`)?.textContent).toBe(
+      "Not the default branch, a release branch, or a protected one. Not every branch is listed: type a branch's exact name to find it.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "feature/599" } });
+  });
+
   test("a repository dude may not push to is not offered, and none at all says why", async () => {
     class NoWrite extends Sources {
       override sourceRepositories() {
