@@ -46,7 +46,7 @@ func TestAStallReportReachesTheConductorInTheSamePass(t *testing.T) {
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_state, started_at)
 		VALUES ('run_rev', $1, 'prj_'||$1, 'wi_s', 1, 'review', 'running', 'running', now() - interval '1 hour')`, org)
 	w.s.WakeWindow = time.Nanosecond
-	if err := w.s.beforeDue(ctx); err != nil {
+	if _, err := w.s.Sweep(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(`SELECT count(*) FROM conductor_wakes WHERE task_id = 'wi_s' AND kind = 'stalled' AND delivered_at IS NOT NULL`); n != 1 {
