@@ -90,10 +90,10 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
         options={[{ value: "documents", label: "Documents" }, { value: "media", label: "Images & video" }].map((o) => ({ ...o, count: files.filter((f) => fileKindFacet(f) === o.value).length }))} /></PageRailBlock>
       <PageRailBlock label="Published by"><FacetList label="File source" value={sources} onValueChange={setSources}
         options={[...new Set(files.map((f) => f.versions[0]!.session))].map((s) => ({ value: s, label: s, count: files.filter((f) => f.versions[0]!.session === s).length }))} /></PageRailBlock>
-      <PageRailBlock label="Scope"><span className="ds-muted">Files and counts belong to the attempt selected in the task header. No selections means all files in that attempt.</span></PageRailBlock>
+      <PageRailBlock label="Scope"><span className="muted">Files and counts belong to the attempt selected in the task header. No selections means all files in that attempt.</span></PageRailBlock>
       <PageRailBlock label="Download"><Button size="sm" variant="secondary" data-testid="download-all" disabled={zipping || !displayed.length}
         onClick={() => { setZipping(true); void displayedFilesZip(client, displayed).then((b) => save(b, `${taskKey ?? taskId}-files.zip`), fail).finally(() => setZipping(false)); }}>
-        {zipping ? "Preparing…" : `Download all · ${formatBytes(total)}`}</Button><p className="ds-muted">One ZIP of every file shown, latest versions only.</p></PageRailBlock>
+        {zipping ? "Preparing…" : `Download all · ${formatBytes(total)}`}</Button><p className="muted">One ZIP of every file shown, latest versions only.</p></PageRailBlock>
     </PageRail>}>
       <div className="taskPane">
       {displayed.length ? <FileGallery

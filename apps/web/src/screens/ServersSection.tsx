@@ -248,7 +248,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           })}
           <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live || wakeable} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
         </PageRailBlock>
-        <PageRailBlock label="How servers behave"><span className="ds-muted">{wakeable
+        <PageRailBlock label="How servers behave"><span className="muted">{wakeable
           ? `A preview has no agent. Opening its stable URLs wakes it on the branch's latest commit; it sleeps after ${run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request.`
           : isPreview ? `A preview has no agent. It parks after ${run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes idle; starting a server wakes it.`
           : "Servers stop when the run pauses, ends or moves host; they do not restart on their own. Output streams into the run log as server:<name>."}</span></PageRailBlock>

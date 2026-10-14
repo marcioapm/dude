@@ -60,6 +60,22 @@ class PageHoldsStill(unittest.TestCase):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.
         self.assertEqual(self.page_overflow("a", ".runRail"), 0)
 
+    def test_rail_notes_use_muted_ink(self):
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}/findings")
+        note = page.get_by_text("Counts cover every finding in this attempt, before filters.", exact=True)
+        note.wait_for()
+        self.assertTrue(note.evaluate("""el => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--ds-color-text-muted)';
+          el.append(probe);
+          const muted = getComputedStyle(probe).color;
+          probe.remove();
+          return getComputedStyle(el).color === muted;
+        }"""))
+
     def test_the_open_session_is_drawn_in_the_selector(self):
         # Open the third session, reopen the list: the keyboard's row is the
         # first, the open one is the third, and only the open one is washed.
