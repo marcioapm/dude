@@ -1237,9 +1237,6 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 // (decide). Nothing goes on by itself: no agent works, and no timer
 // resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
-	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reason); err != nil {
-		return workflow.Result{}, err
-	}
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
 	if reason == "review_failed" {
 		// Its retry is the failed reviewers again, not a fix.
@@ -1261,7 +1258,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		}
 	}
 	st.PendingRunIDs = nil
-	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
+	if err := w.s.SetTaskStatusAndEmit(ctx, sc.OrganizationID, st, "awaiting_input", reason, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
 		return workflow.Result{}, err
 	}
