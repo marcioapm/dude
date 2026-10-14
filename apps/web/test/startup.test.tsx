@@ -541,6 +541,7 @@ describe("a conductor's Chat", () => {
     const page = await runPage("failed", moved, true, undefined, () => { retried += 1; return Promise.resolve(); });
     await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
     expect(page.querySelectorAll("[data-testid=start-retry]").length).toBe(0);
+    expect(page.querySelector("[data-testid=start-wakes-next]")!.textContent).toBe("dude will wake a new conductor.");
     expect(retried).toBe(0);
   });
 

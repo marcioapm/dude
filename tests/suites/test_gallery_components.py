@@ -11,7 +11,7 @@ Marked `ui`; skip with `-m "not ui"`.
 from __future__ import annotations
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, expect
 
 pytestmark = pytest.mark.ui
 
@@ -285,7 +285,12 @@ def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_error
 # the tooltip is open.
 def _hover_until_open(page: Page, trigger) -> None:
     trigger.hover()
-    page.wait_for_function("el => el.dataset.state !== 'closed'", arg=trigger.element_handle(), polling="raf", timeout=5000)
+    try:
+        page.wait_for_function(
+            "el => ['delayed-open', 'instant-open'].includes(el.dataset.state)",
+            arg=trigger.element_handle(), polling="raf", timeout=5000)
+    except PlaywrightTimeoutError:
+        raise AssertionError(f"tooltip trigger {trigger} did not open within 5000ms") from None
 
 
 def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Page, console_errors: list):

@@ -458,9 +458,12 @@ Each of these cost real time.
 
 **An element's absence is asserted as a count**:
 `expect(root.querySelectorAll(sel).length).toBe(0)`, never
-`expect(<a DOM query>).toBeNull()`. bun's `toBeNull` has passed a present
-happy-dom element (a mounted page's stale "thinking" span, before
-b5b4a85b's fix); a count cannot. A finder that returns an element or null
+`expect(<a DOM query>).toBeNull()`. Bun's `toBeNull` has passed a present
+mounted React/happy-dom element in a large object graph (a stale "thinking"
+span before b5b4a85b's fix). The reproduction supports failure-message
+formatting as a hypothesis, not an established root cause; not all happy-dom
+elements are affected. A zero count reliably rejects a present element
+matching the same selector. A finder that returns an element or null
 gets a counting sibling for its absence checks.
 
 The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`,

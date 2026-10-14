@@ -363,9 +363,8 @@ def wait_for_run_status(client: ApiClient, run_id: str, status: str, timeout: fl
 def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, message: str = "") -> dict:
     """Wait for a task's escalation, and return the task with it.
 
-    Not its status: the workflow's escalate() sets awaiting_input and records
-    the escalation (`question.asked`) in two transactions, so a read between
-    them sees awaiting_input with `escalation` still null.
+    Wait for the actual escalation object derived from `question.asked`,
+    rather than inferring its presence from the task's status.
     """
 
     def check():
