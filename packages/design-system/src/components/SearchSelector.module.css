@@ -26,3 +26,9 @@
   color: var(--ds-color-text-primary);
   box-shadow: var(--ds-shadow-2);
 }
+.empty {
+  margin: 0;
+  padding: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}

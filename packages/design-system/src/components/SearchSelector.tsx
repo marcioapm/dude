@@ -55,8 +55,9 @@ export function SearchSelector<T>({ title, label, options, optionKey, searchText
           collisionPadding={16} aria-label={label} data-testid="search-selector">
           <SearchPicker find={find} optionKey={optionKey} renderOption={renderOption} label={label} placeholder={placeholder}
             findOnEmpty delay={0} autoFocus group={group} optionCurrent={current} escapeClosesPicker optionAttributes={optionAttributes} listTestId={listTestId}
-            empty={(query) => query ? "No matching options" : empty} onCancel={() => setOpen(false)}
+            empty={options.length ? () => "No matching options" : undefined} onCancel={() => setOpen(false)}
             onPick={(option) => { setOpen(false); onPick(option); }} />
+          {options.length ? null : <p className={styles["empty"]}>{empty}</p>}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

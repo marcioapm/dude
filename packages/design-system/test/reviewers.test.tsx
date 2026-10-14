@@ -124,6 +124,42 @@ describe("SearchPicker, picking reviewers", () => {
     expect(field().getAttribute("aria-expanded")).toBe("true");
   });
 
+  test("no suggestions before any words says nothing, and the first Escape cancels", async () => {
+    let cancelled = 0;
+    host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(
+      <SearchPicker<Who> label="Who" findOnEmpty delay={0} find={async () => []} optionKey={(p) => p.login}
+        renderOption={(p) => p.name} onPick={() => {}} onCancel={() => cancelled++}
+        empty={(q) => `Nobody who can review matches “${q}”.`} />,
+    ));
+    await settle();
+    const list = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    expect(list.hidden).toBe(true);
+    expect(list.textContent).toBe("");
+    await key("Escape");
+    expect(cancelled).toBe(1);
+  });
+
+  test("every suggestion picked leaves no empty line under the field", async () => {
+    function OnePick() {
+      const [picked, setPicked] = useState<string[]>([]);
+      return <SearchPicker<Who> label="Who" findOnEmpty delay={0} find={async (q) => (q ? [] : [PEOPLE[1]!])}
+        exclude={new Set(picked)} optionKey={(p) => p.login} renderOption={(p) => p.name}
+        onPick={(p) => setPicked((l) => [...l, p.login])} empty={(q) => `Nobody who can review matches “${q}”.`} />;
+    }
+    host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(<OnePick />));
+    await settle();
+    expect(options()).toEqual(["Tom Okafor"]);
+    await key("Enter");
+    await settle();
+    const list = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    expect(list.hidden).toBe(true);
+    expect(list.textContent).toBe("");
+  });
+
   test("Enter with nothing open never submits the form around it", async () => {
     let submitted = 0;
     host = document.body.appendChild(document.createElement("div"));

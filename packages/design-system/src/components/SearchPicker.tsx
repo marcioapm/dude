@@ -108,7 +108,7 @@ export function SearchPicker<T>({
   const current = active < options.length && !why(options[active]!) ? active : Math.max(0, options.findIndex((o) => !why(o)));
 
   const open = !closed && options.length > 0;
-  const nothing = !closed && !open && answered !== null && empty !== undefined;
+  const nothing = !closed && !open && !!answered && empty !== undefined;
   const optionId = (i: number) => `${listId}-${i}`;
   // The next option that can be picked, from `from`, `by` rows at a time.
   const step = (from: number, by: 1 | -1) => {
