@@ -151,12 +151,12 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // this task does not only read.
   const writable = repositories.filter((r) => chosen.find((c) => c.id === r.id)?.access !== "read");
   const [draft, setDraft] = useState<SourceDraft | null>(null);
-  const source = draft ?? sourceDraft(existing?.savedSource, writable);
+  const saved = sourceDraft(existing?.savedSource, writable);
+  const source = draft ?? saved;
   const sourceFixed = existing?.fixed != null;
   const sourceCheck = useSourceCheck(client, projectId, source, created ?? existing?.id, sourceFixed || choices === null);
   const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
-  const sourceSaved = JSON.stringify(sourceInput(sourceDraft(existing?.savedSource, writable)) ?? null);
-  const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== sourceSaved;
+  const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== JSON.stringify(sourceInput(saved) ?? null);
   // New work is always fine; existing work only once dude has found it, in a
   // repository the task changes (one set to Reads it is not saved as its source).
   const sourceReady = sourceFixed || source.from === "new"
