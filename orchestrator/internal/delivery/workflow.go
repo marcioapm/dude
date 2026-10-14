@@ -496,6 +496,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
 	d := directed(st, PhaseReview)
+	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
 	if d != nil && len(d.Categories) > 0 {
 		categories = d.Categories
 	}
@@ -793,6 +796,9 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	k := key(sc, st, ":test")
 	if d != nil {
 		k = conductorKey(sc, st, d, ":test")
+	}
+	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, d.apply)
 	if err != nil {
@@ -1123,6 +1129,19 @@ func feedbackRepos(feedback []forge.ActionableFeedback) []string {
 		}
 	}
 	return out
+}
+
+// refreshPRWaitHeads starts a review or test the conductor asked for while
+// the pull requests waited from GitHub's heads: a person may have pushed.
+func (w *steps) refreshPRWaitHeads(ctx context.Context, sc workflow.StepContext, st *State) error {
+	if !st.ActingOnPR {
+		return nil
+	}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil || gh == nil {
+		return err
+	}
+	return w.fromPullRequestHeads(ctx, sc, st, gh)
 }
 
 // fromPullRequestHeads starts the fix from each open pull request's head

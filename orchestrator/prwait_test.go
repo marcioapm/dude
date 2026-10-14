@@ -60,6 +60,35 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	}
 }
 
+// A person pushed while the pull request waited: the conductor's review and
+// a completed test start from GitHub's head, not the delivery's stale one.
+func TestAPhaseStartedAtThePullRequestWaitStartsFromAPersonsPush(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	branch := w.gh.Pull(1).Head
+
+	pushed := w.gh.CommitOnTop(branch, "A person's change")
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == "after_review" })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, task, pushed); n != 1 {
+		t.Fatalf("%d reviews started from the person's push %s", n, pushed)
+	}
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
+
+	pushed = w.gh.CommitOnTop(branch, "Another change")
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.until("the tester completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND base_refs->>'target' = $2 AND status = 'completed'`,
+			task, pushed) == 1
+	})
+}
+
 // Refused while a phase that publishes is at work (one writer), and past
 // the pull request's fix bound.
 func TestStartingAPhaseWhileThePullRequestWaitsHasTheSameBounds(t *testing.T) {
