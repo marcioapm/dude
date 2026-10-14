@@ -72,6 +72,13 @@ func agentProcessExited(agentErr string) bool {
 	return strings.Contains(agentErr, "process exited")
 }
 
+// machineParked (SQL, over runs r): a machine move of dude's is pending
+// and the Run is being stopped (a control pending: the move's park, or a
+// person's pause) or is paused; whichever resume follows carries the move
+// and tells the agent where it runs. A running Run whose move is still
+// unsettled has no such resume coming.
+const machineParked = `(` + delivery.MoveUnsettled + ` AND (r.control <> 'none' OR r.status = 'paused'))`
+
 // movedNudge is what an agent lux moved mid-turn is told once it runs on
 // its new host.
 const movedNudge = "Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace " +
@@ -189,9 +196,9 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 		return false, nil
 	}
 	var at time.Time
-	var dudeStopped bool
-	if err := tx.QueryRow(ctx, `SELECT now(), lux_stop_reason IS NOT NULL OR status NOT IN ('scheduled', 'starting', 'running')
-		FROM runs WHERE id = $1`, t.run.ID).Scan(&at, &dudeStopped); err != nil {
+	var dudeStopped, parked bool
+	if err := tx.QueryRow(ctx, `SELECT now(), lux_stop_reason IS NOT NULL OR status NOT IN ('scheduled', 'starting', 'running'), `+machineParked+`
+		FROM runs r WHERE r.id = $1`, t.run.ID).Scan(&at, &dudeStopped, &parked); err != nil {
 		return false, err
 	}
 	if dudeStopped {
@@ -199,6 +206,11 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 		return false, nil
 	}
 	t.LastFailed = true
+	if parked {
+		// dude is stopping the Run for a machine move: the move's resume
+		// continues the turn on the new machine, and tells the agent so.
+		return true, nil
+	}
 	if t.Broken == nil {
 		t.Broken = &brokenTurn{Error: reason, AgentError: agentErr, At: at, Epoch: t.epoch}
 	}
@@ -210,14 +222,23 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 
 // moving keeps a Run whose turn a move cut off: said once, as lux's
 // warning, and told to carry on once lux runs it again (a directive,
-// sent by deliverDirectives when the Run is running).
+// sent by deliverDirectives when the Run is running). A Run dude is
+// parking or has parked for a machine move of its own (machineParked) is
+// told by that move's resume (ResizePlan.movedInput) instead, so it gets
+// no second carry-on.
 func (t *translator) moving(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
 	if t.Broken.Moved != "" {
 		return nil
 	}
 	t.Broken.Moved = reason
-	if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: movedNudge, Scope: "turn"}); err != nil {
+	var parked bool
+	if err := tx.QueryRow(ctx, `SELECT `+machineParked+` FROM runs r WHERE r.id = $1`, t.run.ID).Scan(&parked); err != nil {
 		return err
+	}
+	if !parked {
+		if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: movedNudge, Scope: "turn"}); err != nil {
+			return err
+		}
 	}
 	words := luxStopWords(luxStop{Reason: reason}, "")
 	return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem,
@@ -383,28 +404,36 @@ func (r *phaseRun) scanBroken(raw []byte, secs float64) error {
 	return json.Unmarshal(raw, r.Broken)
 }
 
-// takeUpLive answers a person's resume of a Run lux placed again itself
-// after a move (replacedByLux): there is no stopped Run to resume, so it
-// is taken back up as lux has it, its note (or the resume nudge) sent once
-// lux reports it running. False when it is not such a Run: whilePaused
-// waits for it to stop and resumes it.
-func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
-	if r.Control != "resume" || r.RepoApproved || r.talker() || r.LuxRunID == "" {
+// liveAfterMove handles a resumable paused Run that lux placed again itself
+// after a move (replacedByLux): there is no stop of dude's to wait for.
+// A person's resume that only needs the Run running is answered by
+// takeUpLive. A resume that must change the Run (an unsettled machine
+// move's size, an approved repository) cannot be applied to a live
+// placement, so lux is asked to stop the Run again and the resume follows
+// once it has stopped. False when it is not such a Run: whilePaused waits
+// for it to stop and resumes it.
+func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
+	if r.talker() || r.LuxRunID == "" {
 		return false, nil
 	}
 	// Only a Run dude saw lux move is asked about: any other is stopping
 	// at dude's request, and lux is not asked on every sweep while it does.
 	var moved stopState
+	var resumedTo int
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT harness_state FROM runs WHERE id = $1`, r.ID).Scan(&raw); err != nil || raw == nil {
+		if err := tx.QueryRow(ctx, `SELECT harness_state, (SELECT COALESCE(max(epoch), 0) FROM run_resumes WHERE run_id = $1)
+			FROM runs WHERE id = $1`, r.ID).Scan(&raw, &resumedTo); err != nil || raw == nil {
 			return err
 		}
 		return json.Unmarshal(raw, &moved)
 	}); err != nil {
 		return false, err
 	}
-	if movedFrom(moved) == 0 {
+	if from := movedFrom(moved); from == 0 || resumedTo > from {
+		// No move, or dude resumed the Run itself since (a machine move's
+		// resume, a person's): the placement lux runs is not one lux
+		// placed for the move.
 		return false, nil
 	}
 	cur, err := s.Lux.Get(ctx, r.LuxRunID)
@@ -420,13 +449,50 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	if !liveInLux(state) || !replacedByLux(cur, moved) {
 		return false, nil
 	}
+	if r.Control == "resume" && !r.RepoApproved && !r.Moving {
+		return s.takeUpLive(ctx, r, state)
+	}
+	s.follow(r)
+	if !assigned(cur) {
+		// Waiting for a host: nothing of lux's to stop yet. Looked at
+		// again after the retry spacing, not on every sweep.
+		return false, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+				r.ID, placementPoll.Seconds())
+			return err
+		})
+	}
+	// Once lux has the stop, replacedByLux no longer holds for this
+	// placement, so lux is asked once per placement.
+	return false, s.ask(ctx, r, s.Lux.Stop)
+}
+
+// placementPoll is how soon a Run lux is placing after a move is looked at
+// again while it waits for a host.
+const placementPoll = 5 * time.Second
+
+// assigned: lux has a placement of the Run's current epoch, one a stop
+// reaches.
+func assigned(cur lux.Run) bool {
+	for _, p := range cur.Placements {
+		if p.Epoch == cur.Epoch {
+			return true
+		}
+	}
+	return false
+}
+
+// takeUpLive answers a person's resume of a Run lux placed again itself,
+// now in lux state state: it is taken back up as lux has it, its note (or
+// the resume nudge) sent once lux reports it running.
+func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (bool, error) {
 	// The follower is stopped first, and waited for: a batch of its
 	// committing after this would write back the harness_state it loaded.
 	if err := s.unfollowWait(ctx, r.ID); err != nil {
 		return false, err
 	}
 	taken := false
-	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// The cursor stays: what lux reported since dude last read is
 		// followed as usual — the move's states, the new placement's
 		// running or failure, its clones, pushes and files — and lux_state
@@ -452,6 +518,22 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 		return delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID)
 	})
 	return taken, err
+}
+
+// dropMovedNudge withdraws an unsent carry-on (movedNudge) that lux's own
+// move queued before dude parked the Run for a machine move: the move's
+// resume tells the agent where it runs. Returns whether anything else is
+// still queued for the agent.
+func (s *Syncer) dropMovedNudge(ctx context.Context, r phaseRun) (more bool, err error) {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM directives WHERE run_id = $1 AND text = $2
+			AND sent_at IS NULL AND claimed_at IS NULL AND failed_at IS NULL`, r.ID, movedNudge); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = $1
+			AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT `+delivery.HeldBack+`)`, r.ID).Scan(&more)
+	})
+	return more, err
 }
 
 // liveInLux: lux has the Run running, or is placing it.

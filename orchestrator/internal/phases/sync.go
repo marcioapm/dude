@@ -1949,12 +1949,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	if !lux.Terminal(r.LuxState) {
-		// A person's resume of a Run lux resumed itself (a move) has no
-		// stop to wait for: taken up as lux has it.
-		if r.Control == "resume" {
-			if taken, err := s.takeUpLive(ctx, r); taken || err != nil {
-				return true, err
-			}
+		// A Run lux resumed itself (a move) has no stop of dude's to wait
+		// for: taken up as lux has it, or stopped again for a resume that
+		// must change it.
+		if acted, err := s.liveAfterMove(ctx, r); acted || err != nil {
+			return acted, err
 		}
 		// Still stopping: follow the stream, where lux will say so.
 		s.follow(r)
@@ -1966,6 +1965,14 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// the usual way once running); otherwise it is told to carry on.
 	// An agent waiting on a person's answer is told nothing: the answer,
 	// when it comes, is its input.
+	if r.Moving && r.HasDirectives {
+		// The resume carries dude's machine move and tells the agent where
+		// it runs: a carry-on lux's own move queued is said by it.
+		var err error
+		if r.HasDirectives, err = s.dropMovedNudge(ctx, r); err != nil {
+			return true, err
+		}
+	}
 	nudge := ""
 	if !r.HasDirectives && !r.Waiting {
 		nudge = resumeNudge

@@ -586,6 +586,11 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 			why += "; " + broken.Error
 			agentErr = broken.AgentError
 		}
+		if lux.Moved(stop.Reason) {
+			// A move lux ended the Run at instead (a resumePolicy that does
+			// not resume it): lux's own reason says so.
+			why += "; then its run ended: " + reason
+		}
 		event, more = why, stopPayload(*stop, agentErr)
 	case broken != nil:
 		why = broken.Error + "; then its run ended: " + reason

@@ -51,22 +51,35 @@ func newHeldWorld(t *testing.T, broken string, heldFor time.Duration) *heldWorld
 }
 
 // eventsLux is lux as far as a held turn's decision goes: Events answers
-// the page set (none by default), or err; Get answers getErr, counted.
+// the page set (none by default), or err; Get answers run (else a Run
+// running in epoch 2) or getErr, counted; Stop is counted.
 type eventsLux struct {
 	lux.Client
 	mu     sync.Mutex
 	page   []lux.Frame
 	err    error
 	reads  int
+	run    *lux.Run
 	getErr error
 	gets   int
+	stops  int
 }
 
 func (f *eventsLux) Get(_ context.Context, id string) (lux.Run, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gets++
+	if f.run != nil {
+		return *f.run, f.getErr
+	}
 	return lux.Run{ID: id, State: "running", Epoch: 2}, f.getErr
+}
+
+func (f *eventsLux) Stop(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+	return nil
 }
 
 func (f *eventsLux) Events(context.Context, string, int64) ([]lux.Frame, error) {
