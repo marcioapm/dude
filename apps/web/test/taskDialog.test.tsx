@@ -567,10 +567,7 @@ describe("where a task starts from", () => {
     expect(d.save().disabled).toBe(true);
     await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
     await until(() => document.querySelector("[data-testid=task-source-found]"), "the pull request found");
-    const found = document.querySelector("[data-testid=task-source-found]")!.textContent;
-    expect(found).toContain("#12");
-    expect(found).toContain("Greet in Portuguese");
-    expect(found).toContain("feature/greet → main");
+    expect(document.querySelector("[data-testid=task-source-found]")!.textContent).toBe("#12 Greet in Portuguese · feature/greet → main");
     expect(d.save().disabled).toBe(false);
     await act(async () => d.save().click());
     await until(() => client.created.length > 0, "the create");

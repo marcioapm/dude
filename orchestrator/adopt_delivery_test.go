@@ -2,6 +2,8 @@ package orchestrator_test
 
 import (
 	"context"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -198,7 +200,9 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 		!slices.Contains(log, "Start Greet in Portuguese") {
 		t.Fatalf("feature/greet history %v", log)
 	}
-	_ = start
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", start, "refs/heads/feature/greet").CombinedOutput(); err != nil {
+		t.Fatalf("the person's commit %s is not under feature/greet's head: %v %s", start, err, out)
+	}
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND adopted AND number = 1 AND base_branch = 'main'`, wi); n != 1 {
 		t.Fatalf("adopted pull request recorded %d times", n)
 	}
@@ -225,6 +229,66 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests after the fix", len(w.gh.Pulls()))
+	}
+}
+
+// commitFile commits path with content on top of branch in the fake's
+// repository, as a person's push does; its SHA.
+func (w *world) commitFile(branch, path, content, message string) string {
+	w.t.Helper()
+	index := filepath.Join(w.t.TempDir(), "index")
+	git := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", w.gh.Repo}, args...)...)
+		cmd.Env = append(cmd.Environ(), "GIT_INDEX_FILE="+index, "GIT_AUTHOR_NAME=Alice", "GIT_AUTHOR_EMAIL=alice@example.com",
+			"GIT_COMMITTER_NAME=Alice", "GIT_COMMITTER_EMAIL=alice@example.com")
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			w.t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "read-tree", "refs/heads/"+branch)
+	blob := git(content, "hash-object", "-w", "--stdin")
+	git("", "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path)
+	tree := git("", "write-tree")
+	sha := git("", "commit-tree", tree, "-p", "refs/heads/"+branch, "-m", message)
+	git("", "update-ref", "refs/heads/"+branch, sha)
+	return sha
+}
+
+// A stacked branch's first review is of what it adds to its base: a file
+// only the base changed is not among the paths reviewers are picked by.
+func TestAStackedBranchIsReviewedForItsOwnChangesOnly(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Branch("stack/base", "main", "The base")
+	w.commitFile("stack/base", "migrations/001_base.sql", "CREATE TABLE base (id int);\n", "Base migration")
+	w.gh.Branch("stack/top", "stack/base", "The top")
+	w.commitFile("stack/top", "web/Top.tsx", "export const Top = 1;\n", "Top component")
+
+	wi := w.adopting("branch", 0, "stack/top", "stack/base")
+	w.until("the first review", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
+	})
+	var changed []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'changedPaths'))
+		FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, wi).Scan(&changed); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(changed, []string{"target/web/Top.tsx"}) {
+		t.Fatalf("changed paths %v, want only the top's file", changed)
+	}
+	rows, err := w.owner.Query(context.Background(), `SELECT COALESCE(category, '') FROM runs WHERE task_id = $1 AND phase = 'review'
+		ORDER BY category`, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	categories, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(categories, "frontend") || slices.Contains(categories, "database") {
+		t.Fatalf("first reviewers %v, want frontend for the top's file and no database for the base's", categories)
 	}
 }
 
