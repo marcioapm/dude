@@ -61,6 +61,17 @@ export async function listInvitations(scope: OrgScope, url: URL) {
       AND id > ${cursor} ORDER BY id LIMIT 51`;
   return { invitations: rows.slice(0,50).map((r: { invitation: unknown }) => r.invitation), cursor: rows.length > 50 ? rows[49].invitation.id : null };
 }
+/** Every invitation of the organisation `scope` is in, by the status the list filters on, and in all. */
+export async function invitationCounts(scope: OrgScope) {
+  const [c] = await scope.sql`SELECT
+      count(*) FILTER (WHERE revoked_at IS NULL AND accepted_at IS NULL AND expires_at > now())::int AS pending,
+      count(*) FILTER (WHERE revoked_at IS NULL AND accepted_at IS NULL AND expires_at <= now())::int AS expired,
+      count(*) FILTER (WHERE revoked_at IS NULL AND accepted_at IS NOT NULL)::int AS accepted,
+      count(*) FILTER (WHERE revoked_at IS NOT NULL)::int AS revoked,
+      count(*)::int AS "all"
+    FROM invitations`;
+  return c as { pending: number; expired: number; accepted: number; revoked: number; all: number };
+}
 export async function changeInvitation(scope: OrgScope, id: string, renew: boolean, actor: string | null) {
   const rows = renew ? await scope.sql`UPDATE invitations SET expires_at = now()+interval '14 days', renewed_at=now(), renewed_by=${actor}
     WHERE id=${id} AND accepted_at IS NULL AND revoked_at IS NULL RETURNING code` :
@@ -107,6 +118,9 @@ export function registerInvitationRoutes(router: Router) {
   const path = "/v1/organization/invitations";
   router.get(path, async (ctx) => json(await withOrg(ctx.principal.organizationId, async (scope) => {
     await invitationAdmin(scope, ctx); return listInvitations(scope, ctx.url);
+  })));
+  router.get(`${path}/counts`, async (ctx) => json(await withOrg(ctx.principal.organizationId, async (scope) => {
+    await invitationAdmin(scope, ctx); return invitationCounts(scope);
   })));
   router.post(path, async (ctx) => {
     const input = await parseBody(ctx.request, batch);

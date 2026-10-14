@@ -3,7 +3,7 @@ import { newId } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { HttpError, json, noContent, parseBody, conflict } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { changeInvitation, inviteBatch, listInvitations, lockPeople } from "./invitations.ts";
+import { changeInvitation, invitationCounts, inviteBatch, listInvitations, lockPeople } from "./invitations.ts";
 import { removePerson, updatePerson } from "./people.ts";
 function requireSuper(ctx: RequestContext) {
   if (ctx.principal.credentialKind !== "person" || !ctx.principal.access?.superAdmin) {
@@ -54,6 +54,7 @@ export function registerAdminRoutes(router: Router) {
   });
   const path = "/v1/admin/organizations/:id/invitations";
   router.get(path, async (ctx) => { requireSuper(ctx); return json(await withOrg(ctx.params.id!, s=>listInvitations(s,ctx.url))); });
+  router.get(`${path}/counts`, async (ctx) => { requireSuper(ctx); return json(await withOrg(ctx.params.id!, s=>invitationCounts(s))); });
   router.post(path, async (ctx) => {
     requireSuper(ctx); const input=await parseBody(ctx.request,invitationInput);
     return json({ results:await withOrg(ctx.params.id!,async s=>{ await lockPeople(s); return inviteBatch(s,input,null); }) });

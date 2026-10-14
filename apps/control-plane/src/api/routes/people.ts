@@ -539,10 +539,27 @@ async function locate(ctx: RequestContext): Promise<Response> {
   throw notFound("not found");
 }
 
+/**
+ * The membership's first-time page was shown and left: it is not shown
+ * again. Only your own active row, in the organisation the request is in;
+ * the first time is kept, so a repeat changes nothing.
+ */
+async function markWelcomed(ctx: RequestContext): Promise<Response> {
+  if (ctx.params.organizationId !== ctx.principal.organizationId || !ctx.principal.personId) {
+    throw new HttpError(403, "not_a_member", "not_a_member");
+  }
+  const [row] = await withOrg(ctx.principal.organizationId, ({ sql }) => sql`
+    UPDATE people SET welcomed_at = COALESCE(welcomed_at, now())
+    WHERE id = ${ctx.principal.personId} AND removed_at IS NULL RETURNING welcomed_at`);
+  if (!row) throw new HttpError(403, "not_a_member", "not_a_member");
+  return json({ welcomedAt: row.welcomed_at });
+}
+
 export function registerPeopleRoutes(router: Router): void {
   router.get("/v1/locate/:id", locate);
   router.get("/v1/me", getMe);
   router.patch("/v1/me", updateMe);
+  router.post("/v1/me/memberships/:organizationId/welcomed", markWelcomed);
   router.put("/v1/me/photo", uploadMyPhoto);
   router.get("/v1/me/keys", listMyKeys);
   router.post("/v1/me/keys", createMyKey);
