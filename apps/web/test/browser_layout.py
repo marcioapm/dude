@@ -60,6 +60,29 @@ class PageHoldsStill(unittest.TestCase):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.
         self.assertEqual(self.page_overflow("a", ".runRail"), 0)
 
+    def test_the_open_session_is_drawn_in_the_selector(self):
+        # Open the third session, reopen the list: the keyboard's row is the
+        # first, the open one is the third, and only the open one is washed.
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+        page.get_by_role("tab", name="Sessions").click()
+        trigger = page.get_by_role("button", name="Select session", exact=True)
+        trigger.click()
+        options = page.get_by_test_id("sessions").get_by_role("option")
+        options.nth(2).wait_for()
+        options.nth(2).dispatch_event("mousedown")
+        trigger.click()
+        options.nth(2).wait_for()
+        page.mouse.move(0, 0)
+        self.assertEqual(options.nth(2).get_attribute("aria-current"), "true")
+        washes = page.evaluate("""() => [...document.querySelectorAll('[data-testid="sessions"] [role=option]')]
+          .map((o) => getComputedStyle(o).backgroundColor)""")
+        clear = washes[1]
+        self.assertNotIn(washes[2], (clear, washes[0]))
+        self.assertEqual([w for i, w in enumerate(washes) if i not in (0, 2)], [clear] * (len(washes) - 2))
+
 
 if __name__ == "__main__":
     unittest.main()

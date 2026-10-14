@@ -125,6 +125,24 @@ test("the highlight stays on its row when the app hands over fresh options while
   expect(scrolls).toBe(0);
 });
 
+test("the open option is marked apart from the keyboard's row", async () => {
+  const el = await mount();
+  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  await act(async () => trigger.click());
+  await tick();
+  await press(document.querySelector("input[role=combobox]")!, "ArrowDown");
+  await press(document.querySelector("input[role=combobox]")!, "Enter");
+  await tick();
+  await act(async () => trigger.click());
+  await tick();
+  const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  const [first, second] = [...document.querySelectorAll("[role=option]")];
+  expect(input.getAttribute("aria-activedescendant")).toBe(first!.id);
+  expect(first!.getAttribute("aria-current")).toBeNull();
+  expect(second!.getAttribute("aria-current")).toBe("true");
+  expect(second!.getAttribute("aria-selected")).toBe("true");
+});
+
 test("no options says so", async () => {
   const el = await mount(true);
   await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!.click());

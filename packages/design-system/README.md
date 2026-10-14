@@ -1086,7 +1086,8 @@ here.
   `SessionHeader` title, using `SearchSelector`: a quiet chevron, a Radix
   popover and SearchPicker's combobox/listbox. Search matches real role labels,
   model and status; conductor/delivery grouping and newest-first order come
-  from the app. The current option is marked independently of keyboard focus.
+  from the app. The current option (`aria-current`) sits on the active wash
+  whichever row the keyboard is on; the keyboard's row adds the hover wash.
   The selector remains reachable with one session; no sessions is a meaningful
   empty state. There is no separate selection column. A link (`#/session/<id>`) opens it on that tab, not a
   separate page: the task's people, pull requests and findings stay one

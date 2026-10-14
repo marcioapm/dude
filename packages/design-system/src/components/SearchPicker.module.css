@@ -40,6 +40,13 @@
 .active {
   background: var(--ds-color-hover-wash);
 }
+/* What is open now (`optionCurrent`), drawn apart from the keyboard's row; the hover wash stacks on it. */
+.option[aria-current="true"] {
+  background-color: var(--ds-color-active-wash);
+}
+.option[aria-current="true"].active {
+  background-image: linear-gradient(var(--ds-color-hover-wash), var(--ds-color-hover-wash));
+}
 /* A group's heading: muted, small, not an option. */
 .group {
   display: flex;
