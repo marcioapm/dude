@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -39,6 +40,27 @@ func TestBotCommentsRideAlongWithARequestedReview(t *testing.T) {
 	if len(batch) != 2 || batch[0].Author != "jerv" || batch[0].Source != "review" ||
 		batch[1].Author != "coderabbitai[bot]" || batch[1].Source != forge.SourceBot {
 		t.Fatalf("batch %+v, want jerv's review then the bot's comment", batch)
+	}
+}
+
+// A requested review whose bots' thread states GitHub would not give still
+// wakes its fixer, with the review alone; healthy syncs after wake no other.
+func TestARequestedReviewWakesItsFixerWhenBotThreadsCannotBeRead(t *testing.T) {
+	w := newWorld(t)
+	w.askingFor("jerv")
+	wi := w.reviewing()
+	w.gh.LineComment(1, "coderabbitai[bot]", "FACTORY.md", "Open nit.")
+	w.syncs(2)
+	w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = http.StatusInternalServerError })
+	w.gh.ReviewSaying(1, "jerv", "CHANGES_REQUESTED", "Please rename the greeting.")
+	w.until("a fixer", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	if batch := w.fixBatch(wi); len(batch) != 1 || batch[0].Author != "jerv" {
+		t.Fatalf("batch %+v, want jerv's review alone", batch)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 0 })
+	w.syncs(5)
+	if n := w.fixes(wi); n != 1 {
+		t.Fatalf("%d fixers, want the one", n)
 	}
 }
 

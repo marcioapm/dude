@@ -131,6 +131,8 @@ type Server struct {
 	// Review threads GitHub reports as outdated, by thread id.
 	OutdatedThreads map[string]bool
 	MarkedReady     []int
+	// When set, the review-thread query (with comment ids) fails with it.
+	ThreadsStatus int
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -762,6 +764,13 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 				return
 			}
 			if strings.Contains(in.Query, "databaseId") {
+				s.mu.Lock()
+				fail := s.ThreadsStatus
+				s.mu.Unlock()
+				if fail != 0 {
+					write(w, fail, map[string]any{"message": http.StatusText(fail)})
+					return
+				}
 				write(w, 200, s.threads(in.Variables.Number))
 				return
 			}

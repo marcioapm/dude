@@ -486,10 +486,15 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 		return batch, nil
 	}
 	// A bot's line comment in a thread resolved or outdated is no longer open; a
-	// top-level comment has no resolution and stays.
+	// top-level comment has no resolution and stays. Unread, the batch goes
+	// without bots: its feedback is already recorded, and no later sync
+	// would deliver it again.
 	closed, err := gh.ClosedThreadComments(ctx, forge.SlugFromURL(pr.RepoURL), pr.Number)
 	if err != nil {
-		return nil, err
+		if s.Log != nil {
+			s.Log.Warn("bot thread states unread: the batch goes without bots", "pr", pr.Number, "repo", pr.RepoName, "error", err)
+		}
+		return batch, nil
 	}
 	open := bots[:0]
 	for _, b := range bots {
