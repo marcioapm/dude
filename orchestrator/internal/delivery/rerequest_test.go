@@ -314,21 +314,10 @@ func TestARerequestWhoseRecordFailedIsFinishedOnReplay(t *testing.T) {
 func TestConcurrentRerequestsAskOnce(t *testing.T) {
 	f := newRerequestFixture(t, "target")
 	head := f.fix("target")
-	inPOST, release := make(chan struct{}), make(chan struct{})
-	var released sync.Once
-	letGo := func() { released.Do(func() { close(release) }) }
-	t.Cleanup(letGo) // a failed test must not leave the request held
-	var posts atomic.Int32
 	f.gh["target"].Set(func(s *fakegithub.Server) {
 		s.ReviewRequestStatus = 403
-		s.Intercept = func(r *http.Request) int {
-			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/requested_reviewers") && posts.Add(1) == 1 {
-				close(inPOST)
-				<-release
-			}
-			return 0
-		}
 	})
+	entered, letGo := f.hold("target", 1)
 	heads := map[string]string{"target": head}
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -337,11 +326,7 @@ func TestConcurrentRerequestsAskOnce(t *testing.T) {
 	}
 	close(start)
 	// The claim holder is held in its POST: the first result is the other's.
-	select {
-	case <-inPOST:
-	case <-time.After(30 * time.Second):
-		t.Fatal("no caller reached GitHub")
-	}
+	wait(t, entered)
 	if err := <-results; !errors.Is(err, ErrRerequestBusy) {
 		t.Fatalf("the second caller: %v, want ErrRerequestBusy", err)
 	}

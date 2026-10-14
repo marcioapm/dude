@@ -18,12 +18,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// RerequestReviews asks again for a review of each open pull request whose
-// head is now a commit dude pushed (heads, by repository), from everyone
-// whose latest review is on an older head and who is not asked already
-// (forge.StaleReviewers). GitHub drops a reviewer from requested_reviewers
-// when they submit, and a reviewer that reviews only when requested would
-// otherwise never see the fix.
+// RerequestReviews asks stale reviewers of each open pull request to look
+// at the fix dude pushed (heads, by repository; forge.StaleReviewers).
+// GitHub drops a reviewer from requested_reviewers when they submit, so
+// reviewers who look only when asked would otherwise never see the fix.
 //
 // Best effort, as the request at opening: GitHub refusing, or failing to
 // say who reviewed, never fails the step; what was asked, and what was
@@ -34,7 +32,7 @@ import (
 // connection of its own from before it reads the pull_request_rerequests
 // row until after it records the outcome, and does every GitHub read and
 // request for that head inside it. A caller that finds every re-request
-// slot taken (admit: holders are bounded so they cannot take the whole
+// slot taken (holders are bounded so they cannot take the whole
 // pool while GitHub answers) returns ErrRerequestBusy before any database
 // work; one that finds a head's lock held skips that pull request,
 // finishes the others, and returns ErrRerequestBusy; either way its step
@@ -64,7 +62,7 @@ func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh 
 	}
 	// Admitted before any database work, so a caller past the bound is
 	// busy at once rather than queued on the pool.
-	leave, ok := s.admit()
+	leave, ok := s.admitRerequest()
 	if !ok {
 		return ErrRerequestBusy
 	}
@@ -136,7 +134,7 @@ func (c *rerequestClaim) run(ctx context.Context, st *State, gh *forge.GitHub, s
 // lock takes a pool connection and the head's lock on it, or returns
 // errClaimBusy. unlock frees both; a connection whose unlock failed is
 // closed rather than pooled, which frees the lock too. The caller holds a
-// re-request slot (admit) throughout.
+// re-request slot throughout.
 func (c *rerequestClaim) lock(ctx context.Context) (unlock func(), err error) {
 	conn, err := c.s.DB.Pool.Acquire(ctx)
 	if err != nil {
@@ -144,7 +142,7 @@ func (c *rerequestClaim) lock(ctx context.Context) (unlock func(), err error) {
 	}
 	// Not a transaction lock: it must outlive the transactions below and
 	// the GitHub calls between them.
-	key := c.lockKey()
+	key := fmt.Sprintf("pull_request_rerequest:%s:%s:%d:%s", c.taskID, c.repo, c.number, c.head)
 	var held bool
 	err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, key).Scan(&held)
 	if err != nil || !held {
@@ -186,9 +184,9 @@ func rerequestSlotCount(maxConns int32) int {
 	return int(min(max(1, maxConns/4), rerequestMaxSlots))
 }
 
-// admit takes a re-request slot without waiting; ok false when every slot
+// admitRerequest takes a slot without waiting; ok false when every slot
 // is taken, and then the caller is busy rather than queued on the pool.
-func (s *Store) admit() (leave func(), ok bool) {
+func (s *Store) admitRerequest() (leave func(), ok bool) {
 	s.rerequestOnce.Do(func() {
 		s.rerequestSlots = make(chan struct{}, rerequestSlotCount(s.DB.Pool.Config().MaxConns))
 	})
@@ -198,11 +196,6 @@ func (s *Store) admit() (leave func(), ok bool) {
 	default:
 		return nil, false
 	}
-}
-
-// lockKey is the head's advisory lock, as text for hashtextextended.
-func (c *rerequestClaim) lockKey() string {
-	return fmt.Sprintf("pull_request_rerequest:%s:%s:%d:%s", c.taskID, c.repo, c.number, c.head)
 }
 
 // alive is nil while the session holding the lock is. A session lock is
