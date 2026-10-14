@@ -44,6 +44,7 @@ async function typeText(el: HTMLInputElement, value: string) {
 test("the title opens a searchable listbox with the current session selected", async () => {
   const el = await mount();
   const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
+  expect(el.querySelectorAll("[title=machine]").length).toBe(1);
   expect(el.querySelectorAll("button [title=machine]").length).toBe(0);
   await act(async () => trigger.click());
   await tick();
