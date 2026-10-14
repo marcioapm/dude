@@ -501,6 +501,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   he aborts) wear the same face and name. Prompts clamp at eight lines with
   a "Show all" control, measured after layout so a short prompt gets no
   control (`maxLines` overrides).
+- **What dude told an agent** that no one typed — where a machine move left
+  it, what lux kept it on — is shown in one of two ways, under review
+  (agent-machine-request.md, Follow-ups): a turn of its own, `ChatMessage
+  role="system" intent="told"` (dude's face and name, the "Told" tag, the
+  prompt's neutral frame, never clamped), just before the agent's first
+  words after it; or quoted under the line that reports it, `ChatNotice
+  told="…"` ("Told it", a 2px rule, secondary ink, on the line's measure).
 
 ### A task's Chat (the conductor)
 

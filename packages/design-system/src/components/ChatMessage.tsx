@@ -18,9 +18,10 @@ export type ChatMessageKind = "agent" | "human" | "system";
  * task (`prompt`), an answer, a steer; and in a task's Chat, dude's
  * briefing of its conductor (`briefing`, framed as a prompt is) and a
  * person's message to it (`message`, a plain signed turn: talking, not
- * intervening).
+ * intervening). `told` is a line dude put in front of an agent's input
+ * (where a machine move left it), framed as a prompt, never clamped.
  */
-export type HumanIntent = "prompt" | "answer" | "steer" | "briefing" | "message";
+export type HumanIntent = "prompt" | "answer" | "steer" | "briefing" | "message" | "told";
 
 export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "children" | "title" | "content"> {
   readonly role: AvatarKind;
@@ -121,6 +122,7 @@ const INTENT_LABEL: Record<HumanIntent, string | null> = {
   steer: "Steer",
   briefing: "Briefing",
   message: null,
+  told: "Told",
 };
 
 const PROMPT_MAX_LINES = 8;

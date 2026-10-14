@@ -54,6 +54,29 @@ describe("the turns of a Chat", () => {
   });
 });
 
+describe("what dude told the agent", () => {
+  const told = "You now run on Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on.";
+
+  test("as a turn: dude's, tagged Told, framed as a prompt", () => {
+    const h = html(<ChatMessage role="system" name="El Duderino" intent="told" content={told} />);
+    expect(h).toContain('data-kind="human"');
+    expect(h).toContain('data-intent="told"');
+    expect(plain(h)).toBe(`El DuderinoTold${told}`);
+  });
+
+  test("on a notice: the line, then the words quoted under it", () => {
+    const h = html(<ChatNotice kind="unparked" by="El Duderino" text="The implementer moved to Large in 48s." at="2026-10-14T10:00:00Z" told={told} />);
+    const text = plain(h);
+    expect(text).toStartWith("El Duderino: The implementer moved to Large in 48s.");
+    expect(text).toEndWith(`Told it${told}`);
+    expect(h).toContain("<blockquote");
+  });
+
+  test("a notice with nothing told has no quote", () => {
+    expect(html(<ChatNotice kind="unparked" text="Taken back up in 6.4s." at={0} />)).not.toContain("<blockquote");
+  });
+});
+
 describe("the chat composer", () => {
   test("asks about the task, sends with Send, says where it goes, and never interrupts", () => {
     const h = html(<ChatComposer mode="chat" canInterrupt sentAs="Márcio" to={<>To <b>Conductor</b> · read-only</>} onSubmit={() => {}} />);
