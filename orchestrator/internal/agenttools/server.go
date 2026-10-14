@@ -36,6 +36,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // EventType is the ledger event for one call of a dude tool.
@@ -43,8 +44,10 @@ const EventType = "agent.tool.dude"
 
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
-	DB  *db.DB
-	Log *slog.Logger
+	DB              *db.DB
+	Log             *slog.Logger
+	Lux             lux.Client
+	ValidateMachine func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error
 	// Embedder lets search_memory search by meaning; nil, by words alone.
 	Embedder embeddings.Embedder
 	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
@@ -69,10 +72,12 @@ type Caller struct {
 // env is the server's, for the tools that need more than the database, and
 // what a tool's prepare step made before its transaction opened.
 type env struct {
-	embedder embeddings.Embedder
-	kick     func()
-	forges   delivery.Forges
-	prepared any
+	embedder        embeddings.Embedder
+	lux             lux.Client
+	validateMachine func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error
+	kick            func()
+	forges          delivery.Forges
+	prepared        any
 }
 
 func (c Caller) run() delivery.RunRef {
@@ -154,7 +159,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 	out := []entry{}
 	for _, t := range allTools() {
 		if t.allowed(c.Role) {
-			out = append(out, entry{t.name, t.description})
+			out = append(out, entry{t.name, s.descriptionFor(r.Context(), c, t)})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tools": out})
@@ -179,7 +184,7 @@ func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	var refused refusal
 	switch {
 	case errors.As(err, &refused):
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error()})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error(), "code": refused.code})
 	case err != nil:
 		s.Log.Error("agent tool failed", "tool", t.name, "run", c.RunID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -243,8 +248,13 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 			var refused refusal
 			if errors.As(err, &refused) {
 				// Said to the agent, which can do something about it; not
-				// a failure of the server.
-				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}, nil
+				// a failure of the server. The code, when the refusal has
+				// one (lux's), is structured beside the words.
+				res := &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}
+				if refused.code != "" {
+					res.StructuredContent = map[string]string{"error": refused.Error(), "code": refused.code}
+				}
+				return res, nil
 			}
 			if err != nil {
 				return nil, err
@@ -254,6 +264,23 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 		}
 		srv.AddTool(&mcp.Tool{Name: t.name, Description: t.description, InputSchema: t.schema}, handler)
 	}
+	// The server is built for every request: descriptions made for the
+	// Run (its machine's sizes) are read only when the tools are listed.
+	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if list, ok := res.(*mcp.ListToolsResult); ok && err == nil {
+				for i, listed := range list.Tools {
+					if t, ok := find(listed.Name, c.Role); ok && t.describeFor != nil {
+						described := *listed
+						described.Description = s.descriptionFor(ctx, c, t)
+						list.Tools[i] = &described
+					}
+				}
+			}
+			return res, err
+		}
+	})
 	return srv
 }
 
@@ -279,6 +306,34 @@ type tool struct {
 	// from either leaves the call unrecorded, as run's does.
 	outside func(ctx context.Context, c Caller, checked any) (any, error)
 	settle  func(ctx context.Context, tx pgx.Tx, c Caller, checked, done any) (any, error)
+	// describeFor, when set, is the description for the calling Run (its
+	// own machine's sizes); "" or an error keeps description.
+	describeFor func(ctx context.Context, tx pgx.Tx, c Caller) (string, error)
+}
+
+// describe gives the tool a description made for each calling Run.
+func (t tool) describe(f func(ctx context.Context, tx pgx.Tx, c Caller) (string, error)) tool {
+	t.describeFor = f
+	return t
+}
+
+// descriptionFor is t's description as c sees it.
+func (s *Server) descriptionFor(ctx context.Context, c Caller, t tool) string {
+	if t.describeFor == nil {
+		return t.description
+	}
+	c.env = env{lux: s.Lux}
+	var out string
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
+		out, err = t.describeFor(ctx, tx, c)
+		return err
+	}); err != nil && s.Log != nil {
+		s.Log.Warn("agent tool description failed", "tool", t.name, "run", c.RunID, "error", err)
+	}
+	if out == "" {
+		return t.description
+	}
+	return out
 }
 
 func (t tool) allowed(role string) bool {
@@ -381,7 +436,7 @@ const (
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
-	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges}
+	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}
@@ -488,6 +543,7 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 // refusal is a tool declining a request, optionally recorded after rollback.
 type refusal struct {
 	msg     string
+	code    string
 	event   *refusedEvent
 	blocked *delivery.BlockedError
 }

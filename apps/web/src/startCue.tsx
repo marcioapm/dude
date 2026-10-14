@@ -35,7 +35,7 @@ const SLOW_WORDS: Record<StartStage, string> = {
 
 /** The verb a start reads with: a move (a drain, a preemption) is "Moving to another machine". */
 export function startVerbOf(start: StartState): string {
-  return start.kind === "move" ? "Moving to another machine" : start.kind === "resume" ? "Resuming" : "Starting";
+  return start.machine ? `Moving to ${start.machine.to}` : start.kind === "move" ? "Moving to another machine" : start.kind === "resume" ? "Resuming" : "Starting";
 }
 
 /** Try again found a newer agent already holding the failed one's messages (the API's 409 retry_taken). */
@@ -50,7 +50,7 @@ export function retryRefusal(err: unknown, why: (err: unknown) => string): { tak
 const STAGES_OF: Record<StartState["kind"], readonly StartStage[]> = { start: FRESH_START_STAGES, resume: RESUME_STAGES, move: MOVE_STAGES };
 
 export function stepsOf(start: StartState): StartStep[] {
-  return startSteps({ stage: start.stage, since: start.stageSince, done: start.done, failed: start.failed !== null, stages: STAGES_OF[start.kind] });
+  return startSteps({ stage: start.stage, since: start.stageSince, done: start.done, failed: start.failed !== null, stages: STAGES_OF[start.kind], pool: start.machine?.pool });
 }
 
 /** The slow line, once the current stage has run past its threshold at `now`; none while failed or with no stage. */

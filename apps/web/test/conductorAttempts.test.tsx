@@ -134,6 +134,14 @@ describe("the header's mark of a task its conductor decides", () => {
       .toEqual({ status: "running" });
   });
 
+  test("a conductor or a phase paused for a machine move keeps it running: dude resumes it with no message", () => {
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "machine" })), 1, 1)).toEqual({ status: "running" });
+    const moving = { ...RESTARTED_RUNS.find((r) => r.id === "run_a2_fix")!, attempt: 1, status: "paused", dudePause: "machine" } as Run;
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "conductor" }), moving), 1, 1)).toEqual({ status: "running" });
+    // Paused by a person, it waits on Chat as before.
+    expect(attemptMark(talked(conductor(1, { status: "paused", dudePause: "person" })), 1, 1).status).toBe("paused");
+  });
+
   test("a historical attempt keeps its original status while the current one waits on Chat", () => {
     const task = talked(...RESTARTED_RUNS.filter((r) => r.attempt === 1), conductor(2, { status: "paused", dudePause: "conductor" }));
     expect(attemptMark(task, 2, 2)).toEqual({ status: "paused", label: "Waiting on Chat" });

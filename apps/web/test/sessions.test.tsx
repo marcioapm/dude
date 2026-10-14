@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Harness, PersistedEvent, ProposalItemStatus, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
+import type { AgentMachine, Harness, Machine, PersistedEvent, ProposalItemStatus, Raise, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -62,6 +62,7 @@ function detail(role: "owner" | "chat" | "read", over: Partial<SessionDetail> = 
     you: { id: YOU, role, archived: false },
     proposals: [],
     question: null,
+    agentMachines: [],
     ...over,
   };
 }
@@ -150,6 +151,68 @@ async function menuItem(label: string): Promise<HTMLElement> {
     return found.length === 1 ? found[0] : null;
   }, `the menu's ${label}`);
 }
+
+describe("a session's raised machine", () => {
+  const small: Machine = { sizeId: "msz_small", name: "Small", cpus: 1, memoryMiB: 4096, diskGiB: 10, poolId: null, pool: "default", from: "organization" };
+  const raise: Raise = { sizeId: "msz_xl", moveId: "mmv_s", askedBy: RUN, role: "brainstorm", reason: "duckdb ran out of memory joining 2025's invoices", at: at(0) };
+  const xl: Machine = { sizeId: "msz_xl", name: "XL", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: "pool_hm", pool: "highmem", from: "session", raised: raise };
+  const raised: AgentMachine = { role: "brainstorm", size: xl, settings: small, raise, askedBy: { runId: RUN, role: "brainstorm" }, followedBy: [] };
+
+  class ResetClient extends SessionClient {
+    resets: Array<{ id: string; note: string }> = [];
+    refuse: ApiError | null = null;
+    override async resetSessionMachine(id: string, note = "") {
+      this.resets.push({ id, note });
+      if (this.refuse) throw this.refuse;
+      this.detail = { ...this.detail, agentMachines: [] };
+      return { ok: true as const, moved: true };
+    }
+  }
+
+  async function writeNote(text: string) {
+    const field = await until(() => document.querySelector<HTMLTextAreaElement>("[data-testid=reset-note]"), "the note");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  test("the rail shows the raised size, its pool and the settings' size from the detail; nothing when none is raised", async () => {
+    const page = await sessionPage(new ResetClient(detail("owner", { agentMachines: [raised] })));
+    const block = await until(() => page.querySelector<HTMLElement>("[data-testid=session-machine]"), "the Machine block");
+    expect(block.querySelector("button[aria-label]")!.getAttribute("aria-label")).toBe("Machine: XL, 8 CPUs · 32 GiB, raised for this session");
+    expect(block.textContent).toContain("highmem");
+    expect(block.textContent).toContain("Small");
+    const bare = await sessionPage(new ResetClient(detail("owner")));
+    await settle();
+    expect(bare.querySelector("[data-testid=session-machine]")).toBeNull();
+  });
+
+  test("Reset sends the note to the session's route, closes, and the block goes once the detail has no raise", async () => {
+    const client = new ResetClient(detail("owner", { agentMachines: [raised] }));
+    const page = await sessionPage(client);
+    await click(await until(() => page.querySelector<HTMLElement>("[data-testid=session-machine-reset]"), "Reset"));
+    expect(document.body.textContent).toContain("Move the brainstorm back to Small now?");
+    await writeNote("the archive fits now");
+    await click(document.querySelector<HTMLElement>("[data-testid=confirm-reset]")!);
+    expect(client.resets).toEqual([{ id: SESSION, note: "the archive fits now" }]);
+    await until(() => (page.querySelector("[data-testid=session-machine]") ? null : true), "the block gone");
+    expect(document.querySelector("[data-testid=reset-note]")).toBeNull();
+  });
+
+  test("a refused Reset keeps the dialog and the note, and shows the server's words exactly", async () => {
+    const client = new ResetClient(detail("read", { agentMachines: [raised] }));
+    client.refuse = new ApiError(409, "pending", "a machine move is under way");
+    const page = await sessionPage(client);
+    // A reader may Reset too: the API lets every member.
+    await click(await until(() => page.querySelector<HTMLElement>("[data-testid=session-machine-reset]"), "Reset"));
+    await writeNote("smaller please");
+    await click(document.querySelector<HTMLElement>("[data-testid=confirm-reset]")!);
+    expect(document.querySelector("[data-testid=reset-error]")?.textContent).toBe("a machine move is under way");
+    expect(document.querySelector<HTMLTextAreaElement>("[data-testid=reset-note]")!.value).toBe("smaller please");
+    expect(page.querySelector("[data-testid=session-machine]")).not.toBeNull();
+  });
+});
 
 describe("a brainstorm session's page", () => {
   test("its Tools used rail renders the harness calls and dude's completed actions as separate sources", async () => {

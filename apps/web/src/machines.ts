@@ -18,8 +18,68 @@ import {
   type MachineSizeInput,
   type MachineSizeUse,
   type MachineSizeWithUse,
+  type Run,
   type SettingsRole,
+  type AgentMachine,
+  type Machine,
+  type MachineMove,
+  type MachineResetPayload,
+  type Raise,
 } from "@dude/domain";
+
+import type { MachineRaise } from "@dude/design-system/components";
+import { formatDuration } from "@dude/design-system";
+import type { TaskDetail } from "./api/client.ts";
+
+/** A Run's machine as the API records it, the raise it runs on included. */
+export type RaisedMachine = NonNullable<Run["machine"]>;
+
+export function taskRaisedMachines(detail: Pick<TaskDetail, "agentMachines">): AgentMachine[] {
+  return detail.agentMachines ?? [];
+}
+
+/** "Asked for by run_7f3k (the implementer), 1h ago: <reason>". `role` is the asking Run's, when known. */
+export function raisedProvenance(raise: Pick<Raise, "askedBy" | "reason" | "at">, role: string | null | undefined, now = Date.now()): string {
+  const at = Date.parse(raise.at);
+  const when = Number.isFinite(at) ? `${formatDuration(Math.max(0, now - at), { style: "age" })} ago` : raise.at;
+  return `Asked for by ${raise.askedBy}${role ? ` (the ${roleLabel(role).toLowerCase()})` : ""}, ${when}: ${raise.reason}`;
+}
+
+/** What a move event names: sizes by name, and the pool only when the move changes it. */
+export function moveWords(move: MachineMove): { role: string; from: string; to: string; pool: string | null } {
+  const pool = move.pool ? move.pool.to.name ?? move.pool.to.id : null;
+  return { role: move.role, from: move.from.name, to: move.to.name, pool };
+}
+
+/** A Reset as its notice says it, in a Run's transcript and in the task's Chat: "Márcio moved the implementer back to Standard: “fits”". */
+export function resetNotice(p: MachineResetPayload): string {
+  const m = moveWords(p);
+  return `${p.by.name || "Someone"} moved the ${roleLabel(m.role).toLowerCase()} back to ${m.to}${p.note ? `: “${p.note}”` : "."}`;
+}
+
+/**
+ * The Overview's rows: one per raised role with its Reset back to the
+ * settings' size, then each role that follows it (the fixer following the
+ * implementer), which has no Reset of its own. A raise whose size was
+ * removed meanwhile names no size and is left out until removal rewrites it.
+ */
+export function raisedRows(machines: readonly AgentMachine[], reset: (machine: AgentMachine, from: Machine, to: Machine) => void): MachineRaise[] {
+  return machines.flatMap((m) => {
+    const size = m.size;
+    if (!size) return [];
+    const settings = m.settings;
+    const row = (role: string) => ({ role: avatarOf(role), label: roleLabel(role), size, settings: { name: settings?.name ?? "its settings' size" } });
+    const own: MachineRaise = { ...row(m.role), detail: raisedProvenance(m.raise, m.askedBy.role ?? m.raise.role),
+      onReset: settings ? () => reset(m, size, settings) : undefined };
+    const followers = m.followedBy.map((role): MachineRaise => ({ ...row(role), detail: null, follows: roleLabel(m.role).toLowerCase() }));
+    return [own, ...followers];
+  });
+}
+
+/** A settings role's face: the fixer has none of its own and wears the implementer's. */
+function avatarOf(role: string): MachineRaise["role"] {
+  return (role === "fixer" ? "implementer" : role) as MachineRaise["role"];
+}
 
 /** A pool's host, as a person reads it: "16 CPUs · 32 GiB · 180 GiB", disk "not reserved" when 0. */
 export function hostSpec(pool: MachinePool): string | null {

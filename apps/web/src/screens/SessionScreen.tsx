@@ -34,6 +34,7 @@ import { usePeople, type People } from "../people.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { SessionMachineBlock } from "./actions.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
@@ -47,6 +48,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined, EventTypes.BrainstormRoleChanged,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormProposed,
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
+  EventTypes.MachineRequested, EventTypes.MachineRaised, EventTypes.MachineRefused, EventTypes.MachineReset,
   EventTypes.BrainstormModelApplied,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
@@ -302,6 +304,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   // The header: where the start is, or where it failed until a next agent is created.
   const headerStart = starting ?? conversation.startFailed;
   const startHint = readWhen(starting);
+  // A session's one raise (role brainstorm).
+  const raised = detail.agentMachines?.[0] ?? null;
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
@@ -427,6 +431,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
               </SessionRailBlock>
+              {/* Every member may Reset, readers included (the API's rule, as for starting a task). */}
+              {raised ? <SessionMachineBlock client={client} id={sessionId} machine={raised}
+                by={firstName(people.names.get(you.id) ?? "you")} onChanged={() => void load()} /> : null}
               <SessionRailBlock label="Cost">
                 <SessionFacts facts={[{ label: "Session", value: <CostDisplay usd={session.costUsd} /> }]} />
               </SessionRailBlock>

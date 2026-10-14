@@ -39,6 +39,7 @@ export const ID_PREFIXES = {
   /** A brainstorm session (an agent's sessions inside a Run keep "ses"). */
   brainstorm: "ssn",
   proposal: "prp",
+  machineMove: "mmv",
   peerMessage: "pm",
   peerWait: "pw",
   epicNote: "epn",

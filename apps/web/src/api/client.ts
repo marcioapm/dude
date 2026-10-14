@@ -14,6 +14,7 @@ import { isActive } from "../activity.ts";
 export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type {
+  AgentMachine,
   AgentRole,
   FileResult,
   SessionDetail,
@@ -161,6 +162,8 @@ export type ForgeConnection =
       /** A GitHub App's id, and its default installation (none: found per repository owner). */
       appId?: string | null;
       installationId?: string | null;
+      oauthClientId?: string | null;
+      oauthClientSecretConfigured?: boolean;
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;
@@ -206,6 +209,9 @@ export interface GithubAppInput {
   privateKey: string;
   appId: string;
   installationId?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  clearOauthClientSecret?: boolean;
 }
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
@@ -265,6 +271,8 @@ export type { TaskRepository } from "@dude/domain";
 export interface TaskDetail extends Task {
   runs: Run[];
   escalation: Escalation | null;
+  /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
+  agentMachines: AgentMachine[];
 }
 
 /** What a message in a task's Chat reached: its conductor, made by it or not. */
@@ -711,7 +719,20 @@ export class ApiClient {
   /** Store the organization's GitHub App: its webhook is the App's own, so nothing is registered. */
   connectGithubApp(app: GithubAppInput, apiBaseUrl?: string): Promise<unknown> {
     return this.#request("POST", "/v1/forge/credential", { auth: "github_app", secret: app.privateKey, appId: app.appId,
-      installationId: app.installationId || null, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+      installationId: app.installationId || null, oauthClientId: app.oauthClientId, oauthClientSecret: app.oauthClientSecret,
+      clearOauthClientSecret: app.clearOauthClientSecret, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+  }
+
+  githubAuthorization(): Promise<{ available: boolean; connection: { login: string; expiresAt: string; refreshExpiresAt: string; reconnectRequired: boolean } | null }> {
+    return this.#request("GET", "/v1/me/github");
+  }
+
+  connectGithub(): Promise<{ url: string }> {
+    return this.#request("POST", "/v1/me/github/connect", {});
+  }
+
+  disconnectGithub(): Promise<void> {
+    return this.#request("DELETE", "/v1/me/github");
   }
 
   githubSettings(): Promise<GithubSettings> {
@@ -1048,6 +1069,15 @@ export class ApiClient {
   }
 
   // -- machines: the organization's sizes, lux's pools -----------------------
+
+  /** Reset a role's raised machine to its settings' size; `moved` is false when no live Run had to move. */
+  resetTaskMachine(id: string, role: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(id)}/agent-machines/${encodeURIComponent(role)}`, note ? { note } : {});
+  }
+
+  resetSessionMachine(id: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    return this.#request("DELETE", `/v1/sessions/${encodeURIComponent(id)}/agent-machine`, note ? { note } : {});
+  }
 
   machineSizes(): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
     return this.#request("GET", "/v1/machines/sizes");

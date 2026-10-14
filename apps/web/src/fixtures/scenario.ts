@@ -8,7 +8,10 @@ export const SCENARIOS = ["a", "b", "c", "d", "e"] as const;
 export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";
-/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused; or peers, its epic's agents coordinating. */
+/**
+ * The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused; or peers, its epic's
+ * agents coordinating; and machine moves: raised, refused-platform, refused-largest, refused-moves, conductor, session, start-over.
+ */
 export const RUN_KEY = `${KEY}.run`;
 
 /**

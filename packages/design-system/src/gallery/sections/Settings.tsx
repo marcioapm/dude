@@ -23,7 +23,7 @@ import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Table, TBody, Td, Th, THead, Tr } from "../../primitives/Table.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
-import { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
+import { FitBar, MachineChip, MachineRaises, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
 import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
 import { HostPresets, NetworkRefusedNote, RefusedHosts, type HostPreset } from "../../components/Network.tsx";
@@ -152,6 +152,14 @@ function MachinesDemo() {
           { id: "b", value: 15, label: "Run B · asks 16 · gets 15" },
         ]}
         legend={<><ReservedSwatch />Linux and the host · 2 GiB</>} total="c7a.4xlarge · 32 GiB" />
+      <Label>Raised in a task</Label>
+      <MachineChip name="Large" spec="4 CPUs · 16 GiB · 40 GiB" raised="for this task"
+        tooltip={<MachineTip name="Large">Asked for by run_7f3k (the implementer), 1h ago: jest OOM-killed with --maxWorkers 4 on 8 GiB. Settings name Standard; Reset is on the task's Overview.</MachineTip>} />
+      <MachineRaises where="raised in this task" raises={[
+        { role: "implementer", label: "Implementer", size: { name: "Large", cpus: 4, memoryMiB: 16384 }, settings: { name: "Standard" },
+          detail: "Asked for by run_7f3k, 1h ago: jest OOM-killed with --maxWorkers 4 on 8 GiB", onReset: () => setSize("standard") },
+        { role: "implementer", label: "Fixer", size: { name: "Large", cpus: 4, memoryMiB: 16384 }, settings: { name: "Standard" }, detail: null, follows: "implementer" },
+      ]} />
       <Label>MachineChip, with its tooltip</Label>
       <MachineChip name="XL" spec="16 CPUs · 48 GiB · 200 GiB"
         tooltip={<MachineTip name="XL">From Checkout’s settings for the Implementer. Set when the session started or last resumed. It asked for 48 GiB and got 45.6.</MachineTip>} />

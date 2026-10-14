@@ -14,14 +14,14 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
-import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
-import { EPIC_NOTES_MAX, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
+import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
+import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, EPIC_NOTES_MAX, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
-import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, eventsFor, logsFor, navigationFor, restartedMetrics, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -82,6 +82,9 @@ export function installFixtureStream(): void {
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const later = (fn: () => void, ms: number) => void setTimeout(fn, ms);
 
+/** The `dude.fixtures.run` states of agents' machine moves. */
+const MACHINE_RUNS: readonly string[] = ["raised", "refused-platform", "refused-largest", "refused-moves", "conductor", "session", "start-over"];
+
 export class FixtureClient extends ApiClient {
   #scenario: ServerScenario;
   #servers: TaskServers;
@@ -120,6 +123,7 @@ export class FixtureClient extends ApiClient {
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
     if (as === "stalled") this.#stall();
     if (as === "refused") this.#refuse();
+    if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
     if (as === "peers") this.#coordinate();
     this.#nav = navigationFor(scenario);
     // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
@@ -190,6 +194,66 @@ export class FixtureClient extends ApiClient {
 
   #restarted = false;
   #recovery: RecoveryOptions | null = null;
+
+  /**
+   * `dude.fixtures.run` = raised: the implementer asked for XL in the
+   * highmem pool and is moving there; the fixer follows it. refused-platform,
+   * refused-largest, refused-moves: its requests refused (then, for the
+   * platform, its move to Large). conductor: the task's conductor moving to
+   * Large. session: a brainstorm session (`#/sessions/ssn_invoices`) moving
+   * to XL. start-over: attempt 2's implementer on Large, raised in attempt 1.
+   * The task detail, the Runs' machines and the ledger are in the shapes the
+   * API and the orchestrator write (data.ts).
+   */
+  #raise(as: string) {
+    const last = this.#events.at(-1)!;
+    if (as === "conductor") {
+      const c = conductorMove(last);
+      this.#task = { ...this.#task, runs: [...this.#task.runs, c.run], agentMachines: c.agentMachines };
+      this.#events = [...this.#events, ...c.events];
+      return;
+    }
+    if (as === "session") {
+      const s = sessionMove(last);
+      this.#session = s.detail;
+      this.#events = [...this.#events, ...s.events];
+      return;
+    }
+    if (as === "start-over") {
+      this.#restart();
+      const r = startOverRaise();
+      this.#task = { ...this.#task, runs: this.#task.runs.map((run) => (run.id === r.runId ? { ...run, machine: r.machine } : run)), agentMachines: r.agentMachines };
+      return;
+    }
+    const move = as === "raised" ? raisedMove(last) : refusedMove(last, as as RefusedMachineView);
+    this.#runPatch = { machine: move.machine };
+    this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, machine: move.machine } : r)),
+      agentMachines: move.agentMachines };
+    this.#events = [...this.#events, ...move.events];
+  }
+
+  #session: SessionDetail | null = null;
+
+  override getSession(id: string): Promise<SessionDetail> {
+    return this.#session && id === this.#session.session.id ? Promise.resolve(this.#session)
+      : Promise.reject(new ApiError(404, "not_found", "No such session."));
+  }
+
+  override async resetSessionMachine(_id: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    await wait(300);
+    if (note.trim() === "fail") throw new ApiError(409, "pending", "a machine move is under way");
+    if (!this.#session?.agentMachines.length) throw new ApiError(404, "not_found", "nothing is raised");
+    this.#session = { ...this.#session, agentMachines: [] };
+    return { ok: true, moved: true };
+  }
+
+  override async resetTaskMachine(_id: string, role: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    await wait(300);
+    if (note.trim() === "fail") throw new ApiError(409, "pending", "a machine move is under way");
+    if (!this.#task.agentMachines.some((m) => m.role === role)) throw new ApiError(404, "not_found", "nothing is raised");
+    this.#task = { ...this.#task, agentMachines: this.#task.agentMachines.filter((m) => m.role !== role) };
+    return { ok: true, moved: true };
+  }
 
   /**
    * `dude.fixtures.run` = stalled: the implementer of a plain delivery has
@@ -501,6 +565,10 @@ export class FixtureClient extends ApiClient {
   }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
+  }
+  // Images may be attached, within the domain's limits, as on a dude with photo storage.
+  override attachmentLimits(): Promise<AttachmentLimits> {
+    return Promise.resolve({ enabled: true, types: [...ATTACHMENT_TYPES], ...ATTACHMENT_LIMITS });
   }
   override modelTiers() {
     return Promise.resolve({ tiers: MODEL_TIERS, canEdit: true, upgrade: [] });

@@ -130,6 +130,25 @@ func TestEveryPhaseIsToldWhatPeopleDecided(t *testing.T) {
 	}
 }
 
+// On an epic a phase gets both the coordination section and the machine
+// line: the coordination comes first and the machine line is the prompt's
+// tail, after every other note, since a harness may drop the tail.
+func TestAPhasePromptOnAnEpicEndsWithTheMachineAfterTheCoordination(t *testing.T) {
+	const coordination, machine = "## Your epic\n\nC", "## Your machine\n\nM"
+	in := PromptInput{Title: "T", Tools: true, CLI: true, Context: "Use tabs.",
+		Coordination: coordination, Machine: machine}
+	for _, phase := range []string{PhaseInvestigate, PhaseImplement, PhaseReview, PhaseFix} {
+		got := Prompt(phase, in)
+		if !strings.HasSuffix(got, "\n\n"+machine) {
+			t.Errorf("%s: the prompt does not end with the machine line:\n%s", phase, got)
+		}
+		c, m := strings.Index(got, coordination), strings.Index(got, machine)
+		if c < 0 || c >= m {
+			t.Errorf("%s: the coordination (at %d) is not before the machine line (at %d):\n%s", phase, c, m, got)
+		}
+	}
+}
+
 // A criterion written over several lines stays one item in the prompt: its
 // later lines sit under its marker, so a line that starts with "- " is not
 // read as a criterion of its own, and nothing drops out of the list.

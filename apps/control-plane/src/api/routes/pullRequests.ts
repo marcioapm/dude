@@ -77,6 +77,10 @@ const credentialInput = z.object({
   secret: z.string().min(1),
   appId: z.string().nullable().default(null),
   installationId: z.string().nullable().default(null),
+  oauthClientId: z.string().nullable().optional(),
+  // One line: a pasted line break would reach GitHub as part of client_secret.
+  oauthClientSecret: z.string().trim().optional(),
+  clearOauthClientSecret: z.boolean().default(false),
   apiBaseUrl: z.string().min(1).default("https://api.github.com"),
   /**
    * Where GitHub reaches this dude (the browser's origin): given, dude
@@ -117,7 +121,12 @@ async function getCredential(ctx: RequestContext): Promise<Response> {
   const webhook = await webhookHealth(organizationId);
   // A PEM ends in its armour: a key's last characters tell no key apart.
   const secretHint = cred.auth === "github_app" ? "" : secret.slice(-4);
-  return json({ connected: true, ...shown, secretHint, webhookPath: webhookPath(organizationId), webhook });
+  const oauth = await withOrg(organizationId, async ({ sql }) => {
+    const [row] = await sql`SELECT oauth_client_id AS "oauthClientId", oauth_client_secret IS NOT NULL AS "oauthClientSecretConfigured"
+      FROM forge_credentials WHERE forge = 'github'`;
+    return row;
+  });
+  return json({ connected: true, ...shown, ...oauth, secretHint, webhookPath: webhookPath(organizationId), webhook });
 }
 
 const webhookPath = (organizationId: string) => `/v1/webhooks/github/${organizationId}`;
@@ -291,18 +300,36 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   }
 
   const saved = await withOrg(organizationId, async (scope) => {
+    const [oauth] = await scope.sql`SELECT auth, app_id, oauth_client_id, oauth_client_secret FROM forge_credentials WHERE forge = 'github' FOR UPDATE`;
+    // Only a GitHub App keeps an OAuth client, and an explicit clear drops it.
+    const keepsOAuth = input.auth === "github_app" && !input.clearOauthClientSecret;
+    let clientId: string | null = null;
+    let clientSecret: string | null = null;
+    if (keepsOAuth) {
+      clientId = input.oauthClientId === undefined ? oauth?.oauth_client_id ?? null : input.oauthClientId;
+      clientSecret = input.oauthClientSecret || oauth?.oauth_client_secret || null;
+    }
+    const switchingApp = oauth && (oauth.auth !== input.auth || oauth.app_id !== input.appId);
+    const changingIdentity = switchingApp || (oauth && clientId !== oauth.oauth_client_id);
+    if (keepsOAuth && changingIdentity && (clientId || oauth?.oauth_client_secret)
+      && (!input.oauthClientId || !input.oauthClientSecret)) {
+      throw badRequest("Changing the App or OAuth Client ID requires a freshly supplied Client ID and Client secret, or explicit clear");
+    }
     const rows = (await scope.sql`
       INSERT INTO forge_credentials (
-        id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url, webhook_secret)
+        id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url, webhook_secret,
+        oauth_client_id, oauth_client_secret)
       VALUES (${newId("forgeCredential")}, ${organizationId}, 'github', ${input.auth}::forge_auth_kind,
               ${input.secret}, ${input.appId}, ${input.installationId}, ${input.apiBaseUrl},
-              ${randomBytes(32).toString("hex")})
+              ${randomBytes(32).toString("hex")}, ${clientId}, ${clientSecret})
       ON CONFLICT (organization_id, forge) DO UPDATE SET
         auth            = EXCLUDED.auth,
         secret          = EXCLUDED.secret,
         app_id          = EXCLUDED.app_id,
         installation_id = EXCLUDED.installation_id,
         api_base_url    = EXCLUDED.api_base_url,
+        oauth_client_id = EXCLUDED.oauth_client_id,
+        oauth_client_secret = EXCLUDED.oauth_client_secret,
         webhook_secret  = COALESCE(forge_credentials.webhook_secret, EXCLUDED.webhook_secret),
         updated_at      = now()
       RETURNING id, forge, auth, app_id AS "appId", installation_id AS "installationId",
@@ -380,6 +407,7 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
   await noteDelivery(organizationId, signed ? null : "signature did not match: the secret GitHub has is not dude's");
   if (!signed) throw unauthorized("webhook signature does not match");
   if (event === "ping") return json({ ok: true });
+  if (event === "github_app_authorization") return revokeAuthorization(ctx, organizationId, deliveryId, body);
   if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
 
   let payload: unknown;
@@ -402,6 +430,42 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
 /** When a delivery arrived, and whether it was signed: the webhook's health. */
 async function noteDelivery(organizationId: string, failure: string | null): Promise<void> {
   await withoutTenant(({ sql }) => sql`SELECT note_webhook_delivery(${organizationId}, ${failure})`);
+}
+
+/**
+ * A person revoked their authorization of the App: drop it for the
+ * organization's current App (rules in docs/github.md, "Pull requests as the
+ * task owner"). The signature does not identify the App, because a
+ * replacement keeps the webhook secret. The delivery is claimed as already
+ * processed, so a redelivery after the person reconnects is a no-op.
+ */
+async function revokeAuthorization(ctx: PublicContext, organizationId: string, deliveryId: string, body: string): Promise<Response> {
+  const ignored = json({ ok: true, ignored: "github_app_authorization" });
+  if (!deliveryId) return ignored;
+  let revoked: { action?: unknown; sender?: { id?: unknown }; installation?: { app_id?: unknown } };
+  try { revoked = JSON.parse(body); } catch { throw badRequest("webhook body must be JSON"); }
+  const userId = revoked.sender?.id;
+  if (revoked.action !== "revoked" || typeof userId !== "number" || !Number.isSafeInteger(userId)) return ignored;
+  const payloadApp = revoked.installation?.app_id;
+  if (payloadApp !== undefined && !Number.isSafeInteger(payloadApp)) return ignored;
+  const targetType = ctx.request.headers.get("x-github-hook-installation-target-type");
+  const targetId = ctx.request.headers.get("x-github-hook-installation-target-id");
+  if (targetType !== null && targetType !== "integration") return ignored;
+  if (targetId !== null && !/^[1-9][0-9]*$/.test(targetId)) return ignored;
+  const named = new Set([payloadApp === undefined ? null : String(payloadApp), targetType ? targetId : null].filter((v) => v !== null));
+  const [appId, ...others] = named;
+  if (appId === undefined || others.length > 0) return ignored;
+  await withOrg(organizationId, async ({ sql }) => {
+    const claimed = await sql`INSERT INTO webhook_deliveries (id, organization_id, event, payload, processed_at)
+      VALUES (${deliveryId}, ${organizationId}, 'github_app_authorization',
+        ${{ action: "revoked", sender: { id: userId }, appId }}::jsonb, now())
+      ON CONFLICT (id) DO NOTHING RETURNING id`;
+    if (claimed.length === 0) return;
+    await sql`DELETE FROM github_user_authorizations a USING forge_credentials c
+      WHERE a.credential_id = c.id AND a.credential_version = c.oauth_version
+        AND c.auth = 'github_app' AND c.app_id = ${appId} AND a.github_user_id = ${userId}`;
+  });
+  return json({ ok: true });
 }
 
 /**

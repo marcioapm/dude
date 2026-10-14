@@ -591,12 +591,17 @@ const PersonAsk = `(` + openQuestion + `
 const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + `)`
 
 // HoldsTurn is true (SQL, over a Run aliased r) while a turn that ends
-// is not done: something is open for a person or a peer (OpenAsk), or a
-// repository the agent waits on was approved and has not reached it yet —
-// it is resumed with it.
+// is not done: something is open for a person or a peer (OpenAsk), a
+// repository the agent waits on was approved and has not reached it yet, or
+// a machine move of the Run is under way — it is resumed with it, or on it.
 const HoldsTurn = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved'))
+	OR ` + MoveUnsettled + `
 	OR ` + openPeerWait + `)`
+
+// MoveUnsettled is true (SQL, over a Run aliased r) while a machine move of
+// the Run is not settled.
+const MoveUnsettled = `EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)`
 
 // Directive is a message queued for a Run's agent: delivered by the phase
 // syncer, acknowledged by lux when the agent takes it. Scope "run" holds for
@@ -791,6 +796,15 @@ func NameOnlyRepository(ctx context.Context, tx pgx.Tx, taskID string) error {
 	return err
 }
 
+func FreezePublicationTx(ctx context.Context, tx pgx.Tx, taskID, branch string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO pr_publications (organization_id, task_id, branch, owner_person_id)
+		SELECT t.organization_id, t.id, $2, (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = t.id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)
+		FROM tasks t WHERE t.id = $1 AND EXISTS (SELECT 1 FROM forge_credentials WHERE auth = 'github_app')
+		ON CONFLICT DO NOTHING`, taskID, branch)
+	return err
+}
+
 // OpenPullRequests opens a pull request in each repository the work changed
 // that has none yet, and returns every one the task has, oldest first.
 // Idempotent: one already recorded is kept, and one GitHub already has for
@@ -858,8 +872,22 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	if err != nil {
 		return nil, err
 	}
+	var owner string
+	if gh.UsesApp() {
+		err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch)
+			if err != nil {
+				return err
+			}
+			return tx.QueryRow(ctx, `SELECT COALESCE(owner_person_id, '') FROM pr_publications
+				WHERE task_id = $1 AND branch = $2`, st.TaskID, st.Branch).Scan(&owner)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, r := range todo {
-		id, err := s.openPullRequest(ctx, org, st, gh, r, changed, title, body)
+		id, err := s.openPullRequest(ctx, org, st, gh, r, changed, title, body, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -899,7 +927,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 }
 
 func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *forge.GitHub, repo Repository,
-	all []Repository, title, body string) (string, error) {
+	all []Repository, title, body, owner string) (string, error) {
 	slug := forge.SlugFromURL(repo.URL)
 	if slug == "" {
 		return "", fmt.Errorf("cannot derive owner/repo from %s", repo.URL)
@@ -915,9 +943,39 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
 	draft := gh.Settings.OpenAs == "draft" || st.Draft
-	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch,
-		Base: repo.DefaultBranch, Draft: draft})
-	fresh := err == nil
+	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch, Draft: draft}
+	var ref forge.PullRequestRef
+	var err error
+	fresh := false
+	if gh.UsesApp() {
+		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		if existing != nil {
+			ref = *existing
+		} else {
+			token, tokenErr := forge.OwnerToken(ctx, s.DB, org, owner)
+			if tokenErr != nil {
+				return "", tokenErr
+			}
+			ref, err = gh.OpenPullRequestAs(ctx, in, token)
+			if refusal, ok := err.(*forge.Error); ok && refusal.Status == 401 {
+				if invalidateErr := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					_, updateErr := tx.Exec(ctx, `UPDATE github_user_authorizations SET reconnect_required = true
+						WHERE person_id = $1 AND access_token = $2`, owner, token)
+					return updateErr
+				}); invalidateErr != nil {
+					return "", invalidateErr
+				}
+				return "", forge.OwnerAuthorizationError{}
+			}
+			fresh = err == nil
+		}
+	} else {
+		ref, err = gh.OpenPullRequest(ctx, in)
+		fresh = err == nil
+	}
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.
