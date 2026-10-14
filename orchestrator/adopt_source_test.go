@@ -1,11 +1,16 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -147,6 +152,62 @@ func TestSourcePickersAskGitHub(t *testing.T) {
 	status, body = w.get("/internal/projects/"+w.project+"/sources/repositories", w.org)
 	if status != 200 || !strings.Contains(body, `"writable":false`) || !strings.Contains(body, "push access denied") {
 		t.Fatalf("repositories without write %d %s", status, body)
+	}
+}
+
+// Fifty repositories, each push-access check 320 ms, are answered inside
+// the backend's 15 s deadline, at most four checks at a time, in name order.
+func TestFiftyRepositoriesAreCheckedInsideTheBackendsDeadline(t *testing.T) {
+	w := newWorld(t)
+	var inFlight, most atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		select {
+		case <-time.After(320 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		rw.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+		fmt.Fprint(rw, "001f# service=git-receive-pack\n0000")
+	}))
+	defer srv.Close()
+	mustExec(t, w.owner, `UPDATE forge_credentials SET api_base_url = $1 WHERE organization_id = $2`, srv.URL, w.org)
+	mustExec(t, w.owner, `UPDATE repositories SET name = 'r00', url = $1 WHERE id = $2`, srv.URL+"/acme/r0.git", w.repoID)
+	for i := 1; i < 50; i++ {
+		mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+			VALUES ($1, $2, $3, $4, $5, 'main')`, fmt.Sprintf("repo_many_%d", i), w.org, w.project, fmt.Sprintf("r%02d", i),
+			fmt.Sprintf("%s/acme/r%d.git", srv.URL, i))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", w.api+"/internal/projects/"+w.project+"/sources/repositories", nil)
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", w.org)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("past the deadline: %v", err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		Repositories []struct {
+			Name     string
+			Writable bool
+		}
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	if res.StatusCode != 200 || len(out.Repositories) != 50 {
+		t.Fatalf("%d, %d repositories", res.StatusCode, len(out.Repositories))
+	}
+	for i, r := range out.Repositories {
+		if r.Name != fmt.Sprintf("r%02d", i) || !r.Writable {
+			t.Fatalf("repository %d is %+v", i, r)
+		}
+	}
+	if m := most.Load(); m > 4 || m < 2 {
+		t.Fatalf("%d checks at once, want at most 4 (and more than one)", m)
 	}
 }
 

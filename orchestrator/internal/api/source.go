@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 
@@ -48,20 +49,39 @@ func (s *Server) sourceRepositories(w http.ResponseWriter, r *http.Request, org 
 	}); err != nil {
 		return err
 	}
-	out := []map[string]any{}
-	for _, rp := range repos {
-		entry := map[string]any{"id": rp.ID, "name": rp.Name, "writable": false}
-		switch {
-		case forge.SlugFromURL(rp.URL) == "":
-			entry["reason"] = "not on GitHub"
-		default:
-			if err := gh.CheckPushAccess(r.Context(), rp.URL); err != nil {
-				entry["reason"] = err.Error()
-			} else {
-				entry["writable"] = true
+	// Checked four at a time, after the read's transaction has ended: one
+	// by one, fifty of them outlast the backend's deadline.
+	out := make([]map[string]any, len(repos))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for range min(4, len(repos)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				rp := repos[i]
+				entry := map[string]any{"id": rp.ID, "name": rp.Name, "writable": false}
+				if forge.SlugFromURL(rp.URL) == "" {
+					entry["reason"] = "not on GitHub"
+				} else if err := gh.CheckPushAccess(r.Context(), rp.URL); err != nil {
+					entry["reason"] = err.Error()
+				} else {
+					entry["writable"] = true
+				}
+				out[i] = entry
 			}
+		}()
+	}
+	for i := range repos {
+		if r.Context().Err() != nil {
+			break
 		}
-		out = append(out, entry)
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	if err := r.Context().Err(); err != nil {
+		return err
 	}
 	write(w, http.StatusOK, map[string]any{"repositories": out})
 	return nil
