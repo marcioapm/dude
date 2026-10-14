@@ -30,6 +30,9 @@ type Signal struct {
 type ActionableFeedback struct {
 	// "review" or "checks".
 	Source string `json:"source"`
+	// The feedback's id (Feedback.ID: line-comment-…, issue-comment-…,
+	// review-…); "" for checks. What the fixer may answer and resolve.
+	ID string `json:"id,omitempty"`
 	// Which repository's pull request it is on, when a task has several.
 	Repo   string `json:"repo,omitempty"`
 	Author string `json:"author,omitempty"`
@@ -175,7 +178,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 	var actionable []ActionableFeedback
 	for _, f := range feedback {
 		if IsActionableComment(f, factoryLogins) && !AddressedToDude(f, factoryLogins) {
-			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
+			actionable = append(actionable, ActionableFeedback{Source: "review", ID: f.ID, Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}
 	// A check turning red is worth a fixer; one already red is not news, and

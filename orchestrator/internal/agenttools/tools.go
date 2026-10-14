@@ -117,8 +117,9 @@ var tools = []tool{
 		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
 		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
 		"request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. "+
-		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted.",
-		conductors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
+		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted. A fixer answering pull "+
+		"request feedback replies only to the comments in its feedback, in_reply_to each.",
+		prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
 	define("publish", "Publish what you committed in your checkout to the task branch, as a phase's work is: lux "+
 		"pushes it, then dude fast-forwards the task branch to it. Only for small, well-understood changes while you "+
 		"take the decisions: refused while an implementer or fixer is at work, when your checkout is behind the task "+

@@ -3,6 +3,8 @@ package delivery
 import (
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // A reviewer of a taken-over pull request is told what its people raised,
@@ -31,5 +33,20 @@ func TestAReviewerOfAnAdoptedPullRequestIsGivenWhatWasRaised(t *testing.T) {
 	fresh := Prompt(PhaseReview, PromptInput{Title: "Greet"})
 	if strings.Contains(fresh, "## Base") || strings.Contains(fresh, "continues") {
 		t.Errorf("new work told of a base or a pull request:\n%s", fresh)
+	}
+}
+
+// A fixer of pull request feedback with dude's tools is given each
+// comment's id and told it may answer and resolve those, and only those.
+func TestAPullRequestFixerIsToldHowToAnswerItsFeedback(t *testing.T) {
+	in := PromptInput{Title: "Greet", Tools: true,
+		PRFeedback: []forge.ActionableFeedback{{Source: "review", ID: "line-comment-42", Author: "ana", Path: "greet.go", Body: "Say why."}}}
+	fix := Prompt(PhaseFix, in)
+	if !strings.Contains(fix, "Say why. _(line-comment-42)_") || !strings.Contains(fix, "resolve_thread") {
+		t.Errorf("fix prompt:\n%s", fix)
+	}
+	in.Tools = false
+	if fix := Prompt(PhaseFix, in); strings.Contains(fix, "line-comment-42") || strings.Contains(fix, "resolve_thread") {
+		t.Errorf("a fixer without tools told of them:\n%s", fix)
 	}
 }

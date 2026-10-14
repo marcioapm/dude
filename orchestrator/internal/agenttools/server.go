@@ -371,7 +371,7 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, coordinationTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, coordinationTools, brainstormTools)
 }
 
 // define makes a tool from a typed function: its input schema from In,

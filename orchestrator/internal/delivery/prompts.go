@@ -322,6 +322,12 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 	"task changed, and `dude publish FILE --name NAME --description \"…\"` to keep a file for people " +
 	"(the description: one short line of what the file is for)."
 
+// fixerGitHubNote tells a fixer of pull request feedback how it answers
+// on GitHub: through dude, on the comments it was given only.
+const fixerGitHubNote = "Once a comment above is addressed and committed, you may answer it on the pull request: " +
+	"reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, " +
+	"then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change."
+
 // PromptRoleForPhase is whose prompt and settings each phase runs with: an
 // agent role, or the fixer's — the implementer's model, told something
 // else, whose settings fall back to the implementer's.
@@ -629,6 +635,9 @@ func Prompt(phase string, in PromptInput) string {
 					parts = append(parts, "**"+f.Author+"**")
 				}
 				item := strings.Join(append(parts, f.Body), " — ")
+				if f.ID != "" && in.Tools {
+					item += " _(" + f.ID + ")_"
+				}
 				for _, c := range f.Checks {
 					item += "\n\n**Failing check: " + c.Name + "**"
 					if c.URL != "" {
@@ -641,6 +650,9 @@ func Prompt(phase string, in PromptInput) string {
 				items = append(items, item)
 			}
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
+			if in.Tools {
+				add(fixerGitHubNote)
+			}
 		}
 		add(tail...)
 		add(commitNote)
