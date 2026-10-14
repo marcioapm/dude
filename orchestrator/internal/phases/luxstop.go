@@ -225,7 +225,7 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 // sent by deliverDirectives when the Run is running). A Run dude is
 // parking or has parked for a machine move of its own (machineParked) is
 // told by that move's resume (ResizePlan.movedInput) instead, so it gets
-// no second carry-on.
+// no second carry-on, and its warning says so.
 func (t *translator) moving(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
 	if t.Broken.Moved != "" {
 		return nil
@@ -235,14 +235,15 @@ func (t *translator) moving(ctx context.Context, tx pgx.Tx, s *Syncer, reason st
 	if err := tx.QueryRow(ctx, `SELECT `+machineParked+` FROM runs r WHERE r.id = $1`, t.run.ID).Scan(&parked); err != nil {
 		return err
 	}
-	if !parked {
-		if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: movedNudge, Scope: "turn"}); err != nil {
-			return err
-		}
+	told := "it is told to carry on once it runs again"
+	if parked {
+		told = "it is told where it runs, and to carry on, when dude resumes it for its machine move"
+	} else if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: movedNudge, Scope: "turn"}); err != nil {
+		return err
 	}
 	words := luxStopWords(luxStop{Reason: reason}, "")
 	return s.event(ctx, tx, t.run, evAgentWarning, ledger.ActorSystem,
-		map[string]any{"message": words + "; its turn was cut off, and it is told to carry on once it runs again", "luxStop": reason})
+		map[string]any{"message": words + "; its turn was cut off, and " + told, "luxStop": reason})
 }
 
 // failForLux fails the Run for lux's stop, the agent's failure after it.

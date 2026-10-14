@@ -176,22 +176,25 @@ func TestAResetAndATakeUpOfARunLuxMovedEndWithTheMovePending(t *testing.T) {
 // queued, since the move's own resume tells the agent where it runs. With
 // no move of dude's, the turn is held as lux's move and the carry-on
 // queued once. A turn already held for lux's reason when dude parks the
-// Run for a move is kept as lux's move, with no carry-on.
+// Run for a move is kept as lux's move, with no carry-on, and its warning
+// says the move's resume tells the agent, not a carry-on.
 func TestALuxMoveOfARunParkedForAMachineMoveQueuesNoCarryOn(t *testing.T) {
 	const (
 		noMove = iota
 		parkedFirst
 		heldFirst
 	)
+	const cutOff = "lux stopped the Run to move it: its spot host was reclaimed; its turn was cut off, and "
 	for _, c := range []struct {
 		name             string
 		order            int
 		nudges, warnings int
-		moved            string
+		moved, warning   string
 	}{
-		{"no machine move", noMove, 1, 1, "preempt"},
-		{"parked for a machine move", parkedFirst, 0, 0, ""},
-		{"held, then parked for a machine move", heldFirst, 0, 1, "preempt"},
+		{"no machine move", noMove, 1, 1, "preempt", cutOff + "it is told to carry on once it runs again"},
+		{"parked for a machine move", parkedFirst, 0, 0, "", ""},
+		{"held, then parked for a machine move", heldFirst, 0, 1, "preempt",
+			cutOff + "it is told where it runs, and to carry on, when dude resumes it for its machine move"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
@@ -223,15 +226,20 @@ func TestALuxMoveOfARunParkedForAMachineMoveQueuesNoCarryOn(t *testing.T) {
 			// The batch's end saves the translator's state.
 			w.feed()
 			var nudges, warnings int
-			var moved string
+			var moved, warning string
 			if err := w.owner.QueryRow(ctx, `SELECT (SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2),
 					(SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.warning' AND payload->>'luxStop' = 'preempt'),
-					COALESCE(harness_state->'brokenTurn'->>'moved', '')
-				FROM runs WHERE id = $1`, w.run.ID, movedNudge).Scan(&nudges, &warnings, &moved); err != nil {
+					COALESCE(harness_state->'brokenTurn'->>'moved', ''),
+					COALESCE((SELECT payload->>'message' FROM events WHERE run_id = $1 AND event_type = 'agent.warning'
+						AND payload->>'luxStop' = 'preempt' ORDER BY cursor DESC LIMIT 1), '')
+				FROM runs WHERE id = $1`, w.run.ID, movedNudge).Scan(&nudges, &warnings, &moved, &warning); err != nil {
 				t.Fatal(err)
 			}
 			if nudges != c.nudges || warnings != c.warnings || moved != c.moved {
 				t.Errorf("%d carry-ons, %d warnings, held as moved %q; want %d, %d, %q", nudges, warnings, moved, c.nudges, c.warnings, c.moved)
+			}
+			if warning != c.warning {
+				t.Errorf("the warning says %q, want %q", warning, c.warning)
 			}
 			if failed := ofType(w.events(), "run.failed"); len(failed) != 0 {
 				t.Errorf("run.failed %v", failed)
