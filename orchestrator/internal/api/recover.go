@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -251,6 +252,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
 				return err
 			}
+		} else if src := t.State.Source; src != nil {
+			// The adopted branch was released when the task stopped.
+			if err := delivery.HoldBranchTx(r.Context(), tx, taskID, src); err != nil {
+				return err
+			}
 		}
 		// Out of aborted, the one way: the status change says who and why.
 		if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
@@ -285,6 +291,10 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			principalOf(r), map[string]any{"action": body.Action, "note": note, "attempt": max(attempt, t.Attempt),
 				"runIds": db.NonNil(t.Kept)})
 	})
+	var taken delivery.SourceRefusal
+	if errors.As(err, &taken) {
+		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
+	}
 	if err != nil {
 		return s.refusedStart(r.Context(), org, taskID, "start_over", principalOf(r), err)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // adopting makes a task that starts from source (as task_sources keeps
@@ -229,6 +230,61 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests after the fix", len(w.gh.Pulls()))
+	}
+}
+
+// A task whose PR fixer was aborted released its adopted branch; once a
+// second task adopts it, no way of picking the first back up may publish
+// on it, and the second task's delivery stays as it was.
+func TestAStoppedAdoptedTaskCannotTakeBackABranchAnotherTaskAdopted(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/shared", "main", "Shared")
+	first := w.adopting("pr", n, "feature/shared", "main")
+	w.until("waiting on the pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, first) == 1
+	})
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.gh.Comment(n, "octo", "Please rename it")
+	w.until("a fixer for the feedback", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, first) == 1
+	})
+	var fix string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`,
+		first).Scan(&fix)
+	if status, body := w.call("/internal/runs/"+fix+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	w.until("the first task stopped", func() bool { return w.taskStatus(first) == "aborted" })
+
+	second := w.adopting("pr", n, "feature/shared", "main")
+	var secondWF, secondStatus string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id, status::text FROM workflow_runs WHERE task_id = $1`, second).
+		Scan(&secondWF, &secondStatus)
+	snapshot := func() string {
+		var s string
+		_ = w.owner.QueryRow(context.Background(), `SELECT t.status::text || ' ' || d.status::text || ' ' || d.step ||
+			' ' || (SELECT count(*) FROM runs WHERE task_id = t.id)
+			FROM tasks t JOIN workflow_runs d ON d.task_id = t.id WHERE t.id = $1`, first).Scan(&s)
+		return s
+	}
+	before := snapshot()
+	actions, _ := w.options(first)
+	if !slices.Contains(actions, "retry") || !slices.Contains(actions, "restart") {
+		t.Fatalf("recovery options %v", actions)
+	}
+	for _, action := range actions {
+		status, body := w.call("/internal/tasks/"+first+"/recover", map[string]any{"action": action})
+		if status != 409 || body["error"].(map[string]any)["code"] != "branch_taken" {
+			t.Fatalf("%s beside the branch's new holder: %d %v", action, status, body)
+		}
+		if after := snapshot(); after != before {
+			t.Fatalf("refused %s changed the first task: %s -> %s", action, before, after)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND id = $2 AND status::text = $3`,
+		second, secondWF, secondStatus); n != 1 {
+		t.Fatalf("the second task's delivery changed")
 	}
 }
 

@@ -212,20 +212,29 @@ func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy P
 	if err != nil || src == nil {
 		return st, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM repositories WHERE id = $1 FOR UPDATE`, src.RepositoryID); err != nil {
-		return st, err
-	}
-	var holder string
-	err = tx.QueryRow(ctx, branchHolder, src.RepositoryID, src.HeadBranch, taskID).Scan(&holder)
-	if err == nil {
-		return st, sourceRefusal("branch_taken", "%s is already the branch of %s", src.HeadBranch, holder)
-	}
-	if !db.IsNotFound(err) {
+	if err := HoldBranchTx(ctx, tx, taskID, src); err != nil {
 		return st, err
 	}
 	st.Branch, st.Source = src.HeadBranch, src
 	st.Bases = map[string]string{src.Repository: src.BaseBranch}
 	return st, nil
+}
+
+// HoldBranchTx refuses (branch_taken) when another live task holds src's
+// head branch, under src's repository row lock held to tx's end.
+func HoldBranchTx(ctx context.Context, tx pgx.Tx, taskID string, src *Source) error {
+	if _, err := tx.Exec(ctx, `SELECT id FROM repositories WHERE id = $1 FOR UPDATE`, src.RepositoryID); err != nil {
+		return err
+	}
+	var holder string
+	err := tx.QueryRow(ctx, branchHolder, src.RepositoryID, src.HeadBranch, taskID).Scan(&holder)
+	if err == nil {
+		return sourceRefusal("branch_taken", "%s is already the branch of %s", src.HeadBranch, holder)
+	}
+	if !db.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // Adopted says the delivery took over existing work.
