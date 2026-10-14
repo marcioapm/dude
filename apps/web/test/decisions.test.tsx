@@ -271,9 +271,8 @@ describe("a conducted task's Chat", () => {
     expect(notices[0]).toContain("Pull request #88 approved.");
   });
 
-  test("Sessions: the conductor's Runs under it, Deliver's under Delivered automatically", async () => {
-    const before = run({ id: "run_auto", createdAt: at(-100) });
-    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }));
+  // Opens Sessions and its selector: each option's place in the tree, and the Delivered automatically heading.
+  async function sessionTree(p: HTMLElement) {
     const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
     await act(async () => {
       tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
@@ -281,9 +280,14 @@ describe("a conducted task's Chat", () => {
     });
     await sessionOptions(p);
     await settle();
-    const rows = [...document.querySelectorAll('[data-testid=sessions] [role="option"], [data-testid=sessions] [role="presentation"]')].filter((li) => li.getAttribute("role") === "option" || li.textContent === "Delivered automatically").map((li) =>
+    return [...document.querySelectorAll('[data-testid=sessions] [role="option"], [data-testid=sessions] [role="presentation"]')].filter((li) => li.getAttribute("role") === "option" || li.textContent === "Delivered automatically").map((li) =>
       li.getAttribute("role") === "presentation" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
-    expect(rows).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
+  }
+
+  test("Sessions: the conductor's Runs under it, Deliver's under Delivered automatically", async () => {
+    const before = run({ id: "run_auto", createdAt: at(-100) });
+    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }));
+    expect(await sessionTree(p)).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
   });
 
   // Deliver started it; the person took over, and the conductor steered it.
@@ -296,16 +300,7 @@ describe("a conducted task's Chat", () => {
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_auto]"), "the steered Run's line");
     expect(line.querySelector("[data-testid=conductor-steer]")?.getAttribute("data-directive")).toBe("dir_auto");
     expect(line.textContent).toContain("Use staging.");
-    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
-    await act(async () => {
-      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      tab.click();
-    });
-    await sessionOptions(p);
-    await settle();
-    const rows = [...document.querySelectorAll('[data-testid=sessions] [role="option"], [data-testid=sessions] [role="presentation"]')].filter((li) => li.getAttribute("role") === "option" || li.textContent === "Delivered automatically").map((li) =>
-      li.getAttribute("role") === "presentation" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
-    expect(rows).toEqual(["top", "— Delivered automatically", "delivered"]);
+    expect(await sessionTree(p)).toEqual(["top", "— Delivered automatically", "delivered"]);
   });
 
   test("under Deliver, a Run the conductor steered still has its line", () => {
