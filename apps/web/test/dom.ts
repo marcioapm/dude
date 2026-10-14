@@ -59,7 +59,7 @@ export async function type(el: Element, text: string): Promise<void> {
 }
 
 export async function sessionOptions(page: HTMLElement): Promise<HTMLElement> {
-  const trigger = await until(() => page.querySelector<HTMLElement>('button[aria-label="Select session"]'), "session title selector");
+  const trigger = await until(() => page.querySelector<HTMLElement>('[data-testid="search-selector-trigger"]'), "session title selector");
   if (trigger.getAttribute("data-state") !== "open") await click(trigger);
   return until(() => document.querySelector<HTMLElement>('[data-testid="sessions"]'), "session options");
 }

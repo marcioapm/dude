@@ -43,7 +43,7 @@ async function typeText(el: HTMLInputElement, value: string) {
 
 test("the title opens a searchable listbox with the current session selected", async () => {
   const el = await mount();
-  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
   expect(el.querySelector("[title=machine]")?.closest("button")).toBeNull();
   await act(async () => trigger.click());
   await tick();
@@ -56,7 +56,7 @@ test("the title opens a searchable listbox with the current session selected", a
 
 test("arrows and Enter choose; Escape closes and returns focus to the title", async () => {
   const el = await mount();
-  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
   await act(async () => trigger.click());
   await tick();
   let input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
@@ -84,7 +84,7 @@ test("in a session header the list opens at the header's bottom-left, not over i
     const rect = (top: number, bottom: number, left: number, width: number) => () =>
       ({ x: left, y: top, top, bottom, left, right: left + width, width, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
     el.querySelector("header")!.getBoundingClientRect = rect(100, 180, 20, 900);
-    const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+    const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
     trigger.getBoundingClientRect = rect(110, 130, 80, 120);
     await act(async () => trigger.click());
     await tick();
@@ -127,7 +127,7 @@ test("the highlight stays on its row when the app hands over fresh options while
 
 test("the open option is marked apart from the keyboard's row", async () => {
   const el = await mount();
-  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
   await act(async () => trigger.click());
   await tick();
   await press(document.querySelector("input[role=combobox]")!, "ArrowDown");
@@ -143,9 +143,18 @@ test("the open option is marked apart from the keyboard's row", async () => {
   expect(second!.getAttribute("aria-selected")).toBe("true");
 });
 
+test("the trigger is named by the open session and says it opens a listbox", async () => {
+  const el = await mount();
+  const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
+  expect(trigger.getAttribute("aria-label")).toBeNull();
+  expect(trigger.getAttribute("aria-labelledby")).toBeNull();
+  expect(trigger.textContent).toBe("Conductor");
+  expect(trigger.getAttribute("aria-haspopup")).toBe("listbox");
+});
+
 test("no options says so", async () => {
   const el = await mount(true);
-  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!.click());
+  await act(async () => el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
   await tick();
   expect(document.body.textContent).toContain("No sessions yet");
 });

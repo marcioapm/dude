@@ -48,7 +48,7 @@ class PageHoldsStill(unittest.TestCase):
         page.goto(f"{URL}/?fixtures={scenario}#/task/{TASK}")
         page.get_by_role("tab", name="Sessions").click()
         if box == '[data-testid="sessions"]':
-            page.get_by_role("button", name="Select session", exact=True).click()
+            page.get_by_test_id("search-selector-trigger").click()
         page.locator(f"{box} .ds-sr-only").first.wait_for(state="attached", timeout=15000)
         return page.evaluate(OVERFILL, box)
 
@@ -68,7 +68,7 @@ class PageHoldsStill(unittest.TestCase):
         page = context.new_page()
         page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
         page.get_by_role("tab", name="Sessions").click()
-        trigger = page.get_by_role("button", name="Select session", exact=True)
+        trigger = page.get_by_test_id("search-selector-trigger")
         trigger.click()
         options = page.get_by_test_id("sessions").get_by_role("option")
         options.nth(2).wait_for()
