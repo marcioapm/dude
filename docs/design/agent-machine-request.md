@@ -598,3 +598,160 @@ Dark and light at 1440 comfortable, plus dark compact, unless noted.
 None left. Decided on 2026-10-12 (Márcio): lux's dry run so every refusal
 comes before the park; settings-driven resumes cross pools; image platforms
 from lux's placements.
+
+## Follow-ups (2026-10-14)
+
+**Status: mockup.** Two follow-ups of #130 that are dude's. Mockup:
+`docs/design/mockups/machinemoves/index.html`, source
+`apps/web/mockups/machinemoves`; build it from `apps/web` with
+`MOCKUP=machinemoves bunx vite build --config mockups/vite.config.ts`.
+`?s=reset&v=before&theme=light` picks a state, today's fold or the
+proposed one, and the theme. Each state is a ledger written event by event
+as the orchestrator writes it (`events.ts`), folded by the app's own
+`apply` and drawn by its own `renderTurn`; "After" is that fold with the
+changes below (`proposed.ts`).
+
+### What changes
+
+**1. The agent's words are shown.** When a move applies, the resume's
+input starts with what `movePlan` and `keptInput` wrote: "You now run on
+Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you
+had running. Carry on.", "Moved back to Standard by Ana Ribeiro: <note>",
+or "You asked for XL; lux kept you on Standard: <why>. <advice>". Followed,
+when no person's words wait, by the resume nudge ("You were paused and
+have been resumed…"). Nobody sees any of it today.
+
+- **How dude's words to an agent are shown today.** A task's prompt and a
+  conductor's or session's briefing are `ChatMessage role="system"`, with
+  dude's face and the task's dude name, tagged Task or Briefing. A
+  session's `session.told` is the same frame (tagged Task: see below). A
+  peer's message is a `PeerMessage`, an agent's words and not dude's. A
+  person's message carried with a resume is that person's own turn. The
+  idle nudge, a live conductor's wake note, lux's carry-on after a host
+  move and the resume nudge are not shown, only a `ChatNotice` that
+  something was said. So one pattern fits: **the briefing's frame, tagged
+  Told** (`ChatMessage intent="told"`, new in the design system). It reads
+  as dude's, never as a person's: dude's face, his name for the task, the
+  prompt's neutral frame, and no person's tint. No second option is
+  offered.
+- **Placement.** A turn of its own, put down when the agent is up (the
+  first of its records after the resume, as `endStart` puts down a held
+  "Taken back up"), just after the move's notice and before the agent's
+  first reply. Not merged into the move's row: the row is dude's margin
+  note about the Run, and the words are what the agent read. Its time is
+  when the agent was up.
+- **With a person's message on the same resume** (a Reset with a note,
+  then Ana's steer queued while it moved): **two rows**. The resume
+  carries dude's sentence alone (`resumeInput` is empty when directives
+  wait), and the steer goes after it as its own input, read at the
+  agent's next step. dude's Told turn, then Ana's steer where the agent
+  read it (screen 7).
+- **Every screen with a Run's transcript shows it**, because they share
+  the fold (`apply`) and `renderTurn`: a Run's session; the task's Chat
+  for its conductor's own move (the Told turn in the conductor's
+  conversation, screen 5); the Session screen for a brainstorm's move
+  (screen 6). A phase Run's move is not in the task's Chat, which shows
+  that Run as one `ChatRunLine`; its words are one click in, on its
+  session.
+- **A move lux refused at the resume** (state 4): the Told turn holds
+  `keptInput`'s words, after the refusal's notice.
+
+**2. One notice per move.** Today a move ends with "The implementer moved
+to Large in 10s, with its conversation and work." (`run.resized`, timed
+from the move's start to the resize: the stop only), then "Resumed in
+48s, on another host." (`run.resume.timed` on the `standaloneTimings`
+path, since a move writes no `run.unparked`). Proposed:
+
+- One row, put down when the agent is up: "The implementer moved to Large
+  in 48s, with its conversation and work." Its time is
+  `run.resume.timed`'s `totalMs`, which for a move already runs from the
+  move's start (`woken` for cause `machine`: the unsettled
+  `machine_moves.created_at`) to the agent's first output: the whole move.
+- Its `title` lists the resume's stages, as a "Taken back up" notice's
+  does today (`resumeTiming`), the first renamed "Stopped, work kept"
+  (`START_STAGE_WORDS.park.done`): for a move `react` is the stop.
+- A Reset: the same row, "moved back to Standard in 46s".
+- A refused move: the refusal's row ("The implementer asked for XL; lux
+  kept it on Standard: …"), and no timing row.
+
+### What the web needs
+
+**The words must be recorded.** The web cannot rebuild them from what is
+recorded today:
+
+- **The input is in no event.** dude sends it as the resume's `input`
+  (`lux.ResumeInput.Input`), with no request id of its own (`resume` sets
+  none outside a session's link): no directive row holds it, so
+  `directiveReceipt` has nothing to settle or record, and the fake lux's
+  receipt names `resume`. Only the task's prompt (`promptRequestID`) gets
+  its text recorded (`agent.prompt.delivered`).
+- **Its parts are read at resume time, from places that change:**
+  - the size's name and numbers, from `machine_sizes` (`plan.Target.Spec()`):
+    an admin's edit (`PUT /v1/machines/sizes/:id`) between the call and
+    the resume changes them. `run.resized` records what lux applied,
+    which differs when lux kept the disk (`DiskKept`): the agent is told
+    the target's disk.
+  - " in highmem": only when the plan changes pools (`plan.Pool`, from
+    lux's binding) and lux's pool list could be read then
+    (`LoadPoolNames`); otherwise no pool is said.
+  - the Reset's person: `PersonName` at the resume, from `people`.
+    `machine.reset`'s `by.name` is the name at the Reset.
+  - `keptInput`'s reason and advice: `RefusalOf` with lux's pool list and
+    the Run's placements at that moment. `machine.refused` keeps only
+    `ForPerson()`; the advice ("or ask a person to add an arm64 image")
+    names the pool's platform, which it does not keep.
+  - whether the resume nudge follows: `resumeInput()` on
+    `HasDirectives`/`Waiting` at that sweep. A 409 keeps the input
+    without the move's sentence, and a session's resume adds a newly
+    linked repository's line after it (`sessionResume`).
+
+**Proposed event: `run.told`**, on the Run: `{ epoch, moveId, kind:
+"moved" | "kept", text }`. `text` is the resume's input exactly as lux
+accepted it; `epoch` the placement it resumed into. Written in `resume`'s
+deferred step, beside `RecordResize`, once lux has accepted a resume whose
+input carries `moveTold` or `keptInput`'s words (`ResumeSized` would say
+which it sent), once per Run and epoch (a 409's retry writes nothing new). Added to
+`packages/domain/src/events/types.ts` with its Go constant.
+
+**For the one notice, nothing new is needed.** The web matches the move's
+`run.resume.timed` by epoch: `run.told.epoch`, or for ledgers before it
+`run.resized`'s `machine.sinceEpoch` (which a move always sets: the size
+changes, `Outcome`). A refused move's timing is the one of cause
+`machine` after `machine.refused`, and it is dropped.
+
+**In `conversation.ts`:**
+
+- a `ToldTurn` (`kind: "told"`, `text`, `at`), held from `run.told` and put
+  down by `endStart`, after the move's notice;
+- `RunResized`'s notice is held as `heldUnpark` is, and kept by epoch
+  until its `run.resume.timed`, which sets its text and `title` and adds
+  no row of its own;
+- after `MachineRefused`, the timing of that resume adds no row;
+- `renderTurn` draws `told` as `ChatMessage role="system" intent="told"`
+  with `DudeMark`.
+
+### Design system
+
+`ChatMessage` gains `intent="told"`: the briefing's frame and clamp,
+tagged Told. In the gallery under *Chat › What dude told the agent*, and
+in the README beside the task prompt. Nothing else changes; the move's
+notice is `ChatNotice kind="unparked"` with its `title`, as today.
+
+**Not changed here:** a session's `session.told` (dude telling its agent
+who owns it now, or that a question is withdrawn) is a `prompt` turn
+tagged **Task** today, which it is not. It would read right as `told`.
+
+### Screens
+
+1920×1080, comfortable, dark and light (`-dark.png`, `-light.png`), in
+`docs/design/mockups/machinemoves/screens/`.
+
+| # | State | Files |
+|---|---|---|
+| 1 | A raise in its pool, Standard → Large, in the implementer's session. Before: the move's line "in 10s", then "Resumed in 48s" as a second row, no words. After: one line "in 48s", then the Told turn, then the agent's reply. Hover: the stages, printed beside the line | `1-raise-before-*`, `1-raise-after-*`, `1-raise-hover-*` |
+| 2 | A raise to another pool, Standard → XL in highmem: the wait for a machine there in the move's time; "in highmem" in the words | `2-raise-pool-*` |
+| 3 | Ana's Reset with a note, of the fixer while it runs (its watcher stops with the move). Before and after | `3-reset-before-*`, `3-reset-after-*` |
+| 4 | lux refuses XL at the real resume (`platform_mismatch`): the refusal's row, no timing row, the `keptInput` words as the Told turn. And today's | `4-refused-*`, `4-refused-before-*` |
+| 5 | BILL-42's Chat: the conductor moves itself to Large; its notice and Told turn in the conductor's conversation. And today's | `5-conductor-*`, `5-conductor-before-*` |
+| 6 | A brainstorm session Small → XL in highmem, on the Session screen. And today's | `6-session-*`, `6-session-before-*` |
+| 7 | Ana's Reset with a note, then her steer queued while it moved: the Told turn, then her steer read after Bash | `7-reset-steer-*` |
