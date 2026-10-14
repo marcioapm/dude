@@ -131,7 +131,7 @@ describe("StartProgress", () => {
     const crossed = el.querySelector("li[data-state=failed]")!;
     expect(crossed.getAttribute("aria-current")).toBe("step");
     expect(crossed.textContent).toBe("Getting the image ready, failedfailed");
-    expect(el.querySelector("[role=status]")).toBeNull();
+    expect(el.querySelectorAll("[role=status]").length).toBe(0);
   });
 
   test("a resume that failed says it did not resume; no reason ends the sentence there", () => {
@@ -157,7 +157,7 @@ describe("StartProgress", () => {
     el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: "image", failed: true })} failure={{ reason: "pull failed: manifest unknown" }} />);
     expect(el.querySelector("[data-testid=start-failed] code")!.textContent).toBe("pull failed: manifest unknown");
     el.innerHTML = renderToStaticMarkup(<StartProgress steps={startSteps({ stage: null, failed: true })} failure={{ reason: "No model yet.", plain: true }} />);
-    expect(el.querySelector("[data-testid=start-failed] code")).toBeNull();
+    expect(el.querySelectorAll("[data-testid=start-failed] code").length).toBe(0);
     expect(el.querySelector("[data-testid=start-failed]")!.textContent).toBe("Did not start: No model yet. Nothing was spent on the model.");
   });
 

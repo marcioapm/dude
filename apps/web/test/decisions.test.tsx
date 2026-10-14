@@ -121,8 +121,8 @@ describe("starting a task", () => {
     const deliver = p.querySelector<HTMLButtonElement>("[data-testid=start-deliver]");
     expect([talk?.textContent, deliver?.textContent]).toEqual(["Talk it through", "Deliver"]);
     expect([reachable(talk), reachable(deliver)]).toEqual([true, true]);
-    expect(p.querySelector("[data-testid=talk]")).toBeNull();
-    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=talk]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=deliver]").length).toBe(0);
   });
 
   test("on another tab the header offers both, equal and reachable by keyboard; back on Overview it leaves them to the cards", async () => {
@@ -136,12 +136,12 @@ describe("starting a task", () => {
     // Equal: the same variant, neither the primary one.
     expect([talk!.getAttribute("data-variant"), deliver!.getAttribute("data-variant")]).toEqual(["secondary", "secondary"]);
     expect([reachable(talk), reachable(deliver)]).toEqual([true, true]);
-    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=start-choice]").length).toBe(0);
     await click(deliver!);
     expect(client.delivered).toBe(1);
 
     await toTab(p, "Overview");
-    expect(p.querySelector("[data-testid=talk]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=talk]").length).toBe(0);
     expect(p.querySelector("[data-testid=start-talk]")).not.toBeNull();
   });
 
@@ -151,8 +151,8 @@ describe("starting a task", () => {
     await click(p.querySelector<HTMLButtonElement>("[data-testid=start-talk]")!);
     expect(client.talked).toBe(1);
     await until(() => selected(p) === "Chat" ? true : null, "Chat");
-    expect(p.querySelector("[data-testid=talk]")).toBeNull();
-    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=talk]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=deliver]").length).toBe(0);
   });
 
   test("from the header on another tab, Talk it through starts the conductor and opens Chat on it", async () => {
@@ -166,11 +166,11 @@ describe("starting a task", () => {
 
   test("a task already started offers neither, on the Overview or in the header", async () => {
     const p = await page(new DecisionsClient({ status: "running", decider: "policy" }));
-    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=start-choice]").length).toBe(0);
     await toTab(p, "Findings");
     expect(selected(p)).toStartWith("Findings");
-    expect(p.querySelector("[data-testid=talk]")).toBeNull();
-    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=talk]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=deliver]").length).toBe(0);
   });
 });
 
@@ -239,7 +239,7 @@ describe("a conducted task's Chat", () => {
     const p = await page(new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs,
       awaitingDecision: null }, events()));
     await until(() => p.querySelector("[data-testid=chat-screen]"), "the Chat");
-    expect(p.querySelector("[data-testid=decider-line]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=decider-line]").length).toBe(0);
   });
 
   test("a hand-back that fails says why beside the conductor's Chat", async () => {
@@ -397,9 +397,9 @@ describe("a conducted task with two attempts", () => {
 
   test("an earlier attempt offers no way to start or hand back: Chat on it has no Let Deliver finish it", async () => {
     const { p } = await showing(1, "findings");
-    expect(p.querySelector("[data-testid=talk]")).toBeNull();
-    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
-    expect(p.querySelector("[data-testid=start-choice]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=talk]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=deliver]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=start-choice]").length).toBe(0);
     // Chat is the task's: opened with attempt 1 picked, attempt 1 stays shown, set aside.
     await toTab(p, "Chat");
     await until(() => p.querySelector("[data-testid=task-chat]"), "Chat");
@@ -407,7 +407,7 @@ describe("a conducted task with two attempts", () => {
     expect(p.querySelector("[data-testid=earlier-bar]")).not.toBeNull();
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     expect(line.textContent).toContain("The conductor decides");
-    expect(p.querySelector("[data-testid=let-deliver-finish]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=let-deliver-finish]").length).toBe(0);
   });
 
   test("on the current attempt, Chat keeps Let Deliver finish it", async () => {

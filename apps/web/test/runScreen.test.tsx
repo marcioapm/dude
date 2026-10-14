@@ -59,7 +59,7 @@ describe("the session's machine", () => {
   test("a Run from before sizes has no chip", async () => {
     const page = await session({ client: new RunClient({ machine: null }) });
     await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
-    expect(page.querySelector("[data-testid=run-machine]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=run-machine]").length).toBe(0);
   });
 
   const FIXED = "Set when the session started or last resumed — a change to its size reaches it when it next resumes.";
@@ -164,7 +164,7 @@ describe("the session's model", () => {
   test("a Run that has asked for nothing yet has no chip", async () => {
     const page = await session({ client: new RunClient({ model: null, modelTier: null }) });
     await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
-    expect(modelChip(page)).toBeNull();
+    expect(page.querySelectorAll("[data-testid=run-model]").length).toBe(0);
   });
 });
 
@@ -195,7 +195,7 @@ describe("whether the session can start containers", () => {
     test(`nothing when ${what}`, async () => {
       const page = await session({ client: new RunClient({ image: IMAGE, ...patch }) });
       await until(() => page.querySelector("[data-testid=run-image]"), "the image chip");
-      expect(badge(page)).toBeNull();
+      expect(page.querySelectorAll("[data-testid=can-run-containers]").length).toBe(0);
     });
   }
 });

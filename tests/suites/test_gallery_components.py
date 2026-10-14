@@ -11,7 +11,7 @@ Marked `ui`; skip with `-m "not ui"`.
 from __future__ import annotations
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, expect
 
 pytestmark = pytest.mark.ui
 
@@ -277,11 +277,27 @@ def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_error
     assert console_errors == []
 
 
+# Radix opens a hovered trigger's tooltip on a 400 ms timer. On the gallery,
+# Playwright's role-and-name query walks the accessibility tree of some 50,000
+# elements in the page's main thread every poll, which held that timer back
+# 3 to 8 s under load, past expect's 5 s. Waiting on the trigger's own
+# data-state, read each frame, costs the page nothing; the role query runs once
+# the tooltip is open.
+def _hover_until_open(page: Page, trigger) -> None:
+    trigger.hover()
+    try:
+        page.wait_for_function(
+            "el => ['delayed-open', 'instant-open'].includes(el.dataset.state)",
+            arg=trigger.element_handle(), polling="raf", timeout=5000)
+    except PlaywrightTimeoutError:
+        raise AssertionError(f"tooltip trigger {trigger} did not open within 5000ms") from None
+
+
 def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Page, console_errors: list):
     """The editor's Bold names its shortcut as caps, the platform's modifier first."""
     gallery_page.get_by_role("link", name="MarkdownEditor").click()
     bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
-    bold.hover()
+    _hover_until_open(gallery_page, bold)
     tip = gallery_page.get_by_role("tooltip", name="Bold")
     caps = tip.locator("kbd")
     expect(tip).to_be_visible()
@@ -290,7 +306,7 @@ def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Pa
     expect(caps).to_have_text([modifier, "B"])
 
     gallery_page.get_by_role("link", name="Tooltip").click()
-    gallery_page.locator("#p-tooltip").get_by_role("button", name="Hover me").first.hover()
+    _hover_until_open(gallery_page, gallery_page.locator("#p-tooltip").get_by_role("button", name="Hover me").first)
     string_tip = gallery_page.get_by_role("tooltip").filter(has_text="Open the session in a side panel")
     expect(string_tip).to_be_visible()
     expect(string_tip.locator("kbd")).to_have_text(["⏎"])

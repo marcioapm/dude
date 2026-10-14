@@ -79,7 +79,7 @@ test("an open-only thread stays folded and opens by click, Enter and Space", asy
   await act(async () => row.click());
   for (const key of ["Enter", " "]) await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
   expect(opened).toEqual(["row", "row", "row"]);
-  expect(host.querySelector("[role='group']")).toBeNull();
+  expect(host.querySelectorAll("[role='group']").length).toBe(0);
   await act(async () => host!.querySelector<HTMLElement>("section")!.click());
   expect(opened).toHaveLength(4);
 });
@@ -101,8 +101,8 @@ test("a live child is a folded subagent row under the call's card, without its t
   expect(thread.getAttribute("aria-label")).toBe("Subagent subagent: Inspect test capture setup · explore");
   // Under the parent's card, not inside it.
   expect(threadsUnder(el.querySelector("[data-tool='task']")!)).toEqual(["ses_kid"]);
-  expect(thread.querySelector("[role='group']")).toBeNull();
-  expect(el.querySelector("[data-tool='grep']")).toBeNull();
+  expect(thread.querySelectorAll("[role='group']").length).toBe(0);
+  expect(el.querySelectorAll("[data-tool='grep']").length).toBe(0);
   expect(thread.getAttribute("data-waiting")).toBeNull();
 });
 
@@ -113,7 +113,7 @@ test("a child waiting on a permission says so in its header, on its stuck call a
   const thread = el.querySelector("[data-testid='child-thread']")!;
   expect(thread.getAttribute("data-waiting")).toBe("true");
   expect(thread.querySelector("[data-testid='chat-thread-waiting']")!.textContent).toMatch(/^waiting 1h 57m on a permission$/);
-  expect(thread.querySelector("[data-testid='child-waiting-notice']")).toBeNull();
+  expect(thread.querySelectorAll("[data-testid='child-waiting-notice']").length).toBe(0);
   expect(thread.textContent).not.toContain("nothing in this Run can allow or refuse it");
 });
 
@@ -124,7 +124,7 @@ test("a done child folds to its summary, with its turns counted", async () => {
     ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed" }, 2)]);
   const thread = el.querySelector("[data-testid='child-thread']")!;
   expect(thread.getAttribute("data-status")).toBe("completed");
-  expect(thread.querySelector("[role='group']")).toBeNull();
+  expect(thread.querySelectorAll("[role='group']").length).toBe(0);
   expect(thread.textContent).toContain("Playwright's 1280×720 default applies.");
   expect(thread.textContent).not.toContain("More.");
   expect(thread.textContent).toContain("1 turns");
@@ -163,11 +163,11 @@ test("a child heard before its parent's call is drawn once, under that call's on
 test("a child watched while it works folds when it ends", async () => {
   const before = [...start(), ev(EventTypes.ChildMessage, { ...kid, text: "Reading." }, 3)];
   const el = await render(before);
-  expect(el.querySelector("[data-testid='child-thread'] [role='group']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='child-thread'] [role='group']").length).toBe(0);
   const { turns } = project([...before, ev(EventTypes.ChildEnded, { ...kid, status: "completed", summary: "Done: 1280×720." }, 1)]);
   await act(async () => root!.render(<>{turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</>));
   const thread = el.querySelector("[data-testid='child-thread']")!;
-  expect(thread.querySelector("[role='group']")).toBeNull();
+  expect(thread.querySelectorAll("[role='group']").length).toBe(0);
   expect(thread.textContent).toContain("Done: 1280×720.");
 });
 
@@ -181,14 +181,15 @@ const deep = () => [...start(),
 ];
 
 const threadOf = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-testid='child-thread'][data-child='${id}']`);
+const threadsOf = (el: HTMLElement, id: string) => el.querySelectorAll(`[data-testid='child-thread'][data-child='${id}']`).length;
 const header = (thread: HTMLElement) => thread.querySelector<HTMLElement>(":scope > [role='button']")!;
 
 test("a live child starts folded and deeper children are not drawn inline", async () => {
   const el = await render(deep());
-  expect(threadOf(el, "ses_kid")!.querySelector("[role='group']")).toBeNull();
+  expect(threadOf(el, "ses_kid")!.querySelectorAll("[role='group']").length).toBe(0);
   expect(header(threadOf(el, "ses_kid")!).getAttribute("aria-expanded")).toBeNull();
-  expect(threadOf(el, "ses_grand")).toBeNull();
-  expect(threadOf(el, "ses_great")).toBeNull();
+  expect(threadsOf(el, "ses_grand")).toBe(0);
+  expect(threadsOf(el, "ses_great")).toBe(0);
 });
 
 test("opening a row uses its screen callback without creating a per-thread dialog", async () => {
@@ -199,7 +200,7 @@ test("opening a row uses its screen callback without creating a per-thread dialo
   await act(async () => root!.render(<ChildOpenContext.Provider value={(id) => opened.push(id)}>{project(events).turns.map((t) => renderTurn(t, "implementer", 0, false, people, "dude"))}</ChildOpenContext.Provider>));
   await act(async () => header(threadOf(el, "ses_kid")!).click());
   expect(opened).toEqual(["ses_kid"]);
-  expect(document.querySelector("[role='dialog']")).toBeNull();
+  expect(document.querySelectorAll("[role='dialog']").length).toBe(0);
 });
 
 test("a child still running when its Run ended shows it settled, then how it ended once that is heard", async () => {
@@ -297,7 +298,7 @@ describe("the selected child's transcript follows it while open", () => {
 
 test("the screen opens a child beside its transcript, navigates children and returns, then Escape closes", async () => {
   const el = await screen(deep());
-  expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='child-panel']").length).toBe(0);
   expect(el.querySelectorAll("[data-testid='child-thread']")).toHaveLength(1);
   const rail = el.querySelector("[data-testid='rail-subagents']")!;
   expect(rail.textContent).toContain("Subagents · 3");
@@ -308,8 +309,8 @@ test("the screen opens a child beside its transcript, navigates children and ret
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
   expect(panel().querySelector("[data-intent='prompt']")!.textContent).toContain("Read the browser fixtures and report the configured viewport.");
   expect(panel().querySelector("[data-tool='task']")).toBeTruthy();
-  expect(el.querySelector("[data-testid='session-rail']")).toBeNull();
-  expect(threadOf(panel(), "ses_grand")!.querySelector("[role='group']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='session-rail']").length).toBe(0);
+  expect(threadOf(panel(), "ses_grand")!.querySelectorAll("[role='group']").length).toBe(0);
   await act(async () => header(threadOf(panel(), "ses_grand")!).click());
   expect(panel().getAttribute("data-child")).toBe("ses_grand");
   await act(async () => header(threadOf(panel(), "ses_great")!).click());
@@ -321,7 +322,7 @@ test("the screen opens a child beside its transcript, navigates children and ret
   await act(async () => back.click());
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  expect(el.querySelector("[data-testid='child-panel']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='child-panel']").length).toBe(0);
   await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='rail-subagents'] button")!.click());
   expect(panel().getAttribute("data-child")).toBe("ses_kid");
   await act(async () => header(threadOf(panel(), "ses_grand")!).click());
@@ -421,7 +422,7 @@ test("permission waiting stays on the row and rail, with the notice and stuck ca
     ev(EventTypes.ChildWaiting, { ...kid, permission: "external_directory", patterns: ["/opt/venv/*"], answered: "none" }, 117)]);
   expect(threadOf(el, "ses_kid")!.textContent).toContain("waiting 1h 57m on a permission");
   expect(el.querySelector("[data-testid='rail-subagents']")!.textContent).toContain("waiting 1h 57m on a permission");
-  expect(el.querySelector("[data-testid='child-waiting-notice']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='child-waiting-notice']").length).toBe(0);
   await act(async () => header(threadOf(el, "ses_kid")!).click());
   const panel = el.querySelector("[data-testid='child-panel']")!;
   expect(panel.querySelector("[data-testid='child-waiting-notice']")!.textContent).toContain("Nothing in this Run can answer it.");
@@ -438,7 +439,7 @@ test("below 960px the screen uses the xl dialog fallback", async () => {
     expect(document.querySelector("[role='dialog'] [data-testid='child-panel']")?.getAttribute("data-child")).toBe("ses_kid");
     expect(el.querySelector("[data-testid='session-rail']")).toBeTruthy();
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(document.querySelector("[data-testid='child-panel']")).toBeNull();
+    expect(document.querySelectorAll("[data-testid='child-panel']").length).toBe(0);
   } finally {
     window.matchMedia = original;
   }
@@ -446,7 +447,7 @@ test("below 960px the screen uses the xl dialog fallback", async () => {
 
 test("a Run without children has no Subagents block", async () => {
   const el = await screen([]);
-  expect(el.querySelector("[data-testid='rail-subagents']")).toBeNull();
+  expect(el.querySelectorAll("[data-testid='rail-subagents']").length).toBe(0);
 });
 
 describe("a child's thread is drawn again only when it or a child under it changed", () => {
@@ -527,7 +528,7 @@ describe("a child's thread is drawn again only when it or a child under it chang
     expect(threadRuns.a).toBeGreaterThan(0);
     expect(threadRuns.b).toBe(0);
     expect(bodyRuns.b).toBe(0);
-    expect(threadOf(host!, "a-grand")).toBeNull();
+    expect(threadsOf(host!, "a-grand")).toBe(0);
   });
 
   test("a hidden grandchild's event does not mount a transcript body", async () => {
