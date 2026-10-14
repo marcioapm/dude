@@ -1237,9 +1237,6 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 // (decide). Nothing goes on by itself: no agent works, and no timer
 // resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
-	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reason); err != nil {
-		return workflow.Result{}, err
-	}
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
 	if reason == "review_failed" {
 		// Its retry is the failed reviewers again, not a fix.
@@ -1261,8 +1258,16 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		}
 	}
 	st.PendingRunIDs = nil
-	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
-		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
+	// One transaction: the API reads a task's escalation from this event
+	// only while it is awaiting_input, so either alone is a stopped task
+	// that says no why.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if _, err := SetTaskStatusTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "", "awaiting_input", reason); err != nil {
+			return err
+		}
+		return emitTx(ctx, tx, sc.OrganizationID, st, EvQuestionAsked,
+			map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()})
+	}); err != nil {
 		return workflow.Result{}, err
 	}
 	if st.conducted() {
