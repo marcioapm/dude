@@ -194,6 +194,35 @@ describe("task rail filtering", () => {
     });
   }
 
+  test("Files kind counts stay put and Download all reads only displayed latest versions", async () => {
+    const client = new FixtureClient("a");
+    const artifact = (id: string, name: string, contentType: string) => ({ id, name, phase: "implement", role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;
+    client.listArtifacts = async () => ({ artifacts: [artifact("latest", "notes.md", "text/markdown"), artifact("old", "notes.md", "text/markdown"), artifact("image", "shot.png", "image/png")] });
+    const reads: string[] = [];
+    client.artifactContent = async (id) => { reads.push(id); return new Blob([id]); };
+    const page = await taskPage(client, { tab: "files" });
+    await until(() => reads.includes("image") ? true : null, "thumbnail read");
+    const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
+    const counts = kinds.textContent;
+    const documents = [...kinds.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("Documents"));
+    expect(documents).toBeDefined();
+    await click(documents!);
+    expect(kinds.textContent).toBe(counts);
+    expect(page.querySelectorAll('[data-testid="file-row"]').length).toBe(1);
+    expect(page.querySelectorAll('[data-testid="file-card"]').length).toBe(0);
+    reads.length = 0;
+    const anchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = () => {};
+    try {
+      await click(page.querySelector('[data-testid="download-all"]')!);
+      await until(() => reads.length ? true : null, "zip reads");
+      await settle();
+      expect(reads).toEqual(["latest"]);
+    } finally {
+      HTMLAnchorElement.prototype.click = anchorClick;
+    }
+  });
+
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
     expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
