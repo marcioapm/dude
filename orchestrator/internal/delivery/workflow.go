@@ -836,6 +836,10 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
+	// A person's branch is never published as a pull request without their Open or Draft.
+	if st.Source != nil && st.Source.Kind == SourceBranch {
+		st.GateRequired = true
+	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)
 }
 

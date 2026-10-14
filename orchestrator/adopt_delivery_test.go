@@ -99,6 +99,32 @@ func TestAStartWaitsForAnInFlightSourceReplacement(t *testing.T) {
 	}
 }
 
+// An adopted pull request under the GitHub App needs no owner's connection:
+// nothing is created, the delivery waits on that one pull request.
+func TestAnAdoptedPullRequestUnderTheAppNeedsNoOwnerConnection(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret'
+		WHERE organization_id = $1`, w.org)
+	n := w.gh.OpenAsPerson("alice", "feature/app", "main", "App auth")
+	wi := w.task()
+	w.taskOwners(wi, ana)
+	mustExec(t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch)
+		VALUES ($1, $2, $3, 'pr', $4, 'App auth', 'feature/app', 'main')`, wi, w.org, w.repoID, n)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
+		w.org, wi, w.repoID)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	w.until("waiting on the adopted pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
+	})
+	if len(w.gh.Pulls()) != 1 || len(w.gh.OpenAuth) != 0 {
+		t.Fatalf("pulls=%d creation auth=%v", len(w.gh.Pulls()), w.gh.OpenAuth)
+	}
+}
+
 // phasesRun lists the phase of each Run lux was given, in order.
 func (w *world) phasesRun(wi string) []string {
 	rows, err := w.owner.Query(context.Background(), `SELECT phase::text FROM runs WHERE task_id = $1 AND phase IS NOT NULL ORDER BY created_at`, wi)
@@ -183,12 +209,25 @@ func TestAnAdoptedBranchOpensItsPullRequestIntoItsBase(t *testing.T) {
 	w.gh.Branch("stack/top", "stack/base", "The top")
 
 	wi := w.adopting("branch", 0, "stack/top", "stack/base")
+	w.until("the person's Open or Draft", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	for range 3 {
+		w.pump()
+	}
+	if len(w.gh.Pulls()) != 0 {
+		t.Fatal("Deliver opened a person's branch without their Open or Draft")
+	}
+	if status, out := w.handBack(wi, map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
+		t.Fatalf("hand-back without Open or Draft: %d %v", status, out)
+	}
+	if status, out := w.handBack(wi, map[string]any{"decider": "policy", "openPullRequest": true, "draft": true}); status != 200 {
+		t.Fatalf("Draft: %d %v", status, out)
+	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
 
 	pr := w.gh.Pulls()[0]
-	if pr.Head != "stack/top" || pr.Base != "stack/base" {
-		t.Fatalf("pull request %s into %s, want stack/top into stack/base", pr.Head, pr.Base)
+	if pr.Head != "stack/top" || pr.Base != "stack/base" || !pr.Draft {
+		t.Fatalf("pull request %s into %s draft=%v, want draft stack/top into stack/base", pr.Head, pr.Base, pr.Draft)
 	}
 	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify"}) {
 		t.Fatalf("phases %v, want no implement", got)

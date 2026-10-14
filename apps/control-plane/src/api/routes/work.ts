@@ -270,7 +270,9 @@ async function talkTask(ctx: RequestContext): Promise<Response> {
     JSON.stringify(input.data), ctx.principal);
 }
 
-const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
+const deciderInput = z.object({
+  decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional(), draft: z.boolean().optional(),
+}).strict();
 
 /**
  * Who takes the delivery's decisions from the next one on: "policy" is Let
