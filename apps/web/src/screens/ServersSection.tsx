@@ -116,7 +116,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   if (!run) {
     const auto = data.recipes.filter((r) => r.autostartInPreviews).map((r) => r.name);
     return (
-      <ServersPanel data-testid="servers-panel" data-run="none">
+      <div className="taskPane"><ServersPanel data-testid="servers-panel" data-run="none">
         <EmptyState
           icon="globe"
           title="Nothing is serving this task"
@@ -134,7 +134,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {data.recipes.length > 0 ? <ServersRecipesPreview recipes={data.recipes} note="Defined in project settings → Servers." /> : null}
-      </ServersPanel>
+      </ServersPanel></div>
     );
   }
 

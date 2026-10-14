@@ -214,9 +214,9 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   return (
     <div className="screen" data-testid="inbox">
       <ScreenHeader title="Waiting" />
-      <Tabs value={selectedTab} onValueChange={changeTab}>
+      <Tabs value={selectedTab} onValueChange={changeTab} fill>
         <PageWithRail rail={rail}>
-          <TabList aria-label="Waiting">
+          <TabList aria-label="Waiting" className="tabsInset">
             <Tab value="you" count={mineCount}>On you</Tab>
             <Tab value="others" count={others.length}>On others</Tab>
           </TabList>

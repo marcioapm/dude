@@ -599,7 +599,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack} />
         </TabPanel>
 
-        <TabPanel value="overview">
+        <TabPanel value="overview" className="railPanel">
           <PageWithRail children={
             <div className="taskMain taskPane">
               {item.goal ? (
@@ -706,7 +706,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           } />
         </TabPanel>
 
-        <TabPanel value="findings">
+        <TabPanel value="findings" className="railPanel">
           <PageWithRail rail={<PageRail aria-label="Finding filters and review facts">
             <PageRailBlock label="Status"><FacetList label="Finding status" value={findingStatuses} onValueChange={setFindingStatuses}
               options={FINDING_STATUSES.map((s) => ({ value: s, label: FINDING_STATUS_SPECS[s].label, count: mine.findings.filter((f) => f.status === s).length }))} /></PageRailBlock>
@@ -770,7 +770,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )}
         </TabPanel>
 
-        <TabPanel value="files">
+        <TabPanel value="files" className="railPanel">
           {mine.artifacts.length > 0 ? (
             <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
           ) : many ? (
@@ -782,11 +782,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )}
         </TabPanel>
 
-        <TabPanel value="servers">
+        <TabPanel value="servers" className="railPanel">
           <ServersSection client={client} servers={servers} taskId={taskId} />
         </TabPanel>
 
-        <TabPanel value="activity">
+        <TabPanel value="activity" className="railPanel">
           <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>

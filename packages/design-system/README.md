@@ -2342,7 +2342,9 @@ tokens`). This leaves at least 720px for the main column. Below that threshold
 there is no reserved column: the same rail is above the main content, with
 facets wrapping into compact controls. Controls are never hidden or remounted,
 so actions, selection and keyboard focus remain available. The host owns page
-scrolling; the layout imposes no fixed height or independent width cap.
+scrolling; the layout imposes no fixed height or independent width cap. In a
+flex-column host it grows to the remaining height, so the desktop rail's shade
+reaches the foot of the page however short its blocks are.
 
 `PageRail` uses the chrome shade and 16px padding in both densities.
 `PageRailBlock label={…}` names a section through its heading; `live` adds the

@@ -1,11 +1,18 @@
+/* In a flex column host the page takes the remaining height, so the desktop
+   rail's shade reaches the foot of the page rather than ending with its blocks. */
 .page {
   container: ds-page-rail / inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
   min-width: 0;
   width: 100%;
 }
 .layout {
   display: grid;
+  flex: 1 0 auto;
   grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   min-width: 0;
 }
 .content {
@@ -55,6 +62,7 @@
 @container ds-page-rail (min-width: 1080px) {
   .layout:has(> .railSlot) {
     grid-template-columns: minmax(0, 1fr) var(--ds-size-page-rail);
+    align-content: stretch;
   }
   .content {
     grid-column: 1;
