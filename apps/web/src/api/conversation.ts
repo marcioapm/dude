@@ -1028,30 +1028,23 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
         const existing = completedCall(state, callId, tool);
-        const result = resultFrom(payload);
-        const machineCall = dudeToolName(existing?.tool ?? tool) === "request_machine";
-        const outcome = machineCall ? machineOutcome(result, payload.status === "error") : null;
-        if (existing && outcome) {
-          const asked = (existing.args as { size?: unknown } | null)?.size;
-          existing.machine = { from: existing.machine?.from ?? null, to: existing.machine?.to ?? (typeof asked === "string" ? asked : "a larger machine"),
-            pool: existing.machine?.pool ?? outcome.pool, ...outcome.said };
-        }
         if (existing) {
           // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
-          if (!existing.endedAt) {
+          const ending = !existing.endedAt;
+          if (ending) {
             claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
             indexCall(state, existing);
             endTool(existing, payload, event.occurredAt);
-            // request_machine's refusal fails its call even when the harness reported it completed.
-            if (outcome?.said.error !== undefined) existing.status = "failed";
-            takeRefusal(state, existing);
           }
+          answerMachine(existing, payload, ending);
+          if (ending) takeRefusal(state, existing);
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
           // than a gap in the record.
           const turn = toolTurn(callId || event.eventId, tool, payload, event.occurredAt);
           endTool(turn, payload, event.occurredAt);
+          answerMachine(turn, payload, true);
           toolsByCall.set(turn.id, turn);
           addToolTurn(state, turn, ask);
           takeRefusal(state, turn);
@@ -1835,6 +1828,20 @@ function machineOutcome(result: ToolResult | null, failed: boolean): { said: Mac
   }
   if (typeof out.answer === "string" && !failed) return { said: { answer: out.answer }, pool };
   return { said: failed ? { error: raw } : { answer: raw }, pool };
+}
+
+/**
+ * request_machine's answer, from a completion, on its call's card. The card takes every completion's answer; a
+ * refusal fails the call only when this completion ends it, even if the harness reported it completed.
+ */
+function answerMachine(turn: ToolTurn, payload: Record<string, unknown>, ending: boolean): void {
+  if (dudeToolName(turn.tool) !== "request_machine") return;
+  const outcome = machineOutcome(resultFrom(payload), payload.status === "error");
+  if (!outcome) return;
+  const asked = (turn.args as { size?: unknown } | null)?.size;
+  turn.machine = { from: turn.machine?.from ?? null, to: turn.machine?.to ?? (typeof asked === "string" ? asked : "a larger machine"),
+    pool: turn.machine?.pool ?? outcome.pool, ...outcome.said };
+  if (ending && outcome.said.error !== undefined) turn.status = "failed";
 }
 
 /**
