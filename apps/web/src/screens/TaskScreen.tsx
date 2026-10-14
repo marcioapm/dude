@@ -43,8 +43,8 @@ import {
   PlanMeter,
   PrChip,
   PullRequestPanel,
-  SessionItem,
-  SessionList,
+  SessionItemContent,
+  SearchSelector,
   StartChoice,
   StatusMark,
   StepList,
@@ -736,41 +736,30 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         <TabPanel value="sessions" fill>
           {sessions.length > 0 ? (
             <div className="taskSessions">
-              <div className="taskSessionList" data-testid="sessions">
-                {(() => {
-                  const item = (run: Run, under: boolean) => (
-                    <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session" data-run={run.id}
-                      data-under={under ? (run.conductorRunId ? "conductor" : "delivered") : undefined}
-                      className={under ? "sessionUnder" : undefined}
-                      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
-                      title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
-                      detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : runStatusShown(run) === "starting" ? "starting" : "not started"}</>}
-                      trailing={<>
-                        {run.stalled ? (
-                          <Badge tone="attention" size="sm" icon="warning" data-testid="session-stalled" title={run.stalled.text}>stalled</Badge>
-                        ) : null}
-                        <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
-                      </>}><RunReplacement run={run} /></SessionItem>
-                  );
-                  // A tree over the attempt shown: each conductor (the
-                  // task's), the Runs it started in this attempt under it;
-                  // the attempt's other Runs under "Delivered automatically".
-                  const tops = sessions.filter(isConductor);
-                  const delivered = sessions.filter((r) => !isConductor(r) && !(r.conductorRunId && tops.some((c) => c.id === r.conductorRunId)));
-                  return (
-                    <SessionList>
-                      {tops.flatMap((c) => [item(c, false), ...sessions.filter((r) => r.conductorRunId === c.id).map((r) => item(r, true))])}
-                      {delivered.length > 0 && tops.length > 0 ? (
-                        <li key="delivered" className="ds-label sessionGroupHead" data-testid="delivered-automatically">Delivered automatically</li>
-                      ) : null}
-                      {delivered.map((r) => item(r, tops.length > 0))}
-                    </SessionList>
-                  );
-                })()}
-              </div>
               {openRun ? (
                 <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                  stopped={openStopped} />
+                  stopped={openStopped} titleSelector={(title) => {
+                    const tops = sessions.filter(isConductor);
+                    const delivered = sessions.filter((r) => !isConductor(r) && !(r.conductorRunId && tops.some((c) => c.id === r.conductorRunId)));
+                    const options = [...tops.flatMap((c) => [c, ...sessions.filter((r) => r.conductorRunId === c.id)]), ...delivered];
+                    return <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={options}
+                      optionKey={(run) => run.id} listTestId="sessions"
+                      optionAttributes={(run) => ({ "data-testid": "session", "data-run": run.id, "data-under": isConductor(run) ? undefined : run.conductorRunId ? "conductor" : "delivered" })}
+                      current={(run) => run.id === openRun} onPick={(run) => onOpenRun(run.id)}
+                      searchText={(run) => [runLabel(run), againOf(run, sessions) ? "again" : "", run.model, run.harness, runStatusLabel(run), runStatusShown(run), run.stalled?.text].filter(Boolean).join(" ")}
+                      group={(run) => isConductor(run) ? "Conductor" : run.conductorRunId && tops.some((c) => c.id === run.conductorRunId) ? `Started by ${runLabel(tops.find((c) => c.id === run.conductorRunId)!)}` : "Delivered automatically"}
+                      renderOption={(run) => <>
+                        <SessionItemContent
+                          avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+                          title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
+                          detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : runStatusShown(run) === "starting" ? "starting" : "not started"}</>}
+                          trailing={<>{run.id === openRun ? <span className="ds-sr-only">Current session</span> : null}
+                            {run.stalled ? <Badge data-testid="session-stalled" tone="attention" size="sm" icon="warning" title={run.stalled.text}>stalled</Badge> : null}
+                            <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
+                          </>} />
+                        <RunReplacement run={run} />
+                      </>} />;
+                  }} />
               ) : null}
             </div>
           ) : (
