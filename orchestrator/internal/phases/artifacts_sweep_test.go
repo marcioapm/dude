@@ -2,10 +2,14 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -73,5 +77,79 @@ func TestTheSweepRecordsEveryVersionOnceAndTheLatestFinalDiff(t *testing.T) {
 	}
 	if !strings.Contains(files, "NEW.md") || strings.Contains(files, "OLD.md") {
 		t.Errorf("the final diff is %s; want the patch's latest version", files)
+	}
+}
+
+// The sweep and the stream's follower recording the same artifact at once:
+// the follower's batch holds the Run's row (followOutput) when the sweep
+// reaches its insert, and then records the artifact itself. Each waits for
+// the other to finish, in turn, and the artifact is recorded once.
+func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
+	w := newReceiptWorld(t)
+	ctx := context.Background()
+	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
+		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	const id = "art_aaaaaaaaaaaaaaaa"
+	path := lux.PublishedPrefix + "notes.md"
+	a := &Artifacts{DB: w.s.DB, Lux: &sweepLux{listed: []lux.Artifact{
+		{ID: id, Epoch: 2, Path: path, Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
+	}}}
+
+	// The follower's batch, as followOutput runs it: the Run's row first,
+	// then the frame. It records once the sweep is waiting on it.
+	locked, record := make(chan int32), make(chan struct{})
+	followed := make(chan error, 1)
+	go func() {
+		followed <- w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			var pid int32
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid() FROM runs WHERE id = $1 FOR UPDATE`, w.tr.run.ID).Scan(&pid); err != nil {
+				close(locked)
+				return err
+			}
+			locked <- pid
+			<-record
+			data, _ := json.Marshal(map[string]any{"artifactId": id, "path": path, "name": "notes.md", "version": 1,
+				"description": "Why the export streams rows", "size": 12, "sha256": "ab12", "contentType": "text/markdown"})
+			return w.tr.luxEvent(ctx, tx, w.s, lux.Frame{Kind: "lux", Epoch: 2, EventType: "artifact.published", EventData: data})
+		})
+	}()
+	follower, ok := <-locked
+	if !ok {
+		t.Fatal(<-followed)
+	}
+	swept := make(chan error, 1)
+	go func() {
+		_, err := a.Sweep(ctx)
+		swept <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting bool
+		if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`,
+			follower).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(record)
+			t.Fatalf("the sweep never waited on the follower: %v", <-swept)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(record)
+	if err := <-followed; err != nil {
+		t.Errorf("follower: %v", err)
+	}
+	if err := <-swept; err != nil {
+		t.Errorf("sweep: %v", err)
+	}
+	if got := w.artifacts(); len(got) != 1 || got[0].StorageKey != id {
+		t.Errorf("recorded %+v; want %s once", got, id)
+	}
+	if n := w.events(ArtifactEventType); n != 1 {
+		t.Errorf("%d artifact.created events, want 1", n)
 	}
 }
