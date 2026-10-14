@@ -81,9 +81,10 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			}
 
 			// resumeAsked waits at most timingLockTimeout. An attempt where
-			// it stopped waiting before the batch had applied its frames, a
-			// scheduling delay longer than that, did not reach the
-			// interleaving: its batch is rolled back and it is tried again.
+			// it stopped waiting, or was seen waiting with less than four
+			// fifths of that left, before the batch was let apply its
+			// frames (a scheduling delay) did not reach the interleaving:
+			// its batch is rolled back and it is tried again.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -147,25 +148,139 @@ func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 	}
 }
 
+// Another transaction holding the Run's row FOR UPDATE past
+// timingLockTimeout costs a resume only its timing: resumeAsked gives up
+// on its KEY SHARE, records no row and still returns the epoch foreseen;
+// whilePaused then asks lux, and takes the Run back to running once the
+// holder lets go.
+func TestAResumeBehindAHeldRunSkipsItsTimingAndStillResumes(t *testing.T) {
+	w := newResumeWorld(t)
+	logs := &logSink{}
+	w.s.Log = slog.New(slog.NewTextHandler(logs, nil))
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+	release := sync.OnceFunc(w.holding(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID))
+	var workers sync.WaitGroup
+	// LIFO: runs before holding's own cleanup, so no worker still waits on
+	// the holder when it is joined.
+	t.Cleanup(func() {
+		cancel()
+		release()
+		workers.Wait()
+	})
+	timedOut := func(what string) {
+		t.Helper()
+		if got := logs.String(); !strings.Contains(got, "step=resume") || !strings.Contains(got, "lock timeout") {
+			t.Errorf("%s: want the resume step's lock timeout logged, got:\n%s", what, got)
+		}
+		if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 0 {
+			t.Errorf("%s: %d resume rows recorded behind the held Run, want none", what, n)
+		}
+	}
+
+	asked := make(chan int, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		asked <- w.s.resumeAsked(ctx, w.run, stoppedOnHost1(base))
+	}()
+	select {
+	case epoch := <-asked:
+		if epoch != 2 {
+			t.Errorf("resumeAsked foresaw epoch %d, want 2", epoch)
+		}
+	case <-ctx.Done():
+		t.Fatalf("resumeAsked did not return behind the held Run\nlogs:\n%s", logs)
+	}
+	timedOut("resumeAsked")
+
+	logs.Reset()
+	answering := &releasingLux{placementLux: w.lux, release: release}
+	w.s.Lux = answering
+	r := w.run
+	r.Resumable = true
+	paused := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := w.s.whilePaused(ctx, r)
+		paused <- err
+	}()
+	select {
+	case err := <-paused:
+		if err != nil {
+			t.Fatalf("whilePaused: %v\nlogs:\n%s", err, logs)
+		}
+	case <-ctx.Done():
+		t.Fatalf("whilePaused did not return\nlogs:\n%s", logs)
+	}
+	if n := answering.resumes(); n != 1 {
+		t.Fatalf("lux was asked to resume %d times, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'resuming'`); n != 1 {
+		t.Errorf("the Run was not taken back to running once the holder let go")
+	}
+	timedOut("whilePaused")
+}
+
+// releasingLux answers a resume as resuming, on the stopped epoch, after
+// letting go of the Run's row held elsewhere: resumeAsked has returned by
+// then, so it ran with the row held throughout.
+type releasingLux struct {
+	*placementLux
+	release func()
+	mu      sync.Mutex
+	asked   int
+}
+
+func (f *releasingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.mu.Lock()
+	f.asked++
+	f.mu.Unlock()
+	f.release()
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 1}, nil
+}
+
+func (f *releasingLux) resumes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.asked
+}
+
 // stampWhileTheResumeWaits is one attempt. reached is false when
-// resumeAsked stopped waiting on the batch before the batch had applied
-// its frames, without the batch waiting on it; the batch is then rolled
-// back. The batch waiting on resumeAsked while resumeAsked waits on the
-// batch is a deadlock, returned as an error.
+// resumeAsked stopped waiting on the batch, or was seen waiting too late,
+// before the batch was let apply its frames; the batch is then rolled
+// back. Once let go, the batch commits its frames at once. resumeAsked
+// waiting on the batch while holding the row the batch stamps, the batch
+// waiting on resumeAsked, and resumeAsked failing a timing statement once
+// the batch was let go (a cycle its lock_timeout broke, sampled or not)
+// are returned as errors, never as an attempt to try again.
 func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *sync.WaitGroup, logs *logSink,
 	base time.Time) (reached bool, err error) {
 	tr := &translator{run: w.run}
 	tr.run.Status, tr.run.LuxState = statusRunning, "resuming"
-	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error { return tr.load(ctx, tx) }); err != nil {
+	warm := &translator{run: tr.run}
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		return errors.Join(tr.load(ctx, tx), warm.load(ctx, tx))
+	}); err != nil {
 		return false, err
+	}
+	frames := []lux.Frame{session(2), running(2), busy(2), spoke(2)}
+	applyAll := func(tr *translator, tx pgx.Tx) error {
+		for _, f := range frames {
+			if err := tr.apply(ctx, tx, w.s, f); err != nil {
+				return err
+			}
+		}
+		return tr.save(ctx, tx, "", 0)
 	}
 
 	locked := make(chan int32, 1)
 	apply := make(chan struct{})
-	applied := make(chan error, 1)
-	// Closed once the attempt's outcome is known, with keep set; every
-	// return closes it, so the batch never outlives the attempt.
-	var keep bool
+	// Closed on every return, so a batch not let go never outlives the
+	// attempt: it is rolled back.
 	finish := make(chan struct{})
 	release := sync.OnceFunc(func() { close(finish) })
 	defer release()
@@ -179,6 +294,16 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid() FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID).Scan(&pid); err != nil {
 				return err
 			}
+			// The same frames once, undone, before resumeAsked starts: the
+			// connection has their statements prepared, so the batch let
+			// go below spends its time applying, not preparing.
+			sp, err := tx.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			if err := errors.Join(applyAll(warm, sp), sp.Rollback(ctx)); err != nil {
+				return err
+			}
 			locked <- pid
 			select {
 			case <-apply:
@@ -187,28 +312,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			var err error
-			for _, f := range []lux.Frame{session(2), running(2), busy(2), spoke(2)} {
-				if err = tr.apply(ctx, tx, w.s, f); err != nil {
-					break
-				}
-			}
-			if err == nil {
-				err = tr.save(ctx, tx, "", 0)
-			}
-			applied <- err
-			if err != nil {
-				return err
-			}
-			select {
-			case <-finish:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if !keep {
-				return errAttemptLost
-			}
-			return nil
+			return applyAll(tr, tx)
 		})
 	}()
 	var follower int32
@@ -219,8 +323,8 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
-	// The batch's transaction has ended, kept or rolled back, before the
-	// attempt returns.
+	// The batch's transaction has ended, committed or rolled back, before
+	// the attempt returns.
 	ended := func() error {
 		release()
 		select {
@@ -242,17 +346,27 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 		defer close(asked)
 		w.s.resumeAsked(ctx, w.run, stoppedOnHost1(base))
 	}()
-	// The backend waiting on blocker's locks, 0 when none is.
-	waitingOn := func(blocker int32) (int32, error) {
+	untilAsked := func() error {
+		select {
+		case <-asked:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// The backend waiting on the batch's locks, 0 when none is.
+	waitingOnTheBatch := func() (int32, error) {
 		var pid int32
 		err := w.owner.QueryRow(ctx, `SELECT COALESCE((SELECT pid FROM pg_stat_activity
-			WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1), 0)`, blocker).Scan(&pid)
+			WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1), 0)`, follower).Scan(&pid)
 		return pid, err
 	}
-	// resumeAsked ended without the batch waiting on it: too late for
-	// this attempt, if it waited on the batch and ran out of time.
-	lost := func() (bool, error) {
-		if err := ended(); err != nil {
+	// resumeAsked ended, or is left to, before the batch was let apply its
+	// frames, so before the batch could wait on it: too late for this
+	// attempt, if it waited on the batch and ran out of time.
+	lost := func(why string) (bool, error) {
+		w.t.Logf("before the batch was let go, %s", why)
+		if err := errors.Join(untilAsked(), ended()); err != nil {
 			return false, err
 		}
 		if !strings.Contains(logs.String(), "lock timeout") {
@@ -262,7 +376,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	}
 	var asker int32
 	for asker == 0 {
-		if asker, err = waitingOn(follower); err != nil {
+		if asker, err = waitingOnTheBatch(); err != nil {
 			return fail(err)
 		}
 		if asker != 0 {
@@ -270,57 +384,87 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 		}
 		select {
 		case <-asked:
-			return lost()
+			return lost("resumeAsked ended without being seen waiting")
 		case <-ctx.Done():
 			return fail(ctx.Err())
 		case <-time.After(time.Millisecond):
 		}
 	}
 
+	// How long resumeAsked has waited, by the database's clock, and whether
+	// it holds epoch 2's resume row (its xmax one of resumeAsked's
+	// (sub)transactions): the half of the cycle the batch would wait on.
+	// Blocked, resumeAsked takes no lock until it is let go, so this is
+	// read at a barrier, not sampled. pg_locks.waitstart is NULL for a
+	// moment after a wait begins: until it is set, the age is unknown, and
+	// read again.
+	var waitedMs *float64
+	var holdsRow bool
+	for waitedMs == nil {
+		if err := w.owner.QueryRow(ctx, `SELECT
+			(SELECT max(EXTRACT(EPOCH FROM clock_timestamp() - waitstart) * 1000) FROM pg_locks
+				WHERE pid = $1 AND NOT granted),
+			EXISTS (SELECT 1 FROM run_resumes rr JOIN pg_locks l ON l.locktype = 'transactionid'
+				AND l.transactionid = rr.xmax AND l.granted AND l.pid = $1
+				WHERE rr.run_id = $2 AND rr.epoch = 2)`, asker, w.run.ID).Scan(&waitedMs, &holdsRow); err != nil {
+			return fail(err)
+		}
+		if waitedMs != nil {
+			break
+		}
+		select {
+		case <-asked:
+			return lost("resumeAsked ended before its wait's start was known")
+		case <-ctx.Done():
+			return fail(ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if holdsRow {
+		return fail(fmt.Errorf("resumeAsked (pid %d) waits on the batch's lock on the Run holding the resume row the batch stamps",
+			asker))
+	}
+	// Seen late, too little of resumeAsked's lock_timeout is left for the
+	// batch's frames: not let go, the batch waits for resumeAsked to time
+	// out and the attempt is tried again.
+	waited := time.Duration(*waitedMs * float64(time.Millisecond))
+	if waited > timingLockTimeout/5 {
+		return lost(fmt.Sprintf("resumeAsked was seen waiting only after %s", waited))
+	}
+
+	start := time.Now()
 	close(apply)
 	for done := false; !done; {
 		select {
-		case err := <-applied:
+		case err := <-followed:
 			if err != nil {
-				return fail(err)
+				return false, errors.Join(err, untilAsked())
 			}
 			done = true
 		case <-ctx.Done():
 			return fail(ctx.Err())
-		case <-time.After(time.Millisecond):
-			blocked, err := waitingOn(asker)
-			if err != nil {
+		// Sparse enough to leave the batch the database's CPU.
+		case <-time.After(5 * time.Millisecond):
+			var waits bool
+			if err := w.owner.QueryRow(ctx, `SELECT $2::int = ANY(pg_blocking_pids($1))`, follower, asker).Scan(&waits); err != nil {
 				return fail(err)
 			}
-			if blocked == follower {
+			if waits {
 				return fail(fmt.Errorf("deadlock: the batch (pid %d) waits on resumeAsked (pid %d), which waits on the batch",
 					follower, asker))
 			}
 		}
 	}
-	if strings.Contains(logs.String(), "deadlock detected") {
-		return fail(errors.New("deadlock detected"))
-	}
-	still, err := waitingOn(follower)
-	if err != nil {
-		return fail(err)
-	}
-	if still != asker {
-		select {
-		case <-asked:
-		case <-ctx.Done():
-			return fail(ctx.Err())
-		}
-		return lost()
-	}
-	keep = true
-	if err := ended(); err != nil {
+	committed := time.Since(start)
+	if err := untilAsked(); err != nil {
 		return false, err
 	}
-	select {
-	case <-asked:
-	case <-ctx.Done():
-		return false, ctx.Err()
+	// The batch was let go: resumeAsked failing a statement now, a lock
+	// timeout included, is a failure, whether or not a reverse wait was
+	// sampled.
+	if got := logs.String(); got != "" {
+		return false, fmt.Errorf("resumeAsked failed a timing statement after the batch was let go, having waited %s; "+
+			"the batch committed %s later (lock_timeout %s)", waited, committed, timingLockTimeout)
 	}
 	return true, nil
 }
