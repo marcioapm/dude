@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { NumberInput } from "../src/primitives/NumberInput.tsx";
 import { Select } from "../src/primitives/Select.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
-import { FitBar, MachineChip, ProportionBar } from "../src/components/Machines.tsx";
+import { FitBar, MachineChip, MachineRaises, ProportionBar } from "../src/components/Machines.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -144,6 +144,37 @@ describe("Select with meta", () => {
 });
 
 describe("the bars and the chip", () => {
+  test("raised chips announce provenance on focus and keep the tooltip on a press", async () => {
+    await mount(<TooltipProvider><MachineChip name="Large" spec="4 CPUs · 16 GiB" raised="for this task"
+      tooltip="Asked for by run_7f3k (the implementer), 1h ago: jest OOM-killed." /></TooltipProvider>);
+    const button = host!.querySelector<HTMLButtonElement>("button")!;
+    expect(button.getAttribute("aria-label")).toBe("Machine: Large, 4 CPUs · 16 GiB, raised for this task");
+    await act(async () => button.focus());
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    await act(async () => {
+      button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }));
+      button.click();
+      document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("run_7f3k (the implementer), 1h ago: jest OOM-killed");
+  });
+
+  test("raised roles reset through a callback; a following fixer cannot reset independently", async () => {
+    let resets = 0;
+    const row = { role: "implementer" as const, label: "Implementer", size: { name: "Large", cpus: 4, memoryMiB: 16384 },
+      settings: { name: "Standard" }, detail: "Asked for by run_7f3k: OOM", onReset: () => resets++ };
+    await mount(<TooltipProvider><MachineRaises raises={[row, { ...row, label: "Fixer", follows: "implementer" }]} /></TooltipProvider>);
+    expect(host!.querySelectorAll("button").length).toBe(1);
+    expect(host!.textContent).toContain("Follows the implementer");
+    await act(async () => host!.querySelector<HTMLButtonElement>("button")!.click());
+    expect(resets).toBe(1);
+    await act(async () => root!.render(<TooltipProvider><MachineRaises loading error="Move already under way" raises={[row]} /></TooltipProvider>));
+    expect(host!.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true);
+    expect(host!.querySelector("[role=alert]")?.textContent).toBe("Move already under way");
+    expect(host!.querySelector("[role=status]")?.textContent).toBe("Loading raised machines…");
+    await act(async () => root!.render(<MachineRaises raises={[]} />));
+    expect(host!.textContent).toBe("");
+  });
   test("a proportion bar sizes each part by its share, and names the reserved one", () => {
     const h = renderToStaticMarkup(
       <ProportionBar aria-label="32 GiB: 2 kept, two runs of 15" total="32 GiB" legend="Linux and the host · 2 GiB" segments={[

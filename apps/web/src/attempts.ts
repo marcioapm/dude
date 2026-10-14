@@ -131,12 +131,15 @@ export const attemptStatus = (task: TaskDetail, attempt: number, current: number
  * conductor parked (or ended): nothing is working, and the next message in
  * Chat is what moves it. That is said as paused, in those words, rather
  * than as a spinner. A conductor still running may be mid-turn, which a
- * task's Runs cannot tell from warm and idle: it stays Running.
+ * task's Runs cannot tell from warm and idle: it stays Running. So does a
+ * Run paused for a machine move (dudePause "machine"): dude resumes it on
+ * the new size without a message.
  */
 export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
   const status = attemptStatus(task, attempt, current);
   if (attempt !== current || status !== "running" || task.decider !== "conductor" || !task.awaitingDecision) return { status };
-  const working = task.runs.some((r) => (isAttemptWork(r) || isConductor(r)) && r.status !== "paused" && !TERMINAL_RUN_STATUSES.includes(r.status));
+  const working = task.runs.some((r) => (isAttemptWork(r) || isConductor(r))
+    && (r.status !== "paused" || r.dudePause === "machine") && !TERMINAL_RUN_STATUSES.includes(r.status));
   return working ? { status } : { status: "paused", label: WAITING_ON_CHAT };
 }
 

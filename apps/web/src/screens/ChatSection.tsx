@@ -261,6 +261,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
             />
           }
         >
+          {/* With no conductor yet, dude's lines (a person's machine Reset, a task relation) are the Chat's only turns. */}
           {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
         </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}

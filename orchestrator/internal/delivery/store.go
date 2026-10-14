@@ -591,12 +591,17 @@ const PersonAsk = `(` + openQuestion + `
 const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + `)`
 
 // HoldsTurn is true (SQL, over a Run aliased r) while a turn that ends
-// is not done: something is open for a person or a peer (OpenAsk), or a
-// repository the agent waits on was approved and has not reached it yet —
-// it is resumed with it.
+// is not done: something is open for a person or a peer (OpenAsk), a
+// repository the agent waits on was approved and has not reached it yet, or
+// a machine move of the Run is under way — it is resumed with it, or on it.
 const HoldsTurn = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved'))
+	OR ` + MoveUnsettled + `
 	OR ` + openPeerWait + `)`
+
+// MoveUnsettled is true (SQL, over a Run aliased r) while a machine move of
+// the Run is not settled.
+const MoveUnsettled = `EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)`
 
 // Directive is a message queued for a Run's agent: delivered by the phase
 // syncer, acknowledged by lux when the agent takes it. Scope "run" holds for

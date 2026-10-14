@@ -8,8 +8,8 @@
 import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
-import { SETTINGS_ROLES } from "@dude/domain";
-import type { Finding, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, RefusedName, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import { EventTypes, SETTINGS_ROLES } from "@dude/domain";
+import type { AgentMachine, Finding, Machine, MachineMove, MachineRaisedPayload, MachineRequestedPayload, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Raise, RefusedName, Run, SessionDetail, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -109,7 +109,8 @@ const TASK_BASE = {
 export function taskFor(scenario: ServerScenario): TaskDetail {
   const inReview = scenario === "d";
   const status: Task["status"] = inReview ? "review" : "running";
-  return { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null } as TaskDetail;
+  const task = { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null } as Omit<TaskDetail, "agentMachines">;
+  return { ...task, agentMachines: [] };
 }
 
 export const PULL_REQUEST: PullRequest = {
@@ -445,6 +446,191 @@ export function eventsFor(scenario: ServerScenario): PersistedEvent[] {
     ];
   }
   return out;
+}
+
+// -- Machine moves: agents asking for larger machines, as dude records them ---
+
+const STANDARD_MACHINE: Machine = { sizeId: "msz_standard", name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, pool: "default", from: "organization" };
+const LARGE_MACHINE: Machine = { sizeId: "msz_large", name: "Large", cpus: 4, memoryMiB: 16384, diskGiB: 40, poolId: null, pool: "default", from: "task" };
+const XL_MACHINE: Machine = { sizeId: "msz_xl", name: "XL", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: "pool_highmem", pool: "highmem", from: "task" };
+const RAISE_REASON = "jest OOM-killed with --maxWorkers 4 on 8 GiB";
+const KEEPS = "Your conversation and your checkout are kept, committed or not, with everything else on /workspace and your home. " +
+  "Running processes and /tmp are not: start your servers and watchers again.";
+const movedAnswer = (to: Machine, later: string) =>
+  `Moved: you run on ${to.name} (${to.cpus} CPUs · ${to.memoryMiB / 1024} GiB · ${to.diskGiB} GiB)${to.poolId ? ` in the ${to.pool} pool` : ""} from your next step. ${KEEPS} ${later} End your turn now; you are resumed on ${to.name}.`;
+
+/** A Run's ledger, from a base event: each event `s` seconds ago, on `runId`, by its agent unless said. */
+let ledgers = 0;
+function ledgerFrom(base: PersistedEvent, runId: string, scope: Partial<PersistedEvent> = {}) {
+  let i = 0;
+  const n = ++ledgers;
+  const prefix = `${runId}_${n}`;
+  return (eventType: string, payload: object, s: number, actor: PersistedEvent["actor"] = { type: "agent", id: runId }): PersistedEvent =>
+    ({ ...base, ...scope, cursor: 20_000 + n * 100 + i, eventId: `evt_${prefix}_${i++}`, eventType, occurredAt: new Date(Date.now() - s * 1000).toISOString(),
+      runId, actor, payload: payload as Record<string, unknown> });
+}
+
+/**
+ * An accepted request and its park, as agenttools.requestMachine, the park
+ * and lux's stages write them: the call, machine.requested and .raised,
+ * the tool's answer, the agent's last words, run.paused, then waiting.
+ */
+function acceptedMoveEvents(at: ReturnType<typeof ledgerFrom>, o: { role: string; from: Machine; to: Machine; reason: string; answer: string; s: number; said: string }): PersistedEvent[] {
+  const moveId = `mmv_${o.role}_${o.to.sizeId}`;
+  const pool = (o.from.poolId ?? null) !== (o.to.poolId ?? null)
+    ? { from: { id: o.from.poolId, name: o.from.pool }, to: { id: o.to.poolId, name: o.to.pool } } : undefined;
+  const move: MachineMove = { moveId, role: o.role, from: o.from, to: o.to, ...(pool ? { pool } : {}) };
+  const requested: MachineRequestedPayload = { ...move, reason: o.reason };
+  const raised: MachineRaisedPayload = { ...move, moveId };
+  return [
+    at(EventTypes.ToolCalled, { tool: "request_machine", callId: `call_${moveId}`, input: { size: o.to.name, reason: o.reason } }, o.s + 1),
+    at(EventTypes.MachineRequested, requested, o.s),
+    at(EventTypes.MachineRaised, raised, o.s),
+    at(EventTypes.ToolCompleted, { tool: "request_machine", callId: `call_${moveId}`, status: "completed",
+      output: { head: JSON.stringify({ size: o.to.name, ...(pool ? { pool: o.to.pool } : {}), answer: o.answer }) } }, o.s),
+    at(EventTypes.AgentMessage, { text: o.said }, o.s - 1),
+    at(EventTypes.RunPaused, { confirmed: true }, o.s - 6, dude),
+    at(EventTypes.RunStage, { stage: "waiting", since: new Date(Date.now() - (o.s - 8) * 1000).toISOString(), epoch: 2 }, o.s - 8, dude),
+  ];
+}
+
+/**
+ * A refused request: the call, failing with the tool's `{error, code}`, and
+ * machine.requested with `refused` when dude knew both sizes (lux's dry
+ * run, not larger); the largest and the move cap are refused before that.
+ */
+function refusedCallEvents(at: ReturnType<typeof ledgerFrom>, o: { role: string; size: string; reason: string; words: string; code?: string; sizes?: { from: Machine; to: Machine }; s: number }): PersistedEvent[] {
+  const callId = `call_refused_${o.size}_${o.s}`;
+  const recorded: MachineRequestedPayload[] = o.sizes && o.code ? [{ role: o.role, from: o.sizes.from, to: o.sizes.to, reason: o.reason, refused: o.code, message: o.words,
+    ...((o.sizes.from.poolId ?? null) !== (o.sizes.to.poolId ?? null)
+      ? { pool: { from: { id: o.sizes.from.poolId, name: o.sizes.from.pool }, to: { id: o.sizes.to.poolId, name: o.sizes.to.pool } } } : {}) }] : [];
+  return [
+    at(EventTypes.ToolCalled, { tool: "request_machine", callId, input: { size: o.size, reason: o.reason } }, o.s + 1),
+    ...recorded.map((p) => at(EventTypes.MachineRequested, p, o.s)),
+    at(EventTypes.ToolCompleted, { tool: "request_machine", callId, status: "error", output: { head: JSON.stringify({ error: o.words, code: o.code ?? "" }) } }, o.s),
+  ];
+}
+
+/** A raise as the API shows it on the Run (`machine`) and on its task or session (`agentMachines`). */
+function raiseOf(size: Machine, settings: Machine, o: { role: string; runId: string; reason: string; s: number; followedBy?: string[]; from?: Machine["from"] }) {
+  const raise: Raise = { sizeId: size.sizeId, moveId: `mmv_${o.role}_${size.sizeId}`, askedBy: o.runId, role: o.role, reason: o.reason,
+    at: new Date(Date.now() - o.s * 1000).toISOString() };
+  const machine = { ...size, from: o.from ?? "task", raised: raise };
+  const agentMachine: AgentMachine = { role: o.role, size: machine, settings, raise, askedBy: { runId: o.runId, role: o.role }, followedBy: o.followedBy ?? [] };
+  return { machine, agentMachine };
+}
+
+/**
+ * The implementer's raise to XL in the highmem pool (screens 1, 2, 5, 6,
+ * 9): the Run's `machine`, the task's `agentMachines` (the fixer
+ * following), and the ledger from the call to the Run waiting for a host
+ * in highmem — payloads typed by the domain, as the backend writes them.
+ */
+export function raisedMove(after: PersistedEvent): { machine: NonNullable<Run["machine"]>; agentMachines: AgentMachine[]; events: PersistedEvent[] } {
+  const { machine, agentMachine } = raiseOf(XL_MACHINE, STANDARD_MACHINE, { role: "implementer", runId: RUN_ID, reason: RAISE_REASON, s: 50, followedBy: ["fixer"] });
+  return {
+    machine, agentMachines: [agentMachine],
+    events: acceptedMoveEvents(ledgerFrom(after, RUN_ID), { role: "implementer", from: STANDARD_MACHINE, to: XL_MACHINE, reason: RAISE_REASON, s: 50,
+      answer: movedAnswer(XL_MACHINE, "Later implementer and fixer Runs in this task run on XL too."),
+      said: "Moving to XL; I will run the suite again with 4 workers once I am back." }),
+  };
+}
+
+export type RefusedMachineView = "refused-platform" | "refused-largest" | "refused-moves";
+
+/**
+ * Screen 3, on the implementer's Run: lux's platform_mismatch for XL
+ * (recorded, before any park) and then the move to Large; or the largest
+ * size; or the move cap — the last two refused before dude records anything.
+ */
+export function refusedMove(after: PersistedEvent, view: RefusedMachineView): { machine: NonNullable<Run["machine"]>; agentMachines: AgentMachine[]; events: PersistedEvent[] } {
+  const at = ledgerFrom(after, RUN_ID);
+  if (view === "refused-platform") {
+    const reason = "Playwright with 4 workers crashed Chromium twice (Target crashed) rendering the 2.1M-row preview; 4 browsers need about 20 GiB.";
+    const { machine, agentMachine } = raiseOf(LARGE_MACHINE, STANDARD_MACHINE, { role: "implementer", runId: RUN_ID, s: 30, followedBy: ["fixer"],
+      reason: "Same crash; XL is refused for this image. Large (16 GiB) fits 3 browser workers." });
+    return { machine, agentMachines: [agentMachine], events: [
+      at(EventTypes.ToolCalled, { tool: "bash", callId: "c_pw", input: { command: "npx playwright test --workers 4 e2e/export.spec.ts" }, title: "npx playwright test --workers 4" }, 100),
+      at(EventTypes.ToolCompleted, { tool: "bash", callId: "c_pw", status: "error", exitCode: 1, output: { head: "Error: Target crashed\n" } }, 90),
+      ...refusedCallEvents(at, { role: "implementer", size: "XL", reason, code: "platform_mismatch", sizes: { from: STANDARD_MACHINE, to: XL_MACHINE }, s: 80,
+        words: "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only." }),
+      at(EventTypes.AgentMessage, { text: "XL is not offered for this image. Large fits 3 browser workers; asking for that instead." }, 60),
+      ...acceptedMoveEvents(at, { role: "implementer", from: STANDARD_MACHINE, to: LARGE_MACHINE, s: 30,
+        reason: "Same crash; XL is refused for this image. Large (16 GiB) fits 3 browser workers.",
+        answer: movedAnswer(LARGE_MACHINE, "Later implementer and fixer Runs in this task run on Large too."),
+        said: "Moving to Large; I will run the export suite with 3 workers once I am back." }),
+    ] };
+  }
+  const largest = view === "refused-largest";
+  const on = largest ? XL_MACHINE : STANDARD_MACHINE;
+  const machine = { ...on, from: largest ? "task" as const : "organization" as const };
+  const words = largest
+    ? "You run on XL (8 CPUs · 32 GiB · 80 GiB), Example's largest size: there is none larger to ask for. Use fewer workers or less data, and say in your work what did not fit."
+    : "This Run has moved 3 times, the limit for one Run; a Reset does not give a move back. Carry on on Standard, or say in your work what did not fit.";
+  return { machine, agentMachines: [], events: [
+    at(EventTypes.ToolCalled, { tool: "bash", callId: "c_big", input: { command: largest ? "npx jest --maxWorkers 1 export/full-fixture" : "npx jest --maxWorkers 4 packages/backend" } }, 120),
+    at(EventTypes.ToolCompleted, { tool: "bash", callId: "c_big", status: "error", exitCode: 137, output: { head: "Killed\n" } }, 70),
+    ...refusedCallEvents(at, { role: "implementer", size: largest ? "XXL" : "Large", s: 50, words,
+      reason: largest ? "The full fixture's sort was OOM-killed at 32 GiB." : RAISE_REASON }),
+    at(EventTypes.AgentMessage, { text: largest ? "No larger size. Sorting in 8 chunks and merging on disk keeps the peak under 12 GiB."
+      : "No more moves for this Run. Running the suite with --maxWorkers 2 and noting that 4 workers do not fit Standard." }, 40),
+  ] };
+}
+
+export const CONDUCTOR_ID = "run_conductor_fx";
+
+/** Screen 4: the task's conductor asks Standard → Large to run the backend suite, in the task's Chat. */
+export function conductorMove(after: PersistedEvent): { run: Run; agentMachines: AgentMachine[]; events: PersistedEvent[] } {
+  const reason = "Márcio asked me to run the backend suite before I hand over. It needs 4 jest workers; Standard (8 GiB) is the size the implementer was OOM-killed on.";
+  const { machine, agentMachine } = raiseOf(LARGE_MACHINE, STANDARD_MACHINE, { role: "conductor", runId: CONDUCTOR_ID, reason, s: 40 });
+  const run = { ...RUN_IMPLEMENT, id: CONDUCTOR_ID, phase: null, role: "conductor", machine, branch: null, createdAt: iso(20 * MIN), startedAt: iso(20 * MIN) } as Run;
+  const at = ledgerFrom(after, CONDUCTOR_ID);
+  return { run, agentMachines: [agentMachine], events: [
+    at(EventTypes.RunCreated, { role: "conductor" }, 1200, dude),
+    at(EventTypes.RunStarted, {}, 1190, dude),
+    at(EventTypes.ChatMessage, { text: "Run the backend suite before you hand over, please." }, 120, me),
+    at(EventTypes.AgentMessage, { text: "The suite needs 4 jest workers rendering PDFs; on Standard the implementer was OOM-killed. Asking for Large first." }, 90),
+    ...acceptedMoveEvents(at, { role: "conductor", from: STANDARD_MACHINE, to: LARGE_MACHINE, reason, s: 40,
+      answer: movedAnswer(LARGE_MACHINE, "Later conductors in this task run on Large too."),
+      said: "Moving to Large; I will run the suite once I am back." }),
+  ] };
+}
+
+export const SESSION_ID = "ssn_invoices";
+const SESSION_RUN = "run_session_fx";
+
+/** Screen 7: a brainstorm session on Small moves to XL, in the highmem pool, keeping its conversation and archive.db. */
+export function sessionMove(after: PersistedEvent): { detail: SessionDetail; events: PersistedEvent[] } {
+  const small: Machine = { ...STANDARD_MACHINE, sizeId: "msz_small", name: "Small", cpus: 1, memoryMiB: 4096, diskGiB: 10 };
+  const reason = "duckdb ran out of memory joining 2025's invoices with their lines (3.7 GiB of 3.7 GiB used); the join needs about 20 GiB.";
+  const { machine, agentMachine } = raiseOf(XL_MACHINE, small, { role: "brainstorm", runId: SESSION_RUN, reason, s: 45, from: "session" });
+  const people = [{ person: { ...ref(YOU) }, role: "owner" as const, accepted: true, becomesOwner: false, open: true },
+    { person: { ...ref("u_ana") }, role: "chat" as const, accepted: true, becomesOwner: false, open: false }];
+  const detail: SessionDetail = {
+    session: { id: SESSION_ID, title: "Invoice archive: what 7 years would cost", titledBy: "agent", createdAt: iso(30 * MIN), people,
+      projects: [{ id: PROJECT.id, key: PROJECT.key, name: PROJECT.name, repositories: [{ id: "repo_wc", name: "web-console", defaultBranch: "main" }] }],
+      run: { id: SESSION_RUN, status: "running", dudePause: null, model: "claude-opus-5-5", modelTier: "Thinker", harness: "opencode", machine: machine.name, waiting: false, stage: null },
+      runs: [SESSION_RUN], costUsd: 0.84, messages: 3 },
+    you: { id: YOU, role: "owner", archived: false }, proposals: [], question: null, agentMachines: [agentMachine],
+  };
+  const at = ledgerFrom(after, SESSION_RUN, { taskId: null as unknown as string, projectId: null as unknown as string, sessionId: SESSION_ID });
+  return { detail, events: [
+    at(EventTypes.RunCreated, { role: "brainstorm" }, 1800, dude),
+    at(EventTypes.ChatMessage, { text: "What would it cost to keep 7 years of invoices queryable? Try it on 2025's." }, 300, me),
+    at(EventTypes.AgentMessage, { text: "Loading 2025's invoices and lines into archive.db to measure the join." }, 250),
+    at(EventTypes.ToolCalled, { tool: "bash", callId: "c_duck", input: { command: "duckdb archive.db -c \"CREATE TABLE inv AS SELECT * FROM 'invoices-2025.parquet' JOIN 'lines-2025.parquet' USING (id)\"" } }, 200),
+    at(EventTypes.ToolCompleted, { tool: "bash", callId: "c_duck", status: "error", exitCode: 1,
+      output: { head: "Out of Memory Error: could not allocate block of 262144 bytes (3.7 GiB/3.7 GiB used)\n" } }, 150),
+    ...acceptedMoveEvents(at, { role: "brainstorm", from: small, to: XL_MACHINE, reason, s: 45,
+      answer: movedAnswer(XL_MACHINE, "This session's agent runs on XL from now on."),
+      said: "Moving to XL; archive.db and this conversation come with me." }),
+  ].map((e) => ({ ...e, taskId: null as unknown as string })) };
+}
+
+/** Screen 8: after Start over, attempt 2's first implementer Run starts on Large, raised for this task. */
+export function startOverRaise(): { machine: NonNullable<Run["machine"]>; agentMachines: AgentMachine[]; runId: string } {
+  const { machine, agentMachine } = raiseOf(LARGE_MACHINE, STANDARD_MACHINE, { role: "implementer", runId: "run_a1_fix", reason: RAISE_REASON, s: 130 * 60, followedBy: ["fixer"] });
+  return { machine, agentMachines: [agentMachine], runId: "run_attempt2" };
 }
 
 // -- Servers: the scenarios, copied so the fixture client can change them ------

@@ -38,6 +38,7 @@ import (
 const (
 	causeAnswer     = "answer"
 	causeRepository = "repository"
+	causeMachine    = "machine"
 	causePerson     = "person"
 	causeIdle       = "idle"
 	// A person's message to a parked conductor.
@@ -55,6 +56,10 @@ func resumeCause(r phaseRun) string {
 		return causeIdle
 	case r.Control == "resume":
 		return causePerson
+	// A person park still waiting yet resumable has no person ask: it is
+	// parked only on a peer's reply. No mail to read: resumed for its move.
+	case r.DudePause == "machine", r.DudePause == "person" && r.Waiting && r.Moving && !r.HasDirectives:
+		return causeMachine
 	case r.DudePause == "repository":
 		return causeRepository
 	case r.DudePause == "conductor":
@@ -106,11 +111,13 @@ func placementsAround(ps []lux.Placement, epoch int) (cur, prev lux.Placement) {
 // parks without it fall back to occurred_at, the orchestrator's clock; or,
 // for a Run parked only on a peer, mail queued since the park. A
 // message to a parked conductor: the first message it has not been sent
-// yet.
+// yet. A machine move: when the move was asked for; it settles only after
+// lux answers the resume, so here it is still the Run's unsettled one.
 const woken = `CASE $3
 	WHEN 'person' THEN r.control_requested_at
 	WHEN 'idle' THEN r.control_requested_at
 	WHEN 'repository' THEN (SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'approved')
+	WHEN 'machine' THEN (SELECT max(m.created_at) FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL)
 	WHEN 'conductor' THEN (SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
 	WHEN 'session' THEN (SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
 	ELSE (SELECT GREATEST(
