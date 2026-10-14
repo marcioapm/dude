@@ -101,7 +101,7 @@ test("GitHub authorization shows its canonical status and when a reconnect would
   await click(confirm);
   await until(() => client.disconnects === 1 && card.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null,
     "disconnected status");
-  expect(card.querySelector("[data-testid=github-disconnect]")).toBeNull();
+  expect(card.querySelectorAll("[data-testid=github-disconnect]").length).toBe(0);
   // The dialog is gone and the keyboard is on Connect, not <body>: the button that opened the dialog went with the connection.
   await until(() => document.querySelector("[role=dialog]") === null && document.activeElement === card.querySelector("[data-testid=github-connect]")
     ? true : null, "dialog closed, focus on Connect");
@@ -177,7 +177,7 @@ test("the callback's outcome leaves the address once read, and a later Disconnec
   await click(card.querySelector<HTMLButtonElement>("[data-testid=github-disconnect]")!);
   await click(await until(() => document.querySelector<HTMLButtonElement>("[data-testid=github-disconnect-confirm]"), "the confirmation"));
   await until(() => card.querySelector("[data-testid=github-authorization-status]")?.textContent === "Not connected" ? true : null, "disconnected status");
-  expect(card.querySelector("[data-testid=github-outcome]")).toBeNull();
-  expect(card.querySelector("[data-tone=success]")).toBeNull();
+  expect(card.querySelectorAll("[data-testid=github-outcome]").length).toBe(0);
+  expect(card.querySelectorAll("[data-tone=success]").length).toBe(0);
   expect(window.location.search).toBe("?keep=1");
 });

@@ -1296,6 +1296,12 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
         <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
           content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} {...turnImages(turn, shown)} />
       );
+    case "told":
+      // What dude put in front of the agent's input that no one typed: dude's, in the briefing's frame.
+      return (
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="told"
+          content={turn.text} startedAt={turn.at} data-testid="chat-told" />
+      );
     case "message":
       return (
         <ChatMessage

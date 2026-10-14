@@ -184,15 +184,59 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     return () => window.removeEventListener("hashchange", follow);
   }, []);
 
+  // Welcome to <organisation> shows until the membership is welcomed (`welcomedAt`). Whether it
+  // shows is decided on arriving, so marking it while still there leaves the page in place.
+  const membershipId = account?.current.id;
+  const welcomedAt = account?.current.welcomedAt;
+  const atJoined = place?.view === "joined";
+  const [joinedShown, setJoinedShown] = useState<boolean | null>(null);
+  if (!atJoined && joinedShown !== null) setJoinedShown(null);
+  if (atJoined && joinedShown === null) setJoinedShown(welcomedAt == null);
+  const refreshAccount = account?.refresh;
+  // One mark per displayed membership: Save, then leaving, sends it once.
+  const welcomeMarked = useRef(false);
+  const welcomed = useCallback(() => {
+    if (!membershipId || welcomeMarked.current) return;
+    welcomeMarked.current = true;
+    void client.markWelcomed(membershipId).catch(() => {
+      welcomeMarked.current = false;
+    }).then(() => refreshAccount?.());
+  }, [client, membershipId, refreshAccount]);
+  const welcomedRef = useRef(welcomed);
+  welcomedRef.current = welcomed;
+  // Leaving it in this tab (Start, the sidebar, Back) is dismissing it.
+  const showingJoined = atJoined && joinedShown === true;
+  const wasShowingJoined = useRef(false);
+  useEffect(() => {
+    if (wasShowingJoined.current && !showingJoined) welcomedRef.current();
+    wasShowingJoined.current = showingJoined;
+  }, [showingJoined]);
+  // So is leaving with it shown: a switch or front door unmounts this membership's app, and the
+  // document can go (reload, close). A request started on pagehide may still be cancelled.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const showingJoinedRef = useRef(showingJoined);
+  showingJoinedRef.current = showingJoined;
+  useEffect(() => {
+    const shell = shellRef.current;
+    const depart = () => {
+      if (showingJoinedRef.current) welcomedRef.current();
+    };
+    window.addEventListener("pagehide", depart);
+    return () => {
+      window.removeEventListener("pagehide", depart);
+      // StrictMode's replay keeps the shell in the document; an unmount has removed it by then.
+      queueMicrotask(() => {
+        if (!shell?.isConnected) depart();
+      });
+    };
+  }, []);
+
   // Notifications: the service worker, and a clicked one opening its place. Someone in several
-  // organisations over Access keeps the subscription where Notify me in this browser put it.
-  const pushOrgId = account?.current.id;
-  const pushOrgName = account?.current.name;
-  const reclaimPush = !(account && account.authMethod === "cloudflare_access" && account.memberships.length > 1);
+  // organisations turns each on with its own Notify me; opening one registers nothing.
+  const reclaimPush = !account || account.memberships.length <= 1;
   useEffect(() => startPush(client, (hash) => {
     window.location.hash = hash;
-  }, { reclaim: reclaimPush, organization: pushOrgId && pushOrgName ? { id: pushOrgId, name: pushOrgName } : null }),
-  [client, reclaimPush, pushOrgId, pushOrgName]);
+  }, { reclaim: reclaimPush }), [client, reclaimPush]);
 
   // Bumped on each reload: what reads its own data (an epic's metrics)
   // re-reads with the tree rather than on a stream of its own.
@@ -387,10 +431,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
   const newProject = () => setOpen({ kind: "newProject" });
-  if (place?.view === "joined" && account) {
+  if (place?.view === "joined" && account && joinedShown) {
     flush = true;
     main = <JoinedScreen client={client} organization={account.current} projects={projects} people={people.all.length}
-      me={people.me} onChanged={() => void people.refresh()} onStart={toWelcome} />;
+      me={people.me} onChanged={() => void people.refresh()} onStart={toWelcome} onWelcomed={welcomed} />;
   } else if (place?.view === "welcome" || place?.view === "joined") {
     flush = true;
     // A session needs no project, so the welcome is always the welcome; an
@@ -627,7 +671,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   ) : null;
 
   return (
-    <div className="shell" data-testid="shell">
+    <div ref={shellRef} className="shell" data-testid="shell">
       {/* First to take focus: past the sidebar, straight to what is selected. */}
       <a className="skipLink" href="#main" onClick={(e) => {
         e.preventDefault();

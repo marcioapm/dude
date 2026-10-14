@@ -5,9 +5,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { escalationWords, shortError } from "../src/escalation.ts";
+import type { Escalation } from "@dude/domain";
+import { escalationWords as wordsFor, shortError } from "../src/escalation.ts";
 
 const at = "2026-01-01T00:00:00Z";
+// The words read only reason and detail; the escalation's actions are left out.
+const escalationWords = (e: Omit<Escalation, "actions">) => wordsFor(e as Escalation);
 
 describe("escalationWords", () => {
   test("a stuck review counts the findings it is stuck on", () => {

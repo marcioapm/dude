@@ -151,7 +151,7 @@ describe("settings pages", () => {
     const screen = await until(() => page.querySelector<HTMLElement>("[data-testid=my-settings]"), "your settings");
     await until(() => screen.querySelector("[data-testid=profile]"), "the profile");
     expect([...screen.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Your settings"]);
-    expect(screen.querySelector("nav[aria-label=Breadcrumb]")).toBeNull();
+    expect(screen.querySelectorAll("nav[aria-label=Breadcrumb]").length).toBe(0);
     expect(document.title).toBe("Your settings — dude");
     expect(screen.querySelector("[data-testid=profile]")!.textContent).toContain("Organisation admin");
   });
@@ -183,16 +183,16 @@ describe("the sidebar's profile band", () => {
 describe("the first load with no place", () => {
   /** A client whose tree arrives only when `arrive` is called. */
   class SlowTree extends FixtureClient {
-    private gate = Promise.withResolvers<void>();
+    private held = Promise.withResolvers<void>();
     asked = Promise.withResolvers<void>();
     /** Called as the tree is handed to the app. */
     onArrival = () => {};
     arrive() {
-      this.gate.resolve();
+      this.held.resolve();
     }
     override async navigation() {
       this.asked.resolve();
-      await this.gate.promise;
+      await this.held.promise;
       const tree = await super.navigation();
       this.onArrival();
       return tree;
@@ -253,7 +253,7 @@ describe("home", () => {
   test("the sidebar's New session goes to the welcome and makes nothing", async () => {
     class Counting extends FixtureClient {
       made = 0;
-      override createSession(): Promise<never> {
+      override createSession() {
         this.made++;
         return super.createSession();
       }
@@ -269,7 +269,7 @@ describe("home", () => {
     class OneUntitled extends FixtureClient {
       override sessions(): Promise<SessionsList> {
         return Promise.resolve({
-          sessions: [{ id: "bs_untitled", title: null, role: "owner", createdAt: new Date().toISOString(), owner: { id: YOU, name: "Márcio Martins", photoUrl: null },
+          sessions: [{ id: "bs_untitled", title: null, role: "owner", createdAt: new Date().toISOString(), owner: { id: YOU, name: "Márcio Martins", photoUrl: null, online: false },
             shared: false, projects: [], runStatus: null, dudePause: null, filed: 0, lastActivityAt: new Date().toISOString(), archived: false }],
           invitations: [], questions: [],
         });

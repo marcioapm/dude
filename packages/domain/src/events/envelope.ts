@@ -19,6 +19,8 @@ export type Actor = z.infer<typeof actorSchema>;
 
 export const eventSourceSchema = z.enum([
   "control-plane",
+  // The Go orchestrator's own writes (ledger.SourceOrchestrator).
+  "orchestrator",
   "runner",
   "harness",
   "github",

@@ -108,7 +108,8 @@ describe("machine moves", () => {
     const done = project([...events, ev(EventTypes.RunResized, { machine: { ...XL, from: "task" } }),
       ev(EventTypes.AgentMessage, { text: "Back on XL." })], "running");
     expect(done.start).toBeNull();
-    expect(notices(done).at(-1)).toBe("The implementer moved to XL in 6.0s, with its conversation and work.");
+    // Untimed until its resume's timing comes: the stop alone is not the move's time.
+    expect(notices(done).at(-1)).toBe("The implementer moved to XL, with its conversation and work.");
   });
 
   test("lux refusing the real resume ends the move with whom it was kept on and the backend's words", () => {
@@ -262,7 +263,7 @@ describe("machine moves", () => {
       const rows = toolRows(c).map(({ tool, status, endedAt, result, machine }) => ({ tool, status, endedAt, result, machine }));
       expect(rows).toEqual([
         { tool: "request_machine", status: "completed", endedAt: first.occurredAt, result: { output }, machine: refusedCard },
-        ...(bash ? [{ tool: "bash", status: "running", endedAt: null, result: null, machine: undefined }] : []),
+        ...(bash ? [{ tool: "bash", status: "running" as const, endedAt: null, result: null, machine: undefined }] : []),
       ]);
       expect(c.activeTool).toEqual(bash ? { name: "bash", since: bash.occurredAt } : null);
     });

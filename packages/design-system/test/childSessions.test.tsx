@@ -74,7 +74,7 @@ test("a live thread waiting on a permission says so in its header and marks itse
   // Still live: it stays open with its turns inside.
   expect(live!.textContent).toContain("inside");
   expect(done!.getAttribute("data-waiting")).toBeNull();
-  expect(done!.querySelector("[data-testid='chat-thread-waiting']")).toBeNull();
+  expect(done!.querySelectorAll("[data-testid='chat-thread-waiting']").length).toBe(0);
 });
 
 test("an open-only row marks its whole root as clickable; a disclosure thread does not", async () => {
@@ -104,9 +104,9 @@ test("an open-only row opens by click, Enter and Space and never discloses a bod
   await press(header, "Enter");
   await press(header, " ");
   expect(opened).toEqual(["row", "row", "row"]);
-  expect(el.querySelector("[role='group']")).toBeNull();
+  expect(el.querySelectorAll("[role='group']").length).toBe(0);
   expect(el.textContent).not.toContain("Hidden transcript");
-  expect(el.querySelector("button[aria-label='Open session']")).toBeNull();
+  expect(el.querySelectorAll("button[aria-label='Open session']").length).toBe(0);
 });
 
 test("an ordinary disclosure thread toggles its body by Enter and Space without opening", async () => {
@@ -121,7 +121,7 @@ test("an ordinary disclosure thread toggles its body by Enter and Space without 
   expect(el.textContent).toContain("Inline transcript");
   await press(header, "Enter");
   expect(header.getAttribute("aria-expanded")).toBe("false");
-  expect(el.querySelector("[role='group']")).toBeNull();
+  expect(el.querySelectorAll("[role='group']").length).toBe(0);
   await press(header, " ");
   expect(header.getAttribute("aria-expanded")).toBe("true");
   expect(el.textContent).toContain("Inline transcript");
@@ -136,16 +136,16 @@ test("the gallery's child-session block draws a live, a waiting, a folded and tw
   );
   const block = el.querySelector("#ch-children")!;
   expect(block.querySelector("h3")?.textContent).toContain("child session");
-  expect(block.querySelector("[data-role='subagent']")).toBeNull();
-  expect(block.querySelector("[data-theme]")).toBeNull();
+  expect(block.querySelectorAll("[data-role='subagent']").length).toBe(0);
+  expect(block.querySelectorAll("[data-theme]").length).toBe(0);
   expect(observer.target).toBe(block.querySelector("[data-testid='child-examples-pending']"));
   expect(observer.options?.rootMargin).toBe("1500px 0px");
   await act(async () => observer.intersect(false));
-  expect(block.querySelector("[data-role='subagent']")).toBeNull();
+  expect(block.querySelectorAll("[data-role='subagent']").length).toBe(0);
   expect(observer.disconnects).toBe(0);
   await act(async () => observer.intersect(true));
   expect(observer.disconnects).toBe(1);
-  expect(block.querySelector("[data-testid='child-examples-pending']")).toBeNull();
+  expect(block.querySelectorAll("[data-testid='child-examples-pending']").length).toBe(0);
   await act(async () => observer.intersect(false));
   const panes = [...block.querySelectorAll("[data-theme]")];
   expect(panes.map((p) => p.getAttribute("data-theme"))).toEqual(["dark", "light"]);
@@ -171,7 +171,7 @@ test("without IntersectionObserver the child examples render immediately in both
   Reflect.deleteProperty(globalThis, "IntersectionObserver");
   const el = await mount(<PaneDensityContext.Provider value="comfortable"><ChatSection mode="both" /></PaneDensityContext.Provider>);
   const block = el.querySelector("#ch-children")!;
-  expect(block.querySelector("[data-testid='child-examples-pending']")).toBeNull();
+  expect(block.querySelectorAll("[data-testid='child-examples-pending']").length).toBe(0);
   expect([...block.querySelectorAll("[data-theme]")].map((pane) => pane.getAttribute("data-theme"))).toEqual(["dark", "light"]);
   expect(block.querySelectorAll("section[data-session-id]").length).toBe(10);
 });

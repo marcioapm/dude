@@ -110,7 +110,7 @@ describe("an organisation's Network page", () => {
 
   test("Anywhere writes * and says what it means; an empty list says agents reach only their model", async () => {
     const { container, client } = await organisation();
-    expect(container.querySelector("[data-testid=network-anywhere]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-anywhere]").length).toBe(0);
     await click(container.querySelector("[data-testid=network-anywhere-switch]")!);
     await settle(150);
     expect(client.patches.at(-1)?.network?.egress?.[0]).toBe("*");
@@ -128,12 +128,13 @@ describe("an organisation's Network page", () => {
   const ON = "On — brainstorm agents may reach any host, to read the web";
   /** The danger Callout under the switch (role alert), found by its heading words; null when absent. */
   const risk = (c: Element) => allByRole(c, "alert").find((a) => a.textContent?.startsWith("Anything a page says can steer the agent")) ?? null;
+  const risks = (c: Element) => allByRole(c, "alert").filter((a) => a.textContent?.startsWith("Anything a page says can steer the agent")).length;
 
   test("Brainstorm sessions: off, the list applies; on, they reach any host, and the page says what that risks", async () => {
     const { container, client } = await organisation();
     expect(byRole(container, "switch", OFF).getAttribute("aria-checked")).toBe("false");
     expect(container.textContent).toContain("A change reaches brainstorm agents started after it; one already started, running or parked, keeps the network it had until its session starts a new agent");
-    expect(risk(container)).toBeNull();
+    expect(risks(container)).toBe(0);
     await click(byRole(container, "switch", OFF));
     await settle(150);
     expect(client.patches).toEqual([{ network: { brainstorm: true } }]);
@@ -145,7 +146,7 @@ describe("an organisation's Network page", () => {
     await click(byRole(container, "switch", ON));
     await settle(150);
     expect(client.patches.at(-1)).toEqual({ network: { brainstorm: false } });
-    expect(risk(container)).toBeNull();
+    expect(risks(container)).toBe(0);
   });
 
   test("a member who may not change it sees Brainstorm sessions disabled", async () => {
@@ -165,7 +166,7 @@ describe("a project's Network page", () => {
     const went: string[] = [];
     const { container, client } = await project(new Recording("a"), (p) => went.push(p));
     expect(chips(container, "network-org-egress")).toEqual(["github.com", "*.github.com", "objects.githubusercontent.com"]);
-    expect(container.querySelector("[data-testid=network-org-egress] button")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-org-egress] button").length).toBe(0);
     expect(container.querySelector("[data-testid=network-from]")?.textContent).toContain("From Example · change in Example’s settings");
     await click(byRole(container, "button", "change in Example’s settings"));
     expect(went).toEqual(["network"]);
@@ -185,7 +186,7 @@ describe("a project's Network page", () => {
     await settle(150);
     expect(client.patches).toEqual([{ network: { mode: "only" } }]);
     expect(container.textContent).toContain("OverriddenExample: 3 hosts");
-    expect(container.querySelector("[data-testid=network-org-egress]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-org-egress]").length).toBe(0);
     await click(byRole(container, "button", "Reset"));
     await settle(150);
     expect(client.patches.at(-1)).toEqual({ network: { mode: "add", egress: [] } });
@@ -203,7 +204,7 @@ describe("a project's Network page", () => {
     await until(() => container.querySelector("[data-refused='registry.npmjs.org']") === null || null, "the allowed host to go");
     await click(byRole(container, "button", "Allow all 1"));
     await settle(200);
-    expect(container.querySelector("[data-testid=network-refused-row]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-refused-row]").length).toBe(0);
   });
 
   test("a member who may not change it sees everything, disabled", async () => {
@@ -213,11 +214,11 @@ describe("a project's Network page", () => {
     client.patches = [];
     const { container } = await project(client);
     expect(chips(container, "network-egress")).toEqual(["proxy.golang.org"]);
-    expect(container.querySelector("[data-testid=network-page] input")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-page] input").length).toBe(0);
     expect([...container.querySelectorAll<HTMLButtonElement>("[data-preset]")].every((b) => b.disabled)).toBe(true);
     expect(container.querySelector<HTMLButtonElement>("[data-testid=network-only-switch]")!.disabled).toBe(true);
     const row = await until(() => container.querySelector("[data-testid=network-refused-row]"), "the refused row");
-    expect(row.querySelector("button")).toBeNull();
+    expect(row.querySelectorAll("button").length).toBe(0);
   });
 });
 
@@ -247,7 +248,7 @@ describe("in a Run", () => {
     await click(byRole(note as HTMLElement, "button", "Allow for web-console"));
     await until(() => container.querySelector("[data-testid=network-allowed]"), "Allowed");
     expect(client.allowed).toEqual([["files.pythonhosted.org"]]);
-    expect(container.querySelector("[data-testid=network-allow]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-allow]").length).toBe(0);
   });
 
   test("someone who may not change the project's list gets the note and Settings, no Allow", async () => {
@@ -268,7 +269,7 @@ describe("in a Run", () => {
     localStorage.setItem(RUN_KEY, "refused");
     const again = await run(client);
     await until(() => again.querySelector("[data-testid=network-allowed]"), "Allowed, on opening the Run again");
-    expect(again.querySelector("[data-testid=network-allow]")).toBeNull();
+    expect(again.querySelectorAll("[data-testid=network-allow]").length).toBe(0);
   });
 });
 
@@ -305,7 +306,7 @@ describe("which refused host a call's output names", () => {
     mounted.push(unmount);
     // The settings are read: the call has been scanned for a.example.com alone.
     await until(() => container.querySelector("[data-testid=notes-ready]"), "the project's settings");
-    expect(container.querySelector("[data-testid=network-refused]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=network-refused]").length).toBe(0);
     await act(async () => setEvents(refused("a.example.com", "b.example.com")));
     await until(() => container.querySelector("[data-testid=network-refused]"), "the note for b.example.com");
   });

@@ -14,11 +14,12 @@ import { KeysSection, ProfileSection, type KeyGroup } from "./YouSections.tsx";
 import { useAccount } from "../accounts/context.tsx";
 import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
-import { pushOrganization, pushState, showTestNotification, turnPushOff, turnPushOn, type PushOrganization, type PushState } from "../push.ts";
+import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
 
+// Notifications are on or off per organisation: the card speaks of the one this tab is in.
 const PUSH_TEXT: Record<PushState, string> = {
-  on: "On in this browser: a question or a request from an agent shows as a notification, even with dude closed.",
-  off: "Off in this browser. Waiting work still shows under Needs you.",
+  on: "On in this browser, for this organisation: a question or a request from an agent here shows as a notification, even with dude closed.",
+  off: "Off in this browser, for this organisation. Waiting work still shows under Needs you.",
   blocked: "Blocked by this browser. Allow notifications for this site in the browser's settings, then come back.",
   unsupported: "This browser cannot show dude's notifications here (it needs a secure connection and push support).",
 };
@@ -143,21 +144,16 @@ export function MySettingsScreen({ client, me, onChanged }: {
 }) {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
-  const [pushFor, setPushFor] = useState<PushOrganization | null>(null);
   const { busy, problem, save } = useSave();
   // Who you are on GitHub is only on your own /v1/me, not the people list.
   const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
   const [authorization, setAuthorization] = useState<Awaited<ReturnType<ApiClient["githubAuthorization"]>> | null>(null);
   const [read, setRead] = useState(0);
   const account = useAccount();
-  const here: PushOrganization | null = account ? { id: account.current.id, name: account.current.name } : null;
 
   useEffect(() => {
-    void Promise.all([pushState(), pushOrganization()]).then(([state, owner]) => {
-      setPush(state);
-      setPushFor(owner);
-    });
-  }, []);
+    void pushState(client).then(setPush);
+  }, [client]);
   useEffect(() => {
     void client.me().then((r) => setGithub({ githubLogin: r.person.githubLogin ?? null, commitEmail: r.person.commitEmail ?? null }),
       () => setGithub({ githubLogin: null, commitEmail: null }));
@@ -167,21 +163,11 @@ export function MySettingsScreen({ client, me, onChanged }: {
     void client.githubAuthorization().then(setAuthorization, () => setAuthorization(null));
   }, [client, read]);
 
-  const change = (to: () => Promise<PushState>, owner: PushOrganization | null) => save(async () => {
-    const state = await to();
-    setPush(state);
-    setPushFor(state === "on" ? owner : null);
-  });
-  // The recorded owner counts only while you are still in it, under its current name.
-  const ownerMembership = pushFor && account ? account.memberships.find((m) => m.id === pushFor.id) : undefined;
-  const owner: PushOrganization | null = !account ? pushFor
-    : ownerMembership ? { id: ownerMembership.id, name: ownerMembership.name } : null;
-  // The one subscription is another organisation's: claiming it here moves it.
-  const elsewhere = push === "on" && owner && here && owner.id !== here.id;
-  const pushText = push === "on" && owner
-    ? `On in this browser, for ${owner.name}: a question or a request from an agent there shows as a notification, even with dude closed.`
-      + (elsewhere ? " This browser can notify you for one organisation at a time." : "")
-    : push ? PUSH_TEXT[push] : "";
+  const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
+  // Your other organisations, asked before the browser's subscription is dropped.
+  const elsewhere = () => (account?.memberships ?? []).filter((m) => m.id !== account?.current.id)
+    .map((m) => account!.base.inOrganization(m.id));
+  const pushText = push ? PUSH_TEXT[push] : "";
   // Keys across your organisations: read with the credential that names none.
   const keysClient = account?.base ?? client;
   const groups: KeyGroup[] = account
@@ -272,21 +258,16 @@ export function MySettingsScreen({ client, me, onChanged }: {
               {problem ? <Callout tone="danger">{problem}</Callout> : null}
               <FormActions>
                 {push === "off" ? (
-                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-on">
+                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client))} data-testid="push-on">
                     Notify me in this browser
                   </Button>
                 ) : null}
                 {push === "on" ? (
                   <>
-                    {elsewhere ? (
-                      <Button variant="secondary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-here">
-                        Notify me for {here.name} instead
-                      </Button>
-                    ) : null}
                     <Button variant="secondary" disabled={busy} onClick={() => void showTestNotification()}>
                       Send a test notification
                     </Button>
-                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client), null)} data-testid="push-off">
+                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client, elsewhere()))} data-testid="push-off">
                       Turn off
                     </Button>
                   </>

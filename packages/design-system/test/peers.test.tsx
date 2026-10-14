@@ -65,7 +65,7 @@ describe("PeerMessage", () => {
     expect(words(turn)).toContain("Peer");
     expect(words(turn)).toContain("you");
     expect(turn.getAttribute("data-unread")).toBeNull();
-    expect(el.querySelector('[data-testid="peer-lands"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="peer-lands"]').length).toBe(0);
   });
 
   test("queued, it lands at the peer's next step; held, it says the orchestrator's notice", async () => {
@@ -91,8 +91,8 @@ describe("PeerMessage", () => {
     expect(words(el)).toContain("Replying toWhat body will /v1/metrics/preview/* take?");
     await act(async () => root!.render(<PeerMessage msg={{ ...ASK, delivery: { kind: "queued" } }} carryingOn refused="5 messages in the last hour" />));
     expect(byRole(el, "status").textContent).toContain("Not sent: 5 messages in the last hour");
-    expect(el.querySelector('[data-testid="peer-lands"]')).toBeNull();
-    expect(el.querySelector('[data-testid="peer-carrying-on"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="peer-lands"]').length).toBe(0);
+    expect(el.querySelectorAll('[data-testid="peer-carrying-on"]').length).toBe(0);
   });
 });
 
@@ -299,7 +299,7 @@ describe("the changed pieces", () => {
     expect(words(limit)).toBe("3 of 10");
     expect(limit.getAttribute("aria-label")).toBe("3 of at most 10 notes");
     await act(async () => root!.render(<Section title="Tasks" count={4}>x</Section>));
-    expect(el.querySelector('[data-testid="section-limit"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="section-limit"]').length).toBe(0);
     expect(words(el.querySelector("h2")!)).toBe("Tasks4");
   });
 

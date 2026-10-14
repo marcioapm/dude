@@ -90,7 +90,7 @@ describe("the Models page", () => {
 
   test("a member sees no Add tier and no row menu", async () => {
     const container = await page(new TestingClient("a"), { ...TIERS, canEdit: false });
-    expect(container.querySelector("[data-testid=add-model-tier]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=add-model-tier]").length).toBe(0);
     expect(button(container, "Actions for Coder")).toBeUndefined();
   });
 
@@ -114,7 +114,7 @@ describe("the Models page", () => {
     expect(button(dialog, "Save anyway")).toBeDefined();
     expect(button(dialog, "Save")).toBeUndefined();
     await click(chips[2]!);
-    expect(dialog.querySelector("[data-testid=model-tier-unlisted]")).toBeNull();
+    expect(dialog.querySelectorAll("[data-testid=model-tier-unlisted]").length).toBe(0);
     expect(button(dialog, "Save")).toBeDefined();
   });
 
@@ -198,7 +198,7 @@ describe("a role's tier", () => {
     override organizationSettings(): Promise<SettingsResponse> {
       const { project: _, ...org } = SETTINGS;
       const roles = Object.fromEntries(Object.entries(org.roles).map(([role, s]) => [role, { ...s, tier: { ...s.tier, organization: undefined } }]));
-      return Promise.resolve({ ...org, roles } as SettingsResponse);
+      return Promise.resolve({ ...org, roles } as unknown as SettingsResponse);
     }
   }
   class FailingTiers extends OrganizationClient {
@@ -271,7 +271,7 @@ describe("a role's tier", () => {
     const { container } = await organizationRole(ADMIN);
     const requests = await until(() => container.querySelector("[data-testid=role-tier-requests]"), "what the tier requests");
     expect(requests.textContent).toBe("Requests claude-fable-5-1 · high");
-    expect(container.querySelector("[aria-label='Reasoning effort']")).toBeNull();
+    expect(container.querySelectorAll("[aria-label='Reasoning effort']").length).toBe(0);
   });
 
   test("on the organisation, a member is told only admins change tiers", async () => {

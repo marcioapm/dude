@@ -82,6 +82,7 @@ async function harness(client: WaitClient, initial: Props) {
 }
 
 const callout = (page: HTMLElement) => page.querySelector("[data-testid=waiting-for-host]");
+const callouts = (page: HTMLElement) => page.querySelectorAll("[data-testid=waiting-for-host]").length;
 
 describe("useRunServers: why a Run waits", () => {
   test("the same Run, once placed, asked again: the wait is gone", async () => {
@@ -94,7 +95,7 @@ describe("useRunServers: why a Run waits", () => {
     client.reasons.set("run_1", null);
     await act(async () => drive!({ runId: "run_1", status: "scheduled", waitAsk: 1 }));
     await until(() => page.querySelector("[data-testid=placed]"), "the wait gone");
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
   });
 
   test("a Run that ends shows no wait, without asking", async () => {
@@ -104,7 +105,7 @@ describe("useRunServers: why a Run waits", () => {
     await until(() => callout(page), "the wait");
     const reads = client.reads.length;
     await act(async () => drive!({ runId: "run_1", status: "completed", waitAsk: 0 }));
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
     await settle();
     expect(client.reads.length).toBe(reads);
   });
@@ -124,7 +125,7 @@ describe("useRunServers: why a Run waits", () => {
     await until(() => page.querySelector("[data-testid=placed]"), "run_2 placed");
     await act(async () => release());
     await settle();
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
   });
 
   test("a running Run that lux has placed is asked once, until lux's state changes", async () => {
@@ -159,7 +160,7 @@ describe("useRunServers: why a Run waits", () => {
     expect(client.reads.length).toBe(2);
     await act(async () => client.release());
     await until(() => page.querySelector("[data-testid=placed]"), "the wait gone after the follow-up");
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
     expect(client.reads).toEqual(["run_1", "run_1", "run_1"]);
   });
 
@@ -185,7 +186,7 @@ describe("useRunServers: why a Run waits", () => {
     await act(async () => client.release());
     await settle(100);
     expect(client.reads).toEqual(["run_1"]);
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
   });
 
   test("any other reason of lux's is shown as lux wrote it, with one period", async () => {
@@ -233,7 +234,7 @@ describe("the Run page", () => {
     client.reasons.set(RUN_ID, NESTED);
     const page = await runPage(client);
     await settle(200);
-    expect(callout(page)).toBeNull();
+    expect(callouts(page)).toBe(0);
     expect(client.reads).toEqual([]);
   });
 });

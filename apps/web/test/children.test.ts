@@ -247,7 +247,7 @@ describe("a call id reused for another tool", () => {
 
   // Events are made in fold order: one made earlier has a lower cursor, and a lower cursor is skipped as already folded.
   test("bash then task: two rows, each with its own input, end, result and children", () => {
-    const events = [bashCall(), bashDone(), parentCall(), started(), childEnded(), taskDone()];
+    const events = [bashCall(), bashDone(), parentCall(), started(), childEnded(), taskDone()] as const;
     const [, bashEnd, , , , taskEnd] = events;
     const { turns, toolCounts } = project(events);
     const [bash, task] = rows(turns);
@@ -260,7 +260,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("the first call's completion repeated while the second runs leaves the second running, and its own completion ends it", () => {
-    const events = [bashCall(), bashDone(), parentCall(), bashDone()];
+    const events = [bashCall(), bashDone(), parentCall(), bashDone()] as const;
     const [, bashEnd, task] = events;
     const state = apply(emptyProjection(), events);
     const [, running] = rows(snapshot(state).turns);
@@ -275,7 +275,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("a child heard before the second call hangs under that call, not under the first call that ended", () => {
-    const events = [bashCall(), bashDone(), started(), parentCall(), childEnded(), taskDone()];
+    const events = [bashCall(), bashDone(), started(), parentCall(), childEnded(), taskDone()] as const;
     const [, , , task, , taskEnd] = events;
     const { turns, toolCounts } = project(events);
     const [bash, parent] = rows(turns);
@@ -287,7 +287,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("the first call's completion repeated after a child is heard stays that call's, and the child goes to the second call", () => {
-    const events = [bashCall(), bashDone(), started(), bashDone(), parentCall(), taskDone()];
+    const events = [bashCall(), bashDone(), started(), bashDone(), parentCall(), taskDone()] as const;
     const [, bashEnd, , , , taskEnd] = events;
     const [bash, task] = rows(project(events).turns);
     expect(bash).toMatchObject({ status: "completed", endedAt: bashEnd.occurredAt,
@@ -299,7 +299,7 @@ describe("a call id reused for another tool", () => {
   test("a completion of a tool called twice under the id ends the later call, the earlier keeping its own end", () => {
     const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed", output: { head } });
     const events = [bashCall(), done("first"), parentCall(), taskDone(), bashCall(),
-      ev(EventTypes.ToolCalled, { tool: "edit", callId: "c1" }), done("second")];
+      ev(EventTypes.ToolCalled, { tool: "edit", callId: "c1" }), done("second")] as const;
     const [, firstEnd, , taskEnd, , , secondEnd] = events;
     const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
     expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([
@@ -313,7 +313,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("a task call that filled in its child's call is still the one its completion ends after the id moves on", () => {
-    const events = [started(), parentCall(), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }), taskDone()];
+    const events = [started(), parentCall(), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }), taskDone()] as const;
     const [, , , taskEnd] = events;
     const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
     expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["task", "completed", taskEnd.occurredAt], ["bash", "running", null]]);
@@ -322,7 +322,7 @@ describe("a call id reused for another tool", () => {
 
   // Codex reports spawnAgent's completion before the child it spawned.
   test("a child heard after its task call ended hangs under that task call", () => {
-    const events = [parentCall(), taskDone(), ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" })];
+    const events = [parentCall(), taskDone(), ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" })] as const;
     const [, taskEnd] = events;
     const call = only(project(events).turns) as ToolTurn;
     expect(call).toMatchObject({ tool: "task", status: "completed", endedAt: taskEnd.occurredAt });
@@ -330,7 +330,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("a completion of a tool never called under the id, now another tool's, is a row of its own", () => {
-    const events = [bashCall(), ev(EventTypes.ToolCompleted, { tool: "edit", callId: "c1", status: "completed", output: { head: "edited" } })];
+    const events = [bashCall(), ev(EventTypes.ToolCompleted, { tool: "edit", callId: "c1", status: "completed", output: { head: "edited" } })] as const;
     const [bash, edit] = events;
     const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
     expect(tools.map((t) => [t.id, t.tool, t.status])).toEqual([["c1", "bash", "running"], ["c1", "edit", "completed"]]);
@@ -339,7 +339,7 @@ describe("a call id reused for another tool", () => {
   });
 
   test("a call made for a spawned child is filled in by the task completion", () => {
-    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), taskDone()];
+    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), taskDone()] as const;
     const [, taskEnd] = events;
     const call = only(project(events).turns) as ToolTurn;
     expect(call).toMatchObject({ id: "c1", tool: "task", status: "completed", endedAt: taskEnd.occurredAt,
@@ -349,7 +349,7 @@ describe("a call id reused for another tool", () => {
 
   test("a spawned child's call filled in by its task completion keeps that completion after the id moves on", () => {
     const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed", output: { head } });
-    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), done("original"), bashCall(), done("replayed")];
+    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), done("original"), bashCall(), done("replayed")] as const;
     const [, firstEnd] = events;
     const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
     expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["task", "completed", firstEnd.occurredAt], ["bash", "running", null]]);
@@ -360,7 +360,7 @@ describe("a call id reused for another tool", () => {
 
   test("a call heard only as its completion keeps that completion after the id moves on", () => {
     const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "edit", callId: "c1", status: "completed", output: { head } });
-    const events = [done("original"), bashCall(), done("replayed")];
+    const events = [done("original"), bashCall(), done("replayed")] as const;
     const [firstEnd] = events;
     const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
     expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["edit", "completed", firstEnd.occurredAt], ["bash", "running", null]]);

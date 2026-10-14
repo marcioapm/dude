@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, execute, query, wait_until
+from helpers import ApiClient, execute, query, wait_for_escalation, wait_until
 
 
 def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
@@ -225,8 +225,8 @@ def test_a_conflict_stops_for_a_person_and_waits_again_once_resolved(
 ):
     task, pr = _open_pr(client, forge_project)
     fake_github.set_conflicting(pr["number"])
-    wait_until(lambda: _task(client, task["id"])["status"] == "awaiting_input", timeout=30, message="a conflict did not stop for a person")
-    t = _task(client, task["id"])
+    t = wait_for_escalation(client, task["id"], timeout=30, message="a conflict did not stop for a person")
+    assert t["status"] == "awaiting_input"
     assert t["escalation"]["reason"] == "pull_request_conflict"
     # Nobody has approved it yet, which the Rules put before a conflict.
     shown = _pr(client, task["id"])

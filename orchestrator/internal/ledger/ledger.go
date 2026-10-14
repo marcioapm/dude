@@ -50,29 +50,54 @@ type Event struct {
 	Payload        map[string]any
 }
 
+const insertColumns = `INSERT INTO events (id, organization_id, event_type, occurred_at,
+		                    project_id, task_id, run_id, session_id, workflow_run_id,
+		                    actor_type, actor_id, source, correlation_id, causation_id, payload)`
+
 // Append writes one event in the caller's transaction, so it commits or
 // rolls back with the state change that produced it.
 func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
-	id := ids.New(ids.Event)
-	payload := []byte("{}")
-	var err error
-	if e.Payload != nil {
-		payload, err = json.Marshal(e.Payload)
-	}
+	id, args, err := row(e)
 	if err != nil {
 		return "", err
+	}
+	_, err = tx.Exec(ctx, insertColumns+`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)`, args...)
+	return id, err
+}
+
+// AppendOncePerEpoch writes e unless e's Run already has an event of e's
+// type whose payload epoch is epoch, in one statement; it says whether it
+// wrote. The check takes no lock: two transactions appending the same
+// epoch at once could both write, so a caller must be the Run's only
+// writer of that type.
+func AppendOncePerEpoch(ctx context.Context, tx pgx.Tx, e Event, epoch int) (bool, error) {
+	_, args, err := row(e)
+	if err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, insertColumns+`
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb
+		WHERE NOT EXISTS (SELECT 1 FROM events WHERE run_id = $7 AND event_type = $3 AND (payload->>'epoch')::int = $16)`,
+		append(args, epoch)...)
+	return tag.RowsAffected() == 1, err
+}
+
+// row is e's new id and the 15 values of insertColumns, in order.
+func row(e Event) (string, []any, error) {
+	id := ids.New(ids.Event)
+	payload := []byte("{}")
+	if e.Payload != nil {
+		var err error
+		if payload, err = json.Marshal(e.Payload); err != nil {
+			return "", nil, err
+		}
 	}
 	occurred := e.OccurredAt
 	if occurred.IsZero() {
 		occurred = time.Now()
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO events (id, organization_id, event_type, occurred_at,
-		                    project_id, task_id, run_id, session_id, workflow_run_id,
-		                    actor_type, actor_id, source, correlation_id, causation_id, payload)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)`,
-		id, e.OrganizationID, e.Type, occurred,
+	return id, []any{id, e.OrganizationID, e.Type, occurred,
 		db.Nullable(e.ProjectID), db.Nullable(e.TaskID), db.Nullable(e.RunID), db.Nullable(e.SessionID), db.Nullable(e.WorkflowRunID),
-		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload)
-	return id, err
+		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload}, nil
 }

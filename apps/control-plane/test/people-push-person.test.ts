@@ -125,6 +125,9 @@ test("the existing claim boundary transfers only the named browser endpoint", as
   });
   const [staying] = await owner`SELECT organization_id, person_id FROM push_subscriptions WHERE endpoint = 'https://push.example.test/staying'`;
   expect(staying).toEqual({ organization_id: other, person_id: foreign });
+  // Since migration 122 a claim registers the endpoint in the caller's organisation and moves nothing: the other's row stays.
+  expect(await owner`SELECT organization_id, person_id, p256dh FROM push_subscriptions WHERE endpoint = 'https://push.example.test/moving' ORDER BY organization_id`)
+    .toEqual([{ organization_id: org, person_id: person, p256dh: "new" }, { organization_id: other, person_id: foreign, p256dh: "old" }].sort((a, b) => a.organization_id.localeCompare(b.organization_id)) as never);
 });
 
 test("removal hands ownership to a keyless person and deletes their browser subscriptions", async () => {

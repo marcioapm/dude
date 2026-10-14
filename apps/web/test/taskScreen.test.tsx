@@ -633,7 +633,7 @@ describe("a branch preview on the Servers tab", () => {
   // Every server of the three in one of `want`: an empty panel is not a pass.
   const all = (page: HTMLElement, ...want: string[]) => {
     const s = Object.values(states(page));
-    return s.length === 3 && s.every((x) => want.includes(x!)) ? true : null;
+    return s.length === 3 && s.every((x) => want.includes(x as string)) ? true : null;
   };
   const button = (page: HTMLElement, id: string) => page.querySelector<HTMLButtonElement>(`[data-testid=${id}]`);
 

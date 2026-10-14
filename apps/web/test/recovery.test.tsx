@@ -132,7 +132,7 @@ describe("a stopped task", () => {
     await click(await until(() => page.querySelector("[data-testid=recover-restart]"), "Start over…"));
     const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
     // Offered only once the start is refused: a start that may go ahead needs no override.
-    expect(dialog.querySelector("[data-testid=recover-anyway]")).toBeNull();
+    expect(dialog.querySelectorAll("[data-testid=recover-anyway]").length).toBe(0);
     await click(dialog.querySelector("[data-testid=recover-confirm]")!);
     await until(() => dialog.textContent?.includes("is blocked by CP-41 (in review): it can start once that's merged.") || null, "the refusal");
     await click(await until(() => dialog.querySelector("[data-testid=recover-anyway]"), "Start over anyway"));
@@ -145,7 +145,7 @@ describe("a stopped task", () => {
     const sent: Array<[RecoverAction, string]> = [];
     const recover = client.recover.bind(client);
     client.recover = (id, action, note) => {
-      sent.push([action, note]);
+      sent.push([action, note as string]);
       return recover(id, action, note);
     };
     const page = await taskPage(client);
@@ -176,7 +176,7 @@ describe("a stopped task", () => {
     const page = await taskPage(client);
     const waiting = await until(() => page.querySelector("[data-testid=recover-waiting]"), "whom it waits on");
     expect(waiting.textContent).toContain("Only Márcio Martins, its owner, can pick it back up");
-    expect(page.querySelector("[data-testid=recover-resume]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=recover-resume]").length).toBe(0);
   });
 
   test("its session's end strip offers Resume… and the other ways", async () => {

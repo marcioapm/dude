@@ -529,6 +529,19 @@ func (s *Store) Emit(ctx context.Context, org string, st *State, typ string, pay
 	})
 }
 
+// SetTaskStatusAndEmit moves the task and records an event in one
+// transaction: an escalation's awaiting_input and its question.asked, which
+// the API reads as the task's escalation, are never seen one without the
+// other.
+func (s *Store) SetTaskStatusAndEmit(ctx context.Context, org string, st *State, status, reason, typ string, payload map[string]any) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		if _, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", status, reason); err != nil {
+			return err
+		}
+		return emitTx(ctx, tx, org, st, typ, payload)
+	})
+}
+
 // emitTx is Emit in the caller's transaction.
 func emitTx(ctx context.Context, tx pgx.Tx, org string, st *State, typ string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{

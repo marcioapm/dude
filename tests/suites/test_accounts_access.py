@@ -11,7 +11,8 @@ organisation and gets its first admin's link; that admin joins and invites
 two people with the chip editor; an invitee joins; another email sees only
 the generic mismatch; an uninvited email sees No organisation; a person in
 two organisations switches between them, each with its own address, and
-an image uploads in the one the tab is in; keys are made per organisation;
+an image uploads in the one the tab is in; leaving an unsaved welcome by
+switching organisation welcomes it; keys are made per organisation;
 and a forged token and a write from another origin are refused.
 """
 
@@ -302,6 +303,47 @@ def test_a_person_in_two_organisations_switches_and_each_tab_keeps_its_own(page:
     # The task dialog asks for the forge's settings; Northwind has no forge connected, so that one is refused.
     assert set(refused) <= {(409, "/v1/forge/settings")}, refused
     assert _not_loading_errors(console_errors) == []
+
+
+def test_switching_organisation_from_an_unsaved_welcome_welcomes_it(page: Page, access, owner_dsn: str, console_errors: list):
+    s = _suffix()
+    person = f"dee-{s}@both.test"
+    initech = _organisation(access, "Initech", f"initech-{s}", person)
+    northwind = _organisation(access, "Northwind", f"northwind-{s}", person)
+    _join(access, person, initech["code"], "Dee Okafor")
+    _join(access, person, northwind["code"])
+
+    def welcomed() -> dict[str, bool]:
+        rows = query(owner_dsn, "SELECT p.organization_id, p.welcomed_at IS NOT NULL AS done FROM people p "
+                     "JOIN accounts a ON a.id = p.account_id WHERE a.email = %s", (person,))
+        return {r["organization_id"]: r["done"] for r in rows}
+
+    access.sign_in(page, person, "Dee Okafor", at=f"/#/o/{initech['slug']}/welcome")
+    expect(page.get_by_test_id("first-one").get_by_role("heading", level=1)).to_have_text("Welcome to Initech, Dee")
+    assert welcomed() == {initech["id"]: False, northwind["id"]: False}
+
+    # Left by the switcher, not by Start: the welcome's own app is unmounted, and still marks it,
+    # then reads the account again (/v1/me naming no organisation; the tenant app's own read names one).
+    with page.expect_response(lambda r: r.url.endswith("/v1/me") and r.request.method == "GET"
+                              and r.request.headers.get("x-dude-organization") is None) as reread, \
+            page.expect_response(lambda r: r.url.endswith(f"/v1/me/memberships/{initech['id']}/welcomed")) as marked:
+        page.get_by_test_id("switcher").click()
+        page.get_by_role("menu").get_by_role("menuitemradio", name=re.compile("^Northwind")).click()
+    assert marked.value.status == 200
+    assert marked.value.request.headers.get("x-dude-organization") == initech["id"]
+    assert reread.value.status == 200
+    expect(page).to_have_url(re.compile(rf"#/o/{northwind['slug']}/$"))
+    assert welcomed() == {initech["id"]: True, northwind["id"]: False}
+
+    # Initech's welcome address now opens its home, in this tab and in a new document.
+    page.goto(f"{access.url}/#/o/{initech['slug']}/welcome")
+    expect(page.get_by_test_id("switcher")).to_contain_text("Initech · Admin")
+    expect(page.get_by_test_id("welcome")).to_be_visible()
+    expect(page.get_by_test_id("first-one")).to_have_count(0)
+    page.reload()
+    expect(page.get_by_test_id("welcome")).to_be_visible()
+    expect(page.get_by_test_id("first-one")).to_have_count(0)
+    assert console_errors == []
 
 
 def test_keys_are_made_per_organisation(page: Page, access, console_errors: list):

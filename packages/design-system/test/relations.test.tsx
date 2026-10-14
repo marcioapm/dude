@@ -72,7 +72,7 @@ describe("StartGate", () => {
   test("a reader who may not start sees the ways, disabled, and nothing else; a blocker that never merges refuses the owner's item", async () => {
     const el = await mount(<StartGate blockers={[spike]} starts={[{ id: "deliver", label: "Deliver", icon: "zap" }]}
       onStartWhenUnblocked={() => undefined} startWhenUnblockedRefused="CP-37 was marked done with nothing merged and will never merge, so this would never start it." />);
-    expect(el.querySelector('[data-testid="start-anyway"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="start-anyway"]').length).toBe(0);
     expect([...el.querySelectorAll("button[disabled]")].map((b) => b.textContent)).toEqual(["Deliver", "Start when unblocked…"]);
     expect(el.textContent).toContain("will never merge");
     // The refused item's focusable wrapper, like the ways': a disabled button named for it, described once.
@@ -153,7 +153,7 @@ describe("RelationList", () => {
     // A settled blocker says it merged.
     expect(el.querySelector('[data-key="CP-43"] button')?.getAttribute("aria-label")).toBe("CP-43 Stripe sync, merged");
     expect(el.querySelector('[aria-label="Remove blocked by CP-41"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Remove blocks CP-45"]')).toBeNull();
+    expect(el.querySelectorAll('[aria-label="Remove blocks CP-45"]').length).toBe(0);
     const row = el.querySelector<HTMLElement>('[data-key="CP-45"] button')!;
     expect(document.getElementById(row.getAttribute("aria-describedby")!)?.textContent).toBe("Only Márcio, CP-45's owner, can remove this");
     await act(async () => row.parentElement!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
@@ -269,7 +269,7 @@ describe("Board", () => {
     expect(card.contains(start)).toBe(false);
     expect(start.closest("li")).toBe(card.closest("li"));
     // Only Backlog cards have one.
-    expect(el.querySelector('[data-start="CP-41"]')).toBeNull();
+    expect(el.querySelectorAll('[data-start="CP-41"]').length).toBe(0);
     const tabbable = [...el.querySelectorAll<HTMLElement>("[data-start]")].filter((s) => s.tabIndex === 0).map((s) => s.dataset["start"]);
     const stop = el.querySelector<HTMLElement>('[data-board-key][tabindex="0"]')!;
     expect(tabbable).toEqual(stop.closest("li")!.querySelector("[data-start]") ? [stop.closest("li")!.querySelector<HTMLElement>("[data-start]")!.dataset["start"]] : []);

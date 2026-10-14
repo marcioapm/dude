@@ -4,7 +4,7 @@ import { ACCESS_LOGOUT, AuthSession, KEY_STORAGE } from "../src/auth.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
-const me = { person: {}, organization: { id: "org", name: "Organization" } } as MeResponse;
+const me = { person: {}, organization: { id: "org", name: "Organization" } } as MeResponse & { gate?: "member" };
 
 function setup(key: string | null, responses: Array<MeResponse | Error | Promise<MeResponse>>) {
   const values = new Map(key === null ? [] : [[KEY_STORAGE, key]]);
@@ -41,7 +41,7 @@ describe("session-first authentication", () => {
     expect(session.check()).toBe(check);
     resolve(me);
     await check;
-    expect(session.snapshot()).toEqual({ kind: "authenticated", client: clients[0], authMethod: "api_key", me });
+    expect(session.snapshot()).toEqual({ kind: "authenticated", client: clients[0]!, authMethod: "api_key", me });
     expect(keys).toEqual(["valid"]);
     expect(values.get(KEY_STORAGE)).toBe("valid");
   });
@@ -52,7 +52,7 @@ describe("session-first authentication", () => {
       await session.check();
       expect(keys).toEqual(["revoked", undefined]);
       expect(values.has(KEY_STORAGE)).toBe(false);
-      expect(session.snapshot()).toEqual({ kind: "authenticated", client: clients[1], authMethod: "cloudflare_access", me: { ...me, authMethod: "cloudflare_access" } });
+      expect(session.snapshot()).toEqual({ kind: "authenticated", client: clients[1]!, authMethod: "cloudflare_access", me: { ...me, authMethod: "cloudflare_access" as const } });
       await session.check();
       expect(keys).toHaveLength(2);
     });
@@ -193,7 +193,7 @@ describe("API authentication transport", () => {
   }
 
   test("HTML auth refusals preserve status for fallback", async () => {
-    globalThis.fetch = (async () => new Response("<h1>Forbidden</h1>", { status: 403 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response("<h1>Forbidden</h1>", { status: 403 })) as unknown as typeof fetch;
     await expect(new ApiClient({}).me()).rejects.toMatchObject({ status: 403 });
   });
 });

@@ -137,6 +137,7 @@ function AdminOrganizationPage({ client, org, onList, onChanged }: { client: Api
   const [settingEmail, setSettingEmail] = useState<AdminPerson | null>(null);
   const api: InvitationsApi = useMemo(() => ({
     list: (p) => client.adminInvitations(org.id, p),
+    counts: () => client.adminInvitationCounts(org.id),
     invite: (i, role) => client.adminInvite(org.id, i, role),
     renew: (id) => client.adminRenewInvitation(org.id, id),
     revoke: (id) => client.adminRevokeInvitation(org.id, id),

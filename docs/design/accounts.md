@@ -644,11 +644,13 @@ pending count in the menu.
   **status** (pending, expired, accepted — by whom, when, linked to the
   member — or revoked, by whom, when); the role; the expiry ("in 10 days",
   "expired 2 days ago").
-- **Filter** by status, pending first by default, with counts; **search**
+- **Filter** by status, pending first by default, with counts
+  (`…/invitations/counts`, exact past one page); **search**
   by email or name. Both are query parameters
   (`?status=pending&q=kai`), applied in SQL with the page's limit after
   them, so a pending invitation never hides past a page (llm-proxy learned
-  this: `list_invites_for_org`'s server-side `status` filter).
+  this: `list_invites_for_org`'s server-side `status` filter). **Load more**
+  appends the next page; a new filter or search starts from its first.
 - **Row actions**: pending — **Copy link**, **Revoke…**; expired —
   **Renew**; revoked — **Invite again** (the invite dialog, that address
   filled in: a new invitation, a new link); accepted — none.
@@ -748,12 +750,30 @@ for it.
   names or inviter details. It joins nobody to anything.
 - **New**: `PATCH /v1/me` writes the account; `GET /v1/me/keys` across
   memberships (one `withOrg` per membership, so row-level security holds);
-  `POST /v1/me/keys {organizationId, name}`; `GET /v1/locate/:id`.
+  `POST /v1/me/keys {organizationId, name}`; `GET /v1/locate/:id`;
+  `POST /v1/me/memberships/:organizationId/welcomed`, which sets your own
+  active row's `welcomed_at` in the organisation the request names (the
+  first time is kept, so it is idempotent). `organizations[].welcomedAt` in
+  `/v1/me` says whether that membership's welcome page still shows; the
+  web app marks it when the page is saved or left.
+- **Push, per organisation** (migration 122): a browser's subscription is
+  kept once per organisation it is turned on in (`push_subscriptions` keyed
+  by `(endpoint, organization_id)`), so each organisation's Notifications
+  card is its own switch. `POST /v1/push/subscriptions`,
+  `POST /v1/push/subscriptions/lookup {endpoint}` and
+  `POST /v1/push/subscriptions/remove {endpoint}` act on the request's
+  organisation only. Turning it off in one leaves the others; the browser
+  drops its PushSubscription only when none of your organisations still
+  has it. Sign-out removes it from every membership. An ask in Acme is
+  sent only to Acme's rows, and its link names Acme (`#/o/acme/…`).
 - **Accepting**: `GET /v1/invitations/:code` (the accept page's state, for
   the signed-in email) and `POST /v1/invitations/:code/accept {name?}`.
   Access only, no organisation header. The menu's **Join…** goes to the same
   page.
-- **Invitations** (admins): `GET /v1/organization/invitations?status=&q=&cursor=`;
+- **Invitations** (admins): `GET /v1/organization/invitations?status=&q=&cursor=`
+  (50 a page; **Load more** follows `cursor`);
+  `GET /v1/organization/invitations/counts` → `{pending, expired, accepted,
+  revoked, all}`, the tabs' and the menu's counts in one read;
   `POST /v1/organization/invitations {invitations: [{email, name?}], role}`
   → one result per address, `created` \| `renewed` \| `existing` \| `member`
   \| `invalid` \| `duplicate`, with the link for the first three;
@@ -761,7 +781,8 @@ for it.
   (invite-with-a-key) is retired; `insertPerson` loses its key.
 - **Super-admin**: `GET/POST /v1/admin/organizations`;
   `GET /v1/admin/organizations/:id`;
-  `GET/POST /v1/admin/organizations/:id/invitations`, `…/:invId/renew`,
+  `GET/POST /v1/admin/organizations/:id/invitations`, `…/invitations/counts`,
+  `…/:invId/renew`,
   `DELETE …/:invId`; `PATCH /v1/admin/people/:id {email | role}`;
   `DELETE /v1/admin/organizations/:id/people/:personId`.
 - **`memberFor`** stops creating people. It becomes the gate's first line:

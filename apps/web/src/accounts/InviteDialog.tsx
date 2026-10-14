@@ -12,13 +12,14 @@ import {
 } from "@dude/design-system/components";
 import { Button, Dialog, FormStack, Select, useToast } from "@dude/design-system/primitives";
 import type { PersonRole } from "@dude/domain";
-import type { InvitationRow, InvitationStatus, InviteResult } from "../api/client.ts";
+import type { InvitationCounts, InvitationRow, InvitationStatus, InviteResult } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { absolute, agoWords, roleWord } from "./words.ts";
 
 /** The routes an invitations screen goes through: an organisation's own, or the super-admin's for it. */
 export interface InvitationsApi {
   list: (params: { status?: InvitationStatus | "all"; q?: string; cursor?: string }) => Promise<{ invitations: InvitationRow[]; cursor: string | null }>;
+  counts: () => Promise<InvitationCounts>;
   invite: (invitations: Array<{ email: string; name?: string }>, role: PersonRole) => Promise<{ results: InviteResult[] }>;
   renew: (id: string) => Promise<unknown>;
   revoke: (id: string) => Promise<unknown>;

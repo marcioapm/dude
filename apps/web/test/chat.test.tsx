@@ -20,6 +20,8 @@ import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
 import type { ChatSent, RunDetail, TaskDetail, TaskMetrics } from "../src/api/client.ts";
 import { ApiError } from "../src/api/client.ts";
+import { conductor as conductorMove } from "../mockups/machinemoves/events.ts";
+import { LARGE as MOVE_LARGE, toldRaise } from "../mockups/machinemoves/data.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -60,10 +62,11 @@ function conductorEvents(): PersistedEvent[] {
 }
 
 describe("the history line", () => {
+  // Only the fields the history line reads; the rest of Run is left unset.
   const run = (p: Partial<Run>): Run => ({ id: "r", organizationId: "o", projectId: "p", taskId: TASK_ID, attempt: 1, status: "completed",
     workerId: null, workspacePath: null, error: null, kind: "agent", phase: "implement", role: "implementer", category: null,
     parentRunId: null, baseRefs: {}, heads: {}, branch: null, harness: null, model: null, dudePause: null,
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }, machine: null, createdAt: at(0), startedAt: null, endedAt: null, ...p });
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }, machine: null, createdAt: at(0), startedAt: null, endedAt: null, ...p }) as Run;
 
   test("a delivered task: its pipeline with fan-outs folded, its pull request, findings and cost", () => {
     const runs = [
@@ -186,7 +189,7 @@ class ChatClient extends FixtureClient {
       heads: {}, branch: null, harness: "scripted", model: "fake/scripted", dudePause: null,
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 },
       machine: { sizeId: "msz_s", name: "Small", cpus: 0.5, memoryMiB: 1024, diskGiB: 10, poolId: null, pool: null },
-      createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), endedAt: null };
+      createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), endedAt: null } as Run;
   }
   override async getTask(id: string): Promise<TaskDetail> {
     const task = await super.getTask(id);
@@ -296,6 +299,21 @@ describe("the Chat tab", () => {
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")?.disabled).toBe(false);
   });
 
+  test("a conductor that moved itself: its move's notice, then what dude told it, then its answer", async () => {
+    // The mockup's ledger of BILL-42's conductor moving to Large, as this task's conductor.
+    const events = conductorMove().map((e) => ({ ...e, runId: CONDUCTOR, taskId: TASK_ID }));
+    const page = await chatPage(new ChatClient({ status: "running" }, events));
+    const told = await until(() => page.querySelector("[data-testid=chat-told]"), "the Told turn");
+    expect(told.textContent).toStartWith(`${dudeName(TASK_ID)}Told`);
+    expect(told.textContent).toContain(toldRaise(MOVE_LARGE, false));
+    const moved = [...page.querySelectorAll("[data-testid=chat-notice]")].find((n) => n.textContent?.includes("moved to Large"))!;
+    expect(moved.textContent).toContain("The conductor moved to Large in 45s, with its conversation and work.");
+    const answer = [...page.querySelectorAll("[data-testid=conductor-turn]")].find((n) => n.textContent?.includes("On Large now."))!;
+    const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect([follows(moved, told), follows(told, answer)]).toEqual([true, true]);
+    expect(page.textContent).not.toContain("Resumed in");
+  });
+
   test("the conductor's Tools used names its dude actions as called and completed, with the overlap note only when there are some", async () => {
     const NOTE = "Harness calls include failures and may repeat dude's completed actions.";
     const agent = { type: "agent", id: CONDUCTOR } as const;
@@ -368,7 +386,7 @@ describe("the Chat tab", () => {
     await until(() => page.textContent?.includes("Make it a follow-up task?") ? page : null, "the question");
     const waiting = await until(() => page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]"), "the waiting line");
     expect(waiting.textContent).toContain("The conductor is waiting for your answer above.");
-    expect(page.querySelector("[data-testid=task-chat] textarea")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=task-chat] textarea").length).toBe(0);
     const yes = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")].find((b) => b.textContent?.startsWith("Yes"))!;
     await act(async () => yes.click());
     await settle();
@@ -617,8 +635,8 @@ describe("the Chat tab", () => {
     const card = page.querySelector("[data-testid=task-chat] article[data-state]")!;
     expect(card.getAttribute("data-state")).toBe("dismissed");
     expect(card.querySelector("[data-testid=settled-by]")?.textContent).toBe("Decided on the banner");
-    expect(page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]")).toBeNull();
-    expect(card.querySelector("[data-testid=question-form]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(0);
+    expect(card.querySelectorAll("[data-testid=question-form]").length).toBe(0);
   });
 
   test("Sessions lists the conductor first", async () => {
@@ -766,12 +784,12 @@ describe("an earlier conductor's conversation", () => {
     const page = await chatPage(client);
     const failed = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-failed]"), "the failed read");
     expect(failed.textContent).toContain("the ledger is unreachable");
-    expect(page.querySelector("[data-testid=earlier-conductor-ended]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor-ended]").length).toBe(0);
     client.failing = false;
     await act(async () => failed.querySelector<HTMLButtonElement>("[data-testid=earlier-conductor-retry]")!.click());
     const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the conversation, read");
     expect(earlier.textContent).toContain("Tiago, on the PR.");
-    expect(page.querySelector("[data-testid=earlier-conductor-failed]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor-failed]").length).toBe(0);
   });
 
   test("leaving Chat while a page is on its way reads no more pages", async () => {
@@ -784,7 +802,7 @@ describe("an earlier conductor's conversation", () => {
     const page = await chatPage(client);
     await until(() => client.reads.length === 1 ? page : null, "the first page asked for");
     await pickTab(page, "Overview");
-    expect(page.querySelector("[data-testid=earlier-conductor]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor]").length).toBe(0);
     client.hold = null;
     await act(async () => release());
     await settle();

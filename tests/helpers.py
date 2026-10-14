@@ -359,3 +359,17 @@ def wait_for_run_status(client: ApiClient, run_id: str, status: str, timeout: fl
             f"status={actual['status']!r} error={actual.get('error')!r}"
         ) from None
 
+
+def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, message: str = "") -> dict:
+    """Wait for a task's escalation, and return the task with it.
+
+    Wait for the actual escalation object derived from `question.asked`,
+    rather than inferring its presence from the task's status.
+    """
+
+    def check():
+        task = client.get(f"/v1/tasks/{task_id}").json()
+        return task if (task.get("escalation") or {}).get("reason") else None
+
+    return wait_until(check, timeout=timeout, message=message or f"task {task_id} never escalated")
+

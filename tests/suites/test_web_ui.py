@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_my_settings, sign_in, toast, wait_until
+from helpers import ApiClient, create_api_key, open_my_settings, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1622,9 +1622,8 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Nobody to implement it")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
-               timeout=60, message="delivery never stopped for a person")
-    task = client.get(f"/v1/tasks/{item['id']}").json()
+    task = wait_for_escalation(client, item["id"], timeout=60, message="delivery never stopped for a person")
+    assert task["status"] == "awaiting_input"
     assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
     implement = next(r for r in task["runs"] if r["phase"] == "implement")
 
@@ -1663,9 +1662,9 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Implement it once it can")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
-               timeout=60, message="delivery never stopped for a person")
-    assert client.get(f"/v1/tasks/{item['id']}").json()["escalation"]["actions"] == ["retry", "stop"]
+    task = wait_for_escalation(client, item["id"], timeout=60, message="delivery never stopped for a person")
+    assert task["status"] == "awaiting_input"
+    assert task["escalation"]["actions"] == ["retry", "stop"]
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{item['id']}")
