@@ -11,11 +11,8 @@ import "@dude/design-system/base.css";
 import "./app.css";
 
 import { ApiClient, ApiError, type MeAnswer } from "./api/client.ts";
-import { App } from "./App.tsx";
-import { Gatekeeper } from "./accounts/Gatekeeper.tsx";
 import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
-import { pushOffOnSignOut } from "./push.ts";
-import { PeopleProvider } from "./people.tsx";
+import { SignedIn } from "./SignedIn.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 import { AuthSession, KEY_STORAGE } from "./auth.ts";
@@ -59,24 +56,16 @@ function Root() {
   }
   const signedIn = fixtures ?? (auth.kind === "authenticated" ? { client: auth.client, me: auth.me } : null);
   if (!signedIn) return <div className="keyPrompt" role="status">Checking session…</div>;
-  // From inside an organisation, push is removed through its client: the session's names none,
-  // which the API refuses for someone in several organisations.
-  const signOut = (mounted?: ApiClient) => {
-    void session.signOut(pushOffOnSignOut(mounted), (url) => location.assign(url), flushSync);
+  const signOut = (unsubscribe: (root: ApiClient) => Promise<unknown>) => {
+    void session.signOut(unsubscribe, (url) => location.assign(url), flushSync);
   };
 
   return (
     <TooltipProvider>
       <ToastProvider>
         <AuthRefusal.Provider value={session.refused}>
-          <Gatekeeper client={signedIn.client} me={signedIn.me} authMethod={fixtures ? "api_key" : auth.kind === "authenticated" ? auth.authMethod : "api_key"}
-            reread={() => (fixtures ? Promise.resolve(fixtures.me) : session.reread())} onSignOut={() => signOut()}>
-            {(client) => (
-              <PeopleProvider client={client}>
-                <App client={client} onKeyRefused={session.refused} onSignOut={() => signOut(client)} />
-              </PeopleProvider>
-            )}
-          </Gatekeeper>
+          <SignedIn client={signedIn.client} me={signedIn.me} authMethod={fixtures ? "api_key" : auth.kind === "authenticated" ? auth.authMethod : "api_key"}
+            reread={() => (fixtures ? Promise.resolve(fixtures.me) : session.reread())} onKeyRefused={session.refused} signOut={signOut} />
         </AuthRefusal.Provider>
       </ToastProvider>
     </TooltipProvider>

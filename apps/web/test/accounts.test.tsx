@@ -18,6 +18,7 @@ import { Gatekeeper } from "../src/accounts/Gatekeeper.tsx";
 import { useAccount, type Account } from "../src/accounts/context.tsx";
 import { PUSH_ORGANIZATION, pushOffOnSignOut, turnPushOff } from "../src/push.ts";
 import { PeopleProvider } from "../src/people.tsx";
+import { SignedIn } from "../src/SignedIn.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
 import { LAST_ORGANIZATION } from "../src/accounts/route.ts";
 import { ACME, AccountsClient, GLOBEX, GLOBEX_INVITE, NORTHWIND, invitation, invitationView, memberMe, world, type World } from "./accountsFake.ts";
@@ -710,6 +711,29 @@ describe("this browser's notifications", () => {
     expect(w.calls.filter((c) => c.method === "unsubscribePush")).toEqual([
       { method: "unsubscribePush", org: NORTHWIND.id, args: [endpoint] },
     ]);
+  });
+
+  test("the app's own Sign out, as main.tsx mounts it, hands sign-out the mounted organisation's removal", async () => {
+    window.history.replaceState(null, "", "#/o/northwind/");
+    const w = world();
+    const root = new AccountsClient(w);
+    const asked: Array<(root: ApiClient) => Promise<unknown>> = [];
+    const { container: page, unmount } = await mount(
+      <ThemeProvider storageKey={null} densityStorageKey={null} target={themeTarget}>
+        <TooltipProvider>
+          <ToastProvider>
+            <SignedIn client={root} me={w.me} authMethod="cloudflare_access" reread={() => root.gate()} onKeyRefused={keyRefused}
+              signOut={(unsubscribe) => void asked.push(unsubscribe)} />
+          </ToastProvider>
+        </TooltipProvider>
+      </ThemeProvider>,
+    );
+    mounted.push(unmount);
+    await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-signout]"), "Sign out"));
+    expect(asked.length).toBe(1);
+    await asked[0]!(root);
+    expect(w.calls.filter((c) => c.method === "unsubscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
   });
 
   test("turning off (and signing out) removes it through the organisation it was claimed for, else the mounted one", async () => {
