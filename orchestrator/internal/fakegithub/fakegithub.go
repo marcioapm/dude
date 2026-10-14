@@ -414,7 +414,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
-	mux.HandleFunc("GET "+prefix+"/compare/{spec}", s.compare)
+	mux.HandleFunc("GET "+prefix+"/compare/{spec...}", s.compare)
 	mux.HandleFunc("PATCH "+prefix+"/git/refs/heads/{branch...}", s.updateRef)
 	mux.HandleFunc("GET "+prefix+"/git/ref/heads/{branch...}", func(w http.ResponseWriter, r *http.Request) {
 		sha := s.SHA(r.PathValue("branch"))

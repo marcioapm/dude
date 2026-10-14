@@ -307,6 +307,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 		Recheck: w.recheck,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
+			"adopt":             w.adopt,
 			"implementRun":      w.implementRun,
 			"reviewExit":        w.reviewExit,
 			"conductorDecision": w.conductorDecision,
@@ -396,6 +397,10 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// Existing work has nothing to implement: it is taken over, then reviewed.
+	if st.Adopted() && st.Retries == 0 {
+		return workflow.Result{Next: "adopt", State: st}, nil
 	}
 	// The conductor plans with the person before anything is built: the
 	// first implementer is its call. A person's "try again" is not.
@@ -775,7 +780,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	}
 	d := directed(st, PhaseTest)
 	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
-		return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
+		return w.beforePR(ctx, sc, st, "")
 	}
 	k := key(sc, st, ":test")
 	if d != nil {
@@ -807,13 +812,29 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 		return w.escalate(ctx, sc, st, "test_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.PendingRunIDs = nil
-	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", out.line(runID, "test"))
+	return w.beforePR(ctx, sc, st, out.line(runID, "test"))
+}
+
+// beforePR goes to the pull request step, through the decision before it
+// (Open or Draft) — except for a pull request taken over, which is open
+// already and has nothing to decide.
+func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
+	if st.adoptedPR() {
+		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	}
+	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)
 }
 
 func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	// A pull request taken over is already open: none is opened, nobody is
+	// asked to authorize one, and its reviewers are asked to look again at
+	// what the review loop pushed on it.
+	if st.adoptedPR() {
+		return w.keepAdoptedPullRequest(ctx, sc, st)
 	}
 	// Never untested at the pull request: a head that is the conductor's
 	// commit is reviewed first, whoever decides.
@@ -1292,6 +1313,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 // RetryStep is where "try again" goes back to, from the step that stopped.
 var RetryStep = map[string]string{
 	"awaitImplement": "implement",
+	"adopt":          "adopt",
 	// A review loop that gave up tries again with another round of fixes.
 	"awaitReview": "fix",
 	"awaitFix":    "fix",

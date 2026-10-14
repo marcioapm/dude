@@ -51,6 +51,9 @@ type Source struct {
 	URL          string `json:"url,omitempty"`
 	HeadBranch   string `json:"headBranch"`
 	BaseBranch   string `json:"baseBranch"`
+	// The head when the delivery took it over: a later head is someone's
+	// work on it, dude's or a person's.
+	HeadSHA string `json:"headSha,omitempty"`
 }
 
 // SourceRefusal is a source dude will not adopt, with why in a person's
