@@ -28,7 +28,7 @@ type Pull struct {
 	State    string
 	Draft    bool
 	MergedAt *string
-	// Who opened it: the token's poster when it was opened.
+	// Who opened it: OpenAs for the creating token, else the poster.
 	Author string
 	// Logins asked for a review.
 	Requested []string
@@ -100,6 +100,9 @@ type Server struct {
 	// Authorization headers on POST /pulls, and an optional refusal by token.
 	OpenAuth   []string
 	OpenRefuse map[string]int
+	// The login a bearer token opens pull requests as (a person's OAuth
+	// token opens as that person); a token not named opens as poster().
+	OpenAs map[string]string
 	// LoseOpenResponses creates the pull request, then answers 502.
 	LoseOpenResponses int
 	ReceiveStatus     int
@@ -124,6 +127,8 @@ type Server struct {
 type ReviewRequest struct {
 	Number int
 	Logins []string
+	// The request's Authorization header.
+	Auth string
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -480,7 +485,8 @@ func (s *Server) Handler() http.Handler {
 		if p := s.number(w, r); p != nil {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			s.ReviewRequests = append(s.ReviewRequests, ReviewRequest{Number: p.Number, Logins: in.Reviewers})
+			s.ReviewRequests = append(s.ReviewRequests, ReviewRequest{Number: p.Number, Logins: in.Reviewers,
+				Auth: r.Header.Get("Authorization")})
 			if s.ReviewRequestStatus != 0 {
 				fail(w, s.ReviewRequestStatus, "Validation Failed")
 				return
@@ -581,8 +587,12 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	author := s.OpenAs[strings.TrimPrefix(auth, "Bearer ")]
+	if author == "" {
+		author = s.poster()
+	}
 	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft,
-		Author: s.poster()}
+		Author: author}
 	s.pulls[p.Number] = p
 	out := s.pullJSON(p)
 	lost := s.LoseOpenResponses > 0

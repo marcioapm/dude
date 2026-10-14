@@ -229,6 +229,130 @@ func TestAReviewRequestGitHubRefusesLeavesTheFixPushed(t *testing.T) {
 	})
 }
 
+// A GitHub App organization opens the pull request as the task's owner,
+// with their OAuth token: GitHub names the owner its author. After dude's
+// fix, the owner's own review is not re-requested (GitHub refuses the
+// author), the other reviewer is, once, and the request goes through the
+// App's installation token, not the owner's.
+func TestAnOwnerAuthoredPullRequestsFixAsksItsReviewerAsTheApp(t *testing.T) {
+	w := newWorld(t)
+	app := w.asApp()
+	ana := w.ownerPerson("Ana")
+	w.connectOwner(ana, "ana-token", 1)
+	w.gh.Set(func(s *fakegithub.Server) { s.OpenAs = map[string]string{"ana-token": "ana"} })
+	w.askingFor("jerv")
+	wi := w.task()
+	w.taskOwners(wi, ana)
+	w.deliver(wi)
+	w.until("the owner's pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	if p := w.gh.Pull(1); p.Author != "ana" {
+		t.Fatalf("pull request authored by %q, want the owner", p.Author)
+	}
+	w.gh.Review(1, "ana", "COMMENTED")
+	w.gh.Review(1, "jerv", "COMMENTED")
+
+	head := w.prFixPushed(wi)
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+
+	reqs := w.reviewRequests()
+	if len(reqs) != 2 || !slices.Equal(reqs[1].Logins, []string{"jerv"}) {
+		t.Fatalf("review requests %v, want the opening's then jerv's once", reqs)
+	}
+	token, ok := strings.CutPrefix(reqs[1].Auth, "Bearer ")
+	if !ok || token == "ana-token" || app.Installation(token) != 71 {
+		t.Fatalf("re-request authorized as %q, want an installation token of 71", reqs[1].Auth)
+	}
+	if p := w.gh.Pull(1); slices.Contains(p.Requested, "ana") || !slices.Contains(p.Requested, "jerv") {
+		t.Errorf("requested %v", p.Requested)
+	}
+	e := w.rerequests(wi)
+	if len(e) != 1 || e[0]["head"] != head || !slices.Equal(strs(e[0]["reviewersRequested"]), []string{"jerv"}) ||
+		len(strs(e[0]["reviewersRefused"])) != 0 || e[0]["error"] != nil {
+		t.Fatalf("recorded %v", e)
+	}
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
+		t.Errorf("creation auth %v, want the owner's once", got)
+	}
+}
+
+// A fix that changes a second repository needs a pull request there,
+// authored by the owner, whose authorization is gone: publication parks
+// for them. The open pull request's reviewer was asked before the park, by
+// the App, once; the owner reconnecting opens the sibling and asks nobody
+// again.
+func TestAFixWhoseSiblingParksForItsOwnerHasAskedItsReviewersFirst(t *testing.T) {
+	w := newWorld(t)
+	app := w.asApp()
+	ana := w.ownerPerson("Ana")
+	w.connectOwner(ana, "ana-token", 1)
+	for _, s := range []*fakegithub.Server{w.gh, w.web} {
+		s.Set(func(s *fakegithub.Server) { s.OpenAs = map[string]string{"ana-token": "ana", "ana-again": "ana"} })
+	}
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
+		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	w.askingFor("jerv")
+	wi := w.task()
+	w.taskOwners(wi, ana)
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("target's pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	w.gh.Review(1, "jerv", "COMMENTED")
+	armed := w.gated(func(step, next string) {
+		if step == "prFix" && next == "awaitPRFix" {
+			mustExec(t, w.owner, `DELETE FROM github_user_authorizations WHERE person_id = $1`, ana)
+		}
+	})
+	armed.Store(true)
+	before := w.gh.SHA(w.gh.Pull(1).Head)
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("parked for Ana", func() bool {
+		w.sync()
+		return w.fixes(wi) == 1 && w.taskStatus(wi) == "awaiting_input"
+	})
+	armed.Store(false)
+	head := w.gh.SHA(w.gh.Pull(1).Head)
+	if head == before || len(w.web.Pulls()) != 0 {
+		t.Fatalf("target head moved %v, web pulls %d", head != before, len(w.web.Pulls()))
+	}
+	reqs := w.reviewRequests()
+	if len(reqs) != 2 || !slices.Equal(reqs[1].Logins, []string{"jerv"}) {
+		t.Fatalf("review requests %v, want the opening's then jerv's", reqs)
+	}
+	if token, _ := strings.CutPrefix(reqs[1].Auth, "Bearer "); app.Installation(token) != 71 {
+		t.Fatalf("re-request authorized as %q, want an installation token", reqs[1].Auth)
+	}
+
+	w.connectOwner(ana, "ana-again", 1)
+	w.authorizeAgain(wi, ana)
+	w.until("web's pull request", func() bool { return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	if p := w.web.Pull(1); p.Author != "ana" {
+		t.Errorf("web pull request authored by %q", p.Author)
+	}
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := len(w.reviewRequests()); n != 2 {
+		t.Errorf("%d review requests on target after resuming, want 2", n)
+	}
+	if e := w.rerequests(wi); len(e) != 1 || e[0]["head"] != head || e[0]["repo"] != "target" {
+		t.Errorf("recorded %v", e)
+	}
+}
+
 // A fix that also changes a repository with no pull request yet opens one
 // there after asking the existing pull request's reviewers again: opening
 // it failing (or, later, waiting on someone) leaves them asked, once,
