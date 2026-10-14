@@ -101,9 +101,6 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 			return out, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, in.TaskID); err != nil {
-		return out, err
-	}
 	d, err := LoadDelivery(ctx, tx, in.TaskID)
 	if err != nil {
 		return out, err

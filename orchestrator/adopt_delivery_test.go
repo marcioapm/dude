@@ -86,22 +86,78 @@ func TestAStartWaitsForAnInFlightSourceReplacement(t *testing.T) {
 		status, _ := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{})
 		started <- status
 	}()
-	select {
-	case status := <-started:
-		t.Fatalf("delivery started while source save held the task: %d", status)
-	case <-time.After(200 * time.Millisecond):
-	}
+	w.blockedBehind(tx)
 	if _, err := tx.Exec(ctx, `UPDATE task_sources SET head_branch = 'feature/new' WHERE task_id = $1`, wi); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if status := <-started; status != 201 {
-		t.Fatalf("deliver: %d", status)
+	select {
+	case status := <-started:
+		if status != 201 {
+			t.Fatalf("deliver: %d", status)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("deliver did not finish after the source save committed")
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->>'branch' = 'feature/new'`, wi); n != 1 {
 		t.Fatalf("delivery did not take the committed source")
+	}
+}
+
+// blockedBehind waits until another backend is waiting on a lock tx holds.
+func (w *world) blockedBehind(tx pgx.Tx) {
+	w.t.Helper()
+	var pid int
+	if err := tx.QueryRow(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		w.t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if w.count(`SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, pid) > 0 {
+			return
+		}
+	}
+	w.t.Fatal("nothing waited on the held transaction")
+}
+
+// A start joining a live delivery (a first Chat message, a fired start)
+// while an escalation decision holds the delivery and then takes the task
+// waits for it rather than deadlocking.
+func TestAStartBesideAnEscalationDecisionDoesNotDeadlock(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Branch("feature/lock", "main", "Lock")
+	wi := w.adopting("branch", 0, "feature/lock", "main")
+	ctx := context.Background()
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if d, err := delivery.LoadDelivery(ctx, tx, wi); err != nil || d == nil {
+		t.Fatalf("delivery: %v %v", d, err)
+	}
+	started := make(chan error, 1)
+	go func() {
+		started <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			_, err := delivery.StartTx(ctx, tx, w.runtime, delivery.StartInput{Org: w.org, TaskID: wi, How: delivery.HowDeliver})
+			return err
+		})
+	}()
+	w.blockedBehind(tx)
+	if err := delivery.LockTaskTx(ctx, tx, wi); err != nil {
+		t.Fatalf("the decision's task lock: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("start beside the decision: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start did not finish after the decision committed")
 	}
 }
 
