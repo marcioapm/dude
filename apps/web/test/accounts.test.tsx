@@ -729,6 +729,9 @@ describe("this browser's notifications", () => {
       </ThemeProvider>,
     );
     mounted.push(unmount);
+    // The tree is composed as main.tsx has it: the people list and the app read as the organisation, never the root.
+    await until(() => w.calls.some((c) => c.method === "listPeople") && w.calls.some((c) => c.method === "navigation") ? true : null, "the tenant reads");
+    expect(w.calls.filter((c) => ["navigation", "listPeople"].includes(c.method)).every((c) => c.org === NORTHWIND.id)).toBe(true);
     await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
     await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-signout]"), "Sign out"));
     expect(asked.length).toBe(1);
