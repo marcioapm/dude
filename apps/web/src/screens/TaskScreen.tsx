@@ -1059,7 +1059,8 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
 }) {
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
-    return activityLines(events, people, runs, prs, current, taskKey);
+    const all = activityLines(events, people, runs, prs, current, taskKey);
+    return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
   }, [events, people, runs, prs, current, many, taskKey]);
   const [kinds, setKinds] = useState<string[]>([]);
   const [persons, setPersons] = useState<string[]>([]);
