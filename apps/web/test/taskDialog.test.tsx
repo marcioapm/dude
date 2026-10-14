@@ -421,6 +421,51 @@ describe("creating a task with images", () => {
     await until(() => document.body.textContent?.includes("A task shows at most 6 images; this one shows 7."), "the refusal");
     expect(client.calls).toEqual([]);
   });
+
+  test("created from a pull request, its upload failed, then switched to New work: the retry clears the stored source", async () => {
+    /** Keeps the task's source as the API does: set by the POST, changed by a PATCH that names it, kept by one that does not. */
+    class Stored extends SaveRecorder {
+      source: unknown = undefined;
+      lookups: Array<string | undefined> = [];
+      override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1], taskId?: string) {
+        this.lookups.push(taskId);
+        return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console", number: 12,
+          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+      }
+      override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+        const out = await super.createTask(input);
+        this.source = input.source ?? null;
+        return out;
+      }
+      override async updateTask(id: string, fields: Parameters<FixtureClient["updateTask"]>[1]) {
+        const out = await super.updateTask(id, fields);
+        if ("source" in fields) this.source = fields.source;
+        return out;
+      }
+    }
+    const client = new Stored("a");
+    client.failing = { uploadAttachment: 1 };
+    const d = await withImages(client);
+    const kind = (label: string) => act(async () => {
+      [...document.querySelectorAll<HTMLButtonElement>("[data-testid=task-source-kind] button")].find((b) => b.textContent === label)!.click();
+    });
+    await kind("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => document.querySelector("[data-testid=task-source-found]") && !d.save().disabled, "the pull request found");
+    await press(d.save());
+    await until(() => document.body.textContent?.includes("uploadAttachment failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment"]);
+    expect(client.source).toMatchObject({ kind: "pr", pullRequest: "#12" });
+    // A lookup now is of the task just created, whose own pull request this is.
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "12");
+    await until(() => client.lookups.length > 1, "a second lookup");
+    expect(client.lookups.at(-1)).toBe("task_new");
+    await kind("New work");
+    await press(d.save());
+    await until(() => client.names().includes("updateTask"), "the PATCH");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "uploadAttachment", "updateTask"]);
+    expect(client.source).toBeNull();
+  });
 });
 
 describe("editing a task whose delivery stopped", () => {

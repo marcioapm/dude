@@ -153,7 +153,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const [draft, setDraft] = useState<SourceDraft | null>(null);
   const source = draft ?? sourceDraft(existing?.savedSource, writable);
   const sourceFixed = existing?.fixed != null;
-  const sourceCheck = useSourceCheck(client, projectId, source, existing?.id, sourceFixed || choices === null);
+  const sourceCheck = useSourceCheck(client, projectId, source, created ?? existing?.id, sourceFixed || choices === null);
   const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
   const sourceSaved = JSON.stringify(sourceInput(sourceDraft(existing?.savedSource, writable)) ?? null);
   const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== sourceSaved;
@@ -296,8 +296,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       // later must not leave this work with no checkout. A stopped
       // delivery's are fixed.
       if (existing?.fixed !== "repositories") fields.repositories = choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const }));
-      // Sent when it is new, or changed: saving it unchanged asks GitHub nothing.
-      if (!existing ? source.from !== "new" : sourceChanged) fields.source = sourceInput(source) ?? null;
+      // Sent when it is new, or changed: saving it unchanged asks GitHub nothing. Once created, a retry is
+      // an edit of what the POST saved: New work is sent as null, so a source saved by then is cleared.
+      if (existing ? sourceChanged : created !== null || source.from !== "new") fields.source = sourceInput(source) ?? null;
     }
     let id = existing?.id ?? created ?? "";
     void save(
