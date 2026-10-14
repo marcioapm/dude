@@ -116,7 +116,7 @@ export { PullRequestPanel } from "./PullRequestPanel.tsx";
 export type { FactKind, PullRequestPanelProps } from "./PullRequestPanel.tsx";
 export { Timeline, TimelineItem } from "./Timeline.tsx";
 export type { TimelineProps, TimelineItemProps } from "./Timeline.tsx";
-export { SearchSelector } from "./SearchSelector.tsx";
+export { SearchSelector, SearchSelectorAnchor } from "./SearchSelector.tsx";
 export type { SearchSelectorProps } from "./SearchSelector.tsx";
 export { SessionList, SessionItem, SessionItemContent } from "./SessionList.tsx";
 export { DiffStat } from "./DiffStat.tsx";

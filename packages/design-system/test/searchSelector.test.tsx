@@ -74,6 +74,27 @@ test("arrows and Enter choose; Escape closes and returns focus to the title", as
   expect(document.activeElement).toBe(trigger);
 });
 
+test("in a session header the list opens at the header's bottom-left, not over its subtitle", async () => {
+  // happy-dom lays nothing out: a viewport with room below the header, and a popup with a size.
+  const sized: Array<[object, string, number]> = [[document.documentElement, "clientWidth", 1280], [document.documentElement, "clientHeight", 800],
+    [HTMLElement.prototype, "offsetWidth", 360], [HTMLElement.prototype, "offsetHeight", 200]];
+  for (const [target, key, value] of sized) Object.defineProperty(target, key, { configurable: true, get: () => value });
+  try {
+    const el = await mount();
+    const rect = (top: number, bottom: number, left: number, width: number) => () =>
+      ({ x: left, y: top, top, bottom, left, right: left + width, width, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
+    el.querySelector("header")!.getBoundingClientRect = rect(100, 180, 20, 900);
+    const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+    trigger.getBoundingClientRect = rect(110, 130, 80, 120);
+    await act(async () => trigger.click());
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLElement>("[data-radix-popper-content-wrapper]")!.style.transform).toMatch(/^translate\(20px, 180px\)/);
+  } finally {
+    for (const [target, key] of sized) delete (target as Record<string, unknown>)[key];
+  }
+});
+
 test("no options says so", async () => {
   const el = await mount(true);
   await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!.click());

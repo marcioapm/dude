@@ -9,6 +9,7 @@ import { StatusBadge } from "./StatusBadge.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
 import type { CostOrigin } from "@dude/domain";
 import { Cost } from "./Cost.tsx";
+import { SearchSelectorAnchor } from "./SearchSelector.tsx";
 import styles from "./ChatTranscript.module.css";
 
 export interface ChatTranscriptSession {
@@ -279,8 +280,11 @@ export function SessionHeader({ session, actions, titleSelector }: SessionHeader
   const spec = statusSpec(session.status);
   // Raw ids help whoever debugs, not whoever reads: they live in a tooltip.
   const ids = [session.taskId ? `task ${session.taskId}` : null, `session ${session.id}`].filter(Boolean).join(" · ");
+  const header = useRef<HTMLElement>(null);
   return (
-    <header className={styles["header"]} data-status={session.status}>
+    // A title selector's popup opens below this whole header, leaving the subtitle visible.
+    <SearchSelectorAnchor.Provider value={titleSelector ? header : null}>
+    <header ref={header} className={styles["header"]} data-status={session.status}>
       {session.owner ? (
         <PersonAvatar person={session.owner} size={40} agent={session.role} live={session.status === "running"} />
       ) : (
@@ -338,5 +342,6 @@ export function SessionHeader({ session, actions, titleSelector }: SessionHeader
       </div>
       {actions !== undefined ? <div className={styles["headerActions"]}>{actions}</div> : null}
     </header>
+    </SearchSelectorAnchor.Provider>
   );
 }

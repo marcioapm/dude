@@ -2207,8 +2207,10 @@ MarkdownCheatsheet.
   rail is the same `SessionRail` and `SessionRailBlock`.
 - **SessionList / SessionItem / SessionItemContent** — a task's agent
   sessions, the open one `current`; content is reusable inside a listbox.
-- **SearchSelector** — a title-button selector over `SearchPicker`; gallery
-  `#l-selector` shows populated, empty, current, search and focus states.
+- **SearchSelector** — a title-button selector over `SearchPicker`. Inside a
+  `SessionHeader` its popup anchors (`SearchSelectorAnchor`) to the bottom-left
+  of the whole header, so the owner/model/machine line stays visible; elsewhere
+  it hangs below its title. Gallery `#l-selector` shows populated, empty, current, search and focus states.
 - **FileGallery / FileViewer** — a task's files and their versions. A
   `FileVersion`'s optional `description` (what its agent said the file is
   for) is a secondary line under the name, in a card and a row alike.
