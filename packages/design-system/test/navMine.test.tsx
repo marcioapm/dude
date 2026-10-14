@@ -1,9 +1,3 @@
-/**
- * "Mine" narrows the tree to your tasks but leaves it yours to fold: its
- * projects and epics start open and their chevrons still work. A search
- * is different: it holds every row with a hit open, chevrons inert.
- */
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -38,7 +32,9 @@ const LOGIN: NavEpic = { id: "e", title: "Login", tasks: [
 ] };
 const PROJECT: NavProject = { id: "p", name: "Web", epics: [LOGIN] };
 
-const keys = (rows: ReturnType<typeof flattenNav>) => rows.map((r) => r.key);
+function keys(rows: ReturnType<typeof flattenNav>): string[] {
+  return rows.map((r) => r.key);
+}
 
 describe("flattenNav with Mine", () => {
   test("opens projects and epics by default, without forcing them", () => {
@@ -69,28 +65,39 @@ describe("flattenNav with Mine", () => {
 });
 
 describe("Sidebar with Mine on", () => {
-  const row = (el: HTMLElement, name: string) => byRole(el, "treeitem", name);
-  const shown = (el: HTMLElement, name: string) => allByRole(el, "treeitem", name).length > 0;
-  const press = (el: HTMLElement, rowName: string, button: "Collapse" | "Expand") =>
-    act(async () => byRole(row(el, rowName), "button", button).click());
-  const key = (el: HTMLElement, k: string) =>
-    act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+  function row(el: HTMLElement, name: string): HTMLElement {
+    return byRole(el, "treeitem", name);
+  }
+
+  function shown(el: HTMLElement, name: string): boolean {
+    return allByRole(el, "treeitem", name).length > 0;
+  }
+
+  async function clickButton(el: HTMLElement, name: string): Promise<void> {
+    await act(async () => byRole(el, "button", name).click());
+  }
+
+  async function pressKey(el: HTMLElement, key: string): Promise<void> {
+    await act(async () => {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+  }
 
   test("the epic and project chevrons fold and unfold", async () => {
     const el = await mount(<Sidebar projects={[PROJECT]} you="me" mine />);
     expect(shown(el, "Mine one")).toBe(true);
     expect(shown(el, "Theirs")).toBe(false);
 
-    await press(el, "Login", "Collapse");
+    await clickButton(row(el, "Login"), "Collapse");
     expect(shown(el, "Mine one")).toBe(false);
     expect(row(el, "Login").getAttribute("aria-expanded")).toBe("false");
-    await press(el, "Login", "Expand");
+    await clickButton(row(el, "Login"), "Expand");
     expect(shown(el, "Mine one")).toBe(true);
 
-    await press(el, "Web", "Collapse");
+    await clickButton(row(el, "Web"), "Collapse");
     expect(shown(el, "Login")).toBe(false);
     expect(row(el, "Web").getAttribute("aria-expanded")).toBe("false");
-    await press(el, "Web", "Expand");
+    await clickButton(row(el, "Web"), "Expand");
     expect(shown(el, "Login")).toBe(true);
   });
 
@@ -98,23 +105,23 @@ describe("Sidebar with Mine on", () => {
     const el = await mount(<Sidebar projects={[PROJECT]} you="me" mine />);
     await act(async () => row(el, "Login").focus());
 
-    await key(row(el, "Login"), "ArrowLeft");
+    await pressKey(row(el, "Login"), "ArrowLeft");
     expect(shown(el, "Mine one")).toBe(false);
     expect(document.activeElement).toBe(row(el, "Login"));
 
-    await key(row(el, "Login"), "ArrowRight");
+    await pressKey(row(el, "Login"), "ArrowRight");
     expect(shown(el, "Mine one")).toBe(true);
     expect(document.activeElement).toBe(row(el, "Login"));
   });
 
   test("a fold made under Mine is still there after Everyone and back", async () => {
     const el = await mount(<Sidebar projects={[PROJECT]} you="me" />);
-    await act(async () => byRole(el, "button", "Mine").click());
-    await press(el, "Login", "Collapse");
+    await clickButton(el, "Mine");
+    await clickButton(row(el, "Login"), "Collapse");
 
-    await act(async () => byRole(el, "button", "Everyone").click());
+    await clickButton(el, "Everyone");
     expect(shown(el, "Theirs")).toBe(false);
-    await act(async () => byRole(el, "button", "Mine").click());
+    await clickButton(el, "Mine");
     expect(row(el, "Login").getAttribute("aria-expanded")).toBe("false");
     expect(shown(el, "Mine one")).toBe(false);
   });

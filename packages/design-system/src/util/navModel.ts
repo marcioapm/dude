@@ -375,9 +375,7 @@ function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTa
 export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOverrides, filter: NavFilter = {}): NavRow[] {
   const ctx: Ctx = { overrides, filter, rows: [] };
   const q = (filter.query ?? "").trim().toLowerCase();
-  // A search is a glance: it holds every row with a hit open, chevrons inert.
-  // "Mine" is a view you stay in, so it only opens rows by default and leaves
-  // the chevrons working.
+  // Search forces matching ancestors open; Mine only changes their default.
   const searching = q.length > 0 || (filter.triage ?? null) !== null;
   const filtering = searching || (filter.person ?? null) !== null;
 
