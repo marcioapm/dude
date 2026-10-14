@@ -57,6 +57,30 @@ async function taskPage(client: FixtureClient) {
 }
 
 const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+const BRANCH_SOURCE: TaskSource = { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" };
+
+describe("where the task came from, on Overview", () => {
+  test("an adopted pull request: #N title linking to GitHub, and head → base in mono", async () => {
+    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [ADOPTED]));
+    const fact = page.querySelector<HTMLElement>("[data-testid=task-source-fact]")!;
+    expect(text(fact.closest("div"))).toBe("Starts from#12 Greet in Portuguese · feature/greet → main");
+    expect(fact.querySelector<HTMLAnchorElement>("[data-testid=task-source-link]")!.href).toBe("https://github.com/example/web-console/pull/12");
+    expect([...fact.querySelectorAll(".ds-mono")].map((m) => m.textContent)).toEqual(["feature/greet", "main"]);
+  });
+
+  test("an adopted branch: head → base, no link", async () => {
+    const page = await taskPage(new AdoptedClient({ source: BRANCH_SOURCE }, []));
+    const fact = page.querySelector<HTMLElement>("[data-testid=task-source-fact]")!;
+    expect(text(fact)).toBe("stack/top → stack/base");
+    expect(fact.querySelectorAll("a").length).toBe(0);
+  });
+
+  test("new work says nothing about a source", async () => {
+    const page = await taskPage(new AdoptedClient({ source: null }, [PULL_REQUEST]));
+    expect(page.querySelectorAll("[data-testid=task-source-fact]").length).toBe(0);
+    expect(text(page.querySelector("[data-testid=task-facts]"))).not.toContain("Starts from");
+  });
+});
 
 describe("the adopted pull request across attempts", () => {
   // Picks attempt `n` in the header's picker, as a person would.

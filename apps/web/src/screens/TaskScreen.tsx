@@ -91,7 +91,8 @@ import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refus
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { SourceLine } from "./StartsFrom.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -484,6 +485,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
+  const source = item.source ?? null;
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -677,9 +679,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             </div>
           } rail={
               <PageRail aria-label="Pull requests, machines and servers">
-                <PageRailBlock label="This task"><KeyValueList items={[
+                <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
                   { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
+                  // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
+                  ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
+                    <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} /></span> }] : []),
                   // A task never started over names no attempt anywhere.
                   ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
                 ]} /></PageRailBlock>
@@ -780,7 +785,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="activity" className="railPanel">
-          <Activity events={events} people={people} runs={item.runs} prs={allPrs} source={item.source ?? null} current={current} many={many} shown={shown} taskKey={item.key ?? null}
+          <Activity events={events} people={people} runs={item.runs} prs={allPrs} source={source} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>

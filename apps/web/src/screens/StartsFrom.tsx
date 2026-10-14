@@ -201,14 +201,19 @@ function LockedSource({ draft, repo, saved }: { draft: SourceDraft; repo: Reposi
   );
 }
 
-/** A source's pull request, if it is one, and head → base. */
-function SourceFound({ source, testId }: { source: TaskSource; testId: string }) {
+/** A source's pull request, if it is one (a link when `href` is known), and head → base. */
+export function SourceLine({ source, href }: { source: TaskSource; href?: string | undefined }) {
+  const pr = source.number ? <><b>#{source.number}</b> {source.title}</> : null;
   return (
-    <Callout tone="neutral" data-testid={testId}>
-      {source.number ? <><b>#{source.number}</b> {source.title} · </> : null}
+    <>
+      {pr ? <>{href ? <a href={href} data-testid="task-source-link">{pr}</a> : pr} · </> : null}
       <span className="ds-mono">{source.headBranch}</span> → <span className="ds-mono">{source.baseBranch}</span>
-    </Callout>
+    </>
   );
+}
+
+function SourceFound({ source, testId }: { source: TaskSource; testId: string }) {
+  return <Callout tone="neutral" data-testid={testId}><SourceLine source={source} /></Callout>;
 }
 
 /**
