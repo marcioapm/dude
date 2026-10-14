@@ -255,6 +255,44 @@ describe("task rail filtering", () => {
     expect(kinds.textContent).toBe(counts);
   });
 
+  for (const decider of ["policy", "conductor"] as const) {
+    test(`the Overview rail says who decides for a ${decider} task`, async () => {
+      const client = new FixtureClient("d");
+      const getTask = client.getTask.bind(client);
+      client.getTask = async (id) => ({ ...(await getTask(id)), decider });
+      const page = await taskPage(client);
+      const term = await until(() => [...page.querySelectorAll("dt")].find((dt) => dt.textContent === "Decides"), "Decides");
+      expect(term.nextElementSibling?.textContent).toBe(decider === "conductor" ? "Conductor" : "Deliver");
+    });
+  }
+
+  test("the session selector searches model and status words", async () => {
+    const client = new FixtureClient("d");
+    const getTask = client.getTask.bind(client);
+    const runs = (await getTask(TASK_ID)).runs;
+    const target = runs.find((r) => r.phase !== null)!;
+    const failed = runs.find((r) => r.id !== target.id)!;
+    client.getTask = async (id) => {
+      const task = await getTask(id);
+      return { ...task, runs: task.runs.map((r) => r.id === target.id ? { ...r, model: "zz-unique-model" } : r.id === failed.id ? { ...r, status: "failed" as const } : r) };
+    };
+    const page = await taskPage(client, { tab: "sessions" });
+    const list = await sessionOptions(page);
+    const all = list.querySelectorAll('[role="option"]').length;
+    const input = document.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+    const search = async (words: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, words);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await settle(20);
+      return [...document.querySelectorAll<HTMLElement>('[data-testid="sessions"] [role="option"]')].map((o) => o.getAttribute("data-run"));
+    };
+    expect(all).toBeGreaterThan(1);
+    expect(await search("zz-unique-model")).toEqual([target.id]);
+    expect(await search("failed")).toEqual([failed.id]);
+  });
+
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
     expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
