@@ -544,9 +544,14 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 	return taken, changes, err
 }
 
-// dropMovedNudge withdraws an unsent carry-on (movedNudge) that lux's own
-// move queued before dude parked the Run for a machine move: the move's
-// resume tells the agent where it runs. Returns whether anything else is
+// dropMovedNudge withdraws a carry-on (movedNudge) that lux's own move
+// queued and lux has not taken, before dude resumes the Run for a machine
+// move: the move's resume tells the agent where it runs. One never sent is
+// deleted. One claimed by a send that failed is kept, retired (failed_at,
+// with why), so a receipt of it arriving late still records it delivered;
+// no send of it is in flight, as deliverDirectives sends only to a running
+// Run and a sweep advances each Run once. One lux accepted is kept: lux has
+// it, and says whether the agent read it. Returns whether anything else is
 // still queued for the agent.
 func (s *Syncer) dropMovedNudge(ctx context.Context, r phaseRun) (more bool, err error) {
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -554,11 +559,19 @@ func (s *Syncer) dropMovedNudge(ctx context.Context, r phaseRun) (more bool, err
 			AND sent_at IS NULL AND claimed_at IS NULL AND failed_at IS NULL`, r.ID, movedNudge); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
+			WHERE run_id = $1 AND text = $2 AND sent_at IS NULL AND claimed_at IS NOT NULL
+			  AND accepted_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, r.ID, movedNudge, movedNudgeSuperseded); err != nil {
+			return err
+		}
 		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = $1
 			AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT `+delivery.HeldBack+`)`, r.ID).Scan(&more)
 	})
 	return more, err
 }
+
+// movedNudgeSuperseded is a retired carry-on's error.
+const movedNudgeSuperseded = "superseded: the machine move's resume tells the agent where it runs"
 
 // liveInLux: lux has the Run running, or is placing it.
 func liveInLux(state string) bool {

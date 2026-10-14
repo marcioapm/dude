@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,14 +26,17 @@ import (
 // onStop for each stop dude asks for and, while hold is set, answers the
 // stop as lux accepting it without passing it on, keeping it for release.
 // onGet, once set, is called once, at dude's next read of a Run, before
-// lux answers it.
+// lux answers it. While refuseCarryOn is set, an input carrying lux's
+// carry-on is answered 503 without reaching lux, and counted in refused.
 type stopsThrough struct {
-	hold    atomic.Bool
-	onStop  func()
-	onGet   atomic.Pointer[func()]
-	mu      sync.Mutex
-	held    []*http.Request
-	handler http.Handler
+	hold          atomic.Bool
+	onStop        func()
+	onGet         atomic.Pointer[func()]
+	refuseCarryOn atomic.Bool
+	refused       atomic.Int32
+	mu            sync.Mutex
+	held          []*http.Request
+	handler       http.Handler
 }
 
 func (w *world) stopsThrough() *stopsThrough {
@@ -42,6 +46,17 @@ func (w *world) stopsThrough() *stopsThrough {
 		if req.Method == http.MethodGet && strings.Count(req.URL.Path, "/") == 3 && strings.HasPrefix(req.URL.Path, "/v1/runs/") {
 			if fn := p.onGet.Swap(nil); fn != nil {
 				(*fn)()
+			}
+		}
+		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/input") && p.refuseCarryOn.Load() {
+			body, _ := io.ReadAll(req.Body)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			if strings.Contains(string(body), "Your host was replaced") {
+				p.refused.Add(1)
+				rw.Header().Set("Content-Type", "application/json")
+				rw.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = rw.Write([]byte(`{"error":{"code":"unavailable","message":"lux is restarting"}}`))
+				return
 			}
 		}
 		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/stop") {
@@ -112,7 +127,7 @@ func (w *world) movedOnce(task, runID, luxID, size, told string) {
 	if countOf(r.Inputs, want) != 1 || countOf(r.Inputs, movedNudge) != 0 {
 		w.t.Errorf("the agent's inputs %q; want the move told once and no carry-on of lux's", r.Inputs)
 	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2`, runID, movedNudge); n != 0 {
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL AND failed_at IS NULL`, runID, movedNudge); n != 0 {
 		w.t.Errorf("%d carry-ons of lux's left queued", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness_state ? 'brokenTurn'`, runID); n != 0 {
@@ -211,6 +226,41 @@ func TestAResetAfterALuxPreemptTellsTheAgentOnce(t *testing.T) {
 	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 || out["moved"] != true {
 		t.Fatalf("reset: %d %v", status, out)
 	}
+	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
+}
+
+// As above, but dude's first send of the carry-on fails before it reaches
+// lux, leaving it claimed for a retry, when the Reset parks the Run. The
+// claimed carry-on is withdrawn too: the agent hears the Reset's move once
+// and no carry-on, before or after the move's resume.
+func TestAResetAfterAFailedCarryOnSendTellsTheAgentOnce(t *testing.T) {
+	w := newWorld(t)
+	task, runID, luxID := w.raisedAtWork()
+	p := w.stopsThrough()
+	p.refuseCarryOn.Store(true)
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-gate
+		}
+	})
+	w.lux.Move(luxID, "preempt")
+	w.until("the move's carry-on to be queued", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL`, runID, movedNudge) == 1
+	})
+	w.lux.BeforeStart(nil)
+	release()
+	w.until("dude's send of the carry-on to fail, claimed", func() bool {
+		return p.refused.Load() > 0 && w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2
+			AND claimed_at IS NOT NULL AND sent_at IS NULL`, runID, movedNudge) == 1
+	})
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 || out["moved"] != true {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	p.refuseCarryOn.Store(false)
 	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
 }
 
