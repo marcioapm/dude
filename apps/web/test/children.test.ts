@@ -320,6 +320,24 @@ describe("a call id reused for another tool", () => {
     expect(call).toMatchObject({ tool: "task", status: "completed", endedAt: taskEnd.occurredAt });
     expect(call.children.map((c) => [c.id, c.childKind])).toEqual([["ses_kid", "spawn"]]);
   });
+
+  test("a completion of a tool never called under the id, now another tool's, is a row of its own", () => {
+    const events = [bashCall(), ev(EventTypes.ToolCompleted, { tool: "edit", callId: "c1", status: "completed", output: { head: "edited" } })];
+    const [bash, edit] = events;
+    const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.id, t.tool, t.status])).toEqual([["c1", "bash", "running"], ["c1", "edit", "completed"]]);
+    expect(tools[0]).toMatchObject({ startedAt: bash.occurredAt, endedAt: null, result: null });
+    expect(tools[1]).toMatchObject({ endedAt: edit.occurredAt, result: { output: { head: "edited" } } });
+  });
+
+  test("a call made for a spawned child is filled in by the task completion", () => {
+    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), taskDone()];
+    const [, taskEnd] = events;
+    const call = only(project(events).turns) as ToolTurn;
+    expect(call).toMatchObject({ id: "c1", tool: "task", status: "completed", endedAt: taskEnd.occurredAt,
+      result: { output: { head: "No viewport set." } } });
+    expect(call.children.map((c) => [c.id, c.childKind])).toEqual([["ses_kid", "spawn"]]);
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
