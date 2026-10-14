@@ -130,3 +130,29 @@ func TestTheNextCloneIsMadeAhead(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// Run alone by dbtest's test of dropStale against a live binary: records
+// its database, then holds it open until DBTEST_FIXTURE_HOLD's file
+// exists, and still has its rows after.
+func TestHoldWhileAnotherBinaryCleansUp(t *testing.T) {
+	release := os.Getenv("DBTEST_FIXTURE_HOLD")
+	if release == "" {
+		t.Fatal("DBTEST_FIXTURE_HOLD names the file that releases this test")
+	}
+	owner, name := open(t)
+	mark(t, owner, "held")
+	record(t, "held", name)
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if _, err := os.Stat(release); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("never released")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := marks(t, owner); got != "held" {
+		t.Fatalf("the held database's rows: %q, want held", got)
+	}
+}
