@@ -112,9 +112,9 @@ type ask struct {
 	Org    string
 	// The organisation's slug: every link a notification carries names it
 	// (`#/o/<slug>/…`), so a person in several opens it in the right one.
-	Slug                     string
+	Slug                      string
 	Type, RunID, TaskID, Task string
-	Role                     string
+	Role                      string
 	// The task's first active person; empty for a task nobody owns. For a
 	// session's ask, the member it is for.
 	Owner   string
