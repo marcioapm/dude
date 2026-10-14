@@ -780,7 +780,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
         <TabPanel value="files" className="railPanel">
           {mine.artifacts.length > 0 ? (
-            <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
+             <FilesSection key={shown} client={client} taskId={taskId} taskKey={item.key} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
           ) : many ? (
             <Elsewhere icon="file" title={`No files in attempt ${shown}${earlier ? "" : " yet"}`}
               description="What its agents save — notes, screenshots, reports, recordings — shows here."
