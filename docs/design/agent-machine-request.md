@@ -601,7 +601,7 @@ from lux's placements.
 
 ## Follow-ups (2026-10-14)
 
-**Status: mockup.** Two follow-ups of #130 that are dude's. Mockup:
+**Status: built.** Two follow-ups of #130 that are dude's. Mockup:
 `docs/design/mockups/machinemoves/index.html`, source
 `apps/web/mockups/machinemoves`; build it from `apps/web` with
 `MOCKUP=machinemoves bunx vite build --config mockups/vite.config.ts`.
@@ -737,9 +737,10 @@ tagged Told. In the gallery under *Chat › What dude told the agent*, and
 in the README beside the task prompt. Nothing else changes; the move's
 notice is `ChatNotice kind="unparked"` with its `title`, as today.
 
-**Not changed here:** a session's `session.told` (dude telling its agent
-who owns it now, or that a question is withdrawn) is a `prompt` turn
-tagged **Task** today, which it is not. It would read right as `told`.
+**Also changed here** (approved with this build): a session's
+`session.told` (dude telling its agent who owns it now, or that a question
+is withdrawn) was a `prompt` turn tagged **Task**, which it is not; it is a
+`told` turn now.
 
 ### Screens
 
