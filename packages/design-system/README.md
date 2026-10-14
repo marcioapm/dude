@@ -2349,6 +2349,10 @@ scrolling; the layout imposes no fixed height or independent width cap. In a
 flex-column host it grows to the remaining height, so the desktop rail's shade
 reaches the foot of the page however short its blocks are.
 
+Rail pages pass `RelationList wide` and `Timeline wide` to remove their default
+820px measure, and `MetricGroup joined fill` to spread tiles evenly across the
+main column; callers without those props keep their existing measure.
+
 `PageRail` uses the chrome shade and 16px padding in both densities.
 `PageRailBlock label={…}` names a section through its heading; `live` adds the
 shared live dot. Blocks are separated by space, never rules. `SessionRail`

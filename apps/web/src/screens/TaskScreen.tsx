@@ -1084,7 +1084,7 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
       <p className="muted">Newest first. Counts include every timeline item before filters. No selections means all.</p>
     </PageRail>}><div className="taskPane">
     {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
-    <Timeline data-testid="activity">
+    <Timeline wide data-testid="activity">
       {displayed.map((l) => (
         <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
           data-testid="activity-item" data-attempt={l.attempt ?? undefined}>

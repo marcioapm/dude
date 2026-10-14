@@ -142,11 +142,13 @@ export function MetricTile({
 export interface MetricGroupProps extends HTMLAttributes<HTMLDivElement> {
   /** Tiles share one card with dividers instead of separate cards. */
   readonly joined?: boolean | undefined;
+  /** Spread joined tiles across the full main column of a rail page. */
+  readonly fill?: boolean | undefined;
 }
 
-export function MetricGroup({ joined, className, children, ...rest }: MetricGroupProps) {
+export function MetricGroup({ joined, fill, className, children, ...rest }: MetricGroupProps) {
   return (
-    <div className={cx(styles["group"], joined && styles["groupJoined"], className)} {...rest}>
+    <div className={cx(styles["group"], joined && styles["groupJoined"], fill && styles["groupFill"], className)} {...rest}>
       {children}
     </div>
   );

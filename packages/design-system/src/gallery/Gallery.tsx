@@ -100,6 +100,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["c-avatar", "AgentAvatar"],
       ["c-numbers", "Cost / Tokens / Duration"],
       ["c-metric", "MetricTile"],
+      ["c-timeline", "Timeline"],
       ["c-event", "EventRow"],
       ["c-tree", "SessionTreeNode"],
       ["c-diff", "DiffView"],
