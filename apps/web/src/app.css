@@ -639,11 +639,6 @@ body {
   margin: 0;
   padding-left: calc(1.5 * var(--ds-text-prose));
 }
-.taskAside {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-12);
-}
 .planNow {
   color: var(--ds-color-text-strong);
   overflow: hidden;
@@ -1012,11 +1007,6 @@ body {
 .lineAttempt[data-shown] {
   color: var(--ds-color-text-secondary);
 }
-/* A Run under the conductor that started it, or under "Delivered automatically". */
-.sessionUnder {
-  padding-left: var(--ds-space-24);
-}
-
 /* An image field: the picker, and under it an image typed before the library. */
 .imageField {
   display: flex;
