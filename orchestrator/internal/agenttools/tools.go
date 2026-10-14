@@ -84,8 +84,10 @@ var tools = []tool{
 	define("start_phase", "Take the decision the delivery waits on by starting a phase from the task's head: "+
 		"implement, review (some or all categories), fix (some or all open findings; at pull request feedback, the "+
 		"feedback), simplify or test. The workflow creates the Runs as it creates its own, waits for them, and wakes "+
-		"you at the next decision. Refused when you do not take the task's decisions, or past the policy's bounds: then "+
-		"ask the person.", conductors, startPhase),
+		"you at the next decision. While the delivery waits on its pull requests with nothing running, fix (say what, "+
+		"in note), review or test start too, on the pull request's branch, and it waits on them again after. Refused "+
+		"when you do not take the task's decisions, while a Run or publish is changing the branch, or past the policy's "+
+		"bounds: then ask the person.", conductors, startPhase),
 	define("steer", "Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: "+
 		"your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong "+
 		"way, or to add something the person just said; start another phase only once a Run has ended. interrupt "+

@@ -84,6 +84,11 @@ type State struct {
 	PRFeedback []forge.ActionableFeedback `json:"prFeedback,omitempty"`
 	// The pull requests opened, one per repository changed.
 	PullRequestIDs []string `json:"pullRequestIds,omitempty"`
+	// The conductor started a phase while the delivery waited on its pull
+	// requests: once that work is done (a review loop clear, a fix, a
+	// test), the delivery waits on them again, with no simplify and no
+	// pull request decision in between.
+	ActingOnPR bool `json:"actingOnPr,omitempty"`
 	// Why the workflow stopped for a person, while it waits on one.
 	Escalation *Escalation `json:"escalation,omitempty"`
 	// How often a person sent it back to try again: each retry's Runs are
@@ -623,6 +628,9 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
+		if st.ActingOnPR {
+			return workflow.Result{Next: "openPullRequest", State: st}, nil
+		}
 		if st.Policy.Simplify {
 			return workflow.Result{Next: "simplify", State: st}, nil
 		}
@@ -819,7 +827,7 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 // (Open or Draft) — except for a pull request taken over, which is open
 // already and has nothing to decide.
 func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
-	if st.adoptedPR() {
+	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)
@@ -830,11 +838,24 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	acting := st.ActingOnPR
+	st.ActingOnPR = false
 	// A pull request taken over is already open: none is opened, nobody is
 	// asked to authorize one, and its reviewers are asked to look again at
 	// what the review loop pushed on it.
 	if st.adoptedPR() {
 		return w.keepAdoptedPullRequest(ctx, sc, st)
+	}
+	// Work the conductor started while the pull requests waited may have
+	// moved them: whoever reviewed an older head is asked to look again.
+	if acting {
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	// Never untested at the pull request: a head that is the conductor's
 	// commit is reviewed first, whoever decides.
@@ -1041,7 +1062,21 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
 	var spent []string // pull requests past the organization's budget
-	for _, repo := range feedbackRepos(st.PRFeedback) {
+	repos := feedbackRepos(st.PRFeedback)
+	if len(repos) == 0 {
+		// A fix the conductor started while the pull requests waited, on
+		// no feedback: it counts against each still open.
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		for _, p := range states {
+			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
+				repos = append(repos, p.Repo)
+			}
+		}
+	}
+	for _, repo := range repos {
 		if st.PRFixes == nil {
 			st.PRFixes = map[string]int{}
 		}
@@ -1148,6 +1183,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
+	st.ActingOnPR = false
 	// Who reviewed an open pull request's older head is asked to look at
 	// the fix. Before opening any new pull request, so that nothing that
 	// opening parks on leaves the open ones unasked; a replay of this step
