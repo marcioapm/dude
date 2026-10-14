@@ -175,3 +175,47 @@ func TestAMultiLineCriterionStaysOneItem(t *testing.T) {
 		t.Errorf("{{task.criteria}} not one item each:\n%s", got)
 	}
 }
+
+// underEveryInstructions renders a phase's prompt with dude's built-in
+// instructions, an organization's, and a project's that replaces them: a
+// contract the workflow or a person relies on must survive all three.
+func underEveryInstructions(phase string, in PromptInput) map[string]string {
+	org, project := "ORG: do it our way.", "PROJECT: do it this way only."
+	withOrg, replaced := in, in
+	withOrg.OrgPrompt = &org
+	replaced.OrgPrompt = &org
+	replaced.ProjectPrompt, replaced.ProjectPromptMode = project, "replace"
+	return map[string]string{"built-in": Prompt(phase, in), "organization": Prompt(phase, withOrg),
+		"project replace": Prompt(phase, replaced)}
+}
+
+func twoRepos() []PromptRepo {
+	return []PromptRepo{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/workspace/repos/web"}}
+}
+
+// The tester accounts for every criterion, changes nothing, knows what its
+// severities cause, and records its evidence, whatever its instructions say.
+func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads", "Totals match"},
+		Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true, CLI: true}
+	for kind, got := range underEveryInstructions(PhaseTest, in) {
+		for _, want := range []string{testerContract, testerTools, findingFormat,
+			severityNote(in.BlockingSeverities), "commit in none of them"} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the tester's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+		for _, never := range []string{"Commit in each repository you change", commitNote} {
+			if strings.Contains(got, never) {
+				t.Errorf("%s: the tester is told %q:\n%s", kind, never, got)
+			}
+		}
+	}
+	// The contract's anchors, so a rewrite of it cannot drop one unnoticed.
+	for _, want := range []string{"`acceptance.md`", "`pass`, `fail`, `blocked`", "`not-applicable`",
+		"never `pass`", "commit nothing", "Test environment:", "head commit"} {
+		if !strings.Contains(testerContract, want) {
+			t.Errorf("the tester's contract lacks %q", want)
+		}
+	}
+}

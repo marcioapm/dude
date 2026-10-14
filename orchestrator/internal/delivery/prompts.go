@@ -102,7 +102,9 @@ type PromptRepo struct {
 }
 
 // workspaceNote says where the code is, when that is not simply "here".
-func workspaceNote(repos []PromptRepo, review bool) string {
+// A reviewer and a tester check work and change none of it, so neither is
+// told to commit.
+func workspaceNote(repos []PromptRepo, phase string) string {
 	if len(repos) == 0 {
 		return "No repository is checked out for this work: it changes no code. Its result is what you " +
 			"publish (see below) and what you reply."
@@ -119,10 +121,14 @@ func workspaceNote(repos []PromptRepo, review bool) string {
 		}
 		fmt.Fprintf(&b, "\n- `%s` at `%s` — %s", r.Name, r.Path, access)
 	}
-	if review {
+	switch phase {
+	case PhaseReview:
 		b.WriteString("\n\nReview the changes in each checkout: `git log` and `git diff` against its default branch. " +
 			"Name the repository in each finding's `repo` field.")
-	} else {
+	case PhaseTest:
+		b.WriteString("\n\nTest the changes in each checkout together, and commit in none of them. " +
+			"Name the repository in each finding's `repo` field.")
+	default:
 		b.WriteString("\n\nCommit in each repository you change. Each changed repository gets its own pull request.")
 	}
 	return b.String()
@@ -255,17 +261,49 @@ func severityNote(blocking []string) string {
 const commitNote = "Commit your work when you are done. Only committed changes are kept. " +
 	"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them."
 
+// testerContract is what a person merging the change relies on from the
+// tester, whatever its instructions say: every criterion accounted for in
+// one report, evidence behind each pass, and a product it did not touch.
+const testerContract = "## Your part\n\n" +
+	"You are independent verification: show, as a user would see it, whether this change does what the task says. " +
+	"Do not change the product to make a check pass: commit nothing in the repositories under test. Scripts and " +
+	"test data of your own, outside the product's source, are fine. Something broken is a finding: someone else " +
+	"fixes it, and you will be asked to check again.\n\n" +
+	"First establish what you test: the head commit of each checkout, and how you ran it — the command that " +
+	"started it and the data it used. Run it the way the project documents (its notes, README, scripts). Test the " +
+	"real, integrated application; a mock or fixture demo shows a criterion only when the criterion is about that " +
+	"component alone, and the report says which it was.\n\n" +
+	"Account for every acceptance criterion in a Markdown report published as `acceptance.md`. For each " +
+	"criterion: what you expected, the steps you took, what you observed, its status, and the evidence (file " +
+	"names, and video timestamps where useful). The status is exactly one of `pass`, `fail`, `blocked` (you could " +
+	"not run or reach it; say why) or `not-applicable` (rarely, with the reason). A criterion you did not check " +
+	"is `blocked`, never `pass`; a `pass` without evidence is not a pass. If the task has no acceptance criteria, " +
+	"derive the checks from its goal and say that you did.\n\n" +
+	"The evidence fits the criterion. What a person sees in the UI: a video of the real journey and screenshots " +
+	"of the states that decide it. Behaviour behind an API, a CLI or a job: the request or command and its " +
+	"actual output. Where a criterion depends on them, also check what a video cannot show: the state after a " +
+	"reload, permissions, the obvious failure case, and the flows next to the change. Look at each screenshot " +
+	"and video before you rely on it: a blank frame, a sign-in page or an error overlay is not evidence.\n\n" +
+	"If you cannot start or reach the application, or cannot tell how to test this project, do not guess and do " +
+	"not report success: mark the criteria it affects `blocked`, report a `blocking` finding titled " +
+	"`Test environment: …` that says exactly what you tried, publish the report, and stop.\n\n" +
+	"A criterion that fails is a `blocking` finding: the step it failed at, what you expected and what happened, " +
+	"and the evidence. Report the console errors and failed network requests you saw during the flows; those " +
+	"that show a defect are findings."
+
 // testerTools is how the tester drives a browser and records it. Playwright
 // and Chromium are in the runtime image (images/runtime); the evidence is
 // published as files people open next to the task.
 const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
-	"package; Chromium is installed). Record the whole flow as a video — create the browser context with " +
-	"`record_video_dir` — and take a screenshot at each step that matters. When you are done, close the " +
-	"context so the video is written, then publish the video and each screenshot with " +
+	"package; Chromium is installed), at a desktop viewport (1280×800) unless a criterion is about another size. " +
+	"Record each journey as a video — create the browser context with `record_video_dir` and a " +
+	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` and pause " +
+	"briefly on each state that matters. Keep a failure in the recording; do not cut it out. Take a screenshot of " +
+	"each state that decides a criterion. Read the browser console and network as you go. When you are done, " +
+	"close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with " +
 	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish /tmp/videos/abc.webm " +
 	"--name walkthrough.webm --description \"The sign-in flow, end to end\"`, `--name 01-signed-in.png`), " +
-	"named so the order reads; a description is one short line saying what the file shows. Read the browser console as you go, and report what it says. A flow that does " +
-	"not work is a finding, with the step it failed at; one that works needs no finding — say what you did."
+	"named so the order reads; a description is one short line saying what the file shows."
 
 // publishNote tells an agent how to hand a person something that is not
 // code. Every phase may: an implementer's design notes, a reviewer's
@@ -418,13 +456,12 @@ var builtinInstructions = map[string][]string{
 			"introduced, and consolidate obvious duplication.",
 		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
 			"if they do not pass, your simplification was not behaviour-preserving."},
-	"qa_browser": {"Exercise this change the way a person would. Start the application, drive it in a " +
-		"browser, and confirm it does what the task asked.",
-		"You are not looking for what the unit tests already cover. You are looking for what they " +
-			"cannot: does the feature actually work when used.",
+	"qa_browser": {"Exercise this change the way a person would: start the application, use it, and see " +
+		"whether it does what the task asked.",
+		"Look for what the unit tests cannot show: whether the feature works when someone uses it.",
 		"How to start the application and what data it needs are the project's to say (in the " +
 			"project notes below); if they say nothing, find out from the repository — its README, " +
-			"its scripts — and say in your report what you did."},
+			"its scripts."},
 }
 
 // BuiltinPrompt is a role's instructions as dude ships them: what an
@@ -647,8 +684,11 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseTest:
 		add(lead...)
-		add(testerTools)
+		add(testerContract, testerTools)
 		add(in.task(), findingFormat)
+		if note := severityNote(in.BlockingSeverities); note != "" {
+			add(note)
+		}
 
 	default:
 		add(in.task())
@@ -663,7 +703,7 @@ func Prompt(phase string, in PromptInput) string {
 	if c := strings.TrimSpace(in.Coordination); c != "" {
 		add(c)
 	}
-	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
+	if note := workspaceNote(in.Repositories, phase); note != "" {
 		add(note)
 	}
 	if in.Tools {

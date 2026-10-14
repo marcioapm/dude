@@ -774,7 +774,8 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if d != nil {
 		k = conductorKey(sc, st, d, ":test")
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseTest, k, d.apply)
+	runID, err := w.phase(ctx, sc, st, PhaseTest, k,
+		func(p *PhaseRun) { p.BlockingSeverities = st.Policy.BlockingSeverities; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}

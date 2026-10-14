@@ -1925,6 +1925,41 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	}
 }
 
+// The tester's severities have the same consequences as a reviewer's, so
+// it is told the delivery's policy too.
+func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("qa_browser", "llm-test")
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "test" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.task()
+	policy := delivery.DefaultPolicy()
+	policy.Test = true
+	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
+		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
+	w.start(wi, policy)
+	var prompt string
+	w.until("a test to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "test" {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
+		t.Errorf("the tester was not told the policy's blocking severities:\n%s", prompt)
+	}
+}
+
 func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
