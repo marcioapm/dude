@@ -348,7 +348,9 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 			WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1), 0)`, follower).Scan(&pid)
 		return pid, err
 	}
-	// Only before apply: let resumeAsked time out, then roll back the batch.
+	// Before the batch is let apply its frames it cannot wait on resumeAsked,
+	// so a lock timeout here is a scheduling miss, not a broken cycle: let
+	// resumeAsked time out, then roll back the batch.
 	lost := func(why string) (bool, error) {
 		w.t.Logf("before the batch was let go, %s", why)
 		if err := errors.Join(untilAsked(), ended()); err != nil {
@@ -378,6 +380,8 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 
 	// At the pre-apply barrier, match the resume row's xmax to the asker's
 	// granted (sub)transaction locks: holding it is the cycle's first half.
+	// Blocked, resumeAsked takes no lock until it is let go, so this is read
+	// at a barrier, not sampled.
 	// Measure wait age on the database clock; NULL waitstart is unknown,
 	// not zero, so read again until PostgreSQL publishes it.
 	var waitedMs *float64
