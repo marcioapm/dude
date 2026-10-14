@@ -159,11 +159,23 @@ func TestSourcePickersAskGitHub(t *testing.T) {
 // the backend's 15 s deadline, at most four checks at a time, in name order.
 func TestFiftyRepositoriesAreCheckedInsideTheBackendsDeadline(t *testing.T) {
 	w := newWorld(t)
-	var inFlight, most atomic.Int32
+	var inFlight, most, arrived atomic.Int32
+	// The first four checks are held until all four have arrived: the
+	// overlap is shown, not left to scheduling. Each then takes 320ms, so
+	// checked one by one the fifty outlast the 15s deadline below.
+	four := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		n := inFlight.Add(1)
 		defer inFlight.Add(-1)
 		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		if arrived.Add(1) == 4 {
+			close(four)
+		}
+		select {
+		case <-four:
+		case <-r.Context().Done():
+			return
 		}
 		select {
 		case <-time.After(320 * time.Millisecond):
@@ -206,8 +218,8 @@ func TestFiftyRepositoriesAreCheckedInsideTheBackendsDeadline(t *testing.T) {
 			t.Fatalf("repository %d is %+v", i, r)
 		}
 	}
-	if m := most.Load(); m > 4 || m < 2 {
-		t.Fatalf("%d checks at once, want at most 4 (and more than one)", m)
+	if m := most.Load(); m != 4 {
+		t.Fatalf("%d checks at once, want 4", m)
 	}
 }
 
