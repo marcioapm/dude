@@ -36,9 +36,13 @@ The **orchestrator** already sees every ask: `ask_person`,
 
 - It reads new `question.asked` and `repository.requested` events past a
   stored cursor (`notify_cursor`, one row).
-- It sends one push per subscription of that organization.
+- It sends one push per subscription of that organization: a browser on in
+  several organisations has a row in each (keyed by endpoint and
+  organisation, migration 122), and only the ask's organisation's is used.
+  The click URL names the organisation (`#/o/<slug>/…`); the service worker
+  still opens a bare `#/task/…` from an older release.
 - A subscription the push service answers with 404 or 410 has gone
-  (unsubscribed or expired), so it is deleted.
+  (unsubscribed or expired), so it is deleted, in every organisation.
 - Sending is best effort. A failed push is logged, never retried forever,
   and never blocks the Run: the board still shows the ask.
 
@@ -54,9 +58,10 @@ missing, the orchestrator generates a pair once and stores it in
 
 - `GET /v1/push/key`: the VAPID public key, which the browser needs to
   subscribe.
-- `POST /v1/push/subscriptions {endpoint, keys}` and
-  `DELETE /v1/push/subscriptions {endpoint}`: register or remove the
-  calling browser.
+- `POST /v1/push/subscriptions {endpoint, keys}`,
+  `POST /v1/push/subscriptions/lookup {endpoint}` and
+  `POST /v1/push/subscriptions/remove {endpoint}`: register, look up or
+  remove the calling browser in the request's organisation only.
 
 ## Settings
 

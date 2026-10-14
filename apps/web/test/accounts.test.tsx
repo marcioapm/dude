@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { ThemeProvider } from "@dude/design-system";
 import { act, click, mount, settle, type, until } from "./dom.ts";
@@ -16,7 +16,7 @@ import { ApiClient, ApiError, type MeAnswer } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { Gatekeeper } from "../src/accounts/Gatekeeper.tsx";
 import { useAccount, type Account } from "../src/accounts/context.tsx";
-import { PUSH_ORGANIZATION, pushOffOnSignOut, turnPushOff } from "../src/push.ts";
+import { pushOffOnSignOut, turnPushOff } from "../src/push.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { SignedIn } from "../src/SignedIn.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
@@ -42,7 +42,7 @@ afterEach(async () => {
 });
 
 /** The signed-in app at `hash`, as main.tsx mounts it: the gatekeeper, then the tenant app it chose. */
-async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_access" = "cloudflare_access") {
+async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_access" = "cloudflare_access", { strict = false } = {}) {
   window.history.replaceState(null, "", hash);
   const client = new AccountsClient(w);
   // Every organisation client the gatekeeper handed the tenant app, and the account it provided.
@@ -79,7 +79,8 @@ async function open(hash: string, w: World, authMethod: "api_key" | "cloudflare_
       </ThemeProvider>
     );
   }
-  const { container, unmount } = await mount(<Root />);
+  // main.tsx mounts under StrictMode, which replays every effect once on arriving.
+  const { container, unmount } = await mount(strict ? <StrictMode><Root /></StrictMode> : <Root />);
   mounted.push(unmount);
   return { page: container, client, scopedClients, seen };
 }
@@ -666,10 +667,14 @@ describe("re-reading /v1/me", () => {
   });
 });
 
-/** A browser that can push and is subscribed at `endpoint`, until the returned undo. */
-function fakePush(endpoint: string): () => void {
-  const sub = { endpoint, toJSON: () => ({ endpoint, keys: { p256dh: "p", auth: "a" } }), unsubscribe: async () => true };
-  const registration = { pushManager: { getSubscription: async () => sub, subscribe: async () => sub } };
+/** A browser that can push and is subscribed at `endpoint`, until `restore`; `unsubscribed` counts the browser's own unsubscribes. */
+function fakePush(endpoint: string): { restore: () => void; unsubscribed: () => number } {
+  let unsubscribes = 0;
+  let current: object | null = null;
+  const sub = { endpoint, toJSON: () => ({ endpoint, keys: { p256dh: "p", auth: "a" } }),
+    unsubscribe: async () => { unsubscribes++; current = null; return true; } };
+  current = sub;
+  const registration = { pushManager: { getSubscription: async () => current, subscribe: async () => (current = sub) } };
   const worker = { register: async () => registration, ready: Promise.resolve(registration), getRegistration: async () => registration,
     addEventListener() {}, removeEventListener() {} };
   const notification = { permission: "granted", requestPermission: async () => "granted" };
@@ -685,79 +690,134 @@ function fakePush(endpoint: string): () => void {
     define(scope, "Notification", notification);
   }
   for (const nav of new Set<object>([navigator, window.navigator])) define(nav, "serviceWorker", worker);
-  return () => {
-    for (const step of undo.reverse()) step();
+  return {
+    restore: () => {
+      for (const step of undo.reverse()) step();
+    },
+    unsubscribed: () => unsubscribes,
   };
 }
 
 describe("this browser's notifications", () => {
   const endpoint = "https://push.example/sub-1";
-  let restore: () => void = () => {};
+  let browser: ReturnType<typeof fakePush> = { restore: () => {}, unsubscribed: () => 0 };
   beforeEach(() => {
-    restore = fakePush(endpoint);
+    browser = fakePush(endpoint);
   });
   // Unmounted while the browser can still push: the app's cleanup reads the service worker.
   afterEach(async () => {
     for (const unmount of mounted) await unmount();
     mounted = [];
-    restore();
+    browser.restore();
   });
+  const state = (page: HTMLElement) => byTestId(page, "push-state")?.getAttribute("data-state") ?? null;
+  const registered = (w: World) => [...w.push].filter(([, set]) => set.has(endpoint)).map(([org]) => org).sort();
+  // The browser keeps no record of where it is registered: only the last organisation it was in.
+  const stored = () => Object.keys(localStorage).sort();
 
-  test("claimed in Acme, opening Northwind claims nothing, and Northwind's card says it is on for Acme", async () => {
-    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme" }));
+  test("each organisation has its own switch: on in Acme, Northwind's card is off, and opening Northwind registers nothing", async () => {
     const w = world();
+    w.push.set(ACME.id, new Set([endpoint]));
     const { page } = await open("#/o/northwind/me/settings", w);
-    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
+    await until(() => state(page) === "off" ? true : null, "Northwind's card, off");
     await settle();
     expect(w.calls.filter((c) => c.method === "subscribePush")).toEqual([]);
-    expect(text(byTestId(page, "push-state"))).toBe("On in this browser, for Acme: a question or a request from an agent there shows as a notification, even with dude closed."
-      + " This browser can notify you for one organisation at a time.");
-    // Moving it is the card's own action, for the organisation this tab is in.
-    await click(byTestId(page, "push-here")!);
-    await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
-    expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
-    expect(JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint)!)).toEqual({ id: NORTHWIND.id, name: "Northwind" });
-    await until(() => text(byTestId(page, "push-state")).startsWith("On in this browser, for Northwind:") ? true : null, "on for Northwind");
+    expect(w.calls.filter((c) => c.method === "pushSubscribed").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(text(byTestId(page, "push-state"))).toBe("Off in this browser, for this organisation. Waiting work still shows under Needs you.");
+    expect(text(page)).not.toContain("one organisation at a time");
     expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
   });
 
-  test("an owner recorded for an organisation you have left is ignored: the generic card, and nothing to move", async () => {
-    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: "org_left", name: "Initech" }));
+  test("Notify me in Northwind registers it there and leaves Acme's as it was", async () => {
     const w = world();
+    w.push.set(ACME.id, new Set([endpoint]));
     const { page } = await open("#/o/northwind/me/settings", w);
-    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
-    expect(text(byTestId(page, "push-state"))).toBe("On in this browser: a question or a request from an agent shows as a notification, even with dude closed.");
-    expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
+    await click(await until(() => byTestId(page, "push-on"), "Notify me"));
+    await until(() => state(page) === "on" ? true : null, "on in Northwind");
+    expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(registered(w)).toEqual([ACME.id, NORTHWIND.id].sort());
+    expect(text(byTestId(page, "push-state"))).toBe(
+      "On in this browser, for this organisation: a question or a request from an agent here shows as a notification, even with dude closed.");
+    expect(stored()).toEqual([LAST_ORGANIZATION]);
   });
 
-  test("the recorded owner is named as it is called now, not as it was when recorded", async () => {
-    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme Old" }));
-    const { page } = await open("#/o/acme/me/settings", world());
-    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
-    expect(text(byTestId(page, "push-state"))).toStartWith("On in this browser, for Acme:");
-    expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
+  test("Turn off in Northwind removes only Northwind's, and the browser keeps its subscription for Acme", async () => {
+    const w = world();
+    w.push.set(ACME.id, new Set([endpoint]));
+    w.push.set(NORTHWIND.id, new Set([endpoint]));
+    const { page } = await open("#/o/northwind/me/settings", w);
+    await click(await until(() => byTestId(page, "push-off"), "Turn off"));
+    await until(() => state(page) === "off" ? true : null, "off in Northwind");
+    expect(w.calls.filter((c) => c.method === "unsubscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(registered(w)).toEqual([ACME.id]);
+    expect(browser.unsubscribed()).toBe(0);
   });
 
-  test("in one organisation, opening it claims the subscription again, as before, and records it as that organisation's", async () => {
+  test("Turn off in the last organisation that has it drops the browser's subscription too", async () => {
+    const w = world();
+    w.push.set(NORTHWIND.id, new Set([endpoint]));
+    const { page } = await open("#/o/northwind/me/settings", w);
+    await click(await until(() => byTestId(page, "push-off"), "Turn off"));
+    await until(() => state(page) === "off" ? true : null, "off in Northwind");
+    expect(registered(w)).toEqual([]);
+    // Acme was asked before the browser's own subscription went.
+    expect(w.calls.filter((c) => c.method === "pushSubscribed" && c.org === ACME.id).length).toBe(1);
+    expect(browser.unsubscribed()).toBe(1);
+  });
+
+  test("in one organisation, opening it registers the subscription there again, as before, and records nothing in the browser", async () => {
     const w = world(memberMe({ organizations: [ACME], invitations: [] }));
     await open("#/o/acme/", w);
-    await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
+    await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the registration");
     expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([ACME.id]);
-    await until(() => localStorage.getItem(PUSH_ORGANIZATION + endpoint), "the record");
-    expect(JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint)!)).toEqual({ id: ACME.id, name: "Acme" });
+    expect(registered(w)).toEqual([ACME.id]);
+    expect(stored()).toEqual([LAST_ORGANIZATION]);
   });
 
-  test("signing out from inside an organisation removes it through that organisation's client, with nothing recorded", async () => {
+  test("sign-out removes the browser from every membership, through the session's credential naming each, then drops its subscription", async () => {
     const w = world();
-    expect(await pushOffOnSignOut(new AccountsClient(w).inOrganization(NORTHWIND.id))(new AccountsClient(w))).toBe("off");
+    w.push.set(ACME.id, new Set([endpoint]));
+    w.push.set(NORTHWIND.id, new Set([endpoint]));
+    expect(await pushOffOnSignOut([ACME.id, NORTHWIND.id])(new AccountsClient(w))).toBe("off");
     expect(w.calls.filter((c) => c.method === "unsubscribePush")).toEqual([
+      { method: "unsubscribePush", org: ACME.id, args: [endpoint] },
       { method: "unsubscribePush", org: NORTHWIND.id, args: [endpoint] },
     ]);
+    expect(registered(w)).toEqual([]);
+    expect(browser.unsubscribed()).toBe(1);
   });
 
-  test("the app's own Sign out, as main.tsx mounts it, hands sign-out the mounted organisation's removal", async () => {
+  test("sign-out's removals run side by side: the first organisation's failing keeps none of the others from going", async () => {
+    const w = world();
+    const third = "org_third";
+    for (const org of [ACME.id, NORTHWIND.id, third]) w.push.set(org, new Set([endpoint]));
+    const root = new AccountsClient(w);
+    const started: string[] = [];
+    let fail = (_: Error) => {};
+    root.inOrganization = (id: string) => {
+      const scoped = new AccountsClient(w, id);
+      const remove = scoped.unsubscribePush.bind(scoped);
+      scoped.unsubscribePush = (e: string) => {
+        started.push(id);
+        // Acme's is still unanswered when the others are asked; then it fails.
+        return id === ACME.id ? new Promise<void>((_, reject) => (fail = reject)) : remove(e);
+      };
+      return scoped;
+    };
+    const done = pushOffOnSignOut([ACME.id, NORTHWIND.id, third])(root);
+    await settle();
+    expect(started).toEqual([ACME.id, NORTHWIND.id, third]);
+    fail(new ApiError(503, "unavailable", "unavailable"));
+    expect(await done).toBe("off");
+    expect(registered(w)).toEqual([ACME.id]);
+    expect(browser.unsubscribed()).toBe(1);
+  });
+
+  test("the app's own Sign out, as main.tsx mounts it, hands sign-out the removal from every membership", async () => {
     window.history.replaceState(null, "", "#/o/northwind/");
     const w = world();
+    w.push.set(ACME.id, new Set([endpoint]));
+    w.push.set(NORTHWIND.id, new Set([endpoint]));
     const root = new AccountsClient(w);
     const asked: Array<(root: ApiClient) => Promise<unknown>> = [];
     const { container: page, unmount } = await mount(
@@ -778,20 +838,256 @@ describe("this browser's notifications", () => {
     await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-signout]"), "Sign out"));
     expect(asked.length).toBe(1);
     await asked[0]!(root);
-    expect(w.calls.filter((c) => c.method === "unsubscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(w.calls.filter((c) => c.method === "unsubscribePush").map((c) => c.org)).toEqual([ACME.id, NORTHWIND.id]);
+    expect(registered(w)).toEqual([]);
   });
 
-  test("turning off (and signing out) removes it through the organisation it was claimed for, else the mounted one", async () => {
+  test("turning off in an organisation where another can't be asked keeps the browser's subscription", async () => {
     const w = world();
-    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme" }));
-    expect(await turnPushOff(new AccountsClient(w).inOrganization(NORTHWIND.id))).toBe("off");
-    expect(localStorage.getItem(PUSH_ORGANIZATION + endpoint)).toBeNull();
-    expect(await turnPushOff(new AccountsClient(w).inOrganization(NORTHWIND.id))).toBe("off");
-    expect(w.calls.filter((c) => c.method === "unsubscribePush")).toEqual([
-      { method: "unsubscribePush", org: ACME.id, args: [endpoint] },
-      { method: "unsubscribePush", org: NORTHWIND.id, args: [endpoint] },
-    ]);
+    w.push.set(NORTHWIND.id, new Set([endpoint]));
+    const unreachable = new AccountsClient(w, ACME.id);
+    unreachable.pushSubscribed = () => Promise.reject(new ApiError(503, "unavailable", "unavailable"));
+    expect(await turnPushOff(new AccountsClient(w, NORTHWIND.id), [unreachable])).toBe("off");
+    expect(registered(w)).toEqual([]);
+    expect(browser.unsubscribed()).toBe(0);
   });
+});
+
+describe("Welcome to <organisation>, once per membership", () => {
+  /** You in Acme and Northwind, neither welcomed yet. */
+  const fresh = () => world(memberMe({ organizations: [{ ...ACME, welcomedAt: null }, { ...NORTHWIND, welcomedAt: null }], invitations: [] }));
+  const welcomes = (w: World) => w.calls.filter((c) => c.method === "markWelcomed").map((c) => [c.org, c.args[0]]);
+  const gates = (w: World) => w.calls.filter((c) => c.method === "gate").length;
+
+  test("shown on arrival; Start your first session welcomes it, and a later visit shows the home instead", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w);
+    await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    expect(welcomes(w)).toEqual([]);
+    await click(byTestId(page, "start")!);
+    await until(() => welcomes(w).length ? true : null, "welcomed");
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    // The re-read /v1/me carries it; a new mount at the same address is a reload.
+    await until(() => w.calls.filter((c) => c.method === "gate").length >= 1 ? true : null, "the account re-read");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const again = await open("#/o/acme/welcome", w);
+    await until(() => byTestId(again.page, "welcome"), "the home, not the welcome");
+    expect(again.page.querySelectorAll("[data-testid=first-one]").length).toBe(0);
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+  });
+
+  test("Save on it welcomes it, and it stays on screen until left; leaving after Save marks and re-reads nothing more", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w);
+    const welcome = await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    await type(byTestId(welcome, "welcome-name")!, "Márcio M.");
+    await click(byTestId(welcome, "welcome-save")!);
+    await until(() => welcomes(w).length ? true : null, "welcomed");
+    await until(() => gates(w) === 1 ? true : null, "the account re-read");
+    await settle();
+    expect(page.querySelectorAll("[data-testid=first-one]").length).toBe(1);
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    await click(byTestId(page, "start")!);
+    await until(() => byTestId(page, "welcome"), "the home");
+    await settle();
+    expect({ welcomes: welcomes(w), gates: gates(w) }).toEqual({ welcomes: [[ACME.id, ACME.id]], gates: 1 });
+  });
+
+  test("a failed welcome mark on Save can be attempted again on Start, for Acme only", async () => {
+    const w = fresh();
+    const { page, scopedClients } = await open("#/o/acme/welcome", w);
+    const welcome = await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    const scoped = [...scopedClients].find((c) => c.organizationId === ACME.id)!;
+    const markWelcomed = scoped.markWelcomed.bind(scoped);
+    let attempts = 0;
+    scoped.markWelcomed = (id) => {
+      attempts++;
+      return attempts === 1
+        ? Promise.reject(new ApiError(503, "unavailable", "unavailable"))
+        : markWelcomed(id);
+    };
+    await type(byTestId(welcome, "welcome-name")!, "Márcio M.");
+    await click(byTestId(welcome, "welcome-save")!);
+    // The account re-read follows the rejected mark's catch, after the guard has settled.
+    await until(() => gates(w) === 1 ? true : null, "the failed mark's account re-read");
+    expect(attempts).toBe(1);
+    expect(welcomes(w)).toEqual([]);
+    await click(byTestId(page, "start")!);
+    await until(() => byTestId(page, "welcome"), "the home");
+    expect(attempts).toBe(2);
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    expect(w.me.gate === "member" && w.me.organizations?.map((o) => [o.id, o.welcomedAt != null]))
+      .toEqual([[ACME.id, true], [NORTHWIND.id, false]]);
+  });
+
+  test("switching to Northwind from Acme's unsaved welcome welcomes Acme, through Acme's client, once; arriving marked nothing", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
+    await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    await settle();
+    expect(welcomes(w)).toEqual([]);
+    await act(async () => void (window.location.hash = "#/o/northwind/"));
+    await until(() => welcomes(w).length ? true : null, "Acme welcomed on leaving");
+    await until(() => byTestId(page, "welcome"), "Northwind's home");
+    await settle();
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    const acme = (w.me as { organizations: Array<{ id: string; welcomedAt?: string | null }> }).organizations;
+    expect(acme.map((o) => [o.id, o.welcomedAt != null])).toEqual([[ACME.id, true], [NORTHWIND.id, false]]);
+  });
+
+  test("a quick bounce: arriving under StrictMode and leaving for an invitation link at once marks it once", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
+    expect(byTestId(page, "first-one")).not.toBeNull();
+    await act(async () => void (window.location.hash = "#/invite/Gx4tR8mQ2vLp9sKd3wNb7a"));
+    await until(() => welcomes(w).length ? true : null, "welcomed on leaving");
+    await settle();
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+  });
+
+  test("leaving a welcome already welcomed, or a home that never showed it, marks nothing", async () => {
+    const w = world(memberMe({ organizations: [{ ...ACME, welcomedAt: "2026-10-01T00:00:00Z" }, { ...NORTHWIND, welcomedAt: null }], invitations: [] }));
+    const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
+    await until(() => byTestId(page, "welcome"), "Acme's home, not its welcome");
+    await act(async () => void (window.location.hash = "#/o/northwind/"));
+    await until(() => w.calls.some((c) => c.method === "navigation" && c.org === NORTHWIND.id) ? true : null, "Northwind");
+    await act(async () => void window.dispatchEvent(new PageTransitionEvent("pagehide")));
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    await settle();
+    expect(welcomes(w)).toEqual([]);
+  });
+
+  test("a reload from the unsaved welcome: the page's departure welcomes it, and the reloaded page opens the home", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
+    await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    // The document going: a reload runs pagehide and no React cleanup.
+    await act(async () => void window.dispatchEvent(new PageTransitionEvent("pagehide")));
+    await settle();
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    // The new document's app; this one's teardown marks nothing more.
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    await settle();
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    const again = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
+    await until(() => byTestId(again.page, "welcome"), "the home, not the welcome");
+    expect(again.page.querySelectorAll("[data-testid=first-one]").length).toBe(0);
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+  });
+
+  test("another organisation's welcome is its own: Acme welcomed, Northwind's still shows", async () => {
+    const w = fresh();
+    const { page } = await open("#/o/acme/welcome", w);
+    await click(await until(() => byTestId(page, "start"), "Start"));
+    await until(() => welcomes(w).length ? true : null, "Acme welcomed");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const nw = await open("#/o/northwind/welcome", w);
+    const welcome = await until(() => byTestId(nw.page, "first-one"), "Welcome to Northwind");
+    expect(text(welcome.querySelector("h1"))).toStartWith("Welcome to Northwind");
+  });
+});
+
+describe("the Invitations page, past one page", () => {
+  /** Acme with `n` more pending invitations than the fixtures', and a page size of 2. */
+  function many(n: number) {
+    const w = world();
+    w.pageSize = 2;
+    for (let i = 0; i < n; i++) {
+      w.invitations.push(invitation({ id: `inv_bulk${String(i).padStart(2, "0")}`, code: `Bk${i}`.padEnd(22, "0"), email: `bulk${i}@acme.dev` }));
+    }
+    return w;
+  }
+  const rows = (list: HTMLElement) => [...list.querySelectorAll("[data-testid=invitation-row]")].map((r) => r.getAttribute("data-email"));
+
+  test("the tabs show the counts endpoint's numbers, past 50, in one request", async () => {
+    const w = many(60);
+    const { page } = await open("#/o/acme/org/settings/invitations", w);
+    const list = await until(() => byTestId(page, "org-invitations"), "Invitations");
+    await until(() => text(byTestId(list, "status-filter")).includes("All 65") ? true : null, "the counts");
+    expect([...byTestId(list, "status-filter")!.querySelectorAll("button")].map(text)).toEqual(["Pending 62", "Expired 1", "Accepted 1", "Revoked 1", "All 65"]);
+    expect(text(page.querySelector("[data-settings-nav=invitations]"))).toBe("Invitations62 pending");
+    // The list's own reads are its pages; the counts are one read each for the tabs and the menu.
+    expect(w.calls.filter((c) => c.method === "listInvitations" && (c.args[0] as { cursor?: string }).cursor === undefined
+      && (c.args[0] as { q?: string }).q === undefined).length).toBe(0);
+    expect(w.calls.filter((c) => c.method === "invitationCounts").length).toBe(2);
+  });
+
+  test("Load more appends the next page, following the cursor, until there is none", async () => {
+    const w = many(3);
+    const { page } = await open("#/o/acme/org/settings/invitations", w);
+    const list = await until(() => byTestId(page, "org-invitations"), "Invitations");
+    await until(() => rows(list).length === 2 ? true : null, "the first page");
+    expect(rows(list)).toEqual(["jo.becker@acme.dev", "jules@acme.dev"]);
+    await click(byTestId(list, "invitations-more")!);
+    await until(() => rows(list).length === 4 ? true : null, "the second page");
+    expect(rows(list)).toEqual(["jo.becker@acme.dev", "jules@acme.dev", "bulk0@acme.dev", "bulk1@acme.dev"]);
+    await click(byTestId(list, "invitations-more")!);
+    await until(() => rows(list).length === 5 ? true : null, "the last page");
+    expect(list.querySelectorAll("[data-testid=invitations-more]").length).toBe(0);
+    expect(w.calls.filter((c) => c.method === "listInvitations").map((c) => (c.args[0] as { cursor?: string }).cursor).filter(Boolean))
+      .toEqual(["inv_jules", "inv_bulk01"]);
+  });
+
+  test("a search starts from its own first page: the cursor is not carried over", async () => {
+    const w = many(5);
+    const { page } = await open("#/o/acme/org/settings/invitations", w);
+    const list = await until(() => byTestId(page, "org-invitations"), "Invitations");
+    await until(() => rows(list).length === 2 ? true : null, "the first page");
+    await click(byTestId(list, "invitations-more")!);
+    await until(() => rows(list).length === 4 ? true : null, "the second page");
+    // A third page, so the list's cursor (inv_bulk03) is not the one the search's first page gives (inv_bulk01).
+    await click(byTestId(list, "invitations-more")!);
+    await until(() => rows(list).length === 6 ? true : null, "the third page");
+    await type(byTestId(list, "invite-search")!.querySelector("input") ?? byTestId(list, "invite-search")!, "bulk");
+    await until(() => rows(list).join() === "bulk0@acme.dev,bulk1@acme.dev" ? true : null, `the search's first page, not ${rows(list).join()}`);
+    const searched = w.calls.filter((c) => c.method === "listInvitations" && (c.args[0] as { q?: string }).q === "bulk");
+    expect(searched.map((c) => c.args[0])).toEqual([{ status: "pending", q: "bulk" }]);
+    await click(byTestId(list, "invitations-more")!);
+    await until(() => rows(list).length === 4 ? true : null, "the search's second page");
+    expect(rows(list)).toEqual(["bulk0@acme.dev", "bulk1@acme.dev", "bulk2@acme.dev", "bulk3@acme.dev"]);
+    expect(w.calls.at(-1)!.args[0]).toEqual({ status: "pending", q: "bulk", cursor: "inv_bulk01" });
+  });
+
+  for (const change of ["the All tab", "a search"] as const) {
+    test(`while ${change}'s first page is on its way, Load more is gone: the old cursor is never asked with the new filter`, async () => {
+      const w = many(4);
+      const { page } = await open("#/o/acme/org/settings/invitations", w);
+      const list = await until(() => byTestId(page, "org-invitations"), "Invitations");
+      await until(() => rows(list).length === 2 ? true : null, "the first page");
+      await click(byTestId(list, "invitations-more")!);
+      await until(() => rows(list).length === 4 ? true : null, "the second page");
+      // Pending's cursor is now inv_bulk01; the new first page ends at inv_jules.
+      let release = () => {};
+      const held = new Promise<void>((r) => (release = r));
+      w.holdList = (p) => (p.cursor === undefined ? held : undefined);
+      if (change === "the All tab") await click(button(byTestId(list, "status-filter")!, "All 9")!);
+      else await type(byTestId(list, "invite-search")!.querySelector("input") ?? byTestId(list, "invite-search")!, "acme.dev");
+      const first = change === "the All tab" ? { status: "all", q: "" } : { status: "pending", q: "acme.dev" };
+      const asked = () => w.calls.filter((c) => c.method === "listInvitations").map((c) => c.args[0]);
+      await until(() => asked().some((a) => JSON.stringify(a) === JSON.stringify(first)) ? true : null, "the new first page asked");
+      // The person's click on Load more, if there were one to click.
+      const more = byTestId(list, "invitations-more");
+      if (more) await click(more);
+      await settle();
+      delete w.holdList;
+      release();
+      await until(() => rows(list).join() === "jo.becker@acme.dev,jules@acme.dev" ? true : null, `the new first page alone, not ${rows(list).join()}`);
+      await settle();
+      expect(rows(list)).toEqual(["jo.becker@acme.dev", "jules@acme.dev"]);
+      expect(asked().filter((a) => (a as { cursor?: string }).cursor)).toEqual([{ status: "pending", q: "", cursor: "inv_jules" }]);
+      // Load more follows the new first page's own cursor.
+      await click(await until(() => byTestId(list, "invitations-more"), "Load more, from the new first page"));
+      await until(() => rows(list).length === 4 ? true : null, "its second page");
+      expect(asked().at(-1)).toEqual({ ...first, cursor: "inv_jules" });
+      expect(rows(list)).toEqual(change === "the All tab"
+        ? ["jo.becker@acme.dev", "jules@acme.dev", "kai.nakamura@acme.dev", "lin@example.com"]
+        : ["jo.becker@acme.dev", "jules@acme.dev", "bulk0@acme.dev", "bulk1@acme.dev"]);
+    });
+  }
 });
 
 describe("the super-admin's pages", () => {

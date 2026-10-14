@@ -234,7 +234,7 @@ describe("a move whose resume failed", () => {
       events.push({
         eventId: `ev_${cursor}`, eventType, occurredAt: new Date(Date.UTC(2026, 9, 14, 8) + cursor * 1_000).toISOString(), organizationId: "o",
         projectId: "p", taskId: "t", runId, sessionId: null, workflowRunId: null, actor: { type: agent ? "agent" : "system", id: "x" },
-        source: "x", correlationId: null, causationId: null, payload, cursor,
+        source: agent ? "harness" : "orchestrator", correlationId: null, causationId: null, payload, cursor,
       } as PersistedEvent);
     };
     add(EventTypes.RunCreated, { role: "conductor" });

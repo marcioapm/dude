@@ -16,7 +16,7 @@ import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { conductedLines } from "../src/conducted.ts";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
-import { formatPlace, inTree } from "../src/place.ts";
+import { formatPlace, inTree, type TaskTab } from "../src/place.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -129,7 +129,7 @@ describe("a restarted Run's presentation", () => {
       const getTask = client.getTask.bind(client);
       client.getTask = async (id) => {
         const task = await getTask(id);
-        return { ...task, decider: "conductor", runs: [run({ id: "run_conductor", role: "conductor", phase: null }),
+        return { ...task, decider: "conductor", runs: [run({ id: "run_conductor", role: "conductor", phase: null } as Parameters<typeof run>[0]),
           ...task.runs.map((r) => ({ ...r, conductorRunId: "run_conductor" }))] };
       };
       const getRun = client.getRun.bind(client);
@@ -158,7 +158,7 @@ describe("a restarted Run's presentation", () => {
       <TooltipProvider><ToastProvider><PeopleProvider client={client}>
         {view === "run" ? <RunScreen client={client} runId={RUN_ID} onBack={() => {}} /> :
           <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}}
-            tab={view === "sessions" ? "sessions" : "overview"} />}
+            tab={view === "sessions" ? "sessions" : "overview" as TaskTab} />}
       </PeopleProvider></ToastProvider></TooltipProvider>,
     );
     mounted.push(unmount);

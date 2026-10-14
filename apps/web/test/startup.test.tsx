@@ -13,6 +13,7 @@ import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts
 import { RUN_ID, TASK_ID, run } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import type { TaskTab } from "../src/place.ts";
 import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
 import { runStatusShown } from "../src/runPresentation.tsx";
@@ -76,7 +77,7 @@ describe("the projection", () => {
     const up = project([...events, ev("agent.message", { text: "back" }, 40_000)], "running");
     expect(up.start).toBeNull();
     // The first start's line, and none for the resume: its "Taken back up" line says it.
-    expect(up.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started")).map((t) => t.at)).toEqual([at(10_000)]);
+    expect(up.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started")).map((t) => t.kind === "notice" ? t.at : null)).toEqual([at(10_000)]);
   });
 
   const takenBack = (events: PersistedEvent[]) => project(events, "running").turns
@@ -377,7 +378,7 @@ describe("a task's Run page", () => {
       : getRun(id);
     const { container, unmount } = await mount(
       <TooltipProvider><ToastProvider><PeopleProvider client={client}>
-        <TaskScreen client={client} taskId={TASK_ID} tab={tab} onOpenRun={() => {}} onBack={() => {}} />
+        <TaskScreen client={client} taskId={TASK_ID} tab={tab as TaskTab} onOpenRun={() => {}} onBack={() => {}} />
       </PeopleProvider></ToastProvider></TooltipProvider>,
     );
     mounted.push(unmount);
@@ -449,7 +450,8 @@ describe("a task's Run page", () => {
   test("a tier with no model fails before lux: its useful error is projected and shown, and Try again still opens restart", async () => {
     const error = "The Implementer runs on Coder, which names no model yet. An admin sets it in Models.";
     for (const reason of [undefined, "", "   "]) {
-      let picked: string | null = null;
+      // Widened: TS cannot see the callback assign it, and narrows it to null.
+      let picked = null as string | null;
       const ledger = [created(), ev("run.failed", { status: "failed", error, ...(reason === undefined ? {} : { reason }) }, 1_000)];
       const ended = project(ledger, "failed").turns.find((t) => t.kind === "ended")!;
       expect(ended.kind === "ended" && ended.start).toMatchObject({ stage: null, failed: { reason: error, source: "dude" } });
@@ -465,7 +467,7 @@ describe("a task's Run page", () => {
   });
 
   test("Try again on a phase that did not start opens the task's restart dialog", async () => {
-    let picked: string | null = null;
+    let picked = null as string | null;
     const ledger = [created(), stage("waiting", 0), stage("image", 5_000),
       ev("run.failed", { status: "failed", error: "x", stage: "image", reason: "pull failed: manifest unknown" }, 50_000)];
     const page = await runPage("failed", ledger, false, { onPickUp: (a) => { picked = a; }, keptUntil: null });

@@ -432,7 +432,7 @@ test("permission waiting stays on the row and rail, with the notice and stuck ca
 
 test("below 960px the screen uses the xl dialog fallback", async () => {
   const original = window.matchMedia;
-  window.matchMedia = ((query: string) => ({ matches: query.includes("959px"), addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: query.includes("959px"), addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
   try {
     const el = await screen(start());
     await act(async () => header(threadOf(el, "ses_kid")!).click());

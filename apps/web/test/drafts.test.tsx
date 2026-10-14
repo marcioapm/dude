@@ -7,13 +7,13 @@
 
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { useState } from "react";
-import type { Member, SessionDetail } from "@dude/domain";
+import type { SessionDetail } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
-import type { ChatSent } from "../src/api/client.ts";
+import type { ChatSent, Member } from "../src/api/client.ts";
 import { SessionScreen } from "../src/screens/SessionScreen.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
 import { ChatSection } from "../src/screens/ChatSection.tsx";
@@ -49,7 +49,7 @@ function detail(): SessionDetail {
     you: { id: YOU, role: "owner", archived: false },
     proposals: [],
     question: null,
-  };
+  } as unknown as SessionDetail;
 }
 
 class DraftClient extends FixtureClient {

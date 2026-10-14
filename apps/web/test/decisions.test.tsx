@@ -50,7 +50,8 @@ function ev(eventType: string, payload: Record<string, unknown>, s: number, runI
 /** The fixture task as a test sets it: its status, who decides, its Runs and its ledger. */
 class DecisionsClient extends FixtureClient {
   talked = 0;
-  deciders: Decider[] = [];
+  // A decider as handed back, "+open" when the pull request is to be opened too.
+  deciders: Array<Decider | `${Decider}+open`> = [];
   constructor(private patch: Partial<TaskDetail>, private readonly extra: PersistedEvent[] = []) {
     super("d");
   }
@@ -76,7 +77,7 @@ class DecisionsClient extends FixtureClient {
     return { workflowRunId: "wf_dec", alreadyRunning: false };
   }
   override async setDecider(taskId: string, decider: Decider, openPullRequest = false) {
-    this.deciders.push(openPullRequest ? `${decider}+open` as Decider : decider);
+    this.deciders.push(openPullRequest ? `${decider}+open` : decider);
     if (this.refuse && !(this.refuse.code === "pull_request_gate" && openPullRequest)) throw this.refuse;
     // Confirmed, Deliver opens the pull request: the gate waits no more.
     this.patch = { ...this.patch, decider, ...(openPullRequest ? { awaitingDecision: null } : {}) };
@@ -497,9 +498,9 @@ describe("what the Chat is made of", () => {
       ev("git.commit_created", { repo: "greeter", headSha: "fedcba9876", changedPaths: ["x.ts"] }, 2, "run_impl"),
     ]);
     expect(lines).toHaveLength(1);
-    const [line] = lines;
-    expect(line!.kind).toBe("commit");
-    expect(line!.kind === "commit" && [line.sha, line.paths, line.text]).toEqual(["0123456",
+    const line = lines[0]!;
+    expect(line.kind).toBe("commit");
+    expect(line.kind === "commit" && [line.sha, line.paths, line.text]).toEqual(["0123456",
       ["README.md", "src/a.ts"], "The conductor published greeter@0123456: README.md, src/a.ts."]);
   });
 

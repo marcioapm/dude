@@ -46,7 +46,7 @@ function reset(note: string, runId: string | null, s: number): PersistedEvent {
     by: { id: PERSON, name: "Márcio" }, note };
   return { eventId: `evt_r${cursor}`, cursor: 20_000 + cursor, eventType: EventTypes.MachineReset, occurredAt: at(s), organizationId: "org",
     projectId: "prj", taskId: TASK_ID, runId, sessionId: null, workflowRunId: null, actor: { type: "person", id: PERSON }, source: "api",
-    correlationId: null, causationId: null, payload: payload as unknown as Record<string, unknown> } as PersistedEvent;
+    correlationId: null, causationId: null, payload: payload as unknown as Record<string, unknown> } as unknown as PersistedEvent;
 }
 
 const IMPL = run({ id: "run_impl_r" });

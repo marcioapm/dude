@@ -431,6 +431,8 @@ export interface MembershipInfo {
   role: PersonRole;
   personId: string;
   waitingOnYou: number;
+  /** When its first-time page was left; null until then. Absent from an older backend and in API-key mode. */
+  welcomedAt?: string | null;
 }
 
 /** An invitation as its invitee (or an admin) sees it. */
@@ -448,6 +450,9 @@ export interface InvitationInfo {
 }
 
 export type InvitationStatus = "pending" | "expired" | "accepted" | "revoked";
+
+/** `GET /v1/organization/invitations/counts`: every invitation of the organisation, by status. */
+export type InvitationCounts = Record<InvitationStatus | "all", number>;
 
 /** One row of an organisation's Invitations page. */
 export interface InvitationRow extends InvitationInfo {
@@ -830,6 +835,11 @@ export class ApiClient {
     return this.#request("GET", `/v1/organization/invitations${qs({ ...params, q: params.q || undefined })}`);
   }
 
+  /** Admins: how many invitations there are in each status, and in all. */
+  invitationCounts(): Promise<InvitationCounts> {
+    return this.#request("GET", "/v1/organization/invitations/counts");
+  }
+
   /** Admins: invite each address with `role`; one result per address, in order. */
   invite(invitations: Array<{ email: string; name?: string }>, role: PersonRole): Promise<{ results: InviteResult[] }> {
     return this.#request("POST", "/v1/organization/invitations", { invitations, role });
@@ -864,6 +874,10 @@ export class ApiClient {
     return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations${qs({ ...params, q: params.q || undefined })}`);
   }
 
+  adminInvitationCounts(id: string): Promise<InvitationCounts> {
+    return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations/counts`);
+  }
+
   adminInvite(id: string, invitations: Array<{ email: string; name?: string }>, role: PersonRole): Promise<{ results: InviteResult[] }> {
     return this.#request("POST", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations`, { invitations, role });
   }
@@ -889,6 +903,11 @@ export class ApiClient {
   updateMe(changes: { name?: string; photoUrl?: string | null; githubLogin?: string | null; commitEmail?: string | null }):
     Promise<{ person: Me }> {
     return this.#request("PATCH", "/v1/me", changes);
+  }
+
+  /** Your membership in `organizationId` was welcomed: its first-time page is not shown again. Idempotent. */
+  markWelcomed(organizationId: string): Promise<{ welcomedAt: string }> {
+    return this.#request("POST", `/v1/me/memberships/${encodeURIComponent(organizationId)}/welcomed`, {});
   }
 
   /** Your photo: the image itself, stored and served back by the backend. */
@@ -1292,6 +1311,12 @@ export class ApiClient {
     return this.#request("POST", "/v1/push/subscriptions", subscription);
   }
 
+  /** Whether this browser's subscription is registered in this client's organisation. */
+  pushSubscribed(endpoint: string): Promise<{ subscribed: boolean }> {
+    return this.#request("POST", "/v1/push/subscriptions/lookup", { endpoint });
+  }
+
+  /** Remove this browser's registration in this client's organisation only. */
   unsubscribePush(endpoint: string): Promise<void> {
     return this.#request("POST", "/v1/push/subscriptions/remove", { endpoint });
   }
