@@ -611,18 +611,11 @@ func RecordTold(ctx context.Context, d *db.DB, log *slog.Logger, ref delivery.Ru
 		log = slog.Default()
 	}
 	err := d.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		// Serialises two writers of the same Run, so the check below holds.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, ref.RunID); err != nil {
-			return err
-		}
-		var written bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2 AND (payload->>'epoch')::int = $3)`,
-			ref.RunID, EvRunTold, epoch).Scan(&written); err != nil || written {
-			return err
-		}
-		_, err := ledger.Append(ctx, tx, ref.Event(EvRunTold, ledger.ActorSystem, map[string]any{
+		// No lock: the phase sweep is this Run's only resumer, one advance per
+		// Run per pass (Sweep), so no two RecordTold of one Run overlap.
+		_, err := ledger.AppendOncePerEpoch(ctx, tx, ref.Event(EvRunTold, ledger.ActorSystem, map[string]any{
 			"epoch": epoch, "moveId": plan.moveID, "kind": plan.toldKind, "text": plan.toldText,
-		}))
+		}), epoch)
 		return err
 	})
 	if err != nil && ctx.Err() == nil {
