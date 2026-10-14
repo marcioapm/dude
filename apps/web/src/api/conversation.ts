@@ -870,6 +870,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startWoken = false;
         state.heldUnpark = null;
         state.heldTold = null;
+        // A move of the last Run never timed: this Run's epochs are its own, from 1 again.
+        state.untimedMoves.clear();
+        state.lastMove = null;
         state.retryRun = typeof payload.retries === "string";
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
@@ -1582,6 +1585,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // A failed resume or move shows its failure, never "Taken back up" or words the agent never read.
         state.heldUnpark = null;
         state.heldTold = null;
+        // Nor is a failed move timed: a later resume into its epoch is another's.
+        if (state.lastMove?.epoch != null) state.untimedMoves.delete(state.lastMove.epoch);
+        state.lastMove = null;
         turns.push(ended);
         state.activity = null;
         state.activeTool = null;

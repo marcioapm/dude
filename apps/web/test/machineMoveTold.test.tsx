@@ -150,6 +150,67 @@ describe("a move's notice and what the agent was told", () => {
   });
 });
 
+describe("a move whose resume failed", () => {
+  const size = (name: string) => ({ sizeId: name, name, cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, pool: "default", from: "task" });
+  /** A conductor's move into epoch 2 that fails before it is timed, then Try again's Run, whose own epoch 2 is what `later` does. */
+  function ledger(later: (add: (type: string, payload?: Record<string, unknown>, agent?: boolean) => void) => void): PersistedEvent[] {
+    const events: PersistedEvent[] = [];
+    let runId = "run_a";
+    const add = (eventType: string, payload: Record<string, unknown> = {}, agent = false) => {
+      const cursor = events.length + 1;
+      events.push({
+        eventId: `ev_${cursor}`, eventType, occurredAt: new Date(Date.UTC(2026, 9, 14, 8) + cursor * 1_000).toISOString(), organizationId: "o",
+        projectId: "p", taskId: "t", runId, sessionId: null, workflowRunId: null, actor: { type: agent ? "agent" : "system", id: "x" },
+        source: "x", correlationId: null, causationId: null, payload, cursor,
+      } as PersistedEvent);
+    };
+    add(EventTypes.RunCreated, { role: "conductor" });
+    add(EventTypes.SessionStarted, {}, true);
+    add(EventTypes.AgentMessage, { text: "hi" }, true);
+    add(EventTypes.MachineRequested, { moveId: "mmv_a", role: "conductor", from: size("Standard"), to: size("Large"), reason: "oom" });
+    add(EventTypes.MachineRaised, { moveId: "mmv_a", role: "conductor", from: size("Standard"), to: size("Large") });
+    add(EventTypes.RunPaused, { confirmed: true });
+    add(EventTypes.RunResized, { machine: { ...size("Large"), sinceEpoch: 2 } });
+    add(EventTypes.RunTold, { epoch: 2, moveId: "mmv_a", kind: "moved", text: "You now run on Large." });
+    add(EventTypes.RunFailed, { error: "placement failed", stage: "container" });
+    runId = "run_b";
+    add(EventTypes.RunCreated, { role: "conductor", retries: "run_a" });
+    add(EventTypes.SessionStarted, {}, true);
+    add(EventTypes.AgentMessage, { text: "again" }, true);
+    later(add);
+    return events;
+  }
+
+  test("Try again's Run resumed into the same epoch number: its Taken back up row gets its own time", () => {
+    const events = ledger((add) => {
+      add("run.parked", { reason: "idle" });
+      add("run.unparked", { reason: "a person", epoch: 2 });
+      add(EventTypes.SessionStarted, {}, true);
+      add(EventTypes.AgentMessage, { text: "back" }, true);
+      add(EventTypes.RunResumeTimed, { epoch: 2, cause: "person", moved: false, totalMs: 21_000, phases: { react: 1_000 } });
+    });
+    const back = project(events, "running").turns.find((t) => t.kind === "notice" && t.text.startsWith("Taken back up"));
+    expect(back?.kind === "notice" && back.text).toBe("Taken back up in 21s.");
+    expect(back?.kind === "notice" && back.title).toBeTruthy();
+  });
+
+  test("Try again's Run moved into the same epoch number: the timing is its own move's row, not the failed one's", () => {
+    const events = ledger((add) => {
+      add(EventTypes.MachineRequested, { moveId: "mmv_b", role: "conductor", from: size("Standard"), to: size("XL"), reason: "oom" });
+      add(EventTypes.MachineRaised, { moveId: "mmv_b", role: "conductor", from: size("Standard"), to: size("XL") });
+      add(EventTypes.RunPaused, { confirmed: true });
+      add(EventTypes.RunResized, { machine: { ...size("XL"), sinceEpoch: 2 } });
+      add(EventTypes.RunTold, { epoch: 2, moveId: "mmv_b", kind: "moved", text: "You now run on XL." });
+      add(EventTypes.SessionStarted, {}, true);
+      add(EventTypes.AgentMessage, { text: "on XL" }, true);
+      add(EventTypes.RunResumeTimed, { epoch: 2, cause: "machine", moved: true, totalMs: 33_000, phases: { react: 3_000 } });
+    });
+    expect(notices(events).filter((n) => /^(Resumed|Taken back up)|moved/.test(n))).toEqual([
+      "The conductor moved to XL in 33s, with its conversation and work.",
+    ]);
+  });
+});
+
 describe("the Told turn as drawn", () => {
   const people: People = { you: "u", me: null, all: [], byId: new Map(), names: new Map(), refresh: async () => people, seen: () => false };
   const draw = (t: Turn) => renderToStaticMarkup(renderTurn(t, "implementer", 200_000, false, people, "El Duderino") as React.ReactElement);
