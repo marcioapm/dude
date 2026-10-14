@@ -25,7 +25,7 @@ const sessions: SessionsList = { sessions: [], questions: [{ id: "q", sessionId:
 let cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const unmount of cleanup) await unmount(); cleanup = []; });
 
-async function page(initial: "you" | "others" = "you") {
+async function page(initial: "you" | "others" = "you", extraOwner = false) {
   const client = new FixtureClient("a");
   const opened: NavRef[] = [];
   const openedSessions: string[] = [];
@@ -36,7 +36,8 @@ async function page(initial: "you" | "others" = "you") {
   client.acceptSession = async (id) => { accepted.push(id); return { ok: true }; };
   client.declineSession = async (id) => { declined.push(id); return { ok: true }; };
   function Driven() {
-    const [tree, setTree] = useState(projects);
+    const [tree, setTree] = useState(() => extraOwner ? projects.map((p) => p.id !== "p1" ? p : { ...p, tasks: [...(p.tasks ?? []),
+      { id: "someone", key: "ONE-4", title: "Someone else's decision", status: "awaiting_confirmation" as const, people: [{ id: "p-x", name: "Someone" }], statusSince: "2026-10-04T00:00:00Z" }] }) : projects);
     changed = () => setTree(tree.map((p) => ({ ...p, tasks: p.tasks?.map((t) => t.id === "theirs" ? { ...t, people: [me] } : t) })));
     return <InboxScreen client={client} projects={tree} sessions={sessions} tab={initial} onSelect={(ref) => opened.push(ref)} onOpenSession={(id) => openedSessions.push(id)} onChanged={() => {}} />;
   }
@@ -79,15 +80,19 @@ test("kind and project compose, counts stay based on the tab, empties retain fil
 });
 
 test("others starts selected, person/project compose, Take over moves the row and live tab counts", async () => {
-  const { container: c } = await page("others");
-  expect(c.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("On others1");
+  const { container: c } = await page("others", true);
+  expect(c.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("On others2");
+  expect(list(c).children.length).toBe(2);
   await click(facet(c, "Waiting on", other.name));
+  expect(list(c).children.length).toBe(1);
+  expect(list(c).textContent).toContain("Their decision");
+  expect(list(c).textContent).not.toContain("Someone else's decision");
   await click(facet(c, "Projects", "One"));
   expect(list(c).children.length).toBe(1);
   await click(button(c, "Take over"));
-  await until(() => c.textContent?.includes("Nothing is waiting on others") ? true : null, "moved off others");
+  await until(() => c.textContent?.includes("Nothing matches these filters") ? true : null, "moved off selected person");
   expect(c.querySelector("[role=tab]")?.textContent).toBe("On you6");
-  expect(c.querySelectorAll("[role=tab]")[1]?.textContent).toBe("On others0");
+  expect(c.querySelectorAll("[role=tab]")[1]?.textContent).toBe("On others1");
 });
 
 test("the asks fixture puts the viewer's own tasks on On you and keeps others' on On others", async () => {
