@@ -712,8 +712,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               options={FINDING_STATUSES.map((s) => ({ value: s, label: FINDING_STATUS_SPECS[s].label, count: mine.findings.filter((f) => f.status === s).length }))} /></PageRailBlock>
             <PageRailBlock label="Severity"><FacetList label="Finding severity" value={findingSeverities} onValueChange={setFindingSeverities}
               options={FINDING_SEVERITIES.map((s) => ({ value: s, label: FINDING_SEVERITY_SPECS[s].label, count: mine.findings.filter((f) => f.severity === s).length }))} /></PageRailBlock>
-            <PageRailBlock label="Reviewers"><KeyValueList items={phases.filter((r) => r.phase === "review").map((r) => ({ label: runLabel(r), value: <Button size="sm" variant="quiet" onClick={() => onOpenRun(r.id)}>{runStatusLabel(r)}</Button> }))} />
-              <p className="ds-muted">{phases.filter((r) => r.phase === "fix").length} fix runs in this attempt. Counts above include all findings in the selected attempt, before filters. No selections means all.</p></PageRailBlock>
+            <PageRailBlock label="Reviewers">
+              {/* Reviews sharing a label are told apart by their own status and elapsed time. */}
+              <KeyValueList data-testid="reviewers" items={phases.filter((r) => r.phase === "review").map((r) => ({ label: runLabel(r), value: (
+                <Button size="sm" variant="quiet" data-testid="reviewer" data-run={r.id} title={`Open ${runLabel(r)}`} onClick={() => onOpenRun(r.id)}>
+                  <StatusMark status={runStatusShown(r)} label={runStatusLabel(r)} size="sm" />
+                  {r.startedAt ? <> · <Duration since={r.startedAt} until={r.endedAt} live={r.status === "running"} tone="muted" /></> : null}
+                </Button>
+              ) }))} />
+              <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix").length) }]} />
+              <p className="ds-muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
             {filterFindings(mine.findings, findingStatuses, findingSeverities).length === 0 && mine.findings.length > 0 ? <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." /> : null}
           {mine.findings.length > 0 ? (

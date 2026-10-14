@@ -68,6 +68,24 @@ describe("task rail filtering", () => {
     expect(status.textContent).toBe(counts);
   });
 
+  test("the findings rail names each review run with its status, opens it, and counts fix runs", async () => {
+    const opened: string[] = [];
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings", onOpenRun: (id) => opened.push(id) });
+    const rows = await until(() => {
+      const found = [...page.querySelectorAll<HTMLElement>('[data-testid="reviewer"]')];
+      return found.length > 0 ? found : null;
+    }, "reviewer rows");
+    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["run_d2", "run_d4"]);
+    for (const row of rows) {
+      expect(row.querySelector('[data-status="completed"]')?.textContent).toBe("Completed");
+      expect(row.closest("div")?.querySelector("dt")?.textContent).toBe("Review · correctness");
+    }
+    await click(rows[1]!);
+    expect(opened).toEqual(["run_d4"]);
+    const fix = [...page.querySelectorAll("dt")].find((dt) => dt.textContent === "Fix runs");
+    expect(fix?.nextElementSibling?.textContent).toBe("1");
+  });
+
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
     expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
