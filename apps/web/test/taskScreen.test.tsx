@@ -13,7 +13,46 @@ import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
-import { TaskScreen, activityLines } from "../src/screens/TaskScreen.tsx";
+import { TaskScreen, activityLines, filterActivity, filterFindings } from "../src/screens/TaskScreen.tsx";
+import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSection.tsx";
+import type { Artifact, Finding } from "../src/api/client.ts";
+import { unzipSync } from "fflate";
+
+describe("task rail filtering", () => {
+  test("status and severity compose without treating an open note as settled", () => {
+    const findings = [
+      { id: "note", status: "open", severity: "note" },
+      { id: "fixed", status: "resolved", severity: "blocking" },
+      { id: "accepted", status: "accepted", severity: "low" },
+      { id: "replaced", status: "superseded", severity: "high" },
+    ] as Finding[];
+    expect(filterFindings(findings, ["open"], []).map((f) => f.id)).toEqual(["note"]);
+    expect(filterFindings(findings, ["resolved", "accepted"], ["blocking"]).map((f) => f.id)).toEqual(["fixed"]);
+    expect(filterFindings(findings, [], []).length).toBe(4);
+  });
+
+  test("publisher and kind use latest versions, ZIP reads exactly the displayed IDs and keeps paths", async () => {
+    const artifact = (id: string, name: string, phase: string, contentType: string) => ({ id, name, phase, role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;
+    const files = filesOf([artifact("new", "notes/report.md", "fix", "text/markdown"), artifact("old", "notes/report.md", "implement", "text/markdown"), artifact("image", "shot.png", "implement", "image/png")]);
+    const displayed = filterFiles(files, ["documents"], ["Fix"]);
+    expect(displayed.map((f) => f.name)).toEqual(["notes/report.md"]);
+    expect(displayed[0]!.versions.map((v) => v.id)).toEqual(["new", "old"]);
+    expect(filterFiles(files, ["media"], ["Fix"])).toEqual([]);
+    const reads: string[] = [];
+    const zip = await displayedFilesZip({ artifactContent: async (id) => { reads.push(id); return new Blob([id]); } }, displayed);
+    expect(reads).toEqual(["new"]);
+    const entries = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+    expect(Object.keys(entries)).toEqual(["notes/report.md"]);
+    expect(new TextDecoder().decode(entries["notes/report.md"])).toBe("new");
+    expect(files.length).toBe(2);
+  });
+
+  test("activity filters structured person, event kind and attempt independently of prose", () => {
+    const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
+    expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
+    expect(filterActivity(lines, [], [], []).length).toBe(3);
+  });
+});
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -316,7 +355,7 @@ describe("a branch preview on the Servers tab", () => {
     const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
     expect(progress.getAttribute("data-stage")).toBe("stopping");
     const panel = page.querySelector<HTMLElement>("[data-testid=servers-panel]")!;
-    const mark = await until(() => panel.querySelector<HTMLElement>("[data-status]"), "the run's mark");
+    const mark = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"] [data-status]'), "the run's mark");
     expect(mark.getAttribute("data-status")).not.toBe("starting");
     expect(mark.textContent).toBe("Stopping");
     // The tab reads the same servers: nothing on, and no "Preview starting" dot.
@@ -375,10 +414,11 @@ describe("a branch preview on the Servers tab", () => {
     }
     const page = await taskPage(new AsleepPreview("e"), { tab: "servers" });
     const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=servers-panel][data-run=preview]"), "the preview's panel");
-    await until(() => (panel.textContent?.includes("· asleep") ? true : null), "the asleep detail");
-    expect(panel.textContent).toContain("sleeps after 30m without a request");
-    expect(panel.textContent).not.toContain("parks after");
-    expect(panel.textContent).toContain("opening one wakes it on the branch’s latest commit");
+    const rail = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"]'), "the run rail");
+    await until(() => (rail.textContent?.includes("· asleep") ? true : null), "the asleep detail");
+    expect(rail.textContent).toContain("sleeps after 30m without a request");
+    expect(rail.textContent).not.toContain("parks after");
+    expect(rail.textContent).toContain("Opening its stable URLs wakes it on the branch's latest commit");
     expect(button(page, "add-server")?.disabled).toBe(true);
     expect(page.querySelector("[data-testid=preview-error]")).toBe(null);
   });

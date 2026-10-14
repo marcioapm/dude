@@ -8,17 +8,19 @@
  * page offers — so a colleague's stuck question need not wait for them.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
-import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, WaitingGroup, WaitingRow } from "@dude/design-system/components";
-import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
+import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, WaitingList, WaitingRow } from "@dude/design-system/components";
+import { Button, EmptyState, Tabs, TabList, Tab, TabPanel, useToast } from "@dude/design-system/primitives";
 import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
 
-export function InboxScreen({ client, projects, sessions, onSelect, onOpenSession, onChanged }: {
+export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSelect, onOpenSession, onChanged }: {
+  tab?: "you" | "others" | undefined;
+  onTabChange?: ((tab: "you" | "others") => void) | undefined;
   client: ApiClient;
   projects: ReadonlyArray<NavProject>;
   /** Session invitations and questions put to you; null until read. */
@@ -33,6 +35,16 @@ export function InboxScreen({ client, projects, sessions, onSelect, onOpenSessio
   const now = useNow(true, 60_000);
   const { toast } = useToast();
   const [taking, setTaking] = useState<string | null>(null);
+  const [localTab, setLocalTab] = useState<"you" | "others">("you");
+  const selectedTab = tab ?? localTab;
+  const changeTab = (value: string) => {
+    const next = value === "others" ? "others" : "you";
+    setLocalTab(next);
+    onTabChange?.(next);
+  };
+  const [filters, setFilters] = useState({ you: { projects: [] as string[], facets: [] as string[] }, others: { projects: [] as string[], facets: [] as string[] } });
+  const selected = filters[selectedTab];
+  const filter = (part: "projects" | "facets", values: string[]) => setFilters((f) => ({ ...f, [selectedTab]: { ...f[selectedTab], [part]: values } }));
   const invitations = sessions?.invitations ?? [];
   const questions = sessions?.questions ?? [];
   const openSession = (id: string) => onOpenSession?.(id);
@@ -154,26 +166,69 @@ export function InboxScreen({ client, projects, sessions, onSelect, onOpenSessio
     );
   };
 
+  const taskEntry = (it: AttentionItem, mine: boolean) => ({
+    id: `task-${it.task.id}`, label: it.task.key ?? it.task.title,
+    projects: [it.project.id], kind: it.session ? "questions" : "decisions",
+    person: taskOwner(it.task)?.id ?? taskOwner(it.task)?.name ?? "",
+    since: toMs(it.task.statusSince), node: row(it, mine),
+  });
+  const mineEntries = [
+    ...invitations.map((inv, i) => ({ id: `inv-${inv.id}`, label: sessionTitle(inv), projects: inv.projects.map((p) => p.id), kind: "invitations", person: "", since: toMs(inv.invitedAt), node: sessionRows[i] as ReactNode })),
+    ...questions.map((q, i) => {
+      const summary = sessions?.sessions.find((s) => s.id === q.sessionId);
+      return { id: `q-${q.id}`, label: "A session", projects: summary ? summary.projects.map((p) => p.id) : ["unknown"], kind: "questions", person: "", since: toMs(q.askedAt), node: sessionRows[invitations.length + i] as ReactNode };
+    }),
+    ...yours.map((it) => taskEntry(it, true)),
+  ];
+  const base = selectedTab === "you" ? mineEntries : others.map((it) => taskEntry(it, false));
+  // Counts use the whole tab; choices OR within a facet and AND across facets.
+  const visible = base.filter((entry) =>
+    (!selected.projects.length || selected.projects.some((id) => id === "unlinked" ? !entry.projects.length : entry.projects.includes(id))) &&
+    (!selected.facets.length || selected.facets.includes(selectedTab === "you" ? entry.kind : entry.person)));
+  const projectNames = new Map(projects.map((p) => [p.id, p.name]));
+  for (const inv of invitations) for (const p of inv.projects) projectNames.set(p.id, p.name);
+  for (const s of sessions?.sessions ?? []) for (const p of s.projects) projectNames.set(p.id, p.name);
+  const projectIds = [...new Set([...base.flatMap((e) => e.projects.length ? e.projects : ["unlinked"]), ...selected.projects])];
+  const personNames = new Map(others.map((it) => { const owner = taskOwner(it.task); return [owner?.id ?? owner?.name ?? "", owner?.name ?? "Unknown person"]; }));
+  const facets = selectedTab === "you" ? ["questions", "decisions", "invitations"] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
+  const oldest = visible.filter((e) => e.since !== null).reduce<typeof base[number] | null>((a, b) => !a || b.since! < a.since! ? b : a, null);
+  const rail = <PageRail aria-label="Waiting filters">
+    <PageRailBlock label="Projects">
+      <Button size="sm" variant="quiet" onClick={() => filter("projects", [])} aria-pressed={!selected.projects.length}>All · {base.length}</Button>
+      <FacetList label="Projects" value={selected.projects} onValueChange={(v) => filter("projects", v)} empty="No projects waiting"
+        options={projectIds.map((id) => ({ value: id, label: id === "unlinked" ? "No linked project" : id === "unknown" ? "Project not available" : projectNames.get(id) ?? id,
+          count: base.filter((e) => id === "unlinked" ? !e.projects.length : e.projects.includes(id)).length }))} />
+    </PageRailBlock>
+    <PageRailBlock label={selectedTab === "you" ? "Kind" : "Waiting on"}>
+      <Button size="sm" variant="quiet" onClick={() => filter("facets", [])} aria-pressed={!selected.facets.length}>All · {base.length}</Button>
+      <FacetList label={selectedTab === "you" ? "Kind" : "Waiting on"} value={selected.facets} onValueChange={(v) => filter("facets", v)} empty="Nobody else is waiting"
+        options={facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations" }[value] ?? value) : personNames.get(value) ?? value,
+          count: base.filter((e) => (selectedTab === "you" ? e.kind : e.person) === value).length }))} />
+    </PageRailBlock>
+    <PageRailBlock label="Oldest">
+      {oldest ? <p>{oldest.label} · <Duration ms={Math.max(0, now - oldest.since!)} format="age" tone="muted" /></p> : <p>{visible.length ? "Waiting time unknown" : "Nothing waiting in this selection"}</p>}
+      {selectedTab === "you" ? <Button size="sm" variant="quiet" onClick={() => changeTab("others")}>{others.length} waiting on others — see them</Button> : <p>Take over makes a task yours, and moves it to On you.</p>}
+    </PageRailBlock>
+  </PageRail>;
+
   return (
     <div className="screen" data-testid="inbox">
-      <ScreenHeader title="Waiting on you" />
-      <div className="screenBody narrow">
-        {mineCount + others.length === 0 ? (
-          <EmptyState title="Nothing is waiting on you" description="When an agent asks something, or a delivery needs a decision, it shows here." />
-        ) : (
-          <>
-            <WaitingGroup title="Yours" count={mineCount} empty="Nothing of yours. Others' are below.">
-              {sessionRows}
-              {yours.map((it) => row(it, true))}
-            </WaitingGroup>
-            {others.length > 0 ? (
-              <WaitingGroup title="Waiting on others" count={others.length}>
-                {others.map((it) => row(it, false))}
-              </WaitingGroup>
-            ) : null}
-          </>
-        )}
-      </div>
+      <ScreenHeader title="Waiting" />
+      <Tabs value={selectedTab} onValueChange={changeTab}>
+        <PageWithRail rail={rail}>
+          <TabList aria-label="Waiting">
+            <Tab value="you" count={mineCount}>On you</Tab>
+            <Tab value="others" count={others.length}>On others</Tab>
+          </TabList>
+          <TabPanel value={selectedTab}>
+            <div className="screenBody">
+              {visible.length ? <WaitingList aria-label={selectedTab === "you" ? "On you" : "On others"}>{visible.map((e) => e.node)}</WaitingList> :
+                <EmptyState title={base.length ? "Nothing matches these filters" : selectedTab === "you" ? "Nothing is waiting on you" : "Nothing is waiting on others"}
+                  description={base.length ? "Clear a filter to see what is waiting. Tabs and navigation stay available." : "When an agent asks something, or a delivery needs a decision, it shows here."} />}
+            </div>
+          </TabPanel>
+        </PageWithRail>
+      </Tabs>
     </div>
   );
 }

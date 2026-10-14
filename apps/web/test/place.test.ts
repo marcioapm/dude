@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { formatPlace, inTree, parsePlace } from "../src/place.ts";
 
 describe("places", () => {
+  test("Waiting keeps the original link and names the others tab, including tenant links", () => {
+    expect(parsePlace("#/waiting")).toEqual({ view: "inbox" });
+    expect(formatPlace({ view: "inbox" })).toBe("#/waiting");
+    expect(formatPlace({ view: "inbox", tab: "others" })).toBe("#/waiting/others");
+    expect(parsePlace("#/o/example/waiting/others")).toEqual({ view: "inbox", tab: "others" });
+  });
   test("nothing in the URL is the welcome, and the welcome's URL is #/", () => {
     for (const hash of ["", "#", "#/", "# "]) expect(parsePlace(hash)).toEqual({ view: "welcome" });
     expect(formatPlace({ view: "welcome" })).toBe("#/");

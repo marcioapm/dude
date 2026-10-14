@@ -110,7 +110,7 @@ export { EpicCard, EpicRow, EpicProgress, EpicPullRequests } from "./EpicCard.ts
 export type { EpicCardProps, EpicRowProps, EpicSummary, EpicLanes } from "./EpicCard.tsx";
 export { ScreenHeader, Segmented } from "./ScreenHeader.tsx";
 export type { ScreenHeaderProps, SegmentedProps } from "./ScreenHeader.tsx";
-export { WaitingGroup, WaitingRow } from "./WaitingList.tsx";
+export { WaitingGroup, WaitingList, WaitingRow } from "./WaitingList.tsx";
 export type { WaitingGroupProps, WaitingRowProps } from "./WaitingList.tsx";
 export { PullRequestPanel } from "./PullRequestPanel.tsx";
 export type { FactKind, PullRequestPanelProps } from "./PullRequestPanel.tsx";

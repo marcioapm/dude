@@ -25,6 +25,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  PageWithRail,
+  PageRail,
+  PageRailBlock,
+  FacetList,
+  FINDING_STATUSES,
+  FINDING_STATUS_SPECS,
+  FINDING_SEVERITIES,
+  FINDING_SEVERITY_SPECS,
   AgentAvatar,
   Duration,
   FindingGroup,
@@ -45,7 +53,7 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
@@ -134,6 +142,10 @@ const phasesOf = (runs: readonly Run[], attempt: number) =>
   runs.filter((r) => r.phase && r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
 
+export function filterFindings(findings: readonly Finding[], statuses: readonly string[], severities: readonly string[]) {
+  return findings.filter((f) => (!statuses.length || statuses.includes(f.status)) && (!severities.length || severities.includes(f.severity)));
+}
+
 export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack, tree, onOpenTask }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open, on its attempt; the
   // task's URL names the tab and the attempt when it is not the current
@@ -173,6 +185,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [findingStatuses, setFindingStatuses] = useState<string[]>([]);
+  const [findingSeverities, setFindingSeverities] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [events, setEvents] = useState<PersistedEvent[]>([]);
@@ -585,9 +599,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack} />
         </TabPanel>
 
-        <TabPanel value="overview" className="taskPane">
-          <div className="taskOverview">
-            <div className="taskMain">
+        <TabPanel value="overview">
+          <PageWithRail children={
+            <div className="taskMain taskPane">
               {item.goal ? (
                 <section className="taskBlock" aria-label="Goal">
                   <h2 className="ds-label">Goal</h2>
@@ -656,8 +670,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 live={!earlier && item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 || showServers || taskRaisedMachines(item).length > 0 ? (
-              <aside className="taskAside" aria-label="Pull requests, machines and servers">
+          } rail={
+              <PageRail aria-label="Pull requests, machines and servers">
+                <PageRailBlock label="This task"><KeyValueList items={[
+                  ...(owner ? [{ label: "Owner", value: owner.name }] : []),
+                  { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
+                  { label: "Attempt", value: String(shown) },
+                ]} /></PageRailBlock>
                 <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
@@ -682,14 +701,22 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {showServers ? (
                   <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} />
                 ) : null}
-              </aside>
-            ) : null}
-          </div>
+              </PageRail>
+          } />
         </TabPanel>
 
-        <TabPanel value="findings" className="taskPane">
+        <TabPanel value="findings">
+          <PageWithRail rail={<PageRail aria-label="Finding filters and review facts">
+            <PageRailBlock label="Status"><FacetList label="Finding status" value={findingStatuses} onValueChange={setFindingStatuses}
+              options={FINDING_STATUSES.map((s) => ({ value: s, label: FINDING_STATUS_SPECS[s].label, count: mine.findings.filter((f) => f.status === s).length }))} /></PageRailBlock>
+            <PageRailBlock label="Severity"><FacetList label="Finding severity" value={findingSeverities} onValueChange={setFindingSeverities}
+              options={FINDING_SEVERITIES.map((s) => ({ value: s, label: FINDING_SEVERITY_SPECS[s].label, count: mine.findings.filter((f) => f.severity === s).length }))} /></PageRailBlock>
+            <PageRailBlock label="Reviewers"><KeyValueList items={phases.filter((r) => r.phase === "review").map((r) => ({ label: runLabel(r), value: <Button size="sm" variant="quiet" onClick={() => onOpenRun(r.id)}>{runStatusLabel(r)}</Button> }))} />
+              <p className="ds-muted">{phases.filter((r) => r.phase === "fix").length} fix runs in this attempt. Counts above include all findings in the selected attempt, before filters. No selections means all.</p></PageRailBlock>
+          </PageRail>}><div className="taskPane">
+            {filterFindings(mine.findings, findingStatuses, findingSeverities).length === 0 && mine.findings.length > 0 ? <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." /> : null}
           {mine.findings.length > 0 ? (
-            <FindingGroup data-testid="findings" findings={mine.findings}
+            <FindingGroup data-testid="findings" findings={filterFindings(mine.findings, findingStatuses, findingSeverities)}
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
                   category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}
@@ -703,6 +730,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ) : (
             <EmptyState compact icon="check" title="No findings" description={started ? "The reviewers raised nothing, yet." : "Reviewers report here once delivery starts."} />
           )}
+          </div></PageWithRail>
         </TabPanel>
 
         <TabPanel value="sessions" fill>
@@ -752,7 +780,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )}
         </TabPanel>
 
-        <TabPanel value="files" className="taskPane">
+        <TabPanel value="files">
           {mine.artifacts.length > 0 ? (
             <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
           ) : many ? (
@@ -764,11 +792,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )}
         </TabPanel>
 
-        <TabPanel value="servers" className="taskPane">
+        <TabPanel value="servers">
           <ServersSection client={client} servers={servers} taskId={taskId} />
         </TabPanel>
 
-        <TabPanel value="activity" className="taskPane">
+        <TabPanel value="activity">
           <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
@@ -1029,25 +1057,44 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
   events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
   many: boolean; shown: number; taskKey: string | null; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
 }) {
+    <PageWithRail rail={<PageRail aria-label="Activity filters">
+      <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label, count: lines.filter((l) => l.kind === value).length }))} /></PageRailBlock>
+      <PageRailBlock label="People"><FacetList label="Activity person" value={persons} onValueChange={setPersons} options={personOptions} /></PageRailBlock>
+      <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} />
+        <p className="ds-muted">Newest first. Counts include every timeline item before filters. No selections means all.</p></PageRailBlock>
+    </PageRail>}><div className="taskPane">
+    {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
-    const all = activityLines(events, people, runs, prs, current, taskKey);
-    return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
+    return activityLines(events, people, runs, prs, current, taskKey);
   }, [events, people, runs, prs, current, many, taskKey]);
-  if (lines.length === 0) return <EmptyState compact icon="list" title="Nothing yet" description="Who did what to the task shows here: deliveries, steers, answers, pull requests." />;
+  const [kinds, setKinds] = useState<string[]>([]);
+  const [persons, setPersons] = useState<string[]>([]);
+  const [attempts, setAttempts] = useState<string[]>([]);
+  const displayed = filterActivity(lines, kinds, persons, attempts);
+  const personOptions = [...new Map(lines.map((l) => [l.personId, l.personName])).entries()].map(([id, name]) => ({ value: id, label: name, count: lines.filter((l) => l.personId === id).length }));
   const now = Date.now();
   return (
     <Timeline data-testid="activity">
-      {lines.map((l) => (
+      {displayed.map((l) => (
         <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
           data-testid="activity-item" data-attempt={l.attempt ?? undefined}>
           {l.text}
           {many && l.attempt !== null ? <span className="lineAttempt" data-shown={l.attempt === shown || undefined}> · attempt {l.attempt}</span> : null}
           {l.open ? (
+    </div></PageWithRail>
             <>
               {" "}
               <Button size="sm" variant="quiet" trailingIcon="arrow-right" data-testid="activity-open"
+const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", task: "Task & relations" };
+export function filterActivity(lines: readonly ActivityLine[], kinds: readonly string[], persons: readonly string[], attempts: readonly string[]) {
+  return lines.filter((l) => (!kinds.length || kinds.includes(l.kind)) && (!persons.length || persons.includes(l.personId)) && (!attempts.length || attempts.includes(String(l.attempt))));
+}
+
                 onClick={() => (l.open!.runId ? onOpenRun(l.open!.runId) : onShow(l.attempt ?? shown, l.open!.tab))}>
+  kind: string;
+  personId: string;
+  personName: string;
                 {l.open.label}
               </Button>
             </>
@@ -1092,7 +1139,13 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
     const person = <b>{name ?? "Someone"}</b>;
     const p = e.payload;
     // Its attempt is set below, once the event has made a line.
-    const base = { id: e.eventId, at: e.occurredAt, attempt: 0 };
+    const kind = e.eventType.startsWith("pull_request.") ? "prs"
+      : e.eventType === "artifact.created" || e.eventType === "review.completed" ? "work"
+      : ["run.steered", "question.answered", "task.decided", "task.recovered"].includes(e.eventType) ? "decisions"
+      : e.eventType.startsWith("run.") || e.eventType === "question.asked" ? "sessions" : "task";
+    const base = { id: e.eventId, at: e.occurredAt, attempt: 0, kind,
+      personId: by?.id ?? (e.actor.type === "agent" ? "agents" : "system"),
+      personName: name ?? (e.actor.type === "agent" ? "Agents" : "System & integrations") };
     const lines = out.length;
     switch (e.eventType) {
       case "task.created":

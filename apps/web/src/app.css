@@ -583,6 +583,11 @@ body {
   align-items: center;
   gap: var(--ds-space-8) var(--ds-space-12);
   margin-top: var(--ds-space-8);
+.railActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
 }
@@ -617,6 +622,9 @@ body {
 }
 .taskMain {
   display: flex;
+.taskGoal > * {
+  max-width: none;
+}
   flex-direction: column;
   gap: var(--ds-space-32);
   min-width: 0;
@@ -630,7 +638,6 @@ body {
   margin: 0;
 }
 .taskGoal {
-  max-width: 720px;
   color: var(--ds-color-text-secondary);
 }
 /* Each criterion is Markdown of its own; the list is the criteria's,

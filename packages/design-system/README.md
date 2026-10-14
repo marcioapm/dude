@@ -2354,6 +2354,30 @@ Checkbox's label, description, disabled and keyboard behavior. Gallery
 `#rail-populated`, `#rail-empty`, and `#rail-narrow` show selected, zero-count,
 disabled, interactive focus and action states in both themes and densities.
 
+### Task tab data mapping
+
+The app opts Overview, Findings, Files and Activity into `PageWithRail`; Servers
+moves its serving-run facts and bulk actions into the same rail. PR panels retain
+checks, reviewers and permission-aware actions. Overview facts use the real task
+owner and decider and the header's selected attempt; cost stays in Time & cost.
+Finding status/severity counts use all findings in the header-selected attempt,
+before composing filters. Status vocabulary is Open, Resolved, Superseded and
+Accepted (there is no separate dismissed status); Note is a severity. Expanded
+finding Markdown is unmeasured; document previews keep their document measure.
+Reviewer facts come from review Runs, and fix counts count actual fix Runs.
+
+Files facets count distinct paths by their latest version's kind and publishing
+phase, bounded to the header-selected attempt. Versions remain in the viewer.
+Download all builds a ZIP of exactly the displayed latest-version IDs via
+authenticated content reads, not the whole-task ZIP endpoint. This client-side
+ZIP holds the selected bytes in memory; a failed content read fails the download
+rather than silently omitting a file. `FileGallery controls={false}` leaves
+filtering and downloads to the host rail while preserving row/viewer actions.
+Activity facets use event types, structured actors and `eventAttempts`, never
+rendered sentences; counts cover the complete displayed timeline before filters,
+including every attempt. Empty selections mean all; dimensions compose with AND,
+multiple values within one dimension with OR.
+
 ## What is deliberately not here
 
 - A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`
