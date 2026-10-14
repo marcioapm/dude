@@ -490,6 +490,16 @@ describe("a branch preview on the Servers tab", () => {
       if (timestamp) expect(active.textContent).toMatch(/\b2[4-6]s\b/);
     });
   }
+  test("the server rail names the normal server states, not dangling separators", async () => {
+    const page = await taskPage(new FixtureClient("a"), { tab: "servers" });
+    const rail = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"]'), "the server rail");
+    await until(() => rail.textContent?.includes("Setups") ? true : null, "server setups");
+    const setups = [...rail.querySelectorAll("section")].find((s) => s.textContent?.includes("Setups"));
+    expect(setups).toBeDefined();
+    expect([...setups!.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["web · Ready", "api · Starting", "storybook · Stopped"]);
+    expect(setups!.querySelectorAll('[data-server-state]').length).toBe(3);
+  });
+
   test("a stopping preview says Stopping, not starting, on its run and its tab", async () => {
     class StoppingPreview extends FixtureClient {
       override taskServers() {

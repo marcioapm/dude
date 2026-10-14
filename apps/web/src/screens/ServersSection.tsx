@@ -19,6 +19,7 @@ import {
   ServerList,
   ServerRow,
   ServerStateDot,
+  ServerStateMark,
   ServersMoved,
   ServersPanel,
   ServersRecipesPreview,
@@ -241,7 +242,10 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           </div>
         </PageRailBlock>
         <PageRailBlock label="Setups">
-          {data.servers.map((s) => <p key={s.name}>{s.name} · {describeServer(s, now, run).label}</p>)}
+          {data.servers.map((s) => {
+            const w = describeServer(s, now, run);
+            return <p key={s.name}>{s.name} · <ServerStateMark state={w.state} label={w.label} size="sm" /></p>;
+          })}
           <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live || wakeable} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
         </PageRailBlock>
         <PageRailBlock label="How servers behave"><span className="ds-muted">{wakeable
