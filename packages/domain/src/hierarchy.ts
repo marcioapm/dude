@@ -311,13 +311,6 @@ export const taskSourceSchema = z.object({
 });
 export type TaskSource = z.infer<typeof taskSourceSchema>;
 
-/** Why dude refused a source (the orchestrator's codes), for the UI to say inline. */
-export const TASK_SOURCE_REFUSALS = [
-  "not_in_project", "not_github", "no_write", "bad_pull_request", "pr_not_found", "pr_merged", "pr_closed", "pr_fork",
-  "bad_branch", "same_branch", "branch_not_found", "default_branch", "release_branch", "protected", "branch_taken",
-  "github_unavailable",
-] as const;
-
 /**
  * A person, wherever the API names one: an organization's member, by the
  * id of their `people` row. `online` is whether they were seen in the last
