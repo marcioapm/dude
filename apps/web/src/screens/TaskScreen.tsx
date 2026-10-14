@@ -675,7 +675,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 <PageRailBlock label="This task"><KeyValueList items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
                   { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
-                  { label: "Attempt", value: String(shown) },
+                  // A task never started over names no attempt anywhere.
+                  ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
                 ]} /></PageRailBlock>
                 <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (

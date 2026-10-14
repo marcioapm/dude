@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
@@ -365,8 +365,9 @@ describe("a task started over", () => {
     expect(titles.join()).not.toContain("Totals rounded");
 
     await openTab(page, "Sessions");
+    await sessionOptions(page);
     const sessions = await until(() => {
-      const s = texts(page, "[data-testid=session]");
+      const s = texts(document.body, "[data-testid=sessions] [data-testid=session]");
       return s.length === 4 ? s : null;
     }, "attempt 1's sessions");
     expect(sessions.map((s) => s.split("claude")[0])).toEqual(["Fix", "Simplify", "Review · correctness", "Implement"]);
