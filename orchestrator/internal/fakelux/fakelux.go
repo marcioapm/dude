@@ -723,10 +723,11 @@ type Server struct {
 	failStarts map[string]int
 	failAs     map[string]string
 	// Test hooks for stream delivery, placement starts, and event pages.
-	beforeEvent  func(runID string, eventID int64, typ string)
-	beforeStart  func(runID string)
-	beforeAssign func(runID string)
-	eventPages   func(runID string, after int64, ids []int64) int
+	beforeEvent    func(runID string, eventID int64, typ string)
+	beforeStart    func(runID string)
+	beforeAssign   func(runID string)
+	afterPlacement func(runID string, epoch int)
+	eventPages     func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -1005,6 +1006,14 @@ func (s *Server) BeforeAssign(fn func(runID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.beforeAssign = fn
+}
+
+// AfterPlacement calls fn without the fake's lock when a placement attempt
+// finishes, including cancellation. Each attempt keeps the hook it began with.
+func (s *Server) AfterPlacement(fn func(runID string, epoch int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterPlacement = fn
 }
 
 // PageEvents has every GET /v1/runs/{id}/events ask fn, without the fake's
@@ -1418,6 +1427,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 // play is the agent's life: start, check out, take the task, work, go idle.
 // start is the accepted start it plays (Run.starts).
 func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed bool) {
+	s.mu.Lock()
+	finished := s.afterPlacement
+	s.mu.Unlock()
+	if finished != nil {
+		defer finished(run.ID, epoch)
+	}
 	defer s.hold(epoch, holdOver)
 	if sb, _ := spec["sandbox"].(map[string]any); s.NoNestedHost && sb["nestedContainers"] == true {
 		s.mu.Lock()

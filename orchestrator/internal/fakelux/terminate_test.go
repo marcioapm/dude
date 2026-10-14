@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,13 +97,26 @@ func TestAStopOfAnAssignedPlacementCallsItsStartOff(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	client, run := submitGeneric(t, fake, "k")
 	waitState(t, client, run.ID, "running")
-	held, release := make(chan struct{}), make(chan struct{})
+	held, gate := make(chan struct{}), make(chan struct{})
+	finished := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	fake.AfterPlacement(func(id string, epoch int) {
+		if id == run.ID && epoch == 2 {
+			close(finished)
+		}
+	})
 	fake.BeforeStart(func(string) {
 		close(held)
-		<-release
+		<-gate
 	})
 	fake.Move(run.ID, "preempt")
-	<-held
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the placement never reached its start gate")
+	}
 	before, err := client.Get(context.Background(), run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -114,13 +128,18 @@ func TestAStopOfAnAssignedPlacementCallsItsStartOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.BeforeStart(nil)
-	close(release)
+	release()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled placement attempt did not finish")
+	}
 	waitState(t, client, run.ID, "stopped")
-	time.Sleep(100 * time.Millisecond)
-	if got, err := client.Get(context.Background(), run.ID); err != nil || got.State != "stopped" || got.Epoch != 2 {
+	got, err := client.Get(context.Background(), run.ID)
+	if err != nil || got.State != "stopped" || got.Epoch != 2 {
 		t.Fatalf("after the start was released: %+v %v; want epoch 2 stopped", got, err)
 	}
-	for _, p := range fake.Runs()[0].placements {
+	for _, p := range got.Placements {
 		if p.Epoch == 2 && p.WorkloadStartedAt != nil {
 			t.Errorf("epoch 2's workload started after its stop")
 		}
