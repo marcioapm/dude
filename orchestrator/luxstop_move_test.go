@@ -246,12 +246,7 @@ func TestALuxPreemptDuringADudeMachineMoveStillMovesIt(t *testing.T) {
 		t.Fatal("dude never asked lux to stop the Run")
 	}
 	w.lux.Move(luxID, "preempt")
-	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if s := w.lux.State(luxID); s != "running" {
-		t.Fatalf("lux's run is %s", s)
-	}
+	w.waitLuxRunning(luxID)
 	p.hold.Store(false)
 	w.movedOnce(task, runID, luxID, "Bigger", toldBigger)
 	if r := w.lux.Runs()[0]; r.Resumed != 1 || r.Stopped < 2 {
@@ -265,18 +260,8 @@ func TestALuxPreemptDuringADudeMachineMoveStillMovesIt(t *testing.T) {
 // the Reset's resume tells the agent where it runs, once.
 func TestAResetAfterALuxPreemptTellsTheAgentOnce(t *testing.T) {
 	w := newWorld(t)
-	task, runID, luxID := w.movedRun()
-	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
-	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
-	gate := make(chan struct{})
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate) }) }
-	t.Cleanup(release)
-	w.lux.BeforeStart(func(id string) {
-		if id == luxID {
-			<-gate
-		}
-	})
+	task, runID, luxID := w.raisedAtWork()
+	release := w.holdLuxStart(luxID)
 	w.lux.Move(luxID, "preempt")
 	w.until("the move's carry-on to be queued", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL`, runID, movedNudge) == 1
@@ -306,15 +291,7 @@ func TestAResetAfterAFailedCarryOnSendTellsTheAgentOnce(t *testing.T) {
 	task, runID, luxID := w.raisedAtWork()
 	p := w.stopsThrough()
 	p.refuseCarryOn.Store(true)
-	gate := make(chan struct{})
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate) }) }
-	t.Cleanup(release)
-	w.lux.BeforeStart(func(id string) {
-		if id == luxID {
-			<-gate
-		}
-	})
+	release := w.holdLuxStart(luxID)
 	w.lux.Move(luxID, "preempt")
 	w.until("the move's carry-on to be queued", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL`, runID, movedNudge) == 1
@@ -348,15 +325,7 @@ func (w *world) raisedAtWork() (task, runID, luxID string) {
 // Run paused.
 func (w *world) pausedWhileLuxMovesIt(p *stopsThrough, runID, luxID string) {
 	w.t.Helper()
-	gate := make(chan struct{})
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate) }) }
-	w.t.Cleanup(release)
-	w.lux.BeforeStart(func(id string) {
-		if id == luxID {
-			<-gate
-		}
-	})
+	release := w.holdLuxStart(luxID)
 	w.lux.Move(luxID, "preempt")
 	w.until("the move's carry-on to be queued", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL`, runID, movedNudge) == 1
@@ -371,12 +340,7 @@ func (w *world) pausedWhileLuxMovesIt(p *stopsThrough, runID, luxID string) {
 	p.hold.Store(false)
 	w.lux.BeforeStart(nil)
 	release()
-	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if s := w.lux.State(luxID); s != "running" {
-		w.t.Fatalf("lux's run is %s", s)
-	}
+	w.waitLuxRunning(luxID)
 }
 
 // reset is a person's Reset of the implementer's raised machine, through
@@ -501,9 +465,7 @@ func TestALuxMoveDudeStopsIsAskedOncePerPlacement(t *testing.T) {
 	preempted := func(epoch int) {
 		t.Helper()
 		w.lux.Move(luxID, "preempt")
-		for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
-			time.Sleep(20 * time.Millisecond)
-		}
+		w.waitLuxRunning(luxID)
 		if r := w.lux.Runs()[0]; w.lux.State(luxID) != "running" || r.Epoch != epoch {
 			t.Fatalf("lux's run is %s in epoch %d, want running in %d", w.lux.State(luxID), r.Epoch, epoch)
 		}

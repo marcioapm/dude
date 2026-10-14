@@ -1976,11 +1976,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			return true, err
 		}
 	}
-	nudge := ""
-	if !r.HasDirectives && !r.Waiting {
-		nudge = resumeNudge
-	}
-	lr, foreseen, err := s.resume(ctx, r, nudge)
+	lr, foreseen, err := s.resume(ctx, r, r.resumeInput())
 	// Refused for good: there is no such resume to time.
 	refused := func() {
 		if foreseen != 0 {

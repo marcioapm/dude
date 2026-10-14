@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +40,32 @@ func (w *world) implementing() (task, runID, luxID string) {
 		return luxID != ""
 	})
 	return task, runID, luxID
+}
+
+// holdLuxStart gates one Run without holding up cleanup after a failed test.
+func (w *world) holdLuxStart(luxID string) func() {
+	w.t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	w.t.Cleanup(release)
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-gate
+		}
+	})
+	return release
+}
+
+// waitLuxRunning does not sweep dude while lux finishes its placement.
+func (w *world) waitLuxRunning(luxID string) {
+	w.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if state := w.lux.State(luxID); state != "running" {
+		w.t.Fatalf("lux's run is %s", state)
+	}
 }
 
 // runFailure is a Run's status and error, and its run.failed events' errors.
@@ -200,13 +225,7 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 	// lux gets it running after all, its agent idle and waiting.
 	w.lux.BeforeAssign(nil)
 	release()
-	deadline := time.Now().Add(10 * time.Second)
-	for w.lux.State(luxID) != "running" && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if s := w.lux.State(luxID); s != "running" {
-		t.Fatalf("lux's run is %s", s)
-	}
+	w.waitLuxRunning(luxID)
 	if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "resume", "note": "Carry on, please."}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
@@ -307,27 +326,14 @@ func TestAMoveLuxEndedWhileDudeWasDownIsNotFailedOnItsReturn(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.MoveWait = 500 * time.Millisecond
 	task, runID, luxID := w.implementing()
-	gate := make(chan struct{})
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate) }) }
-	t.Cleanup(release)
-	w.lux.BeforeStart(func(id string) {
-		if id == luxID {
-			<-gate
-		}
-	})
+	release := w.holdLuxStart(luxID)
 	w.lux.Move(luxID, "preempt")
 	w.until("the move to be held", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness_state->'brokenTurn'->>'moved' = 'preempt'`, runID) == 1
 	})
 	w.syncer.Stop()
 	release()
-	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if s := w.lux.State(luxID); s != "running" {
-		t.Fatalf("lux's run is %s", s)
-	}
+	w.waitLuxRunning(luxID)
 	time.Sleep(700 * time.Millisecond)
 	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent,
 		KeepFor: w.syncer.KeepFor, MoveWait: 500 * time.Millisecond}
@@ -387,31 +393,8 @@ func TestAnAgentProcessExitingOnItsOwnFailsWithItsError(t *testing.T) {
 func TestAResumeBeforeLuxAppliedAPauseStillResumesTheRunInLux(t *testing.T) {
 	w := newWorld(t)
 	task, runID, luxID := w.implementing()
-	handler := w.lux.Handler()
-	var holding atomic.Bool
-	holding.Store(true)
-	held := make(chan *http.Request, 4)
-	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		// lux accepts the stop; it is applied when the test says.
-		if holding.Load() && req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/stop") {
-			select {
-			case held <- req.Clone(context.Background()):
-			default:
-			}
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusAccepted)
-			_, _ = rw.Write([]byte(`{}`))
-			return
-		}
-		handler.ServeHTTP(rw, req)
-	}))
-	t.Cleanup(func() {
-		// Followers' streams through the proxy end first, or Close waits on them.
-		w.syncer.Stop()
-		proxy.CloseClientConnections()
-		proxy.Close()
-	})
-	w.syncer.Lux = lux.New(proxy.URL, "lux-key")
+	p := w.stopsThrough()
+	p.hold.Store(true)
 	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
@@ -428,13 +411,10 @@ func TestAResumeBeforeLuxAppliedAPauseStillResumesTheRunInLux(t *testing.T) {
 		t.Fatalf("a Run lux had yet to stop was taken up as live")
 	}
 	// lux applies the stop it accepted.
-	holding.Store(false)
-	select {
-	case req := <-held:
-		handler.ServeHTTP(httptest.NewRecorder(), req)
-	default:
+	if p.heldStops() == 0 {
 		t.Fatal("dude never asked lux to stop the Run")
 	}
+	p.release()
 	w.until("the same implementer to finish, and review to start", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
 			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task) > 0

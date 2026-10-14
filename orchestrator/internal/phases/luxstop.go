@@ -66,12 +66,6 @@ const (
 // ceiling}; luxd stops the placement with reason disk.
 const evLuxDiskExceeded = "disk.exceeded"
 
-// agentProcessExited: the agent's harness answered the turn with lux's
-// adapter's error for a process that went away (lux internal/adapter/rpc.go).
-func agentProcessExited(agentErr string) bool {
-	return strings.Contains(agentErr, "process exited")
-}
-
 // machineParked (SQL, over runs r): a machine move of dude's is pending
 // and the Run is being stopped (a control pending: the move's park, or a
 // person's pause) or is paused; whichever resume follows carries the move
@@ -192,7 +186,7 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 	if stop != nil && stop.Epoch != t.epoch {
 		stop = nil
 	}
-	if stop == nil && !agentProcessExited(agentErr) {
+	if stop == nil && !strings.Contains(agentErr, "process exited") {
 		return false, nil
 	}
 	var at time.Time
@@ -202,7 +196,7 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 		return false, err
 	}
 	if dudeStopped {
-		// dude stopped it (a pause, a finish) or it is over: as before.
+		// dude's pause or finish owns the stop; an ended Run stays ended.
 		return false, nil
 	}
 	t.LastFailed = true
@@ -220,12 +214,8 @@ func (t *translator) luxStoppedTurn(ctx context.Context, tx pgx.Tx, s *Syncer, a
 	return true, t.decideBroken(ctx, tx, s, *stop)
 }
 
-// moving keeps a Run whose turn a move cut off: said once, as lux's
-// warning, and told to carry on once lux runs it again (a directive,
-// sent by deliverDirectives when the Run is running). A Run dude is
-// parking or has parked for a machine move of its own (machineParked) is
-// told by that move's resume (ResizePlan.movedInput) instead, so it gets
-// no second carry-on, and its warning says so.
+// moving warns once and queues a carry-on for when lux runs the Run again.
+// A machineParked Run is told by its machine move's resume instead.
 func (t *translator) moving(ctx context.Context, tx pgx.Tx, s *Syncer, reason string) error {
 	if t.Broken.Moved != "" {
 		return nil
@@ -535,8 +525,8 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 			return err
 		}
 		taken = true
-		if !r.HasDirectives && !r.Waiting {
-			if _, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: resumeNudge, Scope: "turn"}); err != nil {
+		if nudge := r.resumeInput(); nudge != "" {
+			if _, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: nudge, Scope: "turn"}); err != nil {
 				return err
 			}
 		}
@@ -545,15 +535,20 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 	return taken, changes, err
 }
 
-// dropMovedNudge withdraws a carry-on (movedNudge) that lux's own move
-// queued and lux has not taken, before dude resumes the Run for a machine
-// move: the move's resume tells the agent where it runs. One never sent is
-// deleted. One claimed by a send that failed is kept, retired (failed_at,
-// with why), so a receipt of it arriving late still records it delivered;
-// no send of it is in flight, as deliverDirectives sends only to a running
-// Run and a sweep advances each Run once. One lux accepted is kept: lux has
-// it, and says whether the agent read it. Returns whether anything else is
-// still queued for the agent.
+// resumeInput leaves queued instructions and a person's answer as the input.
+func (r phaseRun) resumeInput() string {
+	if r.HasDirectives || r.Waiting {
+		return ""
+	}
+	return resumeNudge
+}
+
+// dropMovedNudge withdraws lux's carry-on before the machine move's resume
+// supplies it. Unclaimed inputs are deleted; unresolved claims are retired
+// with their identity kept for late receipts. A lost answer cannot say
+// whether lux took the input: retirement prevents a resend, not prior speech.
+// Accepted inputs stay. No send is in flight: only running Runs send, and
+// a sweep advances each Run once. Returns whether another input is queued.
 func (s *Syncer) dropMovedNudge(ctx context.Context, r phaseRun) (more bool, err error) {
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM directives WHERE run_id = $1 AND text = $2
