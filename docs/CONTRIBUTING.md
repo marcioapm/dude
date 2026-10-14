@@ -456,6 +456,13 @@ Each of these cost real time.
 | Browser, Access mode | `tests/suites/test_accounts_access.py` (conftest `access`) | The sign-in gate, invitations and organisations as Cloudflare Access fronts them: a second backend with `auth.provider = cloudflare_access` verifies tokens a local stand-in team (`tests/access-edge.ts`) signs for any email; no API key signs anyone in |
 | Browser, no backend | `apps/web/test/browser_*.py` (`python3 apps/web/test/browser_terminal.py`) | Layout and sign-in the web app decides alone, against the Vite dev server and the fixture client or routed API answers, in system Chrome |
 
+**An element's absence is asserted as a count**:
+`expect(root.querySelectorAll(sel).length).toBe(0)`, never
+`expect(<a DOM query>).toBeNull()`. bun's `toBeNull` has passed a present
+happy-dom element (a mounted page's stale "thinking" span, before
+b5b4a85b's fix); a count cannot. A finder that returns an element or null
+gets a counting sibling for its absence checks.
+
 The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`,
 requested by a tier like any other model; the suites' `ApiClient.on_models`
 puts roles on such tiers)
