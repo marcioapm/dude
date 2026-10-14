@@ -190,11 +190,14 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// The Run's row before any artifact, as the stream's follower takes
-		// them: otherwise an insert's foreign-key check waits on the
-		// follower's row lock while the follower's insert of the same
-		// storage_key waits on this one, a deadlock.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+		// FOR NO KEY UPDATE on the Run's row before any artifact key is
+		// placed: it queues behind the follower's FOR UPDATE and other
+		// writers of the row, so an insert's foreign-key check never waits
+		// on the follower while the follower's insert of the same
+		// storage_key waits on this one. NO KEY UPDATE is the strength the
+		// UPDATE of runs below takes anyway; it still admits other inserts'
+		// foreign-key KEY SHARE checks on this Run.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID); err != nil {
 			return err
 		}
 		// Most were recorded from the stream already: one read, rather than

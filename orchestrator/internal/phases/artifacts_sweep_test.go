@@ -80,6 +80,54 @@ func TestTheSweepRecordsEveryVersionOnceAndTheLatestFinalDiff(t *testing.T) {
 	}
 }
 
+// The sweep's lock on the Run's row admits the KEY SHARE an unrelated child
+// insert's foreign-key check holds on it (a directive, an event, a peer
+// wait): the sweep records its artifact while that transaction is open.
+func TestTheSweepRecordsWhileAnotherTransactionHoldsTheRunsKeyShare(t *testing.T) {
+	w := newReceiptWorld(t)
+	ctx := context.Background()
+	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
+		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	const id = "art_aaaaaaaaaaaaaaaa"
+	a := &Artifacts{DB: w.s.DB, Lux: &sweepLux{listed: []lux.Artifact{
+		{ID: id, Epoch: 2, Path: lux.PublishedPrefix + "notes.md", Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
+	}}}
+
+	holder, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR KEY SHARE`, w.tr.run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if n, err := a.Sweep(bounded); err != nil || n != 1 {
+		t.Fatalf("with the Run's KEY SHARE held elsewhere the sweep returned %d, %v; want it to record without waiting", n, err)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w.artifacts(); len(got) != 1 || got[0].StorageKey != id {
+		t.Errorf("recorded %+v; want %s once", got, id)
+	}
+	if n := w.events(ArtifactEventType); n != 1 {
+		t.Errorf("%d artifact.created events, want 1", n)
+	}
+	var due bool
+	if err := w.owner.QueryRow(ctx, `SELECT artifacts_due_at IS NOT NULL FROM runs WHERE id = $1`, w.tr.run.ID).Scan(&due); err != nil {
+		t.Fatal(err)
+	}
+	if due {
+		t.Error("the Run is still due; the sweep should have marked it collected")
+	}
+}
+
 // The sweep and the stream's follower recording the same artifact at once:
 // the follower's batch holds the Run's row (followOutput) when the sweep
 // reaches its insert, and then records the artifact itself. Each waits for
