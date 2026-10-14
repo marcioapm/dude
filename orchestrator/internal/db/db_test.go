@@ -65,19 +65,36 @@ func TestTransactionsOnOneSessionDoNotLeakTheirTenant(t *testing.T) {
 	for _, end := range []string{"commit", "rollback", "panic", "commit"} {
 		for i, org := range orgs {
 			want := []string{[]string{"prj_a", "prj_b"}[i]}
+			var called bool
+			var gotErr error
+			var gotPanic any
 			func() {
-				defer func() {
-					if r := recover(); r != nil && r != refused {
-						panic(r)
-					}
-				}()
-				_ = db.InOrgOn(ctx, conn, org, func(tx pgx.Tx) error {
+				defer func() { gotPanic = recover() }()
+				gotErr = db.InOrgOn(ctx, conn, org, func(tx pgx.Tx) error {
+					called = true
 					if got := projectsSeen(ctx, t, tx); !slices.Equal(got, want) {
 						t.Errorf("%s in %s sees %v, want %v", end, org, got, want)
 					}
 					return ends[end]()
 				})
 			}()
+			if !called {
+				t.Fatalf("%s in %s: the transaction's callback did not run (err %v, panic %v)", end, org, gotErr, gotPanic)
+			}
+			switch end {
+			case "commit":
+				if gotErr != nil || gotPanic != nil {
+					t.Fatalf("commit in %s: err %v, panic %v; want neither", org, gotErr, gotPanic)
+				}
+			case "rollback":
+				if !errors.Is(gotErr, refused) || gotPanic != nil {
+					t.Fatalf("rollback in %s: err %v, panic %v; want the callback's error", org, gotErr, gotPanic)
+				}
+			case "panic":
+				if gotPanic != refused {
+					t.Fatalf("panic in %s: recovered %v, want the callback's panic", org, gotPanic)
+				}
+			}
 			if got, role := sessionState(ctx, t, conn); got != "" || role != "dude_app" {
 				t.Fatalf("after %s in %s: organization %q, role %q on the session", end, org, got, role)
 			}
@@ -110,17 +127,25 @@ func TestInSystemLeavesNoRoleOnTheConnection(t *testing.T) {
 	}
 	defer pool.Close()
 	one := &db.DB{Pool: pool}
+	refused := errors.New("refused")
 	for _, fail := range []bool{false, true} {
-		_ = one.InSystem(ctx, "test", func(tx pgx.Tx) error {
-			if got := projectsSeen(ctx, t, tx); len(got) != 2 {
+		called := false
+		err := one.InSystem(ctx, "test", func(tx pgx.Tx) error {
+			called = true
+			if got := projectsSeen(ctx, t, tx); !slices.Equal(got, []string{"prj_a", "prj_b"}) {
 				t.Errorf("the sweeper sees %v, want both tenants'", got)
 			}
 			if fail {
-				return errors.New("refused")
+				return refused
 			}
 			return nil
 		})
-		err := one.InOrg(ctx, orgs[0], func(tx pgx.Tx) error {
+		if !called || (fail && !errors.Is(err, refused)) || (!fail && err != nil) {
+			t.Fatalf("InSystem (failing %v): callback ran %v, err %v", fail, called, err)
+		}
+		called = false
+		err = one.InOrg(ctx, orgs[0], func(tx pgx.Tx) error {
+			called = true
 			var role string
 			if err := tx.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
 				return err
@@ -130,8 +155,8 @@ func TestInSystemLeavesNoRoleOnTheConnection(t *testing.T) {
 			}
 			return nil
 		})
-		if err != nil {
-			t.Fatal(err)
+		if err != nil || !called {
+			t.Fatalf("InOrg after InSystem: callback ran %v, err %v", called, err)
 		}
 	}
 }

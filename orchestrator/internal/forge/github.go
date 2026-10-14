@@ -281,6 +281,11 @@ func WithTestGitHost(host string) func(*GitHub) {
 	return func(g *GitHub) { g.testGitHost = host }
 }
 
+// WithTransport sends every request through rt instead of the default transport.
+func WithTransport(rt http.RoundTripper) func(*GitHub) {
+	return func(g *GitHub) { g.http.Transport = rt }
+}
+
 func NewGitHub(c Credential, options ...func(*GitHub)) *GitHub {
 	if c.APIBaseURL == "" {
 		c.APIBaseURL = "https://api.github.com"

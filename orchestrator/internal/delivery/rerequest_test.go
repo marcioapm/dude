@@ -37,6 +37,7 @@ type rerequestFixture struct {
 	s      *Store
 	st     *State
 	client *forge.GitHub
+	api    string // the fake GitHub's base URL
 	gh     map[string]*fakegithub.Server
 }
 
@@ -78,6 +79,7 @@ func newRerequestFixture(t *testing.T, repos ...string) *rerequestFixture {
 	// Not the host's CPU count: the re-request slots are sized from it.
 	f.usePool(16)
 	f.client = forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})
+	f.api = srv.URL
 	for _, name := range repos {
 		if _, err := f.client.OpenPullRequest(f.ctx, forge.OpenPullRequest{Slug: "acme/" + name, Title: "Greet", Head: "feature", Base: "main"}); err != nil {
 			t.Fatal(err)
@@ -103,7 +105,17 @@ func (f *rerequestFixture) usePool(maxConns int32) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.t.Cleanup(pool.Close)
+	// pool.Close waits for every connection out: a leaked one fails the
+	// test instead of hanging it.
+	f.t.Cleanup(func() {
+		closed := make(chan struct{})
+		go func() { pool.Close(); close(closed) }()
+		select {
+		case <-closed:
+		case <-time.After(15 * time.Second):
+			f.t.Errorf("%d pool connections still out at cleanup", pool.Stat().AcquiredConns())
+		}
+	})
 	f.s = &Store{DB: &db.DB{Pool: pool}}
 }
 
@@ -736,31 +748,19 @@ func (f *rerequestFixture) advisoryLocks() int {
 	return n
 }
 
-// However a holder ends after taking the lock, its slot and lock are
-// freed: a pool of four admits one holder, and the next re-request of the
-// same head, on whichever session, runs. A connection whose lock could not
-// be released normally (its session ended, or it no longer held the lock)
-// is closed, not pooled.
-func TestARerequestHolderFreesItsSlotAndLockHoweverItEnds(t *testing.T) {
+// A lock whose release fails is not pooled: when the holder's session
+// ended, or no longer holds the lock, unlock closes the connection, which
+// frees the lock, and the next re-request of the same head runs.
+func TestARerequestLockThatCannotBeReleasedClosesItsConnection(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		end    func(f *rerequestFixture, c *rerequestClaim, cancel func(), unlock func())
-		closed bool
+		name string
+		end  func(f *rerequestFixture, c *rerequestClaim, unlock func())
 	}{
-		{name: "context canceled", end: func(_ *rerequestFixture, _ *rerequestClaim, cancel, unlock func()) {
-			cancel()
-			unlock()
-		}},
-		{name: "panic", end: func(_ *rerequestFixture, _ *rerequestClaim, _, unlock func()) {
-			defer func() { _ = recover() }()
-			defer unlock()
-			panic("in the holder")
-		}},
-		{name: "session ended", closed: true, end: func(f *rerequestFixture, _ *rerequestClaim, _, unlock func()) {
+		{name: "session ended", end: func(f *rerequestFixture, _ *rerequestClaim, unlock func()) {
 			f.killHolder()
 			unlock()
 		}},
-		{name: "lock gone from its session", closed: true, end: func(f *rerequestFixture, c *rerequestClaim, _, unlock func()) {
+		{name: "lock gone from its session", end: func(f *rerequestFixture, c *rerequestClaim, unlock func()) {
 			if _, err := c.conn.Exec(f.ctx, `SELECT pg_advisory_unlock_all()`); err != nil {
 				f.t.Fatal(err)
 			}
@@ -772,9 +772,7 @@ func TestARerequestHolderFreesItsSlotAndLockHoweverItEnds(t *testing.T) {
 			f.usePool(4)
 			head := f.fix("target")
 			c := &rerequestClaim{s: f.s, org: f.org, taskID: f.st.TaskID, repo: "target", number: 1, head: head}
-			ctx, cancel := context.WithCancel(f.ctx)
-			defer cancel()
-			unlock, err := c.lock(ctx)
+			unlock, err := c.lock(f.ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -782,17 +780,87 @@ func TestARerequestHolderFreesItsSlotAndLockHoweverItEnds(t *testing.T) {
 				t.Fatalf("while held: %v, want ErrRerequestBusy", err)
 			}
 			total := f.s.DB.Pool.Stat().TotalConns()
-			tc.end(f, c, cancel, unlock)
+			tc.end(f, c, unlock)
 			stat := f.s.DB.Pool.Stat()
 			if n := f.advisoryLocks(); n != 0 || stat.AcquiredConns() != 0 {
 				t.Fatalf("after the holder ended: %d advisory locks, %d connections out", n, stat.AcquiredConns())
 			}
-			if tc.closed && stat.TotalConns() != total-1 {
+			if stat.TotalConns() != total-1 {
 				t.Errorf("pool has %d connections, had %d: the holder's went back to it", stat.TotalConns(), total)
 			}
 			if err := f.rerequest(map[string]string{"target": head}); err != nil {
 				t.Fatalf("the next caller: %v", err)
 			}
+			if n := len(f.asks("target")); n != 1 {
+				t.Errorf("%d review requests, want 1", n)
+			}
+			f.eventFor("target", head)
+		})
+	}
+}
+
+// panickingTransport panics on review requests while armed, as a fault in
+// the HTTP client would; every other request goes through.
+type panickingTransport struct{ armed atomic.Bool }
+
+var errTransportPanic = errors.New("transport panic for the test")
+
+func (p *panickingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if p.armed.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/requested_reviewers") {
+		panic(errTransportPanic)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// A re-request that panics in its POST, or whose context is canceled while
+// the POST hangs, frees its slot, its lock and its connection on the way
+// out: no lock is held and no connection is out afterwards, and the next
+// re-request of the same head, which needs the pool's one slot, asks.
+func TestARerequestThatPanicsOrIsCanceledFreesItsSlotAndLock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  func(f *rerequestFixture, head string)
+	}{
+		{name: "panic", end: func(f *rerequestFixture, head string) {
+			rt := &panickingTransport{}
+			rt.armed.Store(true)
+			f.client = forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: f.api}, forge.WithTransport(rt))
+			var got any
+			func() {
+				defer func() { got = recover() }()
+				_ = f.rerequest(map[string]string{"target": head})
+			}()
+			if got != errTransportPanic {
+				f.t.Fatalf("recovered %v, want the transport's panic", got)
+			}
+			rt.armed.Store(false)
+		}},
+		{name: "context canceled", end: func(f *rerequestFixture, head string) {
+			entered, _ := f.hold("target", 1)
+			ctx, cancel := context.WithCancel(f.ctx)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- f.s.RerequestReviews(ctx, f.org, f.st, f.client, map[string]string{"target": head}) }()
+			wait(f.t, entered)
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				f.t.Fatalf("canceled holder: %v, want context.Canceled", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRerequestFixture(t, "target")
+			f.usePool(4)
+			head := f.fix("target")
+			tc.end(f, head)
+			if n, out := f.advisoryLocks(), f.s.DB.Pool.Stat().AcquiredConns(); n != 0 || out != 0 {
+				t.Fatalf("after the holder ended: %d advisory locks, %d connections out", n, out)
+			}
+			if err := f.rerequest(map[string]string{"target": head}); err != nil {
+				t.Fatalf("the next caller: %v", err)
+			}
+			// The ended holder's POST never reached GitHub's record (panicked
+			// before sending, or still hanging): only the next caller's did.
 			if n := len(f.asks("target")); n != 1 {
 				t.Errorf("%d review requests, want 1", n)
 			}
