@@ -232,6 +232,50 @@ describe("agent.child.ended", () => {
   });
 });
 
+// One call id reused for another tool (the fixture's "c1": bash, then task) is two calls, each with its own row.
+describe("a call id reused for another tool", () => {
+  const bashCall = () => ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1", input: { command: "npm test" } });
+  const bashDone = () => ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed", exitCode: 0, output: { head: "9 passed" } });
+  const taskDone = () => ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed", output: { head: "No viewport set." } });
+  const childEnded = () => ev(EventTypes.ChildEnded, { ...kid, status: "completed", summary: "Done." });
+
+  function rows(turns: readonly unknown[]): [ToolTurn, ToolTurn] {
+    const tools = (turns as Array<{ kind: string }>).filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.id, t.tool])).toEqual([["c1", "bash"], ["c1", "task"]]);
+    return [tools[0]!, tools[1]!];
+  }
+
+  // Events are made in fold order: one made earlier has a lower cursor, and a lower cursor is skipped as already folded.
+  test("bash then task: two rows, each with its own input, end, result and children", () => {
+    const events = [bashCall(), bashDone(), parentCall(), started(), childEnded(), taskDone()];
+    const [, bashEnd, , , , taskEnd] = events;
+    const { turns, toolCounts } = project(events);
+    const [bash, task] = rows(turns);
+    expect(bash).toMatchObject({ args: { command: "npm test" }, status: "completed", endedAt: bashEnd.occurredAt,
+      result: { exitCode: 0, output: { head: "9 passed" } }, children: [] });
+    expect(task).toMatchObject({ args: { description: "Inspect test capture setup", subagent_type: "explore" }, status: "completed",
+      endedAt: taskEnd.occurredAt, result: { output: { head: "No viewport set." } } });
+    expect(only(task.children)).toMatchObject({ id: "ses_kid", status: "completed", summary: "Done." });
+    expect([toolCounts.get("bash"), toolCounts.get("task")]).toEqual([1, 1]);
+  });
+
+  test("the first call's completion repeated while the second runs leaves the second running, and its own completion ends it", () => {
+    const events = [bashCall(), bashDone(), parentCall(), bashDone()];
+    const [, bashEnd, task] = events;
+    const state = apply(emptyProjection(), events);
+    const [, running] = rows(snapshot(state).turns);
+    expect(running).toMatchObject({ status: "running", endedAt: null, result: null });
+    expect(snapshot(state).activeTool).toEqual({ name: "task", since: task.occurredAt });
+
+    const taskEnd = taskDone();
+    apply(state, [taskEnd]);
+    const [bash, ended] = rows(snapshot(state).turns);
+    expect(bash).toMatchObject({ status: "completed", endedAt: bashEnd.occurredAt, result: { exitCode: 0, output: { head: "9 passed" } } });
+    expect(ended).toMatchObject({ status: "completed", endedAt: taskEnd.occurredAt, result: { output: { head: "No viewport set." } } });
+  });
+
+});
+
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
   const state = apply(emptyProjection(), [parentCall(), started(),
     ev(EventTypes.ChildToolCalled, { ...kid, parentCallId: "c1", callId: "k1", tool: "grep" }),

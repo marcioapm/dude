@@ -953,7 +953,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
-        const existing = toolsByCall.get(callId);
+        const existing = completedCall(state, callId, tool);
         if (existing) {
           // A repeated completion never re-times a finished call.
           if (!existing.endedAt) {
@@ -1745,6 +1745,16 @@ function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, paylo
   turn.tool = tool;
   turn.args = payload.input ?? turn.args;
   if (called) turn.startedAt = at;
+}
+
+/**
+ * The call a completion of `tool` ends. An id reused for another tool maps to the later call, so a completion of
+ * the earlier tool (a repeat of one already folded) is that earlier row's; a placeholder takes any tool.
+ */
+function completedCall(state: Projection, callId: string, tool: string): ToolTurn | undefined {
+  const mapped = state.toolsByCall.get(callId);
+  if (!mapped || mapped.tool === tool || state.placeholderCalls.has(mapped)) return mapped;
+  return state.turns.findLast((t): t is ToolTurn => t.kind === "tool" && t.id === callId && t.tool === tool);
 }
 
 /** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
