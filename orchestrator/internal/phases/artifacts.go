@@ -190,13 +190,9 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// FOR NO KEY UPDATE on the Run's row before any artifact key is
-		// placed: it queues behind the follower's FOR UPDATE and other
-		// writers of the row, so an insert's foreign-key check never waits
-		// on the follower while the follower's insert of the same
-		// storage_key waits on this one. NO KEY UPDATE is the strength the
-		// UPDATE of runs below takes anyway; it still admits other inserts'
-		// foreign-key KEY SHARE checks on this Run.
+		// Lock the Run before placing artifact keys, matching the follower's
+		// order to avoid a foreign-key/unique-key deadlock. NO KEY UPDATE
+		// matches the UPDATE below and admits unrelated FK KEY SHARE checks.
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID); err != nil {
 			return err
 		}

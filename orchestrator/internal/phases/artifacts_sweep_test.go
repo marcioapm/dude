@@ -87,14 +87,8 @@ func TestTheSweepRecordsEveryVersionOnceAndTheLatestFinalDiff(t *testing.T) {
 func TestTheSweepRecordsWhileAnotherTransactionHoldsTheRunsKeyShare(t *testing.T) {
 	w := newReceiptWorld(t)
 	ctx := context.Background()
-	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
-		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
-		t.Fatal(err)
-	}
 	const id = "art_aaaaaaaaaaaaaaaa"
-	a := &Artifacts{DB: w.s.DB, Lux: &sweepLux{listed: []lux.Artifact{
-		{ID: id, Epoch: 2, Path: lux.PublishedPrefix + "notes.md", Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
-	}}}
+	a := w.sweepListing(ctx, id, lux.PublishedPrefix+"notes.md")
 
 	holder, err := w.owner.Begin(ctx)
 	if err != nil {
@@ -114,12 +108,7 @@ func TestTheSweepRecordsWhileAnotherTransactionHoldsTheRunsKeyShare(t *testing.T
 		t.Fatal(err)
 	}
 
-	if got := w.artifacts(); len(got) != 1 || got[0].StorageKey != id {
-		t.Errorf("recorded %+v; want %s once", got, id)
-	}
-	if n := w.events(ArtifactEventType); n != 1 {
-		t.Errorf("%d artifact.created events, want 1", n)
-	}
+	w.artifactRecordedOnce(id)
 	var due bool
 	if err := w.owner.QueryRow(ctx, `SELECT artifacts_due_at IS NOT NULL FROM runs WHERE id = $1`, w.tr.run.ID).Scan(&due); err != nil {
 		t.Fatal(err)
@@ -129,15 +118,11 @@ func TestTheSweepRecordsWhileAnotherTransactionHoldsTheRunsKeyShare(t *testing.T
 	}
 }
 
-// The sweep and the stream's follower recording the same artifact at once:
-// the follower's batch holds the Run's row (followOutput) when the sweep
-// reaches its insert, and then records the artifact itself. Each waits for
-// the other to finish, in turn, and the artifact is recorded once.
+// The follower records the same artifact after the sweep blocks on its Run
+// lock. Parent-first locking must serialize them without a deadlock.
 func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 	w := newReceiptWorld(t)
-	// Registered after newReceiptWorld's cleanups, so it runs before them:
-	// both workers have returned, their transactions ended, before the
-	// pool and database are closed.
+	// LIFO cleanup joins both workers before the fixture closes its database.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	var workers sync.WaitGroup
 	t.Cleanup(func() {
@@ -157,15 +142,9 @@ func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 		}
 	}
 
-	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
-		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
-		t.Fatal(err)
-	}
 	const id = "art_aaaaaaaaaaaaaaaa"
 	path := lux.PublishedPrefix + "notes.md"
-	a := &Artifacts{DB: w.s.DB, Lux: &sweepLux{listed: []lux.Artifact{
-		{ID: id, Epoch: 2, Path: path, Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
-	}}}
+	a := w.sweepListing(ctx, id, path)
 
 	// The follower's batch, as followOutput runs it: the Run's row first,
 	// then the frame. It records once the sweep is waiting on it.
@@ -234,10 +213,26 @@ func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 	if err := await(swept); err != nil {
 		t.Errorf("sweep: %v", err)
 	}
+	w.artifactRecordedOnce(id)
+}
+
+func (w *receiptWorld) sweepListing(ctx context.Context, id, path string) *Artifacts {
+	w.t.Helper()
+	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
+		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
+		w.t.Fatal(err)
+	}
+	return &Artifacts{DB: w.s.DB, Lux: &sweepLux{listed: []lux.Artifact{
+		{ID: id, Epoch: 2, Path: path, Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
+	}}}
+}
+
+func (w *receiptWorld) artifactRecordedOnce(id string) {
+	w.t.Helper()
 	if got := w.artifacts(); len(got) != 1 || got[0].StorageKey != id {
-		t.Errorf("recorded %+v; want %s once", got, id)
+		w.t.Errorf("recorded %+v; want %s once", got, id)
 	}
 	if n := w.events(ArtifactEventType); n != 1 {
-		t.Errorf("%d artifact.created events, want 1", n)
+		w.t.Errorf("%d artifact.created events, want 1", n)
 	}
 }
