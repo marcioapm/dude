@@ -463,12 +463,15 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 		if !forge.WokenByRequestedReview(batch, requested) {
 			return nil
 		}
+		// Each as last recorded: a later comment_edited carries its new body.
 		rows, err = tx.Query(ctx, `SELECT COALESCE(e.payload->>'feedbackId', ''), COALESCE(e.payload->>'author', ''),
-				COALESCE(e.payload->>'body', ''), COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'kind', '')
+				COALESCE((SELECT l.payload->>'body' FROM events l WHERE l.task_id = e.task_id AND l.event_type IN ($2, $5)
+				  AND l.payload->>'feedbackId' = e.payload->>'feedbackId' ORDER BY l.cursor DESC LIMIT 1), ''),
+				COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'kind', '')
 			FROM events e WHERE e.task_id = $1 AND e.event_type = $2 AND (e.payload->>'number')::int = $3 AND e.payload->>'repo' = $4
 			  AND e.occurred_at > COALESCE((SELECT max(r.created_at) FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix'
 			      AND r.pr_feedback <> '[]'::jsonb), '-infinity')
-			ORDER BY e.cursor`, pr.TaskID, delivery.EvPullRequestCommented, pr.Number, pr.RepoName)
+			ORDER BY e.cursor`, pr.TaskID, delivery.EvPullRequestCommented, pr.Number, pr.RepoName, delivery.EvPullRequestCommentEdited)
 		if err != nil {
 			return err
 		}

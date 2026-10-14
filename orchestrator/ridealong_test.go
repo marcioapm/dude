@@ -64,6 +64,22 @@ func TestARequestedReviewWakesItsFixerWhenBotThreadsCannotBeRead(t *testing.T) {
 	}
 }
 
+// A bot comment rides along as its author last edited it.
+func TestABotCommentRidesAlongAsEdited(t *testing.T) {
+	w := newWorld(t)
+	w.askingFor("jerv")
+	wi := w.reviewing()
+	id := w.gh.Comment(1, "coderabbitai[bot]", "Use the old option.")
+	w.syncs(2)
+	w.gh.EditComment(1, id, "Ignore the earlier suggestion; use the new option.")
+	w.syncs(2)
+	w.gh.ReviewSaying(1, "jerv", "CHANGES_REQUESTED", "Please rename the greeting.")
+	w.until("a fixer", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	if batch := w.fixBatch(wi); len(batch) != 2 || batch[1].Body != "Ignore the earlier suggestion; use the new option." {
+		t.Fatalf("batch %+v, want the review and the bot's edited comment", batch)
+	}
+}
+
 // A bot's line comment in a resolved thread is no longer open and stays
 // behind; its top-level comment, which nothing resolves, rides along.
 func TestAResolvedBotThreadStaysBehind(t *testing.T) {
