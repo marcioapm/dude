@@ -141,6 +141,14 @@ func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) in
 	_, prev := placementsAround(before.Placements, epoch)
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		s.bestEffort(ctx, tx, r, "resume", func(ctx context.Context, tx pgx.Tx) error {
+			// The Run's row before the resume's: a retry's new row version
+			// makes writePlacements' foreign-key check take this KEY SHARE,
+			// and taken then, it would wait on a follower batch holding the
+			// Run while that batch waits to stamp the row. Nothing here
+			// writes runs, so KEY SHARE is all it takes, early.
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR KEY SHARE`, r.ID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at)
 				SELECT r.id, r.organization_id, $2, $3, `+woken+`, clock_timestamp() FROM runs r WHERE r.id = $1 AND r.status = 'paused'
 				ON CONFLICT (run_id, epoch) DO UPDATE SET requested_at = EXCLUDED.requested_at
