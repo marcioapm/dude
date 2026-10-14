@@ -661,6 +661,51 @@ describe("where a task starts from", () => {
     expect([...kind.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
     expect(document.querySelector<HTMLInputElement>("[data-testid=task-source-pr]")!.disabled).toBe(true);
     expect(document.body.textContent).toContain("where it started from is fixed");
+    expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("#12 Greet · feature/greet → main");
     expect(client.asked.length).toBe(0);
+  });
+
+  test("a started branch shows its saved head → base", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the stacked branch on top of the base one.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" } }, client);
+    expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("stack/top → stack/base");
+    expect(client.asked.length).toBe(0);
+  });
+
+  test("the source's repository set to Reads it says so, and Save stays off until it changes it again", async () => {
+    class TwoRepos extends Sources {
+      override getProject(id: string) {
+        return super.getProject(id).then((p) => ({ ...p, repositories: [...p.repositories,
+          { ...p.repositories[0]!, id: "repo_api", name: "api" }] }));
+      }
+      override sourceRepositories() {
+        return Promise.resolve({ repositories: [{ id: PROJECT.repositories[0]!.id, name: PROJECT.repositories[0]!.name, writable: true },
+          { id: "repo_api", name: "api", writable: true }] });
+      }
+    }
+    const client = new TwoRepos("a");
+    const repoId = PROJECT.repositories[0]!.id;
+    const d = await open({ id: "task_draft", fixed: null, title: "Take over", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: repoId, access: "write" }, { id: "repo_api", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: repoId, repository: PROJECT.repositories[0]!.name, number: 12, title: "Greet",
+        headBranch: "feature/greet", baseBranch: "main" } }, client);
+    await d.title("Take over the greeting");
+    await until(() => !d.save().disabled, "Save on");
+    const access = document.querySelector(`[aria-label="What the work does in ${PROJECT.repositories[0]!.name}"]`)!;
+    const choose = async (label: string) => {
+      await act(async () => access.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      await act(async () => access.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+      const option = await until(() => [...document.querySelectorAll("[role=option]")].find((o) => o.textContent === label), label);
+      await act(async () => (option as HTMLElement).click());
+    };
+    await choose("Reads it");
+    await until(() => document.querySelector("[data-testid=task-source-read]"), "the contradiction named");
+    expect(document.querySelector("[data-testid=task-source-read]")!.textContent)
+      .toBe(`This task only reads ${PROJECT.repositories[0]!.name}, which it starts from: set it to Changes it, or start from New work.`);
+    expect(d.save().disabled).toBe(true);
+    await choose("Changes it");
+    await until(() => !document.querySelector("[data-testid=task-source-read]") && !d.save().disabled, "Save on again");
   });
 });

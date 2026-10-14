@@ -157,8 +157,10 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
   const sourceSaved = JSON.stringify(sourceInput(sourceDraft(existing?.savedSource, writable)) ?? null);
   const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== sourceSaved;
-  // New work is always fine; existing work only once dude has found it.
-  const sourceReady = sourceFixed || source.from === "new" || sourceCheck.state === "ok";
+  // New work is always fine; existing work only once dude has found it, in a
+  // repository the task changes (one set to Reads it is not saved as its source).
+  const sourceReady = sourceFixed || source.from === "new"
+    || (sourceCheck.state === "ok" && writable.some((r) => r.id === source.repositoryId));
   // One repository needs no choosing: it is where the work goes unless the
   // task says otherwise.
   const choosing = repositories.length > 1;
@@ -410,7 +412,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           ) : null}
           {choices !== null ? (
             <StartsFromField client={client} projectId={projectId} repositories={writable} access={sourceAccess} draft={source}
-              onChange={setDraft} check={sourceCheck} locked={sourceFixed} />
+              onChange={setDraft} check={sourceCheck} locked={sourceFixed} saved={existing?.savedSource} />
           ) : null}
           {refusals.length > 0 ? (
             <Callout tone="attention" data-testid="task-image-refused">

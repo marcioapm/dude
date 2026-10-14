@@ -110,11 +110,16 @@ export interface StartsFromFieldProps {
   check: SourceCheck;
   /** Delivery has started: shown, not changed. */
   locked: boolean;
+  /** The source as saved: what a locked field shows, with no lookup. */
+  saved?: TaskSource | null | undefined;
 }
 
-export function StartsFromField({ client, projectId, repositories, access, draft, onChange, check, locked }: StartsFromFieldProps) {
+export function StartsFromField({ client, projectId, repositories, access, draft, onChange, check, locked, saved }: StartsFromFieldProps) {
   const set = (patch: Partial<SourceDraft>) => onChange({ ...draft, ...patch });
   const repo = repositories.find((r) => r.id === draft.repositoryId);
+  // The person set the draft's repository to Reads it: the task would not change what it starts from.
+  const onlyRead = !locked && draft.from !== "new" && draft.repositoryId !== "" && !repo;
+  const readName = (Array.isArray(access) ? access.find((a) => a.id === draft.repositoryId)?.name : undefined) ?? "the repository";
   const refused = check.state === "refused" ? check.message : undefined;
   const found = check.state === "ok" ? check.source : null;
   const writableIds = Array.isArray(access) ? new Set(access.filter((a) => a.writable).map((a) => a.id)) : null;
@@ -122,7 +127,7 @@ export function StartsFromField({ client, projectId, repositories, access, draft
   const usable = writableIds ? repositories.filter((r) => writableIds.has(r.id)) : [];
   // The draft's repository is one dude may push to; else the first that is.
   useEffect(() => {
-    if (locked || draft.from === "new" || !writableIds || writableIds.has(draft.repositoryId)) return;
+    if (locked || onlyRead || draft.from === "new" || !writableIds || writableIds.has(draft.repositoryId)) return;
     if (usable[0]) onChange({ ...draft, repositoryId: usable[0].id, branch: "", base: "" });
   });
   return (
@@ -138,7 +143,11 @@ export function StartsFromField({ client, projectId, repositories, access, draft
           { value: "branch", label: "Existing branch", disabled: repositories.length === 0 },
         ]} />
       {draft.from === "new" ? null : locked ? (
-        <LockedSource draft={draft} repo={repo} />
+        <LockedSource draft={draft} repo={repo} saved={saved} />
+      ) : onlyRead ? (
+        <Callout tone="attention" data-testid="task-source-read">
+          This task only reads {readName}, which it starts from: set it to Changes it, or start from New work.
+        </Callout>
       ) : typeof access === "string" ? (
         <Callout tone="attention" data-testid="task-source-access">GitHub could not say which repositories dude may push to: {access}</Callout>
       ) : access === null ? (
@@ -168,27 +177,37 @@ export function StartsFromField({ client, projectId, repositories, access, draft
                 hint="What its pull request will merge into. None picked: the repository's default branch." />
             </>
           )}
-          {found ? (
-            <Callout tone="neutral" data-testid="task-source-found">
-              {found.number ? <><b>#{found.number}</b> {found.title} · </> : null}
-              <span className="ds-mono">{found.headBranch}</span> → <span className="ds-mono">{found.baseBranch}</span>
-            </Callout>
-          ) : null}
+          {found ? <SourceFound source={found} testId="task-source-found" /> : null}
         </>
       )}
     </Fieldset>
   );
 }
 
-/** A started task's source: shown as it was saved, nothing to pick. */
-function LockedSource({ draft, repo }: { draft: SourceDraft; repo: Repository | undefined }) {
-  return draft.from === "pr" ? (
-    <Input label="Pull request" size="sm" mono disabled value={draft.pullRequest ? `#${draft.pullRequest}` : ""} data-testid="task-source-pr" />
-  ) : (
+/** A started task's source: shown as it was saved, nothing to pick and nothing asked of GitHub. */
+function LockedSource({ draft, repo, saved }: { draft: SourceDraft; repo: Repository | undefined; saved: TaskSource | null | undefined }) {
+  return (
     <>
-      <Input label="Branch" size="sm" mono disabled value={draft.branch} data-testid="task-source-branch-locked" />
-      <Input label="Base" size="sm" mono disabled value={draft.base || repo?.defaultBranch || ""} data-testid="task-source-base-locked" />
+      {draft.from === "pr" ? (
+        <Input label="Pull request" size="sm" mono disabled value={draft.pullRequest ? `#${draft.pullRequest}` : ""} data-testid="task-source-pr" />
+      ) : (
+        <>
+          <Input label="Branch" size="sm" mono disabled value={draft.branch} data-testid="task-source-branch-locked" />
+          <Input label="Base" size="sm" mono disabled value={draft.base || repo?.defaultBranch || ""} data-testid="task-source-base-locked" />
+        </>
+      )}
+      {saved ? <SourceFound source={saved} testId="task-source-saved" /> : null}
     </>
+  );
+}
+
+/** A source's pull request, if it is one, and head → base. */
+function SourceFound({ source, testId }: { source: TaskSource; testId: string }) {
+  return (
+    <Callout tone="neutral" data-testid={testId}>
+      {source.number ? <><b>#{source.number}</b> {source.title} · </> : null}
+      <span className="ds-mono">{source.headBranch}</span> → <span className="ds-mono">{source.baseBranch}</span>
+    </Callout>
   );
 }
 
