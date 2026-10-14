@@ -7,13 +7,17 @@ package orchestrator_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // implementing delivers a task whose implementer hangs mid-turn until told
@@ -155,7 +159,10 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate) }) }
 	t.Cleanup(release)
-	w.lux.BeforeStart(func(id string) {
+	// lux's new placement waits for a host: with none assigned there is no
+	// live placement, so the stop that keeps the failed Run finds nothing
+	// to stop (lux requestStop), and lux places it once a host frees up.
+	w.lux.BeforeAssign(func(id string) {
 		if id == luxID {
 			<-gate
 		}
@@ -174,7 +181,7 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, runID) == 1
 	})
 	// lux gets it running after all, its agent idle and waiting.
-	w.lux.BeforeStart(nil)
+	w.lux.BeforeAssign(nil)
 	release()
 	deadline := time.Now().Add(10 * time.Second)
 	for w.lux.State(luxID) != "running" && time.Now().Before(deadline) {
@@ -217,5 +224,72 @@ func TestAnAgentProcessExitingOnItsOwnFailsWithItsError(t *testing.T) {
 	}
 	if got := w.escalationError(task); got != errText {
 		t.Errorf("the escalation says %q", got)
+	}
+}
+
+// A person pauses the implementer and resumes it before lux has applied
+// the stop it accepted: lux still runs the same placement, which is not
+// one lux moved. It is not taken up as live; once the stop lands, dude
+// resumes it in lux and the same Run finishes, failing nothing.
+func TestAResumeBeforeLuxAppliedAPauseStillResumesTheRunInLux(t *testing.T) {
+	w := newWorld(t)
+	task, runID, luxID := w.implementing()
+	handler := w.lux.Handler()
+	var holding atomic.Bool
+	holding.Store(true)
+	held := make(chan *http.Request, 4)
+	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		// lux accepts the stop; it is applied when the test says.
+		if holding.Load() && req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/stop") {
+			select {
+			case held <- req.Clone(context.Background()):
+			default:
+			}
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusAccepted)
+			_, _ = rw.Write([]byte(`{}`))
+			return
+		}
+		handler.ServeHTTP(rw, req)
+	}))
+	t.Cleanup(func() {
+		// Followers' streams through the proxy end first, or Close waits on them.
+		w.syncer.Stop()
+		proxy.CloseClientConnections()
+		proxy.Close()
+	})
+	w.syncer.Lux = lux.New(proxy.URL, "lux-key")
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("dude to record the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND control = 'resume'`, runID); n != 1 {
+		t.Fatalf("a Run lux had yet to stop was taken up as live")
+	}
+	// lux applies the stop it accepted.
+	holding.Store(false)
+	select {
+	case req := <-held:
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	default:
+		t.Fatal("dude never asked lux to stop the Run")
+	}
+	w.until("the same implementer to finish, and review to start", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task) > 0
+	})
+	if !slices.Contains(w.lux.CallsOf(luxID), "resume") {
+		t.Errorf("dude never resumed the stopped Run in lux: calls %v", w.lux.CallsOf(luxID))
+	}
+	if _, _, failed := w.runFailure(runID); len(failed) != 0 {
+		t.Errorf("run.failed %q", failed)
 	}
 }

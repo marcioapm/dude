@@ -260,8 +260,9 @@ func (t *translator) stateSeen(ctx context.Context, tx pgx.Tx, s *Syncer, state,
 	case state == "stopping" && reason != "":
 		return t.stopSeen(ctx, tx, s, luxStop{Reason: reason, Epoch: epoch})
 	case state == "running":
-		// Running in a later placement: what stopped the last is over.
-		if t.LuxStop != nil && epoch > t.LuxStop.Epoch {
+		// Running in a later placement: what stopped the last is over. A
+		// move is kept: it says lux itself placed this one (replacedByLux).
+		if t.LuxStop != nil && epoch > t.LuxStop.Epoch && !lux.Moved(t.LuxStop.Reason) {
 			t.LuxStop = nil
 		}
 		if b != nil && epoch > b.Epoch {
@@ -377,6 +378,19 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	if !liveInLux(state) {
 		return false, nil
 	}
+	var moved stopState
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT harness_state FROM runs WHERE id = $1`, r.ID).Scan(&raw); err != nil || raw == nil {
+			return err
+		}
+		return json.Unmarshal(raw, &moved)
+	}); err != nil {
+		return false, err
+	}
+	if !replacedByLux(cur, moved) {
+		return false, nil
+	}
 	var after int64
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
@@ -425,4 +439,28 @@ func liveInLux(state string) bool {
 		return true
 	}
 	return false
+}
+
+// replacedByLux: lux's live placement of cur is one lux itself placed
+// after moving the Run — dude recorded the move (st) for an earlier
+// placement — and nobody has asked it to stop. A Run merely still live
+// after dude's own stop (a pause lux has not applied yet) is not: it
+// still stops, and is resumed as any.
+func replacedByLux(cur lux.Run, st stopState) bool {
+	movedFrom := 0
+	if st.LuxStop != nil && lux.Moved(st.LuxStop.Reason) {
+		movedFrom = st.LuxStop.Epoch
+	}
+	if st.Broken != nil && st.Broken.Moved != "" {
+		movedFrom = max(movedFrom, st.Broken.Epoch)
+	}
+	if movedFrom == 0 || cur.Epoch <= movedFrom {
+		return false
+	}
+	for _, p := range cur.Placements {
+		if p.Epoch == cur.Epoch && p.StopRequestedAt != nil {
+			return false
+		}
+	}
+	return true
 }
