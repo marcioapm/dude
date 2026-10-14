@@ -11,9 +11,7 @@ import (
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if template != "" {
-		drop(template)
-	}
+	dropTemplate()
 	os.Exit(code)
 }
 

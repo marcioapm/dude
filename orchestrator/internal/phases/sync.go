@@ -469,23 +469,99 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 	return runs, err
 }
 
+// pending lets idle sweeps probe all pre-due selections in one round trip
+// instead of opening a transaction per step. A step whose probe found
+// nothing would have selected no rows. Probe failure runs every step.
+type pending struct{ brainstorms, unheard, unheardBrainstorms, stalls, failed, wakes bool }
+
+// What each of those steps selects from (SQL), shared by its query and its
+// probe so the two cannot disagree.
+var (
+	stuckBrainstorms = `runs r WHERE ` + stuckBrainstorm
+	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
+	failedForWake    = `runs r WHERE ` + delivery.FailedForConductor
+	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
+)
+
+func (s *Syncer) pending(ctx context.Context) pending {
+	window := s.WakeWindow
+	if window == 0 {
+		window = WakeWindow
+	}
+	var p pending
+	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		b := &pgx.Batch{}
+		for _, probe := range []struct {
+			selection string
+			found     *bool
+			args      []any
+		}{
+			{stuckBrainstorms, &p.brainstorms, []any{brainstormCallLimit.Seconds()}},
+			{delivery.Unheard, &p.unheard, nil},
+			{delivery.UnheardBrainstorm, &p.unheardBrainstorms, nil},
+			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
+			{failedForWake, &p.failed, nil},
+			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
+		} {
+			b.Queue(`SELECT EXISTS (SELECT 1 FROM `+probe.selection+`)`, probe.args...).
+				QueryRow(func(row pgx.Row) error { return row.Scan(probe.found) })
+		}
+		return tx.SendBatch(ctx, b).Close()
+	})
+	if err != nil {
+		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
+		return pending{true, true, true, true, true, true}
+	}
+	return p
+}
+
+// beforeDue is Sweep's work on what is not a Run's own state: stuck
+// session agents, messages ended agents never heard, stall reports and
+// conductors' wakes. Each step runs if the probe found it work, or once an
+// earlier step ran: that one may have made work for it (a stall report is
+// a conductor's reason to wake).
+func (s *Syncer) beforeDue(ctx context.Context) error {
+	p, ran := s.pending(ctx), false
+	if p.brainstorms {
+		ran = true
+		if err := s.interruptBrainstorms(ctx); err != nil {
+			return err
+		}
+	}
+	if p.unheard || ran {
+		ran = true
+		if err := s.handOverUnheardConductors(ctx); err != nil {
+			s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+		}
+	}
+	if p.unheardBrainstorms || ran {
+		ran = true
+		if err := s.handOverUnheardBrainstorms(ctx); err != nil {
+			s.Log.Warn("finding stopped session agents' messages failed", "error", err)
+		}
+	}
+	// Before the wakes: a stalled report joins the note it is due with.
+	if p.stalls || ran {
+		ran = true
+		if err := s.reportStalls(ctx); err != nil {
+			s.Log.Warn("reporting stalled runs failed", "error", err)
+		}
+	}
+	if p.failed || p.wakes || ran {
+		if err := s.wakeConductors(ctx); err != nil {
+			s.Log.Warn("waking conductors failed", "error", err)
+		}
+	}
+	return nil
+}
+
 // Sweep takes one pass over every phase Run dude still has something to do
 // for, advancing each as far as it can. Cross-tenant, because finding the
 // Runs that need attention is the job; each is then handled in its own
 // organization's scope.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
-	if err := s.interruptBrainstorms(ctx); err != nil {
+	if err := s.beforeDue(ctx); err != nil {
 		return 0, err
-	}
-	if err := s.handOverUnheard(ctx); err != nil {
-		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
-	}
-	// Before the wakes: a stalled report joins the note it is due with.
-	if err := s.reportStalls(ctx); err != nil {
-		s.Log.Warn("reporting stalled runs failed", "error", err)
-	}
-	if err := s.wakeConductors(ctx); err != nil {
-		s.Log.Warn("waking conductors failed", "error", err)
 	}
 	runs, err := s.due(ctx)
 	if err != nil {
@@ -522,7 +598,7 @@ func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 	type found struct{ ID, Org, SessionID string }
 	var due []found
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.session_id FROM runs r WHERE `+stuckBrainstorm,
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.session_id FROM `+stuckBrainstorms,
 			brainstormCallLimit.Seconds())
 		if err != nil {
 			return err
@@ -774,16 +850,15 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 		// Reasons to record, then the tasks whose reasons can be delivered
 		// now, oldest reason first: each its own bounded batch, so neither
 		// crowds out the other, and tasks that must wait are not selected.
-		rows, err := tx.Query(ctx, `SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r
-			WHERE `+delivery.FailedForConductor+` LIMIT $1`, wakeBatch)
+		rows, err := tx.Query(ctx, `SELECT 'failed', r.organization_id, r.task_id, r.id FROM `+failedForWake+` LIMIT $1`, wakeBatch)
 		if err != nil {
 			return err
 		}
 		if todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found]); err != nil {
 			return err
 		}
-		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM conductor_wakes c
-			WHERE `+delivery.Wakeable+` GROUP BY c.organization_id, c.task_id ORDER BY min(c.created_at) LIMIT $2`,
+		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM `+wakeableWakes+`
+			GROUP BY c.organization_id, c.task_id ORDER BY min(c.created_at) LIMIT $2`,
 			window.Seconds(), wakeBatch)
 		if err != nil {
 			return err
@@ -822,6 +897,13 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 // them: handed to the task's next conductor, or, for one a person
 // aborted, failed saying so (delivery.HandOver).
 func (s *Syncer) handOverUnheard(ctx context.Context) error {
+	if err := s.handOverUnheardConductors(ctx); err != nil {
+		return err
+	}
+	return s.handOverUnheardBrainstorms(ctx)
+}
+
+func (s *Syncer) handOverUnheardConductors(ctx context.Context) error {
 	type ended struct{ ID, Org, ProjectID, TaskID, Status string }
 	var todo []ended
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
@@ -847,7 +929,7 @@ func (s *Syncer) handOverUnheard(ctx context.Context) error {
 			s.Log.Warn("handing a stopped conductor's messages on failed", "run", e.ID, "error", err)
 		}
 	}
-	return s.handOverUnheardBrainstorms(ctx)
+	return nil
 }
 
 // handOverUnheardBrainstorms is handOverUnheard for sessions' agents that

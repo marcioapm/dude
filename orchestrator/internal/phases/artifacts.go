@@ -190,6 +190,13 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 	}
 	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Lock the Run before placing artifact keys, matching the follower's
+		// order to avoid a foreign-key/unique-key deadlock. NO KEY UPDATE
+		// matches the UPDATE below and admits unrelated FK KEY SHARE checks.
+		// KEY SHARE-first would let two sweeps deadlock when upgrading for UPDATE.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID); err != nil {
+			return err
+		}
 		// Most were recorded from the stream already: one read, rather than
 		// a conflicting insert each.
 		rows, err := tx.Query(ctx, `SELECT storage_key FROM artifacts WHERE run_id = $1`, r.ID)

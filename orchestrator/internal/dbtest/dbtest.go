@@ -4,6 +4,10 @@
 // design, so a test's loops would claim another test's rows — the reason
 // shared-database tests once failed at random. Each database is cloned from
 // a template migrated once per test binary, which takes milliseconds.
+//
+// Under Main the template is dropped when the binary is done. Whatever a
+// binary that crashed or was killed left is dropped by a later binary once
+// it is an hour old, never while its own binary runs (dropStale).
 package dbtest
 
 import (
@@ -12,7 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +37,9 @@ var (
 	// fails them, or a broken migration would pass as "ok".
 	unreachable bool
 	counter     atomic.Int64
+	// live holds this binary's liveLock for as long as it runs: a binary
+	// cleaning up after crashed runs (dropStale) leaves its databases alone.
+	live *pgx.Conn
 )
 
 func host() string {
@@ -83,7 +92,19 @@ func Main(m *testing.M) int {
 		}
 	}
 	ahead.drops.Wait()
+	dropTemplate()
 	return code
+}
+
+// dropTemplate drops this binary's template, once nothing can clone it.
+func dropTemplate() {
+	if template != "" {
+		drop(template)
+	}
+	if live != nil {
+		_ = live.Close(context.Background())
+		live = nil
+	}
 }
 
 // clone makes a new database from the template.
@@ -208,18 +229,35 @@ func setup() {
 		return
 	}
 	defer admin.Close(ctx)
+	name := fmt.Sprintf("dude_gotest_%d", time.Now().UnixNano())
+	// Held before the template exists, so no other binary's dropStale can
+	// take it for a crashed run's.
+	if live, err = adminConn(ctx); err != nil {
+		setupErr = err
+		return
+	}
+	if _, err := live.Exec(ctx, "SELECT pg_advisory_lock($1, hashtext($2))", liveLock, name); err != nil {
+		setupErr = err
+		return
+	}
+	template = name
+	if setupErr = migrateTemplate(ctx, admin); setupErr != nil {
+		return
+	}
+	dropStale(ctx, admin, staleAfter, func(string) bool { return true })
+}
+
+// migrateTemplate creates the template and migrates it.
+func migrateTemplate(ctx context.Context, admin *pgx.Conn) error {
 	// Test binaries run in parallel, one per package, and migrations create
 	// cluster-wide roles: two at once fail with "tuple concurrently
 	// updated". One migrates at a time.
 	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_migrate'))"); err != nil {
-		setupErr = err
-		return
+		return err
 	}
 	defer func() { _, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_migrate'))") }()
-	template = fmt.Sprintf("dude_gotest_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+template+" OWNER dude"); err != nil {
-		setupErr = err
-		return
+		return err
 	}
 	// Migrated by the same runner production uses, so the schema under test
 	// is the schema that ships.
@@ -229,11 +267,11 @@ func setup() {
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude:dude@%s/%s", host(), template))
 	if out, err := cmd.CombinedOutput(); err != nil {
-		setupErr = fmt.Errorf("migrate: %v\n%s", err, out)
-		return
+		return fmt.Errorf("migrate: %v\n%s", err, out)
 	}
 	// A template must have no connections when it is copied.
 	_, _ = admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", template)
+	return nil
 }
 
 // Upgrade gives a migration test a database of its own, migrated by the
@@ -331,4 +369,66 @@ func Org(t *testing.T, owner *pgx.Conn) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// liveLock is the advisory lock class a running binary holds, keyed by its
+// template's name (hashtext), from before its template exists until it is
+// dropped.
+const liveLock = 0x64756465 // "dude"
+
+// staleAfter is how old a test database must be before dropStale takes it
+// for a crashed run's: a test binary runs for well under an hour.
+const staleAfter = time.Hour
+
+// testDatabase is a database dbtest makes, by its name: a binary's
+// template (dude_gotest_<nanos>), a clone of one (…_<n>), or an Upgrade
+// database (dude_gotest_upgrade_<nanos>_<n>). <nanos> is when it, or its
+// template, was made.
+var testDatabase = regexp.MustCompile(`^dude_gotest_(upgrade_)?([0-9]+)(_[0-9]+)?$`)
+
+// dropStale drops what crashed runs left behind: every test database made
+// over olderThan ago, by its name, that match accepts, that no session is
+// connected to and whose binary holds no liveLock. Upgrade databases have
+// no lock; a live one always has its test's connection. DROP DATABASE
+// without FORCE fails, dropping nothing, if a session connects meanwhile.
+// Failures are left for the next binary: cleaning up never fails a run.
+func dropStale(ctx context.Context, admin *pgx.Conn, olderThan time.Duration, match func(name string) bool) []string {
+	rows, err := admin.Query(ctx, `SELECT d.datname FROM pg_database d
+		WHERE d.datname LIKE 'dude\_gotest\_%' AND NOT d.datistemplate
+		  AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datid = d.oid)`)
+	if err != nil {
+		return nil
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-olderThan).UnixNano()
+	var dropped []string
+	for _, name := range names {
+		m := testDatabase.FindStringSubmatch(name)
+		if m == nil || !match(name) {
+			continue
+		}
+		if nanos, err := strconv.ParseInt(m[2], 10, 64); err != nil || nanos > cutoff {
+			continue
+		}
+		var owner string
+		if m[1] == "" {
+			// A template or a clone: its binary's lock, held while it drops.
+			owner = "dude_gotest_" + m[2]
+			var free bool
+			if err := admin.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, hashtext($2))", liveLock, owner).Scan(&free); err != nil || !free {
+				continue
+			}
+		}
+		_, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name)
+		if owner != "" {
+			_, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock($1, hashtext($2))", liveLock, owner)
+		}
+		if err == nil {
+			dropped = append(dropped, name)
+		}
+	}
+	return dropped
 }

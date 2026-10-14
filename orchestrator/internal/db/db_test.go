@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -157,6 +158,73 @@ func TestInSystemLeavesNoRoleOnTheConnection(t *testing.T) {
 		})
 		if err != nil || !called {
 			t.Fatalf("InOrg after InSystem: callback ran %v, err %v", called, err)
+		}
+	}
+}
+
+// InSystem's role and name hold for its transaction only: on the same
+// pooled connection, the next transaction, after a commit or a rollback, is
+// the app role again, scoped by RLS, under the connection's own name.
+func TestInSystemsRoleAndNameEndWithItsTransaction(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	// One connection, so every transaction below reuses the one before's.
+	url := app.Pool.Config().ConnString()
+	if strings.Contains(url, "?") {
+		url += "&pool_max_conns=1"
+	} else {
+		url += "?pool_max_conns=1"
+	}
+	one, err := db.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(one.Close)
+	orgA, orgB := dbtest.Org(t, owner), dbtest.Org(t, owner)
+	for _, org := range []string{orgA, orgB} {
+		if _, err := owner.Exec(ctx, `INSERT INTO projects (id, organization_id, name, slug, key_prefix)
+			VALUES ($1, $2, 'P', $1, 'P')`, "prj_"+org, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type seen struct {
+		user, name string
+		orgs       int
+	}
+	look := func(tx pgx.Tx) (s seen) {
+		if err := tx.QueryRow(ctx, `SELECT current_user::text, current_setting('application_name'),
+			(SELECT count(*) FROM projects WHERE organization_id IN ($1, $2))`, orgA, orgB).Scan(&s.user, &s.name, &s.orgs); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	var before seen
+	if err := one.InOrg(ctx, orgA, func(tx pgx.Tx) error { before = look(tx); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if before.user != "dude_app" || before.name == "dude:sweep-test" || before.orgs != 1 {
+		t.Fatalf("before InSystem: %+v, want dude_app seeing its own organization's project only", before)
+	}
+
+	for _, end := range []struct {
+		how string
+		err error
+	}{{"commit", nil}, {"rollback", errors.New("the sweep failed")}} {
+		var during seen
+		err := one.InSystem(ctx, "sweep-test", func(tx pgx.Tx) error { during = look(tx); return end.err })
+		if !errors.Is(err, end.err) {
+			t.Fatalf("%s: InSystem returned %v", end.how, err)
+		}
+		if during != (seen{"dude_sweeper", "dude:sweep-test", 2}) {
+			t.Errorf("%s: inside InSystem: %+v, want dude_sweeper named dude:sweep-test seeing both organizations' projects", end.how, during)
+		}
+		var after seen
+		if err := one.InOrg(ctx, orgB, func(tx pgx.Tx) error { after = look(tx); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if after != (seen{"dude_app", before.name, 1}) {
+			t.Errorf("after InSystem's %s: %+v, want %+v", end.how, after, seen{"dude_app", before.name, 1})
 		}
 	}
 }

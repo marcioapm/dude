@@ -761,7 +761,11 @@ func TestAMoveWhosePoolsCannotBeReadAtTheResumeIsRetried(t *testing.T) {
 	})
 	pools.fail.Store(true)
 	live := w.str(`SELECT lux_run_id FROM runs WHERE id=$1`, runID)
-	w.until("parked", func() bool { return w.lux.State(live) == "stopped" })
+	// Parked as dude records it: until the stream brings lux's stop, a
+	// sweep follows the stream rather than resuming.
+	w.until("parked", func() bool {
+		return w.lux.State(live) == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id=$1 AND lux_state='stopped'`, runID) == 1
+	})
 	for range 10 {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
 		w.sweep()

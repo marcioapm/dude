@@ -13,8 +13,9 @@ import (
 
 // Main, run over a package (testdata/mainfixture) three times: each Open,
 // two in one test or one in a subtest, gets a fresh database of its own
-// (the fixture checks rows), and once the binary exits no database cloned
-// for it is left, the one made ahead for an Open that never came included.
+// (the fixture checks rows), and once the binary exits no database made
+// for it is left: neither its template nor any clone, the one made ahead
+// for an Open that never came included.
 func TestMainGivesEachOpenAFreshDatabaseAndLeavesNoneBehind(t *testing.T) {
 	ctx := context.Background()
 	admin, err := adminConn(ctx)
@@ -27,7 +28,7 @@ func TestMainGivesEachOpenAFreshDatabaseAndLeavesNoneBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "opened")
-	cmd := exec.Command(goBin, "test", "-count=3", "-v", "./testdata/mainfixture")
+	cmd := exec.Command(goBin, "test", "-count=3", "-v", "-skip", "TestHoldWhileAnotherBinaryCleansUp", "./testdata/mainfixture")
 	cmd.Env = append(os.Environ(), "DBTEST_FIXTURE_OUT="+out)
 	log, runErr := cmd.CombinedOutput()
 	raw, _ := os.ReadFile(out)
@@ -44,8 +45,8 @@ func TestMainGivesEachOpenAFreshDatabaseAndLeavesNoneBehind(t *testing.T) {
 	if len(opened) == 0 {
 		t.Fatalf("the fixture opened no database: %v\n%s", runErr, log)
 	}
-	// The fixture's template stays behind, as every test binary's does, and
-	// a failing fixture can leave clones: this test drops them all.
+	// A failing fixture can leave its template and clones: this test drops
+	// them all.
 	template := opened[0][:strings.LastIndex(opened[0], "_")]
 	clones := func() []string {
 		rows, err := admin.Query(ctx, `SELECT datname FROM pg_database WHERE left(datname, length($1) + 1) = $1 || '_'`, template)
@@ -94,5 +95,8 @@ func TestMainGivesEachOpenAFreshDatabaseAndLeavesNoneBehind(t *testing.T) {
 	}
 	if left := clones(); len(left) != 0 {
 		t.Errorf("clones of %s left after the fixture exited: %v", template, left)
+	}
+	if n := databases(t, admin, template); n != 0 {
+		t.Errorf("the fixture's template %s is left after it exited", template)
 	}
 }
