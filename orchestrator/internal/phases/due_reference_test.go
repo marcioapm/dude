@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
+var updateDue = flag.Bool("update-due", false, "intentionally rewrite testdata/due-reference.sql from dueQuery; independent of -update")
+
 // due's reference: the selection as it stood before its plan settings
 // changed (testdata/due-reference.sql), run on a custom plan with the
 // server's JIT. dueIn must return exactly its Runs, in its order, over
@@ -25,12 +28,13 @@ import (
 // timestamp lands on, just before or just after the boundary it is compared
 // with, in the transaction both queries run in, so now() is the same for
 // both. A change to due's selection that is meant to change its result
-// rewrites the reference: go test ./internal/phases -run TestDueMatches -update.
+// rewrites the reference: go test ./internal/phases -run TestDueMatches -update-due.
+// Ordinary spec-golden refreshes with -update never rewrite this SQL.
 func TestDueMatchesItsReferenceOverRandomStates(t *testing.T) {
 	ctx := context.Background()
 	_, owner := dbtest.Open(t)
 	path := filepath.Join("testdata", "due-reference.sql")
-	if *update {
+	if *updateDue {
 		if err := os.WriteFile(path, []byte(dueQuery), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -49,6 +53,7 @@ func TestDueMatchesItsReferenceOverRandomStates(t *testing.T) {
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 	g := newDueStates(t, ctx, owner)
 	cov := dueCoverage{}
+	g.adversarial(owner, string(ref), &cov)
 	for round := range 40 {
 		s := &Syncer{
 			ParkAfter:     pick(rng, 0, 90*time.Second),
@@ -88,6 +93,113 @@ func TestDueMatchesItsReferenceOverRandomStates(t *testing.T) {
 		_ = tx.Rollback(ctx)
 	}
 	cov.check(t)
+}
+
+// adversarial crosses the actionable partition with creation times in the
+// opposite order, and makes the rare Quiet and Unread flags deterministic.
+func (g *dueStates) adversarial(owner *pgx.Conn, ref string, cov *dueCoverage) {
+	t, ctx := g.t, g.ctx
+	t.Helper()
+	tx, err := owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	b := &pgx.Batch{}
+	for i, state := range []string{"lost", "stopped", "succeeded", "failed", "cancelled", "terminated"} {
+		for _, done := range []bool{true, false} {
+			id := fmt.Sprintf("run_terminal_%s_%t", state, done)
+			b.Queue(`INSERT INTO sessions (id, organization_id, titled_by) VALUES ($1, 'org_due0', NULL)`, "ses_"+id)
+			age := 100 + i
+			if !done {
+				age += 100
+			}
+			// A warm finished conductor is actionable only because lux is
+			// terminal; unfinished terminal Runs remain in the follow partition.
+			b.Queue(`INSERT INTO runs (id, organization_id, session_id, attempt, status, control, role, kind,
+				lux_state, dude_pause, turn_done_at, created_at)
+				VALUES ($1, 'org_due0', $2, 1, 'running', 'none', 'conductor', 'agent', $3, 'person',
+				CASE WHEN $4 THEN now() END, now() - make_interval(secs => $5))`, id, "ses_"+id, state, done, age)
+		}
+	}
+	for i, done := range []bool{true, false} {
+		for _, resume := range []bool{true, false} {
+			id := fmt.Sprintf("run_paused_%t_%t", done, resume)
+			b.Queue(`INSERT INTO sessions (id, organization_id, titled_by) VALUES ($1, 'org_due0', NULL)`, "ses_"+id)
+			control := "none"
+			if resume {
+				control = "resume"
+			}
+			b.Queue(`INSERT INTO runs (id, organization_id, session_id, attempt, status, control, role, kind,
+				lux_state, dude_pause, turn_done_at, created_at)
+				VALUES ($1, 'org_due0', $2, 1, 'paused', $3::run_control, 'conductor', 'agent', 'lost', 'idle',
+				CASE WHEN $4 THEN now() END, now() - make_interval(secs => $5))`, id, "ses_"+id, control, done, 1+i)
+		}
+	}
+	for _, id := range []string{"run_quiet", "run_unread"} {
+		b.Queue(`INSERT INTO sessions (id, organization_id, titled_by) VALUES ($1, 'org_due0', NULL)`, "ses_"+id)
+		b.Queue(`INSERT INTO runs (id, organization_id, session_id, attempt, status, control, role, kind,
+			lux_state, turn_done_at, agent_busy_at, agent_active_at, created_at)
+			VALUES ($1, 'org_due0', $2, 1, 'running', 'none', 'brainstorm', 'agent', 'running',
+			CASE WHEN $1 = 'run_unread' THEN now() END, now() - interval '1 hour', now() - interval '1 hour',
+			now() - CASE WHEN $1 = 'run_quiet' THEN interval '10 seconds' ELSE interval '11 seconds' END)`, id, "ses_"+id)
+	}
+	b.Queue(`INSERT INTO directives (id, organization_id, run_id, text, sent_at, interrupt_only)
+		VALUES ('dir_unread', 'org_due0', 'run_unread', 'do it', now(), false)`)
+	if err := tx.SendBatch(ctx, b).Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_sweeper', true), set_config('plan_cache_mode', 'force_custom_plan', true)`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Syncer{IdleAfter: time.Minute, ConductorWarm: time.Minute}
+	for _, limit := range []int{9, sweepBatch} {
+		rows, err := tx.Query(ctx, ref, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.dueIn(ctx, tx, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("adversarial (limit %d): %s", limit, firstDifference(got, want))
+		}
+		if len(want) != min(limit, 16) || want[5].ID != "run_terminal_lost_true" || want[8].ID != "run_terminal_terminated_false" {
+			t.Fatalf("adversarial partition not crossed: %+v", want)
+		}
+		if limit == sweepBatch {
+			flags := map[string][2]bool{}
+			paused := map[string]bool{}
+			for _, r := range got {
+				if r.Status == "paused" {
+					paused[r.ID] = true
+				}
+				for name, v := range map[string]bool{"Quiet": r.Quiet, "Unread": r.Unread} {
+					f := flags[name]
+					if v {
+						f[1] = true
+					} else {
+						f[0] = true
+					}
+					flags[name] = f
+				}
+			}
+			if len(paused) != 2 || !paused["run_paused_true_true"] || !paused["run_paused_false_true"] {
+				t.Errorf("paused selection: %v, want only explicitly resumed Runs", paused)
+			}
+			for name, f := range flags {
+				if f != [2]bool{true, true} {
+					t.Errorf("adversarial %s false/true: %v", name, f)
+				}
+			}
+		}
+		cov.add(want, limit)
+	}
 }
 
 func pick[T any](rng *rand.Rand, vs ...T) T { return vs[rng.IntN(len(vs))] }
