@@ -450,7 +450,12 @@ func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	if r.Control == "resume" && !r.RepoApproved && !r.Moving {
-		return s.takeUpLive(ctx, r, state)
+		taken, changes, err := s.takeUpLive(ctx, r, state)
+		if taken || err != nil || !changes {
+			return taken, err
+		}
+		// A Reset or an approval came in since the sweep read the Run:
+		// its resume must change the Run, and is had once lux stops it.
 	}
 	s.follow(r)
 	if !assigned(cur) {
@@ -485,28 +490,47 @@ func assigned(cur lux.Run) bool {
 // takeUpLive answers a person's resume of a Run lux placed again itself,
 // now in lux state state: it is taken back up as lux has it, its note (or
 // the resume nudge) sent once lux reports it running.
-func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (bool, error) {
+//
+// The sweep's snapshot only nominates the Run. Under its row lock — the one
+// a paused Run's StartMove takes before recording a move — its status,
+// control, unsettled move and approved repositories are read again. A Run
+// whose resume now has to change it (changes) is left paused with its
+// resume, for liveAfterMove to stop lux's placement and resume it after.
+func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (taken, changes bool, err error) {
 	// The follower is stopped first, and waited for: a batch of its
 	// committing after this would write back the harness_state it loaded.
 	if err := s.unfollowWait(ctx, r.ID); err != nil {
-		return false, err
+		return false, false, err
 	}
-	taken := false
-	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Locked first, read after: a statement's snapshot is taken before
+		// it waits for the lock, so a move committed meanwhile is seen only
+		// by the next statement.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+			return err
+		}
+		var resumable bool
+		if err := tx.QueryRow(ctx, `SELECT r.status = 'paused' AND r.control = 'resume', `+delivery.MoveUnsettled+` OR `+repoApproved+`
+			FROM runs r WHERE r.id = $1`, r.ID).Scan(&resumable, &changes); err != nil {
+			return err
+		}
+		if !resumable || changes {
+			changes = resumable && changes
+			return nil
+		}
 		// The cursor stays: what lux reported since dude last read is
 		// followed as usual — the move's states, the new placement's
 		// running or failure, its clones, pushes and files — and lux_state
 		// ends where lux's events do. A move's earlier placement ends
 		// stopped (resuming as recorded), never terminal: a move lux does
 		// not resume is not one replacedByLux takes up.
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
 				control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 				idle_nudged_at = NULL, agent_active_at = NULL, files_changed_at = now(),
 				left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
 				waiting_since = CASE WHEN $3 THEN now() END, turn_done_at = NULL, agent_busy_at = NULL,
 				harness_state = harness_state - 'brokenTurn'
-			WHERE id = $1 AND status = 'paused' AND control = 'resume'`, r.ID, state, r.Waiting)
-		if err != nil || tag.RowsAffected() == 0 {
+			WHERE id = $1`, r.ID, state, r.Waiting); err != nil {
 			return err
 		}
 		taken = true
@@ -517,7 +541,7 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (bool
 		}
 		return delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID)
 	})
-	return taken, err
+	return taken, changes, err
 }
 
 // dropMovedNudge withdraws an unsent carry-on (movedNudge) that lux's own

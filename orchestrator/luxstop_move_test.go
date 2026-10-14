@@ -6,7 +6,9 @@ package orchestrator_test
 // once; nothing is held, failed or taken up live twice.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,15 +17,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // stopsThrough routes dude's calls to lux through a proxy that calls
 // onStop for each stop dude asks for and, while hold is set, answers the
 // stop as lux accepting it without passing it on, keeping it for release.
+// onGet, once set, is called once, at dude's next read of a Run, before
+// lux answers it.
 type stopsThrough struct {
 	hold    atomic.Bool
 	onStop  func()
+	onGet   atomic.Pointer[func()]
 	mu      sync.Mutex
 	held    []*http.Request
 	handler http.Handler
@@ -33,6 +39,11 @@ func (w *world) stopsThrough() *stopsThrough {
 	w.t.Helper()
 	p := &stopsThrough{handler: w.lux.Handler()}
 	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && strings.Count(req.URL.Path, "/") == 3 && strings.HasPrefix(req.URL.Path, "/v1/runs/") {
+			if fn := p.onGet.Swap(nil); fn != nil {
+				(*fn)()
+			}
+		}
 		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/stop") {
 			if p.onStop != nil {
 				p.onStop()
@@ -199,6 +210,153 @@ func TestAResetAfterALuxPreemptTellsTheAgentOnce(t *testing.T) {
 	}
 	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 || out["moved"] != true {
 		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
+}
+
+// raisedAtWork is movedRun's implementer on Bigger, raised in its task, so
+// a person's Reset moves it back to Standard.
+func (w *world) raisedAtWork() (task, runID, luxID string) {
+	w.t.Helper()
+	task, runID, luxID = w.movedRun()
+	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	return task, runID, luxID
+}
+
+// pausedWhileLuxMovesIt has lux preempt the implementer mid-turn and a
+// person pause it before lux has it running again; the pause's stop never
+// reaches lux, so lux then runs its own placement, live, while dude has the
+// Run paused.
+func (w *world) pausedWhileLuxMovesIt(p *stopsThrough, runID, luxID string) {
+	w.t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	w.t.Cleanup(release)
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-gate
+		}
+	})
+	w.lux.Move(luxID, "preempt")
+	w.until("the move's carry-on to be queued", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text = $2 AND sent_at IS NULL`, runID, movedNudge) == 1
+	})
+	p.hold.Store(true)
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		w.t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("dude to record the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND control = 'none'`, runID) == 1
+	})
+	p.hold.Store(false)
+	w.lux.BeforeStart(nil)
+	release()
+	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s := w.lux.State(luxID); s != "running" {
+		w.t.Fatalf("lux's run is %s", s)
+	}
+}
+
+// reset is a person's Reset of the implementer's raised machine, through
+// api (w.api when ""), as its answer's status and whether it moved a Run.
+func (w *world) reset(api, task string) (int, any) {
+	if api == "" {
+		api = w.api
+	}
+	b, _ := json.Marshal(map[string]any{"taskId": task, "role": "implementer"})
+	req, _ := http.NewRequest("POST", api+"/internal/agent-machines/reset", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", w.org)
+	req.Header.Set("X-Dude-Actor", "key_resetter_"+w.org)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out["moved"]
+}
+
+// A person resumes the implementer lux moved and placed again itself, and
+// a person Resets its machine while dude reads lux's placement to take it
+// up live: the Reset is committed before the take-up's. The Run is not
+// taken up on its old size: lux is asked to stop it, and the resume that
+// follows moves it to Standard and tells the agent once.
+func TestAResetCommittedDuringALiveTakeUpMovesTheRun(t *testing.T) {
+	w := newWorld(t)
+	task, runID, luxID := w.raisedAtWork()
+	w.person("Resetter")
+	p := w.stopsThrough()
+	w.pausedWhileLuxMovesIt(p, runID, luxID)
+	var resetStatus int
+	var moved any
+	reset := func() { resetStatus, moved = w.reset("", task) }
+	p.onGet.Store(&reset)
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("dude to read lux's placement", func() bool { return p.onGet.Load() == nil })
+	if resetStatus != 200 || moved != true {
+		t.Fatalf("reset: %d moved %v", resetStatus, moved)
+	}
+	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
+}
+
+// readGated is lux for an API whose reads of a Run wait for release, once
+// entered says so.
+type readGated struct {
+	lux.Client
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (g *readGated) Get(ctx context.Context, id string) (lux.Run, error) {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+	return g.Client.Get(ctx, id)
+}
+
+// As above, but the Reset read the Run paused before the take-up, and
+// records its move after the take-up committed: the Reset finds the Run
+// running and parks it for its move, as a Reset of a running Run does.
+func TestAResetThatReadTheRunPausedBeforeALiveTakeUpParksIt(t *testing.T) {
+	w := newWorld(t)
+	task, runID, luxID := w.raisedAtWork()
+	w.person("Resetter")
+	p := w.stopsThrough()
+	w.pausedWhileLuxMovesIt(p, runID, luxID)
+	gated := &readGated{Client: w.syncer.Lux, entered: make(chan struct{}), release: make(chan struct{})}
+	var released sync.Once
+	t.Cleanup(func() { released.Do(func() { close(gated.release) }) })
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: gated, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	type answer struct {
+		status int
+		moved  any
+	}
+	done := make(chan answer, 1)
+	go func() {
+		status, moved := w.reset(srv.URL, task)
+		done <- answer{status, moved}
+	}()
+	<-gated.entered
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the Run taken up live", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+	})
+	released.Do(func() { close(gated.release) })
+	if a := <-done; a.status != 200 || a.moved != true {
+		t.Fatalf("reset: %d moved %v", a.status, a.moved)
 	}
 	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
 }

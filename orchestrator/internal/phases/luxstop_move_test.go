@@ -1,8 +1,13 @@
 package phases
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -73,6 +78,94 @@ func TestAResumedRunLuxMovedDefersToAMachineMoveOfDudes(t *testing.T) {
 			}
 			if len(runs) != c.wantDue {
 				t.Errorf("the next sweep takes up %d runs, want %d", len(runs), c.wantDue)
+			}
+		})
+	}
+}
+
+// getThen is lux answering Get after then has run: a person's Reset
+// committing while dude reads lux's live placement.
+type getThen struct {
+	*eventsLux
+	then func()
+}
+
+func (f *getThen) Get(ctx context.Context, id string) (lux.Run, error) {
+	if f.then != nil {
+		f.then()
+		f.then = nil
+	}
+	return f.eventsLux.Get(ctx, id)
+}
+
+// resetPaused records a person's Reset of the Run as the API does once it
+// has read the Run paused.
+func (w *heldWorld) resetPaused() error {
+	var org, task string
+	if err := w.owner.QueryRow(w.ctx, `SELECT organization_id, task_id FROM runs WHERE id = $1`, w.id).Scan(&org, &task); err != nil {
+		return err
+	}
+	if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib)
+		VALUES ('msz_'||$1, $1, 'Reset to', 2, 8192, 20)`, org); err != nil {
+		return err
+	}
+	return w.s.DB.InOrg(w.ctx, org, func(tx pgx.Tx) error {
+		return delivery.StartMove(w.ctx, tx, delivery.MachineMove{ID: "mmv_" + org, Org: org, TaskID: task, RunID: w.id,
+			Role: "implementer", Kind: "reset", ToSizeID: "msz_" + org, From: map[string]any{}}, false)
+	})
+}
+
+// A person's resume of a paused Run lux placed again itself after a move,
+// and a person's Reset of the same Run, in either order. Reset first —
+// committed after the sweep read the Run, while dude reads lux — and the
+// Run is not taken up live: it stays paused with its resume, lux is asked
+// to stop the placement, and the Reset's move is applied by the resume
+// that follows. Take-up first, and the Reset finds the Run running and
+// parks it for its move.
+func TestAResetAndATakeUpOfARunLuxMovedEndWithTheMovePending(t *testing.T) {
+	for _, resetFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "reset during the take-up", false: "reset after the take-up"}[resetFirst], func(t *testing.T) {
+			w := newHeldWorld(t, heldExit, 0)
+			fake := w.s.Lux.(*eventsLux)
+			fake.run = &lux.Run{ID: "lrun_1", State: "running", Epoch: 2, Placements: []lux.Placement{{Epoch: 1}, {Epoch: 2}}}
+			if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET status = 'paused', control = 'resume', lux_state = 'resuming',
+				lux_stop_reason = 'pause', harness_state = '{"luxStop": {"reason": "preempt", "epoch": 1}}' WHERE id = $1`, w.id); err != nil {
+				t.Fatal(err)
+			}
+			r := w.snapshot()
+			var resetErr error
+			if resetFirst {
+				w.s.Lux = &getThen{eventsLux: fake, then: func() { resetErr = w.resetPaused() }}
+			}
+			if _, err := w.s.advance(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if !resetFirst {
+				resetErr = w.resetPaused()
+			}
+			if resetErr != nil {
+				t.Fatalf("reset: %v", resetErr)
+			}
+			var status, control, pause string
+			var moving bool
+			if err := w.owner.QueryRow(w.ctx, `SELECT status::text, control::text, COALESCE(dude_pause, ''),
+					EXISTS (SELECT 1 FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL)
+				FROM runs WHERE id = $1`, w.id).Scan(&status, &control, &pause, &moving); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			stops := fake.stops
+			fake.mu.Unlock()
+			want := "paused/resume/ stops=1"
+			if !resetFirst {
+				want = "running/pause_graceful/machine stops=0"
+			}
+			got := fmt.Sprintf("%s/%s/%s stops=%d", status, control, pause, stops)
+			if got != want || !moving {
+				t.Errorf("Run %s, move pending %v; want %s with the move pending", got, moving, want)
+			}
+			if _, _, failed := w.status(); failed != 0 {
+				t.Errorf("%d run.failed", failed)
 			}
 		})
 	}

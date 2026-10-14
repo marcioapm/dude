@@ -222,6 +222,11 @@ func (r phaseRun) parkKind() string {
 // preview, nor a Run made by hand through the API.
 const sweptRuns = `(r.phase IS NOT NULL OR (r.role IN ('conductor', 'brainstorm') AND r.kind = 'agent'))`
 
+// repoApproved (SQL, over runs r): phaseRun.RepoApproved.
+const repoApproved = `(EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
+	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (lux_name(repo.name) = ANY (r.lux_repositories)))
+	OR (r.session_id IS NOT NULL AND r.lux_run_id IS NOT NULL AND ` + sessionRepoMissing + `))`
+
 const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''), COALESCE(r.session_id, ''),
 	COALESCE(r.phase::text, ''), r.status::text, r.control::text,
 	COALESCE(r.role::text, ''),
@@ -237,9 +242,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	              AND e.event_type = 'run.directive.delivered' AND e.payload->>'directiveId' = d.id)
 	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped')))
 	ELSE false END,
-	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
-	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (lux_name(repo.name) = ANY (r.lux_repositories)))
-	OR (r.session_id IS NOT NULL AND r.lux_run_id IS NOT NULL AND ` + sessionRepoMissing + `),
+	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,

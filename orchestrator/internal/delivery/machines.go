@@ -134,8 +134,22 @@ type MoveFrom struct {
 
 // StartMove records a move and, with park, parks its running Run for it
 // (dude_pause 'machine'), which only a Run running with no control pending
-// takes. A paused Run is not parked: it moves at its next resume.
+// takes. Without park the caller read the Run paused: a Run still paused
+// is not parked, and moves at its next resume; one taken back up since (a
+// live take-up of a Run lux moved, phases.takeUpLive) is running, and is
+// parked as with park. The Run's row is locked before either is decided,
+// so a take-up and a move of a paused Run each see the other's commit.
 func StartMove(ctx context.Context, tx pgx.Tx, m MachineMove, park bool) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, m.RunID); err != nil {
+		return err
+	}
+	if !park {
+		var running bool
+		if err := tx.QueryRow(ctx, `SELECT status = 'running' FROM runs WHERE id = $1`, m.RunID).Scan(&running); err != nil {
+			return err
+		}
+		park = running
+	}
 	if park {
 		reason := "machine move"
 		if m.Kind == "reset" {
