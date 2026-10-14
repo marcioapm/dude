@@ -205,7 +205,7 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 				t.Errorf("%s: the tester's prompt should say %q once:\n%s", kind, want, got)
 			}
 		}
-		for _, never := range []string{"Commit in each repository you change", commitNote} {
+		for _, never := range []string{"Commit in each repository you change", commitNote, "you may change it"} {
 			if strings.Contains(got, never) {
 				t.Errorf("%s: the tester is told %q:\n%s", kind, never, got)
 			}

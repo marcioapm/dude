@@ -116,6 +116,9 @@ func workspaceNote(repos []PromptRepo, phase string) string {
 	b.WriteString("## Repositories\n\nThis work spans these checkouts:\n")
 	for _, r := range repos {
 		access := "you may change it"
+		if phase == PhaseTest {
+			access = "the change under test"
+		}
 		if r.ReadOnly {
 			access = "read only: for reference, do not change it — changes there are never kept"
 		}
