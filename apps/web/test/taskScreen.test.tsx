@@ -17,6 +17,7 @@ import { TaskScreen, activityLines, filterActivity, filterFindings } from "../sr
 import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSection.tsx";
 import type { Artifact, Finding } from "../src/api/client.ts";
 import { unzipSync } from "fflate";
+import { ToastProvider } from "@dude/design-system/primitives";
 
 describe("task rail filtering", () => {
   test("status and severity compose without treating an open note as settled", () => {
@@ -86,6 +87,29 @@ describe("task rail filtering", () => {
     expect(fix?.nextElementSibling?.textContent).toBe("1");
   });
 
+  test("toggling a kind facet keeps the attempt's thumbnails instead of reading them again", async () => {
+    const client = new FixtureClient("a");
+    const artifacts = [
+      { id: "image-a", name: "a.png", phase: "implement", role: "implementer", contentType: "image/png", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+      { id: "image-b", name: "b.png", phase: "implement", role: "implementer", contentType: "image/png", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+      { id: "doc", name: "report.md", phase: "implement", role: "implementer", contentType: "text/markdown", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+    ] as Artifact[];
+    client.listArtifacts = async () => ({ artifacts });
+    const reads: string[] = [];
+    client.artifactContent = async (id) => { reads.push(id); return new Blob([id]); };
+    const page = await taskPage(client, { tab: "files" });
+    await until(() => reads.length === 2 ? true : null, "the two image thumbnails");
+    await settle();
+    const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
+    const doc = [...kinds.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("Documents"));
+    expect(doc).toBeDefined();
+    await click(doc!);
+    await settle();
+    await click(doc!);
+    await settle();
+    expect(reads).toEqual(["image-a", "image-b"]);
+  });
+
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
     expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
@@ -101,9 +125,9 @@ afterEach(async () => {
 
 export async function taskPage(client: FixtureClient, props: Partial<Parameters<typeof TaskScreen>[0]> = {}) {
   const { container, unmount } = await mount(
-    <PeopleProvider client={client}>
+    <ToastProvider><PeopleProvider client={client}>
       <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} {...props} />
-    </PeopleProvider>,
+    </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");

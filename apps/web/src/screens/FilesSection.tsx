@@ -83,7 +83,7 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   const [zipping, setZipping] = useState(false);
   const displayed = filterFiles(files, kinds, sources);
   const total = displayed.reduce((n, f) => n + f.versions[0]!.sizeBytes, 0);
-  const thumbnails = useThumbnails(client, displayed);
+  const thumbnails = useThumbnails(client, files);
   return (
     <PageWithRail data-testid="files" rail={<PageRail aria-label="File filters and downloads">
       <PageRailBlock label="Kind"><FacetList label="File kind" value={kinds} onValueChange={setKinds}
