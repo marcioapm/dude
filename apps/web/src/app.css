@@ -227,8 +227,9 @@ body {
   display: none;
 }
 /* Too narrow for both: the conversation keeps the width, and the header
-   keeps the terminal. */
-@container session (max-width: 1079px) {
+   keeps the terminal. 920px keeps the conversation beside the 360px rail as
+   wide as it was beside the old 260px one at 820px. */
+@container session (max-width: 920px) {
   .runRail {
     display: none;
   }

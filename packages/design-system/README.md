@@ -1131,12 +1131,12 @@ here.
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
   the diff's own list does.
-  The rail is 360px; below 1080px of session width the conversation keeps
-  the width and the header keeps the terminal.
+  The rail is 360px; at 920px of session width or less the conversation
+  keeps the width and the header keeps the terminal.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
-  tab). Where the rail is not — the agent session narrower than 1080px,
+  tab). Where the rail is not — the agent session 920px wide or less,
   or on Changes or Events — the header keeps the same link as a
   terminal icon (`LinkButton iconOnly`), chosen by the same container
   query on the agent session's width, so the terminal is never unreachable
