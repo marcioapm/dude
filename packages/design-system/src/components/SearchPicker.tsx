@@ -96,7 +96,13 @@ export function SearchPicker<T>({
           if (mine !== latest.current) return;
           setFound(found);
           // A fresh answer to the same words (the app's options re-read) keeps the highlight.
-          if (answeredWords.current !== words) setActive(0);
+          if (answeredWords.current !== words) {
+            setActive(0);
+            // New words put the highlight back on the first row: bring the list's
+            // own scroll back with it (never scrollIntoView, which moves the page).
+            const list = document.getElementById(listId);
+            if (list) list.scrollTop = 0;
+          }
           setAnswered(words);
         },
         () => {

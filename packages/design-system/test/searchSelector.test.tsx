@@ -142,6 +142,23 @@ test("opening never scrolls the page; only an arrow key scrolls its row into vie
   }
 });
 
+test("new words scroll the list back to the first row they highlight", async () => {
+  const el = await mount();
+  await act(async () => el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
+  await tick();
+  const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  const list = document.querySelector<HTMLElement>("[role=listbox]")!;
+  list.scrollTop = 240;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "c");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await tick();
+  await tick();
+  expect(input.getAttribute("aria-activedescendant")).toBe(document.querySelectorAll("[role=option]")[0]!.id);
+  expect(list.scrollTop).toBe(0);
+});
+
 test("the open option is marked apart from the keyboard's row", async () => {
   const el = await mount();
   const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
