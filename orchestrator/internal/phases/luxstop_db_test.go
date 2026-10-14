@@ -2,14 +2,17 @@ package phases
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // heldWorld is one running implementer whose turn broke on its agent's
@@ -42,9 +45,32 @@ func newHeldWorld(t *testing.T, broken string, heldFor time.Duration) *heldWorld
 			t.Fatal(err)
 		}
 	}
-	s := &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Syncer{DB: app, Lux: &eventsLux{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	t.Cleanup(s.Stop)
 	return &heldWorld{t: t, ctx: ctx, s: s, owner: owner, id: "run_" + org}
+}
+
+// eventsLux is lux as far as a held turn's decision goes: Events answers
+// the page set (none by default), or err.
+type eventsLux struct {
+	lux.Client
+	mu    sync.Mutex
+	page  []lux.Frame
+	err   error
+	reads int
+}
+
+func (f *eventsLux) Events(context.Context, string, int64) ([]lux.Frame, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	return f.page, f.err
+}
+
+// Output, for a follower the decision starts: nothing more, until stopped.
+func (f *eventsLux) Output(ctx context.Context, _, _ string, _ int64, _ func(lux.Frame) error) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // snapshot is the Run as a sweep takes it up.
@@ -147,10 +173,74 @@ func TestAPauseAskedAfterTheSweepTookTheHoldUpWins(t *testing.T) {
 	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET control = 'pause_hard' WHERE id = $1`, w.id); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.s.failBroken(w.ctx, r); err != nil {
+	if err := w.s.failBroken(w.ctx, r, 0); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, failed := w.status(); status != "running" || failed != 0 {
 		t.Errorf("run %s, %d run.failed; want the pause left to act", status, failed)
+	}
+}
+
+// An overdue hold with lux events dude has not read yet — a restart, its
+// follower not caught up — is not failed: the Run is followed, and the
+// hold decided once they are read. Read and still overdue, it fails.
+func TestAnOverdueHoldWithLuxEventsUnreadWaitsForThem(t *testing.T) {
+	w := newHeldWorld(t, heldExit, 2*time.Minute)
+	fake := w.s.Lux.(*eventsLux)
+	fake.page = []lux.Frame{luxState(2, "running")}
+	acted, err := w.s.advance(w.ctx, w.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _, failed := w.status(); acted || status != "running" || failed != 0 {
+		t.Fatalf("acted %v, run %s, %d run.failed; want it followed, not failed", acted, status, failed)
+	}
+	w.s.mu.Lock()
+	_, followed := w.s.following[w.id]
+	w.s.mu.Unlock()
+	if !followed {
+		t.Errorf("the Run is not followed, so its unread events never will be")
+	}
+	fake.mu.Lock()
+	fake.page = nil
+	fake.mu.Unlock()
+	if _, err := w.s.advance(w.ctx, w.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if status, errText, failed := w.status(); status != "failed" || errText != "the agent's turn failed: session/prompt: process exited (0)" || failed != 1 {
+		t.Errorf("run %s %q, %d run.failed; want failed once with the agent's error", status, errText, failed)
+	}
+}
+
+// A failure decided on lux having said nothing more is called off when
+// the follower reads more of lux before it commits.
+func TestAnOverdueHoldIsNotFailedOnceTheFollowerReadMore(t *testing.T) {
+	w := newHeldWorld(t, heldExit, 2*time.Minute)
+	r := w.snapshot()
+	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET lux_after_event = 7 WHERE id = $1`, w.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.s.failBroken(w.ctx, r, 0); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, failed := w.status(); status != "running" || failed != 0 {
+		t.Errorf("run %s, %d run.failed; want it left to what the follower read", status, failed)
+	}
+}
+
+// A failed read of lux's events defers the decision by the usual retry
+// spacing: the sweeps before it ask lux nothing.
+func TestAnOverdueHoldLuxCannotBeReadForIsRetriedLater(t *testing.T) {
+	w := newHeldWorld(t, heldExit, 2*time.Minute)
+	fake := w.s.Lux.(*eventsLux)
+	fake.err = errors.New("lux unreachable")
+	if _, err := w.s.advance(w.ctx, w.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := w.s.due(w.ctx); err != nil || len(runs) != 0 {
+		t.Errorf("the next sweep takes up %d runs (%v); want none until the retry", len(runs), err)
+	}
+	if status, _, failed := w.status(); status != "running" || failed != 0 || fake.reads != 1 {
+		t.Errorf("run %s, %d run.failed, %d reads; want running, one read", status, failed, fake.reads)
 	}
 }

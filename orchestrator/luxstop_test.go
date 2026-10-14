@@ -18,6 +18,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // implementing delivers a task whose implementer hangs mid-turn until told
@@ -281,6 +282,58 @@ func TestAResumeReachesAMovedRunThatStartsRunningWhileDudeReadsIt(t *testing.T) 
 		t.Errorf("dude asked lux to resume a Run lux was running: calls %v", w.lux.CallsOf(luxID))
 	}
 }
+
+// dude stops with a moved implementer's hold saved; lux gets the Run
+// running while dude is down, and dude comes back after the move's bound.
+// What lux said meanwhile is read before the hold is judged: nothing
+// fails, the agent is told to carry on once, and the phase completes.
+func TestAMoveLuxEndedWhileDudeWasDownIsNotFailedOnItsReturn(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.MoveWait = 500 * time.Millisecond
+	task, runID, luxID := w.implementing()
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-gate
+		}
+	})
+	w.lux.Move(luxID, "preempt")
+	w.until("the move to be held", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND harness_state->'brokenTurn'->>'moved' = 'preempt'`, runID) == 1
+	})
+	w.syncer.Stop()
+	release()
+	for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s := w.lux.State(luxID); s != "running" {
+		t.Fatalf("lux's run is %s", s)
+	}
+	time.Sleep(700 * time.Millisecond)
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent,
+		KeepFor: w.syncer.KeepFor, MoveWait: 500 * time.Millisecond}
+	t.Cleanup(w.syncer.Stop)
+	w.until("the same implementer to finish, and review to start", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task) > 0
+	})
+	if _, _, failed := w.runFailure(runID); len(failed) != 0 {
+		t.Errorf("run.failed %q", failed)
+	}
+	if got := w.escalationReason(task); got != "" {
+		t.Errorf("escalated: %s", got)
+	}
+	if got := countOf(w.lux.Runs()[0].Inputs, movedNudge); got != 1 {
+		t.Errorf("told to carry on %d times: %q", got, w.lux.Runs()[0].Inputs)
+	}
+}
+
+// movedNudge is what a moved agent is told (phases.movedNudge).
+const movedNudge = "Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace " +
+	"and conversation are as you left them; processes you had running are not. Carry on with your task where you left off."
 
 // countOf is how many of ins are exactly in.
 func countOf(ins []string, in string) int {

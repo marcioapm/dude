@@ -287,6 +287,28 @@ func (s *Syncer) timeout() string {
 	return DefaultTimeout
 }
 
+// overdueBroken decides a hold past its bound once dude has read all lux
+// said: after a restart, the move's end (or lux's reason) can be waiting
+// in lux's events, unread. With some unread the Run is followed, and the
+// hold decided on a later sweep from what they say.
+func (s *Syncer) overdueBroken(ctx context.Context, r phaseRun) (bool, error) {
+	var after int64
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
+	}); err != nil {
+		return true, err
+	}
+	page, err := s.Lux.Events(ctx, r.LuxRunID, after)
+	if err != nil {
+		return true, s.retryLater(ctx, r, err)
+	}
+	if len(page) > 0 {
+		s.follow(r)
+		return false, nil
+	}
+	return true, s.failBroken(ctx, r, after)
+}
+
 // failBroken fails a Run whose broken turn waited past its bound: lux
 // never said why its agent's process exited (heldWait), or never had it
 // running again after a move (moveWait), which it names.
@@ -294,8 +316,10 @@ func (s *Syncer) timeout() string {
 // The sweep's snapshot only nominates the Run: under the Run's row lock
 // (the one the follower's batches take) the hold, its classification, its
 // bound and the Run's control are read again, and the Run fails only if
-// the hold as it is now is overdue by its own bound.
-func (s *Syncer) failBroken(ctx context.Context, r phaseRun) error {
+// the hold as it is now is overdue by its own bound, and only if no lux
+// event has been read since overdueBroken found none unread (read is
+// lux_after_event then).
+func (s *Syncer) failBroken(ctx context.Context, r phaseRun, read int64) error {
 	failed := false
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
@@ -303,8 +327,9 @@ func (s *Syncer) failBroken(ctx context.Context, r phaseRun) error {
 		var live bool
 		if err := tx.QueryRow(ctx, `SELECT harness_state->'brokenTurn',
 				COALESCE(extract(epoch FROM now() - (harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
-status IN ('scheduled', 'starting', 'running') AND control = 'none' AND lux_stop_reason IS NULL
-			FROM runs WHERE id = $1 FOR UPDATE`, r.ID).Scan(&raw, &secs, &live); err != nil {
+				status IN ('scheduled', 'starting', 'running') AND control = 'none' AND lux_stop_reason IS NULL
+				  AND lux_after_event = $2
+			FROM runs WHERE id = $1 FOR UPDATE`, r.ID, read).Scan(&raw, &secs, &live); err != nil {
 			return err
 		}
 		cur := r

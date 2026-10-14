@@ -581,7 +581,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
 	case r.Status == statusRunning && r.Control == "none" && s.brokenOverdue(r):
-		return true, s.failBroken(ctx, r)
+		return s.overdueBroken(ctx, r)
 	}
 	// Following comes first: a finishing Run still needs its stream, because
 	// that is where the push result arrives — including after a restart —
