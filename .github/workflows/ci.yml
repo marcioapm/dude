@@ -64,8 +64,9 @@ jobs:
         working-directory: orchestrator
         run: |
           set -o pipefail
-          # The root package alone runs about 14 minutes on a hosted runner,
-          # past go test's default 10-minute limit per binary.
+          # The root package alone took 564 s (9.4 minutes) on a hosted runner
+          # (run 38484827348): close to go test's default 10-minute limit per
+          # binary, so the limit is raised with room for a slow runner.
           go test -p 4 -count=1 -timeout 25m -v ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
           if grep -F 'no test database' "$RUNNER_TEMP/go-test.log"; then
             echo "tests skipped without a database: Postgres was not reachable at localhost:5433" >&2
