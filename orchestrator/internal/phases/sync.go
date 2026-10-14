@@ -451,7 +451,8 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 }
 
 // pending lets idle sweeps probe all pre-due selections in one round trip
-// instead of opening a transaction per step. Probe failure runs every step.
+// instead of opening a transaction per step. A step whose probe found
+// nothing would have selected no rows. Probe failure runs every step.
 type pending struct{ brainstorms, unheard, unheardBrainstorms, stalls, failed, wakes bool }
 
 // What each of those steps selects from (SQL), shared by its query and its
@@ -501,28 +502,35 @@ func (s *Syncer) pending(ctx context.Context) pending {
 // earlier step ran: that one may have made work for it (a stall report is
 // a conductor's reason to wake).
 func (s *Syncer) beforeDue(ctx context.Context) error {
-	p := s.pending(ctx)
-	ran := false
-	for _, step := range []struct {
-		pending bool
-		run     func(context.Context) error
-		warning string
-	}{
-		{p.brainstorms, s.interruptBrainstorms, ""},
-		{p.unheard, s.handOverUnheardConductors, "finding stopped conductors' messages failed"},
-		{p.unheardBrainstorms, s.handOverUnheardBrainstorms, "finding stopped session agents' messages failed"},
-		{p.stalls, s.reportStalls, "reporting stalled runs failed"},
-		{p.failed || p.wakes, s.wakeConductors, "waking conductors failed"},
-	} {
-		if !step.pending && !ran {
-			continue
-		}
+	p, ran := s.pending(ctx), false
+	if p.brainstorms {
 		ran = true
-		if err := step.run(ctx); err != nil {
-			if step.warning == "" {
-				return err
-			}
-			s.Log.Warn(step.warning, "error", err)
+		if err := s.interruptBrainstorms(ctx); err != nil {
+			return err
+		}
+	}
+	if p.unheard || ran {
+		ran = true
+		if err := s.handOverUnheardConductors(ctx); err != nil {
+			s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+		}
+	}
+	if p.unheardBrainstorms || ran {
+		ran = true
+		if err := s.handOverUnheardBrainstorms(ctx); err != nil {
+			s.Log.Warn("finding stopped session agents' messages failed", "error", err)
+		}
+	}
+	// Before the wakes: a stalled report joins the note it is due with.
+	if p.stalls || ran {
+		ran = true
+		if err := s.reportStalls(ctx); err != nil {
+			s.Log.Warn("reporting stalled runs failed", "error", err)
+		}
+	}
+	if p.failed || p.wakes || ran {
+		if err := s.wakeConductors(ctx); err != nil {
+			s.Log.Warn("waking conductors failed", "error", err)
 		}
 	}
 	return nil
