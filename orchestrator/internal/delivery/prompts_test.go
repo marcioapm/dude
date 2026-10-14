@@ -205,7 +205,7 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 				t.Errorf("%s: the tester's prompt should say %q once:\n%s", kind, want, got)
 			}
 		}
-		for _, never := range []string{"Commit in each repository you change", commitNote, "you may change it"} {
+		for _, never := range []string{"Commit in each repository you change", commitNote, "you may change it", "asked to check again"} {
 			if strings.Contains(got, never) {
 				t.Errorf("%s: the tester is told %q:\n%s", kind, never, got)
 			}
@@ -213,7 +213,7 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	}
 	// The contract's anchors, so a rewrite of it cannot drop one unnoticed.
 	for _, want := range []string{"`acceptance.md`", "`pass`, `fail`, `blocked`", "`not-applicable`",
-		"never `pass`", "commit nothing", "Test environment:", "head commit"} {
+		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty"} {
 		if !strings.Contains(testerContract, want) {
 			t.Errorf("the tester's contract lacks %q", want)
 		}
@@ -234,6 +234,10 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 				if strings.Count(got, want) != 1 {
 					t.Errorf("%s/%s: the reviewer's prompt should say %q once:\n%s", category, kind, want, got)
 				}
+			}
+			// How to diff is the contract's to say, once, whatever the checkouts.
+			if n := strings.Count(got, "`git diff`"); n != 1 {
+				t.Errorf("%s/%s: the reviewer is told how to diff %d times:\n%s", category, kind, n, got)
 			}
 			if s, f := strings.Index(got, reviewSummary), strings.Index(got, findingFormat); s < f {
 				t.Errorf("%s/%s: the summary is asked for before the findings", category, kind)
