@@ -108,6 +108,9 @@ export function escalationWords(e: Escalation): EscalationWords {
         runId,
       };
     }
+    case "source_changed":
+      // The orchestrator's reason names what changed and the two ways on.
+      return { short: "Adopted work changed on GitHub", sentence: typeof d.reason === "string" && d.reason ? d.reason : "Delivery stopped: source changed.", runId };
     default: {
       const words = e.reason.replaceAll("_", " ");
       return { short: words.charAt(0).toUpperCase() + words.slice(1), sentence: `Delivery stopped: ${words}.`, runId };

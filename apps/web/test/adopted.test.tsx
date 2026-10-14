@@ -10,7 +10,7 @@ import type { Decider, PersistedEvent } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PULL_REQUEST, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, TASK_ID } from "../src/fixtures/data.ts";
-import { ApiClient, type PullRequest, type TaskDetail, type TaskSource } from "../src/api/client.ts";
+import { ApiClient, type EscalationAction, type PullRequest, type TaskDetail, type TaskSource } from "../src/api/client.ts";
 import { eventAttempts } from "../src/attempts.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -217,6 +217,33 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
       ["/v1/tasks/wi_1/decider", { decider: "policy" }],
     ]);
   });
+});
+
+describe("a source that changed on GitHub", () => {
+  // The orchestrator's reason, as delivery/adopt.go's sourceChanged writes it.
+  const REASON = "GitHub's pull request (or branch) no longer matches what this task adopted: it was feature/greet → main, and is now feature/greet → stack/base. Put it back on GitHub and Try again, or stop this task and adopt it in a new one.";
+  class Escalated extends AdoptedClient {
+    decided: EscalationAction[] = [];
+    override async decide(_taskId: string, action: EscalationAction, _note: string) {
+      this.decided.push(action);
+      return { action };
+    }
+  }
+
+  for (const action of ["retry", "stop"] as const) {
+    test(`is an escalation like any other: its reason in full, then Try again and Stop (${action})`, async () => {
+      const client = new Escalated({ source: PR_SOURCE, status: "awaiting_input",
+        escalation: { reason: "source_changed", detail: { reason: REASON }, actions: ["retry", "stop"], at: new Date().toISOString() } }, [ADOPTED]);
+      const page = await taskPage(client);
+      const panel = page.querySelector<HTMLElement>("[data-testid=escalation]")!;
+      expect(panel.getAttribute("data-reason")).toBe("source_changed");
+      expect(text(panel.querySelector("p"))).toBe(`Adopted work changed on GitHub. ${REASON}`);
+      expect([...panel.querySelectorAll<HTMLButtonElement>("button[data-testid^=escalation-]")].map((b) => b.textContent)).toEqual(["Try again", "Stop"]);
+      await click(panel.querySelector(`[data-testid=escalation-${action}]`)!);
+      await settle();
+      expect(client.decided).toEqual([action]);
+    });
+  }
 });
 
 describe("the adopted pull request across attempts", () => {
