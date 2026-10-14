@@ -111,7 +111,7 @@ export function MembersSection({ client, me, people, onChanged, orgName, onInvit
                     />
                   </Td>
                   <Td wrap muted hideWhenNarrow>{joined?.get(p.id) ?? (joined ? "joined before invitations" : "—")}</Td>
-                  <Td>
+                  <Td fit>
                     {admin && !you ? (
                       <Select size="sm" aria-label={`Role of ${p.name}`} value={p.role} options={ROLES}
                         onValueChange={(role) => setRole(p, role as PersonRole)} />

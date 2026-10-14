@@ -580,7 +580,17 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     page.reload()
     page.get_by_test_id("org-settings-button").click()
     row = members.locator('[data-member="Dee"]')
-    row.get_by_role("combobox", name="Role of Dee").click()
+    role = row.get_by_role("combobox", name="Role of Dee")
+    expect(role).to_have_text("Member")
+    # The trigger, chevron included, lies inside its cell (which clips), and its value is not cut short.
+    fit = role.evaluate("""t => {
+        const cell = t.closest('td').getBoundingClientRect(), box = t.getBoundingClientRect();
+        const value = t.firstElementChild;
+        return { inCell: box.left >= cell.left && box.right <= cell.right,
+                 whole: t.scrollWidth <= t.clientWidth && value.scrollWidth <= value.clientWidth };
+    }""")
+    assert fit == {"inCell": True, "whole": True}, fit
+    role.click()
     page.get_by_role("option", name="Admin").click()
     wait_until(lambda: dee.get("/v1/me").json()["person"]["role"] == "admin", timeout=10, message="role not changed")
 
