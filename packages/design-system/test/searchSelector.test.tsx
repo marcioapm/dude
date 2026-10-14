@@ -44,7 +44,7 @@ async function typeText(el: HTMLInputElement, value: string) {
 test("the title opens a searchable listbox with the current session selected", async () => {
   const el = await mount();
   const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
-  expect(el.querySelector("[title=machine]")?.closest("button")).toBeNull();
+  expect(el.querySelectorAll("button [title=machine]").length).toBe(0);
   await act(async () => trigger.click());
   await tick();
   const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
@@ -64,13 +64,13 @@ test("arrows and Enter choose; Escape closes and returns focus to the title", as
   await press(input, "Enter");
   await tick();
   expect(el.textContent).toContain("Review · correctness");
-  expect(document.querySelector("input[role=combobox]")).toBeNull();
+  expect(document.querySelectorAll("input[role=combobox]").length).toBe(0);
   await act(async () => trigger.click());
   await tick();
   input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
   await press(input, "Escape");
   await tick();
-  expect(document.querySelector("input[role=combobox]")).toBeNull();
+  expect(document.querySelectorAll("input[role=combobox]").length).toBe(0);
   expect(document.activeElement).toBe(trigger);
 });
 

@@ -49,7 +49,7 @@ test("facet groups and blocks are named, disabled choices explain scope, empty o
   </PageRail>);
   const section = page.querySelector("section")!;
   expect(document.getElementById(section.getAttribute("aria-labelledby")!)!.textContent).toBe("Status");
-  expect(page.querySelector('[role=group][aria-label="Status filters"]')).not.toBeNull();
+  expect(page.querySelectorAll('[role=group][aria-label="Status filters"]').length).toBe(1);
   const locked = page.querySelectorAll("[role=checkbox]")[2]!;
   expect(document.getElementById(locked.getAttribute("aria-describedby")!)!.textContent).toBe("Earlier scope");
   expect(page.textContent).toContain("No projects in this scope");
@@ -67,6 +67,6 @@ test("page rerenders keep controls and their focus; session aliases share generi
   expect(page.querySelectorAll("aside").length).toBe(1);
   expect(page.textContent).toContain("Updated content");
   await act(async () => root!.render(<PageWithRail><p>No rail</p></PageWithRail>));
-  expect(page.querySelector("aside")).toBeNull();
+  expect(page.querySelectorAll("aside").length).toBe(0);
   expect(page.textContent).toBe("No rail");
 });
