@@ -110,10 +110,13 @@ def test_starting_nav_reaches_an_unmounted_example(gallery_page: Page, anchor: s
     expect(gallery_page.locator("#st-chip")).to_be_in_viewport()
 
 
-def test_starting_deep_link_mounts_and_scrolls(gallery_page: Page):
+def test_starting_deep_link_mounts_and_scrolls(
+    page: Page, gallery_url: str, console_errors: list,
+):
     """Loading a bookmark must not leave its example permanently absent."""
-    gallery_page.goto(gallery_page.url.split("#")[0] + "#st-failed")
-    expect(gallery_page.locator("#st-failed")).to_be_in_viewport()
+    page.goto(f"{gallery_url}#st-failed", wait_until="networkidle")
+    expect(page.locator("#st-failed")).to_be_in_viewport()
+    assert console_errors == []
 
 
 def test_child_examples_mount_after_hash_navigation(gallery_page: Page, console_errors: list):
