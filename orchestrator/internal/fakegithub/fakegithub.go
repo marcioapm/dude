@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ type Pull struct {
 	State    string
 	Draft    bool
 	MergedAt *string
+	// Who opened it: OpenAs for the creating token, else the poster.
+	Author string
 	// Logins asked for a review.
 	Requested []string
 	Comments  []Comment
@@ -44,6 +47,8 @@ type Review struct {
 	Login       string
 	State, Body string
 	SubmittedAt string
+	// The head it was submitted on.
+	CommitID string
 }
 
 type Comment struct {
@@ -95,6 +100,9 @@ type Server struct {
 	// Authorization headers on POST /pulls, and an optional refusal by token.
 	OpenAuth   []string
 	OpenRefuse map[string]int
+	// The login a bearer token opens pull requests as (a person's OAuth
+	// token opens as that person); a token not named opens as poster().
+	OpenAs map[string]string
 	// LoseOpenResponses creates the pull request, then answers 502.
 	LoseOpenResponses int
 	ReceiveStatus     int
@@ -107,6 +115,20 @@ type Server struct {
 	// it, without the fake's lock: it may block (a slow GitHub), or return
 	// a status to fail the request with (0 answers it as usual).
 	Intercept func(r *http.Request) int
+	// Every review request received, refused or not, in order.
+	ReviewRequests []ReviewRequest
+	// When set, review requests are refused with this status.
+	ReviewRequestStatus int
+	// A user's GitHub type ("User", "Bot") when its login does not say.
+	UserTypes map[string]string
+}
+
+// ReviewRequest is one POST to a pull request's requested_reviewers.
+type ReviewRequest struct {
+	Number int
+	Logins []string
+	// The request's Authorization header.
+	Auth string
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -246,13 +268,24 @@ func (s *Server) Review(number int, login, verdict string) {
 	s.ReviewSaying(number, login, verdict, "")
 }
 
-// ReviewSaying submits a review with words in its box.
+// ReviewSaying submits a review with words in its box, on the pull
+// request's head. As GitHub does, a submitted review satisfies the request
+// for it: the reviewer leaves requested_reviewers.
 func (s *Server) ReviewSaying(number int, login, verdict, body string) {
+	sha := s.SHA(s.Pull(number).Head)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.pulls[number]
 	p.Reviews = append(p.Reviews, Review{ID: nextID.Add(1), Login: login, State: verdict, Body: body,
-		SubmittedAt: time.Now().UTC().Format(time.RFC3339)})
+		SubmittedAt: time.Now().UTC().Format(time.RFC3339), CommitID: sha})
+	p.Requested = slices.DeleteFunc(p.Requested, func(l string) bool { return strings.EqualFold(l, login) })
+}
+
+// RequestReview asks login for a review, as a person does on GitHub.
+func (s *Server) RequestReview(number int, login string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].Requested = append(s.pulls[number].Requested, login)
 }
 
 // SetChecks sets the combined status of every commit: "success", "failure",
@@ -452,7 +485,28 @@ func (s *Server) Handler() http.Handler {
 		if p := s.number(w, r); p != nil {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			p.Requested = append(p.Requested, in.Reviewers...)
+			s.ReviewRequests = append(s.ReviewRequests, ReviewRequest{Number: p.Number, Logins: in.Reviewers,
+				Auth: r.Header.Get("Authorization")})
+			if s.ReviewRequestStatus != 0 {
+				fail(w, s.ReviewRequestStatus, "Validation Failed")
+				return
+			}
+			// As GitHub: one login it will not ask refuses the whole request.
+			for _, l := range in.Reviewers {
+				switch {
+				case strings.EqualFold(l, p.Author):
+					fail(w, 422, "Review cannot be requested from pull request author.")
+					return
+				case s.Permissions[l] == "none" || strings.HasSuffix(l, "[bot]"):
+					fail(w, 422, "Reviews may only be requested from collaborators. One or more of the users or teams you specified is not a collaborator of the "+s.Slug+" repository.")
+					return
+				}
+			}
+			for _, l := range in.Reviewers {
+				if !slices.Contains(p.Requested, l) {
+					p.Requested = append(p.Requested, l)
+				}
+			}
 			write(w, 201, s.pullJSON(p))
 		}
 	})
@@ -533,7 +587,12 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft}
+	author := s.OpenAs[strings.TrimPrefix(auth, "Bearer ")]
+	if author == "" {
+		author = s.poster()
+	}
+	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft,
+		Author: author}
 	s.pulls[p.Number] = p
 	out := s.pullJSON(p)
 	lost := s.LoseOpenResponses > 0
@@ -567,7 +626,21 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
 		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
+		"user": s.userJSON(p.Author),
 	}
+}
+
+// userJSON is a GitHub user object: of type Bot for an App's account
+// ("<slug>[bot]") or a login UserTypes names so, else User.
+func (s *Server) userJSON(login string) map[string]any {
+	kind := "User"
+	if strings.HasSuffix(login, "[bot]") {
+		kind = "Bot"
+	}
+	if t := s.UserTypes[login]; t != "" {
+		kind = t
+	}
+	return map[string]any{"login": login, "type": kind}
 }
 
 // reviewers is who the fake says can review: the people dude's reviewer
@@ -777,11 +850,27 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
 		for _, rv := range p.Reviews {
-			out = append(out, map[string]any{"id": rv.ID, "user": map[string]any{"login": rv.Login}, "state": rv.State,
-				"body": rv.Body, "submitted_at": rv.SubmittedAt})
+			out = append(out, map[string]any{"id": rv.ID, "user": s.userJSON(rv.Login), "state": rv.State,
+				"body": rv.Body, "submitted_at": rv.SubmittedAt, "commit_id": rv.CommitID})
 		}
 	}
-	write(w, 200, out)
+	write(w, 200, page(r, out))
+}
+
+// page is one page of a list, as GitHub pages it: `per_page` clamped to
+// 1..100, 30 when absent or invalid; `page` from 1.
+func page[T any](r *http.Request, all []T) []T {
+	size, err := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if err != nil || size < 1 {
+		size = 30
+	}
+	size = min(size, 100)
+	n, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || n < 1 {
+		n = 1
+	}
+	start := min((n-1)*size, len(all))
+	return all[start:min(start+size, len(all))]
 }
 
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {

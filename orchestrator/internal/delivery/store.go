@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,7 +46,10 @@ const (
 	EvPullRequestAction = "pull_request.action"
 	// Mergeability or distance from the base changed.
 	EvPullRequestMergeable = "pull_request.mergeable_changed"
-	EvGitCommitCreated     = "git.commit_created"
+	// dude pushed a fix to an open pull request and asked again for a
+	// review from whoever had reviewed an older head (rerequestReviews).
+	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
+	EvGitCommitCreated             = "git.commit_created"
 )
 
 // Store is the delivery workflow's side effects. Each is one durable action;
@@ -57,6 +61,11 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
+
+	// Admission for re-requests, each of which holds a pool connection
+	// across GitHub calls; sized from the pool on first use (rerequestSlots).
+	rerequestOnce  sync.Once
+	rerequestSlots chan struct{}
 }
 
 // runByKey finds the Run a workflow step already created, or "".

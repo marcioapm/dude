@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -78,6 +80,12 @@ type missingError struct{ label string }
 
 func (e missingError) Error() string { return e.label + " is required" }
 
+// minPoolConns is the smallest database pool the orchestrator runs on:
+// delivery.RerequestReviews admits one holder even to a pool of 2, and that
+// holder keeps its connection across GitHub calls, so a pool of 1 leaves
+// leases, sweeps and API work none meanwhile.
+const minPoolConns = 2
+
 // indexDimensions is the size of memory's vector index; another is a migration.
 const indexDimensions = 768
 
@@ -97,6 +105,11 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 		if *r.dst = cfg.String(r.env); *r.dst == "" {
 			return settings{}, missingError{cfg.Label(r.env)}
 		}
+	}
+	// A URL pgx cannot parse is db.Open's to report, at startup.
+	if pool, err := pgxpool.ParseConfig(s.DatabaseURL); err == nil && pool.MaxConns < minPoolConns {
+		return settings{}, fmt.Errorf("%s: pool_max_conns is %d; the orchestrator needs at least %d, as a review re-request holds one connection while GitHub answers",
+			cfg.Label("DATABASE_URL"), pool.MaxConns, minPoolConns)
 	}
 	s.Listen = cfg.String("DUDE_ORCHESTRATOR_LISTEN")
 	s.ToolsListen = cfg.String("DUDE_TOOLS_LISTEN")
