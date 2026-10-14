@@ -16,10 +16,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
-// The connection carrying the sweep's probe breaks, either before the
-// probe's first answer arrives or just after it: the pass still records the
-// failed Run's reason to wake and the stalled Run's report, as if every
-// probe had found work.
+// A broken probe connection must not prevent failed-Run wakes or stall
+// reports, even when the probe has already received its first answer.
 func TestASweepWhoseProbeBreaksStillTakesUpEveryStep(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -75,9 +73,7 @@ type batchFault struct {
 	fired atomic.Bool
 }
 
-// faultOnFirstBatch returns a pool on app's database whose first pgx.Batch
-// breaks its connection as mode says. Every other statement, and every
-// connection opened afterwards, is healthy.
+// Only the first batch is faulted; subsequent step transactions stay healthy.
 func faultOnFirstBatch(t *testing.T, app *db.DB, mode faultMode) *batchFault {
 	t.Helper()
 	f := &batchFault{mode: mode}
@@ -116,21 +112,19 @@ func (*batchFault) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.Trace
 }
 func (*batchFault) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// faultConn passes a connection through until armed. failOnSend fails the
-// next write; failAfterFirstResult delivers the server's bytes up to and
-// including the next CommandComplete ('C'), then fails every read. Server
-// messages are framed (type byte, int32 length including itself) from the
-// first byte so the cut lands on a message boundary.
+// failAfterFirstResult cuts reads after CommandComplete ('C'), before pgx
+// can buffer later results. Framing starts at connection startup and tracks
+// the type byte and int32 length (including the length itself) across reads.
 type faultConn struct {
 	net.Conn
 	fired *atomic.Bool
 
-	mu     sync.Mutex
-	mode   faultMode
-	broken bool
-	hdr    []byte
-	typ    byte
-	body   int
+	mu            sync.Mutex
+	mode          faultMode
+	broken        bool
+	header        []byte
+	messageType   byte
+	bodyRemaining int
 }
 
 func (c *faultConn) arm(m faultMode) {
@@ -169,19 +163,20 @@ func (c *faultConn) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i := 0; i < n; {
-		if c.body > 0 {
-			k := min(c.body, n-i)
-			c.body -= k
+		if c.bodyRemaining > 0 {
+			k := min(c.bodyRemaining, n-i)
+			c.bodyRemaining -= k
 			i += k
 		} else {
-			c.hdr = append(c.hdr, p[i])
+			c.header = append(c.header, p[i])
 			i++
-			if len(c.hdr) == 5 {
-				c.typ, c.body = c.hdr[0], int(binary.BigEndian.Uint32(c.hdr[1:]))-4
-				c.hdr = c.hdr[:0]
+			if len(c.header) == 5 {
+				c.messageType = c.header[0]
+				c.bodyRemaining = int(binary.BigEndian.Uint32(c.header[1:])) - 4
+				c.header = c.header[:0]
 			}
 		}
-		if c.body == 0 && len(c.hdr) == 0 && c.typ == 'C' && c.mode == failAfterFirstResult {
+		if c.bodyRemaining == 0 && len(c.header) == 0 && c.messageType == 'C' && c.mode == failAfterFirstResult {
 			c.breakLocked()
 			return i, nil
 		}

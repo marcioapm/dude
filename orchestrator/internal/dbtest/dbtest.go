@@ -413,21 +413,20 @@ func dropStale(ctx context.Context, admin *pgx.Conn, olderThan time.Duration, ma
 		if nanos, err := strconv.ParseInt(m[2], 10, 64); err != nil || nanos > cutoff {
 			continue
 		}
+		var owner string
 		if m[1] == "" {
 			// A template or a clone: its binary's lock, held while it drops.
-			owner := "dude_gotest_" + m[2]
+			owner = "dude_gotest_" + m[2]
 			var free bool
 			if err := admin.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, hashtext($2))", liveLock, owner).Scan(&free); err != nil || !free {
 				continue
 			}
-			_, err = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name)
-			_, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock($1, hashtext($2))", liveLock, owner)
-			if err == nil {
-				dropped = append(dropped, name)
-			}
-			continue
 		}
-		if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name); err == nil {
+		_, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name)
+		if owner != "" {
+			_, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock($1, hashtext($2))", liveLock, owner)
+		}
+		if err == nil {
 			dropped = append(dropped, name)
 		}
 	}

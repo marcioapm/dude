@@ -90,11 +90,8 @@ func InOrgOn(ctx context.Context, conn Beginner, organizationID string, fn func(
 
 // InSystem runs fn across tenants as the named background task.
 //
-// The role and the name are set transaction-locally (set_config's true is
-// SET LOCAL), so the elevated role is dropped on commit or rollback. The
-// name shows up in pg_stat_activity, so a slow sweep is identifiable
-// without guessing. One statement for both: the background loops open
-// several of these transactions a second each.
+// Both settings are transaction-local, so commit or rollback drops the
+// elevated role. The name identifies the sweep in pg_stat_activity.
 func (d *DB) InSystem(ctx context.Context, task string, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, d.Pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_sweeper', true), set_config('application_name', $1, true)`,

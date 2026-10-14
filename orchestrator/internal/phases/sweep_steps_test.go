@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-// A Run a conductor started fails while nothing else in the factory needs
-// the sweep: the next Sweep records the failure as the conductor's reason
-// to wake, once, however many sweeps follow.
+// An otherwise idle sweep records a conductor-started Run's failure once.
 func TestASweepRecordsAConductorsFailedRunOnce(t *testing.T) {
 	ctx := context.Background()
 	w := newWakeSweepWorld(t)
@@ -32,9 +30,7 @@ func TestASweepRecordsAConductorsFailedRunOnce(t *testing.T) {
 	}
 }
 
-// A conducted Run stalls while nothing else is due: the pass that reports
-// it also tells its conductor, as a stall report joins the note it is due
-// with, rather than leaving the note to a later pass.
+// A stall report reaches its conductor in the same sweep, not the next pass.
 func TestAStallReportReachesTheConductorInTheSamePass(t *testing.T) {
 	ctx := context.Background()
 	w := newWakeSweepWorld(t)
