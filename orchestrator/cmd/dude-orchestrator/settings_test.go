@@ -329,6 +329,20 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 	}
 }
 
+func TestAOneConnectionDatabasePoolIsRefused(t *testing.T) {
+	for url, ok := range map[string]bool{
+		"postgres://file/dude?pool_max_conns=1": false,
+		"postgres://file/dude?pool_max_conns=2": true,
+		"postgres://file/dude":                  true,
+	} {
+		_, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DATABASE_URL": url}))
+		want := "database.url (DATABASE_URL): pool_max_conns is 1; the orchestrator needs at least 2, as a review re-request holds one connection while GitHub answers"
+		if ok && err != nil || !ok && (err == nil || err.Error() != want) {
+			t.Errorf("%s: err = %v, accepted want %v", url, err, ok)
+		}
+	}
+}
+
 func TestTheLoadersWarningsAreLoggedWithoutTheirSecrets(t *testing.T) {
 	const sentinel = "S3NT1NEL-lux-key-9f2c"
 	text := "[lux]\nurl = \"https://lux.file\"\napi_key = \"" + sentinel + "\"\n"

@@ -388,6 +388,12 @@ export const EventTypes = {
   PullRequestCommented: "pull_request.commented",
   PullRequestMerged: "pull_request.merged",
   PullRequestClosed: "pull_request.closed",
+  /**
+   * dude pushed a fix to an open pull request and asked again for a review
+   * from those whose latest review was on an older head. Payload:
+   * `{ number, repo, head, reviewersRequested?, reviewersRefused?, error? }`.
+   */
+  PullRequestReviewRerequested: "pull_request.review_rerequested",
 
   // Agent sessions
   SessionStarted: "agent.session.started",

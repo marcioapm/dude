@@ -281,6 +281,11 @@ func WithTestGitHost(host string) func(*GitHub) {
 	return func(g *GitHub) { g.testGitHost = host }
 }
 
+// WithTransport sends every request through rt instead of the default transport.
+func WithTransport(rt http.RoundTripper) func(*GitHub) {
+	return func(g *GitHub) { g.http.Transport = rt }
+}
+
 func NewGitHub(c Credential, options ...func(*GitHub)) *GitHub {
 	if c.APIBaseURL == "" {
 		c.APIBaseURL = "https://api.github.com"
@@ -460,11 +465,15 @@ type ghPull struct {
 	RequestedTeams     []struct {
 		Slug string `json:"slug"`
 	} `json:"requested_teams"`
+	// The pull request's author.
+	User *ghUser `json:"user"`
 }
 
 type ghUser struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatar_url"`
+	// "User", "Bot" (a GitHub App's account) or "Organization".
+	Type string `json:"type"`
 }
 
 func (p ghPull) ref() PullRequestRef {
@@ -864,6 +873,8 @@ type ghReview struct {
 	SubmittedAt *string `json:"submitted_at"`
 	HTMLURL     string  `json:"html_url"`
 	User        *ghUser `json:"user"`
+	// The head the review was submitted on.
+	CommitID string `json:"commit_id"`
 }
 
 func login(u *ghUser) string {

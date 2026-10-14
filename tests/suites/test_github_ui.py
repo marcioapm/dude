@@ -50,7 +50,9 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     _sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}/#/task/{task['id']}")
     panel = page.get_by_test_id("pr-panel")
-    expect(panel).to_contain_text("cy requested changes", timeout=30_000)
+    # The fix went back to cy: asked again, their earlier word kept beside it.
+    expect(panel).to_contain_text("cy · asked again · requested changes before", timeout=30_000)
+    assert (n, ["cy"]) in fake_github.review_requests
     expect(panel).to_contain_text("2 unresolved comments")
     expect(panel).to_contain_text("1 commit behind main · no conflicts")
     page.get_by_test_id("pr-update-branch").click()
@@ -93,6 +95,7 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     page.get_by_role("tab", name="Activity").click()
     activity = page.get_by_test_id("activity")
     expect(activity).to_contain_text("cy requested changes on #1")
+    expect(activity).to_contain_text("asked cy to review #1 again after its fix")
     expect(activity).to_contain_text("CI e2e (chrome) failed on #1")
     expect(activity).to_contain_text("merged #1 (squash)")
     expect(activity).to_contain_text("updated #1's branch")
