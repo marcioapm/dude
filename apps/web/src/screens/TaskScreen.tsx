@@ -175,7 +175,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const openedRun = runId && runId !== leftRun ? runId : undefined;
   const asked = openedRun ? "sessions" : chosenTab;
   // For the open session, which is memoised: one function each for the page's life.
-  const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {} });
+  const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {}, selector: (_title: ReactNode): ReactNode => null });
   const openServers = useCallback(() => latest.current.pickTab("servers"), []);
   const toCurrent = useCallback(() => latest.current.toCurrent(), []);
   // The session shown when none is asked for: the last one open, else one
@@ -364,6 +364,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, artifacts, allPrs, item, byId, attempts, current, shown]);
+  const sessionSelector = useCallback((title: ReactNode) => latest.current.selector(title), [parts.sessions]);
 
   // What the attempt's pull requests heard, for why a fix ran: a few of the ledger's many.
   const prEvents = useMemo(() => {
@@ -442,7 +443,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const pickTab = (next: string) => {
     if (next !== tab) show(next, shown, openedRun === undefined);
   };
-  latest.current = { pickTab, toCurrent: () => pickAttempt(current) };
+  latest.current.pickTab = pickTab;
+  latest.current.toCurrent = () => pickAttempt(current);
 
   const started = currentPhases.length > 0;
   // Where Deliver is offered, Talk it through is beside it: a task nothing
@@ -477,6 +479,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? (firstSight.find((r) => r.status === "running") ?? firstSight[0] ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
+  latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
 
@@ -747,28 +750,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <div className="taskSessions">
               {openRun ? (
                 <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                  stopped={openStopped} titleSelector={(title) => {
-                    const tops = sessions.filter(isConductor);
-                    const delivered = sessions.filter((r) => !isConductor(r) && !(r.conductorRunId && tops.some((c) => c.id === r.conductorRunId)));
-                    const options = [...tops.flatMap((c) => [c, ...sessions.filter((r) => r.conductorRunId === c.id)]), ...delivered];
-                    return <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={options}
-                      optionKey={(run) => run.id} listTestId="sessions"
-                      optionAttributes={(run) => ({ "data-testid": "session", "data-run": run.id, "data-under": isConductor(run) ? undefined : run.conductorRunId ? "conductor" : "delivered" })}
-                      current={(run) => run.id === openRun} onPick={(run) => onOpenRun(run.id)}
-                      searchText={(run) => [runLabel(run), againOf(run, sessions) ? "again" : "", run.model, run.harness, runStatusLabel(run), runStatusShown(run), run.stalled?.text].filter(Boolean).join(" ")}
-                      group={(run) => isConductor(run) ? "Conductor" : run.conductorRunId && tops.some((c) => c.id === run.conductorRunId) ? `Started by ${runLabel(tops.find((c) => c.id === run.conductorRunId)!)}` : "Delivered automatically"}
-                      renderOption={(run) => <>
-                        <SessionItemContent
-                          avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
-                          title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
-                          detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : runStatusShown(run) === "starting" ? "starting" : "not started"}</>}
-                          trailing={<>{run.id === openRun ? <span className="ds-sr-only">Current session</span> : null}
-                            {run.stalled ? <Badge data-testid="session-stalled" tone="attention" size="sm" icon="warning" title={run.stalled.text}>stalled</Badge> : null}
-                            <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
-                          </>} />
-                        <RunReplacement run={run} />
-                      </>} />;
-                  }} />
+                  stopped={openStopped} titleSelector={sessionSelector} />
               ) : null}
             </div>
           ) : (
@@ -914,6 +896,33 @@ function Elsewhere({ icon, title, description, others, what, onAttempt }: {
         </>
       } />
   );
+}
+
+function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: string | undefined, onOpenRun: (id: string) => void) {
+  const tops = sessions.filter(isConductor);
+  const conductors = new Map(tops.map((r) => [r.id, r]));
+  const delivered = sessions.filter((r) => !isConductor(r) && !conductors.has(r.conductorRunId ?? ""));
+  const options = [...tops.flatMap((c) => [c, ...sessions.filter((r) => r.conductorRunId === c.id)]), ...delivered];
+  return <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={options}
+    optionKey={(run) => run.id} listTestId="sessions"
+    optionAttributes={(run) => ({ "data-testid": "session", "data-run": run.id, "data-under": isConductor(run) ? undefined : run.conductorRunId ? "conductor" : "delivered" })}
+    current={(run) => run.id === openRun} onPick={(run) => onOpenRun(run.id)}
+    searchText={(run) => [runLabel(run), againOf(run, sessions) ? "again" : "", run.model, run.harness, runStatusLabel(run), runStatusShown(run), run.stalled?.text].filter(Boolean).join(" ")}
+    group={(run) => {
+      const conductor = conductors.get(run.conductorRunId ?? "");
+      return isConductor(run) ? "Conductor" : conductor ? `Started by ${runLabel(conductor)}` : "Delivered automatically";
+    }}
+    renderOption={(run) => <>
+      <SessionItemContent
+        avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+        title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
+        detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : runStatusShown(run) === "starting" ? "starting" : "not started"}</>}
+        trailing={<>{run.id === openRun ? <span className="ds-sr-only">Current session</span> : null}
+          {run.stalled ? <Badge data-testid="session-stalled" tone="attention" size="sm" icon="warning" title={run.stalled.text}>stalled</Badge> : null}
+          <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
+        </>} />
+      <RunReplacement run={run} />
+    </>} />;
 }
 
 /** A phase run again in its attempt after one before it stopped: "Implement · again". */

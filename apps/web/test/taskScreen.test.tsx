@@ -16,6 +16,11 @@ import { ApiError } from "../src/api/client.ts";
 import { TaskScreen, activityLines, filterActivity, filterFindings } from "../src/screens/TaskScreen.tsx";
 import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSection.tsx";
 import type { Artifact, Finding } from "../src/api/client.ts";
+import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
+import { emit } from "../src/fixtures/client.ts";
+import { ORG, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
+import type { ReactNode } from "react";
+
 import { unzipSync } from "fflate";
 import { ToastProvider } from "@dude/design-system/primitives";
 
@@ -108,6 +113,56 @@ describe("task rail filtering", () => {
     await click(doc!);
     await settle();
     expect(reads).toEqual(["image-a", "image-b"]);
+  });
+
+  test("task chatter from other runs does not re-render the open RunScreen", async () => {
+    const memo = RunScreen as unknown as { type: (props: RunScreenProps) => ReactNode };
+    const screen = memo.type;
+    let renders = 0;
+    memo.type = (props) => { renders++; return screen(props); };
+    const source = globalThis.EventSource;
+    const windowSource = window.EventSource;
+    class ScopedSource extends source {
+      constructor(url: string | URL) {
+        super(url);
+        const scope = new URL(String(url), window.location.origin).searchParams;
+        let message: EventSource["onmessage"] = null;
+        Object.defineProperty(this, "onmessage", {
+          configurable: true,
+          get: () => (e: MessageEvent) => {
+            const event = JSON.parse(e.data) as PersistedEvent;
+            if (["taskId", "runId", "sessionId"].every((k) => !scope.get(k) || scope.get(k) === event[k as "runId"])) message?.call(this, e);
+          },
+          set: (value: EventSource["onmessage"]) => { message = value; },
+        });
+      }
+    }
+    globalThis.EventSource = window.EventSource = ScopedSource;
+    try {
+      const page = await taskPage(new FixtureClient("a"), { tab: "sessions", runId: RUN_ID });
+      await until(() => page.querySelector('[data-testid="run-screen"]'), "the open run");
+      await settle(500);
+      expect(renders).toBeGreaterThan(0);
+      renders = 0;
+      const frame = (runId: string) => emit({ eventType: "agent.thought", occurredAt: new Date().toISOString(), organizationId: ORG.id,
+        projectId: PROJECT.id, taskId: TASK_ID, runId, sessionId: null, workflowRunId: null,
+        actor: { type: "system", id: "dude" }, source: "control-plane", correlationId: null, causationId: null, payload: { text: "Thinking" } });
+      for (let i = 0; i < 10; i++) {
+        await act(async () => frame("run_unrelated_probe"));
+        await settle(10);
+      }
+      await settle(350);
+      expect(renders).toBe(0);
+      await act(async () => frame(RUN_ID));
+      await settle();
+      expect(renders).toBeGreaterThan(0);
+    } finally {
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      memo.type = screen;
+      globalThis.EventSource = source;
+      window.EventSource = windowSource;
+    }
   });
 
   test("activity filters structured person, event kind and attempt independently of prose", () => {
