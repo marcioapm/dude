@@ -70,9 +70,10 @@ async function connect(email: string, organizationId: string) {
 }
 
 // GitHub's redirect: a top-level navigation from github.com, with the Access cookie and nothing else of dude's.
+const NAVIGATION = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
 async function returnFromGithub(email: string, state: string) {
   return router.handle(new Request(`${ORIGIN}/v1/me/github/callback?state=${state}&code=code`,
-    { headers: { ...cookie(await sign(signer, { email })), "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" } }));
+    { headers: { ...cookie(await sign(signer, { email })), ...NAVIGATION } }));
 }
 
 async function status(email: string, organizationId: string) {
@@ -101,11 +102,21 @@ test("someone else's state is consumed by no one and lands on the bare settings 
   expect((await returnFromGithub(at("other"), state)).headers.get("location")).toBe(`/?github=connected#/o/northwind-${suffix}/me/settings`);
 });
 
-test("only GitHub's return is let in cross-site: a cross-site read of the status is still refused", async () => {
-  const res = await router.handle(new Request(`${ORIGIN}/v1/me/github`, { headers: { ...cookie(await sign(signer, { email: at("two") })),
-    "x-dude-organization": northwind, "sec-fetch-site": "cross-site" } }));
+test("only GitHub's navigation back is let in cross-site: a cross-site fetch of the callback, other paths and Connect are refused", async () => {
+  const token = await sign(signer, { email: at("two") });
+  const state = await connect(at("two"), northwind);
+  const fetched = await router.handle(new Request(`${ORIGIN}/v1/me/github/callback?state=${state}&code=code`,
+    { headers: { ...cookie(token), "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" } }));
+  expect(fetched.status).toBe(403);
+  const framed = await router.handle(new Request(`${ORIGIN}/v1/me/github/callback?state=${state}&code=code`,
+    { headers: { ...cookie(token), ...NAVIGATION, "sec-fetch-dest": "iframe" } }));
+  expect(framed.status).toBe(403);
+  // Refused before the state was read: it still completes from GitHub's navigation.
+  expect((await returnFromGithub(at("two"), state)).headers.get("location")).toBe(`/?github=connected#/o/northwind-${suffix}/me/settings`);
+  const res = await router.handle(new Request(`${ORIGIN}/v1/me/github`, { headers: { ...cookie(token),
+    "x-dude-organization": northwind, ...NAVIGATION } }));
   expect(res.status).toBe(403);
   const connectCrossSite = await router.handle(new Request(`${ORIGIN}/v1/me/github/connect`, { method: "POST",
-    headers: { ...cookie(await sign(signer, { email: at("two") })), origin: "https://evil.example", "x-dude-organization": northwind } }));
+    headers: { ...cookie(token), origin: "https://evil.example", "x-dude-organization": northwind } }));
   expect(connectCrossSite.status).toBe(403);
 });

@@ -217,10 +217,12 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
     const token = accessToken(request);
     if (!token) return null;
     const url = new URL(request.url);
-    // GitHub's redirect back is another site's navigation, naming no organisation: its proof is the
-    // single-use state bound to the person who started it, and the route finds that organisation itself.
+    // GitHub's redirect back names no organisation: the route finds it by the single-use state, bound to the
+    // person who started it. Only a top-level navigation github.com started skips the cross-site check.
     const githubReturn = request.method === "GET" && url.pathname === GITHUB_CALLBACK_PATH;
-    if (!githubReturn) checkBrowserOrigin(request, config.public_url);
+    const githubNavigation = githubReturn && request.headers.get("sec-fetch-site") === "cross-site" &&
+      request.headers.get("sec-fetch-mode") === "navigate" && request.headers.get("sec-fetch-dest") === "document";
+    if (!githubNavigation) checkBrowserOrigin(request, config.public_url);
     const identity = await deps.verify(token);
     if (!identity) return null;
     let admission = await admissionFor(config, identity.email);
