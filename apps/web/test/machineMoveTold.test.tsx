@@ -56,6 +56,11 @@ describe("a move's notice and what the agent was told", () => {
     ]);
   });
 
+  test("a Reset's row says its stop first, as a raise's does", () => {
+    const row = project(reset(false), "running").turns.find((t) => t.kind === "notice" && t.text.includes("moved back to"));
+    expect(row?.kind === "notice" && row.title?.split("\n")[0]).toBe("Stopped, work kept 7.4s");
+  });
+
   test("a raise to another pool: the move's time includes the wait for a machine there", () => {
     expect(fromTheMove(raise(true)).slice(0, 2)).toEqual([
       "notice:The implementer moved to XL in 1m 11s, with its conversation and work.",
