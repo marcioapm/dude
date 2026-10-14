@@ -4,27 +4,256 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestMachineSettlementRestoresLayerOnRefusalAndIsIdempotent(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		t.Run(fmt.Sprint(refused), func(t *testing.T) {
+			w := newResumeWorld(t)
+			var size, said string
+			if err := w.owner.QueryRow(w.ctx, `SELECT id, name || ' (' || (cpus::float8)::text || ' CPUs · ' || (memory_mib / 1024)::text || ' GiB) is larger than any machine in general'
+				FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size, &said); err != nil {
+				t.Fatal(err)
+			}
+			for _, q := range []string{
+				`UPDATE tasks SET agent_machines = '{"implementer":{"sizeId":"target","moveId":"mmv_test","askedBy":"r","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id = $1`,
+			} {
+				if _, err := w.owner.Exec(w.ctx, q, w.run.TaskID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_test', $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', $4, 'resize')`, w.run.Org, w.run.TaskID, w.run.ID, size); err != nil {
+				t.Fatal(err)
+			}
+			w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+			old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+			target := &delivery.Machine{SizeID: size, Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+			plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+			if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+				t.Fatal(err)
+			}
+			applied := *plan.Send
+			if refused {
+				// Kept as ResumeSized does before its fallback resume.
+				if err := plan.onRefused(&lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}); err != nil {
+					t.Fatal(err)
+				}
+				plan.refused = &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+				applied = lux.Resources{CPUs: 2, Memory: 2048 << 20, Disk: 20 << 30}
+			}
+			answer := lux.Run{Spec: lux.StoredSpec{Resources: &applied}}
+			for i := 0; i < 2; i++ {
+				if err := w.s.settleMachine(w.ctx, w.run, plan, answer); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var raises delivery.Raises
+			var settled bool
+			var code *string
+			var events int
+			if err := w.owner.QueryRow(w.ctx, `SELECT agent_machines, (SELECT settled_at IS NOT NULL FROM machine_moves WHERE id='mmv_test'), (SELECT refused FROM machine_moves WHERE id='mmv_test'), (SELECT count(*) FROM events WHERE run_id=$2 AND event_type = 'machine.refused' AND payload->>'message' = $3 AND payload->'kept'->>'name' = 'Old') FROM tasks WHERE id=$1`, w.run.TaskID, w.run.ID, said).Scan(&raises, &settled, &code, &events); err != nil {
+				t.Fatal(err)
+			}
+			wantEvents := 0
+			if refused {
+				wantEvents = 1
+			}
+			if !settled || events != wantEvents || refused && (len(raises) != 0 || code == nil || *code != "pool_unfit") || !refused && (len(raises) != 1 || code != nil) {
+				t.Fatalf("settled=%v events=%d raises=%+v code=%v", settled, events, raises, code)
+			}
+		})
+	}
+}
+
+// A Run's move lux refuses at the real resume is worded once, for the
+// refusal kept and for the agent's fallback input alike: lux's pool list is
+// read once for it.
+func TestARefusedMovesResumeReadsLuxsPoolsOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	var size string
+	if err := w.owner.QueryRow(w.ctx, `SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1`, w.run.Org).Scan(&size); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.owner.Exec(w.ctx, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_test', $1, $2, $3, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', $4, 'resize')`, w.run.Org, w.run.TaskID, w.run.ID, size); err != nil {
+		t.Fatal(err)
+	}
+	refusing := &poolUnfitLux{placementLux: w.lux}
+	w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+	w.s.Lux = refusing
+	old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+	target := &delivery.Machine{SizeID: size, Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+	plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+	if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+		t.Fatal(err)
+	}
+	before := refusing.poolReads.Load()
+	if _, err := ResumeSized(w.ctx, refusing, "lrun_1", lux.ResumeInput{Input: "Carry on."}, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := refusing.poolReads.Load() - before; got != 1 {
+		t.Fatalf("lux's pools read %d times for one refusal, want 1", got)
+	}
+	if refusing.resumes.Load() != 2 {
+		t.Fatalf("resumes %d, want the refused one and its fallback", refusing.resumes.Load())
+	}
+}
+
+// poolUnfitLux refuses a resume with resources (422 pool_unfit) and takes
+// one without; it counts pool reads and resumes.
+type poolUnfitLux struct {
+	*placementLux
+	poolReads, resumes atomic.Int32
+}
+
+func (f *poolUnfitLux) Pools(ctx context.Context) ([]lux.Pool, error) {
+	f.poolReads.Add(1)
+	return f.placementLux.Pools(ctx)
+}
+
+func (f *poolUnfitLux) Resume(_ context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	f.resumes.Add(1)
+	if in.Resources != nil {
+		return lux.Run{}, &lux.Error{Status: 422, Code: "pool_unfit", Message: "pool pool_d cannot take this Run: it needs 4 cpus; its largest host has 2"}
+	}
+	return lux.Run{ID: id, State: "resuming"}, nil
+}
+
+// A session agent's raise lux refused for good puts back the session's
+// raise it replaced, kept before the fallback resume; a raise written over
+// it since is left alone.
+func TestASessionsRefusedRaiseRestoresItsLayer(t *testing.T) {
+	for _, newer := range []bool{false, true} {
+		t.Run(fmt.Sprint(newer), func(t *testing.T) {
+			w := newResumeWorld(t)
+			org := w.run.Org
+			prior := `{"sizeId":"prior","moveId":"mmv_prior","askedBy":"run_old","reason":"earlier","at":"2026-10-13T00:00:00Z"}`
+			layer := `{"sizeId":"target","moveId":"mmv_s","askedBy":"run_s","reason":"oom","at":"2026-10-13T01:00:00Z"}`
+			if newer {
+				layer = `{"sizeId":"target","moveId":"mmv_newer","askedBy":"run_t","reason":"again","at":"2026-10-13T02:00:00Z"}`
+			}
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO sessions (id, organization_id, title, agent_machine) VALUES ('ssn_'||$1, $1, 'S', $2::jsonb)`, []any{org, layer}},
+				{`INSERT INTO runs (id, organization_id, session_id, attempt, role, status, lux_run_id, lux_state, dude_pause)
+					VALUES ('run_s'||$1, $1, 'ssn_'||$1, 1, 'brainstorm', 'paused', 'lrun_s', 'stopped', 'machine')`, []any{org}},
+				{`INSERT INTO machine_moves (id, organization_id, session_id, run_id, role, kind, from_size, to_size_id, apply)
+					VALUES ('mmv_s', $1, 'ssn_'||$1, 'run_s'||$1, 'brainstorm', 'raise', jsonb_build_object('sizeId', 'old', 'previousRaise', $2::jsonb),
+						(SELECT id FROM machine_sizes WHERE organization_id = $1 LIMIT 1), 'resize')`, []any{org, prior}},
+			} {
+				if _, err := w.owner.Exec(w.ctx, q.sql, q.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run := phaseRun{ID: "run_s" + org, Org: org, SessionID: "ssn_" + org, Role: "brainstorm", Status: statusPaused, LuxRunID: "lrun_s", LuxState: "stopped"}
+			w.lux.pools = []lux.Pool{{ID: "pool_d", Name: "general", IsDefault: true}}
+			old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+			target := &delivery.Machine{SizeID: "target", Name: "Target", CPUs: 4, MemoryMiB: 4096, DiskGiB: 40}
+			plan := &ResizePlan{Recorded: old, Target: target, Send: &lux.Resources{CPUs: 4, Memory: 4096 << 20, Disk: 40 << 30}}
+			if err := w.s.movePlan(w.ctx, run, plan); err != nil {
+				t.Fatal(err)
+			}
+			refusal := &lux.Error{Status: 422, Code: "pool_unfit", Message: "exact refusal"}
+			if err := plan.onRefused(refusal); err != nil {
+				t.Fatal(err)
+			}
+			plan.refused = refusal
+			kept := lux.Resources{CPUs: 2, Memory: 2048 << 20, Disk: 20 << 30}
+			if err := w.s.settleMachine(w.ctx, run, plan, lux.Run{Spec: lux.StoredSpec{Resources: &kept}}); err != nil {
+				t.Fatal(err)
+			}
+			want := prior
+			if newer {
+				want = layer
+			}
+			var got string
+			var settled int
+			if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE((SELECT agent_machine::text FROM sessions WHERE id = 'ssn_'||$1), 'null'),
+				(SELECT count(*) FROM machine_moves WHERE id = 'mmv_s' AND settled_at IS NOT NULL AND refused = 'pool_unfit')`, org).Scan(&got, &settled); err != nil {
+				t.Fatal(err)
+			}
+			var gotJSON, wantJSON any
+			_ = json.Unmarshal([]byte(got), &gotJSON)
+			_ = json.Unmarshal([]byte(want), &wantJSON)
+			if !reflect.DeepEqual(gotJSON, wantJSON) {
+				t.Fatalf("session layer %s, want %s", got, want)
+			}
+			if settled != 1 {
+				t.Fatal("the session's move was not settled as refused")
+			}
+		})
+	}
+}
+
+// A move's target removed while it was under way (to_size_id cleared, the
+// layer dropped with it): the resume settles it on what lux applied, with
+// no refusal and no layer brought back; a settled move's history stays.
+func TestMachineSettlementAfterTargetSizeRemoved(t *testing.T) {
+	w := newResumeWorld(t)
+	for _, q := range []string{
+		`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_gone_'||$1, $1, 'Gone', 4, 4096, 40)`,
+		`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, settled_at) VALUES ('mmv_hist', $1, 'wi_'||$1, 'run_'||$1, 'implementer', 'raise', '{"sizeId":"old"}', 'msz_gone_'||$1, 'resize', now())`,
+		`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_open', $1, 'wi_'||$1, 'run_'||$1, 'implementer', 'raise', '{"sizeId":"old","previousRaise":null}', 'msz_gone_'||$1, 'resize')`,
+		`DELETE FROM machine_sizes WHERE id = 'msz_gone_'||$1`,
+	} {
+		if _, err := w.owner.Exec(w.ctx, q, w.run.Org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := &delivery.Machine{SizeID: "old", Name: "Old", CPUs: 2, MemoryMiB: 2048, DiskGiB: 20}
+	plan := &ResizePlan{Recorded: old, Target: old}
+	if err := w.s.movePlan(w.ctx, w.run, plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.s.settleMachine(w.ctx, w.run, plan, lux.Run{}); err != nil {
+		t.Fatal(err)
+	}
+	var settled, history int
+	var raises delivery.Raises
+	if err := w.owner.QueryRow(w.ctx, `SELECT
+		(SELECT count(*) FROM machine_moves WHERE id = 'mmv_open' AND settled_at IS NOT NULL AND refused IS NULL AND to_size_id IS NULL),
+		(SELECT count(*) FROM machine_moves WHERE id = 'mmv_hist' AND to_size_id IS NULL AND settled_at IS NOT NULL),
+		(SELECT agent_machines FROM tasks WHERE id = $1)`, w.run.TaskID).Scan(&settled, &history, &raises); err != nil {
+		t.Fatal(err)
+	}
+	if settled != 1 || history != 1 || len(raises) != 0 {
+		t.Fatalf("settled=%d history=%d raises=%v", settled, history, raises)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'machine.refused'`); n != 0 {
+		t.Fatalf("a removed target was refused %d times", n)
+	}
+}
 
 // placementLux is lux as far as a resume's timing goes: Get answers the
 // Run with the placements set, or an error, and counts what was asked.
 type placementLux struct {
 	lux.Client
-	mu   sync.Mutex
-	run  lux.Run
-	err  error
-	gets int
+	mu    sync.Mutex
+	run   lux.Run
+	err   error
+	gets  int
+	pools []lux.Pool
+}
+
+func (f *placementLux) Pools(context.Context) ([]lux.Pool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pools, nil
 }
 
 func (f *placementLux) Get(context.Context, string) (lux.Run, error) {

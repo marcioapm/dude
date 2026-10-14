@@ -29,6 +29,9 @@ const maxPendingRequests = 3
 
 // The tools, and which roles have them (docs/design/agent-tools.md).
 var tools = []tool{
+	define("list_machine_sizes", "The larger machine sizes this Run may move to, with their pools.", machineRoles, listMachineSizes).
+		describe(machineOffer(false)),
+	define("request_machine", "Move to a larger machine.", machineRoles, requestMachine).describe(machineOffer(true)),
 	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
 		"asked for them, and each one's relations: what it is blocked by (and whether that merged), what it blocks, "+
 		"what it is related to, and whether it can start — optionally only those mentioning some text, or only "+

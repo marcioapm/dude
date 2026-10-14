@@ -3,14 +3,1045 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestMachineResetWithoutActiveRun(t *testing.T) {
+	for _, note := range []string{"", "Use fewer workers"} {
+		t.Run(note, func(t *testing.T) {
+			w := newWorld(t)
+			task := w.task()
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_standard","moveId":"mmv_old","askedBy":"run_old","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+			person := w.person("Resetter")
+			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": note})
+			if status != 200 {
+				t.Fatalf("reset: %d %v", status, out)
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+				t.Fatal("layer not cleared")
+			}
+			if w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.reset' AND payload->>'note'=$2 AND run_id IS NULL`, task, note) != 1 {
+				t.Fatal("missing reset note event, on the task alone")
+			}
+			if w.count(`SELECT count(*) FROM machine_moves WHERE task_id=$1`, task) != 0 {
+				t.Fatal("inactive Reset created a move")
+			}
+			if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+				t.Fatalf("empty reset=%d", status)
+			}
+		})
+	}
+}
+
+func TestMachineResetActiveRunValidatesBeforeMove(t *testing.T) {
+	for _, tc := range []struct {
+		name, note string
+		refuse     bool
+	}{{"accepted without note", "", false}, {"accepted with note", "Use two workers", false}, {"refused", "x", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			task, runID, live := w.raisedImplementer()
+			if tc.refuse {
+				mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_missing' WHERE organization_id=$1 AND is_default`, w.org)
+			}
+			person := w.person("Resetter")
+			status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": tc.note})
+			if tc.refuse {
+				e, _ := out["error"].(map[string]any)
+				if status != 422 || e["code"] != "unknown_pool" || e["message"] != "Standard's pool has no host it fits" {
+					t.Fatalf("refusal: %d %v", status, out)
+				}
+				if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 ||
+					w.count(`SELECT count(*) FROM runs WHERE id=$1 AND control='none'`, runID) != 1 || w.count(`SELECT count(*) FROM machine_moves`) != 0 {
+					t.Fatal("refused Reset changed state")
+				}
+				return
+			}
+			if status != 200 {
+				t.Fatalf("reset: %d %v", status, out)
+			}
+			w.until("reset settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, runID) == 1
+			})
+			want := "Moved back to Standard by Resetter."
+			if tc.note != "" {
+				want = "Moved back to Standard by Resetter: " + tc.note
+			}
+			if inputs := w.lux.ResumeInputs(live); len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], want+"\n\n") {
+				t.Fatalf("resume inputs %q", inputs)
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 || len(w.lux.Runs()) != 1 {
+				t.Fatal("Reset did not clear layer on the same Run")
+			}
+			if got := w.machineOf(runID); got["name"] != "Standard" {
+				t.Fatalf("machine=%v", got)
+			}
+			if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+				t.Fatalf("second reset=%d", status)
+			}
+			if tc.note == "" {
+				return
+			}
+			// Three raises already used: the Reset gives none back.
+			for i := range 3 {
+				mustExec(t, w.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, settled_at) VALUES ($1, $2, $3, $4, 'implementer', 'raise', '{}', 'msz_big', 'resize', now())`, fmt.Sprintf("mmv_used%d", i), w.org, task, runID)
+			}
+			w.until("running again", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+			})
+			if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom again"}`); status != 422 || !strings.Contains(body, "a Reset does not give a move back") {
+				t.Fatalf("quota after Reset: %d %s", status, body)
+			}
+		})
+	}
+}
+
+// A raise that replaces the task's layer while a Reset is under way (lux's
+// dry run is between the Reset's read of the layer and its write) is kept:
+// the Reset drops only the raise it read, by its moveId.
+func TestResetDropsOnlyTheRaiseItRead(t *testing.T) {
+	w := newWorld(t)
+	task, _, live := w.raisedImplementer()
+	newer := `{"sizeId":"msz_big","moveId":"mmv_newer","askedBy":"run_other","reason":"again","at":"2026-10-13T01:00:00Z"}`
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == live && validateOnly {
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, newer)
+		}
+	}
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, newer) != 1 {
+		t.Fatalf("the newer raise was dropped: %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
+	}
+}
+
+func TestMachineResetKeepsPersonPause(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.raisedImplementer()
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("person paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	resumes := w.luxCalls(live, "resume")
+	person := w.person("Resetter")
+	if status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": "smaller"}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.sweep()
+	time.Sleep(150 * time.Millisecond)
+	w.sweep()
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause IS NULL`, runID) != 1 || w.luxCalls(live, "resume") != resumes {
+		t.Fatal("Reset resumed a person's pause")
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NULL`, runID) != 1 {
+		t.Fatal("pending Reset move missing")
+	}
+	if status, _ := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 404 {
+		t.Fatalf("cleared layer reset=%d", status)
+	}
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_new","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	if status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 409 || out["error"].(map[string]any)["code"] != "pending" {
+		t.Fatalf("pending reset=%d %v", status, out)
+	}
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{}' WHERE id=$1`, task)
+	w.resumeAgent(runID, w.lux.Runs()[0])
+	w.until("settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+	})
+	if inputs := w.lux.ResumeInputs(live); len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], "Moved back to Standard by Resetter: smaller") {
+		t.Fatalf("inputs %q", inputs)
+	}
+}
+
+func TestSessionMachineResetIsForMembers(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "read")
+	mustExec(t, s.owner, `UPDATE sessions SET agent_machine='{"sizeId":"msz_standard","moveId":"mmv_s","askedBy":"run_s","reason":"oom","at":"2026-10-13T00:00:00Z"}' WHERE id=$1`, id)
+	if status, _ := s.as(s.outsider, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id}); status != 404 {
+		t.Fatalf("outsider=%d", status)
+	}
+	if status, out := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id, "note": "fits"}); status != 200 {
+		t.Fatalf("member: %d %v", status, out)
+	}
+	if s.count(`SELECT count(*) FROM sessions WHERE id=$1 AND agent_machine IS NULL`, id) != 1 ||
+		s.count(`SELECT count(*) FROM events WHERE session_id=$1 AND event_type='machine.reset' AND payload->>'note'='fits' AND payload->'by'->>'id'=$2`, id, s.ana) != 1 {
+		t.Fatal("session reset not recorded")
+	}
+	if status, _ := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id}); status != 404 {
+		t.Fatalf("again=%d", status)
+	}
+	long := strings.Repeat("é", 2001)
+	if status, _ := s.as(s.ana, "POST", "/internal/agent-machines/reset", map[string]any{"sessionId": id, "note": long}); status != 400 {
+		t.Fatalf("long note=%d", status)
+	}
+}
+
+// liveImplementer delivers a task and returns it with its implementer Run
+// once lux and dude both have it running.
+func (w *world) liveImplementer() (task, runID, live string) {
+	w.t.Helper()
+	w.lux.Decide = hang
+	task = w.task()
+	w.deliver(task)
+	w.until("live agent", func() bool { return len(w.lux.Runs()) == 1 && w.lux.State(w.lux.Runs()[0].ID) == "running" })
+	runID = w.str(`SELECT id FROM runs WHERE task_id=$1 AND phase='implement'`, task)
+	w.until("recorded running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1
+	})
+	return task, runID, w.lux.Runs()[0].ID
+}
+
+// requestMachine calls request_machine as the Run's agent, validating with
+// lux's dry run as production does.
+func (w *world) requestMachine(runID, body string) (int, string) {
+	w.t.Helper()
+	srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
+		return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
+	}}).Handler())
+	defer srv.Close()
+	token, hash := agenttools.NewToken()
+	mustExec(w.t, w.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
+	req, _ := http.NewRequest("POST", srv.URL+"/tools/request_machine", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	out, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(out)
+}
+
+// A fixer's raise is fixer@task: with the organization naming a fixer size,
+// the fix Run still resumes on the size it asked for, the implementer's
+// layer is untouched, and only the fixer's Reset moves the fix Run.
+func TestAFixersRaiseIsTheFixersAndOnlyItsResetMovesIt(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return scripted(spec)
+	}
+	standard := w.str(`SELECT id FROM machine_sizes WHERE organization_id=$1 AND name='Standard'`, w.org)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || jsonb_build_object('fixer', jsonb_build_object('machineSize', $2::text)) WHERE id = $1`, w.org, standard)
+	task := w.task()
+	w.deliver(task)
+	fix := ""
+	w.until("a live fix Run", func() bool {
+		fix = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='fix' AND status='running' AND control='none' AND lux_state='running'), '')`, task)
+		return fix != ""
+	})
+	if status, body := w.requestMachine(fix, `{"size":"Bigger","reason":"go test killed, exit 137"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("the move settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, fix) == 1
+	})
+	if got := w.machineOf(fix); got["name"] != "Bigger" || got["from"] != "task" {
+		t.Fatalf("fix Run's machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND role='fixer' AND refused IS NULL AND refused_message IS NULL`, fix) != 1 ||
+		w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused'`, fix) != 0 {
+		t.Fatal("the fixer's move was not settled as moved, under fixer")
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines ? 'fixer' AND NOT agent_machines ? 'implementer'`, task) != 1 {
+		t.Fatalf("layer %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
+	}
+	// An implementer raise of its own: its Reset must not reach the fix Run.
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines = agent_machines || '{"implementer":{"sizeId":"msz_big","moveId":"mmv_impl","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	person := w.person("Resetter")
+	status, out := w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if status != 200 || out["moved"] != false {
+		t.Fatalf("implementer reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, fix) != 1 || w.machineOf(fix)["name"] != "Bigger" {
+		t.Fatal("the implementer's Reset moved the fix Run")
+	}
+	w.until("the fix Run running on lux again", func() bool {
+		return w.lux.State(w.str(`SELECT lux_run_id FROM runs WHERE id=$1`, fix)) == "running"
+	})
+	status, out = w.callAs(person, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "fixer"})
+	if status != 200 || out["moved"] != true {
+		t.Fatalf("fixer reset: %d %v", status, out)
+	}
+	w.until("the Reset settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, fix) == 1
+	})
+	if got := w.machineOf(fix); got["name"] != "Standard" {
+		t.Fatalf("after the fixer's Reset machine=%v", got)
+	}
+}
+
+// A fixer with no raise of its own runs on the implementer's: the
+// implementer's Reset moves the live fix Run, to the size the fixer's own
+// settings name when they name one.
+func TestTheImplementersResetMovesAFixerOnItsRaise(t *testing.T) {
+	for _, tc := range []struct{ name, fixerSize, want string }{
+		{"no fixer setting", "", "Standard"},
+		{"the fixer's setting", "msz_fixer", "Fixer size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+					return fakelux.Behaviour{Hang: true}
+				}
+				return scripted(spec)
+			}
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+			if tc.fixerSize != "" {
+				mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ($2, $1, $3, 3, 12288, 30)`, w.org, tc.fixerSize, tc.want)
+				mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || jsonb_build_object('fixer', jsonb_build_object('machineSize', $2::text)) WHERE id = $1`, w.org, tc.fixerSize)
+			}
+			task := w.task()
+			w.deliver(task)
+			fix := ""
+			w.until("a live fix Run", func() bool {
+				fix = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='fix' AND status='running' AND control='none' AND lux_state='running'), '')`, task)
+				return fix != ""
+			})
+			mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_impl","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+			mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, fix)
+			status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+			if status != 200 || out["moved"] != true {
+				t.Fatalf("implementer reset: %d %v", status, out)
+			}
+			w.until("the Reset settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, fix) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, fix); n != 1 {
+				t.Fatalf("moves on the fix Run: %d", n)
+			}
+			if got := w.machineOf(fix); got["name"] != tc.want {
+				t.Fatalf("fix Run's machine=%v, want %s", got, tc.want)
+			}
+			if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.reset' AND payload->'to'->>'name'=$2`, fix, tc.want) != 1 {
+				t.Fatalf("the Reset's notice does not name %s", tc.want)
+			}
+		})
+	}
+}
+
+// raisedImplementer is a live implementer recorded on Bigger, raised for
+// its task under moveId mmv_old.
+func (w *world) raisedImplementer() (task, runID, live string) {
+	w.t.Helper()
+	task, runID, live = w.liveImplementer()
+	mustExec(w.t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(w.t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', jsonb_build_object('sizeId','msz_big','moveId','mmv_old','askedBy',$2::text,'reason','oom','at','2026-10-13T00:00:00Z')) WHERE id=$1`, task, runID)
+	mustExec(w.t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	return task, runID, live
+}
+
+// Two Resets of a paused Run racing past the pending check: the second's
+// move row meets the one-at-a-time index and is answered 409, not 500.
+func TestASecondResetRacingTheFirstIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.raisedImplementer()
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	// The other Reset's row lands while this one's dry run is with lux.
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == live && validateOnly {
+			mustExec(t, w.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply) VALUES ('mmv_other', $1, $2, $3, 'implementer', 'reset', '{}', 'msz_big', 'resize')`, w.org, task, runID)
+		}
+	}
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("racing reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 {
+		t.Fatal("the refused Reset cleared the layer")
+	}
+}
+
+// A person's pause asked for and not yet taken (control pending, the Run
+// still running): a Reset then cannot park the Run for its move, so it is
+// a conflict, and the person's pause is not turned into dude's.
+func TestAResetDuringAPersonsPauseInFlightIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.raisedImplementer()
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control<>'none' AND dude_pause IS NULL`, runID) != 1 {
+		t.Fatalf("the pause is not in flight:\n%s", w.describeRuns())
+	}
+	control := w.str(`SELECT control::text FROM runs WHERE id=$1`, runID)
+	before := w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND dude_pause IS NULL AND control::text=$2`, runID, control) != 1 {
+		t.Fatalf("the person's pause was changed:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM machine_moves`); n != 0 {
+		t.Fatalf("moves recorded: %d", n)
+	}
+	if after := w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task); after != before {
+		t.Fatalf("layer %s, was %s", after, before)
+	}
+}
+
+// A Run lux has not started yet (scheduled) is not "nothing running": its
+// Reset is refused until it runs or pauses.
+func TestAResetOfAScheduledRunIsAConflict(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.raisedImplementer()
+	mustExec(t, w.owner, `UPDATE runs SET status='scheduled' WHERE id=$1`, runID)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "pending" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_old'`, task) != 1 {
+		t.Fatal("the layer was cleared")
+	}
+}
+
+// A Reset whose settings size gives the Run what it has already (same
+// numbers, same pool) parks nothing: the layer is cleared, no move is
+// recorded, and no refusal is said.
+func TestAResetToTheSameNumbersOnlyClearsTheLayer(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_same', $1, 'Same', 2, 8192, 20)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_same","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_same","name":"Same","from":"task"}' WHERE id=$1`, runID)
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if status != 200 || out["moved"] != false {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 || w.count(`SELECT count(*) FROM machine_moves`) != 0 ||
+		w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) != 1 || w.luxCalls(live, "stop") != 0 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.refused'`, task) != 0 {
+		t.Fatalf("a Reset to the same numbers moved the Run: lux calls %v", w.lux.CallsOf(live))
+	}
+}
+
+// A process that dies after lux accepted the sized resume, before dude
+// recorded it: the next sweep's resume finds lux resuming already, and the
+// move is settled from what lux then reports the Run has.
+func TestMachineMoveSettlesAfterRestartFollowingAcceptedResume(t *testing.T) {
+	w := newWorld(t)
+	_, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"jest killed, exit 137"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("parked", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	// lux takes the sized resume; its answer never reaches the process.
+	lost := &lostAnswer{Client: w.syncer.Lux}
+	lost.left.Store(1)
+	w.syncer.Lux = lost
+	w.until("settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != "Bigger" || got["from"] != "task" {
+		t.Fatalf("machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused'`, runID) != 0 ||
+		w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
+		t.Fatal("wrong settlement events")
+	}
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].ID != live || lost.left.Load() != 0 {
+		t.Fatal("the answer was not lost on the same Run")
+	}
+	if got := w.resumeResources(live); len(got) == 0 || got[0] == nil || got[0].CPUs != 4 {
+		t.Fatalf("lux took %v, want the sized resume first", got)
+	}
+}
+
+// lostAnswer is lux taking a real resume whose answer the process never
+// gets, left times: what a process dying mid-call leaves.
+type lostAnswer struct {
+	lux.Client
+	left atomic.Int32
+}
+
+func (l *lostAnswer) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	res, err := l.Client.Resume(ctx, id, in)
+	if err == nil && !in.ValidateOnly && l.left.Add(-1) >= 0 {
+		return lux.Run{}, errors.New("connection reset by peer")
+	}
+	return res, err
+}
+
+// lux refuses the real resume after the dry run passed (the pool went in
+// between), and the process dies before the fallback resume reaches lux.
+// The refusal was kept first, so the next sweep resumes without resources,
+// tells the agent lux's exact reason once, and the prior layer is back.
+func TestMachineMoveRefusalSurvivesRestartBeforeFallback(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, $2)`, w.org, bigPool)
+	standard := w.str(`SELECT id FROM machine_sizes WHERE organization_id=$1 AND name='Standard'`, w.org)
+	prior := `{"sizeId":"` + standard + `","moveId":"mmv_prior","askedBy":"run_old","reason":"earlier","at":"2026-10-13T00:00:00Z"}`
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, prior)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"duckdb out of memory"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	var real atomic.Int32
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == live && !validateOnly && real.Add(1) == 2 {
+			// The fallback resume never reaches lux: the process is gone.
+			panic(http.ErrAbortHandler)
+		}
+	}
+	w.until("refusal kept", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND refused='unknown_pool' AND settled_at IS NULL`, runID) == 1
+	})
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer'->>'moveId'='mmv_prior'`, task) != 1 {
+		t.Fatal("prior layer not restored before the fallback")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
+	})
+	var message string
+	if err := w.owner.QueryRow(context.Background(), `SELECT refused_message FROM machine_moves WHERE run_id=$1`, runID).Scan(&message); err != nil || message != "Bigger's pool has no host it fits" {
+		t.Fatalf("message %q %v", message, err)
+	}
+	told := 0
+	for _, in := range w.lux.ResumeInputs(live) {
+		if strings.HasPrefix(in, "You asked for Bigger; lux kept you on Standard: Bigger's pool has no host it fits; ask for another size\n\n") {
+			told++
+		}
+	}
+	if told != 1 {
+		t.Fatalf("exact reason delivered %d times: %q", told, w.lux.ResumeInputs(live))
+	}
+	if got := w.resumeResources(live); len(got) == 0 || got[len(got)-1] != nil {
+		t.Fatalf("fallback carried resources: %v", got)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, prior) != 1 {
+		t.Fatal("a refused raise kept its layer")
+	}
+	if got := w.machineOf(runID); got["name"] != "Standard" {
+		t.Fatalf("machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'message'=$2 AND payload->'to'->>'name'='Bigger'`, runID, message) != 1 {
+		t.Fatal("machine.refused not recorded once with the asked size")
+	}
+}
+
+// lux refuses a Reset's real resume after its dry run passed (the pool went
+// in between): the agent resumes where it was, told in the Reset's words
+// that it was to move back and where lux kept it, and the notice says so.
+func TestALuxRefusedResetIsToldAsAMoveBack(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("raised on lux", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1 && w.lux.State(live) == "running"
+	})
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id=$2 WHERE organization_id=$1 AND name='Standard'`, w.org, bigPool)
+	if status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"}); status != 200 || out["moved"] != true {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	w.until("settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
+	})
+	inputs := w.lux.ResumeInputs(live)
+	if len(inputs) == 0 || !strings.HasPrefix(inputs[len(inputs)-1], "You were to move back to Standard; lux kept you on Bigger: Standard's pool has no host it fits.\n\n") {
+		t.Fatalf("inputs %q", inputs)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'kind'='reset'
+		AND payload->>'message'='Standard''s pool has no host it fits' AND payload->'kept'->>'name'='Bigger'`, runID) != 1 {
+		t.Fatal("machine.refused not recorded once for the Reset")
+	}
+}
+
+// A refused raise puts back the layer it replaced only while the layer is
+// still its own: another Run of the role (two reviewers share one) that
+// raised it since keeps its raise.
+func TestARefusedRaiseLeavesANewerRaiseAlone(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, $2)`, w.org, bigPool)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	// The pool goes before the real resume, and another Run's raise
+	// replaces this one's in the task's layer.
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	newer := `{"sizeId":"msz_big","moveId":"mmv_newer","askedBy":"run_other","reason":"again","at":"2026-10-13T01:00:00Z"}`
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, newer)
+	w.until("settled refused", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused='unknown_pool'`, runID) == 1
+	})
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, newer) != 1 {
+		t.Fatalf("the newer raise was replaced: %s", w.str(`SELECT agent_machines::text FROM tasks WHERE id=$1`, task))
+	}
+}
+
+// A person pauses the Run while dude's machine park is under way: their
+// pause stands (no resume on dude's account), the move stays pending, and
+// their later resume carries it out.
+func TestPersonPauseDuringMachineMoveIsKept(t *testing.T) {
+	w := newWorld(t)
+	_, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	resumes := w.luxCalls(live, "resume")
+	w.until("paused", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, runID) == 1 })
+	for range 3 {
+		w.pump()
+	}
+	if w.luxCalls(live, "resume") != resumes || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause IS NULL`, runID) != 1 {
+		t.Fatal("a person's pause was resumed on dude's account")
+	}
+	if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL`, runID) != 1 {
+		t.Fatal("move settled without a resume")
+	}
+	w.resumeAgent(runID, w.lux.Runs()[0])
+	w.until("settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != "Bigger" {
+		t.Fatalf("machine=%v", got)
+	}
+}
+
+func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
+	w := newWorld(t)
+	_, runID, liveID := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"suite killed at four workers"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("move settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+	})
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].ID != liveID {
+		t.Fatal("machine move replaced Run")
+	}
+	if got := w.machineOf(runID); got["name"] != "Bigger" || got["from"] != "task" {
+		t.Fatalf("machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
+		t.Fatal("missing raised settlement")
+	}
+	want := "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on.\n\n"
+	if inputs := w.lux.ResumeInputs(liveID); len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) {
+		t.Fatalf("resume inputs %q", inputs)
+	}
+}
+
+// The scripted implementer asks for a larger machine in its first turn.
+// Accepted, that turn ends without the work being done or the phase
+// finishing: the Run is parked, resumed on the size, and its work is the
+// resumed turn's. Refused (nothing larger by that name), the turn is not
+// held: it carries on and the phase finishes on its size.
+func TestASuccessfulMachineRequestEndsTheTurnAndARefusedOneDoesNot(t *testing.T) {
+	for _, accepted := range []bool{true, false} {
+		t.Run(fmt.Sprint(accepted), func(t *testing.T) {
+			w := newWorld(t)
+			w.withTools()
+			w.onModel("implementer", fakeagent.MachineModel)
+			if accepted {
+				mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+					w.org, fakeagent.MachineSize)
+			}
+			task := w.task()
+			w.deliver(task)
+			runID := ""
+			w.until("the implementer to end its first turn", func() bool {
+				runID = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='implement'), '')`, task)
+				return runID != "" && len(w.lux.Runs()) > 0 && w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='agent.message'`, runID) > 0
+			})
+			live := w.lux.Runs()[0].ID
+			if !accepted {
+				w.until("the implementer to finish", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+				})
+				if w.count(`SELECT count(*) FROM machine_moves`) != 0 || w.lux.Runs()[0].Resumed != 0 ||
+					w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.requested' AND payload->>'refused' IS NULL`, runID) != 0 {
+					t.Fatal("a refused request moved the Run")
+				}
+				if said := strings.Join(w.said(runID), "\n"); !strings.Contains(said, "Implemented it.") || strings.Contains(said, fakeagent.MachineEndedTurn) {
+					t.Fatalf("a refused request ended the turn: %q", said)
+				}
+				return
+			}
+			w.until("the move settled and the implementer finished", func() bool {
+				if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1 &&
+					w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1`, runID) == 0 {
+					t.Fatalf("finished without moving; said %q, requested %s", w.said(runID),
+						w.str(`SELECT COALESCE(string_agg(payload::text, ' | '), '') FROM events WHERE run_id=$1 AND event_type IN ('machine.requested', 'agent.tool.dude')`, runID))
+				}
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1 &&
+					w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+			})
+			// The turn the move was accepted in ended without the work: the
+			// first agent message is the move's, and the work came after the
+			// resume on the larger machine.
+			said := w.said(runID)
+			if len(said) < 2 || said[0] != fakeagent.MachineEndedTurn || !strings.Contains(strings.Join(said[1:], "\n"), "Implemented it.") {
+				t.Fatalf("said %q", said)
+			}
+			if r := w.lux.Runs()[0]; r.ID != live || r.Resumed != 1 || len(w.lux.Runs()) != 1 {
+				t.Fatalf("resumed %d times, %d lux Runs", r.Resumed, len(w.lux.Runs()))
+			}
+			if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
+				t.Fatalf("machine=%v", got)
+			}
+			if in := w.lux.ResumeInputs(live); len(in) != 1 || !strings.HasPrefix(in[0], "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB).") {
+				t.Fatalf("resume input %q", in)
+			}
+			// The turn that ended on the move was not taken as the work's end:
+			// one turn_complete before the resume would have completed the
+			// phase on Standard with nothing committed.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'
+				AND cursor < (SELECT min(cursor) FROM events WHERE run_id=$1 AND event_type='run.paused')`, runID); n != 0 {
+				t.Fatalf("%d turn ends before the machine park", n)
+			}
+		})
+	}
+}
+
+// lux's pool list failing at the move's resume: the Run is not resumed
+// unsized (that would leave the move unsettled and the phase waiting for
+// good); the resume is retried, and once the pools answer the Run resumes
+// on the size and the phase finishes.
+func TestAMoveWhosePoolsCannotBeReadAtTheResumeIsRetried(t *testing.T) {
+	w := newWorld(t)
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	w.withTools()
+	w.onModel("implementer", fakeagent.MachineModel)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, $2, 4, 16384, 40)`,
+		w.org, fakeagent.MachineSize)
+	task := w.task()
+	w.deliver(task)
+	runID := ""
+	w.until("the move asked for", func() bool {
+		runID = w.str(`SELECT COALESCE((SELECT run_id FROM machine_moves WHERE task_id=$1), '')`, task)
+		return runID != ""
+	})
+	pools.fail.Store(true)
+	live := w.str(`SELECT lux_run_id FROM runs WHERE id=$1`, runID)
+	w.until("parked", func() bool { return w.lux.State(live) == "stopped" })
+	for range 10 {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		w.sweep()
+		// Each failed read spaces the next attempt, so pools that never
+		// answer are not asked on every sweep.
+		if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND next_attempt_at > now() + interval '3 seconds'`, runID) != 1 {
+			t.Fatalf("the retry was not spaced:\n%s", w.describeRuns())
+		}
+	}
+	reads := pools.calls.Load()
+	w.sweep()
+	if got := pools.calls.Load(); got != reads {
+		t.Fatalf("a sweep inside the back-off read lux's pools: %d reads, was %d", got, reads)
+	}
+	if w.luxCalls(live, "resume") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='machine'`, runID) != 1 ||
+		w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL`, runID) != 1 {
+		t.Fatalf("resumed without lux's pools: resumes %d\n%s", w.luxCalls(live, "resume"), w.describeRuns())
+	}
+	pools.fail.Store(false)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("the move settled and the implementer finished", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL AND refused_message IS NULL`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='completed'`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != fakeagent.MachineSize {
+		t.Fatalf("machine=%v", got)
+	}
+}
+
+// lux's pool list unreadable when a move is asked for: there is no dry run
+// to make, so neither the agent's request nor a person's Reset parks the
+// Run; the agent is told to ask again, and Reset answers 503.
+func TestNoMoveIsParkedWhileLuxsPoolsCannotBeRead(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	pools.fail.Store(true)
+	w.syncer.Lux = pools
+	unchanged := func(what string) {
+		t.Helper()
+		if w.luxCalls(live, "stop") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none' AND dude_pause IS NULL`, runID) != 1 ||
+			w.count(`SELECT count(*) FROM machine_moves`) != 0 {
+			t.Fatalf("%s parked the Run: lux calls %v", what, w.lux.CallsOf(live))
+		}
+	}
+	status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`)
+	var out struct{ Error string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if status != 422 || out.Error != "lux's pools could not be read; ask again shortly" {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	unchanged("the request")
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+		t.Fatal("the request wrote the layer")
+	}
+
+	raise := `{"sizeId":"msz_big","moveId":"mmv_read","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}`
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, raise)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	down := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(down.Close)
+	w.api = down.URL
+	code, res := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := res["error"].(map[string]any); code != 503 || e["code"] != "pools_unavailable" {
+		t.Fatalf("reset: %d %v", code, res)
+	}
+	unchanged("the Reset")
+	if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines->'implementer' = $2::jsonb`, task, raise) != 1 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='machine.reset'`, task) != 0 {
+		t.Fatal("the refused Reset changed the layer or recorded itself")
+	}
+}
+
+// A refusal is worded from the pool list the call already read: a refused
+// request reads lux's pools once, for its choices, which also name its
+// payload's pools (its size names a pool, so planning reads none), and a
+// refused Reset once.
+func TestARefusedMoveReadsLuxsPoolsNoMoreThanItsCallDid(t *testing.T) {
+	w := newWorld(t)
+	task, runID, _ := w.liveImplementer()
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, 'pool_missing')`, w.org)
+	reads := pools.calls.Load()
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`); status != 422 || !strings.Contains(body, `"code":"unknown_pool"`) {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	if got := pools.calls.Load() - reads; got != 1 {
+		t.Fatalf("a refused request read lux's pools %d times, want 1", got)
+	}
+
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_gone' WHERE organization_id=$1 AND is_default`, w.org)
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	w.api = srv.URL
+	reads = pools.calls.Load()
+	status, out := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := out["error"].(map[string]any); status != 422 || e["code"] != "unknown_pool" {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	if got := pools.calls.Load() - reads; got != 1 {
+		t.Fatalf("a refused Reset read lux's pools %d times, want 1", got)
+	}
+}
+
+// A call whose first read of lux's pools failed reads them once more when
+// lux refuses, so a platform_mismatch still names the pool and platforms:
+// the target names its own pool, so planning read none in between.
+func TestARefusalAfterAFailedPoolsReadNamesThePool(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Pools = append(fakelux.DefaultPools(), lux.Pool{ID: "pool_arm", Name: "armpool", Platforms: []string{"linux/arm64"}})
+	w.lux.ImagePlatforms = map[string][]string{"agent:test": {"linux/amd64"}}
+	task, runID, _ := w.liveImplementer()
+	pools := &poolsFailing{Client: w.syncer.Lux}
+	w.syncer.Lux = pools
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_arm', $1, 'Arm', 4, 16384, 40, 'pool_arm')`, w.org)
+	pools.failNext.Store(1)
+	reads := pools.calls.Load()
+	status, body := w.requestMachine(runID, `{"size":"Arm","reason":"oom"}`)
+	var out struct{ Code, Error string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if want := "Arm is in armpool, whose machines are linux/arm64; this agent's image is linux/amd64 only. Ask for another size, or ask a person to add an arm64 image."; status != 422 || out.Code != "platform_mismatch" || out.Error != want {
+		t.Fatalf("request: %d %s\nwant %q", status, body, want)
+	}
+	if got := pools.calls.Load() - reads; got != 2 {
+		t.Fatalf("a refused request whose first read failed read lux's pools %d times, want 2", got)
+	}
+
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_arm' WHERE organization_id=$1 AND is_default`, w.org)
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	w.api = srv.URL
+	pools.failNext.Store(1)
+	reads = pools.calls.Load()
+	code, res := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := res["error"].(map[string]any); code != 422 || e["code"] != "platform_mismatch" ||
+		e["message"] != "Standard is in armpool, whose machines are linux/arm64; this agent's image is linux/amd64 only" {
+		t.Fatalf("reset: %d %v", code, res)
+	}
+	if got := pools.calls.Load() - reads; got != 2 {
+		t.Fatalf("a refused Reset whose first read failed read lux's pools %d times, want 2", got)
+	}
+}
+
+// lux's dry run refuses the agent's move (its size's pool is gone): the
+// agent gets lux's words and code at once, and nothing stops or changes.
+func TestADryRunRefusalStopsNothing(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40, 'pool_missing')`, w.org)
+	status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`)
+	var out struct{ Error, Code string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if status != 422 || out.Code != "unknown_pool" || out.Error != "Bigger's pool has no host it fits; ask for another size" {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if w.luxCalls(live, "stop") != 0 ||
+		w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none' AND dude_pause IS NULL`, runID) != 1 ||
+		w.count(`SELECT count(*) FROM machine_moves`) != 0 || w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+		t.Fatalf("a refused dry run changed the Run: lux calls %v", w.lux.CallsOf(live))
+	}
+}
+
+// A lux from before dry runs and pools (lux#93) answers 400 to validateOnly
+// and to placement. The request is not refused for it: the Run is parked
+// and resumed with the same body. In its pool the move applies (resources
+// alone); to another pool lux refuses placement, and the Run resumes where
+// it was, told so, with nothing recorded as moved and the layer put back.
+func TestAnOlderLuxWithoutDryRunsOrPools(t *testing.T) {
+	for _, tc := range []struct {
+		name, size string
+		pool       *string
+	}{{"in its pool", "Bigger", nil}, {"to another pool", "Huge", ptr(bigPool)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.NoPlacement = true
+			task, runID, live := w.liveImplementer()
+			mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES ('msz_new', $1, $2, 4, 16384, 40, $3)`,
+				w.org, tc.size, tc.pool)
+			status, body := w.requestMachine(runID, `{"size":"`+tc.size+`","reason":"jest killed, exit 137"}`)
+			if status != 200 {
+				t.Fatalf("an older lux's 400 to the dry run refused the request: %d %s", status, body)
+			}
+			w.until("the move settled", func() bool {
+				return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL`, runID) == 1
+			})
+			inputs := w.lux.ResumeInputs(live)
+			if tc.pool == nil {
+				if got := w.machineOf(runID); got["name"] != tc.size || got["cpus"] != 4.0 {
+					t.Fatalf("machine=%v", got)
+				}
+				if len(inputs) != 1 || !strings.HasPrefix(inputs[0], "You now run on Bigger (4 CPUs · 16 GiB · 40 GiB).") ||
+					w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND refused IS NULL`, runID) != 1 {
+					t.Fatalf("inputs %q", inputs)
+				}
+				return
+			}
+			// Refused for good: resumed where it was, without resources or
+			// placement, and told the truth.
+			want := "You asked for Huge; lux kept you on Standard: this lux cannot move a Run between pools yet. Ask for a size in your own pool.\n\n"
+			if len(inputs) != 1 || !strings.HasPrefix(inputs[0], want) || strings.Contains(inputs[0], "You now run on") {
+				t.Fatalf("inputs %q", inputs)
+			}
+			if got := w.resumeResources(live); len(got) != 1 || got[0] != nil {
+				t.Fatalf("lux took %v", got)
+			}
+			if got := w.lux.ResumePlacementsOf(live); len(got) != 1 || got[0] != "" {
+				t.Fatalf("placements %v", got)
+			}
+			got := w.machineOf(runID)
+			if got["name"] != "Standard" || got["cpus"] != 2.0 || got["note"] != "Its settings now name Huge, but this resume kept Standard: this lux cannot move a stopped Run to another pool." {
+				t.Fatalf("machine=%v", got)
+			}
+			if w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND refused='bad_request'`, runID) != 1 ||
+				w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.refused' AND payload->>'code'='bad_request'
+					AND payload->'kept'->>'name'='Standard' AND payload->'to'->>'name'='Huge'`, runID) != 1 {
+				t.Fatal("the refusal was not settled once")
+			}
+			if w.count(`SELECT count(*) FROM tasks WHERE id=$1 AND agent_machines='{}'`, task) != 1 {
+				t.Fatal("the refused raise kept its layer")
+			}
+			if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.resized' AND payload->'machine'->>'name' <> 'Standard'`, runID) != 0 {
+				t.Fatal("a resize to the refused size was recorded")
+			}
+		})
+	}
+}
+
+// What a submitted agent is told of its machine: the sizes it may move to,
+// with other pools named, in its prompt; a raised one says why it is on
+// it; the conductor's prompt ends the same way.
+func TestTheSubmittedPromptNamesTheSizesTheAgentMayMoveTo(t *testing.T) {
+	// Real models, so each prompt is the one a real agent reads.
+	w := conductorWorld(t, "llm-conductor")
+	w.onModel("implementer", "llm-implementer")
+	w.withTools()
+	w.syncer.Agent.ToolsService = true
+	w.lux.Decide = hang
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id) VALUES
+		('msz_big', $1, 'Bigger', 4, 16384, 40, NULL), ('msz_huge', $1, 'Huge', 8, 32768, 80, $2), ('msz_vast', $1, 'Vast', 64, 262144, 80, $2)`, w.org, bigPool)
+	task := w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_x","askedBy":"run_x","role":"implementer","reason":"jest killed, exit 137","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
+	w.deliver(task)
+	impl := ""
+	w.until("the implementer on lux", func() bool {
+		impl = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id=$1 AND phase='implement'), '')`, task)
+		return impl != "" && w.promptOf(impl) != ""
+	})
+	prompt := w.promptOf(impl)
+	want := "## Your machine\n\nYou run on Bigger (4 CPUs · 16 GiB · 40 GiB), raised for this task after the implementer asked: " +
+		"\"jest killed, exit 137\". Larger sizes you may move to: Huge (8 · 32, big pool). "
+	if !strings.Contains(prompt, want) || !strings.Contains(prompt, "dude machine request SIZE --reason") || strings.Contains(prompt, "Vast") {
+		t.Fatalf("implementer's prompt:\n%s", prompt)
+	}
+	// The conductor of another task, on its Small: every larger size that
+	// fits a host of its pool.
+	other := w.task()
+	status, out := w.call("/internal/tasks/"+other+"/talk", map[string]any{})
+	conductor, _ := out["runId"].(string)
+	if status != 201 || conductor == "" {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("the conductor on lux", func() bool { return w.promptOf(conductor) != "" })
+	if p := w.promptOf(conductor); !strings.HasSuffix(p, "\n\n## Your machine\n\nYou run on Small (0.5 CPUs · 1 GiB · 10 GiB). Larger sizes you may move to: "+
+		"Standard (2 · 8), Bigger (4 · 16), Huge (8 · 32, big pool). If something you need to run is killed for memory (exit 137, "+
+		"\"Killed\", an out-of-memory error) or is far too slow for its CPUs, do not call it flaky: run it again with fewer workers "+
+		"if that is enough, and otherwise move with `dude machine request SIZE --reason \"…\"`, saying what ran out. A move keeps "+
+		"your conversation and checkout; running processes and /tmp are not kept.") {
+		t.Fatalf("conductor's prompt:\n%s", p)
+	}
+}
 
 // Resizing a parked Run on resume (lux#51), through the fake lux's HTTP
 // API: what dude sends, what lux's spec then holds, and what runs.machine
@@ -245,11 +1276,8 @@ func (w *world) sleepAgain(runID, web string) {
 	})
 }
 
-// A size in another pool cannot be had by a resume: lux binds a Run to the
-// pool it was submitted to. The preview wakes on the size it has, nothing
-// is sent, and its record says why, naming both; the memory limit lux gave
-// it, still its size's, is kept.
-func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
+// A settings-driven wake sends the other pool and records lux's binding.
+func TestAWakeIntoASizeInAnotherPoolMovesToThatPool(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.lux.MemoryShare = 0.95
@@ -261,20 +1289,22 @@ func TestAWakeIntoASizeInAnotherPoolKeepsTheSizeAndSaysWhy(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_big"}' WHERE id = $1`, w.project)
 	w.wakeAgain(runID, web)
 
-	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] != nil {
-		t.Errorf("the wake sent %v, want nothing", got)
+	want := lux.Resources{CPUs: 8, Memory: 16 * gibB, Disk: 40 * gibB}
+	if got := w.resumeResources(luxRun); len(got) != 1 || got[0] == nil || *got[0] != want {
+		t.Fatalf("resources: %v", got)
 	}
-	if got := w.luxResources(luxRun); got.CPUs != 2 {
-		t.Errorf("lux's spec = %+v, want Standard's", got)
+	if got := w.lux.ResumePlacementsOf(luxRun); len(got) != 1 || got[0] != bigPool {
+		t.Fatalf("placement: %v", got)
+	}
+	if got := w.luxResources(luxRun); got != want {
+		t.Fatalf("lux's spec: %+v", got)
 	}
 	m := w.machineOf(runID)
-	want := "Its settings now name Big, in another pool: a stopped Run cannot change pools, so it keeps Standard. A new Run gets Big."
-	// Standard's 8 GiB, of which the container gets 95%, to a MiB.
-	if m["name"] != "Standard" || m["cpus"] != 2.0 || m["note"] != want || m["memoryLimit"] != float64(int64(7782)<<20) {
-		t.Errorf("runs.machine = %v, want Standard kept with the reason and its memory limit", m)
+	if m["name"] != "Big" || m["poolId"] != bigPool || m["note"] != nil {
+		t.Fatalf("record: %v", m)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized' AND payload->'machine'->>'note' = $2`, runID, want); n != 1 {
-		t.Errorf("%d run.resized with the reason, want 1", n)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
+		t.Fatalf("run.resized: %d", n)
 	}
 }
 
@@ -321,28 +1351,25 @@ func TestASizeNamingTheDefaultPoolByIdIsTheSamePoolAsNone(t *testing.T) {
 	}
 }
 
-// poolsFailing is a lux whose pool list fails while fail is set; calls
-// counts the lists asked for.
+// poolsFailing is a lux whose pool list fails while fail is set, and for
+// the next failNext lists; calls counts the lists asked for.
 type poolsFailing struct {
 	lux.Client
-	fail  atomic.Bool
-	calls atomic.Int32
+	fail     atomic.Bool
+	failNext atomic.Int32
+	calls    atomic.Int32
 }
 
 func (c *poolsFailing) Pools(ctx context.Context) ([]lux.Pool, error) {
 	c.calls.Add(1)
-	if c.fail.Load() {
+	if n := c.failNext.Load(); c.fail.Load() || n > 0 && c.failNext.CompareAndSwap(n, n-1) {
 		return nil, &lux.Error{Status: 503, Code: "unavailable", Message: "down"}
 	}
 	return c.Client.Pools(ctx)
 }
 
-// A preview in a named pool whose settings move to a size naming none
-// (lux's default) needs lux's pool list to tell. While it fails, the wake
-// goes on on the Run's size and nothing is recorded: not knowing is not
-// "another pool". Once lux answers, the record says the size is in
-// another pool; later wakes to the same size do not ask lux again, and
-// record nothing new.
+// An unavailable default pool list preserves the size; once readable,
+// the next wake moves to that default and subsequent wakes send no resize.
 func TestAWakeWhenLuxsPoolsCannotBeReadSendsAndRecordsNothing(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
@@ -375,19 +1402,13 @@ func TestAWakeWhenLuxsPoolsCannotBeReadSendsAndRecordsNothing(t *testing.T) {
 	pools.fail.Store(false)
 	w.sleepAgain(runID, web)
 	w.wakeAgain(runID, web)
-	want := "Its settings now name Tiny, in another pool: a stopped Run cannot change pools, so it keeps Big. A new Run gets Tiny."
-	if m := w.machineOf(runID); m["name"] != "Big" || m["note"] != want {
-		t.Errorf("runs.machine = %v, want Big with note %q", m, want)
+	if m := w.machineOf(runID); m["name"] != "Tiny" || m["poolId"] != defaultPool || m["note"] != nil {
+		t.Fatalf("record after pools recovered: %v", m)
 	}
-	asked := pools.calls.Load()
-
 	w.sleepAgain(runID, web)
 	w.wakeAgain(runID, web)
-	if got := w.resumeResources(luxRun); len(got) != 3 || got[1] != nil || got[2] != nil {
-		t.Errorf("the wakes sent %v, want nothing", got)
-	}
-	if n := pools.calls.Load(); n != asked {
-		t.Errorf("lux's pools were asked for %d more times for a size already found elsewhere", n-asked)
+	if got := w.resumeResources(luxRun); len(got) != 3 || got[1] == nil || got[2] != nil {
+		t.Errorf("the wakes sent %v, want unchanged, Tiny, unchanged", got)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.resized'`, runID); n != 1 {
 		t.Errorf("%d run.resized, want 1", n)
@@ -602,6 +1623,11 @@ func TestALuxThatCannotResizeResumesTheRunAsItIs(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
 		t.Errorf("the Run did not resume:\n%s", w.describeRuns())
+	}
+	// No move was asked for: the agent gets its usual nudge, not lux's error.
+	nudge := "You were paused and have been resumed. Continue the task where you left off."
+	if in := w.lux.ResumeInputs(r.ID); len(in) != 1 || in[0] != nudge {
+		t.Errorf("resume inputs %q, want the nudge", in)
 	}
 }
 

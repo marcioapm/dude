@@ -248,6 +248,105 @@ export function replacePreviewMachineSize<T extends Record<string, unknown>>(pre
   return (to === null ? rest : { ...rest, machineSize: to }) as unknown as T;
 }
 
+// ---------------------------------------------------------------------------
+// Agent machine moves (docs/design/agent-machine-request.md)
+// ---------------------------------------------------------------------------
+
+/** A Run's machine as recorded (`runs.machine`) and as move events carry it. */
+export interface Machine {
+  sizeId: string;
+  name: string;
+  cpus: number;
+  memoryMiB: number;
+  diskGiB: number;
+  /** lux's pool id; null: lux's default pool. */
+  poolId: string | null;
+  /** lux's pool name, when known. */
+  pool: string | null;
+  /** Where the size came from: "task" or "session" for a raise. */
+  from: "task" | "session" | "project" | "organization" | "implementer" | "default" | "";
+  raised?: Raise;
+  note?: string;
+  diskKept?: { requestedGiB: number; reason?: string };
+  sinceEpoch?: number;
+}
+
+/** A size an agent raised for its task (per role) or session. */
+export interface Raise {
+  sizeId: string;
+  moveId: string;
+  /** The Run that asked. */
+  askedBy: string;
+  role?: string;
+  reason: string;
+  at: string;
+}
+
+/** A pool on a move event: lux's id (null: the default pool) and its name when known. */
+export interface MovePool {
+  id: string | null;
+  name: string | null;
+}
+
+/** What every move event carries: whole machines, and pools when they differ. */
+export interface MachineMove {
+  /** Absent on a refused request: no move was made. */
+  moveId?: string;
+  role: string;
+  from: Machine;
+  to: Machine;
+  pool?: { from: MovePool; to: MovePool };
+}
+
+/** `machine.requested`, on the Run: the agent's call, accepted or refused before any park. */
+export interface MachineRequestedPayload extends MachineMove {
+  reason: string;
+  /** lux's code, or `not_larger`, for a refusal; absent when accepted. */
+  refused?: string;
+  /** The refusal's exact words, as the agent was told. */
+  message?: string;
+}
+
+/** `machine.raised`, on the Run: the layer is written and the move starts. */
+export type MachineRaisedPayload = MachineMove & { moveId: string };
+
+/** `machine.refused`, on the Run: lux refused the real resume; it resumed where it was. */
+export interface MachineRefusedPayload extends MachineMove {
+  moveId: string;
+  kind: "raise" | "reset";
+  /** What lux reports the Run kept. */
+  kept: Machine;
+  code: string;
+  message: string;
+}
+
+/** `machine.reset`, on the task or session: a person moved the role back to its settings' size. */
+export interface MachineResetPayload extends MachineMove {
+  /** "" when nothing was running: only the layer was cleared. */
+  moveId: string;
+  by: { id: string; name: string };
+  note: string;
+}
+
+/** A raised role on a task's or session's detail (`agentMachines`). */
+export interface AgentMachine {
+  role: string;
+  /** The raised size, names resolved; null when the size was removed since. */
+  size: Machine | null;
+  /** What the role runs on without the raise. */
+  settings: Machine | null;
+  raise: Raise;
+  /** The Run that asked, and its role. */
+  askedBy: { runId: string; role: string | null };
+  /** A role that follows another's raise (the fixer the implementer's) has no Reset of its own. */
+  followedBy: string[];
+}
+
+/** `DELETE /v1/tasks/:id/agent-machines/:role`, `DELETE /v1/sessions/:id/agent-machine`. */
+export const resetMachineSchema = z
+  .object({ note: z.string().refine((s) => [...s].length <= 2000, "at most 2000 characters").optional() })
+  .strict();
+
 /**
  * The size a role runs on: the project's, then the organization's — for
  * the fixer, then the implementer's over the same layers — else the

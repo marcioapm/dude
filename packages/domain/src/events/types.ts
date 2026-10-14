@@ -255,6 +255,30 @@ export const EventTypes = {
    */
   RunResized: "run.resized",
   /**
+   * An agent asked for a larger machine (request_machine). Payload:
+   * `MachineRequestedPayload`: whole machines, the reason, and for a
+   * refusal before any park `refused` and `message`, with no `moveId`.
+   */
+  MachineRequested: "machine.requested",
+  /**
+   * The task's (or session's) layer names the larger size and the Run is
+   * moving: parked, then resumed on it. On the Run. Payload:
+   * `MachineRaisedPayload` (`pool` when the move changes pools).
+   */
+  MachineRaised: "machine.raised",
+  /**
+   * lux refused the real resume of a move: the Run resumed where it was,
+   * told lux's exact message, and a raise's layer was put back. On the Run.
+   * Payload: `MachineRefusedPayload`.
+   */
+  MachineRefused: "machine.refused",
+  /**
+   * A person moved a role back to its settings' size; on the task or the
+   * session. Payload: `MachineResetPayload`; `note` is what the agent is
+   * told after "Moved back to <size> by <name>".
+   */
+  MachineReset: "machine.reset",
+  /**
    * How long a resume of the Run took, end to end, written once its agent
    * said something. Payload: `{ epoch, cause, moved, hostName, totalMs,
    * untilBusyMs, phases }`: `cause` is `answer`, `repository`, `person` or

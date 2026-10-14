@@ -14,6 +14,7 @@ import { isActive } from "../activity.ts";
 export type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type { QuestionAnswer as SentAnswer } from "@dude/design-system/components";
 import type {
+  AgentMachine,
   AgentRole,
   FileResult,
   SessionDetail,
@@ -268,6 +269,8 @@ export type { TaskRepository } from "@dude/domain";
 export interface TaskDetail extends Task {
   runs: Run[];
   escalation: Escalation | null;
+  /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
+  agentMachines: AgentMachine[];
 }
 
 /** What a message in a task's Chat reached: its conductor, made by it or not. */
@@ -862,6 +865,15 @@ export class ApiClient {
   }
 
   // -- machines: the organization's sizes, lux's pools -----------------------
+
+  /** Reset a role's raised machine to its settings' size; `moved` is false when no live Run had to move. */
+  resetTaskMachine(id: string, role: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(id)}/agent-machines/${encodeURIComponent(role)}`, note ? { note } : {});
+  }
+
+  resetSessionMachine(id: string, note = ""): Promise<{ ok: true; moved: boolean }> {
+    return this.#request("DELETE", `/v1/sessions/${encodeURIComponent(id)}/agent-machine`, note ? { note } : {});
+  }
 
   machineSizes(): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
     return this.#request("GET", "/v1/machines/sizes");

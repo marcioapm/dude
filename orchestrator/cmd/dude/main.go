@@ -103,7 +103,7 @@ func run(args []string, out io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
-		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "git") {
+		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "machine" || cmd == "git") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -147,6 +147,21 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return show(out, *asJSON, call("list_epics", map[string]any{}))
+	case "machine sizes":
+		if _, err := parse(fs, rest); err != nil {
+			return err
+		}
+		return show(out, *asJSON, call("list_machine_sizes", map[string]any{}))
+	case "machine request":
+		reason := fs.String("reason", "", "the command, exit or error that needs a larger machine")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || strings.TrimSpace(*reason) == "" {
+			return errors.New(`usage: dude machine request SIZE --reason "what ran out"`)
+		}
+		return show(out, *asJSON, call("request_machine", map[string]any{"size": args[0], "reason": *reason}))
 	case "repo list":
 		if _, err := parse(fs, rest); err != nil {
 			return err

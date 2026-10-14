@@ -14,11 +14,12 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, PersistedEvent, Run, RunStatus, SessionStatus, StartStage } from "@dude/domain";
+import type { AskItem, AttachmentInfo, CostOrigin, ItemAnswer, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent, Run, RunStatus, SessionStatus, StartStage } from "@dude/domain";
 import { EventTypes, START_STAGE_WORDS, TERMINAL_RUN_STATUSES, askItems, isStartStage, itemAnswers } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 import { formatDuration } from "@dude/design-system";
+import { moveWords, resetNotice, roleLabel } from "../machines.ts";
 import { instant } from "../instant.ts";
 
 /**
@@ -42,6 +43,13 @@ export interface ToolTurn {
   startedAt: string;
   endedAt: string | null;
   result: ToolResult | null;
+  /**
+   * A request_machine call: the sizes from its machine.requested (by name;
+   * the pool only when the move changes it; `from` null when no event named
+   * it, a refusal dude does not record), and the tool's answer, or its
+   * refusal's exact words and code (`not_larger`, `not_live`, lux's).
+   */
+  machine?: { from: string | null; to: string; pool: string | null; answer?: string; error?: string; code?: string };
   /** dude refused the call (a message over the rate, to no peer): why, in its words. */
   refusal?: string;
   /** The child sessions (subagents) this call started, in the order they started. */
@@ -325,6 +333,13 @@ export interface EndedTurn {
  */
 export interface StartState {
   kind: "start" | "resume" | "move";
+  /**
+   * A machine move (machine.requested, or a Reset of a live Run): the size it
+   * goes to, by name; the pool only when the move changes it. `stopped` once
+   * dude's park has stopped the Run: before that, the agent's own records
+   * are its last turn ending, not its return.
+   */
+  machine?: { role: string; to: string; pool: string | null; moveId: string | null; stopped: boolean };
   stage: StartStage | null;
   stageSince: string | null;
   /** When this start began: the Run's creation, the resume's request, or the move's stop. */
@@ -423,6 +438,7 @@ export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }
     composer: "Parked after going quiet. Resume it to steer.",
   },
   repository: { parked: "Paused to bring in a repository.", composer: "Bringing in a repository; it carries on in a moment." },
+  machine: { parked: "Paused to move to another machine.", composer: "Moving to another machine; it carries on in a moment." },
   unused: {
     parked: "Parked: nobody opened the preview for a while. Starting a server wakes it.",
     composer: "A parked branch preview: start a server to wake it.",
@@ -813,8 +829,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     // Only the harness's next report of a tool can be the ask's own.
     const ask = state.pendingAsk;
     if (isToolEvent) state.pendingAsk = null;
-    // The agent's own records (or lux reporting it running) end a start: it is up.
-    if (AGENT_UP.has(event.eventType)) endStart(state, event);
+    // The agent's own records (or lux reporting it running) end a start: it is up. A machine move's start ends
+    // only once the Run has stopped for it: until then they are the turn the request ended.
+    if (AGENT_UP.has(event.eventType) && !moveNotStopped(state)) endStart(state, event);
 
     switch (event.eventType) {
       case EventTypes.RunCreated:
@@ -860,11 +877,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         let start = state.start;
         if (stage === "park") {
           // A move: stopped with its work kept, then started on another machine.
-          start = newStart("move", since);
+          start = state.start?.machine ? state.start : newStart("move", since);
         } else if (!start) {
           start = newStart(state.ran ? "resume" : "start", event.occurredAt);
         }
         enterStage(start, stage, since);
+        // A stage past the park: the Run has stopped for its move.
+        if (start.machine && stage !== "park") start.machine.stopped = true;
         start.luxReason = reason;
         state.start = start;
         state.startStaged = true;
@@ -902,6 +921,57 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     }
 
     switch (event.eventType) {
+      case EventTypes.MachineRequested: {
+        const p = payload as unknown as MachineRequestedPayload;
+        const m = moveWords(p);
+        const requestCall = (t: Turn): t is ToolTurn => t.kind === "tool" && dudeToolName(t.tool) === "request_machine";
+        const called = turns.findLast((t): t is ToolTurn => requestCall(t) && t.status === "running")
+          ?? turns.findLast((t): t is ToolTurn => requestCall(t) && !t.machine?.from);
+        if (called) called.machine = { ...called.machine, from: m.from, to: m.to, pool: m.pool };
+        if (p.refused !== undefined) {
+          // Refused before any park: the tool card says it in the exact words; asked through the CLI, a notice does.
+          if (!called) turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: p.message ?? p.refused });
+          break;
+        }
+        state.start = moveStart(m, p.moveId ?? null, event.occurredAt);
+        state.activity = null;
+        break;
+      }
+      case EventTypes.MachineRaised: {
+        const m = moveWords(payload as unknown as MachineRaisedPayload);
+        const role = roleLabel(m.role).toLowerCase();
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
+          text: `Moving the ${role} to ${m.to}${m.pool ? `, in the ${m.pool} pool` : ""}: it keeps ${m.role === "conductor" ? "this conversation and its" : "its conversation and"} checkout; running processes stop.${laterRuns(m.role, m.to, event.taskId !== null)}` });
+        break;
+      }
+      case EventTypes.MachineRefused: {
+        const p = payload as unknown as MachineRefusedPayload;
+        if (state.start?.machine?.moveId === p.moveId) state.start = null;
+        const verb = p.kind === "reset" ? "was to move back to" : "asked for";
+        // The backend's words for lux's refusal (sizes and pools by name), made a sentence.
+        const why = /[.!?]$/.test(p.message) ? p.message : `${p.message}.`;
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt,
+          text: `The ${roleLabel(p.role).toLowerCase()} ${verb} ${p.to.name}; lux kept it on ${p.kept.name}: ${why}` });
+        break;
+      }
+      case EventTypes.MachineReset: {
+        const p = payload as unknown as MachineResetPayload;
+        turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: resetNotice(p) });
+        // Only a reset that moves a live Run (it has a moveId) has a move to show.
+        if (p.moveId) state.start = moveStart(moveWords(p), p.moveId, event.occurredAt);
+        break;
+      }
+      case EventTypes.RunResized: {
+        // lux applied the move's size: said once, with how long the move has taken so far. A size lux kept
+        // instead is the refusal's to say (machine.refused follows); size names are unique per organization.
+        const machine = (payload as { machine?: { name?: unknown } }).machine;
+        const move = state.start?.machine;
+        if (state.start && move && typeof machine?.name === "string" && machine.name === move.to) {
+          turns.push({ kind: "notice", id: event.eventId, notice: "unparked", at: event.occurredAt,
+            text: `The ${roleLabel(move.role).toLowerCase()} moved to ${machine.name} in ${formatDuration(msBetween(state.start.startedAt, event.occurredAt))}, with its conversation and work.` });
+        }
+        break;
+      }
       case EventTypes.PlanUpdated: {
         // The harness adapter already decided this was a plan rather than a
         // tool call, so nothing here needs to know what the tool was named.
@@ -958,12 +1028,22 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
         const existing = completedCall(state, callId, tool);
+        const result = resultFrom(payload);
+        const machineCall = dudeToolName(existing?.tool ?? tool) === "request_machine";
+        const outcome = machineCall ? machineOutcome(result, payload.status === "error") : null;
+        if (existing && outcome) {
+          const asked = (existing.args as { size?: unknown } | null)?.size;
+          existing.machine = { from: existing.machine?.from ?? null, to: existing.machine?.to ?? (typeof asked === "string" ? asked : "a larger machine"),
+            pool: existing.machine?.pool ?? outcome.pool, ...outcome.said };
+        }
         if (existing) {
-          // A repeated completion never re-times a finished call.
+          // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
           if (!existing.endedAt) {
             claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
             indexCall(state, existing);
             endTool(existing, payload, event.occurredAt);
+            // request_machine's refusal fails its call even when the harness reported it completed.
+            if (outcome?.said.error !== undefined) existing.status = "failed";
             takeRefusal(state, existing);
           }
         } else {
@@ -1361,12 +1441,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.RunPaused:
         placeHeldUnpark(state, event.occurredAt);
         state.untimedUnpark = null;
-        if (state.start && !state.start.failed) state.start = null;
+        // dude's stop for a machine move (run.paused, confirmed) is the move's park done; any other pause ends a start.
+        if (state.start?.machine && payload.confirmed === true) {
+          state.start.machine.stopped = true;
+          state.activity = null;
+          state.activeTool = null;
+        } else if (state.start && !state.start.failed) state.start = null;
         break;
 
       case EventTypes.ServersChanged:
-        // lux reports the Run running (after a wait for a host, a resume or a move): it is up.
-        if (payload.change === "state" && payload.luxState === "running") endStart(state, event);
+        // lux reports the Run running (after a wait for a host, a resume or a move): it is up. Not a move's Run before its stop.
+        if (payload.change === "state" && payload.luxState === "running" && !moveNotStopped(state)) endStart(state, event);
         break;
 
       case EventTypes.RunResumeTimed: {
@@ -1671,7 +1756,9 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
 function shownStart(start: StartState | null, runStatus: RunStatus | undefined): StartState | null {
   if (!start || start.failed) return start;
   if (start.kind === "start" && runStatus === "running") return null;
-  if (runStatus === "paused") return null;
+  // A machine move is paused by dude between its park and its resume, once its park is done. A Run already
+  // paused (a person's pause, or an idle park) moves at its next resume: nothing is shown until that resume's stages.
+  if (runStatus === "paused" && !start.machine?.stopped) return null;
   return start;
 }
 
@@ -1721,6 +1808,45 @@ function normalizeTodoStatus(status: unknown): PlanItem["status"] {
   return (TODO_STATUSES as readonly string[]).includes(status as string)
     ? (status as PlanItem["status"])
     : "pending";
+}
+
+/** The tool's answer, or its refusal's words and code: exactly one of `answer` and `error`. */
+type MachineSaid = { answer?: string; error?: string; code?: string };
+
+/**
+ * What request_machine answered, from its output: `{size, pool?, answer}`
+ * when it moved, `{error, code}` when refused (the JSON route's 422, MCP's
+ * structured content), or a refusal's bare words when the harness kept only
+ * the text. Null when it said nothing.
+ */
+function machineOutcome(result: ToolResult | null, failed: boolean): { said: MachineSaid; pool: string | null } | null {
+  const raw = (result?.output?.head ?? result?.stdout?.head)?.trim();
+  if (!raw) return null;
+  let out: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") out = parsed as Record<string, unknown>;
+  } catch {
+    // The refusal's words alone.
+  }
+  const pool = typeof out.pool === "string" && out.pool ? out.pool : null;
+  if (typeof out.error === "string") {
+    return { said: { error: out.error, ...(typeof out.code === "string" && out.code ? { code: out.code } : {}) }, pool };
+  }
+  if (typeof out.answer === "string" && !failed) return { said: { answer: out.answer }, pool };
+  return { said: failed ? { error: raw } : { answer: raw }, pool };
+}
+
+/**
+ * What else a raise changes, as the design's notice says it: later Runs of
+ * the role in the task (the implementer's reach the fixer too), or nothing
+ * more for a session, whose agent is the one that moved.
+ */
+function laterRuns(role: string, size: string, inTask: boolean): string {
+  if (!inTask) return "";
+  if (role === "conductor") return ` Later conductors in this task run on ${size} too.`;
+  if (role === "implementer") return ` Later implementer and fixer Runs in this task run on ${size} too.`;
+  return ` Later ${roleLabel(role).toLowerCase()} Runs in this task run on ${size} too.`;
 }
 
 /** A tool call's turn as its call reports it, running. */
@@ -2079,6 +2205,19 @@ function placeHeldUnpark(state: Projection, at: string): void {
 
 function newStart(kind: StartState["kind"], startedAt: string): StartState {
   return { kind, stage: null, stageSince: null, startedAt, done: [], luxReason: null, failed: null };
+}
+
+/** A machine move's start, parking from `at`. */
+function moveStart(m: { role: string; to: string; pool: string | null }, moveId: string | null, at: string): StartState {
+  const start = newStart("move", at);
+  start.machine = { role: m.role, to: m.to, pool: m.pool, moveId, stopped: false };
+  enterStage(start, "park", at);
+  return start;
+}
+
+/** A machine move whose Run has not stopped yet: the agent's records are still the turn the request ended. */
+function moveNotStopped(state: Projection): boolean {
+  return !!state.start?.machine && !state.start.machine.stopped;
 }
 
 /** The start is in `stage` from `since`: the stage it was in, if another, is done, timed by the two `since`s. */

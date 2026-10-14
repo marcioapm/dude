@@ -59,6 +59,10 @@ type PromptInput struct {
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
 	Images []PromptImage
+	// Where the agent runs and the sizes it may move to
+	// (MachineChoices.Line), last in a phase's prompt; "" says nothing. A
+	// conductor's and a session agent's prompt get it after, at submit.
+	Machine string
 	// The task's epic as the Run is briefed on it (EpicBriefing): its
 	// peers, the notes in force, messages held for it. "" off an epic.
 	Coordination string
@@ -439,6 +443,17 @@ func PromptRoleFor(phase, role string) string {
 	return PromptRoleForPhase[phase]
 }
 
+// PhaseForPromptRole is the phase whose Runs take a settings role; "" for
+// the conductor and brainstorm, which are Runs with no phase.
+func PhaseForPromptRole(role string) string {
+	for phase, r := range PromptRoleForPhase {
+		if r == role {
+			return phase
+		}
+	}
+	return ""
+}
+
 // instructions is what the role is told to do: the organization's
 // prompt if it has one, else dude's; then the project's, added after it or
 // in its place. dude's own fixer instructions come in two parts, either
@@ -660,6 +675,9 @@ func Prompt(phase string, in PromptInput) string {
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
 		add("## Project notes\n\n" + c)
+	}
+	if in.Machine != "" {
+		add(in.Machine)
 	}
 	return strings.Join(sections, "\n\n")
 }

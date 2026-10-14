@@ -47,7 +47,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -516,7 +516,7 @@ export const runSchema = z.object({
    * writes in its Chat. Null
    * when not paused, or when a person paused it.
    */
-  dudePause: z.enum(["person", "idle", "repository", "unused", "conductor"]).nullable().default(null),
+  dudePause: z.enum(["person", "idle", "repository", "unused", "conductor", "machine"]).nullable().default(null),
   /** Tokens as the agent reported them. Context is the latest size, not a sum. */
   tokens: z
     .object({
@@ -544,6 +544,10 @@ export const runSchema = z.object({
       /** The pool's name in lux when the Run was submitted. */
       pool: z.string().nullable(),
       from: z.string().optional(),
+      /** The raise it runs on (`from` "task" or "session"), copied from the layer when the Run was sized. */
+      raised: z
+        .object({ sizeId: z.string(), moveId: z.string(), askedBy: z.string(), role: z.string().optional(), reason: z.string(), at: z.string() })
+        .optional(),
       /** The memory limit lux gave its container, in bytes, when lux reports one. */
       memoryLimit: z.number().nullable().optional(),
       /** Why it is not on the size its settings name, said at the resume that could not move it. */

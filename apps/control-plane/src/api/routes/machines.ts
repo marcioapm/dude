@@ -26,12 +26,15 @@ import {
   replacePreviewMachineSize,
   resolveMachineSize,
   sizePool,
+  type AgentMachine,
   type AgentModels,
+  type Machine,
   type MachinePools,
   type MachineSize,
   type MachineSizeInput,
   type MachineSizeUse,
   type MachineSizeWithUse,
+  type Raise,
 } from "@dude/domain";
 import { SQL } from "bun";
 import { withOrg, type OrgScope } from "../../db/client.ts";
@@ -257,6 +260,78 @@ async function requireSizeFound(scope: OrgScope, id: string): Promise<{ isDefaul
   return row;
 }
 
+// ---------------------------------------------------------------------------
+// Raised machines: a task's (per role) or a session's, as detail shows them
+// ---------------------------------------------------------------------------
+
+/**
+ * The machines agents raised in a task, or in a session, with names
+ * resolved: the raised size, the size the role runs on without it, which
+ * Run asked, and which roles follow it (the fixer the implementer's, when
+ * it names no size of its own). A pool's name is the one its Runs here
+ * recorded (runs.machine.pool), newest first, so a detail read, which the
+ * screens repeat on each event, never asks lux; a pool no Run here recorded
+ * has a null name.
+ */
+export async function agentMachines(
+  ctx: RequestContext,
+  of: { taskId: string } | { sessionId: string },
+): Promise<AgentMachine[]> {
+  const facts = await withOrg(ctx.principal.organizationId, async (scope) => {
+    let raises: Record<string, Raise> = {};
+    let project: AgentModels | null = null;
+    if ("taskId" in of) {
+      const [row] = (await scope.sql`
+        SELECT t.agent_machines AS raises, p.agent_models AS models FROM tasks t JOIN projects p ON p.id = t.project_id
+        WHERE t.id = ${of.taskId}`) as Array<{ raises: Record<string, Raise>; models: AgentModels }>;
+      raises = row?.raises ?? {};
+      project = row?.models ?? null;
+    } else {
+      const [row] = (await scope.sql`SELECT agent_machine AS raise FROM sessions WHERE id = ${of.sessionId}`) as Array<{ raise: Raise | null }>;
+      if (row?.raise) raises = { brainstorm: row.raise };
+    }
+    if (Object.keys(raises).length === 0) return null;
+    const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels }>;
+    const askers = (await scope.sql`
+      SELECT id, role::text AS role FROM runs WHERE id = ANY(${scope.sql.array(Object.values(raises).map((r) => r.askedBy), "text")}::text[])`) as Array<{ id: string; role: string | null }>;
+    const taskId = "taskId" in of ? of.taskId : null;
+    const sessionId = "sessionId" in of ? of.sessionId : null;
+    // "" is the default pool: a size naming none.
+    const poolNames = (await scope.sql`
+      SELECT DISTINCT ON (COALESCE(machine->>'poolId', '')) COALESCE(machine->>'poolId', '') AS "poolId", machine->>'pool' AS name
+      FROM runs WHERE (task_id = ${taskId} OR session_id = ${sessionId}) AND machine->>'pool' IS NOT NULL
+      ORDER BY COALESCE(machine->>'poolId', ''), created_at DESC`) as Array<{ poolId: string; name: string }>;
+    return { raises, project, organization: org?.models ?? null, sizes: await listSizes(scope), askers, poolNames };
+  });
+  if (!facts) return [];
+  const { raises, sizes, askers, poolNames } = facts;
+  const from = "taskId" in of ? "task" : "session";
+  const machine = (id: string | null, source: Machine["from"], raised?: Raise): Machine | null => {
+    const s = sizes.find((x) => x.id === id);
+    if (!s) return null;
+    return {
+      sizeId: s.id, name: s.name, cpus: s.cpus, memoryMiB: s.memoryMiB, diskGiB: s.diskGiB, poolId: s.poolId,
+      pool: poolNames.find((p) => p.poolId === (s.poolId ?? ""))?.name ?? null, from: source, ...(raised ? { raised } : {}),
+    };
+  };
+  const layers = { project: facts.project, organization: facts.organization };
+  // The fixer takes implementer@task unless it names a size at some layer
+  // (delivery.Sizes.ForRole's chain).
+  const fixerOwn = resolveMachineSize("fixer", layers, sizes).from;
+  const fixerFollows = from === "task" && !raises["fixer"] && (fixerOwn === "implementer" || fixerOwn === "default");
+  return Object.entries(raises).sort(([a], [b]) => a.localeCompare(b)).map(([role, raise]) => {
+    const settings = resolveMachineSize(role, layers, sizes);
+    return {
+      role,
+      size: machine(raise.sizeId, from, raise),
+      settings: machine(settings.sizeId, settings.from),
+      raise,
+      askedBy: { runId: raise.askedBy, role: askers.find((r) => r.id === raise.askedBy)?.role ?? null },
+      followedBy: role === "implementer" && fixerFollows ? ["fixer"] : [],
+    };
+  });
+}
+
 /**
  * Remove a size, moving everything that names it — the organization's
  * roles, every project's overrides and previews — to a replacement, or to
@@ -292,8 +367,30 @@ async function removeSize(ctx: RequestContext): Promise<Response> {
           preview_settings = ${replacePreviewMachineSize(p.previews, id, replacement)}::jsonb, updated_at = now()
         WHERE id = ${p.id}`;
     }
+    // Agents' raises name it too: each task role's and each session's goes
+    // to the replacement, or is dropped (the role follows its settings).
+    const tasks = (await scope.sql`
+      UPDATE tasks SET agent_machines = COALESCE((SELECT jsonb_object_agg(r.key,
+          CASE WHEN r.value->>'sizeId' = ${id} THEN jsonb_set(r.value, '{sizeId}', to_jsonb(${replacement}::text)) ELSE r.value END)
+        FROM jsonb_each(agent_machines) r WHERE r.value->>'sizeId' IS DISTINCT FROM ${id} OR ${replacement}::text IS NOT NULL), '{}')
+      WHERE EXISTS (SELECT 1 FROM jsonb_each(agent_machines) r WHERE r.value->>'sizeId' = ${id})
+      RETURNING id`) as Array<{ id: string }>;
+    const sessions = (await scope.sql`
+      UPDATE sessions SET agent_machine = CASE WHEN ${replacement}::text IS NULL THEN NULL
+        ELSE jsonb_set(agent_machine, '{sizeId}', to_jsonb(${replacement}::text)) END
+      WHERE agent_machine->>'sizeId' = ${id} RETURNING id`) as Array<{ id: string }>;
+    // A move under way goes where its layer went, and the raise it would put
+    // back on a refusal too. A settled move keeps its history in its events
+    // and from_size; its to_size_id is cleared by the foreign key.
+    await scope.sql`
+      UPDATE machine_moves SET to_size_id = CASE WHEN to_size_id = ${id} THEN ${replacement} ELSE to_size_id END,
+        from_size = CASE WHEN from_size->'previousRaise'->>'sizeId' = ${id} THEN
+          CASE WHEN ${replacement}::text IS NULL THEN jsonb_set(from_size, '{previousRaise}', 'null')
+          ELSE jsonb_set(from_size, '{previousRaise,sizeId}', to_jsonb(${replacement}::text)) END ELSE from_size END
+      WHERE settled_at IS NULL AND (to_size_id = ${id} OR from_size->'previousRaise'->>'sizeId' = ${id})`;
     await scope.sql`DELETE FROM machine_sizes WHERE id = ${id}`;
-    await record(scope, ctx, { [id]: { removed: true, movedTo: replacement, projects: projects.map((p) => p.id) } });
+    await record(scope, ctx, { [id]: { removed: true, movedTo: replacement, projects: projects.map((p) => p.id),
+      tasks: tasks.map((t) => t.id), sessions: sessions.map((s) => s.id) } });
   });
   return json(await sizesResponse(ctx));
 }

@@ -146,6 +146,23 @@ func Subagents(model string) bool { return model == SubagentModel || model == Su
 // AskSeveralModel is AskModel asking Questions: several in one ask_person.
 const AskSeveralModel = "fake/ask-several"
 
+// MachineModel's implementer asks to move to MachineSize first, with
+// dude's request_machine, and ends its turn there when the move is
+// accepted; its work is done in the turn the resume on the larger machine
+// starts. A refused request does not end its turn: it carries on and
+// finishes where it is.
+const MachineModel = "fake/machine"
+
+// MachineSize is the size MachineModel's implementer asks for, by name.
+const MachineSize = "Bigger"
+
+// MachineRequest is MachineModel's request_machine arguments.
+const MachineRequest = `{"size":"` + MachineSize + `","reason":"jest was killed, exit 137, at --maxWorkers 4"}`
+
+// MachineEndedTurn is what MachineModel's implementer says as it ends the
+// turn its move was accepted in.
+const MachineEndedTurn = "Asked for a larger machine; ending my turn to be moved."
+
 // Questions is what AskSeveralModel's implementer asks.
 const Questions = `{"questions":[{"header":"Layout","question":"Does it overflow on a phone?","choices":[{"label":"Yes"},{"label":"No"}]},` +
 	`{"header":"Copy","question":"What should the button say?","choices":[{"label":"Split payment"},{"label":"Pay in parts"}]}]}`
@@ -200,6 +217,9 @@ type Step struct {
 	Hang bool
 	// Its first turn asks a person this (ask_person's arguments) and ends.
 	Ask string
+	// Its first turn asks to move machine (request_machine's arguments),
+	// and ends there when the move is accepted.
+	Machine string
 	// Files it publishes for people (lux-shim publish), name → one line,
 	// each with Description(name).
 	Publish map[string]string
@@ -439,6 +459,9 @@ func For(phase, model, runID string, fixed bool) Step {
 		if model == AskSeveralModel {
 			step.Ask = Questions
 		}
+		if model == MachineModel {
+			step.Machine = MachineRequest
+		}
 		if model == WaitModel {
 			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API","wait":true}`}}
 		}
@@ -556,6 +579,12 @@ func Script(phase, model, runID string) string {
 		// lux-fake only echoes — enough to show the conversation resumed.
 		b.WriteString("http dude POST /tools/ask_person " + step.Ask + "\n")
 		b.WriteString("echo I asked; waiting for the answer.")
+		return b.String()
+	}
+	if step.Machine != "" {
+		// As with ask: the work first, then the move, and the turn ends.
+		b.WriteString("http dude POST /tools/request_machine " + step.Machine + "\n")
+		b.WriteString("echo " + MachineEndedTurn)
 		return b.String()
 	}
 	b.WriteString("echo " + step.Reply)

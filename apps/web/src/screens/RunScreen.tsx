@@ -74,6 +74,7 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
+import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
   DigestView, NoteToldView, PeerRail, PeerTurnView, PeerWaitView, noPeers, peerTool, useCoordination, usePeerContext, waitWords, type PeerContext,
@@ -1555,7 +1556,7 @@ function RunTierChip({ tier, model, effort, harness, role, phase }: { tier: stri
  * memory its container actually got. A size changed meanwhile reaches it
  * at its next resume; what kept it from one is the record's note.
  */
-function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNullable<RunDetail["machine"]>; memoryLimit: number | null; role: AgentRole; phase: string | null }) {
+export function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: RaisedMachine; memoryLimit: number | null; role: AgentRole; phase: string | null }) {
   const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
   const from = machine.from === "project" ? `From its project’s settings for the ${agent}.`
     : machine.from === "organization" ? `From the organisation’s settings for the ${agent}.`
@@ -1565,9 +1566,12 @@ function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNul
   const limit = memoryLimit ?? machine.memoryLimit ?? null;
   return (
     <MachineChip name={machine.name} spec={machineSpec(machine)} data-testid="run-machine"
+      raised={machine.raised ? machine.from === "session" ? "for this session" : "for this task" : undefined}
       tooltip={
         <MachineTip name={machine.name}>
-          {from} Set when the session started or last resumed — a change to its size reaches it when it next resumes.
+          {machine.raised ? <>{raisedProvenance(machine.raised, machine.raised.role)}. {phase === "fix" && machine.raised.role === "implementer" ? "The fixer follows the implementer. " : ""}
+            {machine.from === "session" ? "Raised for this session." : "Reset is on the task's Overview."}</>
+            : <>{from} Set when the session started or last resumed — a change to its size reaches it when it next resumes.</>}
           {machine.diskKept ? ` lux kept its ${machine.diskGiB} GiB disk rather than ${machine.diskKept.requestedGiB}${machine.diskKept.reason ? `: ${machine.diskKept.reason}` : ""}.` : null}
           {machine.note ? ` ${machine.note}` : null}
           {limit ? ` It asked for ${asked} GiB and got ${gib(limit)}: every run on its host gives up the same share to Linux.` : null}

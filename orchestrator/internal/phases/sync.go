@@ -184,6 +184,8 @@ type phaseRun struct {
 	Finishes int
 	// The image job a pending Run waits on (runs.image_build_id), "" for none.
 	ImageBuildID string
+	// A machine move of the Run is not settled yet.
+	Moving bool
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -234,7 +236,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
-	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, '')`
+	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -357,11 +359,17 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // or dude paused it itself and its reason is over — a repository to bring
 // (at once), a person it waited on (once nothing is open for them), a
 // conductor parked after its warm period (once someone wrote to it), or a
-// Run parked only on a peer's reply that has peer mail to read (its wait
-// stays open, so its next idle waits again). An idle
-// park, like a person's own pause, waits for a person's Resume.
-const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
+// Run parked only on a peer's reply, not waiting on a person (a question,
+// or a repository it cannot go on without), that has peer mail to read or
+// a machine move to make (its wait stays open, so its next idle waits
+// again). An idle park, like a person's own pause, waits for a person's
+// Resume.
+// Known limit: a Run resumed only for its move whose orchestrator dies
+// between settleMachine's commit and whilePaused's UPDATE stays
+// paused/person in dude until the peer replies or a person resumes it.
+const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
+	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + delivery.MoveUnsettled + `)
 	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
@@ -394,7 +402,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
-		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID)
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving)
 	return r, err
 }
 
@@ -1039,8 +1047,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var raised delivery.Raises
 	var recorded *delivery.Machine
-	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, coordination string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -1056,12 +1065,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
 				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.tier_override, ''),
-				o.agent_egress, p.agent_egress, p.agent_egress_mode
+				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
 			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &tierOverride,
-				&orgEgress, &projectEgress, &egressMode); err != nil {
+				&orgEgress, &projectEgress, &egressMode, &orgName); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -1093,6 +1102,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
+		}
+		if raised, err = delivery.LoadTaskRaises(ctx, tx, r.TaskID); err != nil {
+			return fmt.Errorf("load the task's raised machines: %w", err)
 		}
 		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, settingsRole); err != nil {
 			return err
@@ -1158,7 +1170,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	in.Harness = settings.HarnessName()
 	s.logIgnoredOptions(r, in)
 	in.Egress = RunEgress(orgEgress, projectEgress, egressMode)
-	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
+	if m, ok := sizes.ForRole(settingsRole, raised, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
 	in.Image, in.NestedContainers = image.Ref, image.Nested
@@ -1184,9 +1196,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	if len(in.Repos) > 0 {
 		promptIn.BaseRef = in.Repos[0].Ref
 	}
+	if stored == nil {
+		// A resume sends no prompt: only a submit's says where it runs.
+		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI)
+	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
+		// The conductor's prompt, made in the transaction above, ends with
+		// the machine's paragraph as a phase's does.
 		in.Prompt = conductorPrompt
+		if promptIn.Machine != "" {
+			in.Prompt += "\n\n" + promptIn.Machine
+		}
 	}
 	// Pushed only by a phase that publishes, or a conductor, which
 	// publishes when it asks to. Even with nowhere to change
@@ -2055,6 +2076,9 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, errCannotResume{err}
 	}
 	plan := PlanResize(ctx, s.Lux, sizes.Recorded, sizes.Now, lr)
+	if err := s.movePlan(ctx, r, plan); err != nil {
+		return lux.Run{}, 0, err
+	}
 	secrets, err := s.resumeSecrets(ctx, r, lr.Spec, spec.Secrets)
 	if err != nil {
 		return lux.Run{}, 0, err
@@ -2081,8 +2105,21 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
 	defer func() {
-		if err == nil {
-			RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, resumed)
+		answer := resumed
+		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
+			// Resuming already, an earlier attempt's answer lost: what lux
+			// says the Run has now is the observed result.
+			cur, gerr := s.Lux.Get(ctx, r.LuxRunID)
+			if gerr != nil || lux.Terminated(cur.State) || cur.State == "succeeded" {
+				return
+			}
+			answer = cur
+		} else if err != nil {
+			return
+		}
+		RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, answer)
+		if serr := s.settleMachine(ctx, r, plan, answer); serr != nil && err == nil {
+			err = serr
 		}
 	}()
 	resumed, err = ResumeSized(ctx, s.Lux, r.LuxRunID, in, plan)
