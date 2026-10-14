@@ -445,6 +445,14 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, map[string]any{"ref": "refs/heads/" + r.PathValue("branch"), "object": map[string]string{"sha": sha}})
 	})
 	mux.HandleFunc("POST "+prefix+"/git/refs", s.createRef)
+	mux.HandleFunc("GET "+prefix+"/branches", func(w http.ResponseWriter, r *http.Request) {
+		out, _ := s.git("for-each-ref", "--format=%(refname:short)", "refs/heads")
+		names := []map[string]any{}
+		for _, n := range strings.Fields(out) {
+			names = append(names, map[string]any{"name": n})
+		}
+		write(w, 200, page(r, names))
+	})
 	mux.HandleFunc("GET "+prefix+"/branches/{branch...}", func(w http.ResponseWriter, r *http.Request) {
 		branch := r.PathValue("branch")
 		sha := s.SHA(branch)

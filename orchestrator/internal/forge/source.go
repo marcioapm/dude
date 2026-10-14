@@ -86,6 +86,39 @@ func (g *GitHub) SourcePullNumber(input, slug string) (int, error) {
 	return n, nil
 }
 
+// BranchListLimit bounds a branch lookup: pages of 100, at most this many
+// names read, so a repository with thousands of branches costs a few calls.
+const BranchListLimit = 500
+
+// Branches lists slug's branch names, at most BranchListLimit, keeping those
+// containing query (any case) and at most limit of them; more says the list
+// was cut short, by the read limit or by limit.
+func (g *GitHub) Branches(ctx context.Context, slug, query string, limit int) (names []string, more bool, err error) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	for page, read := 1, 0; read < BranchListLimit; page++ {
+		var batch []struct {
+			Name string `json:"name"`
+		}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/branches?per_page=100&page=%d", slug, page), nil, &batch); err != nil {
+			return nil, false, err
+		}
+		read += len(batch)
+		for _, b := range batch {
+			if query != "" && !strings.Contains(strings.ToLower(b.Name), query) {
+				continue
+			}
+			if len(names) == limit {
+				return names, true, nil
+			}
+			names = append(names, b.Name)
+		}
+		if len(batch) < 100 {
+			return names, false, nil
+		}
+	}
+	return names, true, nil
+}
+
 // BranchInfo is a branch as GitHub's branches endpoint has it.
 type BranchInfo struct {
 	SHA string

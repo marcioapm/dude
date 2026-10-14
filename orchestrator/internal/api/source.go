@@ -4,11 +4,106 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 func (s *Server) sourceRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/projects/{id}/sources/check", s.auth(s.checkSource))
+	mux.Handle("GET /internal/projects/{id}/sources/repositories", s.auth(s.sourceRepositories))
+	mux.Handle("GET /internal/projects/{id}/sources/repositories/{repo}/branches", s.auth(s.sourceBranches))
+}
+
+// branchesShown bounds a branch lookup's answer.
+const branchesShown = 50
+
+// sourceRepositories is the project's repositories with whether dude may
+// push to each with the organisation's GitHub connection: where existing
+// work can be taken over from. Each is asked of GitHub; one it could not
+// be asked about says why.
+func (s *Server) sourceRepositories(w http.ResponseWriter, r *http.Request, org string) error {
+	if s.Forges == nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not set up here")
+	}
+	gh, err := s.Forges.For(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	if gh == nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not connected for this organisation")
+	}
+	type repo struct{ ID, Name, URL string }
+	var repos []repo
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(r.Context(), `SELECT id, name, url FROM repositories WHERE project_id = $1 ORDER BY name LIMIT 50`,
+			r.PathValue("id"))
+		if err != nil {
+			return err
+		}
+		repos, err = pgx.CollectRows(rows, pgx.RowToStructByPos[repo])
+		return err
+	}); err != nil {
+		return err
+	}
+	out := []map[string]any{}
+	for _, rp := range repos {
+		entry := map[string]any{"id": rp.ID, "name": rp.Name, "writable": false}
+		switch {
+		case forge.SlugFromURL(rp.URL) == "":
+			entry["reason"] = "not on GitHub"
+		default:
+			if err := gh.CheckPushAccess(r.Context(), rp.URL); err != nil {
+				entry["reason"] = err.Error()
+			} else {
+				entry["writable"] = true
+			}
+		}
+		out = append(out, entry)
+	}
+	write(w, http.StatusOK, map[string]any{"repositories": out})
+	return nil
+}
+
+// sourceBranches lists a project repository's branches containing q, at
+// most branchesShown, read from GitHub in bounded pages.
+func (s *Server) sourceBranches(w http.ResponseWriter, r *http.Request, org string) error {
+	if s.Forges == nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not set up here")
+	}
+	gh, err := s.Forges.For(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	if gh == nil {
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not connected for this organisation")
+	}
+	var url string
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		return tx.QueryRow(r.Context(), `SELECT url FROM repositories WHERE id = $1 AND project_id = $2`,
+			r.PathValue("repo"), r.PathValue("id")).Scan(&url)
+	})
+	if db.IsNotFound(err) {
+		return fail(http.StatusNotFound, "not_in_project", "that repository is not one of this project's")
+	}
+	if err != nil {
+		return err
+	}
+	slug := forge.SlugFromURL(url)
+	if slug == "" {
+		return fail(http.StatusUnprocessableEntity, "not_github", "that repository is not on GitHub")
+	}
+	names, more, err := gh.Branches(r.Context(), slug, r.URL.Query().Get("q"), branchesShown)
+	if err != nil {
+		if forge.Refused(err) {
+			return fail(http.StatusUnprocessableEntity, "no_access", "%v", err)
+		}
+		return fail(http.StatusBadGateway, "github_unavailable", "GitHub could not be asked about it: %v", err)
+	}
+	write(w, http.StatusOK, map[string]any{"branches": db.NonNil(names), "more": more})
+	return nil
 }
 
 // checkSource checks a task's source against the project and GitHub, and

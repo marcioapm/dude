@@ -1,18 +1,19 @@
 /**
  * Where a task starts from: new work (the default), an existing pull
  * request, or an existing branch, in one of the project's repositories the
- * task may change. A pull request is looked up as it is named, and shows
- * its title and head → base; a branch takes the base its pull request will
- * merge into (the repository's default branch when left empty). dude's
- * refusal — a merged pull request, a fork, a protected branch, another
- * task's branch, GitHub unreachable — is shown on the field.
+ * task may change and dude may push to (GitHub asked). A pull request is
+ * looked up as it is named, and shows its title and head → base; a branch
+ * and its base are picked from the repository's branches, found on GitHub
+ * as the person types (the base defaults to the repository's default
+ * branch). dude's refusal — a merged pull request, a fork, a protected
+ * branch, another task's branch, GitHub unreachable — is shown on the field.
  *
  * Fixed once the task's delivery has started, as what it asks for is.
  */
 
-import { useEffect, useState } from "react";
-import { Callout, Fieldset, Input, Segmented, Select } from "@dude/design-system";
-import { ApiError, type ApiClient, type Repository, type TaskSource, type TaskSourceInput } from "../api/client.ts";
+import { useCallback, useEffect, useState } from "react";
+import { Callout, Fieldset, Input, SearchPicker, Segmented, Select } from "@dude/design-system";
+import { ApiError, type ApiClient, type Repository, type SourceRepository, type TaskSource, type TaskSourceInput } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
 export type StartsFrom = "new" | "pr" | "branch";
@@ -76,9 +77,34 @@ export function useSourceCheck(client: ApiClient, projectId: string, draft: Sour
   return check;
 }
 
+/**
+ * The project's repositories as GitHub answers for dude's connection: which
+ * it may push to, and why not the others. Asked once, when existing work is
+ * chosen; null while asking, an error string when GitHub could not be.
+ */
+export function useSourceRepositories(client: ApiClient, projectId: string, wanted: boolean): SourceRepository[] | string | null {
+  const [found, setFound] = useState<SourceRepository[] | string | null>(null);
+  useEffect(() => {
+    if (!wanted) return;
+    let current = true;
+    void client.sourceRepositories(projectId).then(
+      ({ repositories }) => current && setFound(repositories),
+      (err: unknown) => current && setFound(errorText(err)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [client, projectId, wanted]);
+  return found;
+}
+
 export interface StartsFromFieldProps {
+  client: ApiClient;
+  projectId: string;
   /** The project's repositories the task may change: where existing work can be taken over from. */
   repositories: Repository[];
+  /** GitHub's answer on which dude may push to (useSourceRepositories). */
+  access: SourceRepository[] | string | null;
   draft: SourceDraft;
   onChange: (draft: SourceDraft) => void;
   check: SourceCheck;
@@ -86,11 +112,19 @@ export interface StartsFromFieldProps {
   locked: boolean;
 }
 
-export function StartsFromField({ repositories, draft, onChange, check, locked }: StartsFromFieldProps) {
+export function StartsFromField({ client, projectId, repositories, access, draft, onChange, check, locked }: StartsFromFieldProps) {
   const set = (patch: Partial<SourceDraft>) => onChange({ ...draft, ...patch });
   const repo = repositories.find((r) => r.id === draft.repositoryId);
   const refused = check.state === "refused" ? check.message : undefined;
   const found = check.state === "ok" ? check.source : null;
+  const writableIds = Array.isArray(access) ? new Set(access.filter((a) => a.writable).map((a) => a.id)) : null;
+  const whyNot = (id: string) => (Array.isArray(access) ? access.find((a) => a.id === id)?.reason : undefined);
+  const usable = writableIds ? repositories.filter((r) => writableIds.has(r.id)) : [];
+  // The draft's repository is one dude may push to; else the first that is.
+  useEffect(() => {
+    if (locked || draft.from === "new" || !writableIds || writableIds.has(draft.repositoryId)) return;
+    if (usable[0]) onChange({ ...draft, repositoryId: usable[0].id, branch: "", base: "" });
+  });
   return (
     <Fieldset legend="Starts from" disabled={locked} data-testid="task-source"
       hint={locked ? "Delivery has started: where it started from is fixed."
@@ -103,27 +137,35 @@ export function StartsFromField({ repositories, draft, onChange, check, locked }
           { value: "pr", label: "Existing PR", disabled: repositories.length === 0 },
           { value: "branch", label: "Existing branch", disabled: repositories.length === 0 },
         ]} />
-      {draft.from === "new" ? null : (
+      {draft.from === "new" ? null : locked ? (
+        <LockedSource draft={draft} repo={repo} />
+      ) : typeof access === "string" ? (
+        <Callout tone="attention" data-testid="task-source-access">GitHub could not say which repositories dude may push to: {access}</Callout>
+      ) : access === null ? (
+        <Input label="Repository" size="sm" disabled value="" placeholder="Asking GitHub…" data-testid="task-source-access-pending" />
+      ) : usable.length === 0 ? (
+        <Callout tone="attention" data-testid="task-source-access">
+          dude may not push to any repository this task changes{repositories[0] && whyNot(repositories[0].id) ? `: ${whyNot(repositories[0].id)}` : ""}.
+        </Callout>
+      ) : (
         <>
-          {repositories.length > 1 ? (
-            <Select label="Repository" size="sm" disabled={locked} value={draft.repositoryId}
-              onValueChange={(repositoryId) => set({ repositoryId })} data-testid="task-source-repository"
-              options={repositories.map((r) => ({ value: r.id, label: r.name }))} />
-          ) : null}
+          <Select label="Repository" size="sm" value={draft.repositoryId}
+            onValueChange={(repositoryId) => set({ repositoryId, branch: "", base: "" })} data-testid="task-source-repository"
+            options={repositories.map((r) => ({ value: r.id, label: r.name, disabled: !writableIds?.has(r.id),
+              ...(writableIds?.has(r.id) ? {} : { description: whyNot(r.id) ?? "dude may not push to it" }) }))} />
           {draft.from === "pr" ? (
-            <Input label="Pull request" size="sm" mono disabled={locked} placeholder="#123 or its URL"
+            <Input label="Pull request" size="sm" mono placeholder="#123 or its URL"
               value={draft.pullRequest} onChange={(e) => set({ pullRequest: e.target.value })}
               error={refused} data-testid="task-source-pr"
               hint={found?.number ? undefined : check.state === "checking" ? "Looking it up…" : "Open, in this repository, not from a fork."} />
           ) : (
             <>
-              <Input label="Branch" size="sm" mono disabled={locked} placeholder="feature/…"
-                value={draft.branch} onChange={(e) => set({ branch: e.target.value })}
-                error={refused} data-testid="task-source-branch"
+              <BranchPicker client={client} projectId={projectId} repositoryId={draft.repositoryId} label="Branch"
+                value={draft.branch} onPick={(branch) => set({ branch })} error={refused} testId="task-source-branch"
                 hint={check.state === "checking" ? "Looking it up…" : "Not the default branch, a release branch, or a protected one."} />
-              <Input label="Base" size="sm" mono disabled={locked} placeholder={repo?.defaultBranch ?? "main"}
-                value={draft.base} onChange={(e) => set({ base: e.target.value })} data-testid="task-source-base"
-                hint="What its pull request will merge into. Empty: the repository's default branch." />
+              <BranchPicker client={client} projectId={projectId} repositoryId={draft.repositoryId} label="Base"
+                value={draft.base} placeholderValue={repo?.defaultBranch ?? "main"} onPick={(base) => set({ base })} testId="task-source-base"
+                hint="What its pull request will merge into. None picked: the repository's default branch." />
             </>
           )}
           {found ? (
@@ -135,5 +177,61 @@ export function StartsFromField({ repositories, draft, onChange, check, locked }
         </>
       )}
     </Fieldset>
+  );
+}
+
+/** A started task's source: shown as it was saved, nothing to pick. */
+function LockedSource({ draft, repo }: { draft: SourceDraft; repo: Repository | undefined }) {
+  return draft.from === "pr" ? (
+    <Input label="Pull request" size="sm" mono disabled value={draft.pullRequest ? `#${draft.pullRequest}` : ""} data-testid="task-source-pr" />
+  ) : (
+    <>
+      <Input label="Branch" size="sm" mono disabled value={draft.branch} data-testid="task-source-branch-locked" />
+      <Input label="Base" size="sm" mono disabled value={draft.base || repo?.defaultBranch || ""} data-testid="task-source-base-locked" />
+    </>
+  );
+}
+
+/**
+ * One of a repository's branches, found on GitHub as the person types
+ * (SearchPicker: only the latest answer lands). What is picked stays shown
+ * above the field until another is picked, however the words change; a
+ * lookup GitHub refuses says why under it.
+ */
+function BranchPicker(props: {
+  client: ApiClient;
+  projectId: string;
+  repositoryId: string;
+  label: string;
+  value: string;
+  placeholderValue?: string;
+  onPick: (branch: string) => void;
+  error?: string | undefined;
+  hint: string;
+  testId: string;
+}) {
+  const { client, projectId, repositoryId, label, value, placeholderValue, onPick, error, hint, testId } = props;
+  const [problem, setProblem] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
+  const find = useCallback(async (q: string) => {
+    try {
+      const out = await client.sourceBranches(projectId, repositoryId, q);
+      setProblem(null);
+      setMore(out.more);
+      return out.branches;
+    } catch (err) {
+      setProblem(errorText(err));
+      return [];
+    }
+  }, [client, projectId, repositoryId]);
+  return (
+    <div data-testid={testId}>
+      <Input label={label} size="sm" mono readOnly value={value} placeholder={placeholderValue ?? "Pick one below"}
+        error={error ?? problem ?? undefined} hint={more ? `${hint} More branches match: type more of the name.` : hint}
+        data-testid={`${testId}-value`} />
+      <SearchPicker<string> key={repositoryId} label={`Find a ${label.toLowerCase()}`} size="sm" find={find} findOnEmpty
+        optionKey={(b) => b} renderOption={(b) => <span className="ds-mono">{b}</span>} onPick={onPick}
+        placeholder="Type to find a branch" empty={(q) => `No branch matches “${q}”.`} />
+    </div>
   );
 }

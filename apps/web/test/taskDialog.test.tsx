@@ -490,6 +490,15 @@ describe("where a task starts from", () => {
     const el = document.querySelector(`[data-testid=${id}]`)!;
     return el.getAttribute("aria-invalid") === "true" ? document.getElementById(`${el.id}-hint`)?.textContent ?? "" : "";
   };
+  /** Types words into a branch picker's search, and picks the option named. */
+  const pickBranch = async (id: string, words: string, branch: string) => {
+    const search = document.querySelector<HTMLInputElement>(`[data-testid=${id}] [role=combobox]`)!;
+    await set(search, HTMLInputElement.prototype, words);
+    await until(() => [...document.querySelectorAll(`[data-testid=${id}] [role=option]`)].some((o) => o.textContent === branch),
+      `${branch} offered`);
+    const option = [...document.querySelectorAll(`[data-testid=${id}] [role=option]`)].find((o) => o.textContent === branch)!;
+    await act(async () => option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  };
 
   test("new work is the default, and creating sends no source", async () => {
     const client = new Sources("a");
@@ -535,18 +544,65 @@ describe("where a task starts from", () => {
     expect(document.querySelectorAll("[data-testid=task-source-found]").length).toBe(0);
   });
 
-  test("an existing branch takes the base it merges into", async () => {
+  test("an existing branch and its base are picked from GitHub's branches", async () => {
     const client = new Sources("a");
     const d = await open(undefined, client);
     await d.title("Take over the stack");
     await d.goal("Finish the stacked branch on top of the base one.");
     await pick("Existing branch");
-    await set(document.querySelector("[data-testid=task-source-branch]")!, HTMLInputElement.prototype, "stack/top");
-    await set(document.querySelector("[data-testid=task-source-base]")!, HTMLInputElement.prototype, "stack/base");
+    await pickBranch("task-source-branch", "top", "stack/top");
+    await pickBranch("task-source-base", "base", "stack/base");
+    expect(document.querySelector<HTMLInputElement>("[data-testid=task-source-branch-value]")!.value).toBe("stack/top");
     await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("stack/top → stack/base"), "the branch found");
     await act(async () => d.save().click());
     await until(() => client.created.length > 0, "the create");
     expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "stack/top", base: "stack/base" } });
+  });
+
+  test("a repository dude may not push to is not offered, and none at all says why", async () => {
+    class NoWrite extends Sources {
+      override sourceRepositories() {
+        return Promise.resolve({ repositories: [{ id: "repo_wc", name: "web-console", writable: false, reason: "Git push access denied" }] });
+      }
+    }
+    const client = new NoWrite("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await until(() => document.querySelector("[data-testid=task-source-access]"), "the refusal");
+    expect(document.querySelector("[data-testid=task-source-access]")!.textContent).toContain("Git push access denied");
+    expect(document.querySelectorAll("[data-testid=task-source-branch]").length).toBe(0);
+    expect(d.save().disabled).toBe(true);
+  });
+
+  test("a lookup answered after a newer one is dropped, and the name typed stays", async () => {
+    let release: (() => void) | undefined;
+    class Slow extends Sources {
+      override checkTaskSource(projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
+        if (source.kind === "pr" && source.pullRequest === "12") {
+          return new Promise<never>((_, reject) => {
+            release = () => reject(new ApiError(422, "pr_merged", MERGED));
+          });
+        }
+        return super.checkTaskSource(projectId, source);
+      }
+    }
+    const client = new Slow("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    const field = document.querySelector<HTMLInputElement>("[data-testid=task-source-pr]")!;
+    await set(field, HTMLInputElement.prototype, "12");
+    await until(() => release !== undefined, "the first lookup");
+    await set(field, HTMLInputElement.prototype, "13");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("#13"), "the second answer");
+    await act(async () => release!());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(fieldError("task-source-pr")).toBe("");
+    expect(field.value).toBe("13");
+    expect(document.querySelector("[data-testid=task-source-found]")!.textContent).toContain("#13");
   });
 
   test("once delivery has started, where it starts from is shown and cannot change", async () => {

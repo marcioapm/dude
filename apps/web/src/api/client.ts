@@ -271,6 +271,14 @@ export interface TaskFields {
 
 export type { TaskRepository, TaskSource, TaskSourceInput } from "@dude/domain";
 
+/** A project repository as the source picker offers it: writable says dude may push to it; reason says why not. */
+export interface SourceRepository {
+  id: string;
+  name: string;
+  writable: boolean;
+  reason?: string;
+}
+
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
   runs: Run[];
@@ -964,6 +972,16 @@ export class ApiClient {
    */
   checkTaskSource(projectId: string, source: TaskSourceInput, taskId?: string): Promise<TaskSource> {
     return this.#request("POST", `/v1/projects/${projectId}/sources/check`, { source, ...(taskId ? { taskId } : {}) });
+  }
+
+  /** The project's repositories, each with whether dude may push to it (GitHub asked). */
+  sourceRepositories(projectId: string): Promise<{ repositories: SourceRepository[] }> {
+    return this.#request("GET", `/v1/projects/${projectId}/sources/repositories`);
+  }
+
+  /** A project repository's branches whose names contain `q`: at most 50, `more` when cut short. */
+  sourceBranches(projectId: string, repositoryId: string, q: string): Promise<{ branches: string[]; more: boolean }> {
+    return this.#request("GET", `/v1/projects/${projectId}/sources/repositories/${encodeURIComponent(repositoryId)}/branches?q=${encodeURIComponent(q)}`);
   }
 
   /** Hand a task to someone else to drive: they hear of it, and answer for it. */

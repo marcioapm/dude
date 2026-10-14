@@ -1,7 +1,10 @@
 package orchestrator_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -115,6 +118,36 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 	w.gh.Branch(delivery.BranchFor(live, 1), "main", "Its own")
 	status, out = w.checkSource(map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": delivery.BranchFor(live, 1)})
 	refusedAs(t, status, out, 422, "branch_taken")
+}
+
+// The dialog's pickers: the project's repositories with whether dude may
+// push to each, and a repository's branches matching what was typed.
+func TestSourcePickersAskGitHub(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Branch("feature/greet", "main", "Greet")
+	w.gh.Branch("feature/farewell", "main", "Bye")
+	status, body := w.get("/internal/projects/"+w.project+"/sources/repositories/"+w.repoID+"/branches?q=GREET", w.org)
+	var branches struct {
+		Branches []string
+		More     bool
+	}
+	_ = json.Unmarshal([]byte(body), &branches)
+	if status != 200 || !slices.Equal(branches.Branches, []string{"feature/greet"}) || branches.More {
+		t.Fatalf("branches %d %s", status, body)
+	}
+	if status, _ := w.get("/internal/projects/"+w.project+"/sources/repositories/repo_elsewhere/branches", w.org); status != 404 {
+		t.Fatalf("another project's repository: %d", status)
+	}
+
+	status, body = w.get("/internal/projects/"+w.project+"/sources/repositories", w.org)
+	if status != 200 || !strings.Contains(body, `"writable":true`) {
+		t.Fatalf("repositories %d %s", status, body)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 403 })
+	status, body = w.get("/internal/projects/"+w.project+"/sources/repositories", w.org)
+	if status != 200 || !strings.Contains(body, `"writable":false`) || !strings.Contains(body, "push access denied") {
+		t.Fatalf("repositories without write %d %s", status, body)
+	}
 }
 
 // No write access, and GitHub not answering, are each said as such.

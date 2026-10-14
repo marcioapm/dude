@@ -200,6 +200,20 @@ async function checkSource(ctx: RequestContext): Promise<Response> {
   return json(await checkTaskSource(ctx, ctx.params.id!, input.source, input.taskId ?? null));
 }
 
+/** The project's repositories, with whether dude may push to each: where existing work can be taken over from. */
+async function sourceRepositories(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET",
+    `/internal/projects/${encodeURIComponent(ctx.params.id!)}/sources/repositories`, undefined, ctx.principal);
+}
+
+/** A project repository's branches whose names contain `q`, bounded: the branch and base pickers'. */
+async function sourceBranches(ctx: RequestContext): Promise<Response> {
+  const q = (ctx.url.searchParams.get("q") ?? "").slice(0, 200);
+  return orchestrator(ctx.principal.organizationId, "GET",
+    `/internal/projects/${encodeURIComponent(ctx.params.id!)}/sources/repositories/${encodeURIComponent(ctx.params.repo!)}/branches?q=${encodeURIComponent(q)}`,
+    undefined, ctx.principal);
+}
+
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
@@ -567,6 +581,8 @@ export function registerWorkRoutes(router: Router): void {
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
   router.post("/v1/projects/:id/sources/check", checkSource);
+  router.get("/v1/projects/:id/sources/repositories", sourceRepositories);
+  router.get("/v1/projects/:id/sources/repositories/:repo/branches", sourceBranches);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

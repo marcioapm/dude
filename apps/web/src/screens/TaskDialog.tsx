@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttachDropZone, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy } from "@dude/domain";
 import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository, type TaskSource } from "../api/client.ts";
-import { StartsFromField, sourceDraft, sourceInput, useSourceCheck, type SourceDraft } from "./StartsFrom.tsx";
+import { StartsFromField, sourceDraft, sourceInput, useSourceCheck, useSourceRepositories, type SourceDraft } from "./StartsFrom.tsx";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
@@ -154,6 +154,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const source = draft ?? sourceDraft(existing?.savedSource, writable);
   const sourceFixed = existing?.fixed != null;
   const sourceCheck = useSourceCheck(client, projectId, source, existing?.id, sourceFixed || choices === null);
+  const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
   const sourceSaved = JSON.stringify(sourceInput(sourceDraft(existing?.savedSource, writable)) ?? null);
   const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== sourceSaved;
   // New work is always fine; existing work only once dude has found it.
@@ -407,7 +408,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={existing?.fixed != null} />
           ) : null}
           {choices !== null ? (
-            <StartsFromField repositories={writable} draft={source} onChange={setDraft} check={sourceCheck} locked={sourceFixed} />
+            <StartsFromField client={client} projectId={projectId} repositories={writable} access={sourceAccess} draft={source}
+              onChange={setDraft} check={sourceCheck} locked={sourceFixed} />
           ) : null}
           {refusals.length > 0 ? (
             <Callout tone="attention" data-testid="task-image-refused">

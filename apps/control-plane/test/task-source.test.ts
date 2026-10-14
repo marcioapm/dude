@@ -55,6 +55,12 @@ beforeAll(async () => {
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
   orchestrator = Bun.serve({ port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === "GET") {
+      checks.push({ path: url.pathname, q: url.searchParams.get("q") });
+      if (url.pathname.endsWith("/branches")) return Response.json({ branches: ["feature/greet"], more: false });
+      return Response.json({ repositories: [{ id: REPO, name: "target", writable: false, reason: "Git push access denied" }] });
+    }
     const body = (await request.json()) as Record<string, unknown>;
     checks.push({ path: new URL(request.url).pathname, ...body });
     if (body.pullRequest === "7") {
@@ -124,6 +130,19 @@ test("simultaneous sources reserve one live task per head while different heads 
     source: { ...source, branch: "feature/attach" },
   })));
   expect(attached.map(r => r.status).sort()).toEqual([200, 422]);
+});
+
+test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {
+  const repos = await router.handle(new Request(`http://dude.test/v1/projects/${PROJECT}/sources/repositories`,
+    { headers: { authorization: `Bearer ${key}` } }));
+  expect(repos.status).toBe(200);
+  expect(await repos.json()).toEqual({ repositories: [{ id: REPO, name: "target", writable: false, reason: "Git push access denied" }] });
+  const long = "x".repeat(500) + "/../&q=evil";
+  const branches = await router.handle(new Request(
+    `http://dude.test/v1/projects/${PROJECT}/sources/repositories/${REPO}/branches?q=${encodeURIComponent(long)}`,
+    { headers: { authorization: `Bearer ${key}` } }));
+  expect(branches.status).toBe(200);
+  expect(checks.at(-1)).toEqual({ path: `/internal/projects/${PROJECT}/sources/repositories/${REPO}/branches`, q: long.slice(0, 200) });
 });
 
 test("a refused source is the orchestrator's answer, and no task is made", async () => {
