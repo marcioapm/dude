@@ -156,6 +156,8 @@ func TestAnAttach404ForTheRunKeepsTheServer(t *testing.T) {
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
 	w.previews.Lux = &attachNotFound{Client: w.previews.Lux}
+	// The wake whose attach was refused is retried after its back-off.
+	w.previews.RetryBackOff = 50 * time.Millisecond
 	w.open(web)
 	if n := w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND deleted_at IS NULL`, runID); n != 1 {
 		t.Fatal("dude marked its live server deleted on a Run's 404")

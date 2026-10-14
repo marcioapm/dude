@@ -66,6 +66,9 @@ type Previews struct {
 	// How long a resume or replacement holds its preview's row reserved
 	// while it calls lux (operation.go); zero is 90 seconds.
 	OperationFor time.Duration
+	// For tests: how long a preview whose sync failed waits to be tried
+	// again; zero is retryBackOff.
+	RetryBackOff time.Duration
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc
@@ -978,9 +981,18 @@ func (p *Previews) fail(ctx context.Context, r previewRun, reason string) error 
 	})
 }
 
+// retryBackOff is how long a preview whose sync failed waits before the
+// sweep takes it up again.
+const retryBackOff = 5 * time.Second
+
 func (p *Previews) retryLater(ctx context.Context, r previewRun) error {
+	backOff := retryBackOff
+	if p.RetryBackOff > 0 {
+		backOff = p.RetryBackOff
+	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, backOff.Seconds())
 		return err
 	})
 }

@@ -437,6 +437,8 @@ func TestARestoredServersNameTakenCountsOnlyForItsOwnDefinition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
 			w.previews.Minute = time.Hour
+			// The refused restore is retried after its back-off.
+			w.previews.RetryBackOff = 50 * time.Millisecond
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			w.secret("SEED_LLM_KEY", seedKey)
 			_, out := w.do("POST", "/internal/tasks/"+w.task()+"/preview", nil)
