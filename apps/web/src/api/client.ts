@@ -142,6 +142,8 @@ export interface ApiKeyInfo {
   lastUsedAt: string | null;
   /** The key this browser signed in with. */
   current: boolean;
+  /** The organisation the key acts in; absent from a key's own list, which is its organisation's. */
+  organizationId?: string;
 }
 
 /** A project with its repositories. `GET /v1/projects/:id`. */
@@ -392,9 +394,101 @@ function qs(params: Record<string, unknown>): string {
 
 export interface MeResponse {
   person: Me;
-  organization: { id: string; name: string };
+  organization: { id: string; name: string; slug?: string };
   authMethod?: "api_key" | "cloudflare_access";
   logoutUrl?: "/cdn-cgi/access/logout";
+  /** The sign-in gate's answer (docs/design/accounts.md); absent from an older backend, which is a key's member. */
+  gate?: Gate;
+  superAdmin?: boolean;
+  account?: AccountInfo | null;
+  organizations?: MembershipInfo[];
+  invitations?: InvitationInfo[];
+}
+
+export type Gate = "member" | "invited" | "super_admin" | "none";
+
+/** `GET /v1/me` before any organisation is named: one of the gate's four answers. */
+export type MeAnswer =
+  | (MeResponse & { gate?: "member" })
+  | { gate: "member"; account: AccountInfo | null; organizations: MembershipInfo[]; invitations: InvitationInfo[];
+      organization: null; superAdmin: boolean; authMethod: "cloudflare_access"; person?: undefined }
+  | { gate: "invited" | "super_admin"; email: string; name: string | null; photoUrl: string | null; superAdmin: boolean;
+      invitations?: InvitationInfo[]; person?: undefined }
+  | { gate: "none"; email: string; name: string | null; photoUrl: string | null; superAdmin?: undefined; person?: undefined };
+
+export interface AccountInfo {
+  id: string;
+  email: string;
+  name: string;
+  photoUrl: string | null;
+}
+
+/** One of your organisations, as `/v1/me` lists them. */
+export interface MembershipInfo {
+  id: string;
+  name: string;
+  slug: string;
+  role: PersonRole;
+  personId: string;
+  waitingOnYou: number;
+}
+
+/** An invitation as its invitee (or an admin) sees it. */
+export interface InvitationInfo {
+  id: string;
+  code: string;
+  email: string;
+  name: string | null;
+  organization: { id: string; name: string; slug: string };
+  role: PersonRole;
+  /** Who sent it; "the operator" for a super-admin's. */
+  inviter: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type InvitationStatus = "pending" | "expired" | "accepted" | "revoked";
+
+/** One row of an organisation's Invitations page. */
+export interface InvitationRow extends InvitationInfo {
+  status: InvitationStatus;
+  acceptedAt: string | null;
+  acceptedPersonId: string | null;
+  revokedAt: string | null;
+  renewedAt: string | null;
+}
+
+/** `GET /v1/invitations/:code` for the signed-in email. */
+export type InvitationView = InvitationInfo & { state: "pending" | "member"; personId: string | null };
+
+/** What inviting did with one address. */
+export interface InviteResult {
+  email: string;
+  result: "created" | "renewed" | "existing" | "member" | "invalid" | "duplicate";
+  invitation?: { id: string; code: string; role: PersonRole; expiresAt: string };
+  /** `#/invite/<code>`, for the first three. */
+  link?: string;
+}
+
+/** An organisation as the super-admin lists them. */
+export interface AdminOrganization {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  members: number;
+  admins: number;
+  pendingInvitations: number;
+}
+
+/** A person of an organisation as the super-admin sees them: email null for one who signs in only with a key. */
+export type AdminPerson = PersonRef & { email: string | null; role: PersonRole; accountId: string | null };
+
+/** Where an id lives among your organisations. `GET /v1/locate/:id`. */
+export interface Located {
+  organization: { id: string; name: string; slug: string };
+  kind: "task" | "project" | "epic" | "run" | "brainstorm";
+  id: string;
 }
 
 /** You, as your own profile shows you: who you are on GitHub too. */
@@ -404,6 +498,12 @@ export interface ApiClientOptions {
   /** Base URL; empty means same-origin, which is the browser and Tauri case. */
   baseUrl?: string;
   apiKey?: string | undefined;
+  /**
+   * The organisation tenant requests act in: `X-Dude-Organization` on each
+   * call, `org=` on the event stream. Account routes (`/v1/me` without
+   * one, your keys, invitations, the super-admin's) need none.
+   */
+  organizationId?: string | undefined;
 }
 
 /** A file an agent published, as its task or brainstorm session lists it. `GET /v1/artifacts`. */
@@ -443,12 +543,32 @@ export interface AttachmentLimits {
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string | undefined;
+  readonly #organizationId: string | undefined;
   /** What this browser has open, for presence ("TEXT-14"): see `setWhere`. */
   #where = "";
 
   constructor(options: ApiClientOptions) {
     this.#baseUrl = (options.baseUrl ?? "").replace(/\/$/, "");
     this.#apiKey = options.apiKey;
+    this.#organizationId = options.organizationId;
+  }
+
+  /** The organisation this client's tenant requests name, if any. */
+  get organizationId(): string | undefined {
+    return this.#organizationId;
+  }
+
+  /** The client this one was made from by `inOrganization`, or itself: the session's credential. */
+  get root(): ApiClient {
+    return this.#root ?? this;
+  }
+  #root: ApiClient | undefined;
+
+  /** This credential acting in `organizationId`: a new client, so a tab in another organisation keeps its own. */
+  inOrganization(organizationId: string): ApiClient {
+    const scoped = new ApiClient({ baseUrl: this.#baseUrl, apiKey: this.#apiKey, organizationId });
+    scoped.#root = this.root;
+    return scoped;
   }
 
   /** A request that throws ApiError for a refusal; the caller reads the body. */
@@ -460,6 +580,7 @@ export class ApiClient {
       credentials: "same-origin",
       headers: {
         ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
+        ...(this.#organizationId ? { "x-dude-organization": this.#organizationId } : {}),
         "content-type": raw ? body.type : "application/json",
         ...(this.#where ? { "x-dude-where": this.#where } : {}),
         // Only a request from a tab someone is using says they are here.
@@ -682,6 +803,88 @@ export class ApiClient {
     return this.#request("GET", "/v1/me");
   }
 
+  /** The sign-in gate's answer for this credential, read before any organisation is mounted. */
+  gate(): Promise<MeAnswer> {
+    return this.#request("GET", "/v1/me");
+  }
+
+  /** Which of your organisations an id is in, for a link made before URLs named one. */
+  locate(id: string): Promise<Located> {
+    return this.#request("GET", `/v1/locate/${encodeURIComponent(id)}`);
+  }
+
+  // -- invitations ----------------------------------------------------------
+
+  /** What an invitation link shows the signed-in email: 404 `invitation_unusable`, 403 `invitation_for_another_email`. */
+  invitation(code: string): Promise<InvitationView> {
+    return this.#request("GET", `/v1/invitations/${encodeURIComponent(code)}`);
+  }
+
+  /** Join: makes your account if there is none, and your membership. */
+  acceptInvitation(code: string, name?: string): Promise<{ person: { id: string; role: PersonRole; name: string }; organization: { id: string; name: string; slug: string } }> {
+    return this.#request("POST", `/v1/invitations/${encodeURIComponent(code)}/accept`, name ? { name } : {});
+  }
+
+  /** Admins: the organisation's invitations, filtered by status and searched on the server. */
+  listInvitations(params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}): Promise<{ invitations: InvitationRow[]; cursor: string | null }> {
+    return this.#request("GET", `/v1/organization/invitations${qs({ ...params, q: params.q || undefined })}`);
+  }
+
+  /** Admins: invite each address with `role`; one result per address, in order. */
+  invite(invitations: Array<{ email: string; name?: string }>, role: PersonRole): Promise<{ results: InviteResult[] }> {
+    return this.#request("POST", "/v1/organization/invitations", { invitations, role });
+  }
+
+  /** 14 more days, the same link. */
+  renewInvitation(id: string): Promise<{ code: string }> {
+    return this.#request("POST", `/v1/organization/invitations/${encodeURIComponent(id)}/renew`, {});
+  }
+
+  revokeInvitation(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/organization/invitations/${encodeURIComponent(id)}`);
+  }
+
+  // -- the super-admin: outside every organisation ------------------------------
+
+  adminOrganizations(): Promise<{ organizations: AdminOrganization[] }> {
+    return this.#request("GET", "/v1/admin/organizations");
+  }
+
+  /** A new organisation and an admin invitation for `email`; the result carries its link. */
+  createOrganization(input: { name: string; slug: string; email: string }): Promise<{ organization: { id: string; name: string; slug: string } } & InviteResult> {
+    return this.#request("POST", "/v1/admin/organizations", input);
+  }
+
+  adminOrganization(id: string, params: { status?: InvitationStatus | "all"; q?: string } = {}):
+    Promise<{ organization: { id: string; name: string; slug: string }; people: AdminPerson[]; invitations: InvitationRow[]; cursor: string | null }> {
+    return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}${qs({ ...params, q: params.q || undefined })}`);
+  }
+
+  adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}): Promise<{ invitations: InvitationRow[]; cursor: string | null }> {
+    return this.#request("GET", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations${qs({ ...params, q: params.q || undefined })}`);
+  }
+
+  adminInvite(id: string, invitations: Array<{ email: string; name?: string }>, role: PersonRole): Promise<{ results: InviteResult[] }> {
+    return this.#request("POST", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations`, { invitations, role });
+  }
+
+  adminRenewInvitation(id: string, invitationId: string): Promise<{ code: string }> {
+    return this.#request("POST", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations/${encodeURIComponent(invitationId)}/renew`, {});
+  }
+
+  adminRevokeInvitation(id: string, invitationId: string): Promise<void> {
+    return this.#request("DELETE", `/v1/admin/organizations/${encodeURIComponent(id)}/invitations/${encodeURIComponent(invitationId)}`);
+  }
+
+  /** A key-only person's email (linking an account), or anyone's role. */
+  adminUpdatePerson(personId: string, change: { email: string } | { role: PersonRole }): Promise<unknown> {
+    return this.#request("PATCH", `/v1/admin/people/${encodeURIComponent(personId)}`, change);
+  }
+
+  adminRemovePerson(id: string, personId: string): Promise<void> {
+    return this.#request("DELETE", `/v1/admin/organizations/${encodeURIComponent(id)}/people/${encodeURIComponent(personId)}`);
+  }
+
   /** Your profile; "" or null clears githubLogin or commitEmail. */
   updateMe(changes: { name?: string; photoUrl?: string | null; githubLogin?: string | null; commitEmail?: string | null }):
     Promise<{ person: Me }> {
@@ -693,13 +896,14 @@ export class ApiClient {
     return this.#upload("PUT", "/v1/me/photo", image);
   }
 
+  /** Your keys; over Access, every organisation's, each naming its own. */
   listMyKeys(): Promise<{ keys: ApiKeyInfo[] }> {
     return this.#request("GET", "/v1/me/keys");
   }
 
-  /** A new key for you; `key` is shown this once. */
-  createMyKey(name: string): Promise<{ id: string; name: string; prefix: string; key: string }> {
-    return this.#request("POST", "/v1/me/keys", { name });
+  /** A new key for you in `organizationId` (the client's own when omitted); `key` is shown this once. */
+  createMyKey(name: string, organizationId = this.#organizationId): Promise<{ id: string; name: string; prefix: string; key: string }> {
+    return this.#request("POST", "/v1/me/keys", { name, ...(organizationId ? { organizationId } : {}) });
   }
 
   revokeMyKey(id: string): Promise<void> {
@@ -1146,6 +1350,7 @@ export class ApiClient {
       xhr.open("POST", `${this.#baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/attachments`);
       xhr.withCredentials = true;
       if (this.#apiKey) xhr.setRequestHeader("authorization", `Bearer ${this.#apiKey}`);
+      if (this.#organizationId) xhr.setRequestHeader("x-dude-organization", this.#organizationId);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress?.(e.loaded / e.total);
       };
@@ -1436,7 +1641,8 @@ export class ApiClient {
     live?: boolean | undefined;
   }): string {
     const { live, ...rest } = params;
-    return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), ...(this.#apiKey ? { key: this.#apiKey } : {}) })}`;
+    return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}),
+      ...(this.#organizationId ? { org: this.#organizationId } : {}), ...(this.#apiKey ? { key: this.#apiKey } : {}) })}`;
   }
 }
 

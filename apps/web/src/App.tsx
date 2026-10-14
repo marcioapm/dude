@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type BoardCard, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, ScreenHeader, Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { Board, Breadcrumb, OrgSwitcher, ScreenHeader, Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, Tooltip, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
@@ -47,6 +47,8 @@ import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialo
 import { TaskScreen } from "./screens/TaskScreen.tsx";
 import { LitEpicOrder, useCardStarts, useLitCard } from "./screens/Relations.tsx";
 import { DudeMark } from "./DudeMark.tsx";
+import { orgOf, switcherInvitations, switcherMemberships, useAccount } from "./accounts/context.tsx";
+import { JoinedScreen } from "./accounts/JoinedScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
@@ -131,6 +133,8 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
+  // Your organisations and invitations, when the gatekeeper mounted this one (none in a one-screen test).
+  const account = useAccount();
   useEffect(installActivity, []);
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
@@ -180,10 +184,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     return () => window.removeEventListener("hashchange", follow);
   }, []);
 
-  // Notifications: the service worker, and a clicked one opening its place.
+  // Notifications: the service worker, and a clicked one opening its place. Someone in several
+  // organisations over Access keeps the subscription where Notify me in this browser put it.
+  const pushOrgId = account?.current.id;
+  const pushOrgName = account?.current.name;
+  const reclaimPush = !(account && account.authMethod === "cloudflare_access" && account.memberships.length > 1);
   useEffect(() => startPush(client, (hash) => {
     window.location.hash = hash;
-  }), [client]);
+  }, { reclaim: reclaimPush, organization: pushOrgId && pushOrgName ? { id: pushOrgId, name: pushOrgName } : null }),
+  [client, reclaimPush, pushOrgId, pushOrgName]);
 
   // Bumped on each reload: what reads its own data (an epic's metrics)
   // re-reads with the tree rather than on a stream of its own.
@@ -378,11 +387,16 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // no projects yet still sets up its GitHub connection, and you your view.
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
   const newProject = () => setOpen({ kind: "newProject" });
-  if (place?.view === "welcome") {
+  if (place?.view === "joined" && account) {
+    flush = true;
+    main = <JoinedScreen client={client} organization={account.current} projects={projects} people={people.all.length}
+      me={people.me} onChanged={() => void people.refresh()} onStart={toWelcome} />;
+  } else if (place?.view === "welcome" || place?.view === "joined") {
     flush = true;
     // A session needs no project, so the welcome is always the welcome; an
     // organisation with none (known, not still loading) is also offered one.
     main = <WelcomeScreen client={client} projects={projects ?? []} sessions={sessionsList?.sessions ?? null} name={people.me?.name ?? null}
+      orgName={account && account.memberships.length > 1 ? account.current.name : undefined}
       onOpenSession={openSession} onAllSessions={() => go({ view: "sessions" })}
       offer={projects?.length === 0 && isAdmin ? (
         <Button variant="primary" leadingIcon="plus" onClick={newProject} data-testid="new-project-empty">New project</Button>
@@ -602,6 +616,14 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
 
   const saved = () => void load();
   const you = people.me;
+  const switcher = (variant: "band" | "rail") => account && you ? (
+    <OrgSwitcher variant={variant} you={you} current={orgOf(account.current)}
+      memberships={switcherMemberships(account.memberships)} invitations={switcherInvitations(account.invitations)}
+      superAdmin={account.superAdmin} onSwitch={(o) => account.switchTo(o.id)} onJoin={(i) => account.join(i.code)}
+      onSettings={() => go({ view: "mySettings" })} onAdmin={account.admin} adminNote="Super-admin: this dude's organisations" onSignOut={onSignOut}
+      signOutNote={account.authMethod === "cloudflare_access" ? "Of Cloudflare Access, on this browser" : "Forget this browser's key"}
+      data-testid={variant === "rail" ? "rail-switcher" : "switcher"} />
+  ) : null;
 
   return (
     <div className="shell" data-testid="shell">
@@ -634,10 +656,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               data-testid="rail-org-settings">
               <Icon name="building" size={16} />
             </SidebarRailItem>
-            <SidebarRailItem label="Your settings" current={place?.view === "mySettings"} onClick={() => go({ view: "mySettings" })}
-              data-testid="rail-my-settings">
-              {you ? <PersonAvatar person={you} size={28} aria-hidden title="" /> : <Icon name="human" size={16} />}
-            </SidebarRailItem>
+            {account && you ? switcher("rail") : (
+              <SidebarRailItem label="Your settings" current={place?.view === "mySettings"} onClick={() => go({ view: "mySettings" })}
+                data-testid="rail-my-settings">
+                {you ? <PersonAvatar person={you} size={28} aria-hidden title="" /> : <Icon name="human" size={16} />}
+              </SidebarRailItem>
+            )}
           </>
         }
         projects={projects ?? []}
@@ -678,7 +702,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               data-testid="org-settings-button">
               Organisation settings
             </SidebarLink>
-            {you ? (
+            {account && you ? switcher("band") : you ? (
               <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
                 actions={<Tooltip content="Sign out"><IconButton size="sm" icon="arrow-right" label="Sign out" title={undefined} onClick={onSignOut} data-testid="sign-out" /></Tooltip>} />
             ) : (
@@ -767,6 +791,7 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
   switch (place?.view) {
     case undefined:
     case "welcome":
+    case "joined":
       return "";
     case "orgSettings":
       return "Organisation settings";

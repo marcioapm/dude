@@ -1,0 +1,57 @@
+/* Each invitee's link, on the sunken shade; rows apart by a hairline inset. */
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12);
+}
+.row + .row {
+  box-shadow: inset 0 1px 0 var(--ds-color-border-subtle);
+}
+.who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+.name,
+.detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.detail {
+  color: var(--ds-color-text-muted);
+}
+.url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-secondary);
+}
+
+@media (max-width: 639.98px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .url {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

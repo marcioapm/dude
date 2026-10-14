@@ -6,8 +6,8 @@
  * itself in its own settings.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { AgentAvatar, Segmented, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AgentAvatar, OrgFace, Segmented, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -23,7 +23,10 @@ import {
   Spinner,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection, ForgeVerification, Member } from "../api/client.ts";
-import { MembersSection } from "./MembersSection.tsx";
+import { MembersSection, organizationInvitations } from "./MembersSection.tsx";
+import { countOf, countWord, InvitationsList } from "../accounts/InvitationsList.tsx";
+import { InviteDialog } from "../accounts/InviteDialog.tsx";
+import { orgOf, useAccount } from "../accounts/context.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { settingsPage } from "../settings.ts";
 import { SETTINGS_ROLES } from "@dude/domain";
@@ -39,7 +42,7 @@ import { NetworkPage } from "./NetworkSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
-const PAGES = ["members", "github", "general", ...SETTINGS_ROLES, "network", "models", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "network", "models", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;
@@ -74,6 +77,22 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   // work while the orchestrator (defaults, built-in prompts) is away. Only
   // the pages that need its settings wait for them.
   const needsSettings = page === "general" || page === "delivery" || page === "network" || isRole(page);
+  const admin = me?.role === "admin";
+  const account = useAccount();
+  const orgName = account?.current.name ?? settings?.organization.name ?? "this organisation";
+  const invitations = useMemo(() => organizationInvitations(client), [client]);
+  // The menu's "3 pending", and what bumps the Invitations page after an invite from Members.
+  const [pending, setPending] = useState<number | null>(null);
+  const [invited, setInvited] = useState(0);
+  useEffect(() => {
+    if (!admin) return;
+    let current = true;
+    void invitations.list({ status: "pending" }).then((r) => current && setPending(countOf(r)), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [admin, invitations, invited]);
+  const [inviting, setInviting] = useState<{ initial?: string } | null>(null);
   return (
     <SettingsFrame
       testId="org-settings"
@@ -81,9 +100,11 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
       problem={null}
       page={page}
       onPage={onPage}
-      scope={{ title: settings?.organization.name ?? "Organisation", subtitle: "Organisation settings", leading: <AgentAvatar role="conductor" size="lg" /> }}
+      scope={{ title: orgName, subtitle: "Organisation settings",
+        leading: account ? <OrgFace org={orgOf(account.current)} size={32} aria-hidden /> : <AgentAvatar role="conductor" size="lg" /> }}
       items={[
         { id: "members", label: "Members", icon: "human" },
+        ...(admin ? [{ id: "invitations", label: "Invitations", icon: "link" as const, note: pending ? `${countWord(pending)} pending` : undefined }] : []),
         { id: "general", label: "General", icon: "settings" },
         { id: "github", label: "GitHub", icon: "git-branch" },
         agentsNav(settings),
@@ -113,14 +134,35 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         // Machines says who may change sizes itself.
         <MachinesPage client={client} orgName={settings?.organization.name ?? "the organisation"}
           sizes={machines.sizes} problem={machines.problem} setSizes={machines.setSizes} />
+      ) : page === "members" || page === "invitations" ? (
+        <>
+          <SettingsNote icon="info">
+            Everyone here can create, deliver and steer tasks. Admins manage the organisation: its members, invitations and settings.
+          </SettingsNote>
+          {page === "members" || !admin ? (
+            <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} orgName={orgName}
+              onInvited={() => setInvited((n) => n + 1)} />
+          ) : (
+            <div className="settingsPage" data-testid="org-invitations">
+              <SettingsHeader title="Invitations"
+                description={`Every invitation to ${orgName} and what became of it. A link works only for its address, for 14 days; Renew gives an expired one 14 more.`}
+                actions={<Button variant="primary" leadingIcon="plus" onClick={() => setInviting({})} data-testid="invite">Invite people</Button>} />
+              <InvitationsList api={invitations} orgName={orgName} version={invited}
+                personName={(id) => people.find((p) => p.id === id)?.name}
+                onInviteAgain={(row) => setInviting({ initial: row.name ? `${row.name} <${row.email}>` : row.email })} />
+            </div>
+          )}
+          {inviting ? (
+            <InviteDialog api={invitations} orgName={orgName} memberEmails={people.flatMap((p) => (p.email ? [p.email] : []))}
+              initial={inviting.initial} onClose={() => setInviting(null)} onInvited={() => setInvited((n) => n + 1)} />
+          ) : null}
+        </>
       ) : (
         <>
           <SettingsNote icon="info">
             Organisation admins only change these. Every project starts from them; an admin can change them for one project in its own settings.
           </SettingsNote>
-          {page === "members" ? (
-            <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
-          ) : page === "github" ? (
+          {page === "github" ? (
             <GitHubPage client={client} admin={me?.role === "admin"} />
           ) : needsSettings && !scope ? (
             <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>

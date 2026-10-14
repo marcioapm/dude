@@ -160,6 +160,10 @@ export function accessToken(request: Request): string | null {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+function isCallback(request: Request, url: URL): boolean {
+  return request.method === "GET" && url.pathname === callbackPath;
+}
+
 /**
  * GitHub's redirect back after Connect GitHub: a top-level navigation that
  * github.com started, so the browser marks it `cross-site`. Admitting it is
@@ -171,8 +175,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * is still refused; GitHub is never same-site.
  */
 function isOAuthCallbackNavigation(request: Request): boolean {
-  return request.method === "GET" &&
-    new URL(request.url).pathname === callbackPath &&
+  return isCallback(request, new URL(request.url)) &&
     request.headers.get("sec-fetch-site") === "cross-site" &&
     request.headers.get("sec-fetch-mode") === "navigate" &&
     request.headers.get("sec-fetch-dest") === "document";
@@ -236,9 +239,12 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
     const token = accessToken(request);
     if (!token) return null;
     checkBrowserOrigin(request, config.public_url);
+    const url = new URL(request.url);
+    // GitHub's redirect back names no organisation: the route finds it by the single-use state, which is bound
+    // to the person who started it in one of the account's memberships.
+    const githubReturn = isCallback(request, url);
     const identity = await deps.verify(token);
     if (!identity) return null;
-    const url = new URL(request.url);
     let admission = await admissionFor(config, identity.email);
     const frontDoor = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/invitations/");
     const fill = admission.gate === "member" && admission.account !== null && wantsProfile(admission.account);
@@ -261,7 +267,7 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
     }
     const accountRoute = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/me/keys") ||
       url.pathname.startsWith("/v1/invitations/") || url.pathname.startsWith("/v1/admin/") ||
-      url.pathname.startsWith("/v1/locate/");
+      url.pathname.startsWith("/v1/locate/") || githubReturn;
     const requested = request.headers.get("x-dude-organization") ??
       (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
     let selected: AccessAdmission["memberships"][number] | undefined;

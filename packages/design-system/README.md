@@ -1185,7 +1185,9 @@ here.
   returns to the row on close (`onCloseAutoFocus`) so arrow keys keep
   working. A danger item is still just a request: the destructive action
   itself goes behind a `Dialog tone="danger"`. An item's `leading` puts a
-  face (project, person) in the glyph's place, for a menu of things;
+  face (project, person) in the glyph's place, for a menu of things — in a
+  radio item, after the tick; `trailing` puts a count that belongs to the
+  item at its end (the switcher's needs-you pill);
   `container` portals it into a themed pane, gallery previews only, like
   `forceMount`.
 - `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
@@ -1847,6 +1849,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<StarterPills onPick={(s) => setText(s.prompt)} />`, the caret at the end | a starter that sends its words, or opens a dialog |
 | `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
 | `<ModelPicker tiers organization value onChange />` in the composer's `toAside` and the rail's Model block, a tier with no model disabled with its reason | a `Select` of every tier × harness |
+| `<OrgSwitcher you current memberships invitations />` as the band's footer and `variant="rail"` in the rail | a second organisation menu in the header, or a `Select` of organisations |
+| `<EmailChipsInput entries views={emailChipViews(entries, classify)} />` | a `Textarea` of comma-separated addresses, or a chip that says "invalid" in red alone |
 
 ## Components
 
@@ -2252,6 +2256,72 @@ sessions*):
   colour), title, `SharedMark`, summary, age; "All sessions". Its own compact row,
   not `SessionRow`'s, whose two lines, chips and state column are the
   list page's. `RECENT_SESSIONS_SHOWN` is how many per density.
+
+`src/components/` — accounts (being in several organisations; the flows
+are in `docs/design/accounts.md`):
+
+- **OrgFace** — an organisation's face. Organisations have no image or
+  colour slot, so it is `ProjectAvatar`'s rounded square with the
+  organisation's initials on the identity colour its id hashes to: the
+  same organisation is the same colour everywhere. Named by the
+  organisation; `aria-hidden` where its name is beside it.
+- **OrgSwitcher** — you at the foot of the sidebar, and the one menu for
+  you. `variant="band"` (the expanded sidebar's footer) is
+  `SidebarProfile`'s anatomy: your face and name, the organisation's face,
+  name and your role under it, an info dot while an invitation waits, a
+  sort chevron. `variant="rail"` (the collapsed rail's `railFooter`) is
+  your face with the organisation's in its corner, the dot on its top
+  corner, named in a tooltip. The menu is `RowMenu`: your organisations as
+  `kind: "radio"` items, each with its face (`leading`), your role and
+  what waits on you there as the description and the needs-you pill at
+  the end (`trailing`), the current one ticked; **Join <org>…** per
+  invitation (`onJoin`); **Your settings** (`settingsLabel`); **All
+  organisations** with `superAdmin` (`adminLabel`, and `adminNote` under
+  it); **Sign out** with `signOutNote`. The trigger's name says
+  who, where, your role and what it opens. Enter or Space opens, arrows
+  move, Enter picks, Escape closes and returns focus. Picking the current
+  organisation does nothing; switching is the app's navigation
+  (`onSwitch`). `switcherItems` is the menu's items, for a host that draws
+  its own trigger.
+- **EmailChipsInput** — email addresses as chips, for an invite: `Input`'s
+  field box holding chips and a bare input. Enter, a comma, a semicolon, a
+  space or leaving the field make chips of what is typed; a paste is split
+  by line, comma and semicolon (`parseEmailEntries`): `Name <email>` keeps
+  the name, a tab-separated row's cell with an `@` is the address and its
+  first other cell the name; addresses are trimmed and lower-cased.
+  Backspace in the empty field takes the last chip back; each chip has its
+  ✕ (named "Remove <address>"). The caller says what each chip means with
+  `views` (`emailChipViews(entries, classify)`, which decides `invalid`
+  and `duplicate` itself): `valid` ✓, `renew` (expired, renewed with the
+  same link), `invalid` (danger), `member` and `duplicate` (struck
+  through), `invited` (with one inline `action`, "Copy their link"). Each
+  is told by glyph and words, and a screen reader hears "will be
+  invited" or "left out". The line under the field (`emailChipSummary`,
+  live, describing the field) counts them: "2 new · 1 renewed · 1 not an
+  email … The other 4 are left out."
+- **InvitationLinkList** — each invitee with their link, to send
+  themselves: name over address, role and "renewed, same link"; the link
+  in mono; **Copy** named "Copy <who>'s link". On the sunken shade, rows a
+  hairline inset apart; under 640px the link drops under the name.
+  `invitationLinesText` is Copy all's text, `Name, email, link` a line.
+  Used by an invite's result and by Create organisation.
+- **KeyShownOnce** — a secret, shown this once (moved from the web app): the
+  key in a read-only mono field that selects itself on focus, Copy
+  (Copied) at its end, and a `usage` slot for how to use it (a string is
+  set in a square sunken well) under `usageHeading` ("How to use it"),
+  with a muted `usageNote`. Done closes it;
+  nothing shows it again. `copy` replaces the clipboard write in tests.
+- **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
+  is one centred column: the app's `mark`, a heading (the page's `h1`) and
+  its `line`, cards, and fine print (`footer`) with an inline
+  `FrontDoorLink` ("Sign out"). `variant="outside"` (no organisation's:
+  No organisation, You're invited, an invitation's page) is 640px on the
+  canvas with no sidebar; `inside` (an organisation's first page) is 720px
+  on the surface beside the sidebar. One column on a phone, the heading a
+  step smaller. `FrontDoorMessage` is one message in a card: a face or a
+  glyph on a sunken disc, an `h1`, a line and its `facts`; the card's
+  footer holds its actions. `HowList` is how something works in a few
+  named lines: a glyph, a bold lead-in, a muted sentence.
 
 ## What is deliberately not here
 

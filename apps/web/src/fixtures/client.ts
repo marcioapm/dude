@@ -20,7 +20,7 @@ import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, NoteRecord, PinNoteIn
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
+import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -475,6 +475,14 @@ export class FixtureClient extends ApiClient {
   override me() {
     return Promise.resolve({ person: PEOPLE[0]!, organization: ORG });
   }
+  /** As a key answers it: a member of the one organisation. */
+  override gate(): Promise<MeAnswer> {
+    return this.me();
+  }
+  /** The fixtures are one organisation: naming it changes nothing they answer. */
+  override inOrganization(_organizationId: string): ApiClient {
+    return this;
+  }
   // -- settings: the network the pages change; the rest as data.ts has it --
 
   #orgEgress = [...SETTINGS.network.organizationEgress!];
@@ -538,10 +546,10 @@ export class FixtureClient extends ApiClient {
   override projectOverview() {
     return Promise.resolve({ project: { id: PROJECT.id, name: PROJECT.name }, epics: [{ id: EPIC.id, title: EPIC.title, description: "", position: 0, state: "active" as const, stateSet: false, tasks: 6, lanes: { done: 1, review: 1, progress: 2, backlog: 2 }, prs: { ci_running: 1 }, owners: [], costUsd: 8.4, machineUsd: 0.4, lastActivity: new Date().toISOString(), needsYou: 1, ...(this.#peers ? { waiting: [["WC-214", "WC-212"] as [string, string]] } : {}), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] });
   }
-  override pushKey() {
+  override pushKey(): Promise<{ publicKey: string }> {
     return Promise.reject(new ApiError(404, "not_found", "No push in the fixtures."));
   }
-  override subscribePush() {
+  override subscribePush(_subscription: PushSubscriptionJSON): Promise<{ subscribed: boolean }> {
     return Promise.resolve({ subscribed: false });
   }
   override machineSizes() {

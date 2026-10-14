@@ -12,8 +12,10 @@ export interface RowMenuAction {
   readonly id: string;
   readonly label: string;
   readonly icon?: IconName | undefined;
-  /** A face in the glyph's place (a project's, a person's), for a menu of things rather than actions. */
+  /** A face in the glyph's place (a project's, a person's), for a menu of things rather than actions. In a radio group it follows the tick. */
   readonly leading?: ReactNode;
+  /** At the end of the row: a count that belongs to the item ("2 need you"). It names itself to a screen reader. */
+  readonly trailing?: ReactNode;
   /** Display only — the menu does not bind it. "⌘E", "Del". */
   readonly shortcut?: string | undefined;
   /** A second, quieter line under the label: what the item is. */
@@ -222,6 +224,7 @@ function MenuItems({ items, onSelect, noteIds }: {
               }}
             >
               <ItemBody icon={it.icon} leading={it.leading} label={it.label} reason={disabled ? it.disabledReason : undefined} description={it.description} mono={it.mono} />
+              {it.trailing ? <span className={styles["trailing"]}>{it.trailing}</span> : null}
               {it.shortcut ? (
                 <kbd className={styles["shortcut"]} aria-hidden>
                   {it.shortcut}
@@ -256,12 +259,14 @@ function RadioGroup({ group }: { readonly group: RowMenuRadioGroup }) {
                 <span className={styles["icon"]} aria-hidden>
                   <RadixMenu.ItemIndicator><Icon name="check" size={12} /></RadixMenu.ItemIndicator>
                 </span>
+                {it.leading ? <span className={styles["leading"]} aria-hidden>{it.leading}</span> : null}
                 {it.description ? (
                   <span className={styles["label"]}>
                     <span className={styles["name"]}>{it.label}</span>
                     <span className={cx(styles["description"], it.descriptionMono && styles["mono"], it.descriptionWraps && styles["wraps"])}>{it.description}</span>
                   </span>
                 ) : <span className={styles["label"]}>{it.label}</span>}
+                {it.trailing ? <span className={styles["trailing"]}>{it.trailing}</span> : null}
                 {reason ? <span className="ds-sr-only">. {reason}</span> : null}
               </RadixMenu.RadioItem>
             </WithReason>

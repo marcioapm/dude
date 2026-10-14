@@ -19,10 +19,41 @@ function callbackUrl() {
   return auth.public_url.replace(/\/+$/, "") + callbackPath;
 }
 
-function landing(status: string) {
+// Your settings in the organisation the transaction was for, when known; a bare
+// `#/me/settings` is placed by the web's gatekeeper in your last organisation.
+function landing(status: string, slug: string | null = null) {
+  const settings = slug ? `#/o/${encodeURIComponent(slug)}/me/settings` : "#/me/settings";
   return new Response(null, { status: 303, headers: {
-    location: `/?github=${encodeURIComponent(status)}#/me/settings`, "cache-control": "no-store", "referrer-policy": "no-referrer",
+    location: `/?github=${encodeURIComponent(status)}${settings}`, "cache-control": "no-store", "referrer-policy": "no-referrer",
   } });
+}
+
+/**
+ * Where a callback's state may have been started: GitHub's redirect names no
+ * organisation, so under Access each of the account's memberships, as the
+ * person it is there; otherwise the principal's one.
+ */
+function callbackCandidates(ctx: RequestContext): Array<{ organizationId: string; personId: string; slug: string | null }> {
+  const principal = session(ctx);
+  return principal.access?.memberships.map((m) => ({ organizationId: m.organization_id, personId: m.person_id, slug: m.organization_slug }))
+    ?? [{ organizationId: principal.organizationId, personId: principal.personId, slug: null }];
+}
+
+/**
+ * Deletes the transaction `state` names for this person in this organisation: null when
+ * there is none, `transaction: null` when it had expired or its App changed since.
+ */
+async function consume(organizationId: string, personId: string, state: string) {
+  return withOrg(organizationId, async ({ sql }) => {
+    const [row] = await sql`DELETE FROM github_oauth_transactions WHERE state_hash = ${hash(state)}
+      AND person_id = ${personId} AND organization_id = ${organizationId}
+      RETURNING credential_id, credential_version, generation, verifier, expires_at`;
+    if (!row) return null;
+    if (new Date(row.expires_at).getTime() <= Date.now()) return { organizationId, personId, transaction: null };
+    const [credential] = await sql`SELECT oauth_client_id, oauth_client_secret, api_base_url FROM forge_credentials
+      WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
+    return { organizationId, personId, transaction: credential ? { ...row, ...credential } : null };
+  });
 }
 
 export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetch = fetch) {
@@ -62,37 +93,39 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
     return json({ url: url.toString() });
   });
   router.get(callbackPath, async (ctx) => {
+    let slug: string | null = null;
     try {
-      const { organizationId, personId } = session(ctx);
       const state = ctx.url.searchParams.get("state") ?? "";
-      const transaction = await withOrg(organizationId, async ({ sql }) => {
-        const [row] = await sql`DELETE FROM github_oauth_transactions WHERE state_hash = ${hash(state)}
-          AND person_id = ${personId} AND organization_id = ${organizationId}
-          RETURNING credential_id, credential_version, generation, verifier, expires_at`;
-        if (!row || new Date(row.expires_at).getTime() <= Date.now()) return null;
-        const [credential] = await sql`SELECT oauth_client_id, oauth_client_secret, api_base_url FROM forge_credentials
-          WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
-        return credential ? { ...row, ...credential } : null;
-      });
-      if (!transaction) return landing("invalid_or_expired");
-      if (ctx.url.searchParams.has("error")) return landing("authorization_denied");
+      // The state is one row in one organisation, bound to the person there: the first to consume it is it.
+      let found: Awaited<ReturnType<typeof consume>> = null;
+      for (const candidate of callbackCandidates(ctx)) {
+        found = await consume(candidate.organizationId, candidate.personId, state);
+        if (found) {
+          slug = candidate.slug;
+          break;
+        }
+      }
+      const transaction = found?.transaction;
+      if (!found || !transaction) return landing("invalid_or_expired", slug);
+      const { organizationId, personId } = found;
+      if (ctx.url.searchParams.has("error")) return landing("authorization_denied", slug);
       const code = ctx.url.searchParams.get("code");
-      if (!code) return landing("authorization_failed");
+      if (!code) return landing("authorization_failed", slug);
       const response = await fetchImpl("https://github.com/login/oauth/access_token", {
         method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({ client_id: transaction.oauth_client_id, client_secret: transaction.oauth_client_secret,
           code, code_verifier: transaction.verifier, redirect_uri: callbackUrl() }), signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok) return landing("authorization_failed");
+      if (!response.ok) return landing("authorization_failed", slug);
       const tokens = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; refresh_token_expires_in?: number };
       if (!tokens.access_token || !tokens.refresh_token || !Number.isFinite(tokens.expires_in) || !Number.isFinite(tokens.refresh_token_expires_in)
-        || tokens.expires_in! <= 0 || tokens.refresh_token_expires_in! <= 0) return landing("enable_expiring_tokens");
+        || tokens.expires_in! <= 0 || tokens.refresh_token_expires_in! <= 0) return landing("enable_expiring_tokens", slug);
       const userResponse = await fetchImpl(`${String(transaction.api_base_url).replace(/\/+$/, "")}/user`, {
         headers: { authorization: `Bearer ${tokens.access_token}`, accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000),
       });
-      if (!userResponse.ok) return landing("identity_failed");
+      if (!userResponse.ok) return landing("identity_failed", slug);
       const user = await userResponse.json() as { id?: number; login?: string };
-      if (!Number.isSafeInteger(user.id) || user.id! <= 0 || !user.login) return landing("identity_failed");
+      if (!Number.isSafeInteger(user.id) || user.id! <= 0 || !user.login) return landing("identity_failed", slug);
       const now = Date.now();
       const stored = await withOrg(organizationId, async ({ sql }) => {
         const [credential] = await sql`SELECT id FROM forge_credentials WHERE id = ${transaction.credential_id}
@@ -127,9 +160,9 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
         }
         return "connected";
       });
-      return landing(stored);
+      return landing(stored, slug);
     } catch {
-      return landing("authorization_failed");
+      return landing("authorization_failed", slug);
     }
   });
   router.delete("/v1/me/github", async (ctx) => {

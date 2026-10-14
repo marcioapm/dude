@@ -8,7 +8,7 @@ import { afterEach, expect, test } from "bun:test";
 import { useState } from "react";
 import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, mount, type, until } from "./dom.ts";
+import { act, click, mount, type, until } from "./dom.ts";
 import type { Me, MeResponse } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE } from "../src/fixtures/data.ts";
@@ -106,31 +106,32 @@ test("after a save the form shows what was saved, and has nothing left to save",
 });
 
 // The shell has your name from the people list, which it reads again after a
-// save, later than /v1/me: here it arrives only once /v1/me already has. Its
-// own until (a separate act) lands the name in a render after /v1/me's; waiting
-// without act would flush both in one render and hide the order under test.
-function Shell({ client }: { client: ProfileClient }) {
+// save, later than /v1/me. The test plays the shell: it hands the shell's
+// setter out and does nothing on its own, so the test sets the name itself,
+// in its own act, once /v1/me's answer has rendered.
+function Shell({ client, expose }: { client: ProfileClient; expose: (setName: (name: string) => void) => void }) {
   const [me, setMe] = useState(ME);
-  const onChanged = () => {
-    void (async () => {
-      await until(() => client.reads >= 2 ? true : null, "the re-read of /v1/me");
-      setMe({ ...ME, name: client.name });
-    })().catch(() => {}); // the test's own until reports a missing re-read
-  };
-  return <MySettingsScreen client={client} me={me} onChanged={onChanged} />;
+  expose((name) => setMe({ ...ME, name }));
+  return <MySettingsScreen client={client} me={me} onChanged={() => {}} />;
 }
 
 test("a name saved with a GitHub username shows the new name once the shell has it, with nothing left to save", async () => {
   const client = new ProfileClient({ githubLogin: null, commitEmail: null });
-  const { container, login, save } = await open(client, <Shell client={client} />);
-  await type(container.querySelector<HTMLInputElement>("[data-testid=profile-name]")!, "Renamed Person");
+  let setShellName: (name: string) => void = () => {};
+  const { container, login, save } = await open(client, <Shell client={client} expose={(set) => { setShellName = set; }} />);
+  const nameField = () => container.querySelector<HTMLInputElement>("[data-testid=profile-name]");
+  await type(nameField()!, "Renamed Person");
   await type(login, "octocat");
   await click(save);
   await until(() => client.saved.length === 1 ? true : null, "the save");
-  await until(() => {
-    const shown = container.querySelector<HTMLInputElement>("[data-testid=profile-name]");
-    const button = container.querySelector<HTMLButtonElement>("[data-testid=profile-save]");
-    return shown?.value === "Renamed Person" && button?.disabled ? true : null;
-  }, "the new name shown, with Save off");
+  // /v1/me's answer has rendered: the form started again from it, with the
+  // saved username and the name the shell still has.
+  await until(() => client.reads >= 2 && login.isConnected === false
+    && container.querySelector<HTMLInputElement>("[data-testid=profile-github-login]")?.value === "octocat"
+    && nameField()?.value === ME.name ? true : null, "the form started again from /v1/me");
+  await act(async () => setShellName(client.name));
+  const button = container.querySelector<HTMLButtonElement>("[data-testid=profile-save]");
+  expect(nameField()?.value).toBe("Renamed Person");
+  expect(button?.disabled).toBe(true);
   expect(client.saved).toEqual([{ name: "Renamed Person", githubLogin: "octocat" }]);
 });

@@ -158,6 +158,20 @@ export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
 export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
 export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
+export { OrgFace } from "./OrgFace.tsx";
+export type { OrgFaceProps, Organisation } from "./OrgFace.tsx";
+export { OrgSwitcher, roleWord, switcherItems } from "./OrgSwitcher.tsx";
+export type { OrgInvitation, OrgMembership, OrgRole, OrgSwitcherProps } from "./OrgSwitcher.tsx";
+export { EmailChipsInput } from "./EmailChipsInput.tsx";
+export type { EmailChipsInputProps } from "./EmailChipsInput.tsx";
+export { emailChipSummary, emailChipViews, emailEntry, parseEmailEntries, TAKEN as EMAIL_CHIP_TAKEN } from "../util/emails.ts";
+export type { EmailChipKind, EmailChipView, EmailEntry } from "../util/emails.ts";
+export { InvitationLinkList, invitationLinesText } from "./InvitationLinkList.tsx";
+export type { InvitationLink, InvitationLinkListProps } from "./InvitationLinkList.tsx";
+export { KeyShownOnce } from "./KeyShownOnce.tsx";
+export type { KeyShownOnceProps } from "./KeyShownOnce.tsx";
+export { FrontDoor, FrontDoorLink, FrontDoorMessage, HowList } from "./FrontDoor.tsx";
+export type { FrontDoorMessageProps, FrontDoorProps, HowItem } from "./FrontDoor.tsx";
 export {
   EpicNote, EpicNoteCount, EpicNoteHistory, EpicNoteNotice, EpicNoteRow, PeerList, PeerMessage, PeerThread, PeerWaitLine, PeerWaitMark,
   SinceDigest, TaskChip, noteLine, noteTitle, noteWordChange,

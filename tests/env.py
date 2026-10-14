@@ -64,6 +64,48 @@ MIN_BUN = (1, 4, 0)
 # The fake lux's preview domain: its servers' URLs are under it.
 FAKE_PREVIEW_DOMAIN = "preview.dude.test"
 
+# Access mode's team and application audience: what the control plane's own
+# Access tests sign for (apps/control-plane/test/access-harness.ts), which
+# tests/access-edge.ts reuses.
+ACCESS_TEAM = "dudetest"
+ACCESS_AUD = "app-audience"
+
+
+@dataclass
+class AccessMode:
+    """A backend behind (a stand-in for) Cloudflare Access: its URL, and tokens for any email."""
+
+    url: str
+    edge_url: str
+    designation: str
+
+    def token(self, email: str, name: str | None = None) -> str:
+        """A token the team signed for `email`; `name` is what get-identity says for it."""
+        resp = requests.post(f"{self.edge_url}/test/token", json={"email": email, **({"name": name} if name else {})},
+                             headers={"x-test-designation": self.designation}, timeout=10)
+        resp.raise_for_status()
+        return resp.json()["token"]
+
+    def session(self, email: str, name: str | None = None) -> requests.Session:
+        """Requests as a browser signed in as `email` sends them: the cookie, and this site's Origin."""
+        s = requests.Session()
+        s.headers.update({"cookie": f"CF_Authorization={self.token(email, name)}", "origin": self.url, "content-type": "application/json"})
+        s.request = _prefixed(s.request, self.url)  # type: ignore[method-assign]
+        return s
+
+    def sign_in(self, page, email: str, name: str | None = None, at: str = "/") -> None:
+        """The browser of `page` signed in to Access as `email` (replacing whoever was), opening `at`."""
+        page.context.clear_cookies()
+        page.context.add_cookies([{"name": "CF_Authorization", "value": self.token(email, name), "url": self.url}])
+        page.goto(self.url + at)
+
+
+def _prefixed(request, base: str):
+    def call(method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", 30)
+        return request(method, url if url.startswith("http") else base + url, *args, **kwargs)
+    return call
+
 
 def bun_problem(version: str) -> str | None:
     """Why the `bun --version` output `version` cannot run the suite, or None."""
@@ -171,6 +213,8 @@ class TestEnvironment:
     orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
     lux_proc: subprocess.Popen | None = field(default=None, repr=False)
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
+    # Access mode's edge and backend, when a suite started them (start_access).
+    _access_procs: list = field(default_factory=list, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -414,6 +458,78 @@ class TestEnvironment:
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self.web_port}"
 
+    def start_access(self, super_admins: list[str]) -> "AccessMode":
+        """The backend as Cloudflare Access fronts it, beside the API-key one.
+
+        A local stand-in for the Access team (tests/access-edge.ts) publishes
+        its keys and signs tokens for any email the suite names; a second
+        backend (tests/access-server.ts) runs with `DUDE_AUTH_PROVIDER=
+        cloudflare_access` against this run's database and orchestrator,
+        verifies every request's CF_Authorization token against those keys,
+        and serves the built web app on its own origin. Its super-admins are
+        `super_admins`. Stopped with the environment.
+        """
+        designation = uuid.uuid4().hex
+        addr_file = self.log_dir / f"access-edge-{designation[:8]}.addr"
+        edge = subprocess.Popen(
+            ["bun", "run", "tests/access-edge.ts"], cwd=REPO_ROOT,
+            env={**os.environ, "ACCESS_EDGE_DESIGNATION": designation, "ACCESS_EDGE_ADDR_FILE": str(addr_file), "PORT": "0"},
+            stdout=self._log("access-edge"), stderr=subprocess.STDOUT,
+        )
+        self._access_procs.append(edge)
+        deadline = time.time() + 30
+        while not addr_file.exists() or not addr_file.read_text():
+            if edge.poll() is not None or time.time() > deadline:
+                raise RuntimeError("the Access edge did not start; see access-edge.log")
+            time.sleep(0.1)
+        edge_url = f"http://{addr_file.read_text()}"
+        port = find_free_port()
+        backend = subprocess.Popen(
+            ["bun", "run", "tests/access-server.ts"], cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "DATABASE_URL": self.app_dsn,
+                "PORT": str(port),
+                "DUDE_ORCHESTRATOR_URL": self.orchestrator_url,
+                "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
+                "DUDE_LAYER_IMAGE": TEST_LAYER,
+                "DUDE_WEB_DIR": str(REPO_ROOT / "apps" / "web" / "dist"),
+                "DUDE_AUTH_PROVIDER": "cloudflare_access",
+                # Replaced by the server's own origin (access-server.ts); configuration requires https.
+                "DUDE_AUTH_PUBLIC_URL": "https://dude.access.test",
+                "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM": ACCESS_TEAM,
+                "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD": ACCESS_AUD,
+                "DUDE_AUTH_SUPER_ADMINS": ",".join(super_admins),
+                "ACCESS_EDGE_URL": edge_url,
+                **self.s3_env,
+            },
+            stdout=self._log("access-backend"), stderr=subprocess.STDOUT,
+        )
+        self._access_procs.append(backend)
+        url = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 30
+        while True:
+            if backend.poll() is not None:
+                raise RuntimeError(f"the Access backend exited ({backend.returncode}); see access-backend.log")
+            try:
+                if requests.get(f"{url}/health", timeout=1).ok:
+                    break
+            except requests.RequestException:
+                pass
+            if time.time() > deadline:
+                raise RuntimeError("the Access backend did not come up; see access-backend.log")
+            time.sleep(0.2)
+        return AccessMode(url=url, edge_url=edge_url, designation=designation)
+
+    def stop_access(self) -> None:
+        for proc in reversed(self._access_procs):
+            _signal(proc, signal.SIGTERM, False)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _signal(proc, signal.SIGKILL, False)
+        self._access_procs.clear()
+
     @property
     def fake_lux_url(self) -> str:
         """The fake lux's address, as it wrote it on start: a test reads what it was sent (GET /v1/runs/<id>)."""
@@ -443,6 +559,7 @@ class TestEnvironment:
         return True
 
     def teardown(self, keep: bool = False) -> None:
+        self.stop_access()
         for name in ("web_proc", "gallery_proc", "control_plane_proc", "orchestrator_proc", "lux_proc"):
             proc = getattr(self, name, None)
             if proc is None:
@@ -557,6 +674,7 @@ class TestEnvironment:
         env.orchestrator_proc = None
         env.lux_proc = None
         env.gallery_proc = None
+        env._access_procs = []
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
         env.real_lux = lux_env() if os.environ.get("DUDE_TEST_REAL_LUX") else None
         env.orchestrator_env = {}

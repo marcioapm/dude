@@ -443,6 +443,18 @@ kind — and a header alone forgets the organisation on every shared link.
   `not_a_member`. No header: the organisation if the account has one, else
   400 `organization_required`. Account routes (`/v1/me`, `/v1/me/keys`,
   `/v1/invitations/:code`) need none.
+- **GitHub's return from Connect GitHub** (`GET /v1/me/github/callback`) is
+  the one tenant write that names no organisation and arrives cross-site:
+  GitHub redirects the browser there. `checkBrowserOrigin` lets through only
+  a top-level cross-site navigation to it (`isOAuthCallbackNavigation`:
+  `GET`, `Sec-Fetch-Site: cross-site`, `Mode: navigate`, `Dest: document`),
+  and the gate treats that path as needing no organisation; the route finds the
+  organisation by the single-use state, which is bound to the person who
+  started it in each of the account's memberships, and lands on
+  `/?github=<outcome>#/o/<slug>/me/settings`. A state none of them holds, or
+  a failure before the route runs, lands on the bare `#/me/settings`, which
+  the web places in your last organisation. Connect itself and the status
+  read are ordinary tenant calls.
 - **A key implies its organisation.** A header that names another is a 403,
   so a script pointed at the wrong organisation fails loudly instead of
   acting in the key's.
@@ -676,6 +688,9 @@ lands on *No organisation*.
    *No organisation*.
 
 ### A CLI key, and using it
+
+The CLI below is future work. Today a key is a bearer token for scripts and
+the HTTP API: the reveal shows `curl -H "authorization: Bearer <key>" <origin>/v1/me`.
 
 1. Your settings → Keys (screen 4): keys grouped by organisation, each
    group with **New key for Acme**.

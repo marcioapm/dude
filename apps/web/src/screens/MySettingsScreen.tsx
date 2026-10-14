@@ -6,13 +6,15 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTheme } from "@dude/design-system";
-import { Duration } from "@dude/design-system/components";
+import { Duration, EntityLine, OrgFace } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardFooter, CardHeader, Dialog, FormActions, FormStack, KeyValueList, Page, PageHeader, Select,
   type CalloutTone } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
-import { KeysSection, ProfileSection } from "./YouSections.tsx";
+import { KeysSection, ProfileSection, type KeyGroup } from "./YouSections.tsx";
+import { useAccount } from "../accounts/context.tsx";
+import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
-import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
+import { pushOrganization, pushState, showTestNotification, turnPushOff, turnPushOn, type PushOrganization, type PushState } from "../push.ts";
 
 const PUSH_TEXT: Record<PushState, string> = {
   on: "On in this browser: a question or a request from an agent shows as a notification, even with dude closed.",
@@ -141,14 +143,20 @@ export function MySettingsScreen({ client, me, onChanged }: {
 }) {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
+  const [pushFor, setPushFor] = useState<PushOrganization | null>(null);
   const { busy, problem, save } = useSave();
   // Who you are on GitHub is only on your own /v1/me, not the people list.
   const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
   const [authorization, setAuthorization] = useState<Awaited<ReturnType<ApiClient["githubAuthorization"]>> | null>(null);
   const [read, setRead] = useState(0);
+  const account = useAccount();
+  const here: PushOrganization | null = account ? { id: account.current.id, name: account.current.name } : null;
 
   useEffect(() => {
-    void pushState().then(setPush);
+    void Promise.all([pushState(), pushOrganization()]).then(([state, owner]) => {
+      setPush(state);
+      setPushFor(owner);
+    });
   }, []);
   useEffect(() => {
     void client.me().then((r) => setGithub({ githubLogin: r.person.githubLogin ?? null, commitEmail: r.person.commitEmail ?? null }),
@@ -159,7 +167,26 @@ export function MySettingsScreen({ client, me, onChanged }: {
     void client.githubAuthorization().then(setAuthorization, () => setAuthorization(null));
   }, [client, read]);
 
-  const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
+  const change = (to: () => Promise<PushState>, owner: PushOrganization | null) => save(async () => {
+    const state = await to();
+    setPush(state);
+    setPushFor(state === "on" ? owner : null);
+  });
+  // The recorded owner counts only while you are still in it, under its current name.
+  const ownerMembership = pushFor && account ? account.memberships.find((m) => m.id === pushFor.id) : undefined;
+  const owner: PushOrganization | null = !account ? pushFor
+    : ownerMembership ? { id: ownerMembership.id, name: ownerMembership.name } : null;
+  // The one subscription is another organisation's: claiming it here moves it.
+  const elsewhere = push === "on" && owner && here && owner.id !== here.id;
+  const pushText = push === "on" && owner
+    ? `On in this browser, for ${owner.name}: a question or a request from an agent there shows as a notification, even with dude closed.`
+      + (elsewhere ? " This browser can notify you for one organisation at a time." : "")
+    : push ? PUSH_TEXT[push] : "";
+  // Keys across your organisations: read with the credential that names none.
+  const keysClient = account?.base ?? client;
+  const groups: KeyGroup[] = account
+    ? account.memberships.map((m) => ({ id: m.id, name: m.name, slug: m.slug, role: m.role }))
+    : me ? [{ id: "", name: "this organisation", slug: "", role: me.role }] : [];
   // The callback lands here with a fixed outcome; anything else reads as a failure.
   const [githubOutcome, setGithubOutcome] = useState(() => new URLSearchParams(window.location.search).get("github"));
   // Read once: off the address, so neither a reload nor a later Disconnect shows it again.
@@ -173,19 +200,43 @@ export function MySettingsScreen({ client, me, onChanged }: {
   return (
     <Page data-testid="my-settings">
       <PageHeader title="Your settings"
-        description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
+        description="Only you see these. Your profile and keys are yours in every organisation; how dude looks is this browser's." />
       {me && github ? (
         // Keyed by what is saved (your name from the shell, your GitHub fields
         // from /v1/me): after a save the form starts again as each read lands,
         // so it ends on the saved values whichever lands first.
         <ProfileSection key={`${me.id}:${me.name}:${github.githubLogin ?? ""}:${github.commitEmail ?? ""}`} client={client} me={{ ...me, ...github }}
-          onChanged={() => { setRead((n) => n + 1); onChanged(); }} />
+          organizations={account?.memberships.map((m) => m.name)} accessEmail={account?.authMethod === "cloudflare_access"}
+          onChanged={() => { setRead((n) => n + 1); onChanged(); account?.refresh(); }} />
       ) : null}
       {authorization?.available ? (
         <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
           onDisconnected={() => { setGithubOutcome(null); setRead((n) => n + 1); }} />
       ) : null}
-      <KeysSection client={client} />
+      {groups.length ? <KeysSection client={keysClient} groups={groups} /> : null}
+      {account && account.memberships.length + account.invitations.length > 1 ? (
+        <Card data-testid="my-organisations">
+          <CardHeader title="Organisations" />
+          <CardBody padding="flush">
+            <ul className="plainRows" role="list">
+              {account.memberships.map((m) => (
+                <li key={m.id} className="plainRow">
+                  <EntityLine lead={<OrgFace org={m} size={24} aria-hidden />} name={m.name} detail={`${roleWord(m.role)} · ${window.location.host}/#/o/${m.slug}`} />
+                  {m.id === account.current.id ? <span className="muted">This tab</span>
+                    : <Button size="sm" variant="quiet" onClick={() => account.switchTo(m.id)}>Open</Button>}
+                </li>
+              ))}
+              {account.invitations.map((i) => (
+                <li key={i.code} className="plainRow">
+                  <EntityLine lead={<OrgFace org={i.organization} size={24} aria-hidden />} name={i.organization.name}
+                    detail={`Invited by ${i.inviter} · expires ${untilWords(i.expiresAt)}`} />
+                  <Button size="sm" variant="secondary" onClick={() => account.join(i.code)} data-testid={`settings-join-${i.organization.slug}`}>Join…</Button>
+                </li>
+              ))}
+            </ul>
+          </CardBody>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader title="Appearance" />
         <CardBody>
@@ -217,20 +268,25 @@ export function MySettingsScreen({ client, me, onChanged }: {
         <CardBody>
           {push === null ? null : (
             <FormStack>
-              <p className="muted" data-testid="push-state" data-state={push}>{PUSH_TEXT[push]}</p>
+              <p className="muted" data-testid="push-state" data-state={push}>{pushText}</p>
               {problem ? <Callout tone="danger">{problem}</Callout> : null}
               <FormActions>
                 {push === "off" ? (
-                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client))} data-testid="push-on">
+                  <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-on">
                     Notify me in this browser
                   </Button>
                 ) : null}
                 {push === "on" ? (
                   <>
+                    {elsewhere ? (
+                      <Button variant="secondary" disabled={busy} onClick={() => void change(() => turnPushOn(client, here), here)} data-testid="push-here">
+                        Notify me for {here.name} instead
+                      </Button>
+                    ) : null}
                     <Button variant="secondary" disabled={busy} onClick={() => void showTestNotification()}>
                       Send a test notification
                     </Button>
-                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
+                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client), null)} data-testid="push-off">
                       Turn off
                     </Button>
                   </>

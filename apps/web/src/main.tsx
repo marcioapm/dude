@@ -10,11 +10,9 @@ import "@dude/design-system/tokens.css";
 import "@dude/design-system/base.css";
 import "./app.css";
 
-import { ApiClient, ApiError } from "./api/client.ts";
-import { App } from "./App.tsx";
+import { ApiClient, ApiError, type MeAnswer } from "./api/client.ts";
 import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
-import { turnPushOff } from "./push.ts";
-import { PeopleProvider } from "./people.tsx";
+import { SignedIn } from "./SignedIn.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 import { AuthSession, KEY_STORAGE } from "./auth.ts";
@@ -33,11 +31,11 @@ async function fixtureClient(scenario: FixtureScenario): Promise<ApiClient> {
 function Root() {
   // Outside production, `?fixtures=a` … `e` answers the API from the mockups' world.
   const scenario = useMemo(() => (import.meta.env.DEV || import.meta.env.MODE === "fixtures" ? fixtureScenario() : null), []);
-  const [fixtures, setFixtures] = useState<ApiClient | null>(null);
+  const [fixtures, setFixtures] = useState<{ client: ApiClient; me: MeAnswer } | null>(null);
   const [session] = useState(() => new AuthSession(localStorage));
   const auth = useSyncExternalStore(session.subscribe, session.snapshot);
   useEffect(() => {
-    if (scenario) void fixtureClient(scenario).then(setFixtures);
+    if (scenario) void fixtureClient(scenario).then(async (client) => setFixtures({ client, me: await client.gate() }));
     else void session.check();
   }, [scenario, session]);
 
@@ -56,22 +54,18 @@ function Root() {
       </div>
     );
   }
-  const client = fixtures ?? (auth.kind === "authenticated" ? auth.client : null);
-  if (!client) return <div className="keyPrompt" role="status">Checking session…</div>;
+  const signedIn = fixtures ?? (auth.kind === "authenticated" ? { client: auth.client, me: auth.me } : null);
+  if (!signedIn) return <div className="keyPrompt" role="status">Checking session…</div>;
+  const signOut = (unsubscribe: (root: ApiClient) => Promise<unknown>) => {
+    void session.signOut(unsubscribe, (url) => location.assign(url), flushSync);
+  };
 
   return (
     <TooltipProvider>
       <ToastProvider>
         <AuthRefusal.Provider value={session.refused}>
-          <PeopleProvider client={client}>
-            <App
-              client={client}
-              onKeyRefused={session.refused}
-              onSignOut={() => {
-                void session.signOut(turnPushOff, (url) => location.assign(url), flushSync);
-              }}
-            />
-          </PeopleProvider>
+          <SignedIn client={signedIn.client} me={signedIn.me} authMethod={fixtures ? "api_key" : auth.kind === "authenticated" ? auth.authMethod : "api_key"}
+            reread={() => (fixtures ? Promise.resolve(fixtures.me) : session.reread())} onKeyRefused={session.refused} signOut={signOut} />
         </AuthRefusal.Provider>
       </ToastProvider>
     </TooltipProvider>

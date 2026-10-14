@@ -1,13 +1,22 @@
-import { ApiClient, ApiError, type MeResponse } from "./api/client.ts";
+import { ApiClient, ApiError, type MeAnswer } from "./api/client.ts";
 
 export const KEY_STORAGE = "dude.apiKey";
 export const ACCESS_LOGOUT = "/cdn-cgi/access/logout";
 
+export type AuthMethod = "api_key" | "cloudflare_access";
+
 export type AuthState =
   | { kind: "checking" }
-  | { kind: "authenticated"; client: ApiClient; authMethod: MeResponse["authMethod"] }
+  // `me` is the gate's answer for this credential, before any organisation is named.
+  | { kind: "authenticated"; client: ApiClient; authMethod: AuthMethod; me: MeAnswer }
   | { kind: "key-prompt"; refused: boolean }
   | { kind: "network-error" };
+
+/** How a credential signed in, from its `/v1/me`: a key is always a member; anyone else came through Access. */
+export function authMethodOf(me: MeAnswer): AuthMethod {
+  if ("authMethod" in me && me.authMethod) return me.authMethod;
+  return me.gate && me.gate !== "member" ? "cloudflare_access" : "api_key";
+}
 
 export function authRefused(cause: unknown): boolean {
   return cause instanceof ApiError && (cause.status === 401 || cause.status === 403);
@@ -49,17 +58,17 @@ export class AuthSession {
     const key = this.storage.getItem(KEY_STORAGE) || undefined;
     let client = this.makeClient(key);
     try {
-      let me: MeResponse;
+      let me: MeAnswer;
       try {
-        me = await client.me();
+        me = await client.gate();
       } catch (cause) {
         if (!key || !authRefused(cause)) throw cause;
         this.storage.removeItem(KEY_STORAGE);
         this.#refused = true;
         client = this.makeClient();
-        me = await client.me();
+        me = await client.gate();
       }
-      if (!this.#signedOut) this.#set({ kind: "authenticated", client, authMethod: me.authMethod ?? "api_key" });
+      if (!this.#signedOut) this.#set({ kind: "authenticated", client, authMethod: authMethodOf(me), me });
     } catch (cause) {
       if (!this.#signedOut) this.#set(authRefused(cause)
         ? { kind: "key-prompt", refused: this.#refused }
@@ -68,8 +77,10 @@ export class AuthSession {
   }
 
   // `client` is the one whose request was refused: a refusal still in flight from a
-  // client this session has already replaced says nothing about the current one.
-  refused = (client: ApiClient): void => {
+  // client this session has already replaced says nothing about the current one. An
+  // organisation's client (`inOrganization`) reports as the session's own.
+  refused = (given: ApiClient): void => {
+    const client = given.root;
     if (this.#signedOut || this.#state.kind !== "authenticated" || this.#state.client !== client) return;
     this.storage.removeItem(KEY_STORAGE);
     // A session accepted by /v1/me but refused elsewhere gets one reprobe, not a loop.
@@ -82,6 +93,17 @@ export class AuthSession {
     this.#set({ kind: "checking" });
     void this.check();
   };
+
+  /** Read the gate's answer again for the signed-in credential (after joining, or Check again). */
+  async reread(): Promise<MeAnswer | null> {
+    if (this.#signedOut || this.#state.kind !== "authenticated") return null;
+    const { client } = this.#state;
+    const me = await client.gate();
+    if (!this.#signedOut && this.#state.kind === "authenticated" && this.#state.client === client) {
+      this.#set({ ...this.#state, me });
+    }
+    return me;
+  }
 
   async signOut(
     unsubscribe: (client: ApiClient) => Promise<unknown>,
