@@ -445,11 +445,28 @@ const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumabl
 // submitted. Runs with something to do sort first (actionable).
 func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 	var runs []phaseRun
-	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM `+runFrom+`
-			WHERE `+sweptRuns+`
+	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) (err error) {
+		runs, err = s.dueIn(ctx, tx, sweepBatch)
+		return err
+	})
+	return runs, err
+}
+
+// dueIn runs dueQuery in tx for up to limit Runs.
+func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, error) {
+	rows, err := tx.Query(ctx, dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
+}
+
+// dueQuery is due's selection. Its parameters: runFrom's $1–$3, $4 how far
+// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch.
+const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
+			WHERE ` + sweptRuns + `
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
-			       OR `+resumable+`
+			       OR ` + resumable + `
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
@@ -458,16 +475,8 @@ func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
-			ORDER BY `+actionable+` DESC, r.created_at
-			LIMIT $5`, append(s.limits(), s.RetryAhead.Seconds(), sweepBatch)...)
-		if err != nil {
-			return err
-		}
-		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
-		return err
-	})
-	return runs, err
-}
+			ORDER BY ` + actionable + ` DESC, r.created_at
+			LIMIT $5`
 
 // pending lets idle sweeps probe all pre-due selections in one round trip
 // instead of opening a transaction per step. A step whose probe found
