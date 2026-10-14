@@ -73,11 +73,6 @@ func (e SourceUnreachable) Error() string {
 }
 func (e SourceUnreachable) Unwrap() error { return e.Err }
 
-// ProtectedName says a branch is one dude never takes over by its name
-// alone: a release line. The default branch and GitHub's protection are
-// checked apart.
-func ProtectedName(branch string) bool { return strings.HasPrefix(branch, "release/") }
-
 // CheckSource checks in against the project and GitHub, and returns it
 // resolved: a refusal (SourceRefusal) says what rule it breaks.
 func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID string, in SourceRequest) (Source, error) {
@@ -159,7 +154,8 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 	if out.HeadBranch == defaultBranch {
 		return out, sourceRefusal("default_branch", "%s is %s's default branch: dude never works on it directly", out.HeadBranch, slug)
 	}
-	if ProtectedName(out.HeadBranch) {
+	// A release line by its name alone; GitHub's protection is asked below.
+	if strings.HasPrefix(out.HeadBranch, "release/") {
 		return out, sourceRefusal("release_branch", "%s is a release branch: dude never works on one directly", out.HeadBranch)
 	}
 	info, err := gh.Branch(ctx, slug, out.HeadBranch)
@@ -236,9 +232,6 @@ func HoldBranchTx(ctx context.Context, tx pgx.Tx, taskID string, src *Source) er
 	}
 	return nil
 }
-
-// Adopted says the delivery took over existing work.
-func (st *State) Adopted() bool { return st.Source != nil }
 
 // BaseFor is what repo's task branch merges into: its stored base, else
 // its default branch.

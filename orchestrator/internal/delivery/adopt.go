@@ -105,8 +105,9 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch))
 }
 
-// adoptedPR says the delivery took over a pull request.
-func (st *State) adoptedPR() bool { return st.Source != nil && st.Source.Kind == SourcePR }
+// adoptedPR and adoptedBranch say what existing work the delivery took over.
+func (st *State) adoptedPR() bool     { return st.Source != nil && st.Source.Kind == SourcePR }
+func (st *State) adoptedBranch() bool { return st.Source != nil && st.Source.Kind == SourceBranch }
 
 // sourceChanged is a source_changed escalation's reason: the saved source
 // is immutable once delivery started, so only these two ways out work.

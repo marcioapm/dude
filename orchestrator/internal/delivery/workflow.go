@@ -404,7 +404,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 		return workflow.Result{}, err
 	}
 	// Existing work has nothing to implement: it is taken over, then reviewed.
-	if st.Adopted() && st.Retries == 0 {
+	if st.Source != nil && st.Retries == 0 {
 		return workflow.Result{Next: "adopt", State: st}, nil
 	}
 	// The conductor plans with the person before anything is built: the
@@ -837,7 +837,7 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
 	// A person's branch is never published as a pull request without their Open or Draft.
-	if st.Source != nil && st.Source.Kind == SourceBranch {
+	if st.adoptedBranch() {
 		st.GateRequired = true
 	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)

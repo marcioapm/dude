@@ -389,7 +389,7 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if st.Source != nil && st.Source.Kind == SourceBranch && !st.conducted() {
+	if st.adoptedBranch() && !st.conducted() {
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", "Open or Draft the pull request"); err != nil {
 			return workflow.Result{}, err
 		}
