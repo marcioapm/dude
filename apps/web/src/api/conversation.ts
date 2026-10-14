@@ -157,6 +157,18 @@ export interface PromptTurn {
   attachments: AttachmentInfo[];
 }
 
+/**
+ * Words dude put in front of the agent's input that no one typed: what a
+ * machine move's resume told it (`run.told`), or a session's line to its
+ * agent (`session.told`). Shown as dude's, tagged Told.
+ */
+export interface ToldTurn {
+  kind: "told";
+  id: string;
+  text: string;
+  at: string;
+}
+
 /** A turn's token totals, when the turn ended on something other than a message. */
 export interface UsageTurn {
   kind: "usage";
@@ -335,11 +347,11 @@ export interface StartState {
   kind: "start" | "resume" | "move";
   /**
    * A machine move (machine.requested, or a Reset of a live Run): the size it
-   * goes to, by name; the pool only when the move changes it. `stopped` once
-   * dude's park has stopped the Run: before that, the agent's own records
-   * are its last turn ending, not its return.
+   * goes to, by name; the pool only when the move changes it; `back` for a
+   * Reset. `stopped` once dude's park has stopped the Run: before that, the
+   * agent's own records are its last turn ending, not its return.
    */
-  machine?: { role: string; to: string; pool: string | null; moveId: string | null; stopped: boolean };
+  machine?: { role: string; to: string; pool: string | null; moveId: string | null; back: boolean; stopped: boolean };
   stage: StartStage | null;
   stageSince: string | null;
   /** When this start began: the Run's creation, the resume's request, or the move's stop. */
@@ -353,7 +365,7 @@ export interface StartState {
 }
 
 export type Turn =
-  | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
+  | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | ToldTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
   | RepositoryRequestTurn | NoticeTurn | EndedTurn | PeerTurn | PeerWaitTurn | NoteToldTurn | DigestTurn;
 
 /**
@@ -706,6 +718,18 @@ export interface Projection {
   standaloneTimings: Map<number, { turn: NoticeTurn; took: string }>;
   /** A "Taken back up" notice whose start (a resume or a move) is still live: shown once the agent is up, never if it fails. */
   heldUnpark: NoticeTurn | null;
+  /** What a move's resume told the agent (`run.told`): shown just after the move's notice once the agent is up. */
+  heldTold: ToldTurn | null;
+  /**
+   * A move's notice waiting for its resume's timing, by the epoch it resumed
+   * into (`run.told`'s, else `run.resized`'s `machine.sinceEpoch`): the
+   * timing gives it the whole move's time and adds no row of its own.
+   */
+  untimedMoves: Map<number, { turn: NoticeTurn; words: string }>;
+  /** The latest move's notice, re-keyed by its own `run.told`'s epoch when that follows. */
+  lastMove: { turn: NoticeTurn; words: string; epoch: number | null; moveId: string | null } | null;
+  /** lux refused the move at its resume: that resume's timing (cause `machine`) adds no row. */
+  refusedMove: boolean;
   /**
    * The question a dude ask tool (`agent.tool.dude`) just asked, by the
    * tool's name, until the next harness tool event: dude records the call
@@ -775,6 +799,10 @@ export function emptyProjection(briefedBefore?: string): Projection {
     untimedUnpark: null,
     standaloneTimings: new Map(),
     heldUnpark: null,
+    heldTold: null,
+    untimedMoves: new Map(),
+    lastMove: null,
+    refusedMove: false,
     pendingAsk: null,
     briefed: false,
     peerWaits: new Map(),
@@ -841,6 +869,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startStaged = false;
         state.startWoken = false;
         state.heldUnpark = null;
+        state.heldTold = null;
         state.retryRun = typeof payload.retries === "string";
         // The last Run's queued messages are not this one's to read: only Try again hands them on, below.
         state.startMessages = [];
@@ -912,6 +941,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.start = null;
         state.startMessages = [];
         state.heldUnpark = null;
+        state.heldTold = null;
         break;
 
       case EventTypes.ConductorWoken:
@@ -934,6 +964,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           break;
         }
         state.start = moveStart(m, p.moveId ?? null, event.occurredAt);
+        state.refusedMove = false;
         state.activity = null;
         break;
       }
@@ -947,6 +978,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.MachineRefused: {
         const p = payload as unknown as MachineRefusedPayload;
         if (state.start?.machine?.moveId === p.moveId) state.start = null;
+        // Its resume's timing says nothing the refusal does not.
+        state.refusedMove = true;
         const verb = p.kind === "reset" ? "was to move back to" : "asked for";
         // The backend's words for lux's refusal (sizes and pools by name), made a sentence.
         const why = /[.!?]$/.test(p.message) ? p.message : `${p.message}.`;
@@ -958,18 +991,44 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const p = payload as unknown as MachineResetPayload;
         turns.push({ kind: "notice", id: event.eventId, notice: "notice", at: event.occurredAt, text: resetNotice(p) });
         // Only a reset that moves a live Run (it has a moveId) has a move to show.
-        if (p.moveId) state.start = moveStart(moveWords(p), p.moveId, event.occurredAt);
+        if (p.moveId) {
+          state.start = moveStart(moveWords(p), p.moveId, event.occurredAt, true);
+          state.refusedMove = false;
+        }
         break;
       }
       case EventTypes.RunResized: {
-        // lux applied the move's size: said once, with how long the move has taken so far. A size lux kept
-        // instead is the refusal's to say (machine.refused follows); size names are unique per organization.
-        const machine = (payload as { machine?: { name?: unknown } }).machine;
+        // lux applied the move's size: one notice, put down when the agent is up, given the whole move's time by
+        // its resume's timing. A size lux kept instead is the refusal's to say (machine.refused follows); size
+        // names are unique per organization.
+        const machine = (payload as { machine?: { name?: unknown; sinceEpoch?: unknown } }).machine;
         const move = state.start?.machine;
         if (state.start && move && typeof machine?.name === "string" && machine.name === move.to) {
-          turns.push({ kind: "notice", id: event.eventId, notice: "unparked", at: event.occurredAt,
-            text: `The ${roleLabel(move.role).toLowerCase()} moved to ${machine.name} in ${formatDuration(msBetween(state.start.startedAt, event.occurredAt))}, with its conversation and work.` });
+          const words = `The ${roleLabel(move.role).toLowerCase()} moved ${move.back ? "back " : ""}to ${machine.name}`;
+          const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice: "unparked", at: event.occurredAt,
+            text: `${words}, with its conversation and work.` };
+          placeHeldUnpark(state, event.occurredAt);
+          state.heldUnpark = turn;
+          const epoch = typeof machine.sinceEpoch === "number" ? machine.sinceEpoch : null;
+          state.lastMove = { turn, words, epoch, moveId: move.moveId };
+          if (epoch !== null) state.untimedMoves.set(epoch, { turn, words });
         }
+        break;
+      }
+      case EventTypes.RunTold: {
+        // What the move's resume told the agent: its own turn, just after the move's notice, once the agent is up.
+        const text = typeof payload.text === "string" ? payload.text : "";
+        const epoch = typeof payload.epoch === "number" ? payload.epoch : null;
+        // The epoch lux resumed into: the move's notice is timed by it.
+        const last = state.lastMove;
+        if (last && epoch !== null && last.moveId === payload.moveId && last.epoch !== epoch) {
+          if (last.epoch !== null) state.untimedMoves.delete(last.epoch);
+          state.untimedMoves.set(epoch, { turn: last.turn, words: last.words });
+          last.epoch = epoch;
+        }
+        if (!text.trim()) break;
+        // Held even after a refused move (its start is over): it goes down once the agent is up.
+        state.heldTold = { kind: "told", id: event.eventId, text, at: event.occurredAt };
         break;
       }
       case EventTypes.PlanUpdated: {
@@ -1177,7 +1236,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.BrainstormTold: {
         // dude's line to a session's agent (who owns it now): dude's words, to the agent.
         const text = typeof payload.text === "string" ? payload.text : "";
-        if (text.trim()) turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt, attachments: [] });
+        if (text.trim()) turns.push({ kind: "told", id: event.eventId, text, at: event.occurredAt });
         break;
       }
 
@@ -1414,6 +1473,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             break;
           }
         }
+        // A Run parked for a person and then moved: its return is the move's, whose notice is already held.
+        if (notice === "unparked" && state.heldUnpark && state.heldUnpark === state.lastMove?.turn) break;
         // While its start is live the agent is not back yet: the notice waits for it (endStart).
         if (notice === "parked") placeHeldUnpark(state, event.occurredAt);
         if (notice === "unparked" && state.start && !state.start.failed) state.heldUnpark = turn;
@@ -1454,6 +1515,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // still to come.
         const timing = resumeTiming(payload);
         if (!timing) break;
+        const move = typeof payload.epoch === "number" ? state.untimedMoves.get(payload.epoch) : undefined;
+        if (move) {
+          // A move's resume, timed from the move's start: its notice says the whole move, and its `react` is the stop.
+          state.untimedMoves.delete(payload.epoch as number);
+          if (state.lastMove?.turn === move.turn) state.lastMove = null;
+          move.turn.text = `${move.words} in ${formatDuration(payload.totalMs as number)}, with its conversation and work.`;
+          move.turn.title = timing.title.replace(/^dude asked lux /, `${START_STAGE_WORDS.park.done} `);
+          break;
+        }
+        if (state.refusedMove && payload.cause === "machine") {
+          // The refusal's notice already says where it resumed.
+          state.refusedMove = false;
+          break;
+        }
         let unparked: NoticeTurn | null | undefined;
         if (typeof payload.epoch === "number" && state.untimedUnparks.has(payload.epoch)) {
           unparked = state.untimedUnparks.get(payload.epoch);
@@ -1504,8 +1579,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.startMessages = [];
         }
         state.start = null;
-        // A failed resume or move shows its failure, never "Taken back up".
+        // A failed resume or move shows its failure, never "Taken back up" or words the agent never read.
         state.heldUnpark = null;
+        state.heldTold = null;
         turns.push(ended);
         state.activity = null;
         state.activeTool = null;
@@ -2183,6 +2259,8 @@ const AGENT_UP: ReadonlySet<string> = new Set([
 function endStart(state: Projection, event: PersistedEvent): void {
   const start = state.start;
   state.ran = true;
+  // A refused move's words wait with no start live (an older lux reports none).
+  if (!start) placeHeldUnpark(state, event.occurredAt);
   if (!start || start.failed) return;
   state.start = null;
   for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
@@ -2200,24 +2278,31 @@ function endStart(state: Projection, event: PersistedEvent): void {
 }
 
 /**
- * A held "Taken back up" goes into the transcript at `at`: the agent is up, or was parked or paused again (dude
- * parks only an agent that ran). A failed or ended start drops it instead.
+ * A held "Taken back up" (or a move's notice) goes into the transcript at `at`, then what the resume told the
+ * agent: the agent is up, or was parked or paused again (dude parks only an agent that ran). A failed or ended
+ * start drops them instead.
  */
 function placeHeldUnpark(state: Projection, at: string): void {
-  if (!state.heldUnpark) return;
-  state.heldUnpark.at = at;
-  state.turns.push(state.heldUnpark);
-  state.heldUnpark = null;
+  if (state.heldUnpark) {
+    state.heldUnpark.at = at;
+    state.turns.push(state.heldUnpark);
+    state.heldUnpark = null;
+  }
+  if (state.heldTold) {
+    state.heldTold.at = at;
+    state.turns.push(state.heldTold);
+    state.heldTold = null;
+  }
 }
 
 function newStart(kind: StartState["kind"], startedAt: string): StartState {
   return { kind, stage: null, stageSince: null, startedAt, done: [], luxReason: null, failed: null };
 }
 
-/** A machine move's start, parking from `at`. */
-function moveStart(m: { role: string; to: string; pool: string | null }, moveId: string | null, at: string): StartState {
+/** A machine move's start, parking from `at`; `back` for a Reset. */
+function moveStart(m: { role: string; to: string; pool: string | null }, moveId: string | null, at: string, back = false): StartState {
   const start = newStart("move", at);
-  start.machine = { role: m.role, to: m.to, pool: m.pool, moveId, stopped: false };
+  start.machine = { role: m.role, to: m.to, pool: m.pool, moveId, back, stopped: false };
   enterStage(start, "park", at);
   return start;
 }
