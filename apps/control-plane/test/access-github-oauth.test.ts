@@ -83,7 +83,10 @@ async function status(email: string, organizationId: string) {
 }
 
 test("a callback with no organisation completes in the one Connect named, and lands on Your settings there", async () => {
+  // A Connect left pending in Acme, tried first, must not take Northwind's return.
+  const pendingInAcme = await connect(at("two"), acme);
   const state = await connect(at("two"), northwind);
+  expect(pendingInAcme).not.toBe(state);
   const landed = await returnFromGithub(at("two"), state);
   expect(landed.status).toBe(303);
   expect(landed.headers.get("location")).toBe(`/?github=connected#/o/northwind-${suffix}/me/settings`);

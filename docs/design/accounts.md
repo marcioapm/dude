@@ -451,7 +451,9 @@ kind — and a header alone forgets the organisation on every shared link.
   and the gate treats that path as needing no organisation; the route finds the
   organisation by the single-use state, which is bound to the person who
   started it in each of the account's memberships, and lands on
-  `/?github=<outcome>#/o/<slug>/me/settings`. Connect itself and the status
+  `/?github=<outcome>#/o/<slug>/me/settings`. A state none of them holds, or
+  a failure before the route runs, lands on the bare `#/me/settings`, which
+  the web places in your last organisation. Connect itself and the status
   read are ordinary tenant calls.
 - **A key implies its organisation.** A header that names another is a 403,
   so a script pointed at the wrong organisation fails loudly instead of
