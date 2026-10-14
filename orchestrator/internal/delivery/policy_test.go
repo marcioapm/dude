@@ -166,7 +166,7 @@ func TestTheReviewerCatalogueIsTheDomainPackages(t *testing.T) {
 		t.Fatal("REVIEWER_CATEGORIES not found in hierarchy.ts")
 	}
 	var ts []string
-	for _, q := range regexp.MustCompile(`"([a-z_]+)"`).FindAllSubmatch(m[1], -1) {
+	for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(m[1], -1) {
 		ts = append(ts, string(q[1]))
 	}
 	if !slices.Equal(ts, reviewerOrder) {

@@ -207,3 +207,26 @@ func TestAReviewSummaryIsNotAFinding(t *testing.T) {
 		t.Errorf("a finding run into the summary: %+v", got)
 	}
 }
+
+// The reviewer's contract puts the evidence word on the description's own
+// line; a wrapped description continues on indented lines.
+func TestAnEvidencePrefixedDescriptionParsesWhole(t *testing.T) {
+	reply := "```yaml\n" +
+		"severity: high\n" +
+		"category: correctness\n" +
+		"file: path/to/file.go\n" +
+		"line: 12\n" +
+		"title: The total is summed after rounding\n" +
+		"description: Traced: path/to/file.go:12 rounds each amount before summing,\n" +
+		"  so the total row differs from the page by a cent.\n" +
+		"suggested_fix: Round once, after summing.\n" +
+		"```\n"
+	got := ParseFindings(reply)
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want one", got)
+	}
+	want := "Traced: path/to/file.go:12 rounds each amount before summing, so the total row differs from the page by a cent."
+	if got[0].Description != want || got[0].SuggestedFix != "Round once, after summing." {
+		t.Errorf("finding = %+v, want description %q", got[0], want)
+	}
+}
