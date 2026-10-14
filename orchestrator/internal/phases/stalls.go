@@ -79,7 +79,7 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 				COALESCE((SELECT (w.state->>'iteration')::int FROM workflow_runs w WHERE w.task_id = r.task_id
 					ORDER BY w.created_at DESC LIMIT 1), 0),
 				now()
-			FROM `+stallFrom+` WHERE `+noProgress+` AND `+stallDue+`
+			FROM `+stalledRuns+`
 			ORDER BY r.created_at LIMIT $3`, delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds(), stallBatch)
 		if err != nil {
 			return err
