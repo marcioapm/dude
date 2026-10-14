@@ -61,7 +61,6 @@ const ALLOWED: Record<string, Record<string, string>> = {
   },
   // Bars down one side that carry meaning, not separation.
   "packages/design-system/src/components/ChatMessage.module.css": { ".quote": "a quotation's bar" },
-  "packages/design-system/src/components/ChatNotice.module.css": { ".quote": "a quotation's bar: what dude told the agent" },
   "packages/design-system/src/components/Peer.module.css": { ".replyTo": "a quotation's bar: what a peer's reply answers" },
   "packages/design-system/src/components/ChatThread.module.css": { ".root": "a subagent's thread, in its role's colour", ".finished": "a finished thread, fading" },
   "packages/design-system/src/components/ChatRunLine.module.css": { ".root": "a Run the conductor started, in its role's colour" },

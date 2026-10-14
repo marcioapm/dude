@@ -439,21 +439,22 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-told"
         title="What dude told the agent"
-        note="Words dude put in front of an agent's input, which no one typed: where a machine move left it, or what lux kept it on. Two ways, one per proposal. A: a turn of their own, ChatMessage role system intent told: dude's face and name, the Told tag, the prompt's neutral frame, never clamped, just before the agent's first words after it. B: the move's own ChatNotice carries them, quoted under its line (told), Told it before them. The person's own message on the same resume stays their turn in either."
+        note="Words dude put in front of an agent's input that no one typed: where a machine move left it, or what lux kept it on. A turn of their own, ChatMessage role system intent told: dude's face and name, the Told tag, the prompt's neutral frame and clamp, just before the agent's first words after it. A person's message on the same resume stays their own turn after it. The move's notice above says the move's whole time; its hover lists the stages."
       >
         <Panes mode={mode} surface>
           <Col>
-            <Label>A · a turn of its own</Label>
+            <Label>after a raise</Label>
             <ChatNotice kind="unparked" by="El Duderino" text="The implementer moved to Large in 48s, with its conversation and work." at={at(0)} />
             <ChatMessage role="system" name="El Duderino" intent="told" startedAt={at(0)}
               content="You now run on Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on." />
             <ChatMessage role="implementer" startedAt={at(4_000)} endedAt={at(9_000)} costUsd={0.04}
               content="On Large now. Running the suite again with 4 workers." />
-            <Label>B · on the move's line</Label>
-            <ChatNotice kind="unparked" by="El Duderino" text="The implementer moved to Large in 48s, with its conversation and work." at={at(0)}
-              told="You now run on Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on." />
-            <ChatMessage role="implementer" startedAt={at(4_000)} endedAt={at(9_000)} costUsd={0.04}
-              content="On Large now. Running the suite again with 4 workers." />
+            <Label>after a Reset with a note, and a person's message on the same resume</Label>
+            <ChatNotice kind="unparked" by="El Duderino" text="The implementer moved back to Standard in 39s, with its conversation and work." at={at(60_000)} />
+            <ChatMessage role="system" name="El Duderino" intent="told" startedAt={at(60_000)}
+              content="Moved back to Standard by Ana Ribeiro: the suite fits in 8 GiB with --maxWorkers 2 now." />
+            <ChatMessage role="human" name="Ana" intent="steer" startedAt={at(55_000)} deliveredAt={at(66_000)} read
+              content="Run the PDF tests alone first, then the rest." />
           </Col>
         </Panes>
       </Block>

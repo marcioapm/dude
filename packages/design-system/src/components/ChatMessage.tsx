@@ -19,7 +19,7 @@ export type ChatMessageKind = "agent" | "human" | "system";
  * briefing of its conductor (`briefing`, framed as a prompt is) and a
  * person's message to it (`message`, a plain signed turn: talking, not
  * intervening). `told` is a line dude put in front of an agent's input
- * (where a machine move left it), framed as a prompt, never clamped.
+ * (where a machine move left it), framed and clamped as a briefing is.
  */
 export type HumanIntent = "prompt" | "answer" | "steer" | "briefing" | "message" | "told";
 
@@ -212,7 +212,7 @@ export function ChatMessage({
   const queued = k === "human" && deliveredAt === null && !isFailed;
   const delivered = k === "human" ? toDate(deliveredAt) : null;
   const wasRead = delivered !== null && read === true;
-  const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && (humanIntent === "prompt" || humanIntent === "briefing") ? PROMPT_MAX_LINES : null);
+  const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && (humanIntent === "prompt" || humanIntent === "briefing" || humanIntent === "told") ? PROMPT_MAX_LINES : null);
   const hasStats = k === "agent" && (costUsd !== undefined || tokens !== undefined || contextTokens !== undefined || outputTokens !== undefined || timed);
 
   return (

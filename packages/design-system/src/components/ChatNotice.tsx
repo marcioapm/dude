@@ -22,11 +22,6 @@ export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
   readonly at: string | number | Date;
   /** Who says it, when that is not plain from where it is: dude's name for the task, in a task's Chat. */
   readonly by?: string | undefined;
-  /**
-   * The words dude put in front of the agent's next input for what the
-   * line reports, verbatim: quoted under the line, "Told it:" before them.
-   */
-  readonly told?: string | undefined;
 }
 
 /**
@@ -35,12 +30,11 @@ export interface ChatNoticeProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
  * held), taken back up, or nudged after going quiet. A centred muted line
  * between turns — no avatar, no frame — so it reads as the transcript's
  * margin note, never as a message. `by` signs it, its name in primary ink.
- * `told` quotes, under the line, what the agent was told of it.
  */
-export function ChatNotice({ kind, text, at, by, told, className, ...rest }: ChatNoticeProps) {
+export function ChatNotice({ kind, text, at, by, className, ...rest }: ChatNoticeProps) {
   const when = new Date(at);
-  const line = (
-    <>
+  return (
+    <div role="note" className={cx(styles["root"], className)} data-kind={kind} {...rest}>
       <span className={styles["rule"]} aria-hidden />
       <span className={styles["body"]}>
         <Icon name={GLYPH[kind]} size={12} className={styles["glyph"]} />
@@ -50,18 +44,6 @@ export function ChatNotice({ kind, text, at, by, told, className, ...rest }: Cha
         </time>
       </span>
       <span className={styles["rule"]} aria-hidden />
-    </>
-  );
-  if (!told) {
-    return <div role="note" className={cx(styles["root"], className)} data-kind={kind} {...rest}>{line}</div>;
-  }
-  return (
-    <div role="note" className={cx(styles["told"], className)} data-kind={kind} {...rest}>
-      <div className={styles["root"]}>{line}</div>
-      <blockquote className={styles["quote"]}>
-        <span className={cx(styles["quoteLabel"], "ds-cap")}>Told it</span>
-        <span className={styles["quoteText"]}>{told}</span>
-      </blockquote>
     </div>
   );
 }

@@ -63,18 +63,6 @@ describe("what dude told the agent", () => {
     expect(h).toContain('data-intent="told"');
     expect(plain(h)).toBe(`El DuderinoTold${told}`);
   });
-
-  test("on a notice: the line, then the words quoted under it", () => {
-    const h = html(<ChatNotice kind="unparked" by="El Duderino" text="The implementer moved to Large in 48s." at="2026-10-14T10:00:00Z" told={told} />);
-    const text = plain(h);
-    expect(text).toStartWith("El Duderino: The implementer moved to Large in 48s.");
-    expect(text).toEndWith(`Told it${told}`);
-    expect(h).toContain("<blockquote");
-  });
-
-  test("a notice with nothing told has no quote", () => {
-    expect(html(<ChatNotice kind="unparked" text="Taken back up in 6.4s." at={0} />)).not.toContain("<blockquote");
-  });
 });
 
 describe("the chat composer", () => {
