@@ -49,6 +49,7 @@ export function galleryOrder(files: ReadonlyArray<GalleryFile>): GalleryFile[] {
 type Filter = "all" | "documents" | "media";
 
 export interface FileGalleryProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  readonly controls?: boolean | undefined;
   readonly files: ReadonlyArray<GalleryFile>;
   /** A thumbnail's bytes, for images: the app makes the URL (it holds the key). */
   readonly thumbnail?: ((v: FileVersion) => string | undefined) | undefined;
@@ -66,7 +67,7 @@ export interface FileGalleryProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * one file with versions ("v3"), not three. Filters by kind; the total and
  * Download all on the right.
  */
-export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAll, note, className, ...rest }: FileGalleryProps) {
+export function FileGallery({ files, controls = true, thumbnail, onOpen, onDownload, onDownloadAll, note, className, ...rest }: FileGalleryProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const kinds = useMemo(() => new Map(files.map((f) => [f.name, artifactKind(f.versions[0]!.contentType, f.name)])), [files]);
   const media = files.filter((f) => isMedia(kinds.get(f.name)!));
@@ -79,7 +80,7 @@ export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAl
   ];
   return (
     <div className={cx(styles["root"], className)} {...rest}>
-      <div className={styles["bar"]}>
+      {controls ? <div className={styles["bar"]}>
         <div className={styles["segments"]} role="tablist" aria-label="Show">
           {segments.map(([k, label, n]) => (
             <button key={k} type="button" role="tab" aria-selected={filter === k}
@@ -98,8 +99,8 @@ export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAl
             Download all
           </Button>
         ) : null}
-      </div>
-      {filter !== "documents" && media.length > 0 ? (
+      </div> : null}
+      {(!controls || filter !== "documents") && media.length > 0 ? (
         <section>
           <h3 className={styles["label"]}>Images &amp; video</h3>
           <div className={styles["grid"]}>
@@ -132,7 +133,7 @@ export function FileGallery({ files, thumbnail, onOpen, onDownload, onDownloadAl
           </div>
         </section>
       ) : null}
-      {filter !== "media" && documents.length > 0 ? (
+      {(!controls || filter !== "media") && documents.length > 0 ? (
         <section>
           <h3 className={styles["label"]}>Documents</h3>
           <ul className={styles["list"]}>
