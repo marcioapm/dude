@@ -917,7 +917,7 @@ describe("Welcome to <organisation>, once per membership", () => {
     await until(() => byTestId(page, "welcome"), "the home");
     expect(attempts).toBe(2);
     expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
-    expect(w.me.gate === "member" && w.me.organizations.map((o) => [o.id, o.welcomedAt != null]))
+    expect(w.me.gate === "member" && w.me.organizations?.map((o) => [o.id, o.welcomedAt != null]))
       .toEqual([[ACME.id, true], [NORTHWIND.id, false]]);
   });
 
