@@ -368,7 +368,7 @@ describe("the Chat tab", () => {
     await until(() => page.textContent?.includes("Make it a follow-up task?") ? page : null, "the question");
     const waiting = await until(() => page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]"), "the waiting line");
     expect(waiting.textContent).toContain("The conductor is waiting for your answer above.");
-    expect(page.querySelector("[data-testid=task-chat] textarea")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=task-chat] textarea").length).toBe(0);
     const yes = [...page.querySelectorAll<HTMLElement>("[data-testid=question-turn] [role=radio]")].find((b) => b.textContent?.startsWith("Yes"))!;
     await act(async () => yes.click());
     await settle();
@@ -617,8 +617,8 @@ describe("the Chat tab", () => {
     const card = page.querySelector("[data-testid=task-chat] article[data-state]")!;
     expect(card.getAttribute("data-state")).toBe("dismissed");
     expect(card.querySelector("[data-testid=settled-by]")?.textContent).toBe("Decided on the banner");
-    expect(page.querySelector("[data-testid=task-chat] [data-testid=composer-waiting]")).toBeNull();
-    expect(card.querySelector("[data-testid=question-form]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=task-chat] [data-testid=composer-waiting]").length).toBe(0);
+    expect(card.querySelectorAll("[data-testid=question-form]").length).toBe(0);
   });
 
   test("Sessions lists the conductor first", async () => {
@@ -765,12 +765,12 @@ describe("an earlier conductor's conversation", () => {
     const page = await chatPage(client);
     const failed = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-failed]"), "the failed read");
     expect(failed.textContent).toContain("the ledger is unreachable");
-    expect(page.querySelector("[data-testid=earlier-conductor-ended]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor-ended]").length).toBe(0);
     client.failing = false;
     await act(async () => failed.querySelector<HTMLButtonElement>("[data-testid=earlier-conductor-retry]")!.click());
     const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")?.parentElement, "the conversation, read");
     expect(earlier.textContent).toContain("Tiago, on the PR.");
-    expect(page.querySelector("[data-testid=earlier-conductor-failed]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor-failed]").length).toBe(0);
   });
 
   test("leaving Chat while a page is on its way reads no more pages", async () => {
@@ -783,7 +783,7 @@ describe("an earlier conductor's conversation", () => {
     const page = await chatPage(client);
     await until(() => client.reads.length === 1 ? page : null, "the first page asked for");
     await pickTab(page, "Overview");
-    expect(page.querySelector("[data-testid=earlier-conductor]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=earlier-conductor]").length).toBe(0);
     client.hold = null;
     await act(async () => release());
     await settle();

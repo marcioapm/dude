@@ -169,7 +169,7 @@ test("the viewer says what the agent got, and from what only when it was scaled;
   expect(index).toBe(1);
   await render(el());
   expect(q('[data-testid="viewer-meta"]')?.textContent).toBe("The agent got 900×900 WEBP · 188 KB · read at 15:52:40");
-  expect(q('[data-testid="viewer-original"]')).toBeNull();
+  expect(document.querySelectorAll('[data-testid="viewer-original"]').length).toBe(0);
 });
 
 test("a turn's images open the viewer on the one clicked", async () => {

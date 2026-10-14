@@ -50,6 +50,7 @@ test("SessionTitle: untitled reads Untitled session, muted; one who can chat ren
   expect(reader!.tagName).toBe("SPAN");
   expect(named!.tagName).toBe("BUTTON");
   const field = async () => pane.querySelector<HTMLInputElement>("[data-testid='session-title-input']");
+  const fields = () => pane.querySelectorAll("[data-testid='session-title-input']").length;
   const key = async (input: HTMLInputElement, k: string) => act(async () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
   });
@@ -62,13 +63,13 @@ test("SessionTitle: untitled reads Untitled session, muted; one who can chat ren
   expect(input.value).toBe("Usage-based billing");
   await typeIn(input, "Dropped");
   await key(input, "Escape");
-  expect(await field()).toBeNull();
+  expect(fields()).toBe(0);
   expect(pane.querySelectorAll("[data-testid='session-title']")[1]!.textContent).toBe("Usage-based billing");
   await act(async () => (pane.querySelectorAll("[data-testid='session-title']")[1] as HTMLElement).click());
   input = (await field())!;
   await typeIn(input, "Billing v2");
   await key(input, "Enter");
-  expect(await field()).toBeNull();
+  expect(fields()).toBe(0);
   expect(pane.querySelectorAll("[data-testid='session-title']")[1]!.textContent).toBe("Billing v2");
   const notices = [...pane.querySelectorAll("[data-kind='renamed']")].map((n) => n.textContent);
   expect(notices[0]).toContain("Brainstorm: Named it “Usage-based billing”");

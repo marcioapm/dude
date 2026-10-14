@@ -73,7 +73,7 @@ async function mountFields(fields: Field[]) {
 
 test("Wrap right then Small write the title; Full disables the wraps and drops the alignment", async () => {
   const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
-  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelectorAll("[data-image-toolbar]").length).toBe(0);
   await f.select("goal");
   expect(f.container.querySelectorAll("[data-image-toolbar] button")).toHaveLength(10);
   await f.press("Wrap right");
@@ -140,7 +140,7 @@ test("keys: Alt+↑ moves, Delete removes, Esc deselects; Open opens the viewer"
   await f.select("goal");
   await f.press("Open");
   expect(f.opened).toEqual(["att_a"]);
-  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelectorAll("[data-image-toolbar]").length).toBe(0);
   await f.key(f.figure("goal")!, "ArrowUp", { altKey: true });
   expect(f.value("goal")).toBe(`${A}\n\nOne.\n\nTwo.`);
   await f.select("goal");
@@ -148,7 +148,7 @@ test("keys: Alt+↑ moves, Delete removes, Esc deselects; Open opens the viewer"
   await f.key(document.body, "Escape");
   expect(f.container.querySelector("[data-image-toolbar]")).not.toBeNull();
   await f.key(f.figure("goal")!, "Escape");
-  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
+  expect(f.container.querySelectorAll("[data-image-toolbar]").length).toBe(0);
   await f.select("goal");
   await f.key(f.figure("goal")!, "Delete");
   expect(f.value("goal")).toBe("One.\n\nTwo.");
@@ -156,13 +156,13 @@ test("keys: Alt+↑ moves, Delete removes, Esc deselects; Open opens the viewer"
 
 test("locked: no toolbar, no handles, not draggable; a click opens the image", async () => {
   const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n${A}`, locked: true }]);
-  expect(f.figure("goal")).toBeNull();
+  expect(f.container.querySelectorAll('[data-testid="goal-preview"] [data-image-n="0"]').length).toBe(0);
   const figure = f.container.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!;
   expect(figure.getAttribute("draggable")).toBeNull();
   await act(async () => figure.querySelector<HTMLElement>("button")!.click());
   expect(f.opened).toEqual(["att_a"]);
-  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
-  expect(f.container.querySelector('[data-testid="image-resize-right"]')).toBeNull();
+  expect(f.container.querySelectorAll("[data-image-toolbar]").length).toBe(0);
+  expect(f.container.querySelectorAll('[data-testid="image-resize-right"]').length).toBe(0);
 });
 
 test("a resize handle snaps to Small within 10 px and writes it", async () => {
@@ -191,8 +191,8 @@ test("a change from outside clears the selection, steals no focus, and Backspace
   input.focus();
   // An upload finishing in front of the selected image: reference 0 is now another image.
   await f.type("crit", `- [ ] One ${B}\n- [ ] Two ${A}`);
-  expect(f.container.querySelector("[data-image-toolbar]")).toBeNull();
-  expect(f.container.querySelector("[data-selected]")).toBeNull();
+  expect(f.container.querySelectorAll("[data-image-toolbar]").length).toBe(0);
+  expect(f.container.querySelectorAll("[data-selected]").length).toBe(0);
   expect(document.activeElement).toBe(input);
   await f.key(document.activeElement!, "Backspace");
   expect(f.value("crit")).toBe(`- [ ] One ${B}\n- [ ] Two ${A}`);

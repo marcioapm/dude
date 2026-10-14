@@ -88,6 +88,6 @@ test("a size whose pool lux deleted says so, and cannot be saved until it has an
 test("a size naming the default pool by its id shows that pool, and saves", async () => {
   const dialog = await edit("Pinned");
   expect(picker(dialog).textContent).toBe("general (Acme’s default) — EC2 · hosts · 16 CPUs · 32 GiB · 180 GiB");
-  expect(dialog.querySelector("[data-testid=machine-pool-gone]")).toBeNull();
+  expect(dialog.querySelectorAll("[data-testid=machine-pool-gone]").length).toBe(0);
   expect(save(dialog).disabled).toBe(false);
 });

@@ -72,8 +72,8 @@ test("an App's webhooks card says the App delivers, and shows the URL and secret
   const card = await until(() => container.querySelector("[data-testid=webhooks]"), "the webhooks card");
   expect(card.querySelector("[data-testid=webhook-app]")?.textContent).toContain("Deliveries come from the GitHub App");
   expect(card.querySelector<HTMLInputElement>("[data-testid=webhook-url]")?.value).toBe(`${window.location.origin}/v1/webhooks/github/org_a`);
-  expect(card.querySelector("[data-testid=webhook-register]")).toBeNull();
-  expect(card.querySelector("[data-testid=webhook-repo]")).toBeNull();
+  expect(card.querySelectorAll("[data-testid=webhook-register]").length).toBe(0);
+  expect(card.querySelectorAll("[data-testid=webhook-repo]").length).toBe(0);
   // Not "0 of 1 registered": an App's repositories have no hooks to count.
   expect(card.querySelector("[data-testid=webhook-summary]")?.textContent).toContain("the GitHub App's webhook");
   await click(card.querySelector("[data-testid=webhook-show-secret]")!);
@@ -86,7 +86,7 @@ test("a token's webhooks card still registers on every repository", async () => 
   const container = await openGithub(client);
   const card = await until(() => container.querySelector("[data-testid=webhooks]"), "the webhooks card");
   expect(card.querySelector("[data-testid=webhook-register]")).not.toBeNull();
-  expect(card.querySelector("[data-testid=webhook-app]")).toBeNull();
+  expect(card.querySelectorAll("[data-testid=webhook-app]").length).toBe(0);
   expect(card.querySelectorAll("[data-testid=webhook-repo]").length).toBe(1);
 });
 
@@ -107,7 +107,7 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
   const choice = await until(() => document.querySelector("[data-testid=forge-auth]"), "the choice");
   const appButton = [...choice.querySelectorAll("button")].find((b) => b.textContent === "GitHub App")!;
   await click(appButton);
-  expect(document.querySelector("[data-testid=forge-token]")).toBeNull();
+  expect(document.querySelectorAll("[data-testid=forge-token]").length).toBe(0);
   const save = document.querySelector<HTMLButtonElement>("[data-testid=forge-save]")!;
   // The design system's secret field: masked, a password input, until shown.
   const key = document.querySelector<HTMLInputElement>("[data-testid=forge-private-key]")!;

@@ -68,7 +68,7 @@ function form(items: QuestionItem[], sent: QuestionSubmission[], extra: Partial<
 test("one question: a click on a choice is the answer; the suggestion is said, not picked", async () => {
   const sent: QuestionSubmission[] = [];
   await render(form(ONE, sent));
-  expect(q('[role="tablist"]')).toBeNull();
+  expect(document.querySelectorAll('[role="tablist"]').length).toBe(0);
   const radios = all('[role="radio"]');
   expect(radios.map((r) => r.textContent)).toEqual(["5xx onlyagent suggests", "Everything2", "Something else…3"]);
   expect(radios.every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
@@ -193,7 +193,7 @@ test("answered, the turn is the record: each question with its answer, own words
   expect(q("header")!.textContent).toContain("asked 4 questions");
   expect(q("header")!.textContent).toContain("by marcio, after");
   expect(all('[data-testid="record-answer"]').map((a) => a.textContent)).toEqual(["5xx only", "Leave it", "Unit; API", "“Pay with two cards”in marcio's words"]);
-  expect(q('[data-testid="question-form"]')).toBeNull();
+  expect(document.querySelectorAll('[data-testid="question-form"]').length).toBe(0);
 });
 
 test("Enter on the form's own buttons is that button: Change opens its tab, Back goes back, a tab opens it; nothing is sent", async () => {
@@ -314,6 +314,6 @@ test("with no waitingKey, Write to the agent instead lasts until the wait ends: 
 
 test("someone else's: no form, the choices muted, how to take it over", async () => {
   await render(form(FOUR, [], { waitingOn: "Ana" }));
-  expect(q('[data-testid="question-form"]')).toBeNull();
+  expect(document.querySelectorAll('[data-testid="question-form"]').length).toBe(0);
   expect(q('[data-testid="waiting-on"]')!.textContent).toBe("Waiting for Ana to answer · Take over this task to answer");
 });

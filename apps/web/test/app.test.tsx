@@ -121,7 +121,7 @@ describe("settings pages", () => {
     const screen = await until(() => page.querySelector<HTMLElement>("[data-testid=my-settings]"), "your settings");
     await until(() => screen.querySelector("[data-testid=profile]"), "the profile");
     expect([...screen.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Your settings"]);
-    expect(screen.querySelector("nav[aria-label=Breadcrumb]")).toBeNull();
+    expect(screen.querySelectorAll("nav[aria-label=Breadcrumb]").length).toBe(0);
     expect(document.title).toBe("Your settings — dude");
     expect(screen.querySelector("[data-testid=profile]")!.textContent).toContain("Organisation admin");
   });
