@@ -174,7 +174,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   }
   const openedRun = runId && runId !== leftRun ? runId : undefined;
   const asked = openedRun ? "sessions" : chosenTab;
-  // For the open session, which is memoised: one function each for the page's life.
+  // The open session is memoised: these keep their identity and read the latest render's closures.
   const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {}, selector: (_title: ReactNode): ReactNode => null });
   const openServers = useCallback(() => latest.current.pickTab("servers"), []);
   const toCurrent = useCallback(() => latest.current.toCurrent(), []);

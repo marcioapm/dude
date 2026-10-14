@@ -143,13 +143,17 @@ test("the open option is marked apart from the keyboard's row", async () => {
   expect(second!.getAttribute("aria-selected")).toBe("true");
 });
 
-test("the trigger is named by the open session and says it opens a listbox", async () => {
+test("the trigger is named by the open session and says it opens the dialog it controls", async () => {
   const el = await mount();
   const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;
   expect(trigger.getAttribute("aria-label")).toBeNull();
   expect(trigger.getAttribute("aria-labelledby")).toBeNull();
   expect(trigger.textContent).toBe("Conductor");
-  expect(trigger.getAttribute("aria-haspopup")).toBe("listbox");
+  await act(async () => trigger.click());
+  await tick();
+  const popup = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+  expect(popup?.getAttribute("role")).toBe("dialog");
+  expect(trigger.getAttribute("aria-haspopup")).toBe(popup?.getAttribute("role"));
 });
 
 test("no options says so", async () => {

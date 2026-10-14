@@ -47,8 +47,8 @@ export function SearchSelector<T>({ title, label, options, optionKey, searchText
   };
   return (
     <Popover.Root open={open} onOpenChange={openChange}>
-      {/* The title is the trigger's name: what is open, not what the button does. */}
-      <Popover.Trigger ref={setTrigger} className={styles["trigger"]} aria-haspopup="listbox" data-testid="search-selector-trigger">
+      {/* The title is the trigger's name: what is open, not what the button does. Radix says it opens a dialog, which the popup is. */}
+      <Popover.Trigger ref={setTrigger} className={styles["trigger"]} data-testid="search-selector-trigger">
         {title}<Icon name="chevron-down" size={14} />
       </Popover.Trigger>
       <Popover.Portal>
