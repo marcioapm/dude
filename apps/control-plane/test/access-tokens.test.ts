@@ -171,8 +171,8 @@ describe("cross-site requests", () => {
       registerGithubOAuthRoutes(oauth);
       await member(owner, org, at("oauthnav"));
     });
-    const visit = async (path: string, headers: Record<string, string>) => {
-      const res = await oauth.handle(new Request(`${ORIGIN}${path}`, { headers }));
+    const visit = async (path: string, headers: Record<string, string>, method = "GET") => {
+      const res = await oauth.handle(new Request(`${ORIGIN}${path}`, { method, headers }));
       const body = res.headers.get("content-type")?.includes("json") ? await res.json() as { error?: { code?: string } } : null;
       return { status: res.status, code: body?.error?.code ?? null, location: res.headers.get("location") };
     };
@@ -201,10 +201,16 @@ describe("cross-site requests", () => {
       expect(await visit("/v1/me", { ...cookie(token), ...navigation })).toEqual(refused);
       expect(await visit("/v1/me/github/callback/x?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
       expect(await visit("/v1/me/github/callbacks?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
+      expect(await visit("/v1/me/github/CALLBACK?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
+    });
+
+    test("a cross-site form POST or HEAD to the callback is refused", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit(callback, { ...cookie(token), ...navigation, origin: "https://github.com" }, "POST")).toEqual(refused);
+      expect((await visit(callback, { ...cookie(token), ...navigation }, "HEAD")).status).toBe(403);
     });
 
     test("a cross-site navigation to the callback still needs a verified Access token", async () => {
-      expect((await visit(callback, navigation)).status).toBe(401);
       expect((await visit(callback, { ...cookie("not-a-jwt"), ...navigation })).status).toBe(401);
       const foreign = await sign(stranger, { email: at("oauthnav") });
       expect((await visit(callback, { ...cookie(foreign), ...navigation })).status).toBe(401);

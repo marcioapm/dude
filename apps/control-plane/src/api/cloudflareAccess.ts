@@ -18,6 +18,7 @@ import { withoutTenant } from "../db/client.ts";
 import type { AccessConfig } from "../config.ts";
 import type { AccessAdmission, Principal } from "./auth.ts";
 import { HttpError } from "./http.ts";
+import { callbackPath } from "./routes/githubOAuth.ts";
 
 export const ACCESS_LOGOUT_PATH = "/cdn-cgi/access/logout";
 
@@ -158,7 +159,6 @@ export function accessToken(request: Request): string | null {
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const GITHUB_OAUTH_CALLBACK_PATH = "/v1/me/github/callback";
 
 /**
  * GitHub's redirect back after Connect GitHub: a top-level navigation that
@@ -172,7 +172,7 @@ const GITHUB_OAUTH_CALLBACK_PATH = "/v1/me/github/callback";
  */
 function isOAuthCallbackNavigation(request: Request): boolean {
   return request.method === "GET" &&
-    new URL(request.url).pathname === GITHUB_OAUTH_CALLBACK_PATH &&
+    new URL(request.url).pathname === callbackPath &&
     request.headers.get("sec-fetch-site") === "cross-site" &&
     request.headers.get("sec-fetch-mode") === "navigate" &&
     request.headers.get("sec-fetch-dest") === "document";

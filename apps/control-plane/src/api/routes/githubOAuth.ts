@@ -6,7 +6,7 @@ import { badRequest, json, noContent } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-const callbackPath = "/v1/me/github/callback";
+export const callbackPath = "/v1/me/github/callback";
 
 function session(ctx: RequestContext) {
   if (ctx.principal.credentialKind !== "person") throw badRequest("Connect GitHub requires a logged-in person session");
