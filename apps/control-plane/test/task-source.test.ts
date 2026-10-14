@@ -105,6 +105,25 @@ test("a task created from a pull request keeps it as GitHub said, and works on i
   expect(checks.at(-1)).toMatchObject({ path: `/internal/projects/${PROJECT}/sources/check`, kind: "pr", pullRequest: "12", taskId: "" });
   expect(await storedSource(task.id)).toEqual({ kind: "pr", number: 12, title: "Greet in Portuguese", head_branch: "feature/greet",
     base_branch: "main" });
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
+});
+
+test("simultaneous sources reserve one live task per head while different heads work", async () => {
+  const source = { kind: "branch", repositoryId: REPO, branch: "feature/concurrent", base: "main" };
+  const results = await Promise.all([newTask(source), newTask(source)]);
+  expect(results.map(r => r.status).sort()).toEqual([201, 422]);
+  const refused = results.find(r => r.status === 422)!;
+  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("branch_taken");
+  const different = await Promise.all([
+    newTask({ ...source, branch: "feature/one" }), newTask({ ...source, branch: "feature/two" }),
+  ]);
+  expect(different.map(r => r.status)).toEqual([201, 201]);
+  const tasks = await Promise.all([newTask(), newTask()]);
+  const ids = await Promise.all(tasks.map(async r => ((await r.json()) as { id: string }).id));
+  const attached = await Promise.all(ids.map(id => call("PATCH", `/v1/tasks/${id}`, {
+    source: { ...source, branch: "feature/attach" },
+  })));
+  expect(attached.map(r => r.status).sort()).toEqual([200, 422]);
 });
 
 test("a refused source is the orchestrator's answer, and no task is made", async () => {

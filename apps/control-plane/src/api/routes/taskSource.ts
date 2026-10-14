@@ -64,6 +64,19 @@ export function sameSource(stored: TaskSource | null, given: TaskSourceInput | n
  * source is in is one the task works on, with write access.
  */
 export async function setTaskSource(scope: OrgScope, organizationId: string, taskId: string, source: TaskSource | null) {
+  if (source) {
+    await scope.sql`SELECT id FROM repositories WHERE id = ${source.repositoryId} FOR UPDATE`;
+    const holders = await scope.sql`
+      SELECT p.key_prefix || '-' || t.number AS key FROM tasks t JOIN projects p ON p.id = t.project_id
+      WHERE t.id <> ${taskId} AND t.status NOT IN ('done', 'aborted', 'failed')
+        AND (EXISTS (SELECT 1 FROM task_sources s WHERE s.task_id = t.id
+                     AND s.repository_id = ${source.repositoryId} AND s.head_branch = ${source.headBranch})
+          OR EXISTS (SELECT 1 FROM workflow_runs w JOIN task_repositories tr ON tr.task_id = w.task_id
+                     WHERE w.task_id = t.id AND tr.repository_id = ${source.repositoryId}
+                       AND w.status IN ('running', 'waiting') AND w.state->>'branch' = ${source.headBranch}))
+      LIMIT 1`;
+    if (holders[0]) throw new HttpError(422, `${source.headBranch} is already the branch of ${holders[0].key}, which is still in progress`, "branch_taken");
+  }
   await scope.sql`DELETE FROM task_sources WHERE task_id = ${taskId}`;
   if (!source) return;
   await scope.sql`

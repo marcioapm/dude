@@ -212,6 +212,17 @@ func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy P
 	if err != nil || src == nil {
 		return st, err
 	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM repositories WHERE id = $1 FOR UPDATE`, src.RepositoryID); err != nil {
+		return st, err
+	}
+	var holder string
+	err = tx.QueryRow(ctx, branchHolder, src.RepositoryID, src.HeadBranch, taskID).Scan(&holder)
+	if err == nil {
+		return st, sourceRefusal("branch_taken", "%s is already the branch of %s", src.HeadBranch, holder)
+	}
+	if !db.IsNotFound(err) {
+		return st, err
+	}
 	st.Branch, st.Source = src.HeadBranch, src
 	st.Bases = map[string]string{src.Repository: src.BaseBranch}
 	return st, nil
