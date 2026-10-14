@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,7 +135,28 @@ func TestTheSweepRecordsWhileAnotherTransactionHoldsTheRunsKeyShare(t *testing.T
 // the other to finish, in turn, and the artifact is recorded once.
 func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 	w := newReceiptWorld(t)
-	ctx := context.Background()
+	// Registered after newReceiptWorld's cleanups, so it runs before them:
+	// both workers have returned, their transactions ended, before the
+	// pool and database are closed.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		workers.Wait()
+	})
+	// Every return, Fatal included, lets the follower go on.
+	record := make(chan struct{})
+	release := sync.OnceFunc(func() { close(record) })
+	defer release()
+	await := func(ch <-chan error) error {
+		select {
+		case err := <-ch:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	if _, err := w.owner.Exec(ctx, `UPDATE runs SET lux_run_id = 'lrun_1', status = 'completed',
 		artifacts_due_at = now(), artifacts_next_at = now() WHERE id = $1`, w.tr.run.ID); err != nil {
 		t.Fatal(err)
@@ -147,28 +169,46 @@ func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 
 	// The follower's batch, as followOutput runs it: the Run's row first,
 	// then the frame. It records once the sweep is waiting on it.
-	locked, record := make(chan int32), make(chan struct{})
+	locked := make(chan int32)
 	followed := make(chan error, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		followed <- w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
 			var pid int32
 			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid() FROM runs WHERE id = $1 FOR UPDATE`, w.tr.run.ID).Scan(&pid); err != nil {
 				close(locked)
 				return err
 			}
-			locked <- pid
-			<-record
+			select {
+			case locked <- pid:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case <-record:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			data, _ := json.Marshal(map[string]any{"artifactId": id, "path": path, "name": "notes.md", "version": 1,
 				"description": "Why the export streams rows", "size": 12, "sha256": "ab12", "contentType": "text/markdown"})
 			return w.tr.luxEvent(ctx, tx, w.s, lux.Frame{Kind: "lux", Epoch: 2, EventType: "artifact.published", EventData: data})
 		})
 	}()
-	follower, ok := <-locked
-	if !ok {
-		t.Fatal(<-followed)
+	var follower int32
+	select {
+	case pid, ok := <-locked:
+		if !ok {
+			t.Fatal(await(followed))
+		}
+		follower = pid
+	case <-ctx.Done():
+		t.Fatalf("the follower never locked the Run: %v", ctx.Err())
 	}
 	swept := make(chan error, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		_, err := a.Sweep(ctx)
 		swept <- err
 	}()
@@ -182,16 +222,16 @@ func TestTheSweepAndTheFollowerRecordingOneArtifactDoNotDeadlock(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			close(record)
-			t.Fatalf("the sweep never waited on the follower: %v", <-swept)
+			release()
+			t.Fatalf("the sweep never waited on the follower: %v", await(swept))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	close(record)
-	if err := <-followed; err != nil {
+	release()
+	if err := await(followed); err != nil {
 		t.Errorf("follower: %v", err)
 	}
-	if err := <-swept; err != nil {
+	if err := await(swept); err != nil {
 		t.Errorf("sweep: %v", err)
 	}
 	if got := w.artifacts(); len(got) != 1 || got[0].StorageKey != id {
