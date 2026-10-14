@@ -635,6 +635,8 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
+  /** The latest top-level row of each call id and tool, placeholders not yet claimed left out: an id reused for another tool has several. */
+  latestCallByTool: Map<string, Map<string, ToolTurn>>;
   /** Child sessions by their id, and each child's tool calls by theirs. */
   childrenById: Map<string, ChildTurn>;
   childToolsByCall: Map<string, ToolTurn>;
@@ -734,6 +736,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
+    latestCallByTool: new Map(),
     childrenById: new Map(),
     childToolsByCall: new Map(),
     placeholderCalls: new Set(),
@@ -938,6 +941,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const placeholder = toolsByCall.get(callId);
         if (placeholder && state.placeholderCalls.has(placeholder)) {
           claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
+          indexCall(state, placeholder);
           takeRefusal(state, placeholder);
         } else {
           const turn = toolTurn(callId, tool, payload, event.occurredAt);
@@ -958,6 +962,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           // A repeated completion never re-times a finished call.
           if (!existing.endedAt) {
             claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
+            indexCall(state, existing);
             endTool(existing, payload, event.occurredAt);
             takeRefusal(state, existing);
           }
@@ -1756,9 +1761,19 @@ function completedCall(state: Projection, callId: string, tool: string): ToolTur
   const mapped = state.toolsByCall.get(callId);
   const placeholder = mapped !== undefined && state.placeholderCalls.has(mapped);
   if (!mapped || (mapped.tool === tool && !placeholder)) return mapped;
-  const recorded = state.turns.findLast((t): t is ToolTurn =>
-    t.kind === "tool" && t.id === callId && t.tool === tool && !state.placeholderCalls.has(t));
+  const recorded = state.latestCallByTool.get(callId)?.get(tool);
   return recorded ?? (placeholder ? mapped : undefined);
+}
+
+/**
+ * Records a top-level row as the latest of its id and tool, once it is added or its placeholder claimed. Rows are
+ * never removed or moved before one another, so the last recorded is the last in `turns`.
+ */
+function indexCall(state: Projection, turn: ToolTurn): void {
+  if (state.placeholderCalls.has(turn)) return;
+  let byTool = state.latestCallByTool.get(turn.id);
+  if (!byTool) state.latestCallByTool.set(turn.id, (byTool = new Map()));
+  byTool.set(turn.tool, turn);
 }
 
 /** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
@@ -1886,6 +1901,7 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
 function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
   const { turns } = state;
   turns.push(turn);
+  indexCall(state, turn);
   if (!ask || dudeToolName(turn.tool) !== ask.tool) return;
   const at = turns.lastIndexOf(ask.question);
   if (at < 0) return;

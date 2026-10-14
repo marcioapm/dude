@@ -312,6 +312,14 @@ describe("a call id reused for another tool", () => {
     expect(tools[2]!.result).toEqual({ output: { head: "second" } });
   });
 
+  test("a task call that filled in its child's call is still the one its completion ends after the id moves on", () => {
+    const events = [started(), parentCall(), ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }), taskDone()];
+    const [, , , taskEnd] = events;
+    const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["task", "completed", taskEnd.occurredAt], ["bash", "running", null]]);
+    expect(only(tools[0]!.children).id).toBe("ses_kid");
+  });
+
   // Codex reports spawnAgent's completion before the child it spawned.
   test("a child heard after its task call ended hangs under that task call", () => {
     const events = [parentCall(), taskDone(), ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" })];
