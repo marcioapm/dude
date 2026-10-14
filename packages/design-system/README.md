@@ -862,12 +862,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   for each earlier one — how it stopped, and **Show attempt 1**, which
   folds it open: its steps as they ended, who stopped it and why, who set
   it aside and their note, its branch and last commit, and what lux still
-  keeps. The list of agent sessions on the task's Sessions tab groups by
-  attempt under small-caps heads
-  ("Attempt 2 · current", "Attempt 1 · set aside") once there is more than
-  one; a set-aside agent session reads as it ended, its strip saying it was set
-  aside and the way to where the work goes on. Activity is one timeline
-  across attempts.
+  keeps. The Sessions tab's title selector lists the shown attempt's agent
+  sessions, plus the task's conductor, grouped as Conductor, Started by …,
+  and Delivered automatically. A set-aside agent session reads as it ended,
+  its strip saying it was set aside and the way to where the work goes on.
+  Activity is one timeline across attempts.
 
 ### Nesting
 
@@ -1125,13 +1124,14 @@ here.
   "(completed)" stay readable), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-   the rail is 360px; below 1080px of session width the conversation keeps
-   the width and the header keeps the terminal.
+  the diff's own list does.
+  The rail is 360px; below 1080px of session width the conversation keeps
+  the width and the header keeps the terminal.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
-  tab). Where the rail is not — the agent session narrower than about
-  820px, or on Changes or Events — the header keeps the same link as a
+  tab). Where the rail is not — the agent session narrower than 1080px,
+  or on Changes or Events — the header keeps the same link as a
   terminal icon (`LinkButton iconOnly`), chosen by the same container
   query on the agent session's width, so the terminal is never unreachable
   and never shown twice. A branch preview has no agent to hold it: its
@@ -2344,7 +2344,9 @@ canonical `size.pageRail` in `src/tokens/scale.ts`, regenerated with `bun run
 tokens`). This leaves at least 720px for the main column. Below that threshold
 there is no reserved column: the same rail is above the main content, with
 facets wrapping into compact controls. Controls are never hidden or remounted,
-so actions, selection and keyboard focus remain available. The host owns page
+so actions, selection and keyboard focus remain available. The rail comes
+first in DOM and focus order at every width, so its filters and actions are
+reached before the main content. The host owns page
 scrolling; the layout imposes no fixed height or independent width cap. In a
 flex-column host it grows to the remaining height, so the desktop rail's shade
 reaches the foot of the page however short its blocks are.
