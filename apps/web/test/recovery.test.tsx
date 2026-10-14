@@ -291,6 +291,8 @@ describe("a task started over", () => {
     expect(texts(page, "[data-testid=activity-item]").join()).toContain("created the task");
     expect(texts(page, "[data-testid=activity-item]").filter((t) => t.includes("raised") || t.includes("saved"))).toHaveLength(0);
     expect(count(page, "[data-testid=activity-open]")).toBe(0);
+    expect(count(page, '[aria-label="Activity attempt"]')).toBe(0);
+    expect(page.querySelector('[aria-label="Activity filters"]')?.textContent).not.toContain("Attempt");
   });
 
   test("Activity is not worked out again for what an agent says as it works", async () => {

@@ -1080,8 +1080,8 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
     <PageWithRail rail={<PageRail aria-label="Activity filters">
       <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label, count: lines.filter((l) => l.kind === value).length }))} /></PageRailBlock>
       <PageRailBlock label="People"><FacetList label="Activity person" value={persons} onValueChange={setPersons} options={personOptions} /></PageRailBlock>
-      <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} />
-        <p className="ds-muted">Newest first. Counts include every timeline item before filters. No selections means all.</p></PageRailBlock>
+      {many ? <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} /></PageRailBlock> : null}
+      <p className="ds-muted">Newest first. Counts include every timeline item before filters. No selections means all.</p>
     </PageRail>}><div className="taskPane">
     {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
     <Timeline data-testid="activity">
