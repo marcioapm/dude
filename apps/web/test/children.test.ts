@@ -295,6 +295,22 @@ describe("a call id reused for another tool", () => {
     expect(task).toMatchObject({ status: "completed", endedAt: taskEnd.occurredAt, result: { output: { head: "No viewport set." } } });
     expect(only(task.children).id).toBe("ses_kid");
   });
+
+  test("a completion of a tool called twice under the id ends the later call, the earlier keeping its own end", () => {
+    const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed", output: { head } });
+    const events = [bashCall(), done("first"), parentCall(), taskDone(), bashCall(),
+      ev(EventTypes.ToolCalled, { tool: "edit", callId: "c1" }), done("second")];
+    const [, firstEnd, , taskEnd, , , secondEnd] = events;
+    const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([
+      ["bash", "completed", firstEnd.occurredAt],
+      ["task", "completed", taskEnd.occurredAt],
+      ["bash", "completed", secondEnd.occurredAt],
+      ["edit", "running", null],
+    ]);
+    expect(tools[0]!.result).toEqual({ output: { head: "first" } });
+    expect(tools[2]!.result).toEqual({ output: { head: "second" } });
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
