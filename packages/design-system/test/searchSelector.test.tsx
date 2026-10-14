@@ -151,9 +151,10 @@ test("the trigger is named by the open session and says it opens the dialog it c
   expect(trigger.textContent).toBe("Conductor");
   await act(async () => trigger.click());
   await tick();
-  const popup = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
-  expect(popup?.getAttribute("role")).toBe("dialog");
-  expect(trigger.getAttribute("aria-haspopup")).toBe(popup?.getAttribute("role"));
+  const popups = document.querySelectorAll(`[id="${trigger.getAttribute("aria-controls")}"]`);
+  expect(popups.length).toBe(1);
+  expect(popups[0]!.getAttribute("role")).toBe("dialog");
+  expect(trigger.getAttribute("aria-haspopup")).toBe(popups[0]!.getAttribute("role"));
 });
 
 test("no options says so", async () => {
