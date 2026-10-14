@@ -258,3 +258,30 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 		t.Error("a re-review is not told to judge a fix by the code")
 	}
 }
+
+// Every fixer reproduces before it changes code, leaves a regression test,
+// reruns the checks, and may say a finding is wrong, whatever its
+// instructions say; dude's own keep the fix to what was raised.
+func TestTheFixersContractSurvivesAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Repositories: twoRepos(),
+		Tools: true, Findings: []Finding{{Severity: "high", Title: "Totals off by one", File: "src/export.ts", Line: 40}}}
+	for kind, got := range underEveryInstructions(PhaseFix, in) {
+		for _, want := range []string{fixContract, commitNote, "Totals off by one"} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the fixer's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+		if f, c := strings.Index(got, "Totals off by one"), strings.Index(got, fixContract); c < f {
+			t.Errorf("%s: how to fix comes before what to fix:\n%s", kind, got)
+		}
+	}
+	if got := Prompt(PhaseFix, in); !strings.Contains(got, "Fix only what is raised above") {
+		t.Errorf("the built-in fixer lost its scope rule:\n%s", got)
+	}
+	for _, want := range []string{"reproduce it first", "regression test that fails without the fix",
+		"rerun the affected tests", "say so with your evidence"} {
+		if !strings.Contains(fixContract, want) {
+			t.Errorf("the fixer's contract lacks %q", want)
+		}
+	}
+}

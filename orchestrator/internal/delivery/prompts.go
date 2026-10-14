@@ -295,6 +295,20 @@ func severityNote(blocking []string) string {
 		"however small the fix.", strings.Join(names, ", "), strings.Join(names, ", "))
 }
 
+// fixContract is how every fix is made, whatever the fixer's instructions
+// say: a defect shown before it is changed, and shown gone after.
+const fixContract = "## How you fix\n\n" +
+	"For each problem, reproduce it first where it can be reproduced: a failing test, a script, or the " +
+	"reviewer's or tester's steps. Then fix it, and add or update a regression test that fails without the " +
+	"fix where practical. Before you finish, rerun the affected tests and the project's checks. If a finding " +
+	"is wrong, say so with your evidence instead of changing code to satisfy it."
+
+// implementContract asks the implementer to check its own work: the
+// independent tester after it verifies, but does not do this for it.
+const implementContract = "Before you finish, exercise the changed behaviour yourself, and add a test for each " +
+	"acceptance criterion that can be tested. A later independent tester verifies your work; it does not " +
+	"replace your own testing."
+
 // Every phase that changes code commits it; lux pushes what was committed.
 // Uncommitted work is not part of the result, and saying so is cheaper than
 // discovering an empty push. The image's commit hook adds the task's people
@@ -714,6 +728,7 @@ func Prompt(phase string, in PromptInput) string {
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
 		add(tail...)
+		add(fixContract)
 		add(commitNote)
 		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
