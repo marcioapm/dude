@@ -47,7 +47,9 @@ func (w *world) implementing() (task, runID, luxID string) {
 func (w *world) runFailure(runID string) (status, errText string, failed []string) {
 	w.t.Helper()
 	ctx := context.Background()
-	_ = w.owner.QueryRow(ctx, `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &errText)
+	if err := w.owner.QueryRow(ctx, `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &errText); err != nil {
+		w.t.Fatal(err)
+	}
 	rows, err := w.owner.Query(ctx, `SELECT payload->>'error' FROM events WHERE run_id = $1 AND event_type = 'run.failed' ORDER BY cursor`, runID)
 	if err != nil {
 		w.t.Fatal(err)
@@ -55,17 +57,25 @@ func (w *world) runFailure(runID string) (status, errText string, failed []strin
 	defer rows.Close()
 	for rows.Next() {
 		var e string
-		_ = rows.Scan(&e)
+		if err := rows.Scan(&e); err != nil {
+			w.t.Fatal(err)
+		}
 		failed = append(failed, e)
+	}
+	if err := rows.Err(); err != nil {
+		w.t.Fatal(err)
 	}
 	return status, errText, failed
 }
 
 // escalationError is the error the task's last escalation shows.
 func (w *world) escalationError(task string) string {
+	w.t.Helper()
 	var e string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'error', '') FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, task).Scan(&e)
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'error', '') FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, task).Scan(&e); err != nil {
+		w.t.Fatal(err)
+	}
 	return e
 }
 
@@ -95,21 +105,23 @@ func TestALuxDiskStopIsNamedWithItsNumbersInEitherOrder(t *testing.T) {
 			w.lux.EndStopping(luxID, "failed", "disk limit exceeded")
 			w.until("the task to need a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 			status, errText, failed := w.runFailure(runID)
-			if status != "failed" || !strings.HasPrefix(errText, words+"; ") || !strings.Contains(errText, fakelux.ProcessExited) {
-				t.Errorf("run %s: %q; want failed with %q first, then the agent's error", status, errText, words)
+			want := words + "; the agent's turn failed: " + fakelux.ProcessExited
+			if status != "failed" || errText != want {
+				t.Errorf("run %s: %q; want failed with %q", status, errText, want)
 			}
-			if len(failed) != 1 || failed[0] != errText {
-				t.Errorf("run.failed errors %q; want one, the run's error", failed)
+			if len(failed) != 1 || failed[0] != want {
+				t.Errorf("run.failed errors %q; want one, %q", failed, want)
 			}
 			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
-				AND payload->>'luxStop' = 'disk' AND (payload->>'usedBytes')::bigint = 10790000000`, runID); n != 1 {
-				t.Errorf("run.failed does not carry lux's stop and numbers")
+				AND payload->>'luxStop' = 'disk' AND (payload->>'usedBytes')::bigint = 10790000000
+				AND (payload->>'limitBytes')::bigint = 10737418240 AND payload->>'agentError' = '`+fakelux.ProcessExited+`'`, runID); n != 1 {
+				t.Errorf("run.failed does not carry lux's stop, its numbers and the agent's error")
 			}
 			if got := w.escalationReason(task); got != "implement_failed" {
 				t.Errorf("escalated for %q, want implement_failed", got)
 			}
-			if got := w.escalationError(task); !strings.HasPrefix(got, words) {
-				t.Errorf("the escalation says %q; want it to start with %q", got, words)
+			if got := w.escalationError(task); got != want {
+				t.Errorf("the escalation says %q; want %q", got, want)
 			}
 		})
 	}
@@ -133,14 +145,14 @@ func TestAPreemptedRunCarriesOnOnceLuxRunsItAgain(t *testing.T) {
 		t.Errorf("a move escalated: %s", got)
 	}
 	r := w.lux.Runs()[0]
-	if !slices.ContainsFunc(r.Inputs, func(in string) bool { return strings.HasPrefix(in, "Your host was replaced") }) {
-		t.Errorf("the moved agent was not told to carry on: %q", r.Inputs)
+	if got := countOf(r.Inputs, movedNudge); got != 1 {
+		t.Errorf("the moved agent was told to carry on %d times: %q", got, r.Inputs)
 	}
 	if slices.Contains(w.lux.CallsOf(luxID), "resume") || !r.Pushed {
 		t.Errorf("calls %v, pushed %v; want lux's own resume alone, and the work pushed", w.lux.CallsOf(luxID), r.Pushed)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.warning' AND payload->>'luxStop' = 'preempt'
-		AND payload->>'message' LIKE 'lux stopped the Run to move it: its spot host was reclaimed%'`, runID); n != 1 {
+		AND payload->>'message' = 'lux stopped the Run to move it: its spot host was reclaimed; its turn was cut off, and it is told to carry on once it runs again'`, runID); n != 1 {
 		t.Errorf("%d warnings saying the move", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, task); n != 1 {
@@ -171,9 +183,13 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 	w.lux.Move(luxID, "preempt")
 	w.until("the task to need a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 	status, errText, failed := w.runFailure(runID)
-	if status != "failed" || !strings.HasPrefix(errText, "lux stopped the Run to move it: its spot host was reclaimed, and it was not running again within 500ms; ") ||
-		!strings.Contains(errText, fakelux.ProcessExited) || len(failed) != 1 {
-		t.Errorf("run %s: %q (%d run.failed); want failed once, naming the preemption first", status, errText, len(failed))
+	const want = "lux stopped the Run to move it: its spot host was reclaimed, and it was not running again within 500ms; " +
+		"the agent's turn failed: " + fakelux.ProcessExited
+	if status != "failed" || errText != want || len(failed) != 1 || failed[0] != want {
+		t.Errorf("run %s: %q, run.failed %q; want failed once with %q", status, errText, failed, want)
+	}
+	if got := w.escalationError(task); got != want {
+		t.Errorf("the escalation says %q; want %q", got, want)
 	}
 	if got := w.escalationReason(task); got != "implement_failed" {
 		t.Errorf("escalated for %q, want implement_failed", got)
@@ -202,8 +218,8 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 	if slices.Contains(w.lux.CallsOf(luxID), "resume") {
 		t.Errorf("dude asked lux to resume a Run lux was running: calls %v", w.lux.CallsOf(luxID))
 	}
-	if !slices.Contains(r.Inputs, "Carry on, please.") {
-		t.Errorf("the note did not reach the agent: %q", r.Inputs)
+	if got := countOf(r.Inputs, "Carry on, please."); got != 1 {
+		t.Errorf("the note reached the agent %d times: %q", got, r.Inputs)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, task); n != 1 {
 		t.Errorf("%d implementers", n)

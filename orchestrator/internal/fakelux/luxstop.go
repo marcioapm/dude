@@ -31,10 +31,10 @@ func (s *Server) agentExits(run *Run) {
 	s.turnEnd(run, map[string]any{"stopReason": "", "error": ProcessExited}, true)
 }
 
-// ExceedDisk is lux finding a running Run over its disk limit: the
-// runner's disk.exceeded with its numbers, in bytes, then luxd stopping
-// the placement with reason disk (lux internal/server/runner.go). The Run
-// stays stopping until EndStopping.
+// ExceedDisk is lux finding a running Run over its disk limit: luxd stops
+// the placement with reason disk, then records the runner's disk.exceeded
+// with its numbers, in bytes, in that order (lux internal/server/runner.go:
+// requestStop before addEvent). The Run stays stopping until EndStopping.
 func (s *Server) ExceedDisk(id string, used, limit int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -42,8 +42,8 @@ func (s *Server) ExceedDisk(id string, used, limit int64) {
 	if run == nil || run.State != "running" {
 		return
 	}
-	s.luxEvent(run, "disk.exceeded", map[string]any{"usedBytes": used, "limitBytes": limit, "graceSeconds": 300.0, "ceiling": false})
 	s.setStateWith(run, "stopping", "disk")
+	s.luxEvent(run, "disk.exceeded", map[string]any{"usedBytes": used, "limitBytes": limit, "graceSeconds": 300.0, "ceiling": false})
 }
 
 // EndStopping ends a stopping Run's placement as lux reports it: state with
