@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,24 +30,35 @@ import (
 // onGet, once set, is called once, at dude's next read of a Run, before
 // lux answers it. While refuseCarryOn is set, an input carrying lux's
 // carry-on is answered 503 without reaching lux, and counted in refused.
+// With showRequested, a stop held is lux's accepted stop of the placement
+// it reached: lux's reads of the Run show that placement's stopRequestedAt
+// while it stays live, as lux records the request before it is applied.
 type stopsThrough struct {
 	hold          atomic.Bool
+	showRequested bool
 	onStop        func()
 	onGet         atomic.Pointer[func()]
 	refuseCarryOn atomic.Bool
 	refused       atomic.Int32
 	mu            sync.Mutex
 	held          []*http.Request
-	handler       http.Handler
+	// Stops held, by the epoch of the placement each reached.
+	stopsOf map[int]int
+	handler http.Handler
 }
 
 func (w *world) stopsThrough() *stopsThrough {
 	w.t.Helper()
-	p := &stopsThrough{handler: w.lux.Handler()}
+	p := &stopsThrough{handler: w.lux.Handler(), stopsOf: map[int]int{}}
 	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet && strings.Count(req.URL.Path, "/") == 3 && strings.HasPrefix(req.URL.Path, "/v1/runs/") {
 			if fn := p.onGet.Swap(nil); fn != nil {
 				(*fn)()
+			}
+			if p.showRequested {
+				rw.Header().Set("Content-Type", "application/json")
+				_, _ = rw.Write(p.withRequested(p.read(req)))
+				return
 			}
 		}
 		if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/input") && p.refuseCarryOn.Load() {
@@ -64,8 +77,13 @@ func (w *world) stopsThrough() *stopsThrough {
 				p.onStop()
 			}
 			if p.hold.Load() {
+				epoch := 0
+				if raw, ok := p.read(req)["epoch"].(float64); ok {
+					epoch = int(raw)
+				}
 				p.mu.Lock()
 				p.held = append(p.held, req.Clone(context.Background()))
+				p.stopsOf[epoch]++
 				p.mu.Unlock()
 				rw.Header().Set("Content-Type", "application/json")
 				rw.WriteHeader(http.StatusAccepted)
@@ -82,6 +100,56 @@ func (w *world) stopsThrough() *stopsThrough {
 	})
 	w.syncer.Lux = lux.New(proxy.URL, "lux-key")
 	return p
+}
+
+// read is lux's record of the Run req is about, as fake lux has it.
+func (p *stopsThrough) read(req *http.Request) map[string]any {
+	path := strings.TrimSuffix(req.URL.Path, "/stop")
+	get, _ := http.NewRequest(http.MethodGet, path, nil)
+	get.Header.Set("Authorization", req.Header.Get("Authorization"))
+	rec := httptest.NewRecorder()
+	p.handler.ServeHTTP(rec, get)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return out
+}
+
+// withRequested is run with stopRequestedAt on each placement a held stop
+// reached.
+func (p *stopsThrough) withRequested(run map[string]any) []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	placements, _ := run["placements"].([]any)
+	for _, raw := range placements {
+		if pl, ok := raw.(map[string]any); ok {
+			if epoch, _ := pl["epoch"].(float64); p.stopsOf[int(epoch)] > 0 && pl["stopRequestedAt"] == nil {
+				pl["stopRequestedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+			}
+		}
+	}
+	b, _ := json.Marshal(run)
+	return b
+}
+
+// stops is how many held stops reached each epoch's placement.
+func (p *stopsThrough) stops() map[int]int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return maps.Clone(p.stopsOf)
+}
+
+// release has lux apply the stop it accepted last.
+func (p *stopsThrough) release() {
+	p.hold.Store(false)
+	p.mu.Lock()
+	var last *http.Request
+	if n := len(p.held); n > 0 {
+		last = p.held[n-1]
+	}
+	p.mu.Unlock()
+	if last != nil {
+		p.handler.ServeHTTP(httptest.NewRecorder(), last)
+	}
 }
 
 // heldStops is how many stops the proxy kept.
@@ -409,4 +477,53 @@ func TestAResetThatReadTheRunPausedBeforeALiveTakeUpParksIt(t *testing.T) {
 		t.Fatalf("reset: %d moved %v", a.status, a.moved)
 	}
 	w.movedOnce(task, runID, luxID, "Standard", "Moved back to Standard by Resetter.")
+}
+
+// lux preempts the implementer dude parked for its machine move, before
+// lux applied dude's stop, and runs it again itself (epoch 2). dude asks
+// lux to stop that placement once: lux records the request, and sweeps
+// after see it on the placement and ask nothing more, the Run still
+// paused. lux preempts it again before the stop lands (epoch 3, asked
+// nothing): dude asks lux to stop that one, once. Once lux applies the
+// stop, dude resumes the Run on Bigger, telling the agent once.
+func TestALuxMoveDudeStopsIsAskedOncePerPlacement(t *testing.T) {
+	w := newWorld(t)
+	task, runID, luxID := w.movedRun()
+	p := w.stopsThrough()
+	p.hold.Store(true)
+	p.showRequested = true
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"go test killed, exit 137"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("dude to park the Run for its move", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'machine'`, runID) == 1
+	})
+	preempted := func(epoch int) {
+		t.Helper()
+		w.lux.Move(luxID, "preempt")
+		for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if r := w.lux.Runs()[0]; w.lux.State(luxID) != "running" || r.Epoch != epoch {
+			t.Fatalf("lux's run is %s in epoch %d, want running in %d", w.lux.State(luxID), r.Epoch, epoch)
+		}
+		w.until(fmt.Sprintf("dude to ask lux to stop epoch %d", epoch), func() bool { return p.stops()[epoch] > 0 })
+		for range 10 {
+			w.pump()
+		}
+		if got := p.stops()[epoch]; got != 1 {
+			t.Errorf("lux was asked to stop epoch %d %d times, want once", epoch, got)
+		}
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID); n != 1 {
+			t.Fatalf("the Run is not paused for its move at epoch %d", epoch)
+		}
+	}
+	preempted(2)
+	preempted(3)
+	p.release()
+	w.movedOnce(task, runID, luxID, "Bigger", toldBigger)
+	r := w.lux.Runs()[0]
+	if resources := w.lux.ResumeResourcesOf(luxID); r.Resumed != 1 || len(resources) != 1 || resources[0] == nil {
+		t.Errorf("lux resumed the Run %d times with resources %s; want once, sized", r.Resumed, resources)
+	}
 }
