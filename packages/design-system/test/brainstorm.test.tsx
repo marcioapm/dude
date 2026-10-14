@@ -72,7 +72,7 @@ describe("ProposalCard", () => {
     await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="proposal-fold"]')!.click());
     expect(el.querySelectorAll('[role="checkbox"]').length).toBe(3);
     expect([...el.querySelectorAll('[role="checkbox"]')].every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
-    expect(el.querySelector('[data-testid="file-proposal"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="file-proposal"]').length).toBe(0);
     expect(el.textContent).toContain("You can read this session");
   });
 
@@ -134,7 +134,7 @@ describe("ProposalCard folds", () => {
     const el = await mount(<Folding items={[task("a", { filed: filed("Ana", "BILL-1") }),
       task("b", { kind: "edit", canFile: false, blockedFor: "you", why: "Only Márcio can file this" }),
       task("c", { kind: "edit", canFile: false, blockedFor: "everyone", why: "BL-59 has started (running): its text can no longer change" })]} />);
-    expect(el.querySelector("[data-folded]")).toBeNull();
+    expect(el.querySelectorAll("[data-folded]").length).toBe(0);
     expect([...el.querySelectorAll('[data-testid="cannot-file"]')].map((n) => n.textContent))
       .toEqual(["Only Márcio can file this", "BL-59 has started (running): its text can no longer change"]);
     expect(el.textContent).not.toContain("for others to file");
@@ -156,7 +156,7 @@ describe("ProposalCard folds", () => {
     const el = await mount(<Folding items={items} />);
     const line = el.querySelector('[data-testid="proposal-fold"]')!;
     expect(line.textContent).toBe("Proposed work · 2 epics, 3 tasks · all filed: Usage metering, Usage panel, BILL-1, BILL-2, +1 more · by Ana and Márcio");
-    expect(el.querySelector('[data-testid="file-proposal"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="file-proposal"]').length).toBe(0);
     expect(el.querySelectorAll("li").length).toBe(0);
 
     expect(foldedWords(items.slice(2, 4))).toEqual(["all filed: BILL-1, BILL-2", "by Ana and Márcio"]);
@@ -183,29 +183,29 @@ describe("ProposalCard folds", () => {
     const line = el.querySelector<HTMLButtonElement>('[data-testid="proposal-fold"]')!;
     expect(line.tagName).toBe("BUTTON");
     expect(line.getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="proposal-unfolded"]').length).toBe(0);
 
     await act(async () => line.click());
     expect(line.getAttribute("aria-expanded")).toBe("true");
     const card = el.querySelector('[data-testid="proposal-unfolded"]')!;
     // The line is its header: the opened card does not repeat it.
     expect(el.textContent!.split("Proposed work").length - 1).toBe(1);
-    expect(card.querySelector("header")).toBeNull();
+    expect(card.querySelectorAll("header").length).toBe(0);
     expect(card.querySelectorAll("li").length).toBe(2);
     expect(card.textContent).toContain("Ana filed BILL-1");
     expect(card.querySelector('[data-testid="cannot-file"]')!.textContent).toBe("Only Márcio can file this");
     expect([...card.querySelectorAll('[role="checkbox"]')].every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
-    expect(card.querySelector('[data-testid="file-proposal"]')).toBeNull();
+    expect(card.querySelectorAll('[data-testid="file-proposal"]').length).toBe(0);
 
     await act(async () => line.click());
     expect(line.getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="proposal-unfolded"]').length).toBe(0);
   });
 
   test("a card with something still yours to file stays open, filed items and all", async () => {
     const el = await mount(<Folding items={[task("a", { filed: filed("Ana", "BILL-1") }), task("b")]} />);
-    expect(el.querySelector('[data-folded]')).toBeNull();
-    expect(el.querySelector('[data-testid="proposal-fold"]')).toBeNull();
+    expect(el.querySelectorAll('[data-folded]').length).toBe(0);
+    expect(el.querySelectorAll('[data-testid="proposal-fold"]').length).toBe(0);
     expect(el.querySelector('[data-testid="file-proposal"]')).toBeTruthy();
   });
 
@@ -216,7 +216,7 @@ describe("ProposalCard folds", () => {
     expect(line.getAttribute("aria-expanded")).toBe("true");
     expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeTruthy();
     await act(async () => line.click());
-    expect(el.querySelector('[data-testid="proposal-unfolded"]')).toBeNull();
+    expect(el.querySelectorAll('[data-testid="proposal-unfolded"]').length).toBe(0);
   });
 });
 
@@ -230,7 +230,7 @@ describe("SidebarSessions", () => {
     expect(rows.map((r) => r.textContent?.trim())).toEqual(["Mine alone", "BillingMM"]);
     expect(rows[1]!.getAttribute("aria-current")).toBe("page");
     expect(rows[1]!.querySelector('[aria-label="shared, Márcio Martins\'s"]')).toBeTruthy();
-    expect(rows[0]!.querySelector('[aria-label^="shared"]')).toBeNull();
+    expect(rows[0]!.querySelectorAll('[aria-label^="shared"]').length).toBe(0);
     await act(async () => rows[0]!.click());
     expect(opened).toBe("s1");
     await act(async () => byRole(el, "button", "New session").click());

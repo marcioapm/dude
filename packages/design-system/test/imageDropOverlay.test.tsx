@@ -46,6 +46,7 @@ async function mount() {
     got,
     goal: () => goal,
     overlay: () => container.querySelector('[data-testid="drop-overlay"]'),
+    overlays: () => container.querySelectorAll('[data-testid="drop-overlay"]').length,
     zone: container.querySelector<HTMLElement>("[class]")!,
     panel: container.querySelector<HTMLElement>('[data-testid="goal-preview"]')!,
     figure: () => container.querySelector<HTMLElement>('[data-testid="goal-preview"] [data-image-n="0"]')!,
@@ -68,17 +69,17 @@ test("an image dragged in Preview raises no drop overlay, during the drag or aft
   await act(async () => dnd("dragenter", z.figure()));
   await act(async () => dnd("dragenter", z.panel));
   await act(async () => dnd("dragover", z.panel, 38));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
   await act(async () => dnd("drop", z.panel, 38));
   expect(z.goal()).toBe(`One.\n\n${A}\n\nTwo.`);
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
   await act(async () => void window.dispatchEvent(new Event("dragend")));
 });
 
 test("the image-move type alone keeps the overlay down", async () => {
   const z = await mount();
   await act(async () => fire(z.panel, "dragenter", ["Files", IMAGE_DRAG_TYPE]));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
 });
 
 test("while an image drag runs, a drag listing only Files raises no overlay", async () => {
@@ -86,7 +87,7 @@ test("while an image drag runs, a drag listing only Files raises no overlay", as
   // Its dragstart marks the drag; types that do not carry the image-move type do not unmark it.
   await act(async () => fire(z.figure(), "dragstart", ["Files"], { dataTransfer: { types: ["Files"], setData() {}, effectAllowed: "" } }));
   await act(async () => fire(z.panel, "dragenter", ["Files"]));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
   await act(async () => void z.figure().dispatchEvent(new Event("dragend", { bubbles: true })));
   await act(async () => fire(z.panel, "dragenter", ["Files"]));
   expect(z.overlay()).not.toBeNull();
@@ -98,7 +99,7 @@ test("a file from the desktop raises the overlay, and a dragend with no drop tak
   await act(async () => fire(z.panel, "dragenter", ["Files"]));
   expect(z.overlay()?.textContent).toContain("Drop to attach");
   await act(async () => void window.dispatchEvent(new Event("dragend")));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
 });
 
 test("a file dragged out of the window takes the overlay down; a leave to nothing inside it does not", async () => {
@@ -110,7 +111,7 @@ test("a file dragged out of the window takes the overlay down; a leave to nothin
   expect(z.overlay()).not.toBeNull();
   // Leaving the window: one dragleave, from the innermost element, to nothing, at the edge.
   await act(async () => fire(z.panel, "dragleave", ["Files"], { relatedTarget: null, clientX: 0, clientY: 0 }));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
 });
 
 test("a file drop taken lower down (stopPropagation) still takes the overlay down", async () => {
@@ -121,7 +122,7 @@ test("a file drop taken lower down (stopPropagation) still takes the overlay dow
   z.panel.addEventListener("drop", stop);
   cleanups.push(() => z.panel.removeEventListener("drop", stop));
   await act(async () => fire(z.panel, "drop", ["Files"]));
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
 });
 
 test("a file dropped on the zone still uploads", async () => {
@@ -132,5 +133,5 @@ test("a file dropped on the zone still uploads", async () => {
   drop["dataTransfer"] = { types: ["Files"], files: [image], items: [image] };
   await act(async () => void z.panel.dispatchEvent(drop));
   expect(z.got).toEqual([[image]]);
-  expect(z.overlay()).toBeNull();
+  expect(z.overlays()).toBe(0);
 });

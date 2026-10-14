@@ -107,8 +107,8 @@ describe("a blocked task's start", () => {
   test("Deliver and Talk it through are refused with the reason; the notice names what it waits on", async () => {
     const p = await page(new RelationsClient(rels({ blockedBy: [view("CP-41", "review"), view("CP-43", "running")] })));
     await until(() => p.querySelector("[data-testid=start-gate]"), "the gate");
-    expect(p.querySelector("[data-testid=deliver]")).toBeNull();
-    expect(p.querySelector("[data-testid=start-deliver]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=deliver]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=start-deliver]").length).toBe(0);
     const ways = [...p.querySelectorAll<HTMLButtonElement>("[data-testid=start-gate] [data-testid^=gate-] button")];
     expect(ways.map((b) => [b.textContent, b.disabled])).toEqual([["Talk it through", true], ["Deliver", true]]);
     expect(p.querySelector("[data-testid=blocked-notice]")!.textContent).toContain("Blocked by CP-41 (in review) and CP-43 (in progress).");
@@ -119,8 +119,8 @@ describe("a blocked task's start", () => {
     const p = await page(new RelationsClient(rels({ blockedBy: [view("CP-40", "done", { merged: true })] })));
     // On the Overview the ways are its StartChoice cards; the header does not repeat them.
     await until(() => p.querySelector("[data-testid=start-deliver]"), "Deliver");
-    expect(p.querySelector("[data-testid=start-gate]")).toBeNull();
-    expect(p.querySelector("[data-testid=blocked-notice]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=start-gate]").length).toBe(0);
+    expect(p.querySelectorAll("[data-testid=blocked-notice]").length).toBe(0);
   });
 
   test("Start anyway sends the override and the note, the way picked", async () => {
@@ -159,13 +159,13 @@ describe("a blocked task's start", () => {
     const client = new RelationsClient(rels({ blockedBy: [view("CP-41", "review")], owner: { id: "u_tom", name: "Tom Okafor" } }));
     const p = await page(client);
     await until(() => p.querySelector("[data-testid=start-anyway]"), "Start anyway");
-    expect(p.querySelector("[data-testid=start-when-unblocked]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=start-when-unblocked]").length).toBe(0);
   });
 
   test("a blocker done with nothing merged: Start when unblocked is refused, saying it would never fire", async () => {
     const p = await page(new RelationsClient(rels({ blockedBy: [view("CP-37", "done", { unmerged: true })] })));
     await until(() => p.querySelector("[data-testid=start-gate]"), "the gate");
-    expect(p.querySelector("[data-testid=start-when-unblocked]")).toBeNull();
+    expect(p.querySelectorAll("[data-testid=start-when-unblocked]").length).toBe(0);
     expect(p.querySelector("[data-testid=blocked-notice]")!.textContent).toContain("CP-37 was marked done with nothing merged and will never merge.");
     expect(p.querySelector("[data-testid=blocked-notice]")!.textContent).toContain("Blocked by CP-37 (done, nothing merged).");
   });
@@ -272,7 +272,7 @@ describe("a Backlog card's start", () => {
     const started: string[] = [];
     const { container, unmount } = await mount(<TooltipProvider><BoardWithStarts client={client} started={started} /></TooltipProvider>);
     mounted.push(unmount);
-    expect(container.querySelector("[data-testid=start-menu-CP-41]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=start-menu-CP-41]").length).toBe(0);
     await openMenu(await until(() => container.querySelector<HTMLElement>("[data-testid=start-menu-CP-47]"), "CP-47's start"));
     await click(await until(() => menuItem("Deliver"), "Deliver"));
     await until(() => started.length > 0 || null, "the start");

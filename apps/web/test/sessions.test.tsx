@@ -187,7 +187,7 @@ describe("a session's raised machine", () => {
     expect(block.textContent).toContain("Small");
     const bare = await sessionPage(new ResetClient(detail("owner")));
     await settle();
-    expect(bare.querySelector("[data-testid=session-machine]")).toBeNull();
+    expect(bare.querySelectorAll("[data-testid=session-machine]").length).toBe(0);
   });
 
   test("Reset sends the note to the session's route, closes, and the block goes once the detail has no raise", async () => {
@@ -199,7 +199,7 @@ describe("a session's raised machine", () => {
     await click(document.querySelector<HTMLElement>("[data-testid=confirm-reset]")!);
     expect(client.resets).toEqual([{ id: SESSION, note: "the archive fits now" }]);
     await until(() => (page.querySelector("[data-testid=session-machine]") ? null : true), "the block gone");
-    expect(document.querySelector("[data-testid=reset-note]")).toBeNull();
+    expect(document.querySelectorAll("[data-testid=reset-note]").length).toBe(0);
   });
 
   test("a refused Reset keeps the dialog and the note, and shows the server's words exactly", async () => {
@@ -358,8 +358,8 @@ describe("a brainstorm session's page", () => {
     await write(page, "also, can the panel show cost estimates?");
     expect(client.sent).toEqual(["also, can the panel show cost estimates?"]);
     // Only the owner shares or links.
-    expect(page.querySelector("[data-testid=share-open]")).toBeNull();
-    expect(page.querySelector("[data-testid=link-open]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=share-open]").length).toBe(0);
+    expect(page.querySelectorAll("[data-testid=link-open]").length).toBe(0);
   });
 
   test("a reader's composer is closed, with why, and the card files nothing", async () => {
@@ -372,7 +372,7 @@ describe("a brainstorm session's page", () => {
     expect(composer.disabled).toBe(true);
     expect(composer.placeholder).toContain("You can read this session");
     await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
-    expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=file-proposal]").length).toBe(0);
     // A member may file what a reader cannot, so the card folds to one line.
     const line = await until(() => page.querySelector("[data-testid=proposal-fold]"), "the folded line");
     expect(line.textContent).toBe("Proposed work · 1 task · 1 for others to file");
@@ -401,8 +401,8 @@ describe("a brainstorm session's page", () => {
     const other = await sessionPage(theirs);
     await until(() => other.querySelector("[data-testid=human-turn]"), "the held message");
     // No form for you; the composer still writes, after their answer.
-    expect(other.querySelector("[data-testid=question-form]")).toBeNull();
-    expect(other.querySelector("[data-testid=composer-waiting]")).toBeNull();
+    expect(other.querySelectorAll("[data-testid=question-form]").length).toBe(0);
+    expect(other.querySelectorAll("[data-testid=composer-waiting]").length).toBe(0);
     const composer = other.querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!;
     expect(composer.disabled).toBe(false);
     expect(composer.placeholder).toContain(`Waiting for ${ANA.name.split(" ")[0]}`);
@@ -570,7 +570,7 @@ describe("a brainstorm session's page", () => {
     await click(line);
     expect(line.getAttribute("aria-expanded")).toBe("true");
     expect(page.querySelector("[data-testid=proposal-unfolded]")!.textContent).toContain(`${ME.name} filed BL-61`);
-    expect(page.querySelector("[data-testid=file-proposal]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=file-proposal]").length).toBe(0);
   });
 
   test("a card whose last item nobody can file stays open, saying why; one only you could file is not someone else's", async () => {
@@ -601,8 +601,8 @@ describe("a brainstorm session's page", () => {
     const page = await sessionPage(client);
     const settled = await until(() => page.querySelector("[data-testid=settled-by]"), "the closed card");
     expect(settled.textContent).toBe("Withdrawn");
-    expect(page.querySelector("[data-testid=session-screen] form[data-mode=answer]")).toBeNull();
-    expect(page.querySelector("[data-testid=waiting-on]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-screen] form[data-mode=answer]").length).toBe(0);
+    expect(page.querySelectorAll("[data-testid=waiting-on]").length).toBe(0);
   });
 
   test("a member opening the session updates the people where they are; the page is not read again", async () => {
@@ -681,7 +681,7 @@ describe("a brainstorm session's page", () => {
     mounted.push(unmount);
     const shown = await until(() => container.querySelector("[data-testid=not-found]"), "not found");
     expect(shown.textContent).toContain("you're not in it");
-    expect(container.querySelector("[data-testid=session-screen]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=session-screen]").length).toBe(0);
   });
 });
 
@@ -710,7 +710,7 @@ describe("a session's name", () => {
     expect(input.value).toBe("Usage-based billing");
     await type(input, "Throwaway");
     await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-title-input]").length).toBe(0);
     expect(page.querySelector("[data-testid=session-title]")!.textContent).toBe("Usage-based billing");
     expect(client.renamed).toEqual([]);
 
@@ -730,7 +730,7 @@ describe("a session's name", () => {
     expect(title.tagName).not.toBe("BUTTON");
     expect(title.textContent).toBe("Untitled session");
     await click(title);
-    expect(page.querySelector("[data-testid=session-title-input]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-title-input]").length).toBe(0);
     expect(document.activeElement === page.querySelector("[data-testid=session-screen] textarea")).toBe(false);
   });
 
@@ -926,7 +926,7 @@ describe("a session made from the welcome", () => {
     const client = new NoTiers(detail("owner"));
     const page = await welcome(client, []);
     await settle(100);
-    expect(page.querySelector("[data-testid=welcome] [data-testid=model-picker]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=welcome] [data-testid=model-picker]").length).toBe(0);
     await send(page, "hello");
     expect(client.made).toEqual([{ message: "hello", projects: [] }]);
     // The failure is not kept: the next welcome reads them again, and has its picker.
@@ -1384,7 +1384,7 @@ describe("a session's files", () => {
     const page = await sessionPage(new FilesClient(detail("owner")));
     await settle();
     expect(page.querySelector("[data-testid=session-files]")!.textContent).toContain("Nothing published yet");
-    expect(page.querySelector("[data-testid=session-files-count]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-files-count]").length).toBe(0);
   });
 });
 
@@ -1434,10 +1434,10 @@ describe("a session's events", () => {
     const bar = await until(() => page.querySelector("[data-testid=session-view]"), "the switch");
     const options = [...bar.querySelectorAll("button")].map((b) => b.textContent);
     expect(options).toEqual(["Conversation", "Events4"]);
-    expect(page.querySelector("[data-testid=event-log]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=event-log]").length).toBe(0);
     await click([...bar.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Events"))!);
     const log = await until(() => page.querySelector("[data-testid=event-log]"), "the ledger");
-    expect(page.querySelector("[data-testid=session-composer]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-composer]").length).toBe(0);
     const rows = log.textContent ?? "";
     for (const type of ["chat.message", "session.renamed", "agent.message", "session.linked"]) expect(rows).toContain(type);
     expect(rows).toContain("from the second Run");
@@ -1582,7 +1582,7 @@ describe("archiving a session, for yourself", () => {
   test("Archive on its page calls the API and returns you to the list, its row gone there and from the sidebar at once", async () => {
     const client = new Archiving(detail("read"));
     const page = await onSessionPage(client);
-    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-archived]").length).toBe(0);
     const release = client.holdReads();
     // A reader archives it too: it is their own list.
     await click(await until(() => page.querySelector("[data-testid=session-archive]"), "Archive"));
@@ -1645,7 +1645,7 @@ describe("archiving a session, for yourself", () => {
     expect(client.calls).toEqual([[SESSION, false]]);
     // Unarchiving keeps you on its page, unmarked.
     expect(window.location.hash).toBe(`#/sessions/${SESSION}`);
-    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-archived]").length).toBe(0);
     expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
 
     await click(page.querySelector("[data-testid=sidebar-sessions] button")!);
@@ -1662,7 +1662,7 @@ describe("archiving a session, for yourself", () => {
     expect(problem.textContent).toContain("Could not archive it: the orchestrator is down");
     expect(client.calls).toEqual([[SESSION, true]]);
     expect(window.location.hash).toBe(`#/sessions/${SESSION}`);
-    expect(page.querySelector("[data-testid=session-archived]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=session-archived]").length).toBe(0);
     expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
     await settle(100);
     expect(inSidebar(page).sort()).toEqual([OTHER, SESSION].sort());
@@ -1682,7 +1682,7 @@ describe("archiving a session, for yourself", () => {
       "Nothing archived",
       "A session you archive leaves your list and sidebar, and nobody else's. Open one and Unarchive brings it back.",
     ]);
-    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
+    expect(body.querySelectorAll("[data-testid=session-row]").length).toBe(0);
   });
 
   test("Archived that cannot be read says why", async () => {
@@ -1691,7 +1691,7 @@ describe("archiving a session, for yourself", () => {
     client.refuseArchived = true;
     const body = await archivedBody(client);
     expect(body.querySelector("[data-testid=sessions-problem]")!.textContent).toBe("Could not read your archived sessions: the orchestrator is down");
-    expect(body.querySelector("[data-testid=session-row]")).toBeNull();
+    expect(body.querySelectorAll("[data-testid=session-row]").length).toBe(0);
   });
 });
 
@@ -1733,9 +1733,9 @@ describe("a session's agent starting", () => {
   test("once it is up the cue goes, the message is read, and a line says how long it took", async () => {
     const page = await sessionPage(new SessionClient(detail("owner"), starting(() => [ev("agent.session.started", { role: "brainstorm" })])));
     await until(() => page.querySelector("[data-testid=chat-notice]"), "the summary line");
-    expect(page.querySelector("[data-testid=start-progress]")).toBeNull();
-    expect(page.querySelector("[data-testid=start-chip]")).toBeNull();
-    expect(page.querySelector("[data-testid=composer-start-hint]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=start-progress]").length).toBe(0);
+    expect(page.querySelectorAll("[data-testid=start-chip]").length).toBe(0);
+    expect(page.querySelectorAll("[data-testid=composer-start-hint]").length).toBe(0);
     expect(page.querySelector("[data-testid=chat-notice]")!.textContent).toMatch(/Started in \d+s\./);
     expect(page.querySelector("[data-testid=human-turn]")!.textContent).not.toContain("Will be read");
   });
@@ -1915,8 +1915,8 @@ describe("a session's agent starting", () => {
     const page = await sessionPage(new SessionClient(detail("owner", { session: { ...detail("owner").session,
       run: { id: next, status: "pending", dudePause: null, model: null, modelTier: null, machine: null, waiting: false } } }), ledger));
     await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
-    expect(page.querySelector("[data-testid=start-retry-taken]")).toBeNull();
-    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=start-retry-taken]").length).toBe(0);
+    expect(page.querySelectorAll("[data-testid=start-retry]").length).toBe(0);
     expect([...page.querySelectorAll("[data-testid=human-turn]")].filter((t) => t.textContent?.includes("and the tests?")).length).toBe(1);
   });
 
@@ -1930,7 +1930,7 @@ describe("a session's agent starting", () => {
     await click(await until(() => page.querySelector("[data-testid=start-retry]"), "Try again"));
     const said = await until(() => page.querySelector("[data-testid=start-retry-taken]"), "the line");
     expect(said.textContent).toBe("A new agent already took the later messages.");
-    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=start-retry]").length).toBe(0);
     expect(page.textContent).not.toContain("Could not start it again");
   });
 
@@ -1938,7 +1938,7 @@ describe("a session's agent starting", () => {
     const later = [...failedResume(), { ...ev("run.created", { role: "brainstorm" }), occurredAt: ago(1_000) }];
     const page = await sessionPage(new SessionClient(detail("owner"), later));
     await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
-    expect(page.querySelector("[data-testid=start-retry]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=start-retry]").length).toBe(0);
     expect(page.querySelector("[data-testid=start-retry-taken]")!.textContent).toBe("A new agent already took the later messages.");
   });
 });

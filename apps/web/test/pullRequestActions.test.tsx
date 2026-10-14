@@ -84,7 +84,7 @@ describe("asking for a review", () => {
     await key("Enter", { ctrlKey: true });
     await settle();
     expect(asked).toEqual([["tom", "acme/platform"]]);
-    expect(container.querySelector('[data-testid="pr-review-ask"]')).toBeNull();
+    expect(container.querySelectorAll('[data-testid="pr-review-ask"]').length).toBe(0);
     await unmount();
   });
 });

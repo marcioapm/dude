@@ -126,7 +126,7 @@ describe("FileGallery", () => {
       expect(description(card)).toEqual([["The signed-in page", "The signed-in page"]]);
       expect(textIn(row("NOTES.md"), "With numbers")).not.toBeNull();
       expect(description(row("NOTES.md"))).toEqual([["With numbers", "With numbers"]]);
-      expect(textIn(host, "First draft")).toBeNull();
+      expect(textsIn(host, "First draft")).toBe(0);
       expect(description(row("plain.md"))).toEqual([]);
     } finally {
       await act(async () => root.unmount());
@@ -138,6 +138,11 @@ describe("FileGallery", () => {
 /** The element within `scope` whose own text is exactly `text`, as getByText finds it. */
 function textIn(scope: Element, text: string): Element | null {
   return [...scope.querySelectorAll("*")].find((e) => e.children.length === 0 && e.textContent === text) ?? null;
+}
+
+/** How many elements within `scope` have exactly `text` as their own: absence is 0. */
+function textsIn(scope: Element, text: string): number {
+  return [...scope.querySelectorAll("*")].filter((e) => e.children.length === 0 && e.textContent === text).length;
 }
 
 describe("artifactKind", () => {

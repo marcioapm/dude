@@ -183,8 +183,8 @@ describe("a new task's images", () => {
       // Plain Create is not held back by images any more.
       expect(d.save().disabled).toBe(false);
       // The tray is gone.
-      expect(document.querySelector("[data-testid=task-images]")).toBeNull();
-      expect(document.querySelector("[data-testid=attachment-chip]")).toBeNull();
+      expect(document.querySelectorAll("[data-testid=task-images]").length).toBe(0);
+      expect(document.querySelectorAll("[data-testid=attachment-chip]").length).toBe(0);
     } finally {
       canvas.restore();
     }
@@ -259,17 +259,17 @@ describe("laying out a task's images in Preview", () => {
     const crit = await preview("task-criteria");
     await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
     stackRects(crit.querySelectorAll("li"), 20, 20);
-    const overlay = () => document.querySelector('[data-testid="drop-overlay"]');
+    const overlays = () => document.querySelectorAll('[data-testid="drop-overlay"]').length;
     const dnd = imageDrag({ Files: "" });
     const goal = figure("task-goal")!;
     await act(async () => dnd("dragstart", goal));
     for (const [type, el] of [["dragenter", goal], ["dragleave", goal], ["dragenter", crit], ["dragover", crit]] as const) {
       await act(async () => dnd(type, el, 40));
-      expect(overlay()).toBeNull();
+      expect(overlays()).toBe(0);
     }
     await act(async () => dnd("drop", crit, 40));
     expect(criteriaValue()).toBe(`- [ ] One\n- [ ] Two\n  ${IMG}\n- [ ] Three`);
-    expect(overlay()).toBeNull();
+    expect(overlays()).toBe(0);
   });
 
   test("Esc on a selected image deselects it, and the dialog stays open", async () => {
@@ -280,9 +280,9 @@ describe("laying out a task's images in Preview", () => {
     await act(async () => figure("task-goal")!.click());
     expect(document.querySelector("[data-image-toolbar]")).not.toBeNull();
     await act(async () => void figure("task-goal")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
+    expect(document.querySelectorAll("[data-image-toolbar]").length).toBe(0);
     expect(closed).toBe(0);
-    expect(document.querySelector("[role=alertdialog]")).toBeNull();
+    expect(document.querySelectorAll("[role=alertdialog]").length).toBe(0);
     expect(document.querySelector("[data-testid=task-goal]")).not.toBeNull();
   });
 
@@ -308,10 +308,10 @@ describe("laying out a task's images in Preview", () => {
     await open(task("all", `Keep invoices in euros for EU customers.\n\n${IMG}`));
     const goal = document.querySelector<HTMLElement>("[data-testid=task-goal-preview]")!;
     await until(() => goal.querySelector('[data-testid="markdown-figure"]'), "the image");
-    expect(figure("task-goal")).toBeNull();
+    expect(document.querySelectorAll('[data-testid=task-goal-preview] [data-image-n="0"]').length).toBe(0);
     await act(async () => goal.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!.click());
-    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
-    expect(goal.querySelector("[draggable=true]")).toBeNull();
+    expect(document.querySelectorAll("[data-image-toolbar]").length).toBe(0);
+    expect(goal.querySelectorAll("[draggable=true]").length).toBe(0);
   });
 });
 
