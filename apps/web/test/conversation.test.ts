@@ -192,6 +192,82 @@ describe("machine moves", () => {
     expect(machineCall(c).machine).toEqual({ from: null, to: "Huge", pool: null, error: "no size named Huge; you may move to: Large, XL" });
   });
 
+  // A request_machine completion under a call id another tool now holds, as agenttools.requestMachine answers it.
+  const NOT_LIVE = "this Run is not live and available for a machine move";
+  const refusal = { head: JSON.stringify({ error: NOT_LIVE, code: "not_live" }) };
+  const refusedCard = { from: null, to: "XL", pool: null, error: NOT_LIVE, code: "not_live" };
+  const machineDone = (status: string, output: { head: string }) =>
+    ev(EventTypes.ToolCompleted, { tool: "request_machine", callId: "r", status, input: { size: "XL" }, output });
+  const toolRows = (c: ReturnType<typeof project>) => c.turns.filter((t): t is ToolTurn => t.kind === "tool");
+  const bothWays = (events: PersistedEvent[]) => {
+    const whole = project(events, "running");
+    const live = emptyProjection();
+    for (const event of events) apply(live, [event]);
+    expect(snapshot(live, "running")).toEqual(whole);
+    return whole;
+  };
+
+  const MOVED = "Moved: you run on XL. End your turn now; you are resumed on XL.";
+  for (const [said, status, output, ends, card] of [
+    ["a refusal reported completed", "completed", refusal, "failed", refusedCard],
+    ["a refusal reported as an error", "error", refusal, "failed", refusedCard],
+    ["an accepted move", "completed", { head: JSON.stringify({ size: "XL", answer: MOVED }) }, "completed", { from: null, to: "XL", pool: null, answer: MOVED }],
+  ] as const) {
+    test(`${said} of a call id another tool holds, with no request_machine call before it, is its own carded row`, () => {
+      const bash = ev(EventTypes.ToolCalled, { tool: "bash", callId: "r", input: { command: "pwd" } });
+      const done = machineDone(status, output);
+      const c = bothWays([bash, done]);
+      expect(toolRows(c).map(({ tool, args, status, startedAt, endedAt, result, machine }) => ({ tool, args, status, startedAt, endedAt, result, machine }))).toEqual([
+        { tool: "bash", args: { command: "pwd" }, status: "running", startedAt: bash.occurredAt, endedAt: null, result: null, machine: undefined },
+        { tool: "request_machine", args: { size: "XL" }, status: ends, startedAt: done.occurredAt, endedAt: done.occurredAt, result: { output }, machine: card },
+      ]);
+      expect(c.activeTool).toEqual({ name: "bash", since: bash.occurredAt });
+      expect(c.start).toBeNull();
+      expect(notices(c)).toEqual([]);
+    });
+  }
+
+  test("a refusal of a request_machine call whose id bash took since fails that call with its card; bash runs on", () => {
+    const asked = ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "r", input: { size: "XL" } });
+    const bash = ev(EventTypes.ToolCalled, { tool: "bash", callId: "r", input: { command: "pwd" } });
+    const done = machineDone("completed", refusal);
+    const c = bothWays([asked, bash, done]);
+    expect(toolRows(c).map(({ tool, status, startedAt, endedAt, result, machine }) => ({ tool, status, startedAt, endedAt, result, machine }))).toEqual([
+      { tool: "request_machine", status: "failed", startedAt: asked.occurredAt, endedAt: done.occurredAt, result: { output: refusal }, machine: refusedCard },
+      { tool: "bash", status: "running", startedAt: bash.occurredAt, endedAt: null, result: null, machine: undefined },
+    ]);
+    expect(c.activeTool).toEqual({ name: "bash", since: bash.occurredAt });
+  });
+
+  test("a refusal completing a child's placeholder call claims it as request_machine, failed with its card", () => {
+    const child = ev(EventTypes.ChildStarted, { childId: "kid", callId: "r", kind: "task" });
+    const done = machineDone("completed", refusal);
+    const c = bothWays([child, done]);
+    const rows = toolRows(c);
+    expect(rows).toHaveLength(1);
+    const { tool, args, status, startedAt, endedAt, result, machine, children } = rows[0]!;
+    expect({ tool, args, status, startedAt, endedAt, result, machine }).toEqual({ tool: "request_machine", args: { size: "XL" }, status: "failed",
+      startedAt: child.occurredAt, endedAt: done.occurredAt, result: { output: refusal }, machine: refusedCard });
+    expect(children.map((k) => k.id)).toEqual(["kid"]);
+  });
+
+  for (const [said, reused] of [["its mapped row", false], ["its row after bash took the id", true]] as const) {
+    test(`a repeated request_machine completion of ${said} updates the card but keeps the first status, result and end`, () => {
+      const asked = ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "r", input: { size: "XL" } });
+      const output = { head: JSON.stringify({ size: "XL", answer: MOVED }) };
+      const first = machineDone("completed", output);
+      const bash = reused ? ev(EventTypes.ToolCalled, { tool: "bash", callId: "r", input: { command: "pwd" } }) : null;
+      const repeat = machineDone("error", refusal);
+      const c = bothWays([asked, first, ...(bash ? [bash] : []), repeat]);
+      const rows = toolRows(c).map(({ tool, status, endedAt, result, machine }) => ({ tool, status, endedAt, result, machine }));
+      expect(rows).toEqual([
+        { tool: "request_machine", status: "completed", endedAt: first.occurredAt, result: { output }, machine: refusedCard },
+        ...(bash ? [{ tool: "bash", status: "running", endedAt: null, result: null, machine: undefined }] : []),
+      ]);
+      expect(c.activeTool).toEqual(bash ? { name: "bash", since: bash.occurredAt } : null);
+    });
+  }
+
   test("a Reset says who, the size by name and the note; one that moved a live Run shows its move", () => {
     const reset = (moveId: string, note: string): MachineResetPayload =>
       ({ moveId, role: "implementer", from: XL, to: STANDARD, pool: { from: TO_HIGHMEM.to, to: TO_HIGHMEM.from }, by: { id: "u_m", name: "Márcio" }, note });

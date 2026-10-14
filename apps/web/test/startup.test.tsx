@@ -146,6 +146,29 @@ describe("the projection", () => {
       expect(project([...before, ...parked, ...back], "running").toolCounts.get(first)).toBe(1);
     });
 
+    test(`a task call whose child completed before a ${how} keeps that one child through the replay`, () => {
+      const child = { childId: "ses_kid", callId: "call_task" };
+      const before = [created(), stage("waiting", 0), stage("running", 100),
+        ev("agent.tool.called", { tool: "task", callId: "call_task", input: { description: "Inspect" } }, 1_000),
+        ev("agent.child.started", { ...child, kind: "task", title: "Inspect" }, 1_100),
+        ev("agent.child.ended", { ...child, status: "completed", summary: "Found it." }, 2_000),
+        ev("agent.tool.completed", { tool: "task", callId: "call_task", status: "completed", output: { head: "Found it." } }, 2_100)];
+      const parked = handedBack();
+      const back = [stage("waiting", 31_000, 2), stage("running", 38_000, 2),
+        // The harness replays the call and its child's start, then works on.
+        ev("agent.tool.called", { tool: "task", callId: "call_task", input: { description: "Inspect" } }, 40_000),
+        ev("agent.child.started", { ...child, kind: "task", title: "Inspect" }, 40_100),
+        ev("agent.tool.completed", { tool: "task", callId: "call_task", status: "completed", output: { head: "Found it." } }, 41_000),
+        ev("agent.message", { text: "back" }, 42_000)];
+      const c = project([...before, ...parked, ...back], "running");
+      const rows = c.turns.filter((t) => t.kind === "tool");
+      expect(rows.map((t) => t.kind === "tool" && [t.id, t.tool, t.status, t.startedAt, t.endedAt])).toEqual([
+        ["call_task", "task", "completed", at(1_000), at(2_100)]]);
+      const children = rows[0]!.kind === "tool" ? rows[0]!.children : [];
+      expect(children.map((k) => [k.id, k.status, k.endedAt, k.summary])).toEqual([["ses_kid", "completed", at(2_000), "Found it."]]);
+      expect(c.toolCounts.get("task")).toBe(1);
+    });
+
     test(`a tool call still running at a ${how} completes after it, timed over its whole span`, () => {
       // A move's own call (request_machine) completes once the agent is back on its new machine.
       const name = how === "move" ? "request_machine" : "bash";
