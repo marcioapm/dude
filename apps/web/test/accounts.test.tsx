@@ -894,6 +894,33 @@ describe("Welcome to <organisation>, once per membership", () => {
     expect({ welcomes: welcomes(w), gates: gates(w) }).toEqual({ welcomes: [[ACME.id, ACME.id]], gates: 1 });
   });
 
+  test("a failed welcome mark on Save can be attempted again on Start, for Acme only", async () => {
+    const w = fresh();
+    const { page, scopedClients } = await open("#/o/acme/welcome", w);
+    const welcome = await until(() => byTestId(page, "first-one"), "Welcome to Acme");
+    const scoped = [...scopedClients].find((c) => c.organizationId === ACME.id)!;
+    const markWelcomed = scoped.markWelcomed.bind(scoped);
+    let attempts = 0;
+    scoped.markWelcomed = (id) => {
+      attempts++;
+      return attempts === 1
+        ? Promise.reject(new ApiError(503, "unavailable", "unavailable"))
+        : markWelcomed(id);
+    };
+    await type(byTestId(welcome, "welcome-name")!, "Márcio M.");
+    await click(byTestId(welcome, "welcome-save")!);
+    // The account re-read follows the rejected mark's catch, after the guard has settled.
+    await until(() => gates(w) === 1 ? true : null, "the failed mark's account re-read");
+    expect(attempts).toBe(1);
+    expect(welcomes(w)).toEqual([]);
+    await click(byTestId(page, "start")!);
+    await until(() => byTestId(page, "welcome"), "the home");
+    expect(attempts).toBe(2);
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    expect(w.me.gate === "member" && w.me.organizations.map((o) => [o.id, o.welcomedAt != null]))
+      .toEqual([[ACME.id, true], [NORTHWIND.id, false]]);
+  });
+
   test("switching to Northwind from Acme's unsaved welcome welcomes Acme, through Acme's client, once; arriving marked nothing", async () => {
     const w = fresh();
     const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
