@@ -160,6 +160,10 @@ export function accessToken(request: Request): string | null {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+function isCallback(request: Request, url: URL): boolean {
+  return request.method === "GET" && url.pathname === callbackPath;
+}
+
 /**
  * GitHub's redirect back after Connect GitHub: a top-level navigation that
  * github.com started, so the browser marks it `cross-site`. Admitting it is
@@ -171,8 +175,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * is still refused; GitHub is never same-site.
  */
 function isOAuthCallbackNavigation(request: Request): boolean {
-  return request.method === "GET" &&
-    new URL(request.url).pathname === callbackPath &&
+  return isCallback(request, new URL(request.url)) &&
     request.headers.get("sec-fetch-site") === "cross-site" &&
     request.headers.get("sec-fetch-mode") === "navigate" &&
     request.headers.get("sec-fetch-dest") === "document";
@@ -239,7 +242,7 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
     const url = new URL(request.url);
     // GitHub's redirect back names no organisation: the route finds it by the single-use state, which is bound
     // to the person who started it in one of the account's memberships.
-    const githubReturn = request.method === "GET" && url.pathname === callbackPath;
+    const githubReturn = isCallback(request, url);
     const identity = await deps.verify(token);
     if (!identity) return null;
     let admission = await admissionFor(config, identity.email);
