@@ -347,11 +347,15 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 		WHERE task_id = $1 AND status <> 'completed'`, taskID); err != nil {
 		return "", err
 	}
+	st, err := delivery.NewState(ctx, tx, taskID, projectID, policy, attempt)
+	if err != nil {
+		return "", err
+	}
+	st.Attempt, st.Overridden = attempt, overridden
 	return s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
 		IdempotencyKey: fmt.Sprintf("delivery:%s:attempt-%d", taskID, attempt),
-		Input: delivery.State{TaskID: taskID, ProjectID: projectID, Policy: policy, Attempt: attempt,
-			Branch: delivery.BranchFor(taskID, attempt), Overridden: overridden},
+		Input:          st,
 	})
 }
 
@@ -368,7 +372,7 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 	var prs []openPR
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT p.number, r.url FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
-			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft')`, ids)
+			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft') AND NOT p.adopted`, ids)
 		if err != nil {
 			return err
 		}

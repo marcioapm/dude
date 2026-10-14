@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -198,6 +199,63 @@ func unreachableOr(err error) error {
 		return SourceUnreachable{err}
 	}
 	return err
+}
+
+// NewState is a new delivery's state: on the branch BranchFor names for
+// the attempt, or, for a task that took over existing work, on its
+// source's head branch, measured against its base. The caller sets the
+// rest (Attempt included, where it keeps one).
+func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy Policy, attempt int) (State, error) {
+	st := State{TaskID: taskID, ProjectID: projectID, Policy: policy, Branch: BranchFor(taskID, attempt)}
+	src, err := TaskSource(ctx, tx, taskID)
+	if err != nil || src == nil {
+		return st, err
+	}
+	st.Branch, st.Source = src.HeadBranch, src
+	st.Bases = map[string]string{src.Repository: src.BaseBranch}
+	return st, nil
+}
+
+// Adopted says the delivery took over existing work.
+func (st *State) Adopted() bool { return st.Source != nil }
+
+// BaseFor is what repo's task branch merges into: its stored base, else
+// its default branch.
+func (st *State) BaseFor(repo Repository) string {
+	if b := st.Bases[repo.Name]; b != "" {
+		return b
+	}
+	return repo.DefaultBranch
+}
+
+// TaskBranch is where an attempt's work goes, as its delivery keeps it.
+type TaskBranch struct {
+	Branch string
+	Bases  map[string]string
+	Source *Source
+}
+
+// TaskBranchTx is the task branch of the task's attempt: its delivery's
+// stored branch, else BranchFor's (an attempt with no delivery yet, or one
+// from before the branch was kept).
+func TaskBranchTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (TaskBranch, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT w.state FROM workflow_runs w WHERE w.task_id = $1 AND w.workflow_type = $3
+		AND COALESCE(NULLIF(w.state->>'attempt', '')::int, $2) = $2 ORDER BY w.created_at DESC LIMIT 1`,
+		taskID, attempt, WorkflowType).Scan(&raw)
+	if err != nil && !db.IsNotFound(err) {
+		return TaskBranch{}, err
+	}
+	var st State
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &st); err != nil {
+			return TaskBranch{}, fmt.Errorf("decode delivery state: %w", err)
+		}
+	}
+	if st.Branch == "" {
+		st.Branch = BranchFor(taskID, attempt)
+	}
+	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source}, nil
 }
 
 // TaskSource is the task's source, nil when it starts from new work.

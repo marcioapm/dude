@@ -965,12 +965,13 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
 	draft := gh.Settings.OpenAs == "draft" || st.Draft
-	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch, Draft: draft}
+	base := st.BaseFor(repo)
+	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: base, Draft: draft}
 	var ref forge.PullRequestRef
 	var err error
 	fresh := false
 	if gh.UsesApp() {
-		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, base)
 		if lookupErr != nil {
 			return "", lookupErr
 		}
@@ -1001,7 +1002,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.
-		existing, ferr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		existing, ferr := gh.FindPullRequest(ctx, slug, st.Branch, base)
 		if ferr != nil {
 			return "", ferr
 		}
@@ -1032,7 +1033,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state, 'unknown')
 			ON CONFLICT (repository_id, number) DO NOTHING`,
 			id, org, st.ProjectID, st.TaskID, db.Nullable(st.HeadRunID), repo.ID, ref.Number,
-			db.Nullable(ref.NodeID), ref.URL, st.Branch, repo.DefaultBranch, ref.HeadSHA, title, body, ref.State)
+			db.Nullable(ref.NodeID), ref.URL, st.Branch, base, ref.HeadSHA, title, body, ref.State)
 		if err != nil {
 			return err
 		}
@@ -1045,7 +1046,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 			CorrelationID: st.TaskID,
 			Payload: map[string]any{"number": ref.Number, "url": ref.URL, "repo": repo.Name,
-				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": ref.State == forge.StateDraft,
+				"headBranch": st.Branch, "baseBranch": base, "draft": ref.State == forge.StateDraft,
 				"reviewersRequested": db.NonNil(asked)},
 		})
 		return err

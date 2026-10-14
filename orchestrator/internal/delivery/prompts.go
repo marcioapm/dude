@@ -51,6 +51,13 @@ type PromptInput struct {
 	Branch, BaseRef string
 	// A conductor's: the task branch its checkout is kept current with.
 	TaskBranch string
+	// The task took over an existing branch: what it merges into, by
+	// repository. Empty for new work, whose base is the default branch.
+	Bases map[string]string
+	// The existing pull request the task took over, when it did: its
+	// unresolved threads, changes requested and red checks are the
+	// reviewers' context.
+	Adopted *AdoptedContext
 	// What the task's conductor asked of this Run, when it started it.
 	ConductorNote string
 	// Why this Run replaces one restarted in its step (RestartRunTx).
@@ -665,6 +672,12 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)
+	}
+	if note := baseNote(in.Bases); note != "" {
+		add(note)
+	}
+	if phase == PhaseReview && in.Adopted != nil {
+		add(in.Adopted.note())
 	}
 	if in.Tools {
 		add(toolsNote)

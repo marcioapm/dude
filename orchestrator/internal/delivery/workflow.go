@@ -43,6 +43,13 @@ type State struct {
 	HeadRunID string `json:"headRunId,omitempty"`
 	// The task's branch, the same name in every repository it changes.
 	Branch string `json:"branch,omitempty"`
+	// What the task branch merges into, by repository name, where that is
+	// not the repository's default branch: an adopted source's base. Every
+	// diff, review and pull request of that repository measures against it.
+	Bases map[string]string `json:"bases,omitempty"`
+	// The existing pull request or branch the task took over; nil for new
+	// work. Its head branch is Branch.
+	Source *Source `json:"source,omitempty"`
 	// Where the work stands in each repository it changed, by name: what
 	// the next phase checks out. A repository not here starts from its
 	// default branch.

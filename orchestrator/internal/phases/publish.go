@@ -399,10 +399,13 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 			return s.refusePublish(ctx, p, "no forge to publish "+repo.URL+" to")
 		}
 		// Measured against the task branch's head, or the default branch
-		// where the task has none yet.
+		// where the task has none yet (the branch itself, if it took one over).
 		from, base := target.Heads[repo.Name], target.Heads[repo.Name]
 		if from == "" {
 			from = repo.DefaultBranch
+			if target.Adopted[repo.Name] != "" {
+				from = target.Branch
+			}
 		}
 		cmp, err := gh.Compare(ctx, slug, from, res.Commit)
 		if err != nil {

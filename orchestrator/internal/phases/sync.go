@@ -1161,6 +1161,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var in specInput
 	var title, goal string
 	var repos []delivery.Repository
+	var taskBranch delivery.TaskBranch
+	var adopted *delivery.AdoptedContext
 	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
@@ -1232,6 +1234,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
 		}
+		if taskBranch, err = delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+			return err
+		}
+		if r.Phase == delivery.PhaseReview && taskBranch.Source != nil && stored == nil {
+			if adopted, err = delivery.AdoptedContextTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+				return err
+			}
+		}
 		// The task's epic, on submit only: a resume sends no prompt.
 		if stored == nil && !r.conductor() {
 			if coordination, err = delivery.EpicBriefing(ctx, tx, r.Org, r.TaskID, r.ID, settingsRole); err != nil {
@@ -1281,7 +1291,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 
 	var promptRepos []delivery.PromptRepo
 	for _, repo := range repos {
-		ref, readOnly := checkoutOf(r, repo)
+		ref, readOnly := checkoutOf(r, repo, taskBranch)
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
@@ -1308,7 +1318,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination,
+		Coordination: coordination, Bases: taskBranch.Bases, Adopted: adopted,
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -1369,9 +1379,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
 }
 
-// checkoutOf is where a task's Run checks repo out, and whether read only.
-func checkoutOf(r phaseRun, repo delivery.Repository) (ref string, readOnly bool) {
+// checkoutOf is where a task's Run checks repo out, and whether read only:
+// the commit the phase starts from; else, where the task took over a
+// branch, that branch; else the default branch.
+func checkoutOf(r phaseRun, repo delivery.Repository, tb delivery.TaskBranch) (ref string, readOnly bool) {
 	ref = repo.DefaultBranch
+	if tb.Bases[repo.Name] != "" {
+		ref = tb.Branch
+	}
 	if base := r.BaseRefs[repo.Name]; base != "" {
 		ref = base
 	}
@@ -1381,7 +1396,7 @@ func checkoutOf(r phaseRun, repo delivery.Repository) (ref string, readOnly bool
 	if r.conductor() && !readOnly && r.BaseRefs[repo.Name] != "" {
 		// On the task branch by name, where lux's fast-forward sync can
 		// move it: lux never switches a checkout's branch.
-		ref = delivery.BranchFor(r.TaskID, r.Attempt)
+		ref = tb.Branch
 	}
 	return ref, readOnly
 }
@@ -1430,15 +1445,19 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 		if err != nil {
 			return "", fmt.Errorf("load repositories: %w", err)
 		}
+		tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
+		if err != nil {
+			return "", err
+		}
 		for i, repo := range repos {
-			ref, readOnly := checkoutOf(r, repo)
+			ref, readOnly := checkoutOf(r, repo, tb)
 			if i == 0 {
 				in.BaseRef = ref
 			}
 			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 		}
 		in.CLI = in.Tools && s.Agent.ToolsService
-		in.Branch, in.TaskBranch = runBranch(r), delivery.BranchFor(r.TaskID, r.Attempt)
+		in.Branch, in.TaskBranch = runBranch(r), tb.Branch
 	}
 	in.Context = delivery.ResolveRole(role, models...).Context
 	// A session spans projects: its organisation's prompt alone.
@@ -1712,7 +1731,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	raw, _ := json.Marshal(heads)
 	branch := ""
 	if len(heads) > 0 {
-		branch = delivery.BranchFor(r.TaskID, r.Attempt)
+		tb, err := s.taskBranch(ctx, r)
+		if err != nil {
+			return true, err
+		}
+		branch = tb.Branch
 	}
 	completed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -1736,6 +1759,15 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+// taskBranch is the task branch of r's attempt, as its delivery keeps it.
+func (s *Syncer) taskBranch(ctx context.Context, r phaseRun) (tb delivery.TaskBranch, err error) {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		tb, err = delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
+		return err
+	})
+	return tb, err
 }
 
 // publish moves the task's branch in each repository this Run changed
@@ -1771,7 +1803,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub
-	branch := delivery.BranchFor(r.TaskID, r.Attempt)
+	tb, err := s.taskBranch(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	branch := tb.Branch
 	for _, res := range push.Results {
 		repo, known := byName[res.Repo]
 		switch {

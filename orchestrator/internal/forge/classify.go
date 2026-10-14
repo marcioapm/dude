@@ -132,6 +132,9 @@ func isBot(author string) bool {
 	return strings.HasSuffix(author, "[bot]") || strings.HasSuffix(author, "-bot") || author == "github-actions"
 }
 
+// IsBot says a login is a bot's: its comments never wake a fixer.
+func IsBot(author string) bool { return isBot(author) }
+
 // IsActionableComment decides whether one piece of feedback asks for a change.
 func IsActionableComment(f Feedback, factoryLogins []string) bool {
 	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) {
