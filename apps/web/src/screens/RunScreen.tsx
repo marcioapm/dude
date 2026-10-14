@@ -103,8 +103,8 @@ export interface RunScreenProps {
    */
   chat?: ChatVariant | undefined;
   /** What its end strip says of a session that stopped, beyond how it ended. */
-  titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
   stopped?: StoppedRun | undefined;
+  titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
 }
 
 export interface ChatVariant {

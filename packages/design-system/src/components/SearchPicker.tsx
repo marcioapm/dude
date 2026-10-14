@@ -54,9 +54,12 @@ export interface SearchPickerProps<T> {
   readonly onSubmit?: (() => void) | undefined;
   /** Keys (`optionKey`) never shown: what is already picked. Hidden as found, never found again. */
   readonly exclude?: ReadonlySet<string> | undefined;
+  /** Extra attributes on an option's `<li>`, such as test ids. */
   readonly optionAttributes?: ((option: T) => Record<string, string | undefined>) | undefined;
   readonly listTestId?: string | undefined;
+  /** What is open now: `aria-selected` and `aria-current` follow this instead of the keyboard's row. */
   readonly optionCurrent?: ((option: T) => boolean) | undefined;
+  /** Escape always cancels the picker (`onCancel`), even with the list open: for a picker in a popover. */
   readonly escapeClosesPicker?: boolean | undefined;
 }
 
