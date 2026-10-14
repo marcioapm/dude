@@ -150,6 +150,48 @@ describe("a move's notice and what the agent was told", () => {
   });
 });
 
+describe("two moves on one Run", () => {
+  const into3 = (p: Record<string, unknown>) => {
+    if (p.epoch === 2) return { ...p, epoch: 3 };
+    const m = p.machine as { sinceEpoch?: number } | undefined;
+    return m?.sinceEpoch === 2 ? { ...p, machine: { ...m, sinceEpoch: 3 } } : p;
+  };
+  /** The raise into epoch 2, then a Reset of the same Run on its next resume, into epoch 3; `drop` leaves out a move's timing. */
+  function raiseThenReset(drop: number | null = null): PersistedEvent[] {
+    const first = raise(false);
+    const later = reset(false);
+    const runId = first[0]!.runId;
+    const second = later.slice(later.findIndex((e) => e.eventType === EventTypes.MachineReset))
+      .map((e) => ({ ...e, runId, payload: into3(e.payload) }));
+    return [...first, ...second]
+      .filter((e) => !(e.eventType === EventTypes.RunResumeTimed && e.payload.epoch === drop))
+      .map((e, i) => ({ ...e, eventId: `ev_${i + 1}`, cursor: i + 1 }));
+  }
+  const moves = (events: readonly PersistedEvent[]) =>
+    project(events, "running").turns.flatMap((t) => t.kind === "notice" && /^The \w+ moved|^Resumed|^Taken back up/.test(t.text) ? [t.text]
+      : t.kind === "told" ? [`told:${t.text}`] : []);
+
+  test("each move has its own timed row, each followed by its own Told turn, in order", () => {
+    expect(moves(raiseThenReset())).toEqual([
+      "The implementer moved to Large in 48s, with its conversation and work.",
+      `told:${toldRaise(LARGE, false)}\n\n${NUDGE}`,
+      "The implementer moved back to Standard in 46s, with its conversation and work.",
+      `told:${toldReset(STANDARD, PEOPLE.ana.name, RESET_NOTE)}\n\n${NUDGE}`,
+    ]);
+  });
+
+  test("the second move's timing never lands on the first's row", () => {
+    expect(moves(raiseThenReset(2)).filter((m) => !m.startsWith("told:"))).toEqual([
+      "The implementer moved to Large, with its conversation and work.",
+      "The implementer moved back to Standard in 46s, with its conversation and work.",
+    ]);
+    expect(moves(raiseThenReset(3)).filter((m) => !m.startsWith("told:"))).toEqual([
+      "The implementer moved to Large in 48s, with its conversation and work.",
+      "The implementer moved back to Standard, with its conversation and work.",
+    ]);
+  });
+});
+
 describe("a move whose resume failed", () => {
   const size = (name: string) => ({ sizeId: name, name, cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, pool: "default", from: "task" });
   /** A conductor's move into epoch 2 that fails before it is timed, then Try again's Run, whose own epoch 2 is what `later` does. */

@@ -221,6 +221,46 @@ func TestAResumeRetriedAfterALostAnswerRecordsOnlyWhatLuxTook(t *testing.T) {
 	}
 }
 
+// A raise, then Ana's Reset of the same Run on its next resume: one
+// run.told per move, each for the epoch lux resumed it into (2, then 3),
+// each byte for byte the input lux took for that resume.
+func TestARaiseThenAResetRecordsOneToldEach(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"jest killed, exit 137"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("the raise settled and the agent running", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='raise' AND settled_at IS NOT NULL`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none'`, runID) == 1 && w.lux.State(live) == "running"
+	})
+	const note = "keep it at 2"
+	if status, out := w.callAs(w.person("Ana Ribeiro"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": note}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.until("the Reset settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, runID) == 1
+	})
+	raised := w.str(`SELECT id FROM machine_moves WHERE run_id=$1 AND kind='raise'`, runID)
+	reset := w.str(`SELECT id FROM machine_moves WHERE run_id=$1 AND kind='reset'`, runID)
+	inputs := w.lux.ResumeInputs(live)
+	told := w.toldOf(runID)
+	if len(inputs) != 2 || len(told) != 2 {
+		t.Fatalf("resume inputs %q, run.told %+v; want two of each", inputs, told)
+	}
+	want := []toldEvent{
+		{Epoch: 2, MoveID: raised, Kind: "moved", Text: inputs[0]},
+		{Epoch: 3, MoveID: reset, Kind: "moved", Text: inputs[1]},
+	}
+	if told[0] != want[0] || told[1] != want[1] {
+		t.Fatalf("run.told %+v, want %+v", told, want)
+	}
+	if !strings.HasPrefix(told[0].Text, "You now run on Bigger") || !strings.HasPrefix(told[1].Text, "Moved back to Standard by Ana Ribeiro: "+note) {
+		t.Fatalf("texts %q", []string{told[0].Text, told[1].Text})
+	}
+}
+
 // The resume lux accepted is recorded, then settling the move fails (lux's
 // reads fail) and the resume is retried while lux is still resuming: lux
 // answers the retry as it did the first, and nothing new is recorded for
