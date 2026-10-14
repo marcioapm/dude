@@ -255,6 +255,13 @@ export const EventTypes = {
    */
   RunResized: "run.resized",
   /**
+   * What dude told the agent of its machine move, once lux accepted the
+   * resume carrying it; once per Run and epoch. Payload:
+   * `RunToldPayload`: `{ epoch, moveId, kind, text }`, `text` the resume's
+   * input exactly as lux took it.
+   */
+  RunTold: "run.told",
+  /**
    * An agent asked for a larger machine (request_machine). Payload:
    * `MachineRequestedPayload`: whole machines, the reason, and for a
    * refusal before any park `refused` and `message`, with no `moveId`.

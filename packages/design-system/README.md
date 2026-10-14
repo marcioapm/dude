@@ -501,6 +501,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   he aborts) wear the same face and name. Prompts clamp at eight lines with
   a "Show all" control, measured after layout so a short prompt gets no
   control (`maxLines` overrides).
+- **What dude told an agent** that no one typed — where a machine move left
+  it, what lux kept it on, who owns a session now — is `ChatMessage
+  role="system" intent="told"`:
+  the briefing's grammar (dude's face and name, the prompt's neutral frame
+  and clamp) tagged "Told", just before the agent's first words after it.
+  A person's message read on the same resume stays their own turn.
 
 ### A task's Chat (the conductor)
 

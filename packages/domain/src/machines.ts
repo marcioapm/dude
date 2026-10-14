@@ -328,6 +328,16 @@ export interface MachineResetPayload extends MachineMove {
   note: string;
 }
 
+/** `run.told`, on the Run: what dude told the agent of its move, as the resume's input lux accepted. */
+export interface RunToldPayload {
+  /** The placement lux resumed it into. */
+  epoch: number;
+  moveId: string;
+  /** `moved`: the move applied; `kept`: lux refused it and the agent stayed. */
+  kind: "moved" | "kept";
+  text: string;
+}
+
 /** A raised role on a task's or session's detail (`agentMachines`). */
 export interface AgentMachine {
   role: string;

@@ -20,6 +20,8 @@ import { taskHistory } from "../src/taskHistory.ts";
 import { dudeName } from "../src/DudeMark.tsx";
 import type { ChatSent, RunDetail, TaskDetail, TaskMetrics } from "../src/api/client.ts";
 import { ApiError } from "../src/api/client.ts";
+import { conductor as conductorMove } from "../mockups/machinemoves/events.ts";
+import { LARGE as MOVE_LARGE, toldRaise } from "../mockups/machinemoves/data.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -294,6 +296,21 @@ describe("the Chat tab", () => {
     const notices = [...page.querySelectorAll("[data-testid=chat-notice]")].map((n) => n.textContent);
     expect(notices.some((n) => n?.startsWith(`${dudeName(TASK_ID)}: Parked while nobody is writing`))).toBe(true);
     expect(page.querySelector<HTMLTextAreaElement>("[data-testid=task-chat] textarea")?.disabled).toBe(false);
+  });
+
+  test("a conductor that moved itself: its move's notice, then what dude told it, then its answer", async () => {
+    // The mockup's ledger of BILL-42's conductor moving to Large, as this task's conductor.
+    const events = conductorMove().map((e) => ({ ...e, runId: CONDUCTOR, taskId: TASK_ID }));
+    const page = await chatPage(new ChatClient({ status: "running" }, events));
+    const told = await until(() => page.querySelector("[data-testid=chat-told]"), "the Told turn");
+    expect(told.textContent).toStartWith(`${dudeName(TASK_ID)}Told`);
+    expect(told.textContent).toContain(toldRaise(MOVE_LARGE, false));
+    const moved = [...page.querySelectorAll("[data-testid=chat-notice]")].find((n) => n.textContent?.includes("moved to Large"))!;
+    expect(moved.textContent).toContain("The conductor moved to Large in 45s, with its conversation and work.");
+    const answer = [...page.querySelectorAll("[data-testid=conductor-turn]")].find((n) => n.textContent?.includes("On Large now."))!;
+    const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect([follows(moved, told), follows(told, answer)]).toEqual([true, true]);
+    expect(page.textContent).not.toContain("Resumed in");
   });
 
   test("the conductor's Tools used names its dude actions as called and completed, with the overlap note only when there are some", async () => {

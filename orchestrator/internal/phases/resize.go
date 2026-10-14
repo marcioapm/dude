@@ -27,6 +27,11 @@ import (
 // size, or why it is not on its settings' size). Payload {machine}.
 const EvRunResized = "run.resized"
 
+// EvRunTold: what dude told the agent of its machine move, as the input of
+// the resume lux accepted. Payload {epoch, moveId, kind: "moved"|"kept",
+// text}; once per Run and epoch.
+const EvRunTold = "run.told"
+
 // ResizePlan is what one resume of a parked Run does about its size.
 type ResizePlan struct {
 	// runs.machine before the resume, and the size its settings name now.
@@ -47,11 +52,15 @@ type ResizePlan struct {
 	// Records a refusal durably before the fallback resume is asked for,
 	// so a process that dies in between resumes the same way.
 	onRefused func(*lux.Error) error
-	// The Run's pending machine move: what its agent is told when the
-	// move applies, which kind it is ("raise" or "reset", "" none) and the
-	// name of the size it asked for (a refused raise's layer is restored
-	// before a restart's resume, so Target may no longer be it).
-	moveTold, moveKind, moveTo string
+	// The Run's pending machine move: its id, what its agent is told when
+	// the move applies, which kind it is ("raise" or "reset", "" none) and
+	// the name of the size it asked for (a refused raise's layer is
+	// restored before a restart's resume, so Target may no longer be it).
+	moveID, moveTold, moveKind, moveTo string
+	// The input of ResumeSized's last request to lux when it carried the
+	// move's words, and whether they said it moved or was kept ("moved",
+	// "kept"); "" when that request said nothing of the move.
+	toldText, toldKind string
 	// The pending move's refusal in dude's words (delivery.RefusalOf); nil
 	// without a move.
 	refusalOf func(*lux.Error) delivery.MoveRefusal
@@ -197,13 +206,18 @@ func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeI
 		switch {
 		case plan != nil && plan.refused != nil && plan.refused.Status != http.StatusConflict:
 			in.Input = plan.keptInput(plan.refused, in.Input)
+			plan.told(in.Input, "kept")
 		case plan != nil && plan.refused == nil:
 			in.Input = plan.movedInput(in.Input)
+			plan.told(in.Input, "moved")
+		case plan != nil:
+			plan.told(in.Input, "")
 		}
 		return c.Resume(ctx, runID, in)
 	}
 	asked := in.Input
 	in.Resources, in.Input = plan.Send, plan.movedInput(asked)
+	plan.told(in.Input, "moved")
 	if plan.Pool != "" {
 		in.Placement = &lux.PlacementSpec{PoolID: plan.Pool}
 	}
@@ -221,9 +235,25 @@ func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeI
 		}
 		in.Resources, in.Placement = nil, nil
 		in.Input = plan.keptInput(le, asked)
+		plan.told(in.Input, "kept")
 		return c.Resume(ctx, runID, in)
 	}
 	return res, err
+}
+
+// told notes the input about to be sent as the move's words when it
+// carries them: moveTold for "moved", keptInput's sentence for "kept". A
+// 409's keptInput, or a plan with no move, returns its input unchanged and
+// notes nothing.
+func (p *ResizePlan) told(input, kind string) {
+	p.toldText, p.toldKind = "", ""
+	switch {
+	case kind == "" || p.moveKind == "":
+	case kind == "moved" && p.moveTold == "":
+	case kind == "kept" && p.refused != nil && p.refused.Status == http.StatusConflict:
+	default:
+		p.toldText, p.toldKind = input, kind
+	}
 }
 
 func resourcesRefused(le *lux.Error) bool {
@@ -379,7 +409,7 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 		plan.moveTo = plan.Target.Name
 		asked = *plan.Target
 	}
-	plan.moveKind = move.Kind
+	plan.moveKind, plan.moveID = move.Kind, move.ID
 	// onRefused and keptInput both word the same refusal: lux's pools are
 	// read once for it.
 	var pools []lux.Pool
@@ -566,5 +596,27 @@ func RecordResize(ctx context.Context, d *db.DB, c lux.Client, log *slog.Logger,
 	})
 	if err != nil && ctx.Err() == nil {
 		log.Warn("recording a resumed Run's size failed", "run", ref.RunID, "error", err)
+	}
+}
+
+// RecordTold writes run.told for a resume lux accepted whose input carried
+// the move's words (ResumeSized's last request), once per Run and epoch.
+// The caller's terminal guard keeps retries out; the conditional insert is a backstop.
+// Best effort, as RecordResize: a failure is logged.
+func RecordTold(ctx context.Context, d *db.DB, log *slog.Logger, ref delivery.RunRef, plan *ResizePlan, epoch int) {
+	if plan == nil || plan.toldKind == "" {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	err := d.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
+		_, err := ledger.AppendOncePerEpoch(ctx, tx, ref.Event(EvRunTold, ledger.ActorSystem, map[string]any{
+			"epoch": epoch, "moveId": plan.moveID, "kind": plan.toldKind, "text": plan.toldText,
+		}), epoch)
+		return err
+	})
+	if err != nil && ctx.Err() == nil {
+		log.Warn("recording what a moved agent was told failed", "run", ref.RunID, "error", err)
 	}
 }

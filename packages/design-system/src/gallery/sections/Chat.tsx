@@ -437,6 +437,29 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="ch-told"
+        title="What dude told the agent"
+        note="Words dude put in front of an agent's input that no one typed: where a machine move left it, or what lux kept it on, or who owns a session now. A turn of their own, ChatMessage role system intent told: dude's face and name, the Told tag, the prompt's neutral frame and clamp, just before the agent's first words after it. A person's message on the same resume stays their own turn after it. The move's notice above says the move's whole time; its hover lists the stages."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>after a raise</Label>
+            <ChatNotice kind="unparked" by="El Duderino" text="The implementer moved to Large in 48s, with its conversation and work." at={at(0)} />
+            <ChatMessage role="system" name="El Duderino" intent="told" startedAt={at(0)}
+              content="You now run on Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on." />
+            <ChatMessage role="implementer" startedAt={at(4_000)} endedAt={at(9_000)} costUsd={0.04}
+              content="On Large now. Running the suite again with 4 workers." />
+            <Label>after a Reset with a note, and a person's message on the same resume</Label>
+            <ChatNotice kind="unparked" by="El Duderino" text="The implementer moved back to Standard in 39s, with its conversation and work." at={at(60_000)} />
+            <ChatMessage role="system" name="El Duderino" intent="told" startedAt={at(60_000)}
+              content="Moved back to Standard by Ana Ribeiro: the suite fits in 8 GiB with --maxWorkers 2 now." />
+            <ChatMessage role="human" name="Ana" intent="steer" startedAt={at(55_000)} deliveredAt={at(66_000)} read
+              content="Run the PDF tests alone first, then the rest." />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
         id="ch-conducted"
         title="A conducted task"
         note="The conductor takes the decisions. StartChoice offers the two ways to start, side by side and equal: no primary, nothing preselected. In Chat, each Run the conductor started is a ChatRunLine — one collapsed line on a rail in its role's colour, with its status and what it came to, opening its session. A decision the delivery waits on is El Duderino's notice (kind decision); an approval or a green check is a notice (kind notice) that wakes nobody. DeciderLine sits above the composer: who decides, what it waits on, and Let Deliver finish it."

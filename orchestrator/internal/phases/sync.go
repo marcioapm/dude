@@ -2233,6 +2233,15 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 			return
 		}
 		RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, answer)
+		// Only an input lux took, and only from the resume that took the Run
+		// stopped: lux answers a retry of a Run already resuming 2xx (or 409)
+		// and keeps the first attempt's input, which this one may not repeat.
+		// A resume whose answer was lost so records no run.told.
+		if err == nil && lux.Terminal(lr.State) {
+			// Once per epoch without a lock assumes one orchestrator (docs/operations.md)
+			// and one advance per Run per Sweep; a second orchestrator could write two.
+			RecordTold(ctx, s.DB, s.logger(), r.ref(), plan, resumedEpoch(foreseen, resumed))
+		}
 		if serr := s.settleMachine(ctx, r, plan, answer); serr != nil && err == nil {
 			err = serr
 		}
