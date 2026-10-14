@@ -465,6 +465,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
+  const visibleFindings = filterFindings(mine.findings, findingStatuses, findingSeverities);
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = currentPhases.find((r) => r.status === "running");
   // The aside says what serves the task when something does, or could: a
@@ -726,9 +727,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix").length) }]} />
               <p className="ds-muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
-            {filterFindings(mine.findings, findingStatuses, findingSeverities).length === 0 && mine.findings.length > 0 ? <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." /> : null}
-          {mine.findings.length > 0 ? (
-            <FindingGroup data-testid="findings" findings={filterFindings(mine.findings, findingStatuses, findingSeverities)}
+            {mine.findings.length > 0 && visibleFindings.length === 0 ? (
+              <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." />
+            ) : visibleFindings.length > 0 ? (
+            <FindingGroup data-testid="findings" findings={visibleFindings}
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
                   category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}

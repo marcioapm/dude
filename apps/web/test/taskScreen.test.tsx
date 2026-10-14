@@ -74,6 +74,19 @@ describe("task rail filtering", () => {
     expect(status.textContent).toBe(counts);
   });
 
+  test("findings filtered to nothing shows one empty state, without the empty group", async () => {
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
+    const severity = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]'), "severity filters");
+    const high = [...severity.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes("High"));
+    expect(high).toBeDefined();
+    await click(high!);
+    expect(page.textContent).toContain("No matching findings");
+    expect(page.textContent).not.toContain("No findings.");
+    expect(page.textContent).not.toContain("Review findings");
+    expect(page.querySelectorAll('[data-testid="findings"]').length).toBe(0);
+    expect(page.querySelectorAll('[data-testid="finding"]').length).toBe(0);
+  });
+
   test("the findings rail names each review run with its status, opens it, and counts fix runs", async () => {
     const opened: string[] = [];
     const page = await taskPage(new FixtureClient("d"), { tab: "findings", onOpenRun: (id) => opened.push(id) });
