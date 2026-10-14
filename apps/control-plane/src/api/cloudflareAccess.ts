@@ -18,6 +18,7 @@ import { withoutTenant } from "../db/client.ts";
 import type { AccessConfig } from "../config.ts";
 import type { AccessAdmission, Principal } from "./auth.ts";
 import { HttpError } from "./http.ts";
+import { GITHUB_CALLBACK_PATH } from "./routes/githubOAuth.ts";
 
 export const ACCESS_LOGOUT_PATH = "/cdn-cgi/access/logout";
 
@@ -215,10 +216,13 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
   return async (request: Request): Promise<Principal | null> => {
     const token = accessToken(request);
     if (!token) return null;
-    checkBrowserOrigin(request, config.public_url);
+    const url = new URL(request.url);
+    // GitHub's redirect back is another site's navigation, naming no organisation: its proof is the
+    // single-use state bound to the person who started it, and the route finds that organisation itself.
+    const githubReturn = request.method === "GET" && url.pathname === GITHUB_CALLBACK_PATH;
+    if (!githubReturn) checkBrowserOrigin(request, config.public_url);
     const identity = await deps.verify(token);
     if (!identity) return null;
-    const url = new URL(request.url);
     let admission = await admissionFor(config, identity.email);
     const frontDoor = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/invitations/");
     const fill = admission.gate === "member" && admission.account !== null && wantsProfile(admission.account);
@@ -241,7 +245,7 @@ export function accessAuthenticator(config: AccessConfig, _organizationId: strin
     }
     const accountRoute = url.pathname === "/v1/me" || url.pathname.startsWith("/v1/me/keys") ||
       url.pathname.startsWith("/v1/invitations/") || url.pathname.startsWith("/v1/admin/") ||
-      url.pathname.startsWith("/v1/locate/");
+      url.pathname.startsWith("/v1/locate/") || githubReturn;
     const requested = request.headers.get("x-dude-organization") ??
       (url.pathname === "/v1/events/stream" ? url.searchParams.get("org") : null);
     let selected: AccessAdmission["memberships"][number] | undefined;

@@ -587,6 +587,27 @@ describe("your settings: keys by organisation", () => {
     expect(text(byTestId(profile, "profile-scope"))).toBe("The same in every organisation you're in: Acme and Northwind see this name and photo.");
     expect(text(byTestId(profile, "profile-facts"))).toContain("from Cloudflare Access, can't be changed here");
   });
+
+  test("GitHub's return lands in the organisation Connect was for: its outcome shows there, read with that organisation, and leaves the address", async () => {
+    const w = world();
+    const { page } = await open("/?github=connected#/o/northwind/me/settings", w);
+    const outcome = await until(() => byTestId(page, "github-outcome"), "the callback's outcome");
+    expect(text(outcome)).toBe("GitHub connected.");
+    expect(w.calls.filter((c) => c.method === "githubAuthorization").map((c) => c.org)).toEqual([NORTHWIND.id]);
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("#/o/northwind/me/settings");
+  });
+
+  test("a return with no organisation in its address opens Your settings in your last organisation, with its outcome", async () => {
+    const w = world();
+    localStorage.setItem(LAST_ORGANIZATION, "northwind");
+    const { page } = await open("/?github=invalid_or_expired#/me/settings", w);
+    const outcome = await until(() => byTestId(page, "github-outcome"), "the callback's outcome");
+    expect(text(outcome)).toBe("This GitHub connection request expired or was already used. Connect again.");
+    expect(window.location.hash).toBe("#/o/northwind/me/settings");
+    expect(window.location.search).toBe("");
+    expect(w.calls.filter((c) => c.method === "githubAuthorization").every((c) => c.org === NORTHWIND.id)).toBe(true);
+  });
 });
 
 describe("Members", () => {

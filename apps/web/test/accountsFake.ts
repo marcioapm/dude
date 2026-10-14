@@ -234,6 +234,14 @@ export class AccountsClient extends FixtureClient {
     this.#log("adminRemovePerson", id, personId);
     return Promise.reject(new ApiError(409, "conflict", "the organization needs an admin; make someone else one first"));
   }
+  override githubAuthorization() {
+    this.#log("githubAuthorization");
+    return Promise.resolve({ available: true, connection: null });
+  }
+  override connectGithub() {
+    this.#log("connectGithub");
+    return Promise.reject(new ApiError(400, "bad_request", "not in these tests"));
+  }
 }
 
 export function invitationView(code: string, org: { id: string; name: string; slug: string }, state: "pending" | "member" = "pending",

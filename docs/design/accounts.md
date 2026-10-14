@@ -443,6 +443,14 @@ kind — and a header alone forgets the organisation on every shared link.
   `not_a_member`. No header: the organisation if the account has one, else
   400 `organization_required`. Account routes (`/v1/me`, `/v1/me/keys`,
   `/v1/invitations/:code`) need none.
+- **GitHub's return from Connect GitHub** (`GET /v1/me/github/callback`) is
+  the one tenant write that names no organisation and arrives cross-site:
+  GitHub redirects the browser there. The gate lets that one GET through its
+  cross-site check and its organisation rule; the route finds the
+  organisation by the single-use state, which is bound to the person who
+  started it in each of the account's memberships, and lands on
+  `/?github=<outcome>#/o/<slug>/me/settings`. Connect itself and the status
+  read are ordinary tenant calls.
 - **A key implies its organisation.** A header that names another is a 403,
   so a script pointed at the wrong organisation fails loudly instead of
   acting in the key's.
