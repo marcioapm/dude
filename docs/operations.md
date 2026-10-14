@@ -471,9 +471,14 @@ advisory lock that spans several transactions and the GitHub calls between
 them. Through transaction-mode pooling those statements land on different
 server sessions, so the lock serializes nothing. The orchestrator logs
 `re-request lock was not held by its own session at unlock` when it sees
-this. At most a quarter of the orchestrator's pool (8 connections at most,
-and 1 for a pool under 8) is held by these re-requests at once; a step
-past that waits and tries again.
+this. Each re-request in progress holds one connection of the
+orchestrator's pool while GitHub answers. A quarter of the pool, rounded
+down, may do so at once, at least 1 and at most 8: one for a pool of 2 to
+7. A step past that waits and tries again without touching the database.
+The orchestrator therefore needs a pool of at least 2 connections (the
+default is the larger of 4 and the number of CPUs); it refuses to start
+with `pool_max_conns=1` in its database URL, and `dude-orchestrator
+validate` reports the same.
 
 ## Upgrading
 

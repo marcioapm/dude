@@ -210,6 +210,8 @@ func TestStartupRefusesWhatValidateRefuses(t *testing.T) {
 		{"missing orchestrator.token", strings.Replace(good, "token = \"file-token\"\n", "", 1),
 			2, "orchestrator.token (DUDE_ORCHESTRATOR_TOKEN) is required"},
 		{"invalid registry", good + "[registry]\nauth = \"ecr\"\n", 1, "needs DUDE_AGENT_IMAGE in an ECR registry"},
+		{"one-connection pool", strings.Replace(good, "connect_timeout=2", "connect_timeout=2&pool_max_conns=1", 1),
+			1, "database.url (DATABASE_URL): pool_max_conns is 1; the orchestrator needs at least 2"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

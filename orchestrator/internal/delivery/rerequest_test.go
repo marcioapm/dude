@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -631,18 +632,25 @@ func TestABusyPullRequestDoesNotHoldUpTheNext(t *testing.T) {
 	f.eventFor("b", heads["b"])
 }
 
-// Re-requests hold a pool connection while GitHub answers; with a pool of
-// four, one holder is admitted, so a slow GitHub cannot take every
-// connection. Callers past the bound, and the held head's own caller, are
-// busy at once without reaching GitHub, and unrelated work still gets a
-// connection within a short deadline.
+// Re-requests hold a pool connection while GitHub answers; with the
+// smallest pools the orchestrator starts with (2 to 4 connections), one
+// holder is admitted, so a slow GitHub cannot take every connection.
+// Callers past the bound, and the held head's own caller, are busy at once
+// without reaching GitHub, and unrelated work still gets a connection
+// within a short deadline.
 func TestHeldRerequestsLeaveThePoolToOtherWork(t *testing.T) {
+	for _, maxConns := range []int32{2, 3, 4} {
+		t.Run(fmt.Sprint(maxConns), func(t *testing.T) { heldRerequestsLeaveThePool(t, maxConns) })
+	}
+}
+
+func heldRerequestsLeaveThePool(t *testing.T, maxConns int32) {
 	repos := []string{"a", "b", "c", "d"}
 	f := newRerequestFixture(t, repos...)
-	f.usePool(4)
-	holders := rerequestSlotCount(4)
-	if holders >= len(repos) {
-		t.Fatalf("%d slots for a pool of 4 leave no connection free", holders)
+	f.usePool(maxConns)
+	holders := rerequestSlotCount(maxConns)
+	if holders >= int(maxConns) {
+		t.Fatalf("%d slots for a pool of %d leave no connection free", holders, maxConns)
 	}
 	heads := map[string]string{}
 	entered := map[string]chan struct{}{}
@@ -708,8 +716,9 @@ func TestHeldRerequestsLeaveThePoolToOtherWork(t *testing.T) {
 
 // A pool too small to spare a quarter still admits one re-request, so
 // delivery is never refused forever; larger pools keep three quarters free.
+// A pool of 1 is refused at orchestrator startup.
 func TestRerequestSlotsLeaveMostOfThePool(t *testing.T) {
-	for maxConns, want := range map[int32]int{1: 1, 2: 1, 4: 1, 8: 2, 16: 4, 32: 8, 100: 8} {
+	for maxConns, want := range map[int32]int{2: 1, 3: 1, 4: 1, 8: 2, 16: 4, 32: 8, 100: 8} {
 		if got := rerequestSlotCount(maxConns); got != want {
 			t.Errorf("pool of %d: %d slots, want %d", maxConns, got, want)
 		}
