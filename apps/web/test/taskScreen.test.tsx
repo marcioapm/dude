@@ -47,6 +47,24 @@ describe("task rail filtering", () => {
     expect(files.length).toBe(2);
   });
 
+  test("finding controls compose in the mounted tab and their base counts stay unchanged", async () => {
+    const page = await taskPage(new FixtureClient("a"), { tab: "findings" });
+    const status = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding status"]'), "status filters");
+    const severity = page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]')!;
+    const counts = status.textContent;
+    const pick = async (group: HTMLElement, label: string) => {
+      const button = [...group.querySelectorAll<HTMLElement>('[role="checkbox"]')].find((b) => b.parentElement?.textContent?.includes(label));
+      expect(button !== undefined).toBe(true);
+      await click(button!);
+    };
+    await pick(status, "Open");
+    expect(page.querySelectorAll('[data-testid="finding"]').length).toBeGreaterThan(0);
+    expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-status") === "open")).toBe(true);
+    await pick(severity, "Blocking");
+    expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-severity") === "blocking")).toBe(true);
+    expect(status.textContent).toBe(counts);
+  });
+
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
     expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
