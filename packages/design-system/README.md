@@ -2027,7 +2027,8 @@ MarkdownCheatsheet.
 - **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
-  defaults, and a filter that forces ancestors open. Earlier runs fold into
+  defaults, and a search that forces ancestors open ("Mine" only opens
+  them by default; its chevrons still fold). Earlier runs fold into
   "Attempt n" rows.
 - The view model is pure and exported from `src/util/navModel.ts`:
   `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
