@@ -210,8 +210,6 @@ class FakeGitHub:
                             continue
                         if "resolveReviewThread" in query:
                             gh.resolved_threads.add(node)
-                            if pr.unresolved_threads > 0:
-                                pr.unresolved_threads -= 1
                             return {"data": {"resolveReviewThread": {"thread": {"id": node, "isResolved": True}}}}
                         return {"data": {"node": {**t, "pullRequest": {
                             "number": pr.number, "repository": {"nameWithOwner": f"{gh.owner}/{gh.repo}"}}}}}
@@ -719,7 +717,9 @@ class FakeGitHub:
                 if "databaseId" in query:
                     return self._send(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {
                         "nodes": gh._threads(pr), "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}})
-                nodes = [{"isResolved": True}] + [{"isResolved": False}] * pr.unresolved_threads
+                # The line comments' real threads, then set_unresolved's synthetic ones.
+                nodes = ([{"isResolved": True}] + [{"isResolved": t["isResolved"]} for t in gh._threads(pr)]
+                         + [{"isResolved": False}] * pr.unresolved_threads)
                 self._send(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {
                     "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}})
             def _checks(self, sha: str, kind: str) -> list[dict]:

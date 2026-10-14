@@ -138,3 +138,33 @@ def test_a_requested_reviewer_is_asked_again_after_dudes_fix_once(
     wait_until(lambda: (1, ["jerv"]) in fake_github.review_requests, timeout=30, message="jerv was never asked again")
     assert fake_github.review_requests.count((1, ["jerv"])) == 1, fake_github.review_requests
     assert len(fake_github.pulls) == 1
+
+
+def test_the_stand_ins_thread_queries_agree(fake_github: FakeGitHub):
+    """The count-only query and the thread-node query say the same unresolved count, through resolution."""
+    import requests
+
+    fake_github.open_pull("feature/threads", title="Threads")
+    roots = [fake_github.comment(1, f"Line note {i}.", path="README.md") for i in range(2)]
+    fake_github.set_unresolved(1, 0)
+
+    def unresolved() -> tuple[int, int]:
+        vars = {"owner": fake_github.owner, "name": fake_github.repo, "number": 1}
+        counted = requests.post(f"{fake_github.api_url}/graphql", timeout=5, json={
+            "query": "query{pullRequest{reviewThreads{nodes{isResolved}}}}", "variables": vars}).json()
+        listed = requests.post(f"{fake_github.api_url}/graphql", timeout=5, json={
+            "query": "query{pullRequest{reviewThreads{nodes{id isResolved comments{nodes{databaseId}}}}}}", "variables": vars}).json()
+        return tuple(sum(not t["isResolved"] for t in out["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"])
+                     for out in (counted, listed))
+
+    def resolve(root: int) -> None:
+        resp = requests.post(f"{fake_github.api_url}/graphql", timeout=5, json={
+            "query": "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}",
+            "variables": {"id": fake_github.thread_id(root)}})
+        assert resp.json()["data"]["resolveReviewThread"]["thread"]["isResolved"] is True
+
+    assert unresolved() == (2, 2)
+    resolve(roots[0])
+    assert unresolved() == (1, 1)
+    resolve(roots[0])
+    assert unresolved() == (1, 1)
