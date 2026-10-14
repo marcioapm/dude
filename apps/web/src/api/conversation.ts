@@ -1583,10 +1583,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         }
         state.start = null;
         // A failed resume or move shows its failure, never "Taken back up" or words the agent never read.
+        // A move whose agent never came up has no row for late timing to update.
+        if (state.lastMove?.epoch != null && state.heldUnpark === state.lastMove.turn) {
+          state.untimedMoves.delete(state.lastMove.epoch);
+        }
         state.heldUnpark = null;
         state.heldTold = null;
-        // Nor is a failed move timed: a later resume into its epoch is another's.
-        if (state.lastMove?.epoch != null) state.untimedMoves.delete(state.lastMove.epoch);
         state.lastMove = null;
         turns.push(ended);
         state.activity = null;

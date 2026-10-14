@@ -145,6 +145,27 @@ describe("a move's notice and what the agent was told", () => {
     ]);
   });
 
+  for (const eventType of [EventTypes.RunFailed, EventTypes.RunAborted]) {
+    test(`${eventType} after first words keeps late timing on the move's row, with Told before first words`, () => {
+      const events = raise(false);
+      const timing = events.find((e) => e.eventType === EventTypes.RunResumeTimed)!;
+      const failure = {
+        ...timing, eventId: "ev_ended", eventType,
+        payload: eventType === EventTypes.RunFailed ? { error: "model overloaded", kept: true } : { reason: "enough" },
+      };
+      const ledger = [...events.filter((e) => e !== timing), failure, timing]
+        .map((e, i) => ({ ...e, cursor: i + 1 }));
+      expect(notices(ledger).filter((n) => n.startsWith("Resumed") || n.includes("moved to"))).toEqual([
+        "The implementer moved to Large in 48s, with its conversation and work.",
+      ]);
+      expect(fromTheMove(ledger).slice(0, 3)).toEqual([
+        "notice:The implementer moved to Large in 48s, with its conversation and work.",
+        `told:${toldRaise(LARGE, false)}\n\n${NUDGE}`,
+        "message:On Large now, same c",
+      ]);
+    });
+  }
+
   test("folding the ledger one event at a time gives the same transcript", async () => {
     const { apply, emptyProjection, snapshot } = await import("../src/api/conversation.ts");
     for (const events of [raise(false), reset(true), refused(), conductor(), session()]) {
