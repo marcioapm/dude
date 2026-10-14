@@ -70,37 +70,59 @@ type ReplyPost struct {
 	by string
 }
 
+// actingRun is the Run calling a PR tool: who it is, its status, and the
+// feedback ids a fixer was given (bots' left out: they are not its to answer).
+type actingRun struct {
+	role, phase, status string
+	batch               []string
+}
+
+// ended says the Run is over. lux's lifecycle trails the agent's records,
+// so a Run still starting is acting, and live.
+func (r actingRun) ended() bool {
+	return r.status == "completed" || r.status == "failed" || r.status == "aborted"
+}
+
+func actingRunTx(ctx context.Context, tx pgx.Tx, ref RunRef) (actingRun, error) {
+	var r actingRun
+	var feedback []byte
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(role::text, ''), COALESCE(phase::text, ''), status::text, COALESCE(pr_feedback, '[]')
+		FROM runs WHERE id = $1 AND task_id = $2`, ref.RunID, ref.TaskID).Scan(&r.role, &r.phase, &r.status, &feedback); err != nil {
+		return r, err
+	}
+	var items []forge.ActionableFeedback
+	_ = json.Unmarshal(feedback, &items)
+	for _, f := range items {
+		if f.ID != "" && f.Source != forge.SourceBot {
+			r.batch = append(r.batch, f.ID)
+		}
+	}
+	return r, nil
+}
+
 // CheckReplyTx is step 1: the reply as it will be posted, or a Refusal.
 func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in Reply) (ReplyPost, error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return ReplyPost{}, err
 	}
-	var role, phase, status string
-	var feedback []byte
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(role::text, ''), COALESCE(phase::text, ''), status::text, COALESCE(pr_feedback, '[]')
-		FROM runs WHERE id = $1 AND task_id = $2`, ref.RunID, ref.TaskID).Scan(&role, &phase, &status, &feedback); err != nil {
+	caller, err := actingRunTx(ctx, tx, ref)
+	if err != nil {
 		return ReplyPost{}, err
 	}
 	// A fixer answering pull request feedback replies only to its own
 	// batch's comments, while it runs.
 	var batch []string
-	if phase == PhaseFix {
-		var items []forge.ActionableFeedback
-		_ = json.Unmarshal(feedback, &items)
-		for _, f := range items {
-			if f.ID != "" && f.Source != forge.SourceBot {
-				batch = append(batch, f.ID)
-			}
-		}
+	if caller.phase == PhaseFix {
+		batch = caller.batch
 		switch {
-		case status == "completed" || status == "failed" || status == "aborted":
-			return ReplyPost{}, refusef("your Run is %s: it posts nothing", status)
+		case caller.ended():
+			return ReplyPost{}, refusef("your Run is %s: it posts nothing", caller.status)
 		case len(batch) == 0:
 			return ReplyPost{}, refusef("you reply only to the pull request feedback you were given, and you were given none")
 		case !slices.Contains(batch, strings.TrimSpace(in.InReplyTo)):
 			return ReplyPost{}, refusef("in_reply_to must be one of the comments in your feedback: %s", strings.Join(batch, ", "))
 		}
-	} else if role != RoleConductor {
+	} else if caller.role != RoleConductor {
 		return ReplyPost{}, refusef("a task's conductor replies on its pull requests")
 	}
 	var live bool

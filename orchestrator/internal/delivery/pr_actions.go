@@ -75,17 +75,15 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return PRActionCheck{}, err
 	}
-	var role, phase, status string
-	var feedback []byte
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(role::text, ''), COALESCE(phase::text, ''), status::text, COALESCE(pr_feedback, '[]')
-		FROM runs WHERE id = $1 AND task_id = $2`, ref.RunID, ref.TaskID).Scan(&role, &phase, &status, &feedback); err != nil {
+	caller, err := actingRunTx(ctx, tx, ref)
+	if err != nil {
 		return PRActionCheck{}, err
 	}
-	if !prActionAllowed(role, phase, in.Action) {
+	if !prActionAllowed(caller.role, caller.phase, in.Action) {
 		return PRActionCheck{}, refusef("%s is not yours to do: a task's conductor acts on its pull requests", in.Action)
 	}
 	c := PRActionCheck{ref: ref, action: in.Action}
-	if role == RoleConductor {
+	if caller.role == RoleConductor {
 		var live bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
 			AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
@@ -95,15 +93,12 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refusef("you are no longer this task's conductor: another took over from you. Do nothing on GitHub")
 		}
 	} else {
-		// lux's lifecycle trails the agent's records: a Run acting is live until it ended.
-		if status == "completed" || status == "failed" || status == "aborted" {
-			return c, refusef("your Run is %s: it acts on nothing", status)
+		if caller.ended() {
+			return c, refusef("your Run is %s: it acts on nothing", caller.status)
 		}
-		var items []forge.ActionableFeedback
-		_ = json.Unmarshal(feedback, &items)
-		for _, f := range items {
-			if id := forge.LineCommentID(f.ID); id != 0 && f.Source != forge.SourceBot {
-				c.batch = append(c.batch, id)
+		for _, id := range caller.batch {
+			if n := forge.LineCommentID(id); n != 0 {
+				c.batch = append(c.batch, n)
 			}
 		}
 		if len(c.batch) == 0 {
