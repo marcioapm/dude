@@ -915,7 +915,7 @@ function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: str
       const conductor = conductors.get(run.conductorRunId ?? "");
       return isConductor(run) ? "Conductor" : conductor ? `Started by ${runLabel(conductor)}` : "Delivered automatically";
     }}
-    renderOption={(run) => <>
+    renderOption={(run) => (
       <SessionItemContent
         avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
         title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
@@ -924,7 +924,7 @@ function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: str
           {run.stalled ? <Badge data-testid="session-stalled" tone="attention" size="sm" icon="warning" title={run.stalled.text}>stalled</Badge> : null}
           <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />
         </>} />
-    </>} />;
+    )} />;
 }
 
 /** A phase run again in its attempt after one before it stopped: "Implement · again". */
