@@ -151,7 +151,7 @@ describe("the gate decides the first screen before any organisation mounts", () 
     expect(window.location.hash).toBe("#/admin");
     await until(() => page.querySelectorAll("[data-testid=admin-org]").length === 2 ? true : null, "the organisations");
     expect(text(admin)).toContain("Outside every organisation");
-    expect(byTestId(page, "admin-back")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=admin-back]").length).toBe(0);
   });
 
   test("none: No organisation shows their own address and nothing about this deployment; Check again asks again", async () => {
@@ -752,7 +752,7 @@ describe("the super-admin's pages", () => {
     await until(() => org.querySelectorAll("[data-testid=admin-member]").length === 2 ? true : null, "its members");
     const ops = org.querySelector<HTMLElement>("[data-member=ops-bot]")!;
     expect(text(ops)).toContain("no email: signs in only with a key");
-    expect(org.querySelector("[data-member='Gus Lindqvist'] [data-testid=set-email]")).toBeNull();
+    expect(org.querySelectorAll("[data-member='Gus Lindqvist'] [data-testid=set-email]").length).toBe(0);
     await click(byTestId(ops, "set-email")!);
     const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "Set email");
     await type(byTestId(dialog, "set-email-input")!, "ops@northwind.io");
