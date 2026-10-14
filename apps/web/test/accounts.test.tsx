@@ -936,8 +936,11 @@ describe("Welcome to <organisation>, once per membership", () => {
     const w = fresh();
     const { page } = await open("#/o/acme/welcome", w, "cloudflare_access", { strict: true });
     await until(() => byTestId(page, "first-one"), "Welcome to Acme");
-    // The document going: pagehide, then everything torn down with it.
+    // The document going: a reload runs pagehide and no React cleanup.
     await act(async () => void window.dispatchEvent(new PageTransitionEvent("pagehide")));
+    await settle();
+    expect(welcomes(w)).toEqual([[ACME.id, ACME.id]]);
+    // The new document's app; this one's teardown marks nothing more.
     for (const unmount of mounted) await unmount();
     mounted = [];
     await settle();
