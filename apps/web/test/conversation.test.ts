@@ -251,6 +251,23 @@ describe("machine moves", () => {
     expect(children.map((k) => k.id)).toEqual(["kid"]);
   });
 
+  for (const [said, reused] of [["its mapped row", false], ["its row after bash took the id", true]] as const) {
+    test(`a repeated request_machine completion of ${said} updates the card but keeps the first status, result and end`, () => {
+      const asked = ev(EventTypes.ToolCalled, { tool: "request_machine", callId: "r", input: { size: "XL" } });
+      const output = { head: JSON.stringify({ size: "XL", answer: MOVED }) };
+      const first = machineDone("completed", output);
+      const bash = reused ? ev(EventTypes.ToolCalled, { tool: "bash", callId: "r", input: { command: "pwd" } }) : null;
+      const repeat = machineDone("error", refusal);
+      const c = bothWays([asked, first, ...(bash ? [bash] : []), repeat]);
+      const rows = toolRows(c).map(({ tool, status, endedAt, result, machine }) => ({ tool, status, endedAt, result, machine }));
+      expect(rows).toEqual([
+        { tool: "request_machine", status: "completed", endedAt: first.occurredAt, result: { output }, machine: refusedCard },
+        ...(bash ? [{ tool: "bash", status: "running", endedAt: null, result: null, machine: undefined }] : []),
+      ]);
+      expect(c.activeTool).toEqual(bash ? { name: "bash", since: bash.occurredAt } : null);
+    });
+  }
+
   test("a Reset says who, the size by name and the note; one that moved a live Run shows its move", () => {
     const reset = (moveId: string, note: string): MachineResetPayload =>
       ({ moveId, role: "implementer", from: XL, to: STANDARD, pool: { from: TO_HIGHMEM.to, to: TO_HIGHMEM.from }, by: { id: "u_m", name: "Márcio" }, note });
