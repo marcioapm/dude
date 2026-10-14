@@ -1749,12 +1749,16 @@ function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, paylo
 
 /**
  * The call a completion of `tool` ends. An id reused for another tool maps to the later call, so a completion of
- * the earlier tool (a repeat of one already folded) is that earlier row's; a placeholder takes any tool.
+ * the earlier tool (a repeat of one already folded) is that earlier row's. A placeholder takes any tool's
+ * completion that no earlier row of that id and tool already owns.
  */
 function completedCall(state: Projection, callId: string, tool: string): ToolTurn | undefined {
   const mapped = state.toolsByCall.get(callId);
-  if (!mapped || mapped.tool === tool || state.placeholderCalls.has(mapped)) return mapped;
-  return state.turns.findLast((t): t is ToolTurn => t.kind === "tool" && t.id === callId && t.tool === tool);
+  const placeholder = mapped !== undefined && state.placeholderCalls.has(mapped);
+  if (!mapped || (mapped.tool === tool && !placeholder)) return mapped;
+  const recorded = state.turns.findLast((t): t is ToolTurn =>
+    t.kind === "tool" && t.id === callId && t.tool === tool && !state.placeholderCalls.has(t));
+  return recorded ?? (placeholder ? mapped : undefined);
 }
 
 /** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */

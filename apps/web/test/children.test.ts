@@ -285,6 +285,16 @@ describe("a call id reused for another tool", () => {
     expect(only(parent.children)).toMatchObject({ id: "ses_kid", status: "completed" });
     expect([toolCounts.get("bash"), toolCounts.get("task")]).toEqual([1, 1]);
   });
+
+  test("the first call's completion repeated after a child is heard stays that call's, and the child goes to the second call", () => {
+    const events = [bashCall(), bashDone(), started(), bashDone(), parentCall(), taskDone()];
+    const [, bashEnd, , , , taskEnd] = events;
+    const [bash, task] = rows(project(events).turns);
+    expect(bash).toMatchObject({ status: "completed", endedAt: bashEnd.occurredAt,
+      result: { exitCode: 0, output: { head: "9 passed" } }, children: [] });
+    expect(task).toMatchObject({ status: "completed", endedAt: taskEnd.occurredAt, result: { output: { head: "No viewport set." } } });
+    expect(only(task.children).id).toBe("ses_kid");
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
