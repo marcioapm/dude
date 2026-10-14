@@ -30,7 +30,7 @@ func TestASourceIsResolvedFromGitHub(t *testing.T) {
 	w := newWorld(t)
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
 	status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID,
-		"pullRequest": "https://github.com/acme/target/pull/1"})
+		"pullRequest": w.ghURL + "/acme/target/pull/1"})
 	if status != http.StatusOK || out["headBranch"] != "feature/greet" || out["baseBranch"] != "main" ||
 		out["title"] != "Greet in Portuguese" || out["number"] != float64(n) || out["repository"] != "target" {
 		t.Fatalf("pull request source = %d %v", status, out)
@@ -74,6 +74,8 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 		status int
 		code   string
 	}{
+		{"wrong repository URL", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": w.ghURL + "/acme/other/pull/1"}, 422, "bad_pull_request"},
+		{"wrong host URL", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "https://example.com/acme/target/pull/1"}, 422, "bad_pull_request"},
 		{"not in project", map[string]any{"kind": "pr", "repositoryId": "repo_other", "pullRequest": "1"}, 422, "not_in_project"},
 		{"merged", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "#2"}, 422, "pr_merged"},
 		{"closed", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "3"}, 422, "pr_closed"},

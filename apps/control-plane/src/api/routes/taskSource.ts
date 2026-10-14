@@ -53,8 +53,8 @@ export function sameSource(stored: TaskSource | null, given: TaskSourceInput | n
   if (!stored || !given) return !stored && !given;
   if (stored.kind !== given.kind || stored.repositoryId !== given.repositoryId) return false;
   if (given.kind === "pr") {
-    const n = /^(?:#?(\d+)|https?:\/\/\S+\/pull\/(\d+)\/?(?:[?#].*)?)$/.exec(given.pullRequest);
-    return n !== null && Number(n[1] ?? n[2]) === stored.number;
+    const n = /^#?(\d+)$/.exec(given.pullRequest.trim());
+    return n !== null && Number(n[1]) === stored.number;
   }
   return given.branch === stored.headBranch && (given.base === undefined || given.base === stored.baseBranch);
 }

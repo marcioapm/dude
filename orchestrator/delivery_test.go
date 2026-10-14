@@ -99,6 +99,9 @@ func newWorld(t *testing.T) *world {
 	// The same repository as another owner's, for an App installed on two.
 	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
+	mux.Handle("/repos/acme/target", w.gh.Handler())
+	mux.Handle("/repos/acme/web", w.web.Handler())
+	mux.Handle("/repos/marcio/web", w.marcioWeb.Handler())
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
 	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())

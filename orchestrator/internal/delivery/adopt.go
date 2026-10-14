@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -45,6 +46,20 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	if repo.ID == "" {
 		return w.escalate(ctx, sc, st, "source_gone", map[string]any{"repository": src.Repository})
+	}
+	checked, err := CheckSource(ctx, w.s.DB, gh, sc.OrganizationID, st.ProjectID, SourceRequest{
+		Kind: src.Kind, RepositoryID: src.RepositoryID, PullRequest: fmt.Sprint(src.Number),
+		Branch: src.HeadBranch, Base: src.BaseBranch, TaskID: st.TaskID,
+	})
+	if err != nil {
+		var refusal SourceRefusal
+		if errors.As(err, &refusal) {
+			return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": refusal.Error(), "code": refusal.Code})
+		}
+		return workflow.Result{}, err
+	}
+	if checked.HeadBranch != src.HeadBranch || checked.BaseBranch != src.BaseBranch {
+		return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": "Pull request head or base changed; reattach before starting delivery."})
 	}
 	slug := forge.SlugFromURL(repo.URL)
 	head, err := gh.BranchSHA(ctx, slug, src.HeadBranch)

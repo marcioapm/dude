@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -75,9 +73,6 @@ func (e SourceUnreachable) Error() string {
 }
 func (e SourceUnreachable) Unwrap() error { return e.Err }
 
-// pullNumber reads "12", "#12" or a pull request URL ending in /pull/12.
-var pullNumber = regexp.MustCompile(`^(?:#?(\d+)|https?://[^\s]+/pull/(\d+)/?(?:[?#].*)?)$`)
-
 // ProtectedName says a branch is one dude never takes over by its name
 // alone: a release line. The default branch and GitHub's protection are
 // checked apart.
@@ -114,13 +109,16 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		}
 		return out, SourceUnreachable{err}
 	}
+	defaultBranch, err = gh.SourceDefaultBranch(ctx, slug)
+	if err != nil {
+		return out, unreachableOr(err)
+	}
 	switch in.Kind {
 	case SourcePR:
-		m := pullNumber.FindStringSubmatch(strings.TrimSpace(in.PullRequest))
-		if m == nil {
-			return out, sourceRefusal("bad_pull_request", "name the pull request by its number or its URL")
+		n, err := gh.SourcePullNumber(in.PullRequest, slug)
+		if err != nil {
+			return out, sourceRefusal("bad_pull_request", "%v", err)
 		}
-		n, _ := strconv.Atoi(m[1] + m[2])
 		pr, err := gh.PullRequestSource(ctx, slug, n)
 		var e *forge.Error
 		if errors.As(err, &e) && e.NotFound() {
@@ -132,7 +130,7 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		if pr.State == forge.StateMerged || pr.State == forge.StateClosed {
 			return out, sourceRefusal("pr_"+pr.State, "pull request #%d is %s: only an open one can be adopted", n, pr.State)
 		}
-		if pr.Fork() {
+		if pr.Fork() || !strings.EqualFold(pr.BaseRepo, slug) {
 			return out, sourceRefusal("pr_fork", "pull request #%d is from a fork: its branch is not in %s, and dude cannot push to it",
 				n, slug)
 		}

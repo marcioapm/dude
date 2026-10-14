@@ -393,6 +393,9 @@ func (s *Server) Handler() http.Handler {
 		}
 		_, _ = w.Write([]byte(body))
 	})
+	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
+		write(w, 200, map[string]any{"default_branch": "main"})
+	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
 		owner, _, _ := strings.Cut(s.Slug, "/")

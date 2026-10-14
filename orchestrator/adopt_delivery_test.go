@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
 // adopting makes a task that starts from source (as task_sources keeps
@@ -24,6 +26,35 @@ func (w *world) adopting(kind string, number int, head, base string) string {
 		w.t.Fatalf("deliver: %d %v", status, body)
 	}
 	return wi
+}
+
+func TestAnAdoptedSourceChangedBeforeExecutionCannotRun(t *testing.T) {
+	for _, change := range []string{"protection", "head", "base", "closed", "write access"} {
+		t.Run(change, func(t *testing.T) {
+			w := newWorld(t)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			wi := w.adopting("pr", n, "feature/greet", "main")
+			pr := w.gh.Pull(n)
+			w.gh.Set(func(s *fakegithub.Server) {
+				switch change {
+				case "protection":
+					s.Protected = map[string]bool{"feature/greet": true}
+				case "head":
+					pr.Head = "main"
+				case "base":
+					pr.Base = "other-base"
+				case "closed":
+					pr.State = "closed"
+				case "write access":
+					s.ReceiveStatus = 403
+				}
+			})
+			w.until("source refusal", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+			if got := w.phasesRun(wi); len(got) != 0 {
+				t.Fatalf("changed source started phases: %v", got)
+			}
+		})
+	}
 }
 
 // phasesRun lists the phase of each Run lux was given, in order.
