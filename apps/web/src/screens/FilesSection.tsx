@@ -20,6 +20,7 @@ import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { inFacet, withCounts } from "./facets.ts";
 
 /** Past this, a text file is downloaded rather than shown: the tab would not survive it. */
 const PREVIEW_LIMIT = 2 * 1024 * 1024;
@@ -54,10 +55,10 @@ export function save(blob: Blob, name: string) {
 }
 
 export const fileKindFacet = (f: GalleryFile) => ["image", "video"].includes(artifactKind(f.versions[0]!.contentType, f.name)) ? "media" : "documents";
+const sourceOf = (f: GalleryFile) => f.versions[0]!.session;
 
 export function filterFiles(files: readonly GalleryFile[], kinds: readonly string[], sources: readonly string[]) {
-  return files.filter((f) => (!kinds.length || kinds.includes(fileKindFacet(f))) &&
-    (!sources.length || sources.includes(f.versions[0]!.session)));
+  return files.filter((f) => inFacet(kinds, fileKindFacet(f)) && inFacet(sources, sourceOf(f)));
 }
 
 export async function displayedFilesZip(client: Pick<ApiClient, "artifactContent">, files: readonly GalleryFile[]): Promise<Blob> {
@@ -87,9 +88,9 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   return (
     <PageWithRail data-testid="files" rail={<PageRail aria-label="File filters and downloads">
       <PageRailBlock label="Kind"><FacetList label="File kind" value={kinds} onValueChange={setKinds}
-        options={[{ value: "documents", label: "Documents" }, { value: "media", label: "Images & video" }].map((o) => ({ ...o, count: files.filter((f) => fileKindFacet(f) === o.value).length }))} /></PageRailBlock>
+        options={withCounts([{ value: "documents", label: "Documents" }, { value: "media", label: "Images & video" }], files, fileKindFacet)} /></PageRailBlock>
       <PageRailBlock label="Published by"><FacetList label="File source" value={sources} onValueChange={setSources}
-        options={[...new Set(files.map((f) => f.versions[0]!.session))].map((s) => ({ value: s, label: s, count: files.filter((f) => f.versions[0]!.session === s).length }))} /></PageRailBlock>
+        options={withCounts([...new Set(files.map(sourceOf))].map((s) => ({ value: s, label: s })), files, sourceOf)} /></PageRailBlock>
       <PageRailBlock label="Scope"><span className="muted">Files and counts belong to the attempt selected in the task header. No selections means all files in that attempt.</span></PageRailBlock>
       <PageRailBlock label="Download"><Button size="sm" variant="secondary" data-testid="download-all" disabled={zipping || !displayed.length}
         onClick={() => { setZipping(true); void displayedFilesZip(client, displayed).then((b) => save(b, `${taskKey ?? taskId}-files.zip`), fail).finally(() => setZipping(false)); }}>

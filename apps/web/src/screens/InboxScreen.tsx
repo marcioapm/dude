@@ -17,6 +17,7 @@ import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
+import { inFacet, withCounts } from "./facets.ts";
 
 export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSelect, onOpenSession, onChanged }: {
   tab?: "you" | "others" | undefined;
@@ -181,29 +182,32 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
     ...yours.map((it) => taskEntry(it, true)),
   ];
   const base = selectedTab === "you" ? mineEntries : others.map((it) => taskEntry(it, false));
+  type Entry = (typeof base)[number];
+  const inProject = (entry: Entry, id: string) => id === "unlinked" ? !entry.projects.length : entry.projects.includes(id);
+  const facetOf = (entry: Entry) => selectedTab === "you" ? entry.kind : entry.person;
+  const facetLabel = selectedTab === "you" ? "Kind" : "Waiting on";
   // Counts use the whole tab; choices OR within a facet and AND across facets.
   const visible = base.filter((entry) =>
-    (!selected.projects.length || selected.projects.some((id) => id === "unlinked" ? !entry.projects.length : entry.projects.includes(id))) &&
-    (!selected.facets.length || selected.facets.includes(selectedTab === "you" ? entry.kind : entry.person)));
+    (!selected.projects.length || selected.projects.some((id) => inProject(entry, id))) && inFacet(selected.facets, facetOf(entry)));
   const projectNames = new Map(projects.map((p) => [p.id, p.name]));
   for (const inv of invitations) for (const p of inv.projects) projectNames.set(p.id, p.name);
   for (const s of sessions?.sessions ?? []) for (const p of s.projects) projectNames.set(p.id, p.name);
   const projectIds = [...new Set([...base.flatMap((e) => e.projects.length ? e.projects : ["unlinked"]), ...selected.projects])];
   const personNames = new Map(others.map((it) => { const owner = taskOwner(it.task); return [owner?.id ?? owner?.name ?? "", owner?.name ?? "Unknown person"]; }));
   const facets = selectedTab === "you" ? ["questions", "decisions", "invitations"] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
-  const oldest = visible.filter((e) => e.since !== null).reduce<typeof base[number] | null>((a, b) => !a || b.since! < a.since! ? b : a, null);
+  const oldest = visible.filter((e) => e.since !== null).reduce<Entry | null>((a, b) => !a || b.since! < a.since! ? b : a, null);
   const rail = <PageRail aria-label="Waiting filters">
     <PageRailBlock label="Projects">
       <Button size="sm" variant="quiet" onClick={() => filter("projects", [])} aria-pressed={!selected.projects.length}>All · {base.length}</Button>
       <FacetList label="Projects" value={selected.projects} onValueChange={(v) => filter("projects", v)} empty="No projects waiting"
         options={projectIds.map((id) => ({ value: id, label: id === "unlinked" ? "No linked project" : id === "unknown" ? "Project not available" : projectNames.get(id) ?? id,
-          count: base.filter((e) => id === "unlinked" ? !e.projects.length : e.projects.includes(id)).length }))} />
+          count: base.filter((e) => inProject(e, id)).length }))} />
     </PageRailBlock>
-    <PageRailBlock label={selectedTab === "you" ? "Kind" : "Waiting on"}>
+    <PageRailBlock label={facetLabel}>
       <Button size="sm" variant="quiet" onClick={() => filter("facets", [])} aria-pressed={!selected.facets.length}>All · {base.length}</Button>
-      <FacetList label={selectedTab === "you" ? "Kind" : "Waiting on"} value={selected.facets} onValueChange={(v) => filter("facets", v)} empty="Nobody else is waiting"
-        options={facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations" }[value] ?? value) : personNames.get(value) ?? value,
-          count: base.filter((e) => (selectedTab === "you" ? e.kind : e.person) === value).length }))} />
+      <FacetList label={facetLabel} value={selected.facets} onValueChange={(v) => filter("facets", v)} empty="Nobody else is waiting"
+        options={withCounts(facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations" }[value] ?? value) : personNames.get(value) ?? value })),
+          base, facetOf)} />
     </PageRailBlock>
     <PageRailBlock label="Oldest">
       {oldest ? <p>{oldest.label} · <Duration ms={Math.max(0, now - oldest.since!)} format="age" tone="muted" /></p> : <p>{visible.length ? "Waiting time unknown" : "Nothing waiting in this selection"}</p>}

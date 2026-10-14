@@ -67,6 +67,7 @@ import { useTaskImages } from "../hooks/useTaskImages.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
+import { inFacet, withCounts } from "./facets.ts";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { StalledPanel, stalledForOwner } from "./StalledPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
@@ -143,7 +144,7 @@ const phasesOf = (runs: readonly Run[], attempt: number) =>
 const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
 
 export function filterFindings(findings: readonly Finding[], statuses: readonly string[], severities: readonly string[]) {
-  return findings.filter((f) => (!statuses.length || statuses.includes(f.status)) && (!severities.length || severities.includes(f.severity)));
+  return findings.filter((f) => inFacet(statuses, f.status) && inFacet(severities, f.severity));
 }
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack, tree, onOpenTask }: TaskScreenProps) {
@@ -713,9 +714,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         <TabPanel value="findings" className="railPanel">
           <PageWithRail rail={<PageRail aria-label="Finding filters and review facts">
             <PageRailBlock label="Status"><FacetList label="Finding status" value={findingStatuses} onValueChange={setFindingStatuses}
-              options={FINDING_STATUSES.map((s) => ({ value: s, label: FINDING_STATUS_SPECS[s].label, count: mine.findings.filter((f) => f.status === s).length }))} /></PageRailBlock>
+              options={withCounts(FINDING_STATUSES.map((s) => ({ value: s, label: FINDING_STATUS_SPECS[s].label })), mine.findings, (f) => f.status)} /></PageRailBlock>
             <PageRailBlock label="Severity"><FacetList label="Finding severity" value={findingSeverities} onValueChange={setFindingSeverities}
-              options={FINDING_SEVERITIES.map((s) => ({ value: s, label: FINDING_SEVERITY_SPECS[s].label, count: mine.findings.filter((f) => f.severity === s).length }))} /></PageRailBlock>
+              options={withCounts(FINDING_SEVERITIES.map((s) => ({ value: s, label: FINDING_SEVERITY_SPECS[s].label })), mine.findings, (f) => f.severity)} /></PageRailBlock>
             <PageRailBlock label="Reviewers">
               {/* Reviews sharing a label are told apart by their own status and elapsed time. */}
               <KeyValueList data-testid="reviewers" items={phases.filter((r) => r.phase === "review").map((r) => ({ label: runLabel(r), value: (
@@ -1074,14 +1075,17 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
   const [persons, setPersons] = useState<string[]>([]);
   const [attempts, setAttempts] = useState<string[]>([]);
   const displayed = filterActivity(lines, kinds, persons, attempts);
-  const personOptions = [...new Map(lines.map((l) => [l.personId, l.personName])).entries()].map(([id, name]) => ({ value: id, label: name, count: lines.filter((l) => l.personId === id).length }));
+  const kindOptions = withCounts(Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label })), lines, (l) => l.kind);
+  const personOptions = withCounts([...new Map(lines.map((l) => [l.personId, l.personName]))].map(([value, label]) => ({ value, label })), lines, (l) => l.personId);
+  const attemptOptions = withCounts([...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}` })),
+    lines, (l) => String(l.attempt));
   const now = Date.now();
   return (
     <PageWithRail rail={<PageRail aria-label="Activity filters">
-      <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label, count: lines.filter((l) => l.kind === value).length }))} /></PageRailBlock>
+      <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={kindOptions} /></PageRailBlock>
       <PageRailBlock label="People"><FacetList label="Activity person" value={persons} onValueChange={setPersons} options={personOptions} />
         <p className="muted">Newest first. Counts include every timeline item before filters. No selections means all.</p></PageRailBlock>
-      {many ? <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} /></PageRailBlock> : null}
+      {many ? <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={attemptOptions} /></PageRailBlock> : null}
     </PageRail>}><div className="taskPane">
     {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
     <Timeline wide data-testid="activity">
@@ -1108,7 +1112,7 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
 
 const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", task: "Task & relations" };
 export function filterActivity(lines: readonly ActivityLine[], kinds: readonly string[], persons: readonly string[], attempts: readonly string[]) {
-  return lines.filter((l) => (!kinds.length || kinds.includes(l.kind)) && (!persons.length || persons.includes(l.personId)) && (!attempts.length || attempts.includes(String(l.attempt))));
+  return lines.filter((l) => inFacet(kinds, l.kind) && inFacet(persons, l.personId) && inFacet(attempts, String(l.attempt)));
 }
 
 interface ActivityLine {
