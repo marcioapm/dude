@@ -453,6 +453,12 @@ func (run *Run) currentPlacement() *placement {
 func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	step := after / 5
 	time.Sleep(step)
+	s.mu.Lock()
+	assign := s.beforeAssign
+	s.mu.Unlock()
+	if assign != nil {
+		assign(run.ID)
+	}
 	s.hold(epoch, holdAssign)
 	s.mu.Lock()
 	if !run.starting(epoch, start) {
@@ -717,9 +723,11 @@ type Server struct {
 	failStarts map[string]int
 	failAs     map[string]string
 	// Test hooks for stream delivery, placement starts, and event pages.
-	beforeEvent func(runID string, eventID int64, typ string)
-	beforeStart func(runID string)
-	eventPages  func(runID string, after int64, ids []int64) int
+	beforeEvent    func(runID string, eventID int64, typ string)
+	beforeStart    func(runID string)
+	beforeAssign   func(runID string)
+	afterPlacement func(runID string, epoch int)
+	eventPages     func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -989,6 +997,23 @@ func (s *Server) BeforeStart(fn func(runID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.beforeStart = fn
+}
+
+// BeforeAssign has every placement call fn before lux assigns it a host,
+// without the fake's lock: while it blocks the Run has no live placement,
+// so a stop finds nothing to stop. nil clears it.
+func (s *Server) BeforeAssign(fn func(runID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeAssign = fn
+}
+
+// AfterPlacement calls fn without the fake's lock when a placement attempt
+// finishes, including cancellation. Each attempt keeps the hook it began with.
+func (s *Server) AfterPlacement(fn func(runID string, epoch int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterPlacement = fn
 }
 
 // PageEvents has every GET /v1/runs/{id}/events ask fn, without the fake's
@@ -1402,6 +1427,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 // play is the agent's life: start, check out, take the task, work, go idle.
 // start is the accepted start it plays (Run.starts).
 func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed bool) {
+	s.mu.Lock()
+	finished := s.afterPlacement
+	s.mu.Unlock()
+	if finished != nil {
+		defer finished(run.ID, epoch)
+	}
 	defer s.hold(epoch, holdOver)
 	if sb, _ := spec["sandbox"].(map[string]any); s.NoNestedHost && sb["nestedContainers"] == true {
 		s.mu.Lock()
@@ -2600,6 +2631,13 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 				s.setState(run, "stopped")
 			}
 		}()
+	} else if p := run.currentPlacement(); p != nil && p.ExitedAt == nil && !lux.Terminal(run.State) {
+		// A placement lux assigned and has not started yet is live too
+		// (lux requestStop: assigned, starting): its start is called off
+		// and the Run stops. Before one is assigned there is nothing to stop.
+		run.starts++
+		s.setState(run, "stopping")
+		s.setState(run, "stopped")
 	}
 	writeJSON(w, 202, s.view(run))
 }

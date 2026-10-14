@@ -95,6 +95,10 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
+	// How long a turn lux's stop broke waits for lux's reason, and a
+	// move for lux to run the Run again (luxstop.go); zero takes heldWait
+	// and moveWait.
+	HeldWait, MoveWait time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -106,10 +110,12 @@ type Syncer struct {
 
 // follower is one goroutine reading a Run's output. A pointer, so a
 // finishing follower can tell whether the entry is still its own.
-// poke asks its live diff to be read soon.
+// poke asks its live diff to be read soon; done is closed once it has
+// exited, its last batch committed or abandoned.
 type follower struct {
 	cancel context.CancelFunc
 	poke   chan struct{}
+	done   chan struct{}
 }
 
 // Run statuses (run_status) the syncer decides on.
@@ -186,6 +192,10 @@ type phaseRun struct {
 	ImageBuildID string
 	// A machine move of the Run is not settled yet.
 	Moving bool
+	// A turn lux's stop broke, held for lux's reason or a move's end
+	// (luxstop.go), and how long it has been held; nil for none.
+	Broken    *brokenTurn
+	BrokenFor time.Duration
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -212,6 +222,11 @@ func (r phaseRun) parkKind() string {
 // preview, nor a Run made by hand through the API.
 const sweptRuns = `(r.phase IS NOT NULL OR (r.role IN ('conductor', 'brainstorm') AND r.kind = 'agent'))`
 
+// repoApproved (SQL, over runs r): phaseRun.RepoApproved.
+const repoApproved = `(EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
+	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (lux_name(repo.name) = ANY (r.lux_repositories)))
+	OR (r.session_id IS NOT NULL AND r.lux_run_id IS NOT NULL AND ` + sessionRepoMissing + `))`
+
 const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''), COALESCE(r.session_id, ''),
 	COALESCE(r.phase::text, ''), r.status::text, r.control::text,
 	COALESCE(r.role::text, ''),
@@ -227,16 +242,15 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	              AND e.event_type = 'run.directive.delivered' AND e.payload->>'directiveId' = d.id)
 	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped')))
 	ELSE false END,
-	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
-	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (lux_name(repo.name) = ANY (r.lux_repositories)))
-	OR (r.session_id IS NOT NULL AND r.lux_run_id IS NOT NULL AND ` + sessionRepoMissing + `),
+	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
-	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled
+	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
+	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0)`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -397,13 +411,18 @@ func (s *Syncer) limits() []any {
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
+	var broken []byte
+	var brokenSecs float64
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.SessionID, &r.Phase, &r.Status, &r.Control, &r.Role,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
-		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving)
-	return r, err
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs)
+	if err != nil {
+		return r, err
+	}
+	return r, r.scanBroken(broken, brokenSecs)
 }
 
 // sweepBatch is how many Runs one sweep takes up.
@@ -564,6 +583,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.end(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
+	case r.Status == statusRunning && r.Control == "none" && s.brokenOverdue(r):
+		return s.overdueBroken(ctx, r)
 	}
 	// Following comes first: a finishing Run still needs its stream, because
 	// that is where the push result arrives — including after a restart —
@@ -1379,7 +1400,7 @@ func (s *Syncer) follow(r phaseRun) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1)}
+	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1), done: make(chan struct{})}
 	s.following[r.ID] = mine
 	// The live diff is read for as long as the Run's output is followed; a
 	// session's agent changes nothing, and has none.
@@ -1404,6 +1425,7 @@ func (s *Syncer) follow(r phaseRun) {
 			}
 			s.mu.Unlock()
 			cancel()
+			close(mine.done)
 		}()
 		err := s.followOutput(ctx, r)
 		if err == nil || ctx.Err() != nil {
@@ -1930,6 +1952,12 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	if !lux.Terminal(r.LuxState) {
+		// A Run lux resumed itself (a move) has no stop of dude's to wait
+		// for: taken up as lux has it, or stopped again for a resume that
+		// must change it.
+		if acted, err := s.liveAfterMove(ctx, r); acted || err != nil {
+			return acted, err
+		}
 		// Still stopping: follow the stream, where lux will say so.
 		s.follow(r)
 		return false, nil
@@ -1940,11 +1968,15 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// the usual way once running); otherwise it is told to carry on.
 	// An agent waiting on a person's answer is told nothing: the answer,
 	// when it comes, is its input.
-	nudge := ""
-	if !r.HasDirectives && !r.Waiting {
-		nudge = resumeNudge
+	if r.Moving && r.HasDirectives {
+		// The resume carries dude's machine move and tells the agent where
+		// it runs: a carry-on lux's own move queued is said by it.
+		var err error
+		if r.HasDirectives, err = s.dropMovedNudge(ctx, r); err != nil {
+			return true, err
+		}
 	}
-	lr, foreseen, err := s.resume(ctx, r, nudge)
+	lr, foreseen, err := s.resume(ctx, r, r.resumeInput())
 	// Refused for good: there is no such resume to time.
 	refused := func() {
 		if foreseen != 0 {
@@ -2005,7 +2037,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,
-			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
+			turn_done_at = NULL, agent_busy_at = NULL, harness_state = harness_state - 'brokenTurn'
+			WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
 		if err != nil {
 			return err
 		}
@@ -2616,6 +2649,28 @@ func (s *Syncer) unfollow(runID string) {
 	if f, ok := s.following[runID]; ok {
 		f.cancel()
 		delete(s.following, runID)
+	}
+}
+
+// unfollowWait is unfollow, returning once the follower has exited: no
+// batch of its can commit after, overwriting what the caller writes of
+// the Run's harness_state or cursor.
+func (s *Syncer) unfollowWait(ctx context.Context, runID string) error {
+	s.mu.Lock()
+	f, ok := s.following[runID]
+	if ok {
+		f.cancel()
+		delete(s.following, runID)
+	}
+	s.mu.Unlock()
+	if !ok || f.done == nil {
+		return nil
+	}
+	select {
+	case <-f.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

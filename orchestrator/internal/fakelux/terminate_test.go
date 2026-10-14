@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -86,4 +88,77 @@ func TestASucceededRunResumesOnlyOnTheNewLux(t *testing.T) {
 			waitState(t, client, run.ID, "running")
 		})
 	}
+}
+
+// A stop of a placement lux has assigned and not started calls its start
+// off, as lux's requestStop stops an assigned or starting placement: the
+// Run stops, that epoch never runs, and a resume starts the next.
+func TestAStopOfAnAssignedPlacementCallsItsStartOff(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	client, run := submitGeneric(t, fake, "k")
+	waitState(t, client, run.ID, "running")
+	held, gate := make(chan struct{}), make(chan struct{})
+	finished := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	fake.AfterPlacement(func(id string, epoch int) {
+		if id == run.ID && epoch == 2 {
+			close(finished)
+		}
+	})
+	fake.BeforeStart(func(string) {
+		close(held)
+		<-gate
+	})
+	fake.Move(run.ID, "preempt")
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the placement never reached its start gate")
+	}
+	before, err := client.Get(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assignedNow(before) || before.Epoch != 2 {
+		t.Fatalf("epoch %d %s, placements %+v; want epoch 2 assigned", before.Epoch, before.State, before.Placements)
+	}
+	if err := client.Stop(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	fake.BeforeStart(nil)
+	release()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled placement attempt did not finish")
+	}
+	waitState(t, client, run.ID, "stopped")
+	got, err := client.Get(context.Background(), run.ID)
+	if err != nil || got.State != "stopped" || got.Epoch != 2 {
+		t.Fatalf("after the start was released: %+v %v; want epoch 2 stopped", got, err)
+	}
+	for _, p := range got.Placements {
+		if p.Epoch == 2 && p.WorkloadStartedAt != nil {
+			t.Errorf("epoch 2's workload started after its stop")
+		}
+	}
+	if _, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{}); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, client, run.ID, "running")
+	if got, _ := client.Get(context.Background(), run.ID); got.Epoch != 3 {
+		t.Errorf("resumed into epoch %d, want 3", got.Epoch)
+	}
+}
+
+// assignedNow: lux has a placement of the Run's current epoch.
+func assignedNow(r lux.Run) bool {
+	for _, p := range r.Placements {
+		if p.Epoch == r.Epoch {
+			return true
+		}
+	}
+	return false
 }
