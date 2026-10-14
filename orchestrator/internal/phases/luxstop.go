@@ -358,13 +358,11 @@ func (r *phaseRun) scanBroken(raw []byte, secs float64) error {
 	return json.Unmarshal(raw, r.Broken)
 }
 
-// takeUpLive answers a person's resume of a Run lux already runs, or is
-// placing again (lux resumed it itself after a move): there is no stopped
-// Run to resume, so it is taken back up as lux has it, its note (or the
-// resume nudge) sent once lux reports it running. lux's events since dude
-// last read them are skipped: they are of the placement that stopped, and
-// a stop among them, read now, would end the Run taken up. False when
-// lux's Run is not live: whilePaused waits for it to stop and resumes it.
+// takeUpLive answers a person's resume of a Run lux placed again itself
+// after a move (replacedByLux): there is no stopped Run to resume, so it
+// is taken back up as lux has it, its note (or the resume nudge) sent once
+// lux reports it running. False when it is not such a Run: whilePaused
+// waits for it to stop and resumes it.
 func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	if r.Control != "resume" || r.RepoApproved || r.talker() || r.LuxRunID == "" {
 		return false, nil
@@ -391,33 +389,26 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	if !replacedByLux(cur, moved) {
 		return false, nil
 	}
-	var after int64
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
-	}); err != nil {
+	// The follower is stopped first, and waited for: a batch of its
+	// committing after this would write back the harness_state it loaded.
+	if err := s.unfollowWait(ctx, r.ID); err != nil {
 		return false, err
 	}
-	for {
-		page, err := s.Lux.Events(ctx, r.LuxRunID, after)
-		if err != nil {
-			return false, err
-		}
-		if len(page) == 0 {
-			break
-		}
-		after = page[len(page)-1].EventID
-	}
-	s.unfollow(r.ID)
 	taken := false
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// The cursor stays: what lux reported since dude last read is
+		// followed as usual — the move's states, the new placement's
+		// running or failure, its clones, pushes and files — and lux_state
+		// ends where lux's events do. A move's earlier placement ends
+		// stopped (resuming as recorded), never terminal: a move lux does
+		// not resume is not one replacedByLux takes up.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
-				lux_after_event = GREATEST(lux_after_event, $4),
 				control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 				idle_nudged_at = NULL, agent_active_at = NULL, files_changed_at = now(),
 				left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
 				waiting_since = CASE WHEN $3 THEN now() END, turn_done_at = NULL, agent_busy_at = NULL,
 				harness_state = harness_state - 'brokenTurn'
-			WHERE id = $1 AND status = 'paused' AND control = 'resume'`, r.ID, state, r.Waiting, after)
+			WHERE id = $1 AND status = 'paused' AND control = 'resume'`, r.ID, state, r.Waiting)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

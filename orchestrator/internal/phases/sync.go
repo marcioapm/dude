@@ -110,10 +110,12 @@ type Syncer struct {
 
 // follower is one goroutine reading a Run's output. A pointer, so a
 // finishing follower can tell whether the entry is still its own.
-// poke asks its live diff to be read soon.
+// poke asks its live diff to be read soon; done is closed once it has
+// exited, its last batch committed or abandoned.
 type follower struct {
 	cancel context.CancelFunc
 	poke   chan struct{}
+	done   chan struct{}
 }
 
 // Run statuses (run_status) the syncer decides on.
@@ -1395,7 +1397,7 @@ func (s *Syncer) follow(r phaseRun) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1)}
+	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1), done: make(chan struct{})}
 	s.following[r.ID] = mine
 	// The live diff is read for as long as the Run's output is followed; a
 	// session's agent changes nothing, and has none.
@@ -1420,6 +1422,7 @@ func (s *Syncer) follow(r phaseRun) {
 			}
 			s.mu.Unlock()
 			cancel()
+			close(mine.done)
 		}()
 		err := s.followOutput(ctx, r)
 		if err == nil || ctx.Err() != nil {
@@ -2640,6 +2643,28 @@ func (s *Syncer) unfollow(runID string) {
 	if f, ok := s.following[runID]; ok {
 		f.cancel()
 		delete(s.following, runID)
+	}
+}
+
+// unfollowWait is unfollow, returning once the follower has exited: no
+// batch of its can commit after, overwriting what the caller writes of
+// the Run's harness_state or cursor.
+func (s *Syncer) unfollowWait(ctx context.Context, runID string) error {
+	s.mu.Lock()
+	f, ok := s.following[runID]
+	if ok {
+		f.cancel()
+		delete(s.following, runID)
+	}
+	s.mu.Unlock()
+	if !ok || f.done == nil {
+		return nil
+	}
+	select {
+	case <-f.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

@@ -209,6 +209,90 @@ func TestAMoveLuxNeverEndsFailsNamingItAndAResumeReachesTheRunLuxRuns(t *testing
 	}
 }
 
+// As above, but lux's new placement starts running between the resume's
+// read of the Run (still resuming) and anything after it: the running lux
+// then reports is what dude follows, and the note reaches the agent.
+func TestAResumeReachesAMovedRunThatStartsRunningWhileDudeReadsIt(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.MoveWait = 500 * time.Millisecond
+	task, runID, luxID := w.implementing()
+	assign, start := make(chan struct{}), make(chan struct{})
+	var onceA, onceS sync.Once
+	t.Cleanup(func() { onceA.Do(func() { close(assign) }); onceS.Do(func() { close(start) }) })
+	w.lux.BeforeAssign(func(id string) {
+		if id == luxID {
+			<-assign
+		}
+	})
+	w.lux.BeforeStart(func(id string) {
+		if id == luxID {
+			<-start
+		}
+	})
+	w.lux.Move(luxID, "preempt")
+	w.until("the failed run to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'kept'`, runID) == 1
+	})
+	// A host is assigned; the placement waits to start its workload.
+	onceA.Do(func() { close(assign) })
+	handler := w.lux.Handler()
+	var armed atomic.Bool
+	armed.Store(true)
+	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/v1/runs/"+luxID && armed.CompareAndSwap(true, false) {
+			// dude reads the Run as lux has it now; lux runs it before
+			// dude has the answer.
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			onceS.Do(func() { close(start) })
+			for deadline := time.Now().Add(10 * time.Second); w.lux.State(luxID) != "running" && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+			}
+			for k, v := range rec.Header() {
+				rw.Header()[k] = v
+			}
+			rw.WriteHeader(rec.Code)
+			_, _ = rw.Write(rec.Body.Bytes())
+			return
+		}
+		handler.ServeHTTP(rw, req)
+	}))
+	t.Cleanup(func() {
+		w.syncer.Stop()
+		proxy.CloseClientConnections()
+		proxy.Close()
+	})
+	w.syncer.Lux = lux.New(proxy.URL, "lux-key")
+	if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "resume", "note": "Carry on, please."}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the same implementer to finish, and review to start", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task) > 0
+	})
+	if armed.Load() {
+		t.Fatal("dude never read the Run while lux placed it")
+	}
+	r := w.lux.Runs()[0]
+	if got := countOf(r.Inputs, "Carry on, please."); got != 1 {
+		t.Errorf("the note reached the agent %d times: %q", got, r.Inputs)
+	}
+	if slices.Contains(w.lux.CallsOf(luxID), "resume") {
+		t.Errorf("dude asked lux to resume a Run lux was running: calls %v", w.lux.CallsOf(luxID))
+	}
+}
+
+// countOf is how many of ins are exactly in.
+func countOf(ins []string, in string) int {
+	n := 0
+	for _, s := range ins {
+		if s == in {
+			n++
+		}
+	}
+	return n
+}
+
 // An agent whose process exits with no stop of lux's behind it fails as
 // any failed turn: the agent's error, as it was, once lux has had its time
 // to say otherwise.
