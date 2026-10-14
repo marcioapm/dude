@@ -119,6 +119,12 @@ export async function turnPushOff(client: ApiClient): Promise<PushState> {
   return "off";
 }
 
+/**
+ * Sign-out's removal: through the mounted organisation's client when there
+ * is one, else the session's (`root`), which names none.
+ */
+export const pushOffOnSignOut = (mounted?: ApiClient) => (root: ApiClient): Promise<PushState> => turnPushOff(mounted ?? root);
+
 /** Shown by the service worker as a push would be, signed as it signs them (sw.js): that this browser shows them. */
 export async function showTestNotification(): Promise<void> {
   const reg = await navigator.serviceWorker.ready;

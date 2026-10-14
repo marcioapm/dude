@@ -16,7 +16,7 @@ import { ApiClient, ApiError, type MeAnswer } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { Gatekeeper } from "../src/accounts/Gatekeeper.tsx";
 import { useAccount, type Account } from "../src/accounts/context.tsx";
-import { PUSH_ORGANIZATION, turnPushOff } from "../src/push.ts";
+import { PUSH_ORGANIZATION, pushOffOnSignOut, turnPushOff } from "../src/push.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
 import { LAST_ORGANIZATION } from "../src/accounts/route.ts";
@@ -667,20 +667,49 @@ describe("this browser's notifications", () => {
     await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
     await settle();
     expect(w.calls.filter((c) => c.method === "subscribePush")).toEqual([]);
-    expect(text(byTestId(page, "push-state"))).toBe("On in this browser, for Acme: a question or a request from an agent there shows as a notification, even with dude closed.");
+    expect(text(byTestId(page, "push-state"))).toBe("On in this browser, for Acme: a question or a request from an agent there shows as a notification, even with dude closed."
+      + " This browser can notify you for one organisation at a time.");
     // Moving it is the card's own action, for the organisation this tab is in.
     await click(byTestId(page, "push-here")!);
     await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
     expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([NORTHWIND.id]);
     expect(JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint)!)).toEqual({ id: NORTHWIND.id, name: "Northwind" });
     await until(() => text(byTestId(page, "push-state")).startsWith("On in this browser, for Northwind:") ? true : null, "on for Northwind");
+    expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
   });
 
-  test("in one organisation, opening it claims the subscription again, as before", async () => {
+  test("an owner recorded for an organisation you have left is ignored: the generic card, and nothing to move", async () => {
+    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: "org_left", name: "Initech" }));
+    const w = world();
+    const { page } = await open("#/o/northwind/me/settings", w);
+    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
+    expect(text(byTestId(page, "push-state"))).toBe("On in this browser: a question or a request from an agent shows as a notification, even with dude closed.");
+    expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
+  });
+
+  test("the recorded owner is named as it is called now, not as it was when recorded", async () => {
+    localStorage.setItem(PUSH_ORGANIZATION + endpoint, JSON.stringify({ id: ACME.id, name: "Acme Old" }));
+    const { page } = await open("#/o/acme/me/settings", world());
+    await until(() => byTestId(page, "push-state")?.getAttribute("data-state") === "on" ? true : null, "the card");
+    expect(text(byTestId(page, "push-state"))).toStartWith("On in this browser, for Acme:");
+    expect(page.querySelectorAll("[data-testid=push-here]").length).toBe(0);
+  });
+
+  test("in one organisation, opening it claims the subscription again, as before, and records it as that organisation's", async () => {
     const w = world(memberMe({ organizations: [ACME], invitations: [] }));
     await open("#/o/acme/", w);
     await until(() => w.calls.some((c) => c.method === "subscribePush") ? true : null, "the claim");
     expect(w.calls.filter((c) => c.method === "subscribePush").map((c) => c.org)).toEqual([ACME.id]);
+    await until(() => localStorage.getItem(PUSH_ORGANIZATION + endpoint), "the record");
+    expect(JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint)!)).toEqual({ id: ACME.id, name: "Acme" });
+  });
+
+  test("signing out from inside an organisation removes it through that organisation's client, with nothing recorded", async () => {
+    const w = world();
+    expect(await pushOffOnSignOut(new AccountsClient(w).inOrganization(NORTHWIND.id))(new AccountsClient(w))).toBe("off");
+    expect(w.calls.filter((c) => c.method === "unsubscribePush")).toEqual([
+      { method: "unsubscribePush", org: NORTHWIND.id, args: [endpoint] },
+    ]);
   });
 
   test("turning off (and signing out) removes it through the organisation it was claimed for, else the mounted one", async () => {
@@ -769,7 +798,7 @@ describe("api_key mode", () => {
     const members = await until(() => byTestId(page, "members"), "Members");
     await until(() => members.querySelectorAll("[data-testid=member]").length ? true : null, "its rows");
     expect(text(members)).not.toContain("Cloudflare");
-    expect(byTestId(page, "invite")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=invite]").length).toBe(0);
     expect(w.calls.some((c) => c.method === "listInvitations" && (c.args[0] as { status: string }).status === "accepted")).toBe(false);
   });
 });

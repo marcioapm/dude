@@ -14,7 +14,7 @@ import { ApiClient, ApiError, type MeAnswer } from "./api/client.ts";
 import { App } from "./App.tsx";
 import { Gatekeeper } from "./accounts/Gatekeeper.tsx";
 import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
-import { turnPushOff } from "./push.ts";
+import { pushOffOnSignOut } from "./push.ts";
 import { PeopleProvider } from "./people.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
@@ -62,7 +62,7 @@ function Root() {
   // From inside an organisation, push is removed through its client: the session's names none,
   // which the API refuses for someone in several organisations.
   const signOut = (mounted?: ApiClient) => {
-    void session.signOut((root) => turnPushOff(mounted ?? root), (url) => location.assign(url), flushSync);
+    void session.signOut(pushOffOnSignOut(mounted), (url) => location.assign(url), flushSync);
   };
 
   return (

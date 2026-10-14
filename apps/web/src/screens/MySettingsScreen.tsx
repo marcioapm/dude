@@ -54,11 +54,16 @@ export function MySettingsScreen({ client, me, onChanged }: {
     setPush(state);
     setPushFor(state === "on" ? owner : null);
   });
-  const pushText = push === "on" && pushFor
-    ? `On in this browser, for ${pushFor.name}: a question or a request from an agent there shows as a notification, even with dude closed.`
-    : push ? PUSH_TEXT[push] : "";
+  // The recorded owner counts only while you are still in it, under its current name.
+  const ownerMembership = pushFor && account ? account.memberships.find((m) => m.id === pushFor.id) : undefined;
+  const owner: PushOrganization | null = !account ? pushFor
+    : ownerMembership ? { id: ownerMembership.id, name: ownerMembership.name } : null;
   // The one subscription is another organisation's: claiming it here moves it.
-  const elsewhere = push === "on" && pushFor && here && pushFor.id !== here.id;
+  const elsewhere = push === "on" && owner && here && owner.id !== here.id;
+  const pushText = push === "on" && owner
+    ? `On in this browser, for ${owner.name}: a question or a request from an agent there shows as a notification, even with dude closed.`
+      + (elsewhere ? " This browser can notify you for one organisation at a time." : "")
+    : push ? PUSH_TEXT[push] : "";
   // Keys across your organisations: read with the credential that names none.
   const keysClient = account?.base ?? client;
   const groups: KeyGroup[] = account
