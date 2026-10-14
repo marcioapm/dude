@@ -1,7 +1,10 @@
 package phases
 
 import (
+	"slices"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // RecordTold writes one run.told per Run and epoch: a second call for an
@@ -21,23 +24,15 @@ func TestRecordToldWritesOncePerEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
 	type told struct {
-		epoch int
-		text  string
+		Epoch int
+		Text  string
 	}
-	var got []told
-	for rows.Next() {
-		var e told
-		if err := rows.Scan(&e.epoch, &e.text); err != nil {
-			t.Fatal(err)
-		}
-		got = append(got, e)
-	}
-	if err := rows.Err(); err != nil {
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[told])
+	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []told{{2, "first"}, {3, "third"}}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	if want := []told{{2, "first"}, {3, "third"}}; !slices.Equal(got, want) {
 		t.Fatalf("run.told %+v, want %+v", got, want)
 	}
 }
