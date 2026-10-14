@@ -346,6 +346,27 @@ describe("a call id reused for another tool", () => {
       result: { output: { head: "No viewport set." } } });
     expect(call.children.map((c) => [c.id, c.childKind])).toEqual([["ses_kid", "spawn"]]);
   });
+
+  test("a spawned child's call filled in by its task completion keeps that completion after the id moves on", () => {
+    const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "task", callId: "c1", status: "completed", output: { head } });
+    const events = [ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" }), done("original"), bashCall(), done("replayed")];
+    const [, firstEnd] = events;
+    const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["task", "completed", firstEnd.occurredAt], ["bash", "running", null]]);
+    expect(tools[0]!.result).toEqual({ output: { head: "original" } });
+    expect(tools.map((t) => t.children.map((c) => c.id))).toEqual([["ses_kid"], []]);
+    expect(tools[1]!.result).toBeNull();
+  });
+
+  test("a call heard only as its completion keeps that completion after the id moves on", () => {
+    const done = (head: string) => ev(EventTypes.ToolCompleted, { tool: "edit", callId: "c1", status: "completed", output: { head } });
+    const events = [done("original"), bashCall(), done("replayed")];
+    const [firstEnd] = events;
+    const tools = project(events).turns.filter((t): t is ToolTurn => t.kind === "tool");
+    expect(tools.map((t) => [t.tool, t.status, t.endedAt])).toEqual([["edit", "completed", firstEnd.occurredAt], ["bash", "running", null]]);
+    expect(tools[0]!.result).toEqual({ output: { head: "original" } });
+    expect(tools[1]!.result).toBeNull();
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
