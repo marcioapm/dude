@@ -70,6 +70,9 @@ func TestEveryPushCarriesAFreshAppToken(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
 	wi := w.task()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	pushes := 0
@@ -151,6 +154,8 @@ func TestALuxWithoutPushCredentialsIsPushedWithout(t *testing.T) {
 func TestAPushALuxdWithoutTheHostRefusedIsRetried(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HostUnreachable = 1
+	// The refused push's retry is due at once, not after its 5 s back-off.
+	w.syncer.RetryAhead = time.Minute
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -201,6 +206,7 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
+	w.syncer.RetryAhead = time.Minute
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
@@ -209,6 +215,9 @@ func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing
 		return scripted(spec)
 	}
 	wi := w.task()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 0 {
@@ -379,6 +388,9 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 	}
 	wi := w.task()
 	app := w.twoOwners(wi)
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
+	w.connectOwner(ana, "ana-token", 1)
 	w.start(wi, delivery.DefaultPolicy())
 	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.marcioWeb.Pulls()) == 1 })
 	pushes := 0

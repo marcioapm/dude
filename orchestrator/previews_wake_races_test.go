@@ -207,7 +207,7 @@ func (w *world) preview(runID string) string {
 // untilPreview is until, failing with the preview's own state.
 func (w *world) untilPreview(runID, what string, cond func() bool) {
 	w.t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(30 * time.Millisecond) {
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(untilPoll) {
 		w.pump()
 		if cond() {
 			return

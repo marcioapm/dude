@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -28,6 +29,8 @@ const (
 	SignalPRFeedback = "pr.feedback"
 	// A person answered an escalation.
 	SignalHumanDecision = "human.decision"
+	// The frozen pull request owner connected GitHub again.
+	SignalGitHubAuthorized = "github.authorized"
 )
 
 // State is everything the workflow remembers between steps.
@@ -837,10 +840,16 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		st.Draft = st.GateAt.Draft
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
+	if errors.As(err, new(forge.OwnerAuthorizationError)) {
+		return w.awaitOwnerAuthorization(ctx, sc, st, err)
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	st.PullRequestIDs, st.PRIteration = prIDs, 0
+	if len(st.PullRequestIDs) == 0 {
+		st.PRIteration = 0
+	}
+	st.PullRequestIDs = prIDs
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done.
@@ -855,6 +864,15 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		return workflow.Result{}, err
 	}
 	return waitForPR(st), nil
+}
+
+// awaitOwnerAuthorization parks a publication until its frozen owner
+// connects GitHub; the branch stays pushed and no retry budget is spent.
+func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepContext, st *State, cause error) (workflow.Result, error) {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", cause.Error()); err != nil {
+		return workflow.Result{}, err
+	}
+	return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
 }
 
 // awaitPullRequest wakes a fixer only when there is something to fix: the
@@ -1105,6 +1123,9 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// The fix may have changed a repository no pull request is open for yet:
 	// that one gets its own, alongside the others.
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
+	if errors.As(err, new(forge.OwnerAuthorizationError)) {
+		return w.awaitOwnerAuthorization(ctx, sc, st, err)
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}

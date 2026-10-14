@@ -16,6 +16,7 @@ import {
   CardBody,
   CardFooter,
   CardHeader,
+  Checkbox,
   Input,
   KeyValueList,
   SecretField,
@@ -244,6 +245,7 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
         client={client}
         open={replacing}
         auth={connection.connected ? connection.auth : "pat"}
+        connection={connection}
         onOpenChange={setReplacing}
         publicUrl={(connection.connected ? connection.webhook.publicUrl : null) ?? window.location.origin}
         onSaved={() => {
@@ -265,14 +267,18 @@ function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
  * optionally, a default installation; its webhook is set in the App.
  * Neither secret is ever shown again.
  */
-function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; auth: "pat" | "github_app";
+function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: string; auth: "pat" | "github_app"; connection: ForgeConnection;
   onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [auth, setAuth] = useState<"pat" | "github_app">(props.auth);
   const [token, setToken] = useState("");
   const [privateKey, setPrivateKey] = useState("");
-  const [appId, setAppId] = useState("");
-  const [installationId, setInstallationId] = useState("");
-  const [apiBase, setApiBase] = useState("");
+  const saved = props.connection.connected ? props.connection : null;
+  const [appId, setAppId] = useState(saved?.appId ?? "");
+  const [oauthClientId, setOauthClientId] = useState(saved?.oauthClientId ?? "");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
+  const [clearOauthClientSecret, setClearOauthClientSecret] = useState(false);
+  const [installationId, setInstallationId] = useState(saved?.installationId ?? "");
+  const [apiBase, setApiBase] = useState(saved?.apiBaseUrl ?? "");
   const { busy, problem, save } = useSave();
   const app = auth === "github_app";
   const ready = app ? Boolean(privateKey.trim()) && /^\d+$/.test(appId.trim()) && /^\d*$/.test(installationId.trim())
@@ -283,7 +289,7 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       onOpenChange={props.onOpenChange}
       title="Connect GitHub"
       description={app
-        ? "A GitHub App: pull requests and commits are the App's. Its private key is stored for this organisation and never shown again."
+        ? "A GitHub App: commits are the App's; pull requests require the task owner's authorization. Secrets are never shown again."
         : "A personal access token with repository access. It is stored for this organisation and never shown again."}
       submitLabel="Save"
       submitTestId="forge-save"
@@ -292,7 +298,9 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
       onSubmit={() =>
         void save(
           () => app
-            ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim() },
+            ? props.client.connectGithubApp({ privateKey: privateKey.trim(), appId: appId.trim(), installationId: installationId.trim(),
+                ...(oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}),
+                ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}), ...(clearOauthClientSecret ? { clearOauthClientSecret } : {}) },
               apiBase.trim() || undefined)
             : props.client.connectForge(token.trim(), apiBase.trim() || undefined, props.publicUrl),
           () => {
@@ -315,6 +323,13 @@ function TokenDialog(props: { client: ApiClient; open: boolean; publicUrl: strin
           <SecretField label="Private key" value={privateKey} onChange={setPrivateKey}
             placeholder="Paste the whole .pem file" hint="The whole .pem file GitHub generated for the App."
             data-testid="forge-private-key" />
+          <Input label="OAuth Client ID" mono data-testid="forge-oauth-client-id" value={oauthClientId} autoComplete="off"
+            onChange={(e) => setOauthClientId(e.target.value)} />
+          <SecretField label="OAuth Client secret" value={oauthClientSecret} onChange={setOauthClientSecret}
+            hint="Blank keeps the saved secret. This is not the App's private key."
+            data-testid="forge-oauth-client-secret" />
+          <Checkbox checked={clearOauthClientSecret} onCheckedChange={(c) => setClearOauthClientSecret(c === true)}
+            label="Clear saved OAuth Client secret" />
         </>
       ) : (
         <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}

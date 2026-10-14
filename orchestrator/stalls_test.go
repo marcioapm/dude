@@ -460,14 +460,21 @@ func (w *world) diffsSettled(runs []string) {
 	}
 }
 
-// A lux host that never answers the facts' calls, with six stalled Runs
-// (a conducted task's two reviewers and two plain deliveries' two each):
+// A lux host that never answers the facts' calls, with 24 stalled Runs (a
+// conducted task's two reviewers and eleven plain deliveries' two each):
 // the sweep returns within the facts' budget, still submits a pending Run
 // and wakes the conductor once, and each stalled Run is reported once,
 // saying lux did not answer.
 func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
-	const budget, margin = 15 * time.Second, 5 * time.Second
+	// The budget is production's 15 s scaled down. budget + margin stays
+	// under one exec's own timeout (psTimeout, 10 s), so a sweep asking lux
+	// with no budget fails; and under the 6 waves × 2 s = 12 s that 24 Runs
+	// at stallLuxConcurrency (4) take if each Run gets a budget of its own
+	// rather than sharing the sweep's.
+	const budget, margin = 2 * time.Second, 5 * time.Second
+	const plain = 11
 	w := conducting(t)
+	w.syncer.StallLuxBudget = budget
 	stop := make(chan struct{})
 	never := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
@@ -485,7 +492,7 @@ func TestStallFactsFromALuxThatNeverAnswersDoNotHoldUpTheSweep(t *testing.T) {
 	conducted := w.task()
 	w.conductedReview(conducted)
 	stalled := w.reviewersOpen(conducted, 2)
-	for range 2 {
+	for range plain {
 		// hangingReviews counts reviewers per world: two hang, then reply.
 		w.hangingReviews(taskCall)
 		wi := w.task()

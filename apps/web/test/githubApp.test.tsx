@@ -125,6 +125,72 @@ test("connecting a GitHub App sends its key, App ID and installation, and nothin
   expect(client.tokens).toEqual([]);
 });
 
+const SAVED_APP: ForgeConnection = { ...APP, connected: true, auth: "github_app", oauthClientId: "saved-client", oauthClientSecretConfigured: true };
+
+/** Open Replace credentials on an App with a saved OAuth client, and paste a new private key. */
+async function replaceCredentials() {
+  const client = new AppClient(SAVED_APP);
+  const container = await openGithub(client);
+  await click(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=forge-connect]"), "Replace credentials"));
+  await paste(await until(() => document.querySelector<HTMLElement>("[data-testid=forge-private-key]"), "the key"), "-----BEGIN KEY-----\nK\n-----END KEY-----");
+  return client;
+}
+
+test("reopening App settings prefills canonical Client ID but no secrets", async () => {
+  const container = await openGithub(new AppClient(SAVED_APP));
+  for (let n = 0; n < 2; n++) {
+    await click(await until(() => container.querySelector<HTMLButtonElement>("[data-testid=forge-connect]"), "Replace credentials"));
+    const id = await until(() => document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-id]"), "Client ID");
+    expect(id.value).toBe("saved-client");
+    // The design system's secret field, masked and empty.
+    const secret = document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-secret]")!;
+    expect(secret.type).toBe("password");
+    expect(secret.value).toBe("");
+    expect(document.querySelector<HTMLInputElement>("[data-testid=forge-private-key]")!.value).toBe("");
+    await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
+  }
+});
+
+test("a blank OAuth Client secret is not sent, and ticking Clear sends only the clear", async () => {
+  const client = await replaceCredentials();
+  const clear = [...document.querySelectorAll<HTMLButtonElement>("[role=checkbox]")]
+    .find((b) => document.getElementById(b.getAttribute("aria-labelledby") ?? "")?.textContent === "Clear saved OAuth Client secret")!;
+  expect(clear.getAttribute("aria-checked")).toBe("false");
+  await click(clear);
+  expect(clear.getAttribute("aria-checked")).toBe("true");
+  await click(document.querySelector<HTMLButtonElement>("[data-testid=forge-save]")!);
+  await until(() => client.connectedApps.length === 1 ? true : null, "the App sent");
+  expect(client.connectedApps).toEqual([[{ privateKey: "-----BEGIN KEY-----\nK\n-----END KEY-----", appId: "9001", installationId: "",
+    oauthClientId: "saved-client", clearOauthClientSecret: true }, undefined]]);
+});
+
+/** Replace credentials with `enter` in the OAuth Client secret field, then Save. */
+async function saveWithSecret(enter: (field: HTMLInputElement) => Promise<void>) {
+  const client = await replaceCredentials();
+  await enter(document.querySelector<HTMLInputElement>("[data-testid=forge-oauth-client-secret]")!);
+  const page = document.body.textContent ?? "";
+  await click(document.querySelector<HTMLButtonElement>("[data-testid=forge-save]")!);
+  await until(() => client.connectedApps.length === 1 ? true : null, "the App sent");
+  return { sent: client.connectedApps[0]![0], page };
+}
+
+test("a typed OAuth Client secret is sent, and the masked field never shows it", async () => {
+  const { sent, page } = await saveWithSecret((field) => type(field, "s3cret"));
+  expect(sent).toEqual({ privateKey: "-----BEGIN KEY-----\nK\n-----END KEY-----", appId: "9001", installationId: "",
+    oauthClientId: "saved-client", oauthClientSecret: "s3cret" });
+  expect(page).not.toContain("s3cret");
+});
+
+test("a pasted OAuth Client secret is sent without its trailing line break", async () => {
+  const { sent } = await saveWithSecret((field) => paste(field, "0123abcd\n"));
+  expect(sent.oauthClientSecret).toBe("0123abcd");
+});
+
+test("a whitespace-only OAuth Client secret is not sent, so the saved one stays", async () => {
+  const { sent } = await saveWithSecret((field) => paste(field, "  \n"));
+  expect(sent).toEqual({ privateKey: "-----BEGIN KEY-----\nK\n-----END KEY-----", appId: "9001", installationId: "", oauthClientId: "saved-client" });
+});
+
 test("a connected App shows its App ID, and Verify reports the token it minted", async () => {
   const client = new AppClient(APP);
   const container = await openGithub(client);

@@ -1,4 +1,4 @@
--- 119_agent_machine_moves.sql — an agent moves itself to a larger machine
+-- 120_agent_machine_moves.sql — an agent moves itself to a larger machine
 -- (docs/design/agent-machine-request.md).
 --
 -- An agent's request_machine, and a person's Reset, are each a move: the

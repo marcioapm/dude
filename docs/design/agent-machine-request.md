@@ -335,7 +335,7 @@ chip's tooltip reads that, so history stays true after a Reset.
 
 ## Data, API and migration
 
-One migration, `119_agent_machine_moves.sql`:
+One migration, `120_agent_machine_moves.sql`:
 
 ```sql
 CREATE TABLE machine_moves (

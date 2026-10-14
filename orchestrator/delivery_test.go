@@ -195,19 +195,43 @@ func (w *world) get(path, org string) (int, string) {
 	return res.StatusCode, string(b)
 }
 
+// Each world copies this seed into its own repository. TestMain removes
+// the seed directory after all tests finish.
+var seedRepo struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func makeSeedRepo() (string, error) {
+	dir, err := os.MkdirTemp("", "dude-seed-repo-")
+	if err != nil {
+		return "", err
+	}
+	bare, work := filepath.Join(dir, "seed.git"), filepath.Join(dir, "work")
+	for _, args := range [][]string{
+		{"init", "-q", "--bare", "-b", "main", bare},
+		{"init", "-q", "-b", "main", work},
+		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
+		{"-C", work, "push", "-q", bare, "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return dir, fmt.Errorf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir, nil
+}
+
 // bareRepo makes a bare repository with one commit on main.
 func bareRepo(t *testing.T, dir, name string) string {
 	t.Helper()
-	bare, seed := filepath.Join(dir, name+".git"), filepath.Join(dir, "seed-"+name)
-	for _, args := range [][]string{
-		{"init", "-q", "--bare", "-b", "main", bare},
-		{"init", "-q", "-b", "main", seed},
-		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
-		{"-C", seed, "push", "-q", bare, "main"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	seedRepo.once.Do(func() { seedRepo.dir, seedRepo.err = makeSeedRepo() })
+	if seedRepo.err != nil {
+		t.Fatal(seedRepo.err)
+	}
+	bare := filepath.Join(dir, name+".git")
+	if err := os.CopyFS(bare, os.DirFS(filepath.Join(seedRepo.dir, "seed.git"))); err != nil {
+		t.Fatal(err)
 	}
 	return bare
 }
@@ -277,9 +301,15 @@ func (w *world) start(taskID string, policy delivery.Policy) string {
 // pump runs every loop once, as the orchestrator's main does continuously.
 func (w *world) pump() {
 	ctx := context.Background()
+	// Stop when nothing is runnable now; later wakes, leases and signals
+	// are picked up by the next pump.
 	for range 5 {
-		if _, err := w.runtime.Tick(ctx, 10); err != nil {
+		n, err := w.runtime.Tick(ctx, 10)
+		if err != nil {
 			w.t.Fatal(err)
+		}
+		if n == 0 {
+			break
 		}
 	}
 	if _, err := w.syncer.Sweep(ctx); err != nil {
@@ -306,6 +336,10 @@ func (w *world) pump() {
 	}
 }
 
+// untilPoll is how long until waits between passes: what it waits on is
+// mostly the fakes' goroutines, a few milliseconds behind a pass.
+const untilPoll = 10 * time.Millisecond
+
 // until pumps until cond holds, or fails the test with what it last saw.
 func (w *world) until(what string, cond func() bool) {
 	w.t.Helper()
@@ -315,7 +349,7 @@ func (w *world) until(what string, cond func() bool) {
 		if cond() {
 			return
 		}
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(untilPoll)
 	}
 	w.t.Fatalf("timed out waiting for %s\nruns:\n%s", what, w.describeRuns())
 }
@@ -2947,7 +2981,11 @@ func TestMain(m *testing.M) {
 		fmt.Println("git is required")
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	code := dbtest.Main(m)
+	if seedRepo.dir != "" {
+		_ = os.RemoveAll(seedRepo.dir)
+	}
+	os.Exit(code)
 }
 
 // A Run whose turn ended while no one was following its stream (a restart,

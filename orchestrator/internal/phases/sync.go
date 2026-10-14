@@ -83,6 +83,9 @@ type Syncer struct {
 	// For tests: how long a conductor's input waits for its checkout's
 	// sync to be reported; zero is checkoutSyncWait.
 	CheckoutSyncWait time.Duration
+	// For tests: the budget of a sweep's stall reports for asking lux;
+	// zero is stallLuxBudget.
+	StallLuxBudget time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
 	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration
