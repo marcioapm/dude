@@ -122,7 +122,7 @@ export function AccountsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="ac-key" title="KeyShownOnce"
-        note="A secret, shown this once: the key in a read-only mono field that selects itself, Copy (Copied), and a usage slot for the CLI lines in a sunken well. Done closes it for good.">
+        note="A secret, shown this once: the key in a read-only mono field that selects itself, Copy (Copied), and a usage slot (a string is set in a sunken well) under usageHeading. Done closes it for good.">
         <Panes mode={mode}>
           <KeyDemo />
         </Panes>
