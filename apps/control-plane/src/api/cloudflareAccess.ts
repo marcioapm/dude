@@ -18,6 +18,7 @@ import { withoutTenant } from "../db/client.ts";
 import type { AccessConfig } from "../config.ts";
 import type { AccessAdmission, Principal } from "./auth.ts";
 import { HttpError } from "./http.ts";
+import { callbackPath } from "./routes/githubOAuth.ts";
 
 export const ACCESS_LOGOUT_PATH = "/cdn-cgi/access/logout";
 
@@ -160,16 +161,35 @@ export function accessToken(request: Request): string | null {
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
+ * GitHub's redirect back after Connect GitHub: a top-level navigation that
+ * github.com started, so the browser marks it `cross-site`. Admitting it is
+ * safe because the callback completes nothing without its `state`, a
+ * single-use secret bound to this person's own Connect transaction
+ * (`state_hash`, `person_id` and `organization_id`, expiring after 10
+ * minutes): a forged navigation cannot connect anyone, while refusing it
+ * makes OAuth impossible. A fetch, a frame, or a same-site (preview) origin
+ * is still refused; GitHub is never same-site.
+ */
+function isOAuthCallbackNavigation(request: Request): boolean {
+  return request.method === "GET" &&
+    new URL(request.url).pathname === callbackPath &&
+    request.headers.get("sec-fetch-site") === "cross-site" &&
+    request.headers.get("sec-fetch-mode") === "navigate" &&
+    request.headers.get("sec-fetch-dest") === "document";
+}
+
+/**
  * Refuse a request the browser made on another site's behalf. The browser
  * attaches the Access cookie (and the edge the header) to any request to
  * this host, so an Access identity alone does not show the person meant it.
  * A change must come from the app's own origin, as `Origin` says; a read
- * may be a direct visit but not another site's or a preview's fetch.
+ * may be a direct visit but not another site's or a preview's fetch, save
+ * GitHub's navigation back to the OAuth callback.
  */
 export function checkBrowserOrigin(request: Request, publicOrigin: string): void {
   const site = request.headers.get("sec-fetch-site");
   if (SAFE_METHODS.has(request.method)) {
-    if (site === "cross-site" || site === "same-site") throw crossSite();
+    if ((site === "cross-site" || site === "same-site") && !isOAuthCallbackNavigation(request)) throw crossSite();
     return;
   }
   if (request.headers.get("origin") !== publicOrigin) throw crossSite();

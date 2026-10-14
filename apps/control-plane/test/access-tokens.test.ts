@@ -4,6 +4,7 @@ import { SignJWT } from "jose";
 import { createApiKey, type Principal } from "../src/api/auth.ts";
 import { accessAuthenticator, accessProfiles, accessVerifier, type Profile } from "../src/api/cloudflareAccess.ts";
 import { Router } from "../src/api/router.ts";
+import { registerGithubOAuthRoutes } from "../src/api/routes/githubOAuth.ts";
 import { registerPeopleRoutes } from "../src/api/routes/people.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 import {
@@ -160,6 +161,60 @@ describe("cross-site requests", () => {
     expect(counting.certsCalls + counting.profileCalls).toBe(0);
     expect(await owner`SELECT id FROM accounts WHERE email = ${at("crossread")}`).toHaveLength(0);
     expect((await me(r, { ...cookie(token), "sec-fetch-site": "none" })).status).toBe(200);
+  });
+
+  describe("GitHub's redirect to the OAuth callback", () => {
+    const navigation = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+    let oauth: Router;
+    beforeAll(async () => {
+      oauth = accessRouter(edge);
+      registerGithubOAuthRoutes(oauth);
+      await member(owner, org, at("oauthnav"));
+    });
+    const visit = async (path: string, headers: Record<string, string>, method = "GET") => {
+      const res = await oauth.handle(new Request(`${ORIGIN}${path}`, { method, headers }));
+      const body = res.headers.get("content-type")?.includes("json") ? await res.json() as { error?: { code?: string } } : null;
+      return { status: res.status, code: body?.error?.code ?? null, location: res.headers.get("location") };
+    };
+    const callback = "/v1/me/github/callback?state=x&code=y";
+    const refused = { status: 403, code: "cross_site", location: null };
+
+    test("a cross-site top-level navigation reaches the callback, which lands on settings", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit(callback, { ...cookie(token), ...navigation }))
+        .toEqual({ status: 303, code: null, location: "/?github=invalid_or_expired#/me/settings" });
+    });
+
+    test("a cross-site fetch or frame of the callback is refused", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit(callback, { ...cookie(token), ...navigation, "sec-fetch-mode": "cors" })).toEqual(refused);
+      expect(await visit(callback, { ...cookie(token), ...navigation, "sec-fetch-dest": "iframe" })).toEqual(refused);
+    });
+
+    test("a same-site navigation to the callback is refused", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit(callback, { ...cookie(token), ...navigation, "sec-fetch-site": "same-site" })).toEqual(refused);
+    });
+
+    test("a cross-site navigation to any other path is refused", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit("/v1/me", { ...cookie(token), ...navigation })).toEqual(refused);
+      expect(await visit("/v1/me/github/callback/x?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
+      expect(await visit("/v1/me/github/callbacks?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
+      expect(await visit("/v1/me/github/CALLBACK?state=x&code=y", { ...cookie(token), ...navigation })).toEqual(refused);
+    });
+
+    test("a cross-site form POST or HEAD to the callback is refused", async () => {
+      const token = await sign(signer, { email: at("oauthnav") });
+      expect(await visit(callback, { ...cookie(token), ...navigation, origin: "https://github.com" }, "POST")).toEqual(refused);
+      expect((await visit(callback, { ...cookie(token), ...navigation }, "HEAD")).status).toBe(403);
+    });
+
+    test("a cross-site navigation to the callback still needs a verified Access token", async () => {
+      expect((await visit(callback, { ...cookie("not-a-jwt"), ...navigation })).status).toBe(401);
+      const foreign = await sign(stranger, { email: at("oauthnav") });
+      expect((await visit(callback, { ...cookie(foreign), ...navigation })).status).toBe(401);
+    });
   });
 
   test("API-key automation needs no browser headers", async () => {
