@@ -1762,6 +1762,9 @@ function touch(state: Projection, child: ChildTurn): void {
   for (let c: ChildTurn | undefined = child; c; c = c.parentChildId ? state.childrenById.get(c.parentChildId) : undefined) c.revision += 1;
 }
 
+/** The tool every harness's translator records a child's starting call as (Codex's spawnAgent included). */
+const CHILD_CALL_TOOL = "task";
+
 /**
  * The child an `agent.child.*` event is about, made from it when it is the
  * first heard of the child, and hung under the parent's call. A child of a
@@ -1799,6 +1802,8 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
     ? state.childrenById.get(payload.parentChildId) : undefined;
   child.parentChildId = parentChild?.id ?? null;
   let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
+  // An ended call of another tool under the same id is an earlier call: this child's own call is still to come.
+  if (call?.endedAt && call.tool !== CHILD_CALL_TOOL) call = undefined;
   if (!call) {
     call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
     state.placeholderCalls.add(call);

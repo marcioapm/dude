@@ -274,6 +274,17 @@ describe("a call id reused for another tool", () => {
     expect(ended).toMatchObject({ status: "completed", endedAt: taskEnd.occurredAt, result: { output: { head: "No viewport set." } } });
   });
 
+  test("a child heard before the second call hangs under that call, not under the first call that ended", () => {
+    const events = [bashCall(), bashDone(), started(), parentCall(), childEnded(), taskDone()];
+    const [, , , task, , taskEnd] = events;
+    const { turns, toolCounts } = project(events);
+    const [bash, parent] = rows(turns);
+    expect(bash.children).toEqual([]);
+    expect(parent).toMatchObject({ args: { description: "Inspect test capture setup", subagent_type: "explore" },
+      startedAt: task.occurredAt, status: "completed", endedAt: taskEnd.occurredAt });
+    expect(only(parent.children)).toMatchObject({ id: "ses_kid", status: "completed" });
+    expect([toolCounts.get("bash"), toolCounts.get("task")]).toEqual([1, 1]);
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
