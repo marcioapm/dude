@@ -177,6 +177,50 @@ func TestAResumeRetriedAfterA409RecordsNothingNew(t *testing.T) {
 	}
 }
 
+// Ana's Reset with a note: lux takes the first sized resume and its answer
+// is lost, so lux is still resuming when the retry comes. Ana is renamed
+// before it, so the retry's words differ from the first's; lux answers the
+// retry 202 and keeps the first input. run.told, if any, is that input.
+func TestAResumeRetriedAfterALostAnswerRecordsOnlyWhatLuxTook(t *testing.T) {
+	w := newWorld(t)
+	task, runID, live := w.raisedImplementer()
+	ana := w.person("Ana Ribeiro")
+	hold := make(chan struct{})
+	w.lux.BeforeAssign(func(id string) {
+		if id == live {
+			<-hold
+		}
+	})
+	defer close(hold)
+	lost := &lostAnswer{Client: w.syncer.Lux}
+	lost.left.Store(1)
+	w.syncer.Lux = lost
+	const note = "keep it at 2"
+	if status, out := w.callAs(ana, "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer", "note": note}); status != 200 {
+		t.Fatalf("reset: %d %v", status, out)
+	}
+	w.until("lux took the first resume", func() bool { return len(w.lux.ResumeInputs(live)) == 1 })
+	mustExec(t, w.owner, `UPDATE people SET name = 'Ana R. Silva' WHERE id = (SELECT person_id FROM api_keys WHERE id = $1)`, ana)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("the Reset settled on the retry", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND kind='reset' AND settled_at IS NOT NULL`, runID) == 1
+	})
+	// Settled only by a resume lux answered: the retry, as the first's
+	// answer was lost.
+	inputs := w.lux.ResumeInputs(live)
+	if len(inputs) != 1 || lost.left.Load() > 0 {
+		t.Fatalf("lux took %q; want only the first resume, its answer lost", inputs)
+	}
+	if !strings.HasPrefix(inputs[0], "Moved back to Standard by Ana Ribeiro: "+note) {
+		t.Fatalf("lux took %q", inputs[0])
+	}
+	for _, told := range w.toldOf(runID) {
+		if told.Text != inputs[0] {
+			t.Fatalf("run.told text %q, but lux took %q", told.Text, inputs[0])
+		}
+	}
+}
+
 // The resume lux accepted is recorded, then settling the move fails (lux's
 // reads fail) and the resume is retried while lux is still resuming: lux
 // answers the retry as it did the first, and nothing new is recorded for

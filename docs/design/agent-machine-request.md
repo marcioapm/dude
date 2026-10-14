@@ -713,6 +713,15 @@ input carries `moveTold` or `keptInput`'s words (`ResumeSized` would say
 which it sent), once per Run and epoch (a 409's retry writes nothing new). Added to
 `packages/domain/src/events/types.ts` with its Go constant.
 
+Only the resume that found the Run stopped writes it (`resume`'s own `Get`
+saw a terminal state). A retry after a lost answer finds lux resuming
+already: lux answers it 2xx, or 409, and keeps the first attempt's input,
+while the retry's text is rebuilt from what holds now (a renamed person or
+size, a steer that drops the nudge) and may differ. So a resume whose
+answer was lost records no `run.told`, and the web shows that move as an
+older ledger's: one timed row, no Told turn. A missing turn is accepted
+over words lux never received, as for the 409.
+
 **For the one notice, nothing new is needed.** The web matches the move's
 `run.resume.timed` by epoch: `run.told.epoch`, or for ledgers before it
 `run.resized`'s `machine.sinceEpoch` (which a move always sets: the size
