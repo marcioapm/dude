@@ -544,6 +544,9 @@ describe("a branch preview on the Servers tab", () => {
     expect(button(page, "stop-preview") !== null).toBe(true);
     const startAll = await until(() => button(page, "start-all"), "Start all on the preview");
     expect(button(page, "stop-all") !== null).toBe(true);
+    for (const id of ["start-all", "stop-all", "stop-preview"]) {
+      expect(button(page, id)?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1);
+    }
 
     await click(startAll);
     await until(() => all(page, "starting", "ready"), "every server starting");

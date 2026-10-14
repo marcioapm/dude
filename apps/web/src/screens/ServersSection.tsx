@@ -235,10 +235,10 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           <div className="railActions">
             {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
             {live ? <>
-              <Button size="sm" variant="secondary" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
-              <Button size="sm" variant="quiet" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
+              <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
+              <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
             </> : null}
-            {isPreview && taskId ? <Button size="sm" variant="quiet" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button> : null}
+            {isPreview && taskId ? <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button> : null}
           </div>
         </PageRailBlock>
         <PageRailBlock label="Setups">
