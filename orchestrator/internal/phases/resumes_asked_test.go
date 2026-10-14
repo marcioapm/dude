@@ -16,7 +16,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// logSink is a log writer goroutines may share.
+// logSink captures timing logs shared by workers and the test goroutine.
 type logSink struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -40,22 +40,20 @@ func (l *logSink) Reset() {
 	l.buf.Reset()
 }
 
+func (w *resumeWorld) captureTimingLogs() *logSink {
+	logs := &logSink{}
+	w.s.Log = slog.New(slog.NewTextHandler(logs, nil))
+	return logs
+}
+
 // errAttemptLost rolls back a follower batch whose interleaving was not
 // reached, so the next attempt starts from the same state.
 var errAttemptLost = errors.New("interleaving not reached")
 
-// A follower batch holds the Run's row FOR UPDATE, as followOutput takes
-// it, while resumeAsked records a resume: the first time, inserting its
-// row, or again while lux still reports the Run stopped, updating it.
-// Once resumeAsked waits on the batch, the batch applies the new epoch's
-// session, running state, busy and first output, each stamping that
-// epoch's row, and commits. Neither may wait on the other: the batch
-// commits while resumeAsked still waits, resumeAsked then records the
-// resume, and no timing statement fails.
-//
-// The first time, the row is not in for the batch to stamp. Again, the
-// batch stamps it, and its running_at then keeps resumeAsked from moving
-// requested_at.
+// The follower holds the Run FOR UPDATE before resumeAsked starts, then
+// stamps epoch 2 and commits without waiting on the resume. A first resume
+// is invisible to the batch; a retry's row is stamped, and running_at keeps
+// requested_at from moving. Neither path may lose timing to a lock error.
 func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -63,8 +61,7 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 	}{{"first", false}, {"again", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
-			logs := &logSink{}
-			w.s.Log = slog.New(slog.NewTextHandler(logs, nil))
+			logs := w.captureTimingLogs()
 			ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
 			var workers sync.WaitGroup
 			// LIFO: the workers are joined before the fixture closes its database.
@@ -80,11 +77,8 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 				before = w.row(2)["requested_at"].(time.Time)
 			}
 
-			// resumeAsked waits at most timingLockTimeout. An attempt where
-			// it stopped waiting, or was seen waiting with less than four
-			// fifths of that left, before the batch was let apply its
-			// frames (a scheduling delay) did not reach the interleaving:
-			// its batch is rolled back and it is tried again.
+			// Retry scheduling misses only before frame application. Let the
+			// batch apply with at least four fifths of timingLockTimeout left.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -128,8 +122,7 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 // waiting for it.
 func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 	w := newResumeWorld(t)
-	logs := &logSink{}
-	w.s.Log = slog.New(slog.NewTextHandler(logs, nil))
+	logs := w.captureTimingLogs()
 	base := time.Now().Add(-time.Minute).UTC()
 	release := w.holding(`SELECT 1 FROM runs WHERE id = $1 FOR NO KEY UPDATE`, w.run.ID)
 	defer release()
@@ -155,8 +148,7 @@ func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 // holder lets go.
 func TestAResumeBehindAHeldRunSkipsItsTimingAndStillResumes(t *testing.T) {
 	w := newResumeWorld(t)
-	logs := &logSink{}
-	w.s.Log = slog.New(slog.NewTextHandler(logs, nil))
+	logs := w.captureTimingLogs()
 	base := time.Now().Add(-time.Minute).UTC()
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
@@ -249,14 +241,9 @@ func (f *releasingLux) resumes() int {
 	return f.asked
 }
 
-// stampWhileTheResumeWaits is one attempt. reached is false when
-// resumeAsked stopped waiting on the batch, or was seen waiting too late,
-// before the batch was let apply its frames; the batch is then rolled
-// back. Once let go, the batch commits its frames at once. resumeAsked
-// waiting on the batch while holding the row the batch stamps, the batch
-// waiting on resumeAsked, and resumeAsked failing a timing statement once
-// the batch was let go (a cycle its lock_timeout broke, sampled or not)
-// are returned as errors, never as an attempt to try again.
+// stampWhileTheResumeWaits rolls back scheduling misses before apply.
+// Holding the resume row at the barrier, reverse waits, and every error
+// after apply fail the attempt; a timeout must not hide an unsampled cycle.
 func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *sync.WaitGroup, logs *logSink,
 	base time.Time) (reached bool, err error) {
 	tr := &translator{run: w.run}
@@ -361,9 +348,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 			WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1), 0)`, follower).Scan(&pid)
 		return pid, err
 	}
-	// resumeAsked ended, or is left to, before the batch was let apply its
-	// frames, so before the batch could wait on it: too late for this
-	// attempt, if it waited on the batch and ran out of time.
+	// Only before apply: let resumeAsked time out, then roll back the batch.
 	lost := func(why string) (bool, error) {
 		w.t.Logf("before the batch was let go, %s", why)
 		if err := errors.Join(untilAsked(), ended()); err != nil {
@@ -391,13 +376,10 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 		}
 	}
 
-	// How long resumeAsked has waited, by the database's clock, and whether
-	// it holds epoch 2's resume row (its xmax one of resumeAsked's
-	// (sub)transactions): the half of the cycle the batch would wait on.
-	// Blocked, resumeAsked takes no lock until it is let go, so this is
-	// read at a barrier, not sampled. pg_locks.waitstart is NULL for a
-	// moment after a wait begins: until it is set, the age is unknown, and
-	// read again.
+	// At the pre-apply barrier, match the resume row's xmax to the asker's
+	// granted (sub)transaction locks: holding it is the cycle's first half.
+	// Measure wait age on the database clock; NULL waitstart is unknown,
+	// not zero, so read again until PostgreSQL publishes it.
 	var waitedMs *float64
 	var holdsRow bool
 	for waitedMs == nil {
