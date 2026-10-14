@@ -21,20 +21,30 @@ func (s *Server) sourceRoutes(mux *http.ServeMux) {
 // branchesShown bounds a branch lookup's answer.
 const branchesShown = 50
 
+// connectedGitHub is the organisation's GitHub connection, or 502
+// github_unavailable when there is none to ask.
+func (s *Server) connectedGitHub(r *http.Request, org string) (*forge.GitHub, error) {
+	if s.Forges == nil {
+		return nil, fail(http.StatusBadGateway, "github_unavailable", "GitHub is not set up here")
+	}
+	gh, err := s.Forges.For(r.Context(), org)
+	if err != nil {
+		return nil, err
+	}
+	if gh == nil {
+		return nil, fail(http.StatusBadGateway, "github_unavailable", "GitHub is not connected for this organisation")
+	}
+	return gh, nil
+}
+
 // sourceRepositories is the project's repositories with whether dude may
 // push to each with the organisation's GitHub connection: where existing
 // work can be taken over from. Each is asked of GitHub; one it could not
 // be asked about says why.
 func (s *Server) sourceRepositories(w http.ResponseWriter, r *http.Request, org string) error {
-	if s.Forges == nil {
-		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not set up here")
-	}
-	gh, err := s.Forges.For(r.Context(), org)
+	gh, err := s.connectedGitHub(r, org)
 	if err != nil {
 		return err
-	}
-	if gh == nil {
-		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not connected for this organisation")
 	}
 	type repo struct{ ID, Name, URL string }
 	var repos []repo
@@ -90,15 +100,9 @@ func (s *Server) sourceRepositories(w http.ResponseWriter, r *http.Request, org 
 // sourceBranches lists a project repository's branches containing q, at
 // most branchesShown, read from GitHub in bounded pages.
 func (s *Server) sourceBranches(w http.ResponseWriter, r *http.Request, org string) error {
-	if s.Forges == nil {
-		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not set up here")
-	}
-	gh, err := s.Forges.For(r.Context(), org)
+	gh, err := s.connectedGitHub(r, org)
 	if err != nil {
 		return err
-	}
-	if gh == nil {
-		return fail(http.StatusBadGateway, "github_unavailable", "GitHub is not connected for this organisation")
 	}
 	var url string
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
