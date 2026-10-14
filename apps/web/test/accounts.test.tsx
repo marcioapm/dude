@@ -200,6 +200,27 @@ describe("every tenant request names its organisation", () => {
     expect(scoped.root).toBe(base);
   });
 
+  test("Reset of a raised machine and GitHub's status, Connect and Disconnect name the organisation too", async () => {
+    const seen: Array<[string, string | null]> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push([`${init?.method} ${new URL(String(input), "http://x").pathname}`, new Headers(init?.headers).get("x-dude-organization")]);
+      return Response.json({ ok: true, moved: false, available: false, connection: null, url: "https://github.com/login/oauth/authorize" });
+    }) as typeof fetch;
+    const scoped = new ApiClient({}).inOrganization("org_northwind");
+    await scoped.resetTaskMachine("t", "implementer");
+    await scoped.resetSessionMachine("s");
+    await scoped.githubAuthorization();
+    await scoped.connectGithub();
+    await scoped.disconnectGithub();
+    expect(seen).toEqual([
+      ["DELETE /v1/tasks/t/agent-machines/implementer", "org_northwind"],
+      ["DELETE /v1/sessions/s/agent-machine", "org_northwind"],
+      ["GET /v1/me/github", "org_northwind"],
+      ["POST /v1/me/github/connect", "org_northwind"],
+      ["DELETE /v1/me/github", "org_northwind"],
+    ]);
+  });
+
   test("an attachment upload names the organisation too", async () => {
     const headers: Record<string, string> = {};
     class FakeXHR {
