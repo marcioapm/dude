@@ -5,6 +5,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { SessionsList } from "@dude/domain";
 import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { PeopleProvider } from "../src/people.tsx";
+import type { ApiClient } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
@@ -32,9 +33,10 @@ async function page(initial: "you" | "others" = "you", extraOwner = false) {
   const accepted: string[] = [];
   const declined: string[] = [];
   let changed = () => {};
-  client.reassignTask = async (id) => { changed(); return { id, ownerId: YOU }; };
-  client.acceptSession = async (id) => { accepted.push(id); return { ok: true }; };
-  client.declineSession = async (id) => { declined.push(id); return { ok: true }; };
+  // The fixture refuses reassignment; this stub moves the task to you as the API would.
+  (client as ApiClient).reassignTask = async (id) => { changed(); return { id, ownerId: YOU } as unknown as Awaited<ReturnType<ApiClient["reassignTask"]>>; };
+  client.acceptSession = async (id) => { accepted.push(id); return { id }; };
+  client.declineSession = async (id) => { declined.push(id); return { id }; };
   function Driven() {
     const [tree, setTree] = useState(() => extraOwner ? projects.map((p) => p.id !== "p1" ? p : { ...p, tasks: [...(p.tasks ?? []),
       { id: "someone", key: "ONE-4", title: "Someone else's decision", status: "awaiting_confirmation" as const, people: [{ id: "p-x", name: "Someone" }], statusSince: "2026-10-04T00:00:00Z" }] }) : projects);

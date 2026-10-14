@@ -221,7 +221,7 @@ describe("a task started over", () => {
 
   test("a file publisher facet resets on an attempt switch instead of leaving an un-clearable filter", async () => {
     const client = restarted();
-    const artifacts = (await client.listArtifacts(TASK_ID)).artifacts;
+    const artifacts = (await client.listArtifacts()).artifacts;
     client.listArtifacts = async () => ({ artifacts: artifacts.map((a) => a.runId === "run_attempt2" ? { ...a, phase: "fix" } : a) });
     const page = await taskPage(client, { tab: "files" });
     const source = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File source"]'), "publisher facets");
