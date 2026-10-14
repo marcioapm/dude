@@ -61,6 +61,9 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
+	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
+	// is recorded before its first reviewer starts. nil skips it.
+	SyncPullRequest func(ctx context.Context, org, prID string) error
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

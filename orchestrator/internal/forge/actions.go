@@ -18,6 +18,8 @@ type ReviewThread struct {
 	Repo     string
 	Number   int
 	Resolved bool
+	// Its comment's line changed since: GitHub shows it as outdated.
+	Outdated bool
 	// The REST ids of its comments, the first one opening it: what dude's
 	// feedback names it by (line-comment-<id>).
 	CommentIDs []int64
@@ -63,14 +65,48 @@ func (g *GitHub) ReviewThread(ctx context.Context, slug, id string) (*ReviewThre
 	return t, nil
 }
 
+// ClosedThreadComments are the line comments, by REST id, in pull request
+// number's review threads that are resolved or outdated: no longer open.
+func (g *GitHub) ClosedThreadComments(ctx context.Context, slug string, number int) (map[int64]bool, error) {
+	threads, err := g.reviewThreads(ctx, slug, number)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]bool{}
+	for _, t := range threads {
+		if t.Resolved || t.Outdated {
+			for _, id := range t.CommentIDs {
+				out[id] = true
+			}
+		}
+	}
+	return out, nil
+}
+
 // ThreadOfComment is the review thread of pull request number that a line
 // comment (by its REST id) is in; nil when none is.
 func (g *GitHub) ThreadOfComment(ctx context.Context, slug string, number int, comment int64) (*ReviewThread, error) {
+	threads, err := g.reviewThreads(ctx, slug, number)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range threads {
+		if slices.Contains(t.CommentIDs, comment) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+// reviewThreads is every review thread of pull request number, at most 20
+// pages of 100, each with its comments' REST ids.
+func (g *GitHub) reviewThreads(ctx context.Context, slug string, number int) ([]*ReviewThread, error) {
 	owner, name, _ := strings.Cut(slug, "/")
 	const query = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){` +
-		`pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved comments(first:100){nodes{databaseId}}}` +
+		`pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated comments(first:100){nodes{databaseId}}}` +
 		`pageInfo{hasNextPage endCursor}}}}}`
 	var after *string
+	var out []*ReviewThread
 	for range 20 {
 		var data struct {
 			Repository *struct {
@@ -79,6 +115,7 @@ func (g *GitHub) ThreadOfComment(ctx context.Context, slug string, number int, c
 						Nodes []struct {
 							ID         string `json:"id"`
 							IsResolved bool   `json:"isResolved"`
+							IsOutdated bool   `json:"isOutdated"`
 							Comments   struct {
 								Nodes []struct {
 									DatabaseID int64 `json:"databaseId"`
@@ -106,21 +143,19 @@ func (g *GitHub) ThreadOfComment(ctx context.Context, slug string, number int, c
 		}
 		threads := data.Repository.PullRequest.ReviewThreads
 		for _, n := range threads.Nodes {
-			t := &ReviewThread{ID: n.ID, Repo: slug, Number: number, Resolved: n.IsResolved}
+			t := &ReviewThread{ID: n.ID, Repo: slug, Number: number, Resolved: n.IsResolved, Outdated: n.IsOutdated}
 			for _, c := range n.Comments.Nodes {
 				t.CommentIDs = append(t.CommentIDs, c.DatabaseID)
 			}
-			if slices.Contains(t.CommentIDs, comment) {
-				return t, nil
-			}
+			out = append(out, t)
 		}
 		if !threads.PageInfo.HasNextPage {
-			return nil, nil
+			return out, nil
 		}
 		c := threads.PageInfo.EndCursor
 		after = &c
 	}
-	return nil, nil
+	return out, nil
 }
 
 // ResolveReviewThread marks a review thread resolved.

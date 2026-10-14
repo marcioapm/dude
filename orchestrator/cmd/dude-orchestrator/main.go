@@ -184,6 +184,7 @@ func run(log *slog.Logger) error {
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
+	store.SyncPullRequest = pullRequests.Sync
 
 	embedder, notifier := memoryAndPush(set, database, log)
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}

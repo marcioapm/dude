@@ -128,6 +128,8 @@ type Server struct {
 	// Review threads resolved, by thread id (ThreadID), and draft pull
 	// requests marked ready, through GraphQL.
 	ResolvedThreads map[string]bool
+	// Review threads GitHub reports as outdated, by thread id.
+	OutdatedThreads map[string]bool
 	MarkedReady     []int
 }
 
@@ -788,7 +790,8 @@ func (s *Server) threads(number int) map[string]any {
 				}
 			}
 			id := s.ThreadID(c.ID)
-			nodes = append(nodes, map[string]any{"id": id, "isResolved": s.ResolvedThreads[id], "comments": map[string]any{"nodes": ids}})
+			nodes = append(nodes, map[string]any{"id": id, "isResolved": s.ResolvedThreads[id], "isOutdated": s.OutdatedThreads[id],
+				"comments": map[string]any{"nodes": ids}})
 		}
 	}
 	return map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{

@@ -442,13 +442,28 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 	batch []forge.ActionableFeedback) ([]forge.ActionableFeedback, error) {
 	var before []forge.Review
 	_ = json.Unmarshal(pr.ReviewsJSON, &before)
-	requested := append(forge.Requested(before), gh.Settings.ReviewLogins...)
-	if !forge.WokenByRequestedReview(batch, requested) {
-		return batch, nil
-	}
+	requested := forge.Requested(before)
 	var bots []forge.Feedback
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT COALESCE(e.payload->>'feedbackId', ''), COALESCE(e.payload->>'author', ''),
+		// Logins GitHub accepted a request for: the snapshot loses one once they submit.
+		rows, err := tx.Query(ctx, `SELECT DISTINCT l FROM events e,
+				jsonb_array_elements_text(COALESCE(e.payload->'reviewersRequested', e.payload->'logins', '[]'::jsonb)) l
+			WHERE e.task_id = $1 AND (e.payload->>'number')::int = $2 AND e.payload->>'repo' = $3
+			  AND (e.event_type IN ($4, $5) OR e.event_type = $6 AND e.payload->>'action' = $7)`,
+			pr.TaskID, pr.Number, pr.RepoName, delivery.EvPullRequestOpened, delivery.EvPullRequestReviewRerequested,
+			delivery.EvPullRequestAction, delivery.ActionRequestReview)
+		if err != nil {
+			return err
+		}
+		asked, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		requested = append(requested, asked...)
+		if !forge.WokenByRequestedReview(batch, requested) {
+			return nil
+		}
+		rows, err = tx.Query(ctx, `SELECT COALESCE(e.payload->>'feedbackId', ''), COALESCE(e.payload->>'author', ''),
 				COALESCE(e.payload->>'body', ''), COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'kind', '')
 			FROM events e WHERE e.task_id = $1 AND e.event_type = $2 AND (e.payload->>'number')::int = $3 AND e.payload->>'repo' = $4
 			  AND e.occurred_at > COALESCE((SELECT max(r.created_at) FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix'
@@ -467,7 +482,22 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 	if err != nil {
 		return nil, err
 	}
-	return forge.RideAlong(batch, requested, bots), nil
+	if len(bots) == 0 {
+		return batch, nil
+	}
+	// A bot's line comment in a thread resolved or outdated is no longer open; a
+	// top-level comment has no resolution and stays.
+	closed, err := gh.ClosedThreadComments(ctx, forge.SlugFromURL(pr.RepoURL), pr.Number)
+	if err != nil {
+		return nil, err
+	}
+	open := bots[:0]
+	for _, b := range bots {
+		if id := forge.LineCommentID(b.ID); id == 0 || !closed[id] {
+			open = append(open, b)
+		}
+	}
+	return forge.RideAlong(batch, requested, open), nil
 }
 
 // signal tells the workflow what a sync found. One signal per distinct

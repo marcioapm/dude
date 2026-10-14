@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -38,6 +39,40 @@ func TestBotCommentsRideAlongWithARequestedReview(t *testing.T) {
 	if len(batch) != 2 || batch[0].Author != "jerv" || batch[0].Source != "review" ||
 		batch[1].Author != "coderabbitai[bot]" || batch[1].Source != forge.SourceBot {
 		t.Fatalf("batch %+v, want jerv's review then the bot's comment", batch)
+	}
+}
+
+// A bot's line comment in a resolved thread is no longer open and stays
+// behind; its top-level comment, which nothing resolves, rides along.
+func TestAResolvedBotThreadStaysBehind(t *testing.T) {
+	w := newWorld(t)
+	w.askingFor("jerv")
+	wi := w.reviewing()
+	resolved := w.gh.LineComment(1, "coderabbitai[bot]", "FACTORY.md", "Resolved nit.")
+	w.gh.Comment(1, "coderabbitai[bot]", "Top-level note.")
+	w.gh.Set(func(s *fakegithub.Server) { s.ResolvedThreads = map[string]bool{s.ThreadID(resolved): true} })
+	w.syncs(2)
+	w.gh.ReviewSaying(1, "jerv", "CHANGES_REQUESTED", "Please rename the greeting.")
+	w.until("a fixer", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	batch := w.fixBatch(wi)
+	if len(batch) != 2 || batch[1].Body != "Top-level note." {
+		t.Fatalf("batch %+v, want the review and the open top-level bot comment", batch)
+	}
+}
+
+// A login the organization configures, whose request GitHub refused, was
+// never asked: its review brings no bot along.
+func TestAFailedConfiguredRequestIsNotARequestedReview(t *testing.T) {
+	w := newWorld(t)
+	w.askingFor("jerv")
+	w.gh.Set(func(s *fakegithub.Server) { s.ReviewRequestStatus = 422 })
+	wi := w.reviewing()
+	w.gh.Comment(1, "coderabbitai[bot]", "Please consider a constant here.")
+	w.syncs(2)
+	w.gh.ReviewSaying(1, "jerv", "CHANGES_REQUESTED", "Please rename the greeting.")
+	w.until("a fixer", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	if batch := w.fixBatch(wi); len(batch) != 1 || batch[0].Author != "jerv" {
+		t.Fatalf("batch %+v, want jerv's review alone", batch)
 	}
 }
 

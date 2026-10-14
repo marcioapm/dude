@@ -145,7 +145,8 @@ func newWorld(t *testing.T) *world {
 
 	forges := forge.Resolver{DB: app}
 	w.runtime = workflow.New(app, "test", quiet)
-	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
+	store := &delivery.Store{DB: app}
+	w.runtime.Register(delivery.Workflow(store, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
@@ -154,6 +155,7 @@ func newWorld(t *testing.T) *world {
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
+	store.SyncPullRequest = w.prs.Sync
 	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: quiet,
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
 	t.Cleanup(w.previews.Stop)

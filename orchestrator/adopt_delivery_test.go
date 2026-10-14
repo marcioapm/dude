@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
@@ -125,6 +128,31 @@ func TestAnAdoptedPullRequestUnderTheAppNeedsNoOwnerConnection(t *testing.T) {
 	}
 }
 
+// What people already said on an adopted pull request is recorded from
+// GitHub before its first reviewer is created, so that reviewer's context
+// (AdoptedContextTx, read when it is submitted) has it.
+func TestTheFirstReviewerOfAnAdoptedPullRequestSeesItsFeedback(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/said", "main", "Already discussed")
+	w.gh.Comment(n, "jerv", "Please keep the old greeting as a fallback.")
+	wi := w.adopting("pr", n, "feature/said", "main")
+	w.until("the first reviewer", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
+	})
+	if n := w.count(`SELECT count(*) FROM events e WHERE e.task_id = $1 AND e.event_type = 'pull_request.commented'
+		AND e.payload->>'body' = 'Please keep the old greeting as a fallback.'
+		AND e.occurred_at <= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'review')`, wi); n != 1 {
+		t.Fatalf("existing feedback recorded before the first reviewer: %d", n)
+	}
+	var adopted *delivery.AdoptedContext
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		adopted, err = delivery.AdoptedContextTx(context.Background(), tx, wi, 1)
+		return err
+	}); err != nil || adopted == nil || len(adopted.Said) != 1 || adopted.Said[0].Author != "jerv" {
+		t.Fatalf("reviewer context %+v: %v", adopted, err)
+	}
+}
+
 // phasesRun lists the phase of each Run lux was given, in order.
 func (w *world) phasesRun(wi string) []string {
 	rows, err := w.owner.Query(context.Background(), `SELECT phase::text FROM runs WHERE task_id = $1 AND phase IS NOT NULL ORDER BY created_at`, wi)
@@ -150,7 +178,7 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	w := newWorld(t)
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
 	start := w.gh.SHA("feature/greet")
-	w.gh.ReviewSaying(n, "jerv", "COMMENTED", "Looks reasonable so far.")
+	w.gh.ReviewSaying(n, "jerv", "APPROVED", "")
 
 	wi := w.adopting("pr", n, "feature/greet", "main")
 	w.until("waiting on the pull request", func() bool {

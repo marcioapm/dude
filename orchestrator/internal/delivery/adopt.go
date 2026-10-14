@@ -82,6 +82,11 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		if err != nil {
 			return workflow.Result{}, err
 		}
+		if w.s.SyncPullRequest != nil {
+			if err := w.s.SyncPullRequest(ctx, sc.OrganizationID, id); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 		st.PullRequestIDs = []string{id}
 	}
 	// What it changed is what the reviewers are picked by.
