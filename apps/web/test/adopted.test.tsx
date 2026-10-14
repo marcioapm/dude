@@ -129,6 +129,30 @@ describe("the pipeline of adopted work", () => {
   });
 });
 
+describe("the pull request panel", () => {
+  test("an adopted pull request says, muted, that it is existing and dude opened none", async () => {
+    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [ADOPTED]));
+    const panel = page.querySelector("[data-testid=pr-panel][data-pr=pr_12]")!;
+    expect(text(panel.querySelector("[data-testid=pr-adopted-note]"))).toBe("Existing pull request: dude pushes to it and opened none");
+  });
+
+  test("the note stays beside why merge waits", async () => {
+    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [{ ...ADOPTED, checkState: "failing", display: "ci_red" }]));
+    const panel = page.querySelector("[data-testid=pr-panel][data-pr=pr_12]")!;
+    expect(panel.querySelectorAll("[data-testid=pr-adopted-note]").length).toBe(1);
+    expect(panel.querySelectorAll("[data-testid=pr-blocked]").length).toBe(1);
+  });
+
+  test("a pull request dude opened has no such note, adopted branch or new work", async () => {
+    const opened = { ...ADOPTED, id: "pr_13", runId: "run_d5", number: 13, headBranch: "stack/top" };
+    for (const [source, prs] of [[BRANCH_SOURCE, [opened]], [null, [PULL_REQUEST]]] as const) {
+      const page = await taskPage(new AdoptedClient({ source }, [...prs]));
+      expect(page.querySelectorAll("[data-testid=pr-adopted-note]").length).toBe(0);
+      expect(page.textContent).not.toContain("Existing pull request");
+    }
+  });
+});
+
 describe("the adopted pull request across attempts", () => {
   // Picks attempt `n` in the header's picker, as a person would.
   const press = (el: Element) =>
@@ -150,6 +174,7 @@ describe("the adopted pull request across attempts", () => {
     await until(() => panels(page).length === 1 || null, "attempt 1's panel");
     expect(panels(page)).toEqual(["pr_12"]);
     expect(page.querySelectorAll("[data-testid=pr-merge]").length).toBe(0);
+    expect(text(page.querySelector("[data-testid=pr-adopted-note]"))).toBe("Existing pull request: dude pushes to it and opened none");
     expect(text(page.querySelector("[data-testid=pr-step]"))).toContain("#12");
   });
 

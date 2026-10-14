@@ -138,6 +138,9 @@ function changesRun(payload: unknown): boolean {
 /** Both ways to start a task look alike: no project or button prefers one. */
 const START_VARIANT = "secondary" as const;
 
+/** Under the pull request the task took over: dude works on it and opened none of its own. */
+export const ADOPTED_PR_NOTE = "Existing pull request: dude pushes to it and opened none";
+
 const urlTab = (tab: string): TaskTab | undefined => (tab === "overview" ? undefined : (tab as TaskTab));
 const ago = (at: string) => <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" />;
 const phasesOf = (runs: readonly Run[], attempt: number) =>
@@ -697,13 +700,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
+                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} />
+                      : isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        factActions={actions.facts} factUnder={actions.under} note={actions.note}
+                        factActions={actions.facts} factUnder={actions.under}
+                        note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
                         diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
                         actions={
                           <>
