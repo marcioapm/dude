@@ -49,4 +49,13 @@ func TestAPullRequestFixerIsToldHowToAnswerItsFeedback(t *testing.T) {
 	if fix := Prompt(PhaseFix, in); strings.Contains(fix, "line-comment-42") || strings.Contains(fix, "resolve_thread") {
 		t.Errorf("a fixer without tools told of them:\n%s", fix)
 	}
+	// A bot's comment that rode along is apart, as one to weigh, not an order.
+	in.PRFeedback = append(in.PRFeedback, forge.ActionableFeedback{Source: forge.SourceBot, ID: "issue-comment-7",
+		Author: "coderabbitai[bot]", Body: "Consider a constant."})
+	fix = Prompt(PhaseFix, in)
+	feedback, bots, ok := strings.Cut(fix, "## Bot comments to weigh, not orders")
+	if !ok || strings.Contains(feedback, "Consider a constant.") || !strings.Contains(bots, "**coderabbitai[bot]** — Consider a constant.") ||
+		!strings.Contains(feedback, "Say why.") {
+		t.Errorf("fix prompt with a bot's comment:\n%s", fix)
+	}
 }

@@ -88,7 +88,7 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		var items []forge.ActionableFeedback
 		_ = json.Unmarshal(feedback, &items)
 		for _, f := range items {
-			if f.ID != "" {
+			if f.ID != "" && f.Source != forge.SourceBot {
 				batch = append(batch, f.ID)
 			}
 		}

@@ -101,7 +101,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		var items []forge.ActionableFeedback
 		_ = json.Unmarshal(feedback, &items)
 		for _, f := range items {
-			if id := forge.LineCommentID(f.ID); id != 0 {
+			if id := forge.LineCommentID(f.ID); id != 0 && f.Source != forge.SourceBot {
 				c.batch = append(c.batch, id)
 			}
 		}
