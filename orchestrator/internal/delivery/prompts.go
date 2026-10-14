@@ -126,8 +126,7 @@ func workspaceNote(repos []PromptRepo, phase string) string {
 	}
 	switch phase {
 	case PhaseReview:
-		b.WriteString("\n\nReview the changes in each checkout: `git log` and `git diff` against its default branch. " +
-			"Name the repository in each finding's `repo` field.")
+		b.WriteString("\n\nName the repository in each finding's `repo` field.")
 	case PhaseTest:
 		b.WriteString("\n\nTest the changes in each checkout together, and commit in none of them. " +
 			"Name the repository in each finding's `repo` field.")
@@ -211,9 +210,9 @@ const reviewContract = "## How you review\n\n" +
 	"First establish what is under review: in each checkout, the base (where the branch leaves its default " +
 	"branch: `git merge-base`) and the head, then `git log` and `git diff` from the base. Read the changed code " +
 	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n" +
-	"Every finding says how it is known, as the first word of its description: `Reproduced:` (you ran " +
-	"something and saw it; say what), `Traced:` (a concrete sequence through named code, with file:line) or " +
-	"`Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, " +
+	"Every finding says how it is known, as the first word of its description, on the same line as " +
+	"`description:`: `Reproduced:` (you ran something and saw it; say what), `Traced:` (a concrete sequence " +
+	"through named code, with file:line) or `Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, " +
 	"hypothetical future requirements, or advice that would apply to any codebase. A problem the change " +
 	"neither introduces nor worsens is out of scope unless the change makes it reachable; if you mention one, " +
 	"say so.\n\n" +
@@ -303,8 +302,11 @@ func severityNote(blocking []string) string {
 const fixContract = "## How you fix\n\n" +
 	"For each problem, reproduce it first where it can be reproduced: a failing test, a script, or the " +
 	"reviewer's or tester's steps. Then fix it, and add or update a regression test that fails without the " +
-	"fix where practical. Before you finish, rerun the affected tests and the project's checks. If a finding " +
-	"is wrong, say so with your evidence instead of changing code to satisfy it."
+	"fix where practical. Before you finish, rerun the affected tests and the project's checks.\n\n" +
+	"If a finding is wrong, say so with your evidence instead of changing code to satisfy it. Put that " +
+	"evidence where a person can see it: in your final reply, and in a file published with `dude publish` as " +
+	"`pushback.md`, one section per finding you dispute: its title, why it is wrong, and the evidence. The " +
+	"finding stays open until a reviewer or a person judges it."
 
 // implementContract asks the implementer to check its own work: the
 // independent tester after it verifies, but does not do this for it.
@@ -326,7 +328,7 @@ const testerContract = "## Your part\n\n" +
 	"You are independent verification: show, as a user would see it, whether this change does what the task says. " +
 	"Do not change the product to make a check pass: commit nothing in the repositories under test. Scripts and " +
 	"test data of your own, outside the product's source, are fine. Something broken is a finding: someone else " +
-	"fixes it, and you will be asked to check again.\n\n" +
+	"fixes it.\n\n" +
 	"First establish what you test: the head commit of each checkout, and how you ran it — the command that " +
 	"started it and the data it used. Run it the way the project documents (its notes, README, scripts). Test the " +
 	"real, integrated application; a mock or fixture demo shows a criterion only when the criterion is about that " +
@@ -340,8 +342,9 @@ const testerContract = "## Your part\n\n" +
 	"The evidence fits the criterion. What a person sees in the UI: a video of the real journey and screenshots " +
 	"of the states that decide it. Behaviour behind an API, a CLI or a job: the request or command and its " +
 	"actual output. Where a criterion depends on them, also check what a video cannot show: the state after a " +
-	"reload, permissions, the obvious failure case, and the flows next to the change. Look at each screenshot " +
-	"and video before you rely on it: a blank frame, a sign-in page or an error overlay is not evidence.\n\n" +
+	"reload, permissions, the obvious failure case, and the flows next to the change. Open each screenshot " +
+	"before you rely on it: a blank frame, a sign-in page or an error overlay is not evidence. Check that each " +
+	"video was written and is not empty.\n\n" +
 	"If you cannot start or reach the application, or cannot tell how to test this project, do not guess and do " +
 	"not report success: mark the criteria it affects `blocked`, report a `blocking` finding titled " +
 	"`Test environment: …` that says exactly what you tried, publish the report, and stop.\n\n" +
@@ -355,9 +358,9 @@ const testerContract = "## Your part\n\n" +
 const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
 	"package; Chromium is installed), at a desktop viewport (1280×800) unless a criterion is about another size. " +
 	"Record each journey as a video — create the browser context with `record_video_dir` and a " +
-	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` and pause " +
-	"briefly on each state that matters. Keep a failure in the recording; do not cut it out. Take a screenshot of " +
-	"each state that decides a criterion. Read the browser console and network as you go. When you are done, " +
+	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` of about " +
+	"250 ms and pause about one second on each state that matters. Keep a failure in the recording; do not cut it " +
+	"out. Take a screenshot of each state that decides a criterion. When you are done, " +
 	"close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with " +
 	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish /tmp/videos/abc.webm " +
 	"--name walkthrough.webm --description \"The sign-in flow, end to end\"`, `--name 01-signed-in.png`), " +
@@ -514,12 +517,8 @@ var builtinInstructions = map[string][]string{
 			"introduced, and consolidate obvious duplication.",
 		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
 			"if they do not pass, your simplification was not behaviour-preserving."},
-	"qa_browser": {"Exercise this change the way a person would: start the application, use it, and see " +
-		"whether it does what the task asked.",
-		"Look for what the unit tests cannot show: whether the feature works when someone uses it.",
-		"How to start the application and what data it needs are the project's to say (in the " +
-			"project notes below); if they say nothing, find out from the repository — its README, " +
-			"its scripts."},
+	"qa_browser": {"Start the application and use this change the way a person would.",
+		"Look for what the unit tests cannot show: whether the feature works when someone uses it."},
 }
 
 // BuiltinPrompt is a role's instructions as dude ships them: what an

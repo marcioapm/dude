@@ -240,7 +240,7 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"`Reproduced:`", "`Traced:`", "`Suspected:`", "`low` or `note` at most",
+	for _, want := range []string{"`Reproduced:`", "`Traced:`", "`Suspected:`", "same line as `description:`", "`low` or `note` at most",
 		"`git merge-base`", "minimal local change", "`blocking` is wrong behaviour"} {
 		if !strings.Contains(reviewContract, want) {
 			t.Errorf("the reviewer's contract lacks %q", want)
@@ -279,7 +279,7 @@ func TestTheFixersContractSurvivesAnyInstructions(t *testing.T) {
 		t.Errorf("the built-in fixer lost its scope rule:\n%s", got)
 	}
 	for _, want := range []string{"reproduce it first", "regression test that fails without the fix",
-		"rerun the affected tests", "say so with your evidence"} {
+		"rerun the affected tests", "say so with your evidence", "`pushback.md`"} {
 		if !strings.Contains(fixContract, want) {
 			t.Errorf("the fixer's contract lacks %q", want)
 		}
