@@ -18,7 +18,7 @@ import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSec
 import type { Artifact, Finding } from "../src/api/client.ts";
 import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
 import { emit } from "../src/fixtures/client.ts";
-import { ORG, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
+import { ORG, PEOPLE, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
 import type { ReactNode } from "react";
 
 import { unzipSync } from "fflate";
@@ -221,6 +221,38 @@ describe("task rail filtering", () => {
     } finally {
       HTMLAnchorElement.prototype.click = anchorClick;
     }
+  });
+
+  test("Activity facets classify real steers and filter kind and person without changing counts", async () => {
+    const client = new FixtureClient("d");
+    const base = (await client.events({ taskId: TASK_ID })).events[0]!;
+    const actors = PEOPLE.slice(0, 2);
+    const events: PersistedEvent[] = [
+      { ...base, eventId: "steer-a", cursor: 90001, eventType: "run.steered", actor: { type: "human", id: actors[0]!.id }, payload: { text: "First steer" } },
+      { ...base, eventId: "steer-b", cursor: 90002, eventType: "run.steered", actor: { type: "human", id: actors[1]!.id }, payload: { text: "Second steer" } },
+      { ...base, eventId: "created", cursor: 90003, eventType: "task.created", actor: { type: "human", id: actors[0]!.id }, payload: {} },
+    ];
+    client.events = async () => ({ events, nextCursor: 90003 });
+    const page = await taskPage(client, { tab: "activity" });
+    await until(() => page.querySelectorAll('[data-testid="activity-item"]').length === 3 ? true : null, "three real events");
+    const facet = (group: string, label: string) => {
+      const found = [...page.querySelectorAll<HTMLElement>(`[role="group"][aria-label="${group}"] [role="checkbox"]`)].find((b) => b.parentElement?.textContent?.startsWith(label));
+      expect(found).toBeDefined();
+      return found!;
+    };
+    const kinds = page.querySelector('[aria-label="Event kind"]')!;
+    const counts = kinds.textContent;
+    await click(facet("Event kind", "Steers & decisions"));
+    expect([...page.querySelectorAll('[data-testid="activity-item"]')].map((l) => l.textContent)).toEqual([
+      expect.stringContaining("Second steer"), expect.stringContaining("First steer"),
+    ]);
+    expect(kinds.textContent).toBe(counts);
+    await click(facet("Activity person", actors[1]!.name));
+    const lines = [...page.querySelectorAll('[data-testid="activity-item"]')];
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.textContent).toContain("Second steer");
+    expect(lines[0]!.textContent).toContain(actors[1]!.name);
+    expect(kinds.textContent).toBe(counts);
   });
 
   test("activity filters structured person, event kind and attempt independently of prose", () => {
