@@ -139,6 +139,10 @@ func TestAnOverdueHoldLuxJustCalledAMoveIsNotFailedAtTheShorterBound(t *testing.
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(w.ctx) }()
+	var batch int
+	if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&batch); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(w.ctx, `UPDATE runs SET harness_state = jsonb_set(harness_state, '{brokenTurn,moved}', '"preempt"')
 		WHERE id = $1`, w.id); err != nil {
 		t.Fatal(err)
@@ -148,10 +152,11 @@ func TestAnOverdueHoldLuxJustCalledAMoveIsNotFailedAtTheShorterBound(t *testing.
 		_, err := w.s.advance(w.ctx, r)
 		done <- err
 	}()
-	// The failure is waiting on the batch's row lock.
+	// The failure is waiting on the batch's row lock: some backend is
+	// blocked by this transaction's, and no other.
 	for deadline := time.Now().Add(5 * time.Second); ; {
 		var waiting bool
-		if err := tx.QueryRow(w.ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid', 'tuple'))`).
+		if err := tx.QueryRow(w.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE $1 = ANY (pg_blocking_pids(a.pid)))`, batch).
 			Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
