@@ -460,3 +460,106 @@ describe("editing a task whose delivery stopped", () => {
     expect(sent[0]).not.toHaveProperty("repositories");
   });
 });
+
+describe("where a task starts from", () => {
+  const MERGED = "pull request #7 is merged: only an open one can be adopted";
+  /** Answers lookups as the backend would, and records what is created. */
+  class Sources extends EpicsClient {
+    created: unknown[] = [];
+    asked: unknown[] = [];
+    override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
+      this.asked.push(source);
+      if (source.kind === "pr" && source.pullRequest === "7") return Promise.reject(new ApiError(422, "pr_merged", MERGED));
+      if (source.kind === "pr") {
+        return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console",
+          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+      }
+      return Promise.resolve({ kind: "branch" as const, repositoryId: source.repositoryId, repository: "web-console",
+        headBranch: source.branch, baseBranch: source.base ?? "main" });
+    }
+    override createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+      this.created.push(input);
+      return super.createTask(input);
+    }
+  }
+  const pick = (label: string) => act(async () => {
+    const group = document.querySelector("[data-testid=task-source-kind]")!;
+    [...group.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
+  });
+  const fieldError = (id: string) => {
+    const el = document.querySelector(`[data-testid=${id}]`)!;
+    return el.getAttribute("aria-invalid") === "true" ? document.getElementById(`${el.id}-hint`)?.textContent ?? "" : "";
+  };
+
+  test("new work is the default, and creating sends no source", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    const pressed = document.querySelector("[data-testid=task-source-kind] [aria-pressed=true]");
+    expect(pressed?.textContent).toBe("New work");
+    await d.title("Show invoices in euros");
+    await d.goal("Keep invoices in euros for EU customers.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).not.toHaveProperty("source");
+    expect(client.asked.length).toBe(0);
+  });
+
+  test("an existing pull request is looked up, shows its title and head → base, and is created with it", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    expect(d.save().disabled).toBe(true);
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => document.querySelector("[data-testid=task-source-found]"), "the pull request found");
+    const found = document.querySelector("[data-testid=task-source-found]")!.textContent;
+    expect(found).toContain("#12");
+    expect(found).toContain("Greet in Portuguese");
+    expect(found).toContain("feature/greet → main");
+    expect(d.save().disabled).toBe(false);
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12" } });
+  });
+
+  test("a refused pull request says why on its field, and Create stays off", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "7");
+    await until(() => fieldError("task-source-pr") === MERGED, "the refusal");
+    expect(d.save().disabled).toBe(true);
+    expect(document.querySelectorAll("[data-testid=task-source-found]").length).toBe(0);
+  });
+
+  test("an existing branch takes the base it merges into", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await set(document.querySelector("[data-testid=task-source-branch]")!, HTMLInputElement.prototype, "stack/top");
+    await set(document.querySelector("[data-testid=task-source-base]")!, HTMLInputElement.prototype, "stack/base");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("stack/top → stack/base"), "the branch found");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "stack/top", base: "stack/base" } });
+  });
+
+  test("once delivery has started, where it starts from is shown and cannot change", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
+        baseBranch: "main" } }, client);
+    const kind = document.querySelector("[data-testid=task-source-kind]")!;
+    expect(kind.querySelector("[aria-pressed=true]")?.textContent).toBe("Existing PR");
+    expect([...kind.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
+    expect(document.querySelector<HTMLInputElement>("[data-testid=task-source-pr]")!.disabled).toBe(true);
+    expect(document.body.textContent).toContain("where it started from is fixed");
+    expect(client.asked.length).toBe(0);
+  });
+});

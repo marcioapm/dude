@@ -23,6 +23,8 @@ import type {
   SessionLink,
   SessionsList,
   TaskRepository,
+  TaskSource,
+  TaskSourceInput,
   Decider,
   DeliveryPolicy,
   Directive,
@@ -263,9 +265,11 @@ export interface TaskFields {
   epicId: string | null;
   /** The repositories it works on; none is work that changes no code. */
   repositories: TaskRepository[];
+  /** Existing work it starts from (a pull request or a branch), or null for new work; fixed once delivery starts. */
+  source?: TaskSourceInput | null;
 }
 
-export type { TaskRepository } from "@dude/domain";
+export type { TaskRepository, TaskSource, TaskSourceInput } from "@dude/domain";
 
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
@@ -951,6 +955,15 @@ export class ApiClient {
   /** Edit a task. What it asks for is fixed once delivery starts; where it sits is not. */
   updateTask(id: string, changes: Partial<TaskFields>): Promise<Task> {
     return this.#request("PATCH", `/v1/tasks/${id}`, changes);
+  }
+
+  /**
+   * Look up the existing work a task would start from: the pull request's
+   * title, head and base, or the branch and its base — or why dude will not
+   * take it over (an ApiError with the rule's code).
+   */
+  checkTaskSource(projectId: string, source: TaskSourceInput, taskId?: string): Promise<TaskSource> {
+    return this.#request("POST", `/v1/projects/${projectId}/sources/check`, { source, ...(taskId ? { taskId } : {}) });
   }
 
   /** Hand a task to someone else to drive: they hear of it, and answer for it. */
