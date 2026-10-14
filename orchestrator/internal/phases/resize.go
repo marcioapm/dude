@@ -600,8 +600,8 @@ func RecordResize(ctx context.Context, d *db.DB, c lux.Client, log *slog.Logger,
 }
 
 // RecordTold writes run.told for a resume lux accepted whose input carried
-// the move's words (ResumeSized's last request), once per Run and epoch: a
-// later resume into the same epoch (lux resuming already) adds nothing.
+// the move's words (ResumeSized's last request), once per Run and epoch.
+// The caller's terminal guard keeps retries out; the conditional insert is a backstop.
 // Best effort, as RecordResize: a failure is logged.
 func RecordTold(ctx context.Context, d *db.DB, log *slog.Logger, ref delivery.RunRef, plan *ResizePlan, epoch int) {
 	if plan == nil || plan.toldKind == "" {
@@ -611,8 +611,6 @@ func RecordTold(ctx context.Context, d *db.DB, log *slog.Logger, ref delivery.Ru
 		log = slog.Default()
 	}
 	err := d.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		// No lock: the phase sweep is this Run's only resumer, one advance per
-		// Run per pass (Sweep), so no two RecordTold of one Run overlap.
 		_, err := ledger.AppendOncePerEpoch(ctx, tx, ref.Event(EvRunTold, ledger.ActorSystem, map[string]any{
 			"epoch": epoch, "moveId": plan.moveID, "kind": plan.toldKind, "text": plan.toldText,
 		}), epoch)
