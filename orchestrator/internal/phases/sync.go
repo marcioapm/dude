@@ -2233,6 +2233,10 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 			return
 		}
 		RecordResize(ctx, s.DB, s.Lux, s.logger(), r.ref(), r.LuxRunID, plan, answer)
+		if err == nil {
+			// Only an input lux took: a 409's is an earlier attempt's.
+			RecordTold(ctx, s.DB, s.logger(), r.ref(), plan, resumedEpoch(foreseen, resumed))
+		}
 		if serr := s.settleMachine(ctx, r, plan, answer); serr != nil && err == nil {
 			err = serr
 		}
