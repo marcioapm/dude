@@ -198,7 +198,7 @@ describe("a role's tier", () => {
     override organizationSettings(): Promise<SettingsResponse> {
       const { project: _, ...org } = SETTINGS;
       const roles = Object.fromEntries(Object.entries(org.roles).map(([role, s]) => [role, { ...s, tier: { ...s.tier, organization: undefined } }]));
-      return Promise.resolve({ ...org, roles } as SettingsResponse);
+      return Promise.resolve({ ...org, roles } as unknown as SettingsResponse);
     }
   }
   class FailingTiers extends OrganizationClient {

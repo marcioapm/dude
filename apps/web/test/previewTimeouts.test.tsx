@@ -22,7 +22,7 @@ test("preview form shows both defaults and saves each timeout without replacing 
   const client = new Recording("a");
   const mounted = await mount(<TooltipProvider><ToastProvider>
     <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin page="servers"
-      onPage={() => {}} onChanged={() => {}} onBack={() => {}} />
+      onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={() => {}} />
   </ToastProvider></TooltipProvider>);
   unmount = mounted.unmount;
   const page = await until(() => mounted.container.querySelector<HTMLElement>("[data-testid=preview-settings]"), "previews");

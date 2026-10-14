@@ -145,7 +145,7 @@ describe("a stopped task", () => {
     const sent: Array<[RecoverAction, string]> = [];
     const recover = client.recover.bind(client);
     client.recover = (id, action, note) => {
-      sent.push([action, note]);
+      sent.push([action, note as string]);
       return recover(id, action, note);
     };
     const page = await taskPage(client);

@@ -16,6 +16,10 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen, activityLines } from "../src/screens/TaskScreen.tsx";
+import type { TaskTab } from "../src/place.ts";
+
+// Overview is no TaskTab (its URL names no tab), but the screen opens on it when given.
+const OVERVIEW = "overview" as TaskTab;
 import { conductedLines } from "../src/conducted.ts";
 import { taskHistory } from "../src/taskHistory.ts";
 import { ApiError, type ChatSent, type StartAnyway, type TaskDetail } from "../src/api/client.ts";
@@ -49,7 +53,7 @@ class RelationsClient extends FixtureClient {
     super("a");
   }
   override async getTask(id: string): Promise<TaskDetail> {
-    return { ...(await super.getTask(id)), status: this.status, runs: [], decider: "policy", key: "CP-44", owner: { id: YOU, name: "Márcio Martins" } } as TaskDetail;
+    return { ...(await super.getTask(id)), status: this.status, runs: [], decider: "policy", key: "CP-44", owner: { id: YOU, name: "Márcio Martins" } } as unknown as TaskDetail;
   }
   override async relations(): Promise<TaskRelations> {
     return this.rel;
@@ -90,7 +94,7 @@ async function page(client: RelationsClient) {
     <TooltipProvider>
       <ToastProvider>
         <PeopleProvider client={client}>
-          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab="overview" />
+          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={OVERVIEW} />
         </PeopleProvider>
       </ToastProvider>
     </TooltipProvider>,
@@ -211,7 +215,7 @@ describe("the Relations section", () => {
     const { container: p, unmount } = await mount(
       <TooltipProvider>
         <PeopleProvider client={client}>
-          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab="overview" tree={tree} />
+          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={OVERVIEW} tree={tree} />
         </PeopleProvider>
       </TooltipProvider>,
     );

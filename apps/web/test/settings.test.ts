@@ -19,7 +19,7 @@ const delivery: DeliverySettings = {
 } as DeliverySettings;
 
 const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
-  model: org("m"),
+  tier: org("m"),
   timeLimitMinutes: org(null),
   harness: org("opencode"),
   machineSize: org(null),

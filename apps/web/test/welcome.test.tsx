@@ -27,7 +27,7 @@ const ref = { id: ME.id, name: ME.name, photoUrl: null, online: true };
 const summary = (id: string, title: string | null, filed = 0, over: Partial<SessionSummary> = {}): SessionSummary => ({
   id, title, role: "owner", createdAt: "2026-10-01T10:00:00Z", owner: ref, shared: false, projects: [], runStatus: null, dudePause: null,
   filed, lastActivityAt: "2026-10-01T10:00:00Z", ...over,
-});
+}) as SessionSummary;
 
 class Welcoming extends FixtureClient {
   made: Array<{ message?: string; projects?: SessionLink[] }> = [];
@@ -59,7 +59,7 @@ async function welcome(client: Welcoming, opts: { sessions?: SessionSummary[] | 
     <TooltipProvider>
       <ToastProvider>
         <WelcomeScreen client={client} projects={PROJECTS} sessions={opts.sessions === undefined ? [] : opts.sessions} name={ME.name}
-          now={opts.at ? () => opts.at! : undefined} onOpenSession={opts.onOpen ?? (() => {})} onAllSessions={opts.onAll ?? (() => {})}
+          {...(opts.at ? { now: () => opts.at! } : {})} onOpenSession={opts.onOpen ?? (() => {})} onAllSessions={opts.onAll ?? (() => {})}
           onCreated={opts.onCreated ?? (() => {})} />
       </ToastProvider>
     </TooltipProvider>,

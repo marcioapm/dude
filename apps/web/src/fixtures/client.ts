@@ -370,7 +370,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null });
   }
 
-  override async recover(_taskId: string, action: RecoverAction): Promise<{ action: RecoverAction }> {
+  override async recover(_taskId: string, action: RecoverAction, _note = "", _start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
     await wait(150);
     this.#recovery = null;
     this.#task = { ...this.#task, status: "running" };
@@ -425,7 +425,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ open });
   }
   // Nothing to open in the mockups' world: a session made here is refused, so the welcome shows its failure.
-  override createSession(): Promise<never> {
+  override createSession(): ReturnType<ApiClient["createSession"]> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
   override listPullRequests(taskId: string) {
@@ -528,7 +528,7 @@ export class FixtureClient extends ApiClient {
     await wait(80);
     return this.#patch(false, patch);
   }
-  override projectSettings(): Promise<SettingsResponse> {
+  override projectSettings(_projectId?: string): Promise<SettingsResponse> {
     return Promise.resolve(this.#settings(true));
   }
   override async updateProjectSettings(_projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
@@ -563,14 +563,14 @@ export class FixtureClient extends ApiClient {
   override images() {
     return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536, lastSeenAt: null, offline: false }, canEdit: true });
   }
-  override machinePools() {
+  override machinePools(): ReturnType<ApiClient["machinePools"]> {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
   }
   // Images may be attached, within the domain's limits, as on a dude with photo storage.
   override attachmentLimits(): Promise<AttachmentLimits> {
     return Promise.resolve({ enabled: true, types: [...ATTACHMENT_TYPES], ...ATTACHMENT_LIMITS });
   }
-  override modelTiers() {
+  override modelTiers(): ReturnType<ApiClient["modelTiers"]> {
     return Promise.resolve({ tiers: MODEL_TIERS, canEdit: true, upgrade: [] });
   }
   override proxyModels() {
@@ -781,7 +781,7 @@ export class FixtureClient extends ApiClient {
   override pause(): Promise<never> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
-  override abort(): Promise<never> {
+  override abort(_runId?: string, _reason?: string): ReturnType<ApiClient["abort"]> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
   override runDiff(): Promise<never> {

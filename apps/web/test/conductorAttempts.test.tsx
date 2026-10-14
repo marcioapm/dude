@@ -341,7 +341,7 @@ describe("a conductor's session on an earlier attempt", () => {
     const navigation = client.navigation.bind(client);
     client.navigation = async () => {
       const nav = await navigation();
-      return { projects: nav.projects.map((p) => ({ ...p, epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map((t) => t.id !== TASK_ID ? t
+      return { projects: nav.projects.map((p) => ({ ...p, epics: p.epics!.map((e) => ({ ...e, tasks: e.tasks.map((t) => t.id !== TASK_ID ? t
         : { ...t, runs: t.runs!.map((r, i) => i > 0 ? r : { ...r, sessions: [{ id: COND, role: "conductor", status: "running", title: "Conductor" }, ...r.sessions] }) }) })) })) };
     };
     return client;

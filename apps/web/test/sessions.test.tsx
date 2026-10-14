@@ -75,7 +75,7 @@ class SessionClient extends FixtureClient {
   renamed: string[] = [];
   filed: number[][] = [];
   fileResult: FileResult | null = null;
-  override getSession(): Promise<SessionDetail> {
+  override getSession(_id?: string): Promise<SessionDetail> {
     return Promise.resolve(this.detail);
   }
   override renameSession(_id: string, title: string) {
@@ -1095,7 +1095,7 @@ describe("a session's model", () => {
     function Switching() {
       const [id, setId] = useState(SESSION);
       show = setId;
-      return <SessionScreen client={client} sessionId={id} projects={[]} onBack={() => {}} onChanged={() => {}} />;
+      return <SessionScreen client={client} sessionId={id} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />;
     }
     const { container: page, unmount } = await mount(<PeopleProvider client={client}><ToastProvider><Switching /></ToastProvider></PeopleProvider>);
     mounted.push(unmount);
@@ -1332,7 +1332,8 @@ describe("a session's files", () => {
     const asked = client.asked;
     client.artifacts = [art("art_n", "notes.md", 1, 1), ...client.artifacts];
     await act(async () => {
-      emit({ ...ev("artifact.created", { artifactId: "art_n", name: "notes.md" }, { type: "agent", id: RUN }), eventId: "evt_art_n", cursor: 9999 });
+      const created: PersistedEvent = { ...ev("artifact.created", { artifactId: "art_n", name: "notes.md" }, { type: "agent", id: RUN }), eventId: "evt_art_n", cursor: 9999 };
+      emit(created);
     });
     await until(() => page.querySelector("[data-testid=session-files-count]")?.textContent === "3" || null, "the new file");
     expect(client.asked).toBeGreaterThan(asked);

@@ -60,10 +60,11 @@ function conductorEvents(): PersistedEvent[] {
 }
 
 describe("the history line", () => {
+  // Only the fields the history line reads; the rest of Run is left unset.
   const run = (p: Partial<Run>): Run => ({ id: "r", organizationId: "o", projectId: "p", taskId: TASK_ID, attempt: 1, status: "completed",
     workerId: null, workspacePath: null, error: null, kind: "agent", phase: "implement", role: "implementer", category: null,
     parentRunId: null, baseRefs: {}, heads: {}, branch: null, harness: null, model: null, dudePause: null,
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }, machine: null, createdAt: at(0), startedAt: null, endedAt: null, ...p });
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }, machine: null, createdAt: at(0), startedAt: null, endedAt: null, ...p }) as Run;
 
   test("a delivered task: its pipeline with fan-outs folded, its pull request, findings and cost", () => {
     const runs = [
@@ -186,7 +187,7 @@ class ChatClient extends FixtureClient {
       heads: {}, branch: null, harness: "scripted", model: "fake/scripted", dudePause: null,
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 },
       machine: { sizeId: "msz_s", name: "Small", cpus: 0.5, memoryMiB: 1024, diskGiB: 10, poolId: null, pool: null },
-      createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), endedAt: null };
+      createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), endedAt: null } as Run;
   }
   override async getTask(id: string): Promise<TaskDetail> {
     const task = await super.getTask(id);

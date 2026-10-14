@@ -107,7 +107,7 @@ describe("criteriaFromMarkdown", () => {
       expect(saved).toEqual(expected);
       const list = parseMarkdown(src)[0];
       if (list?.t !== "list") throw new Error(`no list parsed from ${JSON.stringify(src)}`);
-      expect(saved.items.map((c) => parseMarkdown(c))).toEqual(list.items.map((item) => item.c));
+      expect(saved.items.map((c) => parseMarkdown(c))).toEqual(list.items.map((item) => [...item.c]));
     }
   });
 });
