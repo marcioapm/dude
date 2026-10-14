@@ -311,6 +311,15 @@ describe("a call id reused for another tool", () => {
     expect(tools[0]!.result).toEqual({ output: { head: "first" } });
     expect(tools[2]!.result).toEqual({ output: { head: "second" } });
   });
+
+  // Codex reports spawnAgent's completion before the child it spawned.
+  test("a child heard after its task call ended hangs under that task call", () => {
+    const events = [parentCall(), taskDone(), ev(EventTypes.ChildStarted, { ...kid, kind: "spawn" })];
+    const [, taskEnd] = events;
+    const call = only(project(events).turns) as ToolTurn;
+    expect(call).toMatchObject({ tool: "task", status: "completed", endedAt: taskEnd.occurredAt });
+    expect(call.children.map((c) => [c.id, c.childKind])).toEqual([["ses_kid", "spawn"]]);
+  });
 });
 
 test("a Run that ended settles a child still running and its open calls, and what it waited on", () => {
