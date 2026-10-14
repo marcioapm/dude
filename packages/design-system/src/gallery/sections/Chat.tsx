@@ -439,7 +439,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-told"
         title="What dude told the agent"
-        note="Words dude put in front of an agent's input that no one typed: where a machine move left it, or what lux kept it on. A turn of their own, ChatMessage role system intent told: dude's face and name, the Told tag, the prompt's neutral frame and clamp, just before the agent's first words after it. A person's message on the same resume stays their own turn after it. The move's notice above says the move's whole time; its hover lists the stages."
+        note="Words dude put in front of an agent's input that no one typed: where a machine move left it, or what lux kept it on, or who owns a session now. A turn of their own, ChatMessage role system intent told: dude's face and name, the Told tag, the prompt's neutral frame and clamp, just before the agent's first words after it. A person's message on the same resume stays their own turn after it. The move's notice above says the move's whole time; its hover lists the stages."
       >
         <Panes mode={mode} surface>
           <Col>

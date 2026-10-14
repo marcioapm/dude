@@ -19,7 +19,7 @@ export type ChatMessageKind = "agent" | "human" | "system";
  * briefing of its conductor (`briefing`, framed as a prompt is) and a
  * person's message to it (`message`, a plain signed turn: talking, not
  * intervening). `told` is a line dude put in front of an agent's input
- * (where a machine move left it), framed and clamped as a briefing is.
+ * (where a machine move left it, or who owns a session now), framed and clamped as a briefing is.
  */
 export type HumanIntent = "prompt" | "answer" | "steer" | "briefing" | "message" | "told";
 
