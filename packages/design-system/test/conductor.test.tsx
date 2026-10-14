@@ -14,6 +14,8 @@ import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { ChatNotice } from "../src/components/ChatNotice.tsx";
 import { TaskHistory } from "../src/components/TaskHistory.tsx";
 import { ROLE_LABEL } from "../src/components/AgentAvatar.tsx";
+import { PaneDensityContext } from "../src/gallery/Frame.tsx";
+import { ChatSection } from "../src/gallery/sections/Chat.tsx";
 
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 const plain = (h: string) => h.replace(/<[^>]+>/g, "");
@@ -62,6 +64,26 @@ describe("what dude told the agent", () => {
     expect(h).toContain('data-kind="human"');
     expect(h).toContain('data-intent="told"');
     expect(plain(h)).toBe(`El DuderinoTold${told}`);
+  });
+
+  test("the gallery shows it in dark and light: after a raise, and before a person's steer read on the same resume", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<PaneDensityContext.Provider value="comfortable"><ChatSection mode="both" /></PaneDensityContext.Provider>));
+      const panes = [...host.querySelector("#ch-told")!.querySelectorAll("[data-theme]")];
+      expect(panes.map((p) => p.getAttribute("data-theme"))).toEqual(["dark", "light"]);
+      for (const pane of panes) {
+        const turns = [...pane.querySelectorAll("article, [role=note]")].map((t) =>
+          t.getAttribute("role") === "note" ? "notice" : t.getAttribute("data-intent") ?? t.getAttribute("data-role"));
+        expect(turns, pane.getAttribute("data-theme")!).toEqual(["notice", "told", "implementer", "notice", "told", "steer"]);
+        for (const t of pane.querySelectorAll("[data-intent='told']")) expect(t.textContent).toStartWith("El DuderinoTold");
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 });
 
