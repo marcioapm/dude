@@ -1,6 +1,9 @@
 package delivery
 
 import (
+	"encoding/json"
+	"os"
+	"regexp"
 	"slices"
 	"testing"
 )
@@ -105,7 +108,7 @@ func TestAPathRuleMatchesWithinEachRepository(t *testing.T) {
 }
 
 func TestReviewerSelection(t *testing.T) {
-	if got := ReviewersFor(policy, []string{"README.md"}); !slices.Equal(got, []string{"correctness"}) {
+	if got := ReviewersFor(policy, []string{"README.md"}); !slices.Equal(got, []string{"correctness", "tests", "performance"}) {
 		t.Errorf("README: %v", got)
 	}
 	if got := ReviewersFor(policy, []string{"src/styles/app.css"}); slices.Contains(got, "security") {
@@ -118,7 +121,7 @@ func TestReviewerSelection(t *testing.T) {
 		t.Errorf("migration did not summon database: %v", got)
 	}
 	got := ReviewersFor(policy, []string{"src/auth/login.tsx", "migrations/012_phases.sql", "src/api/routes/work.ts"})
-	if !slices.Equal(got, []string{"correctness", "security", "database", "api", "frontend"}) {
+	if !slices.Equal(got, []string{"correctness", "tests", "security", "database", "api", "frontend", "performance"}) {
 		t.Errorf("several: %v", got)
 	}
 	paths := []string{"src/auth/x.ts", "migrations/y.sql"}
@@ -146,5 +149,50 @@ func TestGlobs(t *testing.T) {
 		if got := MatchesGlob(c.pattern, c.path); got != c.want {
 			t.Errorf("MatchesGlob(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
 		}
+	}
+}
+
+// The categories a project may require are @dude/domain's
+// REVIEWER_CATEGORIES; the ones the orchestrator runs and the conductor may
+// start are reviewerOrder. Nothing generates one from the other, so a
+// category added on one side only fails here, as does a change of order.
+func TestTheReviewerCatalogueIsTheDomainPackages(t *testing.T) {
+	raw, err := os.ReadFile("../../../packages/domain/src/hierarchy.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`REVIEWER_CATEGORIES = \[([^\]]*)\] as const`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("REVIEWER_CATEGORIES not found in hierarchy.ts")
+	}
+	var ts []string
+	for _, q := range regexp.MustCompile(`"([a-z_]+)"`).FindAllSubmatch(m[1], -1) {
+		ts = append(ts, string(q[1]))
+	}
+	if !slices.Equal(ts, reviewerOrder) {
+		t.Errorf("REVIEWER_CATEGORIES = %v, reviewerOrder = %v", ts, reviewerOrder)
+	}
+	for _, c := range reviewerOrder {
+		if reviewFocus[c] == "" {
+			t.Errorf("reviewer %q has no focus in its prompt", c)
+		}
+	}
+	if len(reviewFocus) != len(reviewerOrder) {
+		t.Errorf("reviewFocus has %d categories, the catalogue %d", len(reviewFocus), len(reviewerOrder))
+	}
+}
+
+// The factory's required reviewers run on every change, in the
+// catalogue's order; a project that names its own keeps them.
+func TestTheFactoryRequiresCorrectnessTestsAndPerformance(t *testing.T) {
+	if got := DefaultPolicy().RequiredReviewers; !slices.Equal(got, []string{"correctness", "tests", "performance"}) {
+		t.Errorf("default required reviewers = %v", got)
+	}
+	own, err := ResolvePolicy(json.RawMessage(`{"requiredReviewers":["security"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ReviewersFor(own, []string{"README.md"}); !slices.Equal(got, []string{"security"}) {
+		t.Errorf("a project's own required reviewers: %v", got)
 	}
 }

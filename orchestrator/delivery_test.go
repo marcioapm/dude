@@ -130,8 +130,10 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(w.lux.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image)
-		VALUES ($1, $2, 'P', $1, 'P', 'agent:test')`, w.project, w.org)
+	// One required reviewer, so a delivery's Runs are few enough to count;
+	// the factory's default requires several (scriptedPolicy).
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image, delivery_policy)
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"]}')`, w.project, w.org)
 	for _, role := range []string{"implementer", "reviewer", "simplifier"} {
 		w.onModel(role, "fake/scripted")
 	}
@@ -282,7 +284,15 @@ func (w *world) deliver(taskID string) string {
 	}); err != nil {
 		w.t.Fatal(err)
 	}
-	return w.start(taskID, delivery.DefaultPolicy())
+	return w.start(taskID, scriptedPolicy())
+}
+
+// scriptedPolicy is the policy the world's project resolves to: the
+// factory's, with correctness its only required reviewer.
+func scriptedPolicy() delivery.Policy {
+	p := delivery.DefaultPolicy()
+	p.RequiredReviewers = []string{"correctness"}
+	return p
 }
 
 // start starts the delivery workflow as the API does, with a policy.
@@ -1903,7 +1913,7 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	wi := w.task()
-	policy := delivery.DefaultPolicy()
+	policy := scriptedPolicy()
 	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
@@ -1937,7 +1947,7 @@ func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	wi := w.task()
-	policy := delivery.DefaultPolicy()
+	policy := scriptedPolicy()
 	policy.Test = true
 	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
@@ -3660,7 +3670,7 @@ func TestABranchBehindMainIsUpdatedWhenItMergesCleanly(t *testing.T) {
 // request bounds them all.
 func TestPullRequestFixesAreBudgetedPerReviewRound(t *testing.T) {
 	w := newWorld(t)
-	policy := delivery.DefaultPolicy()
+	policy := scriptedPolicy()
 	policy.MaxPRFixIterations = 1
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"fixRoundsPerPr":3}' WHERE organization_id = $1`, w.org)
 	wi := w.task()

@@ -271,7 +271,7 @@ func conducted[T any](out T, err error) (T, error) {
 
 type startPhaseIn struct {
 	Phase      string   `json:"phase" jsonschema:"implement, review, fix, simplify or test"`
-	Categories []string `json:"categories,omitempty" jsonschema:"review: the reviewers to run (correctness, security, database, api, frontend, performance); none runs those the change warrants"`
+	Categories []string `json:"categories,omitempty" jsonschema:"review: the reviewers to run (correctness, tests, security, database, api, frontend, performance); none runs those the change warrants"`
 	Findings   []string `json:"findings,omitempty" jsonschema:"fix: the open findings to fix (fnd_…); none fixes every open one"`
 	Note       string   `json:"note,omitempty" jsonschema:"what you ask of the Run, added to its prompt"`
 }

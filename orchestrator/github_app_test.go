@@ -391,7 +391,7 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 	ana := w.ownerPerson("Ana")
 	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, wi, ana, w.org)
 	w.connectOwner(ana, "ana-token", 1)
-	w.start(wi, delivery.DefaultPolicy())
+	w.start(wi, scriptedPolicy())
 	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.marcioWeb.Pulls()) == 1 })
 	pushes := 0
 	for _, r := range w.lux.Runs() {
@@ -434,7 +434,7 @@ func TestAResumeAcrossTwoOwnersMintsEachOwnersToken(t *testing.T) {
 	w.lux.Decide = hang
 	wi := w.task()
 	app := w.twoOwners(wi)
-	w.start(wi, delivery.DefaultPolicy())
+	w.start(wi, scriptedPolicy())
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 	w.pauseAndResume(wi)
 	r := w.lux.Runs()[0]

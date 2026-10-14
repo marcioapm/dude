@@ -176,20 +176,60 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
 var reviewFocus = map[string]string{
-	"correctness": "Does this do what it claims? Look for logic errors, unhandled cases, " +
-		"race conditions, and assumptions the code makes but does not check.",
-	"security": "Look for credentials that reach somewhere they should not, missing " +
-		"authorization checks, injection, and data crossing a tenant boundary.",
-	"performance": "Look for work repeated per item that could be done once, queries in " +
-		"loops, and anything that grows worse than linearly with real data.",
+	"correctness": "Does the change do what the task and its acceptance criteria say? Look at empty, edge " +
+		"and error cases, concurrency and ordering, state transitions, and assumptions the code makes but " +
+		"does not check. Look hardest where the change meets what it did not change: its callers and the " +
+		"data already stored.",
+	"tests": "Judge the tests, not the code they test. Each should assert behaviour through the public " +
+		"interface, not implementation details, and fail if the change were reverted or broken: mutate the " +
+		"change, in your head or for real, and check that a test fails. Look for tests deleted, skipped or " +
+		"weakened to make the change pass, unrealistic fixtures, and concurrency or time tests that are not " +
+		"deterministic. A missing test for an acceptance criterion or a fixed defect is a finding.",
+	"security": "Look for missing authentication or authorization checks, data crossing a tenant boundary, " +
+		"injection, untrusted input treated as trusted, and credentials that reach somewhere they should not: " +
+		"logs, clients, other tenants.",
+	"performance": "Look for work repeated per item or per request that could be done once, growth without " +
+		"bound under realistic data, blocking I/O or locks held across slow work, avoidable allocation or " +
+		"serialization on hot paths, and N+1 calls to a database or over the network. Back a claim with a " +
+		"measurement or a realistic size.",
 	"frontend": "Look for accessibility gaps, layout that breaks at other sizes, state " +
 		"that can render an impossible combination, and re-render storms.",
-	"database": "Look for migrations that lock or cannot be rolled back, missing " +
+	"database": "Look for migrations that lock a busy table or cannot be rolled back, missing " +
 		"indexes on new query paths, and constraints the code assumes but the " +
 		"schema does not enforce.",
 	"api": "Look for breaking changes to existing callers, inconsistent error " +
 		"shapes, and endpoints that leak more than the caller should see.",
 }
+
+// reviewContract is how every reviewer works and what its reply carries,
+// whatever its instructions say: findings a fixer can act on and a person
+// can trust, and an account of what the review did and did not cover.
+const reviewContract = "## How you review\n\n" +
+	"First establish what is under review: in each checkout, the base (where the branch leaves its default " +
+	"branch: `git merge-base`) and the head, then `git log` and `git diff` from the base. Read the changed code " +
+	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n" +
+	"Every finding says how it is known, as the first word of its description: `Reproduced:` (you ran " +
+	"something and saw it; say what), `Traced:` (a concrete sequence through named code, with file:line) or " +
+	"`Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, " +
+	"hypothetical future requirements, or advice that would apply to any codebase. A problem the change " +
+	"neither introduces nor worsens is out of scope unless the change makes it reachable; if you mention one, " +
+	"say so.\n\n" +
+	"Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or " +
+	"an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` " +
+	"is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request.\n\n" +
+	"A suggested fix is the minimal local change that removes the defect. Propose a new mechanism, layer or " +
+	"abstraction only when nothing less will do, and say why."
+
+// reviewSummary closes a review's reply. Its fields sit indented under
+// `review_summary:`, so ParseFindings reads the document as one untitled
+// block and drops it, as it drops any document without a title.
+const reviewSummary = "End your reply with a summary of the review, as one more YAML document; it is not a finding:\n\n" +
+	"```yaml\n" +
+	"review_summary:\n" +
+	"  read: the code you read\n" +
+	"  ran: each command you ran, and its result\n" +
+	"  not_checked: what you could not check, and why\n" +
+	"```"
 
 const findingFormat = "Report each finding as one YAML document, separated by `---`:\n\n" +
 	"```yaml\n" +
@@ -213,7 +253,8 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 func earlierFindings(findings []Finding) string {
 	var b strings.Builder
 	b.WriteString("## Findings from the last review\n\nA fix has been made since. For each finding below, " +
-		"check the code as it is now and say whether it is fixed — every one, whatever its category or the " +
+		"read the code as it is now, run it where you can, and say whether it is fixed — never judge by which " +
+		"files the fix touched. Judge every one, whatever its category or the " +
 		"reviewer that raised it: you are the one judging it this round. Report a problem that is still there " +
 		"in your verdicts, not as a new finding; report anything new as a finding as usual.")
 	for i, f := range findings {
@@ -614,7 +655,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
 		add(lead...)
-		add("The task under review:\n\n"+in.task(), findingFormat)
+		add("The task under review:\n\n"+in.task(), reviewContract, findingFormat, reviewSummary)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}

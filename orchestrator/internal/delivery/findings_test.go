@@ -173,3 +173,37 @@ func TestNoVerdictsIsNoJudgement(t *testing.T) {
 		t.Errorf("verdicts = %v", v)
 	}
 }
+
+// A re-review's whole reply: findings, verdicts on the earlier ones, and
+// the summary the review ends with. The summary is no finding, even when an
+// indented line of it reads like a field; a finding it was run into stays.
+func TestAReviewSummaryIsNotAFinding(t *testing.T) {
+	reply := "Re-reviewed after the fix.\n\n```yaml\n" +
+		"severity: high\n" +
+		"category: tests\n" +
+		"file: src/export.test.ts\n" +
+		"line: 12\n" +
+		"title: The regression test passes without the fix\n" +
+		"description: Traced: the fixture has one row, so the off-by-one never shows.\n" +
+		"---\n" +
+		"verdicts:\n  F1: fixed\n" +
+		"---\n" +
+		"review_summary:\n" +
+		"  read: src/export.ts and its callers in src/routes/invoices.ts\n" +
+		"  ran: bun test src/export.test.ts, 4 passed\n" +
+		"  title: none of the above was skipped\n" +
+		"  not_checked: the S3 upload; no credentials here\n" +
+		"```\n"
+	findings := ParseFindings(reply)
+	if len(findings) != 1 || findings[0].Title != "The regression test passes without the fix" {
+		t.Fatalf("findings = %+v, want only the one finding", findings)
+	}
+	if v := ParseVerdicts(reply); len(v) != 1 || !v[0] {
+		t.Errorf("verdicts = %v", v)
+	}
+
+	joined := "```yaml\nseverity: high\ntitle: Kept\nreview_summary:\n  ran: go test ./..., ok\n```"
+	if got := ParseFindings(joined); len(got) != 1 || got[0].Title != "Kept" || got[0].Description != "" {
+		t.Errorf("a finding run into the summary: %+v", got)
+	}
+}

@@ -219,3 +219,42 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 		}
 	}
 }
+
+// Every reviewer establishes what is under review, grades its evidence,
+// and ends with what it read, ran and could not check, whatever its
+// instructions say; each category has a focus of its own.
+func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
+	for _, category := range reviewerOrder {
+		in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Category: category,
+			Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true,
+			Findings: []Finding{{Severity: "high", Title: "Totals off by one"}}}
+		for kind, got := range underEveryInstructions(PhaseReview, in) {
+			for _, want := range []string{"for **" + category + "**", reviewFocus[category], reviewContract,
+				findingFormat, reviewSummary, severityNote(in.BlockingSeverities), "verdicts:"} {
+				if strings.Count(got, want) != 1 {
+					t.Errorf("%s/%s: the reviewer's prompt should say %q once:\n%s", category, kind, want, got)
+				}
+			}
+			if s, f := strings.Index(got, reviewSummary), strings.Index(got, findingFormat); s < f {
+				t.Errorf("%s/%s: the summary is asked for before the findings", category, kind)
+			}
+		}
+	}
+	for _, want := range []string{"`Reproduced:`", "`Traced:`", "`Suspected:`", "`low` or `note` at most",
+		"`git merge-base`", "minimal local change", "`blocking` is wrong behaviour"} {
+		if !strings.Contains(reviewContract, want) {
+			t.Errorf("the reviewer's contract lacks %q", want)
+		}
+	}
+	if !strings.Contains(reviewSummary, "review_summary:") || !strings.Contains(reviewSummary, "not_checked") {
+		t.Errorf("the summary asks for no account of what was not checked:\n%s", reviewSummary)
+	}
+	// What the summary asks for is dropped by the parser, so its example is
+	// never taken for a finding.
+	if got := ParseFindings(reviewSummary); len(got) != 0 {
+		t.Errorf("the summary's own example parses as findings: %+v", got)
+	}
+	if !strings.Contains(earlierFindings([]Finding{{Title: "x"}}), "never judge by which files the fix touched") {
+		t.Error("a re-review is not told to judge a fix by the code")
+	}
+}
