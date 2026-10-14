@@ -276,6 +276,49 @@ export const taskRepositorySchema = z.object({
 export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 
 /**
+ * Where a task starts from, when not new work: an existing pull request
+ * (by number or URL) or an existing branch, in one of its project's
+ * repositories. Named only before its delivery first starts; null clears
+ * it. A branch's `base` is what its pull request will merge into, the
+ * repository's default branch when omitted; a pull request's head and base
+ * are GitHub's.
+ */
+export const taskSourceInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("pr"),
+    repositoryId: z.string().min(1),
+    pullRequest: z.string().trim().min(1).max(500),
+  }).strict(),
+  z.object({
+    kind: z.literal("branch"),
+    repositoryId: z.string().min(1),
+    branch: z.string().trim().min(1).max(255),
+    base: z.string().trim().min(1).max(255).optional(),
+  }).strict(),
+]);
+export type TaskSourceInput = z.infer<typeof taskSourceInputSchema>;
+
+/** A task's source as dude checked and keeps it. */
+export const taskSourceSchema = z.object({
+  kind: z.enum(["pr", "branch"]),
+  repositoryId: z.string(),
+  repository: z.string(),
+  /** The pull request's number and title, for kind `pr`. */
+  number: z.number().int().positive().optional(),
+  title: z.string().optional(),
+  headBranch: z.string(),
+  baseBranch: z.string(),
+});
+export type TaskSource = z.infer<typeof taskSourceSchema>;
+
+/** Why dude refused a source (the orchestrator's codes), for the UI to say inline. */
+export const TASK_SOURCE_REFUSALS = [
+  "not_in_project", "not_github", "no_write", "bad_pull_request", "pr_not_found", "pr_merged", "pr_closed", "pr_fork",
+  "bad_branch", "same_branch", "branch_not_found", "default_branch", "release_branch", "protected", "branch_taken",
+  "github_unavailable",
+] as const;
+
+/**
  * A person, wherever the API names one: an organization's member, by the
  * id of their `people` row. `online` is whether they were seen in the last
  * five minutes. `photoUrl` is an https URL or one the backend serves.
@@ -365,6 +408,8 @@ export const taskSchema = z.object({
   key: z.string().optional(),
   /** The repositories it works on; none is work that changes no code. */
   repositories: z.array(taskRepositorySchema).default([]),
+  /** Existing work it starts from; null for new work. */
+  source: taskSourceSchema.nullable().default(null),
   title: z.string().min(1),
   goal: z.string().default(""),
   acceptanceCriteria: z.array(z.string()).default([]),

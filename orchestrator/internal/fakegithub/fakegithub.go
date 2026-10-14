@@ -40,6 +40,8 @@ type Pull struct {
 	Reviews []Review
 	// GitHub refuses comments on it, as on a locked conversation.
 	Locked bool
+	// The repository its head is in, owner/name, when not this one (a fork).
+	HeadRepo string
 }
 
 type Review struct {
@@ -121,6 +123,28 @@ type Server struct {
 	ReviewRequestStatus int
 	// A user's GitHub type ("User", "Bot") when its login does not say.
 	UserTypes map[string]string
+	// Branches GitHub reports as protected (a rule or a ruleset applies).
+	Protected map[string]bool
+}
+
+// OpenAsPerson opens a pull request from head into base as a person does
+// on GitHub, head branched from base with one commit; its number.
+func (s *Server) OpenAsPerson(author, head, base, title string) int {
+	s.Branch(head, base, "Start "+title)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := &Pull{Number: len(s.pulls) + 1, Head: head, Base: base, Title: title, State: "open", Author: author}
+	s.pulls[p.Number] = p
+	return p.Number
+}
+
+// Branch makes branch from base with one commit of a person's on it, as
+// pushing a branch to GitHub does; its SHA.
+func (s *Server) Branch(branch, from, message string) string {
+	if _, err := s.git("update-ref", "refs/heads/"+branch, "refs/heads/"+from, ""); err != nil {
+		return ""
+	}
+	return s.CommitOnTop(branch, message)
 }
 
 // ReviewRequest is one POST to a pull request's requested_reviewers.
@@ -401,6 +425,18 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, map[string]any{"ref": "refs/heads/" + r.PathValue("branch"), "object": map[string]string{"sha": sha}})
 	})
 	mux.HandleFunc("POST "+prefix+"/git/refs", s.createRef)
+	mux.HandleFunc("GET "+prefix+"/branches/{branch...}", func(w http.ResponseWriter, r *http.Request) {
+		branch := r.PathValue("branch")
+		sha := s.SHA(branch)
+		if sha == "" {
+			fail(w, 404, "Branch not found")
+			return
+		}
+		s.mu.Lock()
+		protected := s.Protected[branch]
+		s.mu.Unlock()
+		write(w, 200, map[string]any{"name": branch, "protected": protected, "commit": map[string]string{"sha": sha}})
+	})
 	mux.HandleFunc("DELETE "+prefix+"/git/refs/heads/{branch...}", s.deleteRef)
 	mux.HandleFunc("GET "+prefix+"/collaborators/{login}/permission", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -620,11 +656,16 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	if s.MergeableUnknown[p.Number] {
 		mergeable, state = nil, "unknown"
 	}
+	headRepo := s.Slug
+	if p.HeadRepo != "" {
+		headRepo = p.HeadRepo
+	}
 	return map[string]any{
 		"number": p.Number, "node_id": fmt.Sprintf("PR_%d", p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
-		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title,
+		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
+		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author),
 	}

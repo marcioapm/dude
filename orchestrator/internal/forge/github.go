@@ -455,11 +455,15 @@ type ghPull struct {
 	MergedAt       *string `json:"merged_at"`
 	Mergeable      *bool   `json:"mergeable"`
 	MergeableState string  `json:"mergeable_state"`
+	Title          string  `json:"title"`
 	Head           struct {
-		SHA string `json:"sha"`
+		SHA  string  `json:"sha"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		Ref string `json:"ref"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"base"`
 	RequestedReviewers []ghUser `json:"requested_reviewers"`
 	RequestedTeams     []struct {

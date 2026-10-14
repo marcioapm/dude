@@ -20,6 +20,8 @@ import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { SOURCE_JSON, checkTaskSource, sameSource, setTaskSource, taskSourceInput } from "./taskSource.ts";
+import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
 
@@ -348,6 +350,8 @@ const updateTaskInput = z.object({
   repositories: taskRepositoriesInput,
   /** Hand it to another of the organization's people (a person's id; one of their keys' still works). */
   ownerId: z.string().min(1),
+  /** Existing work it starts from, or null for new work; fixed once its delivery has started. */
+  source: taskSourceInput,
 }).partial();
 
 /**
@@ -357,8 +361,22 @@ const updateTaskInput = z.object({
  * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const { ownerId: ownerGiven, ...given } = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId: ownerGiven, source: sourceGiven, ...given } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
+  // A changed source is asked of GitHub before the transaction, so no row is
+  // held while it answers; the same source again is no change, and not asked.
+  let source: TaskSource | null | undefined;
+  if (sourceGiven !== undefined) {
+    const stored = await withOrg(ctx.principal.organizationId, async (scope) => {
+      const rows = (await scope.sql`SELECT project_id AS "projectId", ${scope.sql.unsafe(SOURCE_JSON)}
+        FROM tasks WHERE id = ${id}`) as Array<{ projectId: string; source: TaskSource | null }>;
+      return rows[0];
+    });
+    if (!stored) throw notFound(`task ${id} not found`);
+    if (!sameSource(stored.source, sourceGiven)) {
+      source = sourceGiven ? await checkTaskSource(ctx, stored.projectId, sourceGiven, id) : null;
+    }
+  }
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
       SELECT project_id AS "projectId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
@@ -388,6 +406,8 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
     const stopped = status === "aborted" || status === "failed";
     if (changesTheTask && delivering.length > 0 && (!stopped || input.repositories !== undefined)) return { started: status };
+    // Where it starts from is the delivery's branch: fixed once one has started, stopped or not.
+    if (source !== undefined && delivering.length > 0) return { started: status };
     // After the started check, so a started task asked for a new goal hears it is fixed.
     // A task saved before the rule keeps its short goal until someone sets one.
     if (input.goal !== undefined && taskGoalShortBy(input.goal) > 0) return { shortGoal: true as const };
@@ -397,10 +417,16 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     }
     const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
     if (ownerId === null) return { noPerson: ownerGiven };
-    if (Object.keys(given).length === 0 && ownerId === undefined) return { unchanged: true as const };
+    if (Object.keys(given).length === 0 && ownerId === undefined && source === undefined) return { unchanged: true as const };
     if (input.repositories) {
       const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };
+    }
+    // After the repositories, so a source's repository stays one it changes.
+    if (source !== undefined) await setTaskSource(scope, ctx.principal.organizationId, id, source);
+    else if (input.repositories) {
+      const kept = (await scope.sql`SELECT ${scope.sql.unsafe(SOURCE_JSON)} FROM tasks WHERE id = ${id}`) as Array<{ source: TaskSource | null }>;
+      if (kept[0]?.source) await setTaskSource(scope, ctx.principal.organizationId, id, kept[0].source);
     }
     await scope.sql`
       UPDATE tasks SET
@@ -415,11 +441,14 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
       await syncTaskAttachments(scope, id, input.goal ?? current[0].goal, input.acceptanceCriteria ?? current[0].acceptanceCriteria);
     }
-    if (Object.keys(input).length > 0) await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
+    if (Object.keys(input).length > 0 || source !== undefined) {
+      await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input, ...(source !== undefined ? { source } : {}) }, id);
+    }
     // The new owner goes first; everyone else on it stays, after them.
     if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);
     const rows = (await scope.sql`
-      SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
+      SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)},
+        ${scope.sql.unsafe(SOURCE_JSON)}, title, goal,
         acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(ownerJson())},
         ${scope.sql.unsafe(peopleJson())}, updated_at AS "updatedAt"
       FROM tasks WHERE id = ${id}`) as Array<Record<string, unknown>>;

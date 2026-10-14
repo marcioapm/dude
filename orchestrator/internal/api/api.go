@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	s.githubRoutes(mux)
+	s.sourceRoutes(mux)
 	s.recoverRoutes(mux)
 	s.stallRoutes(mux)
 	s.serverRoutes(mux)
