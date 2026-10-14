@@ -375,7 +375,11 @@ function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTa
 export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOverrides, filter: NavFilter = {}): NavRow[] {
   const ctx: Ctx = { overrides, filter, rows: [] };
   const q = (filter.query ?? "").trim().toLowerCase();
-  const filtering = q.length > 0 || (filter.triage ?? null) !== null || (filter.person ?? null) !== null;
+  // A search is a glance: it holds every row with a hit open, chevrons inert.
+  // "Mine" is a view you stay in, so it only opens rows by default and leaves
+  // the chevrons working.
+  const searching = q.length > 0 || (filter.triage ?? null) !== null;
+  const filtering = searching || (filter.person ?? null) !== null;
 
   for (const p of projects) {
     const pref: NavRef = { kind: "project", id: p.id };
@@ -391,8 +395,8 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
     if (filtering && epics.length === 0 && loose.length === 0) continue;
 
     const counts = projectCounts(p, filter.you);
-    const forced = filtering;
-    const expanded = isOpen(ctx, pkey, projectDefaultOpen(counts), forced);
+    const forced = searching;
+    const expanded = isOpen(ctx, pkey, filtering || projectDefaultOpen(counts), forced);
     ctx.rows.push({ key: pkey, ref: pref, depth: 0, parentKey: null, expandable: true, expanded, forced, node: p, counts, triage: null, projectId: p.id });
     if (!expanded) continue;
 
@@ -400,7 +404,7 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
       const eref: NavRef = { kind: "epic", id: epic.id };
       const ekey = navKey(eref);
       const ec = epicCounts(epic, filter.you);
-      const eexp = isOpen(ctx, ekey, epicDefaultOpen(ec), forced);
+      const eexp = isOpen(ctx, ekey, filtering || epicDefaultOpen(ec), forced);
       ctx.rows.push({ key: ekey, ref: eref, depth: 1, parentKey: pkey, expandable: epic.tasks.length > 0, expanded: eexp, forced, node: epic, counts: ec, triage: null, projectId: p.id });
       if (eexp) for (const wi of items) pushTask(ctx, wi, 2, ekey, p.id);
     }
