@@ -375,6 +375,12 @@ class FakeGitHub:
             self.pulls[number].unresolved_threads = threads
         self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
 
+    def resolve_thread(self, number: int, root_comment: int) -> None:
+        """A person resolves the review thread a root line comment opened."""
+        with self._lock:
+            self.resolved_threads.add(self.thread_id(root_comment))
+        self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
+
     def commit(self, branch: str, message: str, author: str = "Gus Human") -> str:
         """A person pushes a commit to a branch on GitHub; its sha. A push to
         a pull request's branch is a `synchronize`."""
