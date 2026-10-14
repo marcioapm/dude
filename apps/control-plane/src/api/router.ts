@@ -8,6 +8,7 @@
 import { type Principal, type RequestAuthenticator, authenticate, personPrincipal } from "./auth.ts";
 import { touch } from "./presence.ts";
 import { HttpError, errorResponse, notFound, unauthorized } from "./http.ts";
+import { callbackPath } from "./routes/githubOAuth.ts";
 
 function checkAdmission(principal: Principal, request: Request, url: URL): void {
   const access = principal.access;
@@ -170,7 +171,7 @@ export class Router {
     } catch (err) {
       // Callback middleware still authenticates normally, but an unexpected
       // failure must never log an exception containing its raw request URL.
-      if (request.method === "GET" && url.pathname === "/v1/me/github/callback" && !(err instanceof HttpError)) {
+      if (request.method === "GET" && url.pathname === callbackPath && !(err instanceof HttpError)) {
         return new Response(null, { status: 303, headers: { location: "/?github=authorization_failed#/me/settings",
           "cache-control": "no-store", "referrer-policy": "no-referrer" } });
       }

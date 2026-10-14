@@ -6,7 +6,7 @@ import { badRequest, json, noContent } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-export const GITHUB_CALLBACK_PATH = "/v1/me/github/callback";
+export const callbackPath = "/v1/me/github/callback";
 
 function session(ctx: RequestContext) {
   if (ctx.principal.credentialKind !== "person") throw badRequest("Connect GitHub requires a logged-in person session");
@@ -16,7 +16,7 @@ function session(ctx: RequestContext) {
 function callbackUrl() {
   const auth = config().auth;
   if (auth.provider !== "cloudflare_access") throw badRequest("Connect GitHub requires Cloudflare Access sign-in");
-  return auth.public_url.replace(/\/+$/, "") + GITHUB_CALLBACK_PATH;
+  return auth.public_url.replace(/\/+$/, "") + callbackPath;
 }
 
 // Your settings in the organisation the transaction was for, when known; a bare
@@ -92,7 +92,7 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
       code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
     return json({ url: url.toString() });
   });
-  router.get(GITHUB_CALLBACK_PATH, async (ctx) => {
+  router.get(callbackPath, async (ctx) => {
     let slug: string | null = null;
     try {
       const state = ctx.url.searchParams.get("state") ?? "";

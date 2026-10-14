@@ -445,8 +445,10 @@ kind — and a header alone forgets the organisation on every shared link.
   `/v1/invitations/:code`) need none.
 - **GitHub's return from Connect GitHub** (`GET /v1/me/github/callback`) is
   the one tenant write that names no organisation and arrives cross-site:
-  GitHub redirects the browser there. The gate lets that one GET through its
-  cross-site check and its organisation rule; the route finds the
+  GitHub redirects the browser there. `checkBrowserOrigin` lets through only
+  a top-level cross-site navigation to it (`isOAuthCallbackNavigation`:
+  `GET`, `Sec-Fetch-Site: cross-site`, `Mode: navigate`, `Dest: document`),
+  and the gate treats that path as needing no organisation; the route finds the
   organisation by the single-use state, which is bound to the person who
   started it in each of the account's memberships, and lands on
   `/?github=<outcome>#/o/<slug>/me/settings`. Connect itself and the status

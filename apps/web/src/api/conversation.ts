@@ -651,6 +651,8 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
+  /** The latest top-level row of each call id and tool, placeholders not yet claimed left out: an id reused for another tool has several. */
+  latestCallByTool: Map<string, Map<string, ToolTurn>>;
   /** Child sessions by their id, and each child's tool calls by theirs. */
   childrenById: Map<string, ChildTurn>;
   childToolsByCall: Map<string, ToolTurn>;
@@ -750,6 +752,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
+    latestCallByTool: new Map(),
     childrenById: new Map(),
     childToolsByCall: new Map(),
     placeholderCalls: new Set(),
@@ -1008,6 +1011,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const placeholder = toolsByCall.get(callId);
         if (placeholder && state.placeholderCalls.has(placeholder)) {
           claimPlaceholder(state, placeholder, tool, payload, event.occurredAt, true);
+          indexCall(state, placeholder);
           takeRefusal(state, placeholder);
         } else {
           const turn = toolTurn(callId, tool, payload, event.occurredAt);
@@ -1023,30 +1027,24 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.ToolCompleted: {
         const callId = String(payload.callId ?? "");
-        const existing = toolsByCall.get(callId);
-        const result = resultFrom(payload);
-        const machineCall = dudeToolName(existing?.tool ?? tool) === "request_machine";
-        const outcome = machineCall ? machineOutcome(result, payload.status === "error") : null;
-        if (existing && outcome) {
-          const asked = (existing.args as { size?: unknown } | null)?.size;
-          existing.machine = { from: existing.machine?.from ?? null, to: existing.machine?.to ?? (typeof asked === "string" ? asked : "a larger machine"),
-            pool: existing.machine?.pool ?? outcome.pool, ...outcome.said };
-        }
+        const existing = completedCall(state, callId, tool);
         if (existing) {
           // A repeated completion (a harness taken back up re-reporting it) never re-times a finished call.
-          if (!existing.endedAt) {
+          const ending = !existing.endedAt;
+          if (ending) {
             claimPlaceholder(state, existing, tool, payload, event.occurredAt, false);
+            indexCall(state, existing);
             endTool(existing, payload, event.occurredAt);
-            // request_machine's refusal fails its call even when the harness reported it completed.
-            if (outcome?.said.error !== undefined) existing.status = "failed";
-            takeRefusal(state, existing);
           }
+          answerMachine(existing, payload, ending);
+          if (ending) takeRefusal(state, existing);
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
           // than a gap in the record.
           const turn = toolTurn(callId || event.eventId, tool, payload, event.occurredAt);
           endTool(turn, payload, event.occurredAt);
+          answerMachine(turn, payload, true);
           toolsByCall.set(turn.id, turn);
           addToolTurn(state, turn, ask);
           takeRefusal(state, turn);
@@ -1833,6 +1831,20 @@ function machineOutcome(result: ToolResult | null, failed: boolean): { said: Mac
 }
 
 /**
+ * request_machine's answer, from a completion, on its call's card. The card takes every completion's answer; a
+ * refusal fails the call only when this completion ends it, even if the harness reported it completed.
+ */
+function answerMachine(turn: ToolTurn, payload: Record<string, unknown>, ending: boolean): void {
+  if (dudeToolName(turn.tool) !== "request_machine") return;
+  const outcome = machineOutcome(resultFrom(payload), payload.status === "error");
+  if (!outcome) return;
+  const asked = (turn.args as { size?: unknown } | null)?.size;
+  turn.machine = { from: turn.machine?.from ?? null, to: turn.machine?.to ?? (typeof asked === "string" ? asked : "a larger machine"),
+    pool: turn.machine?.pool ?? outcome.pool, ...outcome.said };
+  if (ending && outcome.said.error !== undefined) turn.status = "failed";
+}
+
+/**
  * What else a raise changes, as the design's notice says it: later Runs of
  * the role in the task (the implementer's reach the fixer too), or nothing
  * more for a session, whose agent is the one that moved.
@@ -1873,10 +1885,37 @@ function claimPlaceholder(state: Projection, turn: ToolTurn, tool: string, paylo
   if (called) turn.startedAt = at;
 }
 
+/**
+ * The call a completion of `tool` ends. An id reused for another tool maps to the later call, so a completion of
+ * the earlier tool (a repeat of one already folded) is that earlier row's. A placeholder takes any tool's
+ * completion that no earlier row of that id and tool already owns.
+ */
+function completedCall(state: Projection, callId: string, tool: string): ToolTurn | undefined {
+  const mapped = state.toolsByCall.get(callId);
+  const placeholder = mapped !== undefined && state.placeholderCalls.has(mapped);
+  if (!mapped || (mapped.tool === tool && !placeholder)) return mapped;
+  const recorded = state.latestCallByTool.get(callId)?.get(tool);
+  return recorded ?? (placeholder ? mapped : undefined);
+}
+
+/**
+ * Records a top-level row as the latest of its id and tool, once it is added or its placeholder claimed. Rows are
+ * never removed or moved before one another, so the last recorded is the last in `turns`.
+ */
+function indexCall(state: Projection, turn: ToolTurn): void {
+  if (state.placeholderCalls.has(turn)) return;
+  let byTool = state.latestCallByTool.get(turn.id);
+  if (!byTool) state.latestCallByTool.set(turn.id, (byTool = new Map()));
+  byTool.set(turn.tool, turn);
+}
+
 /** Marks a child and every child above it changed, for a renderer that skips unchanged ones. */
 function touch(state: Projection, child: ChildTurn): void {
   for (let c: ChildTurn | undefined = child; c; c = c.parentChildId ? state.childrenById.get(c.parentChildId) : undefined) c.revision += 1;
 }
+
+/** The tool every harness's translator records a child's starting call as (Codex's spawnAgent included). */
+const CHILD_CALL_TOOL = "task";
 
 /**
  * The child an `agent.child.*` event is about, made from it when it is the
@@ -1915,6 +1954,8 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
     ? state.childrenById.get(payload.parentChildId) : undefined;
   child.parentChildId = parentChild?.id ?? null;
   let call = parentChild ? state.childToolsByCall.get(`${parentChild.id}/${callId}`) : state.toolsByCall.get(callId);
+  // An ended call of another tool under the same id is an earlier call: this child's own call is still to come.
+  if (call?.endedAt && call.tool !== CHILD_CALL_TOOL) call = undefined;
   if (!call) {
     call = toolTurn(callId || id, child.childKind, {}, event.occurredAt);
     state.placeholderCalls.add(call);
@@ -1993,6 +2034,7 @@ function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
 function addToolTurn(state: Projection, turn: ToolTurn, ask: Projection["pendingAsk"]): void {
   const { turns } = state;
   turns.push(turn);
+  indexCall(state, turn);
   if (!ask || dudeToolName(turn.tool) !== ask.tool) return;
   const at = turns.lastIndexOf(ask.question);
   if (at < 0) return;
