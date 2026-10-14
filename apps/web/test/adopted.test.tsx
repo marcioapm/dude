@@ -246,6 +246,56 @@ describe("a source that changed on GitHub", () => {
   }
 });
 
+describe("Start over on adopted work", () => {
+  async function restartDialog(source: TaskSource | null) {
+    localStorage.setItem("dude.fixtures.run", "aborted");
+    const client = new AdoptedClient({ source, status: "aborted" }, source?.kind === "pr" ? [ADOPTED] : [], "a");
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1, keptUntil: null });
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    await click(await until(() => container.querySelector("[data-testid=recover-restart]"), "Start over…"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    const way = dialog.querySelector<HTMLElement>(".pickUpWay[data-shown=true] ul")!;
+    const lines = [...way.querySelectorAll("li")].map((li) => [...li.children].map((c) => text(c)));
+    const option = [...dialog.querySelectorAll<HTMLElement>("[role=radio]")].find((o) => o.textContent?.startsWith("Start over"))!;
+    return { lines, said: text(way), option: text(option) };
+  }
+
+  test("an adopted pull request: the same branch and pull request, kept, never a new dude/… branch or pull request", async () => {
+    const { lines, said, option } = await restartDialog(PR_SOURCE);
+    expect(option).toBe("Start over as attempt 2The same pull request and branch, reviewed again from the start.");
+    expect(lines).toEqual([
+      ["Conversation", "new", "Fresh agents, told the task as it is now — edit it first if what it asks for was the problem."],
+      ["Workspace", "new", "A clean checkout of feature/greet as GitHub has it."],
+      ["Branch", "kept", "feature/greet, and pull request #12 on it, which stays open."],
+      ["Session", "new", "Attempt 2, from review again. Attempt 1's sessions stay, marked as such."],
+    ]);
+    for (const words of [said, option]) {
+      expect(words).not.toContain("new branch");
+      expect(words).not.toContain("dude/");
+      expect(words).not.toContain("closed");
+      expect(words).not.toContain("default branch");
+    }
+  });
+
+  test("an adopted branch: the same branch into its base; a pull request dude opened from it is closed", async () => {
+    const { lines, option } = await restartDialog(BRANCH_SOURCE);
+    expect(option).toBe("Start over as attempt 2The same branch, reviewed again from the start.");
+    expect(lines[2]).toEqual(["Branch", "kept", "stack/top, into stack/base. A pull request dude opened from it is closed."]);
+    expect(lines[1]).toEqual(["Workspace", "new", "A clean checkout of stack/top as GitHub has it."]);
+  });
+
+  test("new work keeps its words: a new branch, and the last pull request closed", async () => {
+    const { lines, option } = await restartDialog(null);
+    expect(option).toBe("Start over as attempt 2A new branch from the default branch, and the whole pipeline again.");
+    expect(lines[2]).toEqual(["Branch", "new", "A new branch for attempt 2. Attempt 1's is kept; a pull request on it is closed."]);
+  });
+});
+
 describe("the adopted pull request across attempts", () => {
   // Picks attempt `n` in the header's picker, as a person would.
   const press = (el: Element) =>

@@ -16,7 +16,7 @@ import { shortId } from "@dude/design-system";
 import { Duration, ROLE_LABEL } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import { blockedRefusal, runDoer, runLabel, type PersistedEvent } from "@dude/domain";
-import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail } from "../api/client.ts";
+import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail, type TaskSource } from "../api/client.ts";
 import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
@@ -145,7 +145,7 @@ export function StoppedNotice({ task, stop, options, owner, you, onOpenRun, onCh
 /** Kept, new or gone: what one way does to each thing the task has. */
 type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
 
-function effects(action: RecoverAction, role: string, branch: string, head: string | null, attempt: number): Effect[] {
+function effects(action: RecoverAction, role: string, branch: string, head: string | null, attempt: number, source: TaskSource | null): Effect[] {
   const at = head ? <span className="ds-mono">{head}</span> : "what was pushed";
   switch (action) {
     case "resume":
@@ -163,6 +163,17 @@ function effects(action: RecoverAction, role: string, branch: string, head: stri
         { what: "Session", how: "new", text: "A new session in this attempt; the stopped one stays to read." },
       ];
     case "restart":
+      // Existing work is started over where it is: its branch, and its pull request if it had one.
+      if (source) {
+        return [
+          { what: "Conversation", how: "new", text: "Fresh agents, told the task as it is now — edit it first if what it asks for was the problem." },
+          { what: "Workspace", how: "new", text: <>A clean checkout of <span className="ds-mono">{source.headBranch}</span> as GitHub has it.</> },
+          { what: "Branch", how: "kept", text: source.kind === "pr"
+            ? <><span className="ds-mono">{source.headBranch}</span>, and pull request #{source.number} on it, which stays open.</>
+            : <><span className="ds-mono">{source.headBranch}</span>, into <span className="ds-mono">{source.baseBranch}</span>. A pull request dude opened from it is closed.</> },
+          { what: "Session", how: "new", text: `Attempt ${attempt + 1}, from review again. Attempt ${attempt}'s sessions stay, marked as such.` },
+        ];
+      }
       return [
         { what: "Conversation", how: "new", text: "Fresh agents, told the task as it is now — edit it first if what it asks for was the problem." },
         { what: "Workspace", how: "new", text: "A clean checkout of the default branch." },
@@ -202,6 +213,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   const head = Object.values(stop.run?.heads ?? {}).map((sha) => shortId(sha, 7))[0] ?? null;
   const branch = stop.run?.branch ?? task.runs.find((r) => r.branch)?.branch ?? "its branch";
   const open = new Set(options.actions);
+  const source = task.source ?? null;
   const reason = (a: RecoverAction): string | undefined => {
     if (open.has(a)) return undefined;
     if (a === "resume") return "No longer kept: lux keeps a stopped session for a while, then lets it go.";
@@ -210,7 +222,9 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   const choices: ChoiceOption<RecoverAction>[] = [
     { value: "resume", icon: "play", label: `Resume the ${role}`, description: "The same agent picks up where it stopped, with its conversation and unpushed work.", disabledReason: reason("resume") },
     { value: "retry", icon: "retry", label: `Try again with a new ${role}`, description: "Same branch, from what was pushed. Nothing it was thinking comes along.", disabledReason: reason("retry") },
-    { value: "restart", icon: "git-branch", label: `Start over as attempt ${options.attempt + 1}`, description: "A new branch from the default branch, and the whole pipeline again.", disabledReason: reason("restart") },
+    { value: "restart", icon: "git-branch", label: `Start over as attempt ${options.attempt + 1}`,
+      description: source ? `The same ${source.kind === "pr" ? "pull request and branch" : "branch"}, reviewed again from the start.` : "A new branch from the default branch, and the whole pipeline again.",
+      disabledReason: reason("restart") },
   ];
   const go = async (override = false) => {
     setBusy(true);
@@ -250,7 +264,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
           {choices.map(({ value: a }) => (
             <div key={a} className="pickUpWay" data-shown={a === action}>
               <ul className="pickUpEffects" aria-label="What it does">
-                {effects(a, role, branch, head, options.attempt).map((e) => (
+                {effects(a, role, branch, head, options.attempt, source).map((e) => (
                   <li key={e.what} data-how={e.how}>
                     <span className="pickUpWhat">{e.what}</span>
                     <span className="pickUpHow">{e.how}</span>
