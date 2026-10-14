@@ -7,6 +7,7 @@ import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
+import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { click, mount, until } from "./dom.ts";
 
 const me = PEOPLE.find((p) => p.id === YOU)!;
@@ -87,6 +88,24 @@ test("others starts selected, person/project compose, Take over moves the row an
   await until(() => c.textContent?.includes("Nothing is waiting on others") ? true : null, "moved off others");
   expect(c.querySelector("[role=tab]")?.textContent).toBe("On you6");
   expect(c.querySelectorAll("[role=tab]")[1]?.textContent).toBe("On others0");
+});
+
+test("the asks fixture puts the viewer's own tasks on On you and keeps others' on On others", async () => {
+  localStorage.setItem(RUN_KEY, "asks");
+  try {
+    const client = new FixtureClient("a");
+    const { projects: tree } = await client.navigation();
+    const { container, unmount } = await mount(<TooltipProvider><ToastProvider><PeopleProvider client={client}>
+      <InboxScreen client={client} projects={tree} sessions={{ sessions: [], invitations: [], questions: [] }} onSelect={() => {}} onOpenSession={() => {}} onChanged={() => {}} />
+    </PeopleProvider></ToastProvider></TooltipProvider>);
+    cleanup.push(unmount);
+    await until(() => container.querySelector("[data-testid=inbox] [role=tab]")?.textContent === "On you2" ? true : null, "On you counted");
+    expect(list(container).textContent).toContain("WC-205");
+    expect(list(container).textContent).toContain("API-10");
+    expect(container.querySelectorAll("[role=tab]")[1]?.textContent).toBe("On others2");
+  } finally {
+    localStorage.removeItem(RUN_KEY);
+  }
 });
 
 test("invitation Open/Decline and a brainstorm answer keep their existing actions", async () => {
