@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { PersistedEvent } from "@dude/domain";
-import { act, click, mount, until } from "./dom.ts";
+import { act, click, mount, sessionOptions, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RUN_ID, STALLED_TEXT, TASK_ID, run } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -91,7 +91,8 @@ describe("a stalled Run's banner", () => {
 describe("a stalled Run in Sessions", () => {
   test("carries a stalled badge, with dude's facts as its title", async () => {
     const { page } = await stalledPage("sessions");
-    const badge = await until(() => page.querySelector<HTMLElement>(`[data-run="${RUN_ID}"] [data-testid=session-stalled]`), "the badge");
+    await sessionOptions(page);
+    const badge = await until(() => document.querySelector<HTMLElement>(`[data-run="${RUN_ID}"] [data-testid=session-stalled]`), "the badge");
     expect(badge.textContent).toBe("stalled");
     expect(badge.title).toBe(STALLED_TEXT);
   });
@@ -164,7 +165,8 @@ describe("a restarted Run's presentation", () => {
     mounted.push(unmount);
     const selector = view === "run" ? "[data-testid=run-ended]" : view === "sessions"
       ? `[data-testid=session][data-run="${RUN_ID}"]` : "[data-testid=phase][data-status=aborted]";
-    return await until(() => container.querySelector<HTMLElement>(selector), view);
+    if (view === "sessions") await sessionOptions(container);
+    return await until(() => (view === "sessions" ? document : container).querySelector<HTMLElement>(selector), view);
   }
 
   for (const view of ["sessions", "step", "run"] as const) {

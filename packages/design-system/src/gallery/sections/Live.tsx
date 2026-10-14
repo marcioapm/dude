@@ -8,6 +8,10 @@ import { Icon } from "../../icons/index.tsx";
 import { Cost } from "../../components/Cost.tsx";
 import { LiveDiff, type LiveDiffFile } from "../../components/LiveDiff.tsx";
 import { FileGallery, FileViewer, type GalleryFile } from "../../components/FileGallery.tsx";
+import { SearchSelector } from "../../components/SearchSelector.tsx";
+import { SessionHeader } from "../../components/ChatTranscript.tsx";
+import { SessionItemContent } from "../../components/SessionList.tsx";
+import { StatusMark } from "../../components/StatusMark.tsx";
 import { ArtifactPreview } from "../../components/ArtifactPreview.tsx";
 
 const line = (kind: " " | "+" | "-", old: number | null, n: number | null, text: string) => ({ kind, old, new: n, text });
@@ -99,9 +103,27 @@ function FilesDemo() {
   );
 }
 
+const SELECTOR_OPTIONS = [
+  { id: "conductor", title: "Conductor", role: "conductor" as const, model: "claude-sonnet-5", status: "running" as const },
+  { id: "review", title: "Review · correctness", role: "reviewer" as const, model: "claude-opus-5", status: "completed" as const },
+];
+function SelectorDemo({ empty = false }: { empty?: boolean }) {
+  const [selected, setSelected] = useState(SELECTOR_OPTIONS[0]!);
+  return <SessionHeader session={{ id: selected.id, role: selected.role, title: selected.title, status: selected.status, model: selected.model }}
+    titleSelector={(title) => <SearchSelector title={title} label="Select session" placeholder="Find a session…"
+      options={empty ? [] : SELECTOR_OPTIONS} optionKey={(o) => o.id} searchText={(o) => `${o.title} ${o.model} ${o.status}`}
+      group={(o) => o.role === "conductor" ? "Conductor" : "Delivered automatically"} current={(o) => o.id === selected.id} onPick={setSelected}
+      empty="No sessions yet" renderOption={(o) => <SessionItemContent avatar={<AgentAvatar role={o.role} size="lg" />}
+        title={o.title} detail={o.model} trailing={<StatusMark status={o.status} />} />} />} />;
+}
+
 export function LiveSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="live" title="Live work" intro="What an agent is doing to the code as it does it, the files it leaves, and what it cost.">
+      <Block id="l-selector" title="Session title selector" note="The title alone opens the searchable list. Search role, model or status; arrows and Enter choose, Escape or outside press dismisses. Tab and focus restoration use Radix. The selected option is marked independently of keyboard focus. Resize for narrow states; both themes below are interactive.">
+        <Panes mode={mode}><SelectorDemo /></Panes>
+        <Panes mode={mode}><SelectorDemo empty /></Panes>
+      </Block>
       <Block id="l-diff" title="LiveDiff" note="The agent's checkout against the commit it started from, as it changes. Files on the left with status and counts; each file's diff under a header that sticks. New lines flash and keep a mark down their side for a moment; the file they are in lights up. Follow the agent scrolls to the newest change; picking a file shows it alone and turns Follow off. Unified or Split; each file opens in the viewer. The last change carries the agent's face.">
         <Panes mode={mode}>
           <LiveDemo />

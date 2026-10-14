@@ -54,11 +54,15 @@ export interface SearchPickerProps<T> {
   readonly onSubmit?: (() => void) | undefined;
   /** Keys (`optionKey`) never shown: what is already picked. Hidden as found, never found again. */
   readonly exclude?: ReadonlySet<string> | undefined;
+  readonly optionAttributes?: ((option: T) => Record<string, string | undefined>) | undefined;
+  readonly listTestId?: string | undefined;
+  readonly optionCurrent?: ((option: T) => boolean) | undefined;
+  readonly escapeClosesPicker?: boolean | undefined;
 }
 
 export function SearchPicker<T>({
   find, optionKey, renderOption, onPick, onCancel, placeholder, label, autoFocus, delay = 200, size,
-  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, exclude,
+  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, exclude, optionCurrent, escapeClosesPicker, optionAttributes, listTestId,
 }: SearchPickerProps<T>) {
   const listId = useId();
   const [query, setQuery] = useState("");
@@ -104,7 +108,7 @@ export function SearchPicker<T>({
   const current = active < options.length && !why(options[active]!) ? active : Math.max(0, options.findIndex((o) => !why(o)));
 
   const open = !closed && options.length > 0;
-  const nothing = !closed && !open && !!answered && empty !== undefined;
+  const nothing = !closed && !open && answered !== null && empty !== undefined;
   const optionId = (i: number) => `${listId}-${i}`;
   // The next option that can be picked, from `from`, `by` rows at a time.
   const step = (from: number, by: 1 | -1) => {
@@ -119,6 +123,10 @@ export function SearchPicker<T>({
     onPick(o);
     if (clearOnPick) setQuery("");
   };
+
+  useEffect(() => {
+    if (open) document.getElementById(optionId(current))?.scrollIntoView?.({ block: "nearest" });
+  }, [open, current, found]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && (open || closed)) {
@@ -138,7 +146,10 @@ export function SearchPicker<T>({
     } else if (e.key === "Escape") {
       // Inside a dialog: close the list first, the picker next, the dialog last.
       e.stopPropagation();
-      if (open || nothing) {
+      if (escapeClosesPicker) {
+        e.preventDefault();
+        onCancel?.();
+      } else if (open || nothing) {
         e.preventDefault();
         setClosed(true);
       } else {
@@ -158,10 +169,12 @@ export function SearchPicker<T>({
     const off = why(o);
     rows.push(
       <li
+        {...optionAttributes?.(o)}
         key={optionKey(o)}
         id={optionId(i)}
         role="option"
-        aria-selected={i === current}
+        aria-selected={optionCurrent ? optionCurrent(o) : i === current}
+        aria-current={optionCurrent?.(o) ? "true" : undefined}
         aria-disabled={off ? true : undefined}
         className={cx(styles["option"], i === current && !off && styles["active"], off && styles["disabled"])}
         // mousedown, not click: the field keeps its focus.
@@ -197,7 +210,7 @@ export function SearchPicker<T>({
         }}
         onKeyDown={onKeyDown}
       />
-      <ul id={listId} role="listbox" aria-label={label} className={styles["list"]} hidden={!open && !nothing}>
+      <ul data-testid={listTestId} id={listId} role="listbox" aria-label={label} className={styles["list"]} hidden={!open && !nothing}>
         {open ? rows : nothing ? <li role="presentation" className={styles["empty"]}>{empty(answered)}</li> : null}
       </ul>
     </div>

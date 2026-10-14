@@ -1057,13 +1057,6 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
   events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
   many: boolean; shown: number; taskKey: string | null; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
 }) {
-    <PageWithRail rail={<PageRail aria-label="Activity filters">
-      <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label, count: lines.filter((l) => l.kind === value).length }))} /></PageRailBlock>
-      <PageRailBlock label="People"><FacetList label="Activity person" value={persons} onValueChange={setPersons} options={personOptions} /></PageRailBlock>
-      <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} />
-        <p className="ds-muted">Newest first. Counts include every timeline item before filters. No selections means all.</p></PageRailBlock>
-    </PageRail>}><div className="taskPane">
-    {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
     return activityLines(events, people, runs, prs, current, taskKey);
@@ -1075,6 +1068,13 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
   const personOptions = [...new Map(lines.map((l) => [l.personId, l.personName])).entries()].map(([id, name]) => ({ value: id, label: name, count: lines.filter((l) => l.personId === id).length }));
   const now = Date.now();
   return (
+    <PageWithRail rail={<PageRail aria-label="Activity filters">
+      <PageRailBlock label="Show"><FacetList label="Event kind" value={kinds} onValueChange={setKinds} options={Object.entries(ACTIVITY_KINDS).map(([value, label]) => ({ value, label, count: lines.filter((l) => l.kind === value).length }))} /></PageRailBlock>
+      <PageRailBlock label="People"><FacetList label="Activity person" value={persons} onValueChange={setPersons} options={personOptions} /></PageRailBlock>
+      <PageRailBlock label="Attempts"><FacetList label="Activity attempt" value={attempts} onValueChange={setAttempts} options={[...new Set(lines.map((l) => l.attempt))].map((n) => ({ value: String(n), label: n === null ? "Task conductor" : `Attempt ${n}${n === current ? " · current" : ""}`, count: lines.filter((l) => l.attempt === n).length }))} />
+        <p className="ds-muted">Newest first. Counts include every timeline item before filters. No selections means all.</p></PageRailBlock>
+    </PageRail>}><div className="taskPane">
+    {!displayed.length ? <EmptyState compact icon="list" title={lines.length ? "No matching activity" : "Nothing yet"} description="Clear filters to show more of the task timeline." /> : null}
     <Timeline data-testid="activity">
       {displayed.map((l) => (
         <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
@@ -1082,19 +1082,10 @@ function Activity({ events, people, runs, prs, current, many, shown, taskKey, on
           {l.text}
           {many && l.attempt !== null ? <span className="lineAttempt" data-shown={l.attempt === shown || undefined}> · attempt {l.attempt}</span> : null}
           {l.open ? (
-    </div></PageWithRail>
             <>
               {" "}
               <Button size="sm" variant="quiet" trailingIcon="arrow-right" data-testid="activity-open"
-const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", task: "Task & relations" };
-export function filterActivity(lines: readonly ActivityLine[], kinds: readonly string[], persons: readonly string[], attempts: readonly string[]) {
-  return lines.filter((l) => (!kinds.length || kinds.includes(l.kind)) && (!persons.length || persons.includes(l.personId)) && (!attempts.length || attempts.includes(String(l.attempt))));
-}
-
                 onClick={() => (l.open!.runId ? onOpenRun(l.open!.runId) : onShow(l.attempt ?? shown, l.open!.tab))}>
-  kind: string;
-  personId: string;
-  personName: string;
                 {l.open.label}
               </Button>
             </>
@@ -1102,10 +1093,19 @@ export function filterActivity(lines: readonly ActivityLine[], kinds: readonly s
         </TimelineItem>
       ))}
     </Timeline>
+    </div></PageWithRail>
   );
 }
 
+const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", task: "Task & relations" };
+export function filterActivity(lines: readonly ActivityLine[], kinds: readonly string[], persons: readonly string[], attempts: readonly string[]) {
+  return lines.filter((l) => (!kinds.length || kinds.includes(l.kind)) && (!persons.length || persons.includes(l.personId)) && (!attempts.length || attempts.includes(String(l.attempt))));
+}
+
 interface ActivityLine {
+  kind: string;
+  personId: string;
+  personName: string;
   id: string;
   at: string;
   /** Null for a line about the task's conductor, which is no attempt's. */

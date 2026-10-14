@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RESTARTED_RUNS, TASK_ID } from "../src/fixtures/data.ts";
 import type { PersistedEvent, Run } from "@dude/domain";
@@ -245,10 +245,13 @@ describe("a conductor's session, from its URL", () => {
     mounted.push(unmount);
     return container;
   }
-  const sessionsListed = (page: HTMLElement) => until(() => {
-    const l = [...page.querySelectorAll<HTMLElement>("[data-testid=sessions] [data-testid=session]")];
-    return l.length > 0 ? l : null;
-  }, "the sessions listed");
+  const sessionsListed = async (page: HTMLElement) => {
+    const list = await sessionOptions(page);
+    return until(() => {
+      const rows = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      return rows.length ? rows : null;
+    }, "the sessions listed");
+  };
 
   test("opens on the current attempt, whatever attempt its Run names", async () => {
     const page = await app(restartedWith(conductor(1)), `#/session/${COND}`);
@@ -328,8 +331,11 @@ describe("a conductor's session on an earlier attempt", () => {
     mounted.push(unmount);
     return container;
   }
-  const rows = (page: HTMLElement) => [...page.querySelectorAll<HTMLElement>("[data-testid=sessions] [data-testid=session]")];
-  const openRow = (page: HTMLElement) => until(() => rows(page).find((l) => l.querySelector("[aria-current=true]")), "the open session's row");
+  const rows = (_page: HTMLElement) => [...document.querySelectorAll<HTMLElement>("[data-testid=sessions] [data-testid=session]")];
+  const openRow = async (page: HTMLElement) => {
+    await sessionOptions(page);
+    return until(() => rows(page).find((l) => l.matches("[aria-current=true]")), "the open session's row");
+  };
   const writable = (page: HTMLElement) => {
     expect(count(page, "[data-testid=abort]")).toBe(1);
     expect(count(page, "[data-testid=run-ended]")).toBe(0);
@@ -373,7 +379,7 @@ describe("a conductor's session on an earlier attempt", () => {
     expect((await openRow(page)).textContent).not.toContain("Conductor");
     const bar = () => page.querySelector<HTMLElement>("[data-testid=earlier-bar]")?.textContent ?? "";
     expect(bar()).toContain("nothing in it can be merged, resumed or steered.");
-    await click(rows(page).find((l) => l.textContent?.includes("Conductor"))!.querySelector("button")!);
+    await act(async () => rows(page).find((l) => l.textContent?.includes("Conductor"))!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     await until(() => (window.location.hash === `#/session/${COND}` ? true : null), "the conductor's URL");
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
     expect(shown(page)).toBe("1");

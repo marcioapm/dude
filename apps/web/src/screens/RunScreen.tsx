@@ -103,6 +103,7 @@ export interface RunScreenProps {
    */
   chat?: ChatVariant | undefined;
   /** What its end strip says of a session that stopped, beyond how it ended. */
+  titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
   stopped?: StoppedRun | undefined;
 }
 
@@ -184,7 +185,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 
 const PREPARING_EVERY_MS = 4000;
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped, titleSelector }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -782,7 +783,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         disabledReason={tray.disabledReason}
         detail={<>They go with your next {waitingForYou ? "answers, with the note" : "steer"} to <b>{runLabel(run)}</b>.{" "}
           {waitingForYou ? "It reads them with your answers." : dropWhen(landsHint(run.status, activeTool, conversation.lands))}</>}>
-      <SessionHeader session={session} actions={actions} />
+      <SessionHeader session={session} actions={actions} titleSelector={titleSelector} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
           focus; Changes draws its own controls into the slot after it. */}
       <div className="runBar">

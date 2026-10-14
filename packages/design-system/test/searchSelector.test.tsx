@@ -1,0 +1,82 @@
+import { afterEach, expect, test } from "bun:test";
+import { act, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { SearchSelector } from "../src/components/SearchSelector.tsx";
+import { SessionHeader } from "../src/components/ChatTranscript.tsx";
+
+const OPTIONS = [
+  { id: "c", label: "Conductor", model: "claude-sonnet-5", status: "Running" },
+  { id: "r", label: "Review · correctness", model: "claude-opus-5", status: "Completed" },
+];
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  host?.remove();
+  root = host = null;
+});
+
+function Demo({ empty = false }: { empty?: boolean }) {
+  const [current, setCurrent] = useState(OPTIONS[0]!);
+  return <SessionHeader session={{ id: current.id, role: "conductor", title: current.label, status: "running", subtitle: <span title="machine">Large</span> }}
+    titleSelector={(title) => <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={empty ? [] : OPTIONS}
+      optionKey={(o) => o.id} searchText={(o) => `${o.label} ${o.model} ${o.status}`} current={(o) => o.id === current.id}
+      onPick={setCurrent} empty="No sessions yet" renderOption={(o) => o.label} />} />;
+}
+
+async function mount(empty = false) {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root!.render(<Demo empty={empty} />));
+  return host;
+}
+const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+const press = (el: Element, key: string) => act(async () => { el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+async function typeText(el: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await tick();
+}
+
+test("the title opens a searchable listbox with the current session selected", async () => {
+  const el = await mount();
+  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  expect(el.querySelector("[title=machine]")?.closest("button")).toBeNull();
+  await act(async () => trigger.click());
+  await tick();
+  const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  expect(document.activeElement).toBe(input);
+  expect(document.querySelector("[role=option][aria-current=true]")?.textContent).toBe("Conductor");
+  await typeText(input, "opus completed");
+  expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["Review · correctness"]);
+});
+
+test("arrows and Enter choose; Escape closes and returns focus to the title", async () => {
+  const el = await mount();
+  const trigger = el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!;
+  await act(async () => trigger.click());
+  await tick();
+  let input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  await press(input, "ArrowDown");
+  await press(input, "Enter");
+  await tick();
+  expect(el.textContent).toContain("Review · correctness");
+  expect(document.querySelector("input[role=combobox]")).toBeNull();
+  await act(async () => trigger.click());
+  await tick();
+  input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  await press(input, "Escape");
+  await tick();
+  expect(document.querySelector("input[role=combobox]")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+test("no options says so", async () => {
+  const el = await mount(true);
+  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!.click());
+  await tick();
+  expect(document.body.textContent).toContain("No sessions yet");
+});

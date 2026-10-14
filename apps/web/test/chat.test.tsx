@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, Run } from "@dude/domain";
-import { act, mount, settle, until } from "./dom.ts";
+import { act, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import type { SentAnswer } from "../src/api/client.ts";
 import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
@@ -623,8 +623,9 @@ describe("the Chat tab", () => {
 
   test("Sessions lists the conductor first", async () => {
     const page = await chatPage(new ChatClient({ status: "paused", dudePause: "conductor" }, conductorEvents()), { runId: CONDUCTOR });
-    const list = await until(() => page.querySelector("[data-testid=sessions]"), "the sessions");
-    expect(list.querySelector("li")?.textContent).toStartWith("Conductor");
+    const list = await sessionOptions(page);
+    await until(() => list.querySelector('[role="option"]'), "conductor option");
+    expect(list.querySelector('[role="option"]')?.textContent).toStartWith("Conductor");
   });
 
   test("a send that fails keeps the words and says why; sent again, it goes and the composer clears", async () => {

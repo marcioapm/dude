@@ -264,6 +264,7 @@ export function ChatTranscript({
 }
 
 export interface SessionHeaderProps {
+  readonly titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
   readonly session: ChatTranscriptSession;
   readonly actions?: ReactNode;
 }
@@ -272,7 +273,7 @@ export interface SessionHeaderProps {
  * Whose agent this is and what it is doing: the transcript's own header,
  * and — above a session's Conversation / Changes tabs — the header both share.
  */
-export function SessionHeader({ session, actions }: SessionHeaderProps) {
+export function SessionHeader({ session, actions, titleSelector }: SessionHeaderProps) {
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
@@ -292,7 +293,7 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
               {session.taskKey}
             </code>
           ) : null}
-          <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
+          <span className={styles["headerText"]}>{titleSelector ? titleSelector(session.title ?? ROLE_LABEL[session.role]) : session.title ?? ROLE_LABEL[session.role]}</span>
           <StatusBadge status={session.status} label={session.statusLabel} size="sm" />
           {session.statusNote ? <span className={styles["headerStatusNote"]}>{session.statusNote}</span> : null}
         </div>

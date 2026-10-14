@@ -47,12 +47,14 @@ class PageHoldsStill(unittest.TestCase):
         page = context.new_page()
         page.goto(f"{URL}/?fixtures={scenario}#/task/{TASK}")
         page.get_by_role("tab", name="Sessions").click()
+        if box == '[data-testid="sessions"]':
+            page.get_by_role("button", name="Select session", exact=True).click()
         page.locator(f"{box} .ds-sr-only").first.wait_for(state="attached", timeout=15000)
         return page.evaluate(OVERFILL, box)
 
     def test_a_long_session_list_scrolls_in_itself(self):
         # Scenario d has a completed session, whose mark is an sr-only word.
-        self.assertEqual(self.page_overflow("d", ".taskSessionList"), 0)
+        self.assertEqual(self.page_overflow("d", '[data-testid="sessions"]'), 0)
 
     def test_a_long_rail_scrolls_in_itself(self):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.

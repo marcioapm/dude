@@ -1082,9 +1082,13 @@ not a task; see *Brainstorm sessions*. Components keep their names
 (`SessionList`, `SessionHeader`, `SessionRail`, …) but show agent sessions
 here.
 
-- The task's **Sessions** tab puts its agent sessions on the left
-  (`SessionList`, newest first, the open one `current`) and the open one
-  beside them. A link (`#/session/<id>`) opens it on that tab, not a
+- The task's **Sessions** tab selects its agent session through the open
+  `SessionHeader` title, using `SearchSelector`: a quiet chevron, a Radix
+  popover and SearchPicker's combobox/listbox. Search matches real role labels,
+  model and status; conductor/delivery grouping and newest-first order come
+  from the app. The current option is marked independently of keyboard focus.
+  The selector remains reachable with one session; no sessions is a meaningful
+  empty state. There is no separate selection column. A link (`#/session/<id>`) opens it on that tab, not a
   separate page: the task's people, pull requests and findings stay one
   tab away while you watch an agent. Only a session whose task cannot be
   learned stands alone; when it ends, it says the way to its task.
@@ -1120,9 +1124,8 @@ here.
   "(completed)" stay readable), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-  the diff's own list does. When the agent session is narrower than about
-  820px the rail goes and the conversation keeps the width. Narrower than
-  900px the list of agent sessions sits above the open one.
+   the rail is 360px; below 1080px of session width the conversation keeps
+   the width and the header keeps the terminal.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
@@ -1152,7 +1155,7 @@ here.
   above and below the run. Never one of them on its own at the
   transcript's edge. Inside it every row starts on the column and insets
   its glyph 8px, so a thought, an event and a tool call line up.
-- The list of agent sessions is 260px (200px below 1280px).
+- The task Sessions selector anchors under the header and sizes to the viewport.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
@@ -2183,7 +2186,9 @@ MarkdownCheatsheet.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
 - **SessionHeader** — the transcript's header on its own, for an agent
-  session whose views sit under it. `statusNote` sits beside the status;
+  session whose views sit under it. `titleSelector` optionally wraps only the
+  title, leaving owner/model/machine tips independent; standalone and
+  brainstorm headers keep plain titles by default. `statusNote` sits beside the status;
   the title row and the facts under it wrap rather than clip each other.
 - **While its agent starts, the header says where**: `StartChip` in a
   session's meta ("◐ Resuming · Checking out repositories · 00:12") and
@@ -2200,8 +2205,10 @@ MarkdownCheatsheet.
   ChangedFiles** — the column beside an agent session's conversation; its
   facts are a `KeyValueList`, values to the right. A brainstorm session's
   rail is the same `SessionRail` and `SessionRailBlock`.
-- **SessionList / SessionItem** — a task's agent sessions, the open one
-  `current`.
+- **SessionList / SessionItem / SessionItemContent** — a task's agent
+  sessions, the open one `current`; content is reusable inside a listbox.
+- **SearchSelector** — a title-button selector over `SearchPicker`; gallery
+  `#l-selector` shows populated, empty, current, search and focus states.
 - **FileGallery / FileViewer** — a task's files and their versions. A
   `FileVersion`'s optional `description` (what its agent said the file is
   for) is a secondary line under the name, in a card and a row alike.

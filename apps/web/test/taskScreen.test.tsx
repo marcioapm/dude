@@ -48,8 +48,9 @@ describe("task rail filtering", () => {
   });
 
   test("finding controls compose in the mounted tab and their base counts stay unchanged", async () => {
-    const page = await taskPage(new FixtureClient("a"), { tab: "findings" });
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
     const status = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding status"]'), "status filters");
+    await until(() => page.querySelectorAll('[data-testid="finding"]').length > 0 ? true : null, "findings");
     const severity = page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]')!;
     const counts = status.textContent;
     const pick = async (group: HTMLElement, label: string) => {
@@ -60,8 +61,10 @@ describe("task rail filtering", () => {
     await pick(status, "Open");
     expect(page.querySelectorAll('[data-testid="finding"]').length).toBeGreaterThan(0);
     expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-status") === "open")).toBe(true);
+    await pick(severity, "Note");
+    expect([...page.querySelectorAll('[data-testid="finding"]')].map((f) => f.getAttribute("data-severity"))).toEqual(["note"]);
     await pick(severity, "Blocking");
-    expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-severity") === "blocking")).toBe(true);
+    expect([...page.querySelectorAll('[data-testid="finding"]')].map((f) => f.getAttribute("data-severity"))).toEqual(["note"]);
     expect(status.textContent).toBe(counts);
   });
 

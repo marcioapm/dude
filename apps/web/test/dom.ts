@@ -58,6 +58,12 @@ export async function type(el: Element, text: string): Promise<void> {
   });
 }
 
+export async function sessionOptions(page: HTMLElement): Promise<HTMLElement> {
+  const trigger = await until(() => page.querySelector<HTMLElement>('button[aria-label="Select session"]'), "session title selector");
+  if (trigger.getAttribute("data-state") !== "open") await click(trigger);
+  return until(() => document.querySelector<HTMLElement>('[data-testid="sessions"]'), "session options");
+}
+
 export { act };
 
 /** An event on the fixture Run's stream, as the backend sends one, and what it causes settled. */
