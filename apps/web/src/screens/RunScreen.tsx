@@ -518,9 +518,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     [client, intervene],
   );
 
-  if (missing) return <NotFound what="run" onBack={onBack} />;
+  if (missing) return titleSelector ? <div className="runScreen">{titleSelector(<>Session</>)}<NotFound what="run" onBack={onBack} /></div> : <NotFound what="run" onBack={onBack} />;
   if (!run) {
-    return <div ref={childScreen} className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
+    return <div ref={childScreen} className="runScreen">{titleSelector?.(<>Session</>)}{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
 
   // Someone else's to answer: their name. A task nobody owns is anyone's.

@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PersistedEvent, Run } from "@dude/domain";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
@@ -177,6 +177,22 @@ describe("task rail filtering", () => {
       window.EventSource = windowSource;
     }
   });
+
+  for (const error of [new Error("boom"), new ApiError(404, "not_found", "missing")]) {
+    test(`Sessions keeps its switcher when the open run rejects with ${error.message}`, async () => {
+      const client = new FixtureClient("d");
+      client.getRun = async () => { throw error; };
+      const opened: string[] = [];
+      const page = await taskPage(client, { tab: "sessions", onOpenRun: (id) => opened.push(id) });
+      await until(() => page.textContent?.includes(error instanceof ApiError ? "doesn't exist" : "boom") ? true : null, "the run error");
+      const list = await sessionOptions(page);
+      const rows = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      expect(rows.length).toBe(5);
+      const other = rows.find((r) => r.getAttribute("aria-current") !== "true")!;
+      await act(async () => { other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+      expect(opened).toEqual([other.getAttribute("data-run")!]);
+    });
+  }
 
   test("activity filters structured person, event kind and attempt independently of prose", () => {
     const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
