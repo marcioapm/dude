@@ -199,10 +199,11 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 			stalled = g
 		}
 	}
-	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/task/wi_"+org {
+	// Links name the organisation (its slug is its id here, dbtest.Org).
+	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/o/"+org+"/task/wi_"+org {
 		t.Errorf("the stall's notification = %+v", stalled)
 	}
-	if m.Title != "TEXT-19 · Implementer asks" || m.Body != "Does an ellipsis end a sentence?" || m.URL != "#/run/run_"+org {
+	if m.Title != "TEXT-19 · Implementer asks" || m.Body != "Does an ellipsis end a sentence?" || m.URL != "#/o/"+org+"/run/run_"+org {
 		t.Errorf("notification = %+v", m)
 	}
 	if !strings.HasPrefix(mine.auth[0], "vapid t=") {
@@ -303,5 +304,70 @@ func TestAnUnownedAskSkipsRemovedPeople(t *testing.T) {
 		if len(got) != 1 || got[0].Title != "UNOWN-7 asks" || got[0].Body != "Which locale?" {
 			t.Errorf("%s's browser got %+v", person, got)
 		}
+	}
+}
+
+// One browser on in two organisations is a row in each; an ask in one
+// reaches it once, as that organisation's, and the other's row is not used.
+func TestABrowserOnInTwoOrganisationsHearsOnlyTheAsksOrganisation(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	acme, northwind := dbtest.Org(t, owner), dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The same person in both: an account with a membership in each.
+	exec(`INSERT INTO accounts (id, email, name) VALUES ($1, $2, 'Two orgs')`, "acc_"+acme, acme+"@two.test")
+	for _, org := range []string{acme, northwind} {
+		exec(`INSERT INTO people (id, organization_id, account_id, name) VALUES ($1, $2, $3, 'Two orgs')`, "per_"+org, org, "acc_"+acme)
+		exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TWO')`, "prj_"+org, org)
+		exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 1, 'Nobody owns this')`,
+			"wi_"+org, org, "prj_"+org)
+	}
+	b := newBrowser(t)
+	var mu sync.Mutex
+	hits := 0
+	push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		b.ServeHTTP(w, r)
+	}))
+	t.Cleanup(push.Close)
+	p256dh, auth := b.keys()
+	for _, org := range []string{acme, northwind} {
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, person_id, p256dh, auth) VALUES ($1, $2, $3, $4, $5)`,
+			push.URL+"/browser", org, "per_"+org, p256dh, auth)
+	}
+
+	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
+	if _, _, err := n.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', $3, $4, 'system', 'orchestrator', 'orchestrator', '{"kind":"agent","prompt":"Acme asks"}')`,
+		"evt_q_"+acme, acme, "prj_"+acme, "wi_"+acme)
+	for range 5 {
+		if _, err := n.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if hits != 1 || len(b.got) != 1 {
+		t.Fatalf("deliveries = %d, received %+v; want one, Acme's", hits, b.got)
+	}
+	if b.got[0].Body != "Acme asks" || b.got[0].URL != "#/o/"+acme+"/task/wi_"+acme {
+		t.Errorf("got %+v, want Acme's ask linking into Acme", b.got[0])
+	}
+	var rows int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM push_subscriptions WHERE endpoint = $1`, push.URL+"/browser").Scan(&rows); err != nil || rows != 2 {
+		t.Errorf("registrations after the sweep = %d, %v; want both kept", rows, err)
 	}
 }

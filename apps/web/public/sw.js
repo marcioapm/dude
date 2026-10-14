@@ -32,23 +32,34 @@ self.addEventListener("push", (event) => {
   );
 });
 
+// A notification's url is the app's hash: `#/o/<slug>/…` from a dude that
+// names the organisation, or a bare `#/task/…` from an older one, which the
+// app places among your organisations itself (/v1/locate).
+const organisationOf = (hash) => {
+  const m = /^#\/o\/([^/?#]+)\//.exec(hash);
+  return m ? m[1] : null;
+};
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL("/" + (event.notification.data?.url || ""), self.location.origin).href;
+  const hash = event.notification.data?.url || "";
+  const target = new URL("/" + hash, self.location.origin).href;
+  const organisation = organisationOf(hash);
   event.waitUntil(
     (async () => {
-      // An open dude tab goes there; otherwise a new one. The hash is the
-      // app's place, so a tab it cannot navigate is told by message.
-      const tabs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      for (const tab of tabs) {
-        if (new URL(tab.url).origin === self.location.origin) {
-          await tab.focus();
-          try {
-            return await tab.navigate(target);
-          } catch {
-            tab.postMessage({ type: "dude.open", url: event.notification.data?.url || "" });
-            return undefined;
-          }
+      // An open dude tab goes there, one already in the notification's
+      // organisation first; otherwise a new one. The hash is the app's
+      // place, so a tab it cannot navigate is told by message.
+      const tabs = (await self.clients.matchAll({ type: "window", includeUncontrolled: true }))
+        .filter((tab) => new URL(tab.url).origin === self.location.origin);
+      const tab = (organisation && tabs.find((t) => organisationOf(new URL(t.url).hash) === organisation)) || tabs[0];
+      if (tab) {
+        await tab.focus();
+        try {
+          return await tab.navigate(target);
+        } catch {
+          tab.postMessage({ type: "dude.open", url: hash });
+          return undefined;
         }
       }
       return self.clients.openWindow(target);

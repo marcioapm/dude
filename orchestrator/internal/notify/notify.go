@@ -108,9 +108,13 @@ func (n *Notifier) Keys(ctx context.Context) (public, private string, err error)
 }
 
 type ask struct {
-	Cursor                         int64
-	Org, Type, RunID, TaskID, Task string
-	Role                           string
+	Cursor int64
+	Org    string
+	// The organisation's slug: every link a notification carries names it
+	// (`#/o/<slug>/…`), so a person in several opens it in the right one.
+	Slug                     string
+	Type, RunID, TaskID, Task string
+	Role                     string
 	// The task's first active person; empty for a task nobody owns. For a
 	// session's ask, the member it is for.
 	Owner   string
@@ -136,7 +140,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		// never the organisation. Read now, just before it is sent: only
 		// while the question is open and they may still answer it (an
 		// accepted owner or member who can chat); else nobody's.
-		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
+		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, o.slug, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
 				COALESCE(CASE WHEN e.session_id IS NOT NULL THEN (
 					SELECT x.person FROM (SELECT COALESCE(q.to_person,
@@ -146,6 +150,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 					ELSE owner.person_id END, ''),
 				COALESCE(e.session_id, ''), e.payload
 			FROM events e
+			JOIN organizations o ON o.id = e.organization_id
 			LEFT JOIN tasks w ON w.id = e.task_id
 			LEFT JOIN LATERAL (
 				SELECT tp.person_id FROM task_people tp JOIN people member ON member.id = tp.person_id
@@ -169,6 +174,8 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		for _, a := range found {
 			orgs = append(orgs, a.Org)
 		}
+		// A browser on in several organisations has a row in each; an ask
+		// goes only to the rows of its own (subs is keyed by organisation).
 		rows, err = tx.Query(ctx, `SELECT s.organization_id, s.endpoint, s.p256dh, s.auth, s.person_id
 			FROM push_subscriptions s JOIN people p ON p.id = s.person_id AND p.organization_id = s.organization_id
 			WHERE s.organization_id = ANY ($1) AND p.removed_at IS NULL`, orgs)
@@ -226,6 +233,8 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	}
 	return len(found), n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		if len(gone) > 0 {
+			// The push service says the browser's subscription itself is
+			// gone, so it goes in every organisation that registered it.
 			if _, err := tx.Exec(ctx, `DELETE FROM push_subscriptions WHERE endpoint = ANY ($1)`, gone); err != nil {
 				return err
 			}
@@ -298,6 +307,16 @@ func askHeaders(p map[string]any) (int, string) {
 	return len(items), strings.Join(headers, ", ")
 }
 
+// link is a web app hash in the ask's organisation: `#/o/<slug>/<path>`.
+// An ask without a slug (none in tests that build one by hand) gets the
+// bare `#/<path>`, which the app places with /v1/locate.
+func link(a ask, path string) string {
+	if a.Slug == "" {
+		return "#/" + path
+	}
+	return "#/o/" + url.PathEscape(a.Slug) + "/" + path
+}
+
 // messageFor says what an ask's notification reads, and whether it gets
 // one at all.
 func messageFor(a ask) (Message, bool) {
@@ -308,13 +327,13 @@ func messageFor(a ask) (Message, bool) {
 	if label := delivery.RoleLabel[a.Role]; label != "" {
 		who = strings.TrimSpace(who + " · " + label)
 	}
-	msg := Message{Tag: "run:" + a.RunID, URL: "#/run/" + a.RunID}
+	msg := Message{Tag: "run:" + a.RunID, URL: link(a, "run/"+a.RunID)}
 	if a.Session != "" {
 		// Only a question reaches a member; the session's page has the rest.
 		if a.Type != delivery.EvQuestionAsked {
 			return msg, false
 		}
-		msg.Tag, msg.URL = "session:"+a.Session, "#/sessions/"+a.Session
+		msg.Tag, msg.URL = "session:"+a.Session, link(a, "sessions/"+a.Session)
 		msg.Title, msg.Body = "The brainstorm asks you", str("prompt")
 		if n, headers := askHeaders(p); n > 1 {
 			msg.Title, msg.Body = fmt.Sprintf("The brainstorm asks you %d questions", n), headers
@@ -322,7 +341,7 @@ func messageFor(a ask) (Message, bool) {
 		return msg, true
 	}
 	if a.RunID == "" {
-		msg.Tag, msg.URL = "task:"+a.TaskID, "#/task/"+a.TaskID
+		msg.Tag, msg.URL = "task:"+a.TaskID, link(a, "task/"+a.TaskID)
 	}
 	switch a.Type {
 	case delivery.EvQuestionAsked:
@@ -344,7 +363,7 @@ func messageFor(a ask) (Message, bool) {
 		}
 		msg.Title = who + " has made no progress"
 		msg.Body = str("text")
-		msg.URL = "#/task/" + a.TaskID
+		msg.URL = link(a, "task/"+a.TaskID)
 	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {
