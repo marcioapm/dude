@@ -1,0 +1,75 @@
+.page {
+  container: ds-page-rail / inline-size;
+  min-width: 0;
+  width: 100%;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.content {
+  min-width: 0;
+}
+.railSlot {
+  min-width: 0;
+}
+.rail {
+  overflow: auto;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.block + .block {
+  margin-top: var(--ds-space-24);
+}
+.label {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0 0 var(--ds-space-8);
+}
+.facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8) var(--ds-space-16);
+}
+.facet {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.count {
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.empty {
+  color: var(--ds-color-text-muted);
+}
+/* Leave 720px for the main pane before reserving the desktop rail. */
+@container ds-page-rail (min-width: 1080px) {
+  .layout:has(> .railSlot) {
+    grid-template-columns: minmax(0, 1fr) var(--ds-size-page-rail);
+  }
+  .content {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .railSlot {
+    grid-column: 2;
+    grid-row: 1;
+    background: var(--ds-color-chrome);
+  }
+  .facets {
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+  .facet {
+    justify-content: space-between;
+  }
+}

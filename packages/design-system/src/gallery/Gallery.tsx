@@ -24,9 +24,11 @@ import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
+import { PageRailSection } from "./sections/PageRails.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+  ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Welcome",
@@ -363,6 +365,7 @@ function Shell() {
           <LiveSection mode={panes} />
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
+          <PageRailSection mode={panes} />
           <AccountsSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>

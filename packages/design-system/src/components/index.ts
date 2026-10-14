@@ -1,3 +1,5 @@
+export { PageWithRail, PageRail, PageRailBlock, FacetList } from "./PageWithRail.tsx";
+export type { PageWithRailProps, PageRailProps, PageRailBlockProps, FacetListProps, FacetOption } from "./PageWithRail.tsx";
 export { StatusBadge } from "./StatusBadge.tsx";
 export type { StatusBadgeProps } from "./StatusBadge.tsx";
 export { NeedsYouCount, StatusMark } from "./StatusMark.tsx";

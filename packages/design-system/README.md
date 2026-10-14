@@ -2324,6 +2324,36 @@ are in `docs/design/accounts.md`):
   footer holds its actions. `HowList` is how something works in a few
   named lines: a glyph, a bold lead-in, a muted sentence.
 
+## Page rails
+
+`PageWithRail` is opt-in layout, not the app shell. Pass main content as
+`children` and `<PageRail aria-label="…">…</PageRail>` as `rail`. Main content
+fills the remaining width without a prose/page measure. At container widths
+of 1080px and above, the right column uses `--ds-size-page-rail` (360px,
+canonical `size.pageRail` in `src/tokens/scale.ts`, regenerated with `bun run
+tokens`). This leaves at least 720px for the main column. Below that threshold
+there is no reserved column: the same rail is above the main content, with
+facets wrapping into compact controls. Controls are never hidden or remounted,
+so actions, selection and keyboard focus remain available. The host owns page
+scrolling; the layout imposes no fixed height or independent width cap.
+
+`PageRail` uses the chrome shade and 16px padding in both densities.
+`PageRailBlock label={…}` names a section through its heading; `live` adds the
+shared live dot. Blocks are separated by space, never rules. `SessionRail`
+and `SessionRailBlock` are compatible aliases of these generic parts; session
+facts, tool usage and files retain their existing APIs.
+
+`FacetList` is a controlled multi-select group: `label`, `options` (`value`,
+`label`, optional `count`, `disabled`, `description`), `value: string[]`, and
+`onValueChange`. No selected options means what the caller defines (usually
+all). Zero counts remain visible and do not disable a choice. Counts are
+caller-supplied facts: calculate them from a documented base set, not from the
+accidentally filtered result. The DS neither filters records nor infers scope.
+`empty` supplies the meaningful empty line. Each choice uses the existing
+Checkbox's label, description, disabled and keyboard behavior. Gallery
+`#rail-populated`, `#rail-empty`, and `#rail-narrow` show selected, zero-count,
+disabled, interactive focus and action states in both themes and densities.
+
 ## What is deliberately not here
 
 - A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`
@@ -2342,8 +2372,8 @@ are in `docs/design/accounts.md`):
 - Virtualisation. `Table`, `EventStream`, `LogStream` and `NavTree` render
   plain DOM so any row virtualiser can be applied by the consumer; the tree
   is already a flat list of rows for that reason.
-- A side panel or page layout. Those are app concerns; they compose the
-  pieces here. The `Sidebar` and `Board` are chrome, not a layout: the app
-  decides how they sit beside the transcript and how wide they are.
+- The application shell and navigation placement. `PageWithRail` supplies an
+  opt-in content/right-rail region; the app still decides where its sidebar,
+  headers and page regions sit. Non-rail pages need not adopt it.
 - Drag-and-drop on the board. The workflow owns every lane transition; see
   the Board rules.
