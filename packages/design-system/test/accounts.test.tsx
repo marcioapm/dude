@@ -192,8 +192,14 @@ describe("parseEmailEntries", () => {
 describe("emailChipViews and the summary", () => {
   test("the first of an address wins, later ones are duplicates; the caller classifies the rest", () => {
     const entries = parseEmailEntries("a@x.io, b@x.io, nope, a@x.io, c@x.io, d@x.io");
-    const views = emailChipViews(entries, (e) => (e === "b@x.io" ? { kind: "member", note: "already in Acme" }
-      : e === "c@x.io" ? { kind: "invited", note: "already invited 4 days ago" } : e === "d@x.io" ? { kind: "renew" } : null));
+    const views = emailChipViews(entries, (email) => {
+      switch (email) {
+        case "b@x.io": return { kind: "member", note: "already in Acme" };
+        case "c@x.io": return { kind: "invited", note: "already invited 4 days ago" };
+        case "d@x.io": return { kind: "renew" };
+        default: return null;
+      }
+    });
     expect(views.map((v) => v.kind)).toEqual(["valid", "member", "invalid", "duplicate", "invited", "renew"]);
     expect(emailChipSummary(views, { member: "already in Acme" }))
       .toBe("1 new · 1 renewed · 1 not an email · 1 already in Acme · 1 already invited · 1 duplicate. The other 4 are left out.");
@@ -223,12 +229,10 @@ describe("EmailChipsInput", () => {
   test("the field is named Emails; Enter, comma and space make chips of what is typed", async () => {
     const el = await mount(<Chips />);
     const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
-    await type(input, "a@x.io");
-    await key(input, "Enter");
-    await type(input, "Bo <b@x.io>");
-    await key(input, ",");
-    await type(input, "c@x.io");
-    await key(input, " ");
+    for (const [entry, delimiter] of [["a@x.io", "Enter"], ["Bo <b@x.io>", ","], ["c@x.io", " "]] as const) {
+      await type(input, entry);
+      await key(input, delimiter);
+    }
     expect(chips(el)).toEqual(["valid:a@x.io", "valid:b@x.io", "valid:c@x.io"]);
     expect(el.textContent).toContain("Bo");
     expect(input.value).toBe("");
