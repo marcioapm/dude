@@ -163,6 +163,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["nav-tree", "NavTree"],
       ["nav-tree-menus", "NavTree row menus"],
       ["nav-sidebar", "Sidebar (realistic)"],
+      ["nav-waiting-list", "WaitingList"],
+      ["nav-sidebar-others", "Sidebar on others"],
       ["nav-sidebar-states", "Sidebar states"],
     ],
   ],
