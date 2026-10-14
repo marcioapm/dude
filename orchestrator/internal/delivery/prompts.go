@@ -658,7 +658,7 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add(lead...)
-		add(commitNote)
+		add(implementContract, commitNote)
 		add(in.task())
 		add(in.ask()...)
 

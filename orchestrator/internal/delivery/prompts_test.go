@@ -285,3 +285,21 @@ func TestTheFixersContractSurvivesAnyInstructions(t *testing.T) {
 		}
 	}
 }
+
+// The implementer tests its own work, whatever its instructions say: the
+// tester after it does not do that for it.
+func TestTheImplementerTestsItsOwnWorkUnderAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Repositories: twoRepos(), Tools: true}
+	for kind, got := range underEveryInstructions(PhaseImplement, in) {
+		for _, want := range []string{implementContract, commitNote} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the implementer's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+	}
+	for _, want := range []string{"exercise the changed behaviour yourself", "a test for each acceptance criterion"} {
+		if !strings.Contains(implementContract, want) {
+			t.Errorf("the implementer's contract lacks %q", want)
+		}
+	}
+}
