@@ -195,5 +195,6 @@ def gallery_page(page: Page, gallery_url: str, console_errors: list[str]) -> Pag
     and catches errors thrown during the first render.
     """
     page.goto(gallery_url, wait_until="networkidle")
-    page.wait_for_timeout(300)
+    # Settled: the first render's effects have run and two frames have painted.
+    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     return page

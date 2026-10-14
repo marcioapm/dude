@@ -128,66 +128,61 @@ def _expect_fragment_at_top(page: Page, target: str):
     )
 
 
+# These take a blank `page`, not `gallery_page`: each test's first load is
+# itself under test, so a gallery loaded before it would be thrown away.
 @pytest.mark.parametrize("target", RELATION_BLOCK_IDS)
-def test_relation_fragment_navigation(gallery_page: Page, console_errors: list, target: str):
+def test_relation_fragment_navigation(page: Page, gallery_url: str, console_errors: list, target: str):
     """A fresh fragment must mount its deferred target and explicitly land on it."""
-    url = gallery_page.url.split("#")[0]
-    gallery_page.goto("about:blank")
-    gallery_page.goto(f"{url}#{target}", wait_until="networkidle")
-    _expect_fragment_at_top(gallery_page, target)
-    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(0)
+    page.goto(f"{gallery_url}#{target}", wait_until="networkidle")
+    _expect_fragment_at_top(page, target)
+    expect(page.locator("[data-testid=relations-pending]")).to_have_count(0)
     # Once mounted, later fragments use ordinary native navigation.
     for later in ("rel-picker", "rel-board", target):
-        gallery_page.evaluate("id => { location.hash = id; }", later)
-        _expect_fragment_at_top(gallery_page, later)
+        page.evaluate("id => { location.hash = id; }", later)
+        _expect_fragment_at_top(page, later)
     assert console_errors == []
 
 
-def test_relation_sidebar_navigation(gallery_page: Page, console_errors: list):
+def test_relation_sidebar_navigation(page: Page, gallery_url: str, console_errors: list):
     """The sidebar must work before intersection ever mounts the relation blocks."""
-    url = gallery_page.url.split("#")[0]
-    gallery_page.goto("about:blank")
-    gallery_page.goto(url, wait_until="networkidle")
-    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
-    gallery_page.locator('nav a[href="#rel-board"]').click()
-    _expect_fragment_at_top(gallery_page, "rel-board")
+    page.goto(gallery_url, wait_until="networkidle")
+    expect(page.locator("[data-testid=relations-pending]")).to_have_count(1)
+    page.locator('nav a[href="#rel-board"]').click()
+    _expect_fragment_at_top(page, "rel-board")
     assert console_errors == []
 
 
-def test_unrelated_fragment_keeps_relations_deferred(gallery_page: Page, console_errors: list):
+def test_unrelated_fragment_keeps_relations_deferred(page: Page, gallery_url: str, console_errors: list):
     """Unrelated, unknown and malformed fragments must not request the costly mount."""
-    url = gallery_page.url.split("#")[0]
     for fragment in ("p-markdown-editor", "rel-unknown", "rel-%ZZ"):
-        gallery_page.goto("about:blank")
-        gallery_page.goto(f"{url}#{fragment}", wait_until="networkidle")
-        expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
-        expect(gallery_page.locator("#rel-picker")).to_have_count(0)
-    gallery_page.goto("about:blank")
-    gallery_page.goto(f"{url}#%72el-picker", wait_until="networkidle")
-    _expect_fragment_at_top(gallery_page, "rel-picker")
-    gallery_page.goto("about:blank")
-    gallery_page.goto(f"{url}#relations", wait_until="networkidle")
-    gallery_page.locator("#relations").evaluate("el => el.scrollIntoView()")
-    expect(gallery_page.locator("#rel-picker")).to_have_count(1)
-    _expect_fragment_at_top(gallery_page, "relations")
+        page.goto("about:blank")
+        page.goto(f"{gallery_url}#{fragment}", wait_until="networkidle")
+        expect(page.locator("[data-testid=relations-pending]")).to_have_count(1)
+        expect(page.locator("#rel-picker")).to_have_count(0)
+    page.goto("about:blank")
+    page.goto(f"{gallery_url}#%72el-picker", wait_until="networkidle")
+    _expect_fragment_at_top(page, "rel-picker")
+    page.goto("about:blank")
+    page.goto(f"{gallery_url}#relations", wait_until="networkidle")
+    page.locator("#relations").evaluate("el => el.scrollIntoView()")
+    expect(page.locator("#rel-picker")).to_have_count(1)
+    _expect_fragment_at_top(page, "relations")
     assert console_errors == []
 
 
 def test_relation_intersection_preserves_scroll_with_old_fragment(
-    gallery_page: Page, console_errors: list,
+    page: Page, gallery_url: str, console_errors: list,
 ) -> None:
-    url = gallery_page.url.split("#")[0]
-    gallery_page.goto("about:blank")
-    gallery_page.goto(f"{url}#p-markdown-editor", wait_until="networkidle")
-    expect(gallery_page.locator("[data-testid=relations-pending]")).to_have_count(1)
-    intended_y = gallery_page.evaluate("""() => {
+    page.goto(f"{gallery_url}#p-markdown-editor", wait_until="networkidle")
+    expect(page.locator("[data-testid=relations-pending]")).to_have_count(1)
+    intended_y = page.evaluate("""() => {
         const y = document.getElementById('relations').getBoundingClientRect().top
             + window.scrollY - 1000;
         window.scrollTo(0, y);
         return y;
     }""")
-    expect(gallery_page.locator("#rel-picker")).to_have_count(1)
-    gallery_page.wait_for_function(
+    expect(page.locator("#rel-picker")).to_have_count(1)
+    page.wait_for_function(
         "y => Math.abs(window.scrollY - y) <= 2", arg=intended_y, timeout=5000,
     )
     assert console_errors == []
@@ -273,7 +268,6 @@ def test_both_themes_render(gallery_page: Page, console_errors: list):
         gallery_page.evaluate(
             "t => document.documentElement.setAttribute('data-theme', t)", theme
         )
-        gallery_page.wait_for_timeout(120)
 
         background = gallery_page.evaluate(
             "getComputedStyle(document.documentElement)"
@@ -294,11 +288,9 @@ def test_themes_actually_differ(gallery_page: Page):
         )
 
     gallery_page.evaluate("document.documentElement.setAttribute('data-theme','dark')")
-    gallery_page.wait_for_timeout(80)
     dark = canvas()
 
     gallery_page.evaluate("document.documentElement.setAttribute('data-theme','light')")
-    gallery_page.wait_for_timeout(80)
     light = canvas()
 
     assert dark != light, f"both themes resolved to {dark}"
@@ -336,7 +328,6 @@ def test_text_is_readable_on_its_surface(gallery_page: Page):
 
     for theme in ("dark", "light"):
         gallery_page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
-        gallery_page.wait_for_timeout(80)
 
         ratio = gallery_page.evaluate(contrast_js)
         assert ratio is not None, f"could not resolve text/canvas tokens in {theme}"
@@ -372,17 +363,17 @@ def test_reduced_motion_is_honoured(browser, gallery_url: str):
 def test_interactive_primitives_respond(gallery_page: Page, console_errors: list):
     """Click through the interactive primitives; a broken handler throws here."""
     gallery_page.get_by_role("link", name="Checkbox").click()
-    gallery_page.wait_for_timeout(80)
 
     # The accessible role, not a class: the wrapper div carries the module
     # class, while the control that actually holds state is the button.
     checkbox = gallery_page.locator("main").get_by_role("checkbox").first
     checkbox.wait_for(state="visible")
 
-    before = checkbox.get_attribute("data-state") or checkbox.get_attribute("aria-checked")
+    attr = "data-state" if checkbox.get_attribute("data-state") else "aria-checked"
+    before = checkbox.get_attribute(attr)
     checkbox.click()
-    gallery_page.wait_for_timeout(120)
-    after = checkbox.get_attribute("data-state") or checkbox.get_attribute("aria-checked")
+    expect(checkbox).not_to_have_attribute(attr, before or "")
+    after = checkbox.get_attribute(attr)
 
     assert before != after, f"checkbox state did not change on click ({before!r} -> {after!r})"
     assert console_errors == [], f"console errors interacting: {console_errors}"
@@ -396,7 +387,6 @@ def test_keyboard_focus_is_visible(gallery_page: Page):
     rule the product actually ships.
     """
     gallery_page.get_by_role("link", name="Button").click()
-    gallery_page.wait_for_timeout(120)
 
     found = None
     for _ in range(60):
@@ -435,7 +425,6 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
     board, which has a needs-you card in two different lanes.
     """
     gallery_page.get_by_role("link", name="Project board (realistic)").click()
-    gallery_page.wait_for_timeout(120)
 
     board = gallery_page.locator("#board-project").get_by_role("region", name="control-plane board").first
     board.wait_for(state="visible")
