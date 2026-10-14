@@ -84,6 +84,36 @@ func TestTheConductorActsOnItsOwnPullRequest(t *testing.T) {
 	}
 }
 
+// Two simultaneous reruns claim the head before GitHub is asked: exactly
+// one request reaches GitHub, and the other is refused.
+func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	spec := w.conductorSpecOf(task)
+	results := make(chan int, 2)
+	for range 2 {
+		go func() {
+			status, _ := w.callTool(w.syncer.Agent.ToolsURL, spec, "rerun_failed_checks", `{"pr":"1"}`)
+			results <- status
+		}()
+	}
+	statuses := []int{<-results, <-results}
+	slices.Sort(statuses)
+	if statuses[0] != 200 || statuses[1] == 200 {
+		t.Fatalf("statuses %v, want one success", statuses)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.JobsRerun, []int64{77}) {
+			t.Errorf("jobs re-run %v", s.JobsRerun)
+		}
+	})
+}
+
 // Another task's pull request, or one of no task, is not the conductor's to
 // act on; nor is a reviewer who is not a collaborator. Nothing reaches GitHub.
 func TestTheConductorIsRefusedOutsideItsOwnPullRequest(t *testing.T) {

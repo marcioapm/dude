@@ -186,6 +186,13 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		if again {
 			return c, refusef("the failed checks on %s#%d were run again on this head already: a fix answers them now", repo, number)
 		}
+		// The claim commits before GitHub is called; Chat's lock serializes this check.
+		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
+			TaskID: ref.TaskID, RunID: ref.RunID, ActorType: ledger.ActorAgent, ActorID: ref.RunID,
+			Source: ledger.SourceOrchestrator, CorrelationID: ref.TaskID, Payload: map[string]any{"action": ActionRerunChecks,
+				"repo": repo, "number": number, "head": c.head, "claimed": true}}); err != nil {
+			return c, err
+		}
 	default:
 		return c, refusef("no pull request action %q", in.Action)
 	}
@@ -257,7 +264,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 	case ActionRerunChecks:
 		n, err := gh.RerunFailed(ctx, c.slug, c.checks)
 		if err != nil {
-			return done, ghRefusal(err)
+			return done, refusef("GitHub's re-run of the failed checks on %s#%d may or may not have happened (%v); this head is not run again automatically", c.repo, c.number, err)
 		}
 		done.Rerun = n
 	}
@@ -282,6 +289,8 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 		payload["thread"] = done.Thread
 	case ActionRerunChecks:
 		payload["rerun"] = done.Rerun
+		// The claim written before GitHub was called is this head's record.
+		return payload, nil
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: c.ref.Org, ProjectID: c.ref.ProjectID,
 		TaskID: c.ref.TaskID, RunID: c.ref.RunID, ActorType: ledger.ActorAgent, ActorID: c.ref.RunID,
