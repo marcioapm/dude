@@ -22,6 +22,8 @@ import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
 import { project } from "../src/api/conversation.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
+import { session as sessionMove } from "../mockups/machinemoves/events.ts";
+import { XL as MOVE_XL, toldRaise } from "../mockups/machinemoves/data.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -267,6 +269,27 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelector("[data-testid=share-open]")).not.toBeNull();
     expect(page.querySelector("[data-testid=link-open]")).not.toBeNull();
     expect(page.querySelector("[data-testid=session-rail]")!.textContent).toContain("billing");
+  });
+
+  test("a move of its agent: the move's notice, what dude told the agent, then its words; and dude's line to it tagged Told", async () => {
+    // The mockup's ledger of a brainstorm moving Small → XL in highmem, as this session's.
+    const moved = sessionMove().map((e) => ({ ...e, runId: RUN, sessionId: SESSION }));
+    cursor = moved.at(-1)!.cursor;
+    const page = await sessionPage(new SessionClient(detail("owner"), [...moved,
+      ev("session.told", { text: "Ana Ribeiro owns this session now." })]));
+    const told = await until(() => {
+      const all = page.querySelectorAll("[data-testid=chat-told]");
+      return all.length === 2 ? [...all] : null;
+    }, "both Told turns");
+    expect(told[0]!.textContent).toContain(toldRaise(MOVE_XL, true));
+    expect(told[1]!.textContent).toContain("Ana Ribeiro owns this session now.");
+    expect(told.map((t) => t.getAttribute("data-intent"))).toEqual(["told", "told"]);
+    const notice = [...page.querySelectorAll("[data-testid=chat-notice]")].find((n) => n.textContent?.includes("moved to XL"))!;
+    expect(notice.textContent).toContain("The brainstorm moved to XL in 1m 05s, with its conversation and work.");
+    const words = [...page.querySelectorAll("article")].find((a) => a.textContent?.includes("On XL now, in the same workspace"))!;
+    const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect([follows(notice, told[0]!), follows(told[0]!, words)]).toEqual([true, true]);
+    expect(page.textContent).not.toContain("Resumed in");
   });
 
   test("the agent's turn over, nothing is thinking: its closing totals and its end clear it", async () => {
