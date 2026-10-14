@@ -95,14 +95,14 @@ func (e PolicyError) Error() string { return "policy: " + e.Err.Error() }
 // a talk by the conductor, parked on its first decision.
 func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started, error) {
 	var out Started
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, in.TaskID); err != nil {
-		return out, err
-	}
 	if in.How == HowTalk && in.Message != "" {
 		// As Chat takes it, before the delivery: a conductor is made under it.
 		if err := LockChat(ctx, tx, in.TaskID); err != nil {
 			return out, err
 		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, in.TaskID); err != nil {
+		return out, err
 	}
 	d, err := LoadDelivery(ctx, tx, in.TaskID)
 	if err != nil {

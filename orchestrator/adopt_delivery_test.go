@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
@@ -54,6 +55,47 @@ func TestAnAdoptedSourceChangedBeforeExecutionCannotRun(t *testing.T) {
 				t.Fatalf("changed source started phases: %v", got)
 			}
 		})
+	}
+}
+
+func TestAStartWaitsForAnInFlightSourceReplacement(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Branch("feature/old", "main", "Old")
+	w.gh.Branch("feature/new", "main", "New")
+	wi := w.task()
+	mustExec(t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, head_branch, base_branch)
+		VALUES ($1, $2, $3, 'branch', 'feature/old', 'main')`, wi, w.org, w.repoID)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
+		w.org, wi, w.repoID)
+	ctx := context.Background()
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, wi); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan int, 1)
+	go func() {
+		status, _ := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{})
+		started <- status
+	}()
+	select {
+	case status := <-started:
+		t.Fatalf("delivery started while source save held the task: %d", status)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := tx.Exec(ctx, `UPDATE task_sources SET head_branch = 'feature/new' WHERE task_id = $1`, wi); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-started; status != 201 {
+		t.Fatalf("deliver: %d", status)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->>'branch' = 'feature/new'`, wi); n != 1 {
+		t.Fatalf("delivery did not take the committed source")
 	}
 }
 
