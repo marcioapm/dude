@@ -10,7 +10,7 @@ import type { PersonRole } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, YOU } from "../src/fixtures/data.ts";
 import {
-  ApiError, type AdminOrganization, type AdminPerson, type ApiClient, type ApiKeyInfo, type InvitationRow, type InvitationStatus,
+  ApiError, type AdminOrganization, type AdminPerson, type ApiClient, type ApiKeyInfo, type InvitationCounts, type InvitationRow, type InvitationStatus,
   type InvitationView, type InviteResult, type Located, type MeAnswer, type Member, type MembershipInfo, type InvitationInfo,
 } from "../src/api/client.ts";
 
@@ -64,6 +64,8 @@ export interface World {
   pendingUnlisted?: Set<string>;
   /** An organisation's people, where it differs from the fixtures'; a promise holds the read until it settles. */
   people?: Map<string, { people: Member[]; you: string } | Promise<{ people: Member[]; you: string }>>;
+  /** This browser's push registrations, by the organisation they are in. */
+  push: Map<string, Set<string>>;
 }
 
 export function memberMe(over: Partial<{ organizations: MembershipInfo[]; invitations: InvitationInfo[]; superAdmin: boolean }> = {}): MeAnswer {
@@ -74,7 +76,7 @@ export function memberMe(over: Partial<{ organizations: MembershipInfo[]; invita
 
 export function world(me: MeAnswer = memberMe()): World {
   return {
-    me, invitations: ACME_INVITATIONS.map((i) => ({ ...i })), codes: new Map(), located: new Map(), orgPeople: new Map(), calls: [],
+    me, invitations: ACME_INVITATIONS.map((i) => ({ ...i })), codes: new Map(), located: new Map(), orgPeople: new Map(), calls: [], push: new Map(),
     keys: [
       { id: "key_1", name: "Laptop", prefix: "dude_sk_Qm3vX9", createdAt: iso(-30), lastUsedAt: iso(-0.1), current: false, organizationId: ACME.id },
       { id: "key_2", name: "Release script", prefix: "dude_sk_a81LpE", createdAt: iso(-20), lastUsedAt: iso(-1), current: false, organizationId: ACME.id },
@@ -110,11 +112,37 @@ export class AccountsClient extends FixtureClient {
   }
   override subscribePush(subscription: PushSubscriptionJSON) {
     this.#log("subscribePush", subscription.endpoint);
+    this.#pushIn().add(subscription.endpoint!);
     return Promise.resolve({ subscribed: true });
   }
   override unsubscribePush(endpoint: string) {
     this.#log("unsubscribePush", endpoint);
+    this.#pushIn().delete(endpoint);
     return Promise.resolve();
+  }
+  override pushSubscribed(endpoint: string) {
+    this.#log("pushSubscribed", endpoint);
+    return Promise.resolve({ subscribed: this.#pushIn().has(endpoint) });
+  }
+  /** The endpoints registered in this client's organisation ("" for one naming none). */
+  #pushIn(): Set<string> {
+    const org = this.org ?? "";
+    let set = this.w.push.get(org);
+    if (!set) this.w.push.set(org, (set = new Set()));
+    return set;
+  }
+  override updateMe(changes: { name?: string }) {
+    this.#log("updateMe", changes);
+    return this.me().then((r) => ({ person: { ...r.person, ...changes } }));
+  }
+  override markWelcomed(organizationId: string) {
+    this.#log("markWelcomed", organizationId);
+    const welcomedAt = iso(0);
+    const me = this.w.me;
+    if ("organizations" in me && me.organizations) {
+      me.organizations = me.organizations.map((m) => (m.id === organizationId && !m.welcomedAt ? { ...m, welcomedAt } : m));
+    }
+    return Promise.resolve({ welcomedAt });
   }
   override pushKey() {
     this.#log("pushKey");
@@ -156,6 +184,12 @@ export class AccountsClient extends FixtureClient {
     const size = this.w.pageSize ?? 50;
     const page = rows.slice(start, start + size);
     return Promise.resolve({ invitations: page, cursor: start + size < rows.length ? page.at(-1)!.id : null });
+  }
+  override invitationCounts(): Promise<InvitationCounts> {
+    this.#log("invitationCounts");
+    const counts: InvitationCounts = { pending: 0, expired: 0, accepted: 0, revoked: 0, all: this.w.invitations.length };
+    for (const r of this.w.invitations) counts[status(r)]++;
+    return Promise.resolve(counts);
   }
   override invite(invitations: Array<{ email: string; name?: string }>, role: PersonRole) {
     this.#log("invite", invitations, role);
@@ -221,6 +255,10 @@ export class AccountsClient extends FixtureClient {
   override adminInvitations(id: string, params: { status?: InvitationStatus | "all"; q?: string; cursor?: string } = {}) {
     this.#log("adminInvitations", id, params);
     return this.listInvitations(params);
+  }
+  override adminInvitationCounts(id: string) {
+    this.#log("adminInvitationCounts", id);
+    return this.invitationCounts();
   }
   override adminInvite(id: string, invitations: Array<{ email: string; name?: string }>, role: PersonRole) {
     this.#log("adminInvite", id, invitations, role);

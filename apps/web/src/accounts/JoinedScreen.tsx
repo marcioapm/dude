@@ -2,7 +2,8 @@
  * Welcome to <organisation>: where Join lands, inside the organisation's
  * shell (docs/design/accounts.md, *First sign-in from a link*). You as
  * others will see you, editable here; who invited you; its projects; how
- * dude works; Start your first session.
+ * dude works; Start your first session. Shown once per membership: saving
+ * here or leaving it sets `welcomedAt` (App).
  */
 
 import { useEffect, useState } from "react";
@@ -12,7 +13,6 @@ import { firstName, projectCounts, type NavProject } from "@dude/design-system";
 import type { ApiClient, Member, MembershipInfo } from "../api/client.ts";
 import { useSave } from "../hooks/useSave.tsx";
 import { FacePicker } from "../screens/FacePicker.tsx";
-import { useAccount } from "./context.tsx";
 
 const HOW = [
   { icon: "conductor", title: "Talk it through", body: "On a task: you and the conductor work it out in Chat, and it runs the agents." },
@@ -23,7 +23,7 @@ const HOW = [
 /** Who invited you, kept by the accept page for the welcome it opens: the welcome has no invitation to read. */
 export const JOINED_FROM = "dude.joinedFrom";
 
-export function JoinedScreen({ client, organization, projects, people, me, onChanged, onStart }: {
+export function JoinedScreen({ client, organization, projects, people, me, onChanged, onStart, onWelcomed }: {
   client: ApiClient;
   organization: MembershipInfo;
   projects: readonly NavProject[] | null;
@@ -31,8 +31,9 @@ export function JoinedScreen({ client, organization, projects, people, me, onCha
   me: Member | null;
   onChanged: () => void;
   onStart: () => void;
+  /** Saved here: the membership is welcomed, and this page is not shown again. */
+  onWelcomed: () => void;
 }) {
-  const account = useAccount();
   const [name, setName] = useState(me?.name ?? "");
   useEffect(() => setName(me?.name ?? ""), [me?.name]);
   const { busy, problem, save } = useSave();
@@ -66,7 +67,7 @@ export function JoinedScreen({ client, organization, projects, people, me, onCha
           {problem ? <CardBody><Callout tone="danger">{problem}</Callout></CardBody> : null}
           <CardFooter>
             <Button variant="secondary" disabled={busy || !name.trim() || name.trim() === me?.name} data-testid="welcome-save"
-              onClick={() => void save(() => client.updateMe({ name: name.trim() }), () => { onChanged(); account?.refresh(); }, "Name saved")}>Save</Button>
+              onClick={() => void save(() => client.updateMe({ name: name.trim() }), () => { onChanged(); onWelcomed(); }, "Name saved")}>Save</Button>
           </CardFooter>
         </Card>
       ) : null}

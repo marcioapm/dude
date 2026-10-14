@@ -3,14 +3,14 @@
  * Invitations page*): tabs with counts, search, and each row's action —
  * pending: Copy link, Revoke…; expired: Renew (the same link); revoked:
  * Invite again. Status and search are the server's (`?status=&q=`), so a
- * pending invitation never hides past a page.
+ * pending invitation never hides past a page; Load more follows its cursor.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EntityLine, Segmented } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, Input, Table, TableEmpty, TBody, Td, Th, THead, Tr, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
-import type { InvitationRow, InvitationStatus } from "../api/client.ts";
+import type { InvitationCounts, InvitationRow, InvitationStatus } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { inviteLink, useCopy, type InvitationsApi } from "./InviteDialog.tsx";
 import { agoWords, roleWord, untilWords } from "./words.ts";
@@ -24,15 +24,6 @@ const STATUS: Record<InvitationStatus, { label: string; tone: "info" | "attentio
   revoked: { label: "Revoked", tone: "neutral" },
 };
 const LABEL: Record<Filter, string> = { pending: "Pending", expired: "Expired", accepted: "Accepted", revoked: "Revoked", all: "All" };
-/** The rows the API returns per page; a `cursor` says there are more. */
-export const INVITATIONS_PAGE = 50;
-
-/** How many one page says there are: past a page, one more than a page, which `countWord` reads as "50+". */
-export const countOf = (r: { invitations: readonly unknown[]; cursor: string | null }) =>
-  r.cursor ? INVITATIONS_PAGE + 1 : r.invitations.length;
-
-/** A count as the tabs and the menu say it: "50+" past one page. */
-export const countWord = (n: number) => (n > INVITATIONS_PAGE ? `${INVITATIONS_PAGE}+` : String(n));
 
 export interface InvitationsListProps {
   api: InvitationsApi;
@@ -44,45 +35,61 @@ export interface InvitationsListProps {
   /** Names a person by id (who accepted, who revoked), when the page knows them. */
   personName?: ((id: string) => string | undefined) | undefined;
   /** The counts changed (the menu's "3 pending"). */
-  onCounts?: ((counts: Record<Filter, number>) => void) | undefined;
+  onCounts?: ((counts: InvitationCounts) => void) | undefined;
 }
 
 export function InvitationsList({ api, orgName, version, onInviteAgain, personName, onCounts }: InvitationsListProps) {
   const [filter, setFilter] = useState<Filter>("pending");
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<InvitationRow[] | null>(null);
-  const [counts, setCounts] = useState<Record<Filter, number> | null>(null);
+  // Where the next page starts; null when the last read was the last page.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [counts, setCounts] = useState<InvitationCounts | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<InvitationRow | null>(null);
   const [changed, setChanged] = useState(0);
   const copy = useCopy();
   const { toast } = useToast();
+  // Bumped by every first-page read: a page read for an older filter or search is dropped.
   const reads = useRef(0);
 
-  // The shown rows: the server filters and searches; only the latest read lands.
+  // The first page of the shown rows: the server filters and searches; only the latest read lands.
   useEffect(() => {
     const read = ++reads.current;
     const timer = setTimeout(() => {
       api.list({ status: filter, q: query.trim() }).then(
-        (r) => read === reads.current && (setRows(r.invitations), setProblem(null)),
+        (r) => read === reads.current && (setRows(r.invitations), setCursor(r.cursor), setProblem(null)),
         (err: unknown) => read === reads.current && setProblem(errorText(err)),
       );
     }, query ? 200 : 0);
     return () => clearTimeout(timer);
   }, [api, filter, query, version, changed]);
 
+  const loadMore = () => {
+    if (!cursor) return;
+    const read = reads.current;
+    setLoadingMore(true);
+    api.list({ status: filter, q: query.trim(), cursor }).then(
+      (r) => {
+        if (read !== reads.current) return;
+        setRows((shown) => [...(shown ?? []), ...r.invitations]);
+        setCursor(r.cursor);
+      },
+      (err: unknown) => read === reads.current && setProblem(errorText(err)),
+    ).finally(() => setLoadingMore(false));
+  };
+
   // Each tab's count, for the whole organisation, not the search.
   const onCountsRef = useRef(onCounts);
   onCountsRef.current = onCounts;
   useEffect(() => {
     let current = true;
-    void Promise.all(FILTERS.map((s) => api.list({ status: s }).then((r) => [s, countOf(r)] as const))).then(
-      (pairs) => {
-        if (!current) return;
-        const next = Object.fromEntries(pairs) as Record<Filter, number>;
-        setCounts(next);
-        onCountsRef.current?.(next);
-      }, () => undefined);
+    void api.counts().then((next) => {
+      if (!current) return;
+      setCounts(next);
+      onCountsRef.current?.(next);
+    }, () => undefined);
     return () => {
       current = false;
     };
@@ -95,8 +102,7 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
     }, (err: unknown) => toast({ title: errorText(err), tone: "danger" }));
   }, [toast]);
 
-  // A count past one page reads "50+": the API pages by 50 and says only that there are more.
-  const tabCount = (f: Filter) => (counts ? ` ${countWord(counts[f])}` : "");
+  const tabCount = (f: Filter) => (counts ? ` ${counts[f]}` : "");
   return (
     <>
       <div className="invitationFilters">
@@ -142,6 +148,11 @@ export function InvitationsList({ api, orgName, version, onInviteAgain, personNa
           }) : <TableEmpty colSpan={5}>{query.trim() ? `No invitation matches “${query.trim()}”.` : `No ${filter === "all" ? "" : `${filter} `}invitations to ${orgName}.`}</TableEmpty>}
         </TBody>
       </Table>
+      {cursor && rows?.length ? (
+        <div className="invitationMore">
+          <Button size="sm" variant="secondary" disabled={loadingMore} onClick={loadMore} data-testid="invitations-more">Load more</Button>
+        </div>
+      ) : null}
       {revoking ? (
         <Dialog open onOpenChange={(o) => !o && setRevoking(null)} tone="danger" size="sm" title={`Revoke ${revoking.name ?? revoking.email}'s invitation?`}
           description={`The link stops working at once; opening it says it can't be used. If they already joined, this changes nothing. You can invite ${revoking.email} again later, with a new link.`}

@@ -24,6 +24,7 @@ const ROLES = [
 export function organizationInvitations(client: ApiClient): InvitationsApi {
   return {
     list: (p) => client.listInvitations(p),
+    counts: () => client.invitationCounts(),
     invite: (i, role) => client.invite(i, role),
     renew: (id) => client.renewInvitation(id),
     revoke: (id) => client.revokeInvitation(id),

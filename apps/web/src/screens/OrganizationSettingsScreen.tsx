@@ -24,7 +24,7 @@ import {
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection, ForgeVerification, Member } from "../api/client.ts";
 import { MembersSection, organizationInvitations } from "./MembersSection.tsx";
-import { countOf, countWord, InvitationsList } from "../accounts/InvitationsList.tsx";
+import { InvitationsList } from "../accounts/InvitationsList.tsx";
 import { InviteDialog } from "../accounts/InviteDialog.tsx";
 import { orgOf, useAccount } from "../accounts/context.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -87,7 +87,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   useEffect(() => {
     if (!admin) return;
     let current = true;
-    void invitations.list({ status: "pending" }).then((r) => current && setPending(countOf(r)), () => undefined);
+    void invitations.counts().then((c) => current && setPending(c.pending), () => undefined);
     return () => {
       current = false;
     };
@@ -104,7 +104,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         leading: account ? <OrgFace org={orgOf(account.current)} size={32} aria-hidden /> : <AgentAvatar role="conductor" size="lg" /> }}
       items={[
         { id: "members", label: "Members", icon: "human" },
-        ...(admin ? [{ id: "invitations", label: "Invitations", icon: "link" as const, note: pending ? `${countWord(pending)} pending` : undefined }] : []),
+        ...(admin ? [{ id: "invitations", label: "Invitations", icon: "link" as const, note: pending ? `${pending} pending` : undefined }] : []),
         { id: "general", label: "General", icon: "settings" },
         { id: "github", label: "GitHub", icon: "git-branch" },
         agentsNav(settings),

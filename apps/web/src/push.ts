@@ -1,13 +1,13 @@
 /**
- * This browser's notifications: whether they can work here, whether it is
- * subscribed, and subscribing or not (docs/design/notifications.md). The
- * service worker (public/sw.js) shows what dude pushes; it is registered
- * once, at start (startPush).
+ * This browser's notifications: whether they can work here, whether they
+ * are on in an organisation, and turning them on or off
+ * (docs/design/notifications.md). The service worker (public/sw.js) shows
+ * what dude pushes; it is registered once, at start (startPush).
  *
- * A browser has one subscription, and the backend keeps it for one
- * organisation (`claim_push_subscription` moves it on each claim). Which
- * organisation that is, is recorded here per endpoint (PUSH_ORGANIZATION),
- * since no route answers it.
+ * A browser has one PushSubscription; the backend registers it per
+ * organisation, so each organisation is on or off alone. The browser's
+ * subscription is dropped only when no organisation still uses it, and on
+ * sign-out, which removes it from every membership.
  */
 
 import type { ApiClient } from "./api/client.ts";
@@ -18,15 +18,6 @@ export type PushState =
   | "off"
   | "on";
 
-/** The organisation a subscription was claimed for. */
-export interface PushOrganization {
-  id: string;
-  name: string;
-}
-
-/** localStorage key prefix: `<prefix><endpoint>` holds the PushOrganization it was claimed for. */
-export const PUSH_ORGANIZATION = "dude.push.org:";
-
 function supported(): boolean {
   return window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
@@ -35,35 +26,26 @@ async function subscription(): Promise<PushSubscription | null> {
   return (await navigator.serviceWorker.ready).pushManager.getSubscription();
 }
 
-function recorded(endpoint: string): PushOrganization | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(PUSH_ORGANIZATION + endpoint) ?? "null") as PushOrganization | null;
-    return value && typeof value.id === "string" && typeof value.name === "string" ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-async function claim(client: ApiClient, sub: PushSubscription, organization: PushOrganization | null): Promise<void> {
-  await client.subscribePush(sub.toJSON());
-  if (organization) localStorage.setItem(PUSH_ORGANIZATION + sub.endpoint, JSON.stringify(organization));
+/** The browser's subscription without waiting for a worker: none when none was ever registered. */
+async function existingSubscription(): Promise<PushSubscription | null> {
+  const registration = await navigator.serviceWorker.getRegistration();
+  return registration ? registration.pushManager.getSubscription() : null;
 }
 
 /**
  * At start: register the service worker, and if this browser is subscribed
  * and `reclaim` holds, tell dude again — idempotent, and it puts back a
  * subscription dude forgot (its push service said it was gone). Someone in
- * several organisations passes `reclaim: false`: a claim moves the one
- * subscription, so only Notify me in this browser does that.
+ * several organisations passes `reclaim: false`: each organisation is
+ * turned on by its own Notify me, never by opening it.
  * A clicked notification opens its place here when the tab cannot be
  * navigated by the worker.
  */
-export function startPush(client: ApiClient, open: (hash: string) => void,
-  { reclaim = true, organization = null }: { reclaim?: boolean; organization?: PushOrganization | null } = {}): () => void {
+export function startPush(client: ApiClient, open: (hash: string) => void, { reclaim = true }: { reclaim?: boolean } = {}): () => void {
   if (!supported()) return () => {};
   void navigator.serviceWorker.register("/sw.js").then(async () => {
     const sub = reclaim && Notification.permission === "granted" ? await subscription() : null;
-    if (sub) await claim(client, sub, organization).catch(() => {});
+    if (sub) await client.subscribePush(sub.toJSON()).catch(() => {});
   });
   const onMessage = (e: MessageEvent) => {
     if (e.data?.type === "dude.open" && typeof e.data.url === "string") open(e.data.url);
@@ -72,21 +54,19 @@ export function startPush(client: ApiClient, open: (hash: string) => void,
   return () => navigator.serviceWorker.removeEventListener("message", onMessage);
 }
 
-export async function pushState(): Promise<PushState> {
+/** Whether notifications are on in `client`'s organisation: this browser is subscribed and registered there. */
+export async function pushState(client: ApiClient): Promise<PushState> {
   if (!supported()) return "unsupported";
   if (Notification.permission === "denied") return "blocked";
-  return Notification.permission === "granted" && (await subscription()) ? "on" : "off";
-}
-
-/** The organisation this browser's subscription was last claimed for here, if it is subscribed and that was recorded. */
-export async function pushOrganization(): Promise<PushOrganization | null> {
-  if (!supported() || Notification.permission !== "granted") return null;
+  if (Notification.permission !== "granted") return "off";
   const sub = await subscription();
-  return sub ? recorded(sub.endpoint) : null;
+  if (!sub) return "off";
+  const { subscribed } = await client.pushSubscribed(sub.endpoint).catch(() => ({ subscribed: false }));
+  return subscribed ? "on" : "off";
 }
 
-/** Ask for permission, subscribe with dude's key, and claim it for `client`'s organisation. */
-export async function turnPushOn(client: ApiClient, organization: PushOrganization | null = null): Promise<PushState> {
+/** Ask for permission, subscribe with dude's key (or reuse the browser's subscription), and register it in `client`'s organisation. */
+export async function turnPushOn(client: ApiClient): Promise<PushState> {
   if (!supported()) return "unsupported";
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return permission === "denied" ? "blocked" : "off";
@@ -95,35 +75,42 @@ export async function turnPushOn(client: ApiClient, organization: PushOrganizati
   const sub =
     (await reg.pushManager.getSubscription()) ??
     (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromBase64Url(publicKey) }));
-  await claim(client, sub, organization);
+  await client.subscribePush(sub.toJSON());
   return "on";
 }
 
 /**
- * Stop: dude forgets this browser, and the browser its subscription. Also on
- * sign-out. The removal is sent as the organisation it was claimed for when
- * that is recorded, else as `client`'s: a credential naming none is refused
- * for someone in several.
+ * Off in `client`'s organisation only. The browser's subscription is
+ * dropped when none of `elsewhere` (your other organisations' clients)
+ * still has it registered; one that cannot be asked counts as using it.
  */
-export async function turnPushOff(client: ApiClient): Promise<PushState> {
+export async function turnPushOff(client: ApiClient, elsewhere: readonly ApiClient[] = []): Promise<PushState> {
   if (!supported()) return "unsupported";
-  const registration = await navigator.serviceWorker.getRegistration();
-  const sub = registration ? await registration.pushManager.getSubscription() : null;
-  if (sub) {
-    const owner = recorded(sub.endpoint);
-    const remover = owner && owner.id !== client.organizationId ? client.root.inOrganization(owner.id) : client;
-    await remover.unsubscribePush(sub.endpoint).catch(() => {});
-    localStorage.removeItem(PUSH_ORGANIZATION + sub.endpoint);
-    await sub.unsubscribe();
-  }
+  const sub = await existingSubscription();
+  if (!sub) return "off";
+  await client.unsubscribePush(sub.endpoint);
+  const used = await Promise.all(elsewhere.map((other) =>
+    other.pushSubscribed(sub.endpoint).then((r) => r.subscribed, () => true)));
+  if (!used.includes(true)) await sub.unsubscribe();
   return "off";
 }
 
 /**
- * Sign-out's removal: through the mounted organisation's client when there
- * is one, else the session's (`root`), which names none.
+ * Sign-out's removal: this browser's registration in every one of
+ * `organizationIds` (your memberships), each through the session's
+ * credential naming that organisation, then the browser's subscription.
+ * A removal that fails does not keep the others, or the browser's
+ * unsubscribe, from running: its row goes when the push service reports
+ * the endpoint gone.
  */
-export const pushOffOnSignOut = (mounted?: ApiClient) => (root: ApiClient): Promise<PushState> => turnPushOff(mounted ?? root);
+export const pushOffOnSignOut = (organizationIds: readonly string[]) => async (root: ApiClient): Promise<PushState> => {
+  if (!supported()) return "unsupported";
+  const sub = await existingSubscription();
+  if (!sub) return "off";
+  for (const id of organizationIds) await root.inOrganization(id).unsubscribePush(sub.endpoint).catch(() => {});
+  await sub.unsubscribe();
+  return "off";
+};
 
 /** Shown by the service worker as a push would be, signed as it signs them (sw.js): that this browser shows them. */
 export async function showTestNotification(): Promise<void> {
