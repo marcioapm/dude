@@ -125,6 +125,23 @@ test("the highlight stays on its row when the app hands over fresh options while
   expect(scrolls).toBe(0);
 });
 
+test("opening never scrolls the page; only an arrow key scrolls its row into view", async () => {
+  const scrolled: string[] = [];
+  const scroll = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) { scrolled.push(this.id); };
+  try {
+    const el = await mount();
+    await act(async () => el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
+    await tick();
+    expect(document.querySelectorAll("[role=option]").length).toBeGreaterThan(1);
+    expect(scrolled).toEqual([]);
+    await press(document.querySelector("input[role=combobox]")!, "ArrowDown");
+    expect(scrolled).toEqual([document.querySelectorAll("[role=option]")[1]!.id]);
+  } finally {
+    HTMLElement.prototype.scrollIntoView = scroll;
+  }
+});
+
 test("the open option is marked apart from the keyboard's row", async () => {
   const el = await mount();
   const trigger = el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!;

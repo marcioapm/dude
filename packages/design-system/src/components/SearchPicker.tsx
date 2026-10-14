@@ -130,15 +130,17 @@ export function SearchPicker<T>({
     if (clearOnPick) setQuery("");
   };
 
-  useEffect(() => {
-    if (open) document.getElementById(optionId(current))?.scrollIntoView?.({ block: "nearest" });
-  }, [open, current]);
-
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && (open || closed)) {
       e.preventDefault();
       if (closed) setClosed(false);
-      else setActive(step(current, e.key === "ArrowDown" ? 1 : -1));
+      else {
+        const next = step(current, e.key === "ArrowDown" ? 1 : -1);
+        setActive(next);
+        // Only the keyboard scrolls the list: a picker that mounts open (the
+        // gallery, a dialog) must never pull its page to itself.
+        document.getElementById(optionId(next))?.scrollIntoView?.({ block: "nearest" });
+      }
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault();
       onSubmit();
