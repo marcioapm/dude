@@ -95,6 +95,36 @@ test("in a session header the list opens at the header's bottom-left, not over i
   }
 });
 
+test("the highlight stays on its row when the app hands over fresh options while open", async () => {
+  const many = [...OPTIONS, { id: "f", label: "Fix", model: "m", status: "Running" }, { id: "i", label: "Implement", model: "m", status: "Completed" }];
+  const render = () => root!.render(<SearchSelector title="Conductor" label="Select session" options={many.map((o) => ({ ...o }))}
+    optionKey={(o) => o.id} searchText={(o) => o.label} current={(o) => o.id === "c"} onPick={() => {}} renderOption={(o) => o.label} />);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => render());
+  await act(async () => host!.querySelector<HTMLButtonElement>("button")!.click());
+  await tick();
+  const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  await press(input, "ArrowDown");
+  await press(input, "ArrowDown");
+  const third = document.querySelectorAll("[role=option]")[2]!.id;
+  expect(input.getAttribute("aria-activedescendant")).toBe(third);
+  let scrolls = 0;
+  const scroll = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = () => { scrolls++; };
+  try {
+    for (let i = 0; i < 3; i++) {
+      await act(async () => render());
+      await tick();
+    }
+  } finally {
+    HTMLElement.prototype.scrollIntoView = scroll;
+  }
+  expect(input.getAttribute("aria-activedescendant")).toBe(third);
+  expect(scrolls).toBe(0);
+});
+
 test("no options says so", async () => {
   const el = await mount(true);
   await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label='Select session']")!.click());

@@ -69,6 +69,8 @@ export function SearchPicker<T>({
   const [found, setFound] = useState<ReadonlyArray<T>>([]);
   // The words the options answer: an empty answer to words is "nothing found".
   const [answered, setAnswered] = useState<string | null>(null);
+  const answeredWords = useRef(answered);
+  answeredWords.current = answered;
   const [active, setActive] = useState(0);
   // Escape closed the list; typing or an arrow opens it again.
   const [closed, setClosed] = useState(false);
@@ -90,8 +92,9 @@ export function SearchPicker<T>({
         (found) => {
           if (mine !== latest.current) return;
           setFound(found);
+          // A fresh answer to the same words (the app's options re-read) keeps the highlight.
+          if (answeredWords.current !== words) setActive(0);
           setAnswered(words);
-          setActive(0);
         },
         () => {
           if (mine !== latest.current) return;
@@ -126,7 +129,7 @@ export function SearchPicker<T>({
 
   useEffect(() => {
     if (open) document.getElementById(optionId(current))?.scrollIntoView?.({ block: "nearest" });
-  }, [open, current, found]);
+  }, [open, current]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && (open || closed)) {
