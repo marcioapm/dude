@@ -2,6 +2,7 @@ package fakelux
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,6 +34,91 @@ func submitSized(t *testing.T, fake *Server, key string) (*lux.HTTPClient, strin
 // As lux#51: a stopped Run's resume can change its cpus, memory and disk.
 // What applies is written into its spec, and the answer's resize says what
 // was asked and what the Run has; its next placement gets the new memory.
+func TestResumePoolDryRunChangesNothingAndRealResumeRebinds(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	t.Cleanup(fake.Close)
+	client, id := submitSized(t, fake, "pool")
+	ctx := context.Background()
+	// A live Run is accepted by validateOnly, without stopping it.
+	if _, err := client.Resume(ctx, id, lux.ResumeInput{}); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, client, id, "running")
+	before, err := client.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := DefaultPools()[1].ID
+	want := lux.Resources{CPUs: 4, Memory: 16 * gib, Disk: 40 * gib}
+	in := lux.ResumeInput{Resources: &want, Placement: &lux.PlacementSpec{PoolID: pool}, ValidateOnly: true}
+	checked, err := client.Resume(ctx, id, in)
+	if err != nil || !checked.Valid || checked.Placement == nil || checked.Placement.PoolID != pool {
+		t.Fatalf("dry run: %+v %v", checked, err)
+	}
+	after, err := client.Get(ctx, id)
+	if err != nil || after.State != "running" || after.Epoch != before.Epoch || after.PoolID != before.PoolID || *after.Spec.Resources != *before.Spec.Resources {
+		t.Fatalf("dry run changed Run: %+v %v", after, err)
+	}
+	if err := client.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, client, id, "stopped")
+	in.ValidateOnly = false
+	resumed, err := client.Resume(ctx, id, in)
+	if err != nil || resumed.Placement == nil || resumed.Placement.PoolID != pool || resumed.Resize == nil || resumed.Resize.Applied != want {
+		t.Fatalf("resume: %+v %v", resumed, err)
+	}
+	waitState(t, client, id, "running")
+	after, err = client.Get(ctx, id)
+	if err != nil || after.PoolID != pool || *after.Spec.Resources != want {
+		t.Fatalf("binding: %+v %v", after, err)
+	}
+}
+
+func TestResumePoolRefusalsChangeNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, pool, code string
+		platforms        []string
+		nested           bool
+	}{
+		{"unknown", "missing", "unknown_pool", nil, false},
+		{"platform", "pool_other", "platform_mismatch", []string{"linux/arm64"}, false},
+		{"nested", "pool_other", "pool_unfit", []string{"linux/amd64"}, true},
+		{"size", "pool_other", "pool_unfit", []string{"linux/amd64"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+			t.Cleanup(fake.Close)
+			no := false
+			fake.Pools = append(DefaultPools(), lux.Pool{ID: "pool_other", Name: "other", Platforms: tc.platforms, Capabilities: &lux.PoolCapabilities{NestedContainers: &no}, HostSize: &lux.HostSize{CPUs: 2, Memory: 8 * gib}})
+			fake.ImagePlatforms = map[string][]string{"agent:1": {"linux/amd64"}}
+			client, id := submitSized(t, fake, tc.name)
+			if tc.nested {
+				fake.mu.Lock()
+				run := fake.runs[id]
+				var spec map[string]any
+				_ = json.Unmarshal(run.Spec, &spec)
+				spec["sandbox"] = map[string]any{"nestedContainers": true}
+				run.Spec, _ = json.Marshal(spec)
+				fake.mu.Unlock()
+			}
+			ctx := context.Background()
+			before, _ := client.Get(ctx, id)
+			for _, dry := range []bool{true, false} {
+				_, err := client.Resume(ctx, id, lux.ResumeInput{Resources: &lux.Resources{CPUs: 4, Memory: 16 * gib}, Placement: &lux.PlacementSpec{PoolID: tc.pool}, ValidateOnly: dry})
+				le, ok := lux.AsError(err)
+				if !ok || le.Status != 422 || le.Code != tc.code || le.Message == "" {
+					t.Fatalf("dry=%v: %v", dry, err)
+				}
+				after, _ := client.Get(ctx, id)
+				if after.State != before.State || after.PoolID != before.PoolID || *after.Spec.Resources != *before.Spec.Resources {
+					t.Fatalf("refusal changed Run: %+v", after)
+				}
+			}
+		})
+	}
+}
+
 func TestAResumeResizesAStoppedRun(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	fake.MemoryShare = 0.5

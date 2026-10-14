@@ -124,6 +124,46 @@
   color: var(--ds-color-text-muted);
 }
 
+.raised {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  flex-shrink: 0;
+}
+.raiseRows {
+  list-style: none;
+  margin: var(--ds-space-8) 0 0;
+  padding: 0;
+}
+.raiseRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-4) 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.raiseText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.raiseDetail {
+  display: block;
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-muted);
+}
+.raiseSpec {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.raiseError {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+
 .usedBy {
   display: flex;
   align-items: center;

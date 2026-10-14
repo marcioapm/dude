@@ -31,6 +31,7 @@ const (
 	Epic        = "epc"
 	RepoRequest = "rrq"
 	Memory      = "mem"
+	MachineMove = "mmv"
 	PeerMessage = "pm"
 	PeerWait    = "pw"
 	EpicNote    = "epn"

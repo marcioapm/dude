@@ -50,15 +50,20 @@ export function SubagentsBlock({ turns, onOpen }: { turns: readonly Turn[]; onOp
  * card for a call the caller renders its own way (a coordination tool's summary, a refusal).
  */
 export function ToolWithChildren({ turn, depth, note, card }: { turn: ToolTurn; depth: number; note?: ReactNode; card?: ReactElement | undefined }) {
+  const machine = turn.machine;
   return (
     <>
       {card ?? <ToolCallCard
         name={turn.tool}
         args={turn.args}
+        // A request_machine call reads as its move, and its answer or refusal replaces the raw output.
+        summary={machine ? <>Asked for a larger machine: {machine.from ? <>{machine.from} → </> : null}<b>{machine.to}</b>{machine.pool ? ` · ${machine.pool} pool` : ""}</> : undefined}
+        result={machine?.answer}
+        error={machine?.error}
         status={turn.status}
         startedAt={turn.startedAt}
         endedAt={turn.endedAt}
-        output={turn.result?.output ?? turn.result?.stdout}
+        output={machine?.answer || machine?.error ? undefined : turn.result?.output ?? turn.result?.stdout}
         stderr={turn.result?.stderr}
         exitCode={turn.result?.exitCode}
         note={note}

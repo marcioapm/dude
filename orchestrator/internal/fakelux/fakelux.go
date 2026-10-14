@@ -62,6 +62,10 @@ type Behaviour struct {
 	// arguments) and end the first turn there; do the rest (Reply, Commit)
 	// in the turn the answer starts.
 	Ask string
+	// Ask to move machine with dude's request_machine (these are its JSON
+	// arguments) in the first turn; accepted, the turn ends there and the
+	// rest is done in the turn the resume starts. Refused, it carries on.
+	Machine string
 	// Tools start and do not finish: a long command.
 	KeepToolsOpen bool
 	// Files the agent publishes as it finishes its turn, name → content
@@ -189,6 +193,10 @@ type Run struct {
 	pendingResize *lux.Resize
 	// Each accepted resume's resources, as received; nil for none.
 	ResumeResources []json.RawMessage
+	// Each accepted resume's placement.poolId; "" for none.
+	ResumePlacements []string
+	// Where the resume it is resuming from rebound it; nil for none.
+	pendingPlacement *lux.ResumePlacement
 
 	// Its servers (servers.go).
 	servers []*server
@@ -695,6 +703,15 @@ type Server struct {
 	// resume's resources may carry only disk, applied as asked, and
 	// anything else in them is an unknown field (400).
 	NoResize bool
+	// NoPlacement is a lux from before lux#93: placement and validateOnly
+	// on a resume are unknown fields (400).
+	NoPlacement bool
+	// ImagePlatforms is what each placement reports its image offered
+	// (lux#91), by the spec's image ref; absent reports none.
+	ImagePlatforms map[string][]string
+	// OnResume, when set, runs as each resume request arrives (validateOnly
+	// or not), before the fake acts on it, without its lock.
+	OnResume func(runID string, validateOnly bool)
 	// Starts still to fail, by spec label "key=value" (FailStarts), and
 	// the state each ends in.
 	failStarts map[string]int
@@ -819,7 +836,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
@@ -1547,6 +1564,11 @@ func (s *Server) turn(run *Run) {
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
 	}
+	if b.Machine != "" && first && !asking {
+		// Its move accepted, it ends its turn as the tool's answer says,
+		// its work left for the turn the resume starts.
+		asking = s.requestMachine(run, b.Machine) == http.StatusOK
+	}
 	if b.Conductor {
 		// The tools the input asks the scripted conductor for: its first
 		// prompt's (its script), then each later input's.
@@ -1589,6 +1611,9 @@ func (s *Server) turn(run *Run) {
 	}
 	if asking {
 		reply = "I asked; waiting for the answer."
+		if b.Machine != "" {
+			reply = fakeagent.MachineEndedTurn
+		}
 	}
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
@@ -1647,38 +1672,80 @@ func conductorAsked(input string, first bool) string {
 	return strings.Join(lines, "\n")
 }
 
+// requestMachine calls request_machine as the agent would, once dude has
+// recorded the Run live: a real agent's first call comes after its
+// container is up, which dude knows by then, while the fake plays the turn
+// the moment the submit is accepted. Waits up to 5 s, without s.mu, while
+// dude answers not_live. Callers hold s.mu.
+func (s *Server) requestMachine(run *Run, args string) int {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		status, body, err := s.toolRequest(run, "request_machine", args)
+		var refused struct{ Code string }
+		_ = json.Unmarshal(body, &refused)
+		if refused.Code != "not_live" || time.Now().After(deadline) {
+			s.saidOfTool(run, "request_machine", status, err)
+			return status
+		}
+		s.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		s.mu.Lock()
+	}
+}
+
 // callTool calls one of dude's tools as the agent's container would through
 // lux's service proxy: the spec's "dude" service, its header filled in from
 // the secret's value lux holds for the current placement, which a resume
 // replaces, as lux's shim starts its service proxies with the placement's
 // values. (The CLI's own path through a socket is tested in agenttools.)
 // Callers hold s.mu; the call is made without it, since dude may be slow. A
-// failure is said in the agent's reply.
-func (s *Server) callTool(run *Run, tool, args string) {
+// failure is said in the agent's reply. Its HTTP status, 0 when it never
+// got one.
+func (s *Server) callTool(run *Run, tool, args string) int {
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
-		return
+		return http.StatusOK
 	}
+	id, from := InboxLast(run.Inputs)
+	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
+	status, body, err := s.toolRequest(run, tool, args)
+	s.saidOfTool(run, tool, status, err)
+	if err == nil && status != 0 && status < 300 {
+		var answer struct{ ID string }
+		_ = json.Unmarshal(body, &answer)
+		run.lastID = answer.ID
+	}
+	return status
+}
+
+// saidOfTool says a failed call in the agent's reply, as an agent would
+// report a tool it ran. Callers hold s.mu.
+func (s *Server) saidOfTool(run *Run, tool string, status int, err error) {
+	switch {
+	case err != nil:
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": "dude " + tool + " failed: " + err.Error() + "\n"}})
+	case status >= 300:
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, status)}})
+	}
+}
+
+// toolRequest is one call of a dude tool through the spec's "dude"
+// service: its status and body. Callers hold s.mu; it is released for
+// the call. Status 0 with no error: the spec has no such service.
+func (s *Server) toolRequest(run *Run, tool, args string) (status int, body []byte, err error) {
 	s.withDude(run, func(send func(tool, args string) (*http.Response, error)) {
-		id, from := InboxLast(run.Inputs)
-		args := strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
-		res, err := send(tool, args)
-		// Said in the agent's reply, as an agent would report a tool it ran.
-		switch {
-		case err != nil:
-			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-				"content": map[string]any{"type": "text", "text": "dude " + tool + " failed: " + err.Error() + "\n"}})
-		case res.StatusCode >= 300:
-			res.Body.Close()
-			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-				"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, res.StatusCode)}})
-		default:
-			var answer struct{ ID string }
-			_ = json.NewDecoder(res.Body).Decode(&answer)
-			run.lastID = answer.ID
-			res.Body.Close()
+		res, sendErr := send(tool, args)
+		if sendErr != nil {
+			err = sendErr
+			return
 		}
+		defer res.Body.Close()
+		status = res.StatusCode
+		body, _ = io.ReadAll(res.Body)
 	})
+	return status, body, err
 }
 
 // withDude gives fn a way to call dude's tools as the Run's container
@@ -1994,6 +2061,9 @@ func (s *Server) view(run *Run) map[string]any {
 		}
 		if p.peakDisk != nil {
 			view["peakDiskBytes"] = *p.peakDisk
+		}
+		if ps := s.imagePlatforms(run); ps != nil && p.ImageReadyAt != nil {
+			view["imagePlatforms"] = ps
 		}
 		placements = append(placements, view)
 		if p.Epoch == run.Epoch && p.ExitedAt == nil {
@@ -2587,16 +2657,31 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		} `json:"git"`
 		Sync      []lux.SyncRef  `json:"sync"`
 		Resources *resizeRequest `json:"resources"`
+		Placement *struct {
+			PoolID string `json:"poolId"`
+		} `json:"placement"`
+		ValidateOnly bool `json:"validateOnly"`
 	}
 	body, _ := io.ReadAll(r.Body)
 	var raw struct {
-		Secrets   json.RawMessage `json:"secrets"`
-		Resources json.RawMessage `json:"resources"`
+		Secrets      json.RawMessage `json:"secrets"`
+		Resources    json.RawMessage `json:"resources"`
+		Placement    json.RawMessage `json:"placement"`
+		ValidateOnly json.RawMessage `json:"validateOnly"`
 	}
 	_ = json.Unmarshal(body, &raw)
 	if err := json.Unmarshal(body, &in); err != nil {
 		// lux decodes the body strictly: a size it cannot read is a 400.
 		writeErr(w, 400, "bad_request", "invalid JSON body: "+err.Error())
+		return
+	}
+	if s.NoPlacement && (raw.Placement != nil || raw.ValidateOnly != nil) {
+		// A lux from before lux#93: its decoder refuses an unknown field.
+		field := "placement"
+		if raw.Placement == nil {
+			field = "validateOnly"
+		}
+		writeErr(w, 400, "bad_request", fmt.Sprintf("invalid JSON body: json: unknown field %q", field))
 		return
 	}
 	if s.NoResize && in.Resources != nil && (in.Resources.CPUs != nil || in.Resources.Memory != nil) {
@@ -2614,6 +2699,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if in.Resources != nil && !s.NoResize {
 		requested, problem = in.Resources.requested()
 	}
+	targetPool := ""
+	if in.Placement != nil {
+		targetPool = in.Placement.PoolID
+	}
+	if s.OnResume != nil {
+		s.OnResume(run.ID, in.ValidateOnly)
+	}
 	s.mu.Lock()
 	// As lux's resumeRun: a Run resuming already answers as the first
 	// resume did; every other 409 means it was not resumed. Its resources
@@ -2622,12 +2714,22 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	// refused.
 	resumable := run.State == "stopped" || run.State == "failed" || run.State == "lost" ||
 		run.State == "succeeded" && !s.CancelledState
+	// validateOnly judges a live Run as if it were stopped.
+	live := run.State == "scheduled" || run.State == "starting" || run.State == "running" || run.State == "stopping"
 	switch {
 	case resumable:
+	case in.ValidateOnly && live:
 	case run.State == "resuming":
 		if problem != "" {
 			s.mu.Unlock()
 			writeErr(w, 422, "invalid_spec", problem)
+			return
+		}
+		// Its own pool (the one its resume moved it to) is a retry; any
+		// other is refused.
+		if targetPool != "" && targetPool != s.poolOf(run) {
+			s.mu.Unlock()
+			writeErr(w, 409, "not_resumable", "run is resuming already into another pool")
 			return
 		}
 		view := s.view(run)
@@ -2643,6 +2745,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			}
 			view["resize"] = run.pendingResize
 		}
+		if targetPool != "" {
+			view["placement"] = run.pendingPlacement
+		}
 		s.mu.Unlock()
 		writeJSON(w, 202, view)
 		return
@@ -2656,8 +2761,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
-	// secret the Run has must come again, non-empty.
-	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 {
+	// secret the Run has must come again, non-empty. A dry run checks
+	// only the names sent.
+	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 && !in.ValidateOnly {
 		s.mu.Unlock()
 		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
 		return
@@ -2670,6 +2776,36 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if problem != "" {
 		s.mu.Unlock()
 		writeErr(w, 422, "invalid_spec", problem)
+		return
+	}
+	var moved *lux.ResumePlacement
+	if targetPool != "" {
+		var code, msg string
+		moved, code, msg = s.checkPool(run, targetPool, in.Resources, requested)
+		if code != "" {
+			s.mu.Unlock()
+			writeErr(w, 422, code, msg)
+			return
+		}
+	}
+	if in.ValidateOnly {
+		// Every check passed; nothing changes. The resize it would apply is
+		// worked out on the stored spec, which is then put back.
+		answer := map[string]any{"valid": true}
+		if live {
+			answer["stateUnchecked"] = run.State
+		}
+		if in.Resources != nil && !s.NoResize {
+			kept := run.Spec
+			answer["resize"] = s.resize(run, *in.Resources, requested)
+			run.Spec = kept
+		}
+		if moved != nil {
+			answer["placement"] = moved
+		}
+		run.Calls = append(run.Calls, "validate")
+		s.mu.Unlock()
+		writeJSON(w, 200, answer)
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
@@ -2741,7 +2877,12 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		rz = s.resize(run, *in.Resources, requested)
 	}
 	run.pendingResize = rz
+	run.pendingPlacement = moved
+	if moved != nil {
+		s.setPool(run, moved.PoolID)
+	}
 	run.ResumeResources = append(run.ResumeResources, raw.Resources)
+	run.ResumePlacements = append(run.ResumePlacements, targetPool)
 	run.Resumed++
 	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
@@ -2773,6 +2914,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	view := s.view(run)
 	if rz != nil {
 		view["resize"] = rz
+	}
+	if moved != nil {
+		view["placement"] = moved
 	}
 	s.mu.Unlock()
 	go s.play(run, epoch, start, spec, true)

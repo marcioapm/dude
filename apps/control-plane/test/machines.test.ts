@@ -67,6 +67,8 @@ const FRESH = "pool_fresh0id";
 let luxPools: MachinePool[] | null = POOLS();
 /** When set, how the orchestrator answers GET /internal/lux/pools instead. */
 let poolsReply: (() => Response) | null = null;
+/** How many times the orchestrator was asked for lux's pools. */
+let poolReads = 0;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const body = async (res: Response): Promise<Json> => res.json();
@@ -99,6 +101,7 @@ beforeAll(async () => {
     fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === "/internal/lux/pools") {
+        poolReads += 1;
         if (poolsReply) return poolsReply();
         return luxPools === null
           ? Response.json({ pools: [], readAt: new Date().toISOString(), problem: "lux is unreachable" })
@@ -472,5 +475,102 @@ describe("removing a size in use", () => {
     expect((await call(adminKey, "DELETE", `/v1/machines/sizes/${large.id}`, { replacement: "msz_nope" })).status).toBe(400);
     expect((await call(memberKey, "DELETE", `/v1/machines/sizes/${large.id}`, { replacement: null })).status).toBe(403);
     expect(await byName("Large")).toBeDefined();
+  });
+});
+
+describe("raised machines", () => {
+  const TASK = "task_raised";
+  const SESSION = "ssn_raised";
+  const at = "2026-10-13T00:00:00.000Z";
+  const raise = (sizeId: string, moveId: string, askedBy: string) => ({ sizeId, moveId, askedBy, reason: "jest killed, exit 137", at });
+
+  beforeAll(async () => {
+    const large = (await byName("Large")).id;
+    const [{ id: person }] = await owner`SELECT person_id AS id FROM api_keys WHERE organization_id = ${ORG} LIMIT 1`;
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${TASK}, ${ORG}, ${PROJECT}, 90, 'Raised')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, machine)
+      VALUES ('run_raised_impl', ${ORG}, ${PROJECT}, ${TASK}, 1, 'running', 'implement', 'implementer',
+                ${{ sizeId: large, name: "Large", poolId: null, pool: "default" }}::jsonb),
+             ('run_raised_cond', ${ORG}, ${PROJECT}, ${TASK}, 2, 'running', 'implement', 'conductor', NULL)`;
+    await owner`UPDATE tasks SET agent_machines = ${{ implementer: raise(large, "mmv_impl", "run_raised_impl"),
+      conductor: raise(large, "mmv_cond", "run_raised_cond") }}::jsonb WHERE id = ${TASK}`;
+    await owner`INSERT INTO sessions (id, organization_id, title, created_by, agent_machine)
+      VALUES (${SESSION}, ${ORG}, 'Ideas', ${person}, ${raise(large, "mmv_ssn", "run_raised_cond")}::jsonb)`;
+    await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by, accepted_at)
+      VALUES (${SESSION}, ${person}, ${ORG}, 'owner', ${person}, now())`;
+    // Settled history, a pending move, and a pending move that would put Large back on a refusal.
+    await owner`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply, settled_at)
+      VALUES ('mmv_done', ${ORG}, ${TASK}, 'run_raised_impl', 'implementer', 'raise', '{"sizeId":"old"}', ${large}, 'resize', now())`;
+    await owner`INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply)
+      VALUES ('mmv_impl', ${ORG}, ${TASK}, 'run_raised_impl', 'implementer', 'raise', '{"sizeId":"old"}', ${large}, 'resize'),
+             ('mmv_cond', ${ORG}, ${TASK}, 'run_raised_cond', 'conductor', 'raise',
+              ${{ sizeId: "old", previousRaise: raise(large, "mmv_prev", "run_raised_cond") }}::jsonb, ${(await byName("Standard")).id}, 'resize')`;
+  });
+
+  test("the task's detail carries agentMachines with names, pools and who asked; the fixer follows the implementer", async () => {
+    luxPools = POOLS();
+    const reads = poolReads;
+    const res = await call(adminKey, "GET", `/v1/tasks/${TASK}`);
+    expect(res.status).toBe(200);
+    const machines = (await body(res)).agentMachines as Json[];
+    // The screens re-read the detail on each event: its pool names come from the task's Runs, not from lux.
+    expect(poolReads - reads).toBe(0);
+    expect(machines.map((m) => m.role)).toEqual(["conductor", "implementer"]);
+    const impl = machines[1];
+    expect(impl.size).toMatchObject({ name: "Large", cpus: 8, memoryMiB: 16384, pool: "default", from: "task", raised: { moveId: "mmv_impl" } });
+    expect(impl.settings).toMatchObject({ name: "Standard", from: "default" });
+    expect(impl.askedBy).toEqual({ runId: "run_raised_impl", role: "implementer" });
+    expect(impl.followedBy).toEqual(["fixer"]);
+    expect(machines[0].settings).toMatchObject({ name: "Small", from: "organization" });
+    expect(machines[0].followedBy).toEqual([]);
+  });
+
+  test("a session's detail carries its raise, for its members", async () => {
+    const reads = poolReads;
+    const res = await call(adminKey, "GET", `/v1/brainstorms/${SESSION}`);
+    expect(res.status).toBe(200);
+    expect(poolReads - reads).toBe(0);
+    const machines = (await body(res)).agentMachines as Json[];
+    expect(machines).toHaveLength(1);
+    expect(machines[0]).toMatchObject({ role: "brainstorm", size: { name: "Large", from: "session" }, settings: { name: "Small" }, followedBy: [] });
+  });
+
+  test("removing the raised size moves task and session raises and unsettled moves, and keeps settled history", async () => {
+    const large = (await byName("Large")).id;
+    const bigger = (await body(await call(adminKey, "POST", "/v1/machines/sizes", { name: "Bigger", cpus: 8, memoryMiB: 32768, diskGiB: 80, poolId: null })))
+      .sizes.find((s: Json) => s.name === "Bigger").id;
+    const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${large}`, { replacement: bigger });
+    expect(res.status).toBe(200);
+    const [t] = await owner`SELECT agent_machines FROM tasks WHERE id = ${TASK}`;
+    expect(t.agent_machines.implementer).toMatchObject({ sizeId: bigger, moveId: "mmv_impl" });
+    expect(t.agent_machines.conductor).toMatchObject({ sizeId: bigger, moveId: "mmv_cond" });
+    const [s] = await owner`SELECT agent_machine FROM sessions WHERE id = ${SESSION}`;
+    expect(s.agent_machine).toMatchObject({ sizeId: bigger });
+    const moves = await owner`SELECT id, to_size_id, from_size->'previousRaise'->>'sizeId' AS prev, settled_at IS NOT NULL AS settled
+      FROM machine_moves WHERE task_id = ${TASK} ORDER BY id`;
+    expect(moves).toEqual([
+      { id: "mmv_cond", to_size_id: (await byName("Standard")).id, prev: bigger, settled: false },
+      { id: "mmv_done", to_size_id: null, prev: null, settled: true },
+      { id: "mmv_impl", to_size_id: bigger, prev: null, settled: false },
+    ]);
+    expect(((await body(await call(adminKey, "GET", `/v1/tasks/${TASK}`))).agentMachines as Json[])[1].size.name).toBe("Bigger");
+  });
+
+  test("removing it with no replacement drops the raises and clears an unsettled move's target", async () => {
+    const bigger = (await byName("Bigger")).id;
+    const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${bigger}`, { replacement: null });
+    expect(res.status).toBe(200);
+    const [t] = await owner`SELECT agent_machines FROM tasks WHERE id = ${TASK}`;
+    expect(t.agent_machines).toEqual({});
+    const [s] = await owner`SELECT agent_machine FROM sessions WHERE id = ${SESSION}`;
+    expect(s.agent_machine).toBeNull();
+    const moves = await owner`SELECT id, to_size_id, from_size->'previousRaise' AS prev FROM machine_moves WHERE task_id = ${TASK} ORDER BY id`;
+    expect(moves).toEqual([
+      { id: "mmv_cond", to_size_id: (await byName("Standard")).id, prev: null },
+      { id: "mmv_done", to_size_id: null, prev: null },
+      { id: "mmv_impl", to_size_id: null, prev: null },
+    ]);
+    expect((await body(await call(adminKey, "GET", `/v1/tasks/${TASK}`))).agentMachines).toEqual([]);
+    expect((await body(await call(adminKey, "GET", `/v1/brainstorms/${SESSION}`))).agentMachines).toEqual([]);
   });
 });

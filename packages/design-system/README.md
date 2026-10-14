@@ -1634,6 +1634,19 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ### Machines
 
+- A machine an agent raised says so with `MachineChip raised="for this task"`
+  (or `"for this session"`): the arrow and words follow the spec and are in
+  its accessible name. The tooltip names the requesting Run, role, time and
+  reason, the settings' size, and where Reset is available. No approval or price.
+- **MachineRaises** is the Overview aside's Machines panel, on the chrome
+  shade in ServersSummary's grammar. Controlled `raises` carry role, label,
+  size, settings, detail and optional `onReset`/`busy`. A following role
+  (`follows="implementer"`) has no independent Reset. Empty draws nothing;
+  `loading` and `error` explicitly say what is happening.
+- An agent's `request_machine` is a `ToolCallCard` with the chip glyph,
+  “Asked for a larger machine: Standard → Large” as its summary and the
+  answer as its result; a refusal is a failed call.
+
 - **A number moved in steps is a `NumberInput`**: − value + inside one
   field's edge, the unit muted after the number, ↑ ↓ a step (Page Up /
   Down ten, Home / End the bounds). − and + stop at `min` and `max` and

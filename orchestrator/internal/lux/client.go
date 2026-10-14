@@ -55,6 +55,26 @@ type Run struct {
 	// In a resume's answer, when it asked to change resources (lux#51):
 	// what was asked and what the Run has from then on.
 	Resize *Resize `json:"resize,omitempty"`
+	// In a resume's answer that named a pool (lux#93): where the Run is
+	// bound from then on.
+	Placement *ResumePlacement `json:"placement,omitempty"`
+	// A validateOnly resume's answer: lux would accept it.
+	Valid bool `json:"valid,omitempty"`
+}
+
+// ResumePlacement is lux's answer to a resume's placement.poolId: the pool
+// the Run is bound to now, and the one it left (nil when it was there).
+type ResumePlacement struct {
+	Pool              string     `json:"pool"`
+	PoolID            string     `json:"poolId"`
+	From              *BoundPool `json:"from,omitempty"`
+	PlatformUnchecked bool       `json:"platformUnchecked,omitempty"`
+}
+
+// BoundPool names a pool by its current name and id.
+type BoundPool struct {
+	Name string `json:"name"`
+	ID   string `json:"id,omitempty"`
 }
 
 // Resize is lux's answer to a resume's resources: Applied is what the Run
@@ -134,6 +154,9 @@ type Placement struct {
 	// asked for less the host's share (a newer lux; nil from one that does
 	// not say).
 	MemoryLimit *int64 `json:"memoryLimit,omitempty"`
+	// The platforms (os/arch) its image offered (lux#91); nil when the
+	// runner could not tell.
+	ImagePlatforms []string `json:"imagePlatforms,omitempty"`
 }
 
 // Artifact is a file a Run produced, kept by lux after the Run ends.
@@ -280,7 +303,24 @@ type Pool struct {
 	HostSizeFrom string `json:"hostSizeFrom,omitempty"`
 	InstanceType string `json:"instanceType,omitempty"`
 	HostsRunning *int   `json:"hostsRunning,omitempty"`
+	// The os/arch its hosts run (lux#93); nil when lux knows none.
+	Platforms []string `json:"platforms,omitempty"`
+	// What its hosts offer a Run (lux#93); nil from an older lux.
+	Capabilities *PoolCapabilities `json:"capabilities,omitempty"`
 }
+
+// PoolCapabilities: NestedContainers nil when lux does not know.
+type PoolCapabilities struct {
+	NestedContainers *bool `json:"nestedContainers"`
+}
+
+// Refusals of a resume's placement.poolId (lux#93), each a 422 that
+// changed nothing.
+const (
+	CodePlatformMismatch = "platform_mismatch"
+	CodePoolUnfit        = "pool_unfit"
+	CodeInvalidSpec      = "invalid_spec"
+)
 
 // HostSize is one host's resources: memory and disk in bytes, disk 0 when
 // the host reserves none.
@@ -836,6 +876,12 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (
 	if in.Resources != nil {
 		body["resources"] = in.Resources
 	}
+	if in.Placement != nil {
+		body["placement"] = in.Placement
+	}
+	if in.ValidateOnly {
+		body["validateOnly"] = true
+	}
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs/"+runID+"/resume", body, nil, &r)
 	return r, err
@@ -853,6 +899,11 @@ type ResumeInput struct {
 	AddRepositories []Repository
 	Sync            []SyncRef
 	Resources       *Resources
+	// Rebinds the Run to another pool (lux#93); nil stays in its pool.
+	Placement *PlacementSpec
+	// Runs every check and changes nothing: 200 {valid} or the refusal.
+	// Accepted on a live Run; secret values may be left out.
+	ValidateOnly bool
 }
 
 func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {

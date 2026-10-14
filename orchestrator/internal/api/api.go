@@ -27,6 +27,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -80,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.Handle("POST /internal/agent-machines/reset", s.auth(s.resetMachine))
 	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
 	mux.Handle("POST /internal/tasks/{id}/chat", s.auth(s.chat))
 	mux.Handle("POST /internal/tasks/{id}/retry", s.auth(s.retryConductor))
@@ -198,6 +200,178 @@ func (s *Server) resolvePrincipal(r *http.Request, org string) (principal, error
 		return nil
 	})
 	return p, err
+}
+
+func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string) error {
+	var body struct {
+		TaskID    string `json:"taskId"`
+		SessionID string `json:"sessionId"`
+		Role      string `json:"role"`
+		Note      string `json:"note"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	if (body.TaskID == "") == (body.SessionID == "") || len([]rune(body.Note)) > 2000 {
+		return fail(400, "bad_request", "name one task or session; note must be at most 2000 characters")
+	}
+	p := principalOf(r)
+	if p.Person == "" {
+		return errNoPerson
+	}
+	pools, names := delivery.LoadPools(r.Context(), s.Lux)
+	moved := false
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		ctx := r.Context()
+		var raise *delivery.Raise
+		var projectID string
+		var project, organization json.RawMessage
+		fixerRaised := false
+		if body.SessionID != "" {
+			if _, err := member(ctx, tx, body.SessionID, p.Person); err != nil {
+				return err
+			}
+			body.Role = "brainstorm"
+			if err := tx.QueryRow(ctx, `SELECT agent_machine FROM sessions WHERE id=$1`, body.SessionID).Scan(&raise); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.QueryRow(ctx, `SELECT t.agent_machines->$2, t.agent_machines ? 'fixer', t.project_id, p.agent_models FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`,
+				body.TaskID, body.Role).Scan(&raise, &fixerRaised, &projectID, &project); err != nil {
+				if db.IsNotFound(err) {
+					return fail(404, "not_found", "task not found")
+				}
+				return err
+			}
+		}
+		if raise == nil {
+			return fail(404, "not_found", "nothing is raised")
+		}
+		if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id=$1`, org).Scan(&organization); err != nil {
+			return err
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		var runID, live, status, runPhase, runRole string
+		var current *delivery.Machine
+		// A settings role's Runs: a phase's (fixer is phase fix, not every
+		// role='implementer' Run), else the conductor's or brainstorm's,
+		// which have no phase. A fixer with no raise of its own runs on the
+		// implementer's, so the implementer's Reset covers the fix Run too.
+		// Only the newest live Run of the role is moved; any other (a second
+		// reviewer) takes the settings' size at its next resume.
+		// Non-nil: a nil slice is NULL to pgx, and cardinality(NULL) selects no Run.
+		wantPhases := []string{}
+		if phase := delivery.PhaseForPromptRole(body.Role); phase != "" {
+			wantPhases = append(wantPhases, phase)
+		}
+		if body.Role == delivery.PromptRoleForPhase[delivery.PhaseImplement] && !fixerRaised {
+			wantPhases = append(wantPhases, delivery.PhaseFix)
+		}
+		err = tx.QueryRow(ctx, `SELECT id, COALESCE(lux_run_id,''), status::text, machine, COALESCE(phase::text,''), COALESCE(role::text,'') FROM runs
+			WHERE (task_id=$1 OR session_id=$2) AND kind='agent' AND status IN ('running','paused','pending','scheduled','starting')
+				AND CASE WHEN cardinality($4::text[]) = 0 THEN phase IS NULL AND role::text=$3 ELSE phase::text = ANY($4) END
+			ORDER BY created_at DESC LIMIT 1`, db.Nullable(body.TaskID), db.Nullable(body.SessionID), body.Role, wantPhases).Scan(&runID, &live, &status, &current, &runPhase, &runRole)
+		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		found := err == nil
+		// The size the Run's own settings role names, so a fix Run takes a
+		// fixer size its project or organization names over the implementer's.
+		settingsRole := body.Role
+		if found {
+			settingsRole = delivery.PromptRoleFor(runPhase, runRole)
+		}
+		target, ok := sizes.ForRole(settingsRole, nil, project, organization)
+		if !ok {
+			return fail(409, "no_size", "no settings machine size is available")
+		}
+		if found && status != "running" && status != "paused" {
+			return fail(409, "pending", "the Run is %s; reset once it runs or pauses", status)
+		}
+		active := found && live != "" && current != nil
+		if active {
+			var pending bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM machine_moves WHERE run_id=$1 AND settled_at IS NULL)`, runID).Scan(&pending); err != nil {
+				return err
+			}
+			if pending {
+				return fail(409, "pending", "a machine move is under way")
+			}
+			before, err := s.Lux.Get(ctx, live)
+			if err != nil {
+				return err
+			}
+			plan := phases.PlanResize(ctx, s.Lux, current, &target, before)
+			if err := phases.ValidateResize(ctx, s.Lux, live, plan); err != nil {
+				if errors.Is(err, delivery.ErrPoolsUnread) {
+					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
+				}
+				if le, ok := lux.AsError(err); ok {
+					// Unread before, the pools are read once more so the sentence can name them.
+					if pools == nil {
+						pools, _ = delivery.LoadPools(ctx, s.Lux)
+					}
+					// lux's code in dude's words; its own message names pools by id.
+					return fail(le.Status, le.Code, "%s", delivery.RefusalOf(le, target, pools, before).ForPerson())
+				}
+				return err
+			}
+			// A resume that would send lux nothing (the settings' size has
+			// the raised one's numbers and pool) moves nothing: the layer is
+			// cleared, and the Run is left as it is.
+			active = plan != nil && plan.Send != nil
+		}
+		id := ids.New(ids.MachineMove)
+		from := sizes.ByID[raise.SizeID]
+		if current != nil {
+			from = *current
+		}
+		if active {
+			moved = true
+			// A paused Run keeps its pause, person's or dude's: the move
+			// applies at whichever resume comes next. Except a Run parked
+			// only on a peer's reply: the syncer resumes it for the move.
+			err := delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: org, TaskID: body.TaskID, SessionID: body.SessionID, RunID: runID,
+				Role: body.Role, Kind: "reset", ToSizeID: target.SizeID, From: from, Reason: body.Note, ByPerson: p.Person}, status == "running")
+			if errors.Is(err, delivery.ErrMoveUnavailable) {
+				return fail(409, "pending", "%s", err)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if body.SessionID != "" {
+			_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine=NULL WHERE id=$1 AND agent_machine->>'moveId'=$2`, body.SessionID, raise.MoveID)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines=agent_machines-$2 WHERE id=$1 AND agent_machines->$2->>'moveId'=$3`, body.TaskID, body.Role, raise.MoveID)
+		}
+		if err != nil {
+			return err
+		}
+		name, err := delivery.PersonName(ctx, tx, p.Person)
+		if err != nil {
+			return err
+		}
+		payload := delivery.MovePayload("", body.Role, from, target, names)
+		payload["moveId"], payload["by"], payload["note"] = "", map[string]string{"id": p.Person, "name": name}, body.Note
+		ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: body.TaskID, SessionID: body.SessionID}
+		ev := ref.Event(delivery.EvMachineReset, p.ActorType, payload)
+		// The Run it moves is named too, so that Run's transcript shows its move.
+		if active {
+			payload["moveId"], ev.RunID = id, runID
+		}
+		_, err = ledger.Append(ctx, tx, ev)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, 200, map[string]any{"ok": true, "moved": moved})
+	return nil
 }
 
 // split reads a comma-separated query value.

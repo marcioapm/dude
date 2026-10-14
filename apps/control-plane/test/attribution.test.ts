@@ -25,7 +25,7 @@ let person: Extract<Principal, { credentialKind: "person" }>;
 let router: Router;
 let defaults: ReturnType<typeof Bun.serve>;
 // Identity headers of each /internal/tasks and /internal/questions request the receiver got.
-const forwarded: Array<{ path: string; headers: Record<string, string | null> }> = [];
+const forwarded: Array<{ path: string; headers: Record<string, string | null>; body?: unknown }> = [];
 // The bearer token of each request the receiver got.
 const bearers: string[] = [];
 const IDENTITY = ["x-dude-credential-kind", "x-dude-actor", "x-dude-person", "x-dude-role", "x-dude-organization"];
@@ -63,9 +63,13 @@ beforeAll(async () => {
   registerFindingRoutes(router);
   registerWorkRoutes(router);
   registerInterventionRoutes(router);
-  defaults = Bun.serve({ port: 0, fetch(request) {
+  defaults = Bun.serve({ port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     bearers.push(request.headers.get("authorization") ?? "");
+    if (path === "/internal/agent-machines/reset") {
+      forwarded.push({ path, headers: Object.fromEntries(IDENTITY.map((h) => [h, request.headers.get(h)])), body: await request.json() });
+      return Response.json({ ok: true });
+    }
     if (path.startsWith("/internal/tasks/") || path.startsWith("/internal/questions/")) {
       forwarded.push({ path, headers: Object.fromEntries(IDENTITY.map((h) => [h, request.headers.get(h)])) });
       if (path.includes("q_refused")) {
@@ -183,6 +187,22 @@ test("the orchestrator hears who is asking, by person or by key, and its refusal
   }));
   expect(refused.status).toBe(403);
   expect(await refused.json()).toEqual({ error: { code: "forbidden", message: "only the task's owner may answer" } });
+});
+
+test("Reset routes forward the task role or session, the note and the person", async () => {
+  forwarded.length = 0;
+  await call("person", "DELETE", "/v1/tasks/task_reset/agent-machines/implementer", { note: "use fewer workers" });
+  await call("person", "DELETE", "/v1/sessions/ssn_reset/agent-machine");
+  expect(forwarded.map((f) => [f.path, f.body, f.headers["x-dude-person"]])).toEqual([
+    ["/internal/agent-machines/reset", { note: "use fewer workers", taskId: "task_reset", role: "implementer" }, person.personId],
+    ["/internal/agent-machines/reset", { sessionId: "ssn_reset" }, person.personId],
+  ]);
+  const long = await router.handle(new Request("http://dude.test/v1/sessions/ssn_reset/agent-machine", {
+    method: "DELETE", headers: { authorization: "person", "content-type": "application/json" },
+    body: JSON.stringify({ note: "é".repeat(2001) }),
+  }));
+  expect(long.status).toBe(400);
+  expect(forwarded).toHaveLength(2);
 });
 
 test("the orchestrator's URL and token come from the config file, and a variable overrides the token", async () => {

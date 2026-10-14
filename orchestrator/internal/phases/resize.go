@@ -1,11 +1,11 @@
 package phases
 
-// Resizing on resume (lux#51): a parked Run resumes at the size its
-// settings name now. lux applies cpus and memory either way, a larger disk
-// always and a smaller one only when its saved state fits (else it keeps
-// the disk, saying why). A Run stays in the pool it was submitted to, so a
-// size in another pool is not applied. runs.machine records what lux's
-// answer says the Run has, never what was asked.
+// Resizing on resume (lux#51, pools and dry runs lux#93): a parked Run
+// resumes at the size its settings or task layer name now, in that size's
+// pool. lux applies cpus and memory either way, a larger disk always and
+// a smaller one only when its saved state fits (else it keeps the disk,
+// saying why). runs.machine records what lux's answer says the Run has,
+// never what was asked.
 
 import (
 	"bytes"
@@ -33,124 +33,194 @@ type ResizePlan struct {
 	Recorded, Target *delivery.Machine
 	// The resources the resume asks for; nil asks for none.
 	Send *lux.Resources
+	// The pool the resume asks for (lux's id); "" stays in its pool.
+	Pool string
 	// Why Target is not applied, when it differs and is not.
 	Note string
 	// The epoch the resumed placement will have.
 	SinceEpoch int
-	// Target's id, when lux's pool list put it in another pool (Machine.OtherPool).
-	otherPool string
 	// lux's pool list could not be read, so whether Target is in the Run's
 	// pool is not known: nothing is sent and nothing recorded.
 	unknown bool
 	// lux's refusal of Send, after which the resume went without it.
 	refused *lux.Error
+	// Records a refusal durably before the fallback resume is asked for,
+	// so a process that dies in between resumes the same way.
+	onRefused func(*lux.Error) error
+	// The Run's pending machine move: what its agent is told when the
+	// move applies, which kind it is ("raise" or "reset", "" none) and the
+	// name of the size it asked for (a refused raise's layer is restored
+	// before a restart's resume, so Target may no longer be it).
+	moveTold, moveKind, moveTo string
+	// The pending move's refusal in dude's words (delivery.RefusalOf); nil
+	// without a move.
+	refusalOf func(*lux.Error) delivery.MoveRefusal
+	// lux's record of the Run before the resume: its pool and placements.
+	before lux.Run
 }
 
-// PlanResize compares the Run's recorded size with target and decides what
-// the resume sends. before is the lux Run as read before the resume.
-//   - Same CPUs, memory and disk: nothing is sent.
-//   - Settings naming a size that no longer exists (target is the default
-//     only because of that): the Run keeps its size.
-//   - A size in another pool: lux binds a Run to its pool at submit, and a
-//     resume cannot move it; the Run keeps its size.
-//   - lux's pool list failing: the Run resumes on its size, its record left
-//     as it is.
+// movedInput puts what the agent is told of its move before input.
+func (p *ResizePlan) movedInput(input string) string {
+	if p == nil || p.moveTold == "" {
+		return input
+	}
+	return joinInput(p.moveTold, input)
+}
+
+// keptInput is what the agent is told when lux refused the move for good:
+// the size asked for, the one it kept, and why in dude's words, in place of
+// input's claim that it moved. A plan with no move, or a 409, keeps input
+// as it was.
+func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
+	if p.moveKind == "" || le.Status == http.StatusConflict {
+		return input
+	}
+	refusal := p.refusalWords(le)
+	told := fmt.Sprintf("You asked for %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, refusal.ForAgent())
+	if p.moveKind == "reset" {
+		// A person's Reset: the agent has nothing to ask instead.
+		told = fmt.Sprintf("You were to move back to %s; lux kept you on %s: %s.", p.moveTo, p.Recorded.Name, refusal.ForPerson())
+	}
+	return joinInput(told, input)
+}
+
+// refusalWords is le about the move's size, in dude's words. An older
+// lux's 400 is to placement when this resume changes pools.
+func (p *ResizePlan) refusalWords(le *lux.Error) delivery.MoveRefusal {
+	r := delivery.RefusalOf(le, delivery.Machine{Name: p.moveTo}, nil, p.before)
+	if p.refusalOf != nil {
+		r = p.refusalOf(le)
+	}
+	r.OtherPool = p.Pool != ""
+	return r
+}
+
+func joinInput(first, rest string) string {
+	if rest == "" {
+		return first
+	}
+	return first + "\n\n" + rest
+}
+
+// PlanResize compares the recorded size and pool with the target. A pool
+// list failure leaves the Run unchanged; a missing settings size does too.
 func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, before lux.Run) *ResizePlan {
 	if recorded == nil || target == nil {
 		return nil
 	}
-	p := &ResizePlan{Recorded: recorded, Target: target, SinceEpoch: nextEpoch(before)}
-	if delivery.SameSize(*recorded, *target) {
-		return p
-	}
+	p := &ResizePlan{Recorded: recorded, Target: target, SinceEpoch: nextEpoch(before), before: before}
 	if target.Missing != "" {
 		p.Note = fmt.Sprintf("Its settings name a machine size that no longer exists, so it keeps %s.", recorded.Name)
 		return p
 	}
-	match, err := poolOf(ctx, c, recorded, target, before.PoolID)
-	switch {
-	case err != nil:
+	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
+	if err != nil {
 		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
 		p.unknown = true
-	case match == poolSame:
+		return p
+	}
+	p.Pool = pool
+	if !delivery.SameSize(*recorded, *target) || p.Pool != "" {
 		p.Send = &lux.Resources{CPUs: target.CPUs, Memory: target.MemoryMiB << 20, Disk: target.DiskGiB << 30}
-	default:
-		if match == poolNotDefault {
-			p.otherPool = target.SizeID
-		}
-		p.Note = fmt.Sprintf("Its settings now name %s, in another pool: a stopped Run cannot change pools, so it keeps %s. A new Run gets %s.",
-			target.Name, recorded.Name, target.Name)
 	}
 	return p
 }
 
-type poolMatch int
-
-const (
-	poolSame poolMatch = iota
-	poolOther
-	// Another pool: lux's list says the Run's pool is not its default, and
-	// the target names none.
-	poolNotDefault
-)
-
-// poolOf says whether target's pool places a Run where recorded's did.
-// Null is the tenant's default pool in lux, so when lux says which pool
-// the Run is bound to (luxPool), a target naming a pool is compared with
-// it, and one naming none with lux's default; with no answer from lux,
-// only equal ids are the same pool. The pool list is read only for a
-// target naming none on a Run in a named pool, and not again for the
-// target it last said was elsewhere (recorded.OtherPool).
-func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, luxPool string) (poolMatch, error) {
+// poolOf is the pool a resume to target asks lux for, "" for the Run's
+// own, resolving a size naming no pool to lux's current default. The Run's
+// binding wins over the recorded size's submit-time pool when lux says it.
+func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, luxPool string) (string, error) {
 	deref := func(s *string) string {
 		if s == nil {
 			return ""
 		}
 		return *s
 	}
-	want := deref(target.PoolID)
-	switch {
-	case deref(recorded.PoolID) == want:
-		return poolSame, nil
-	case luxPool == "":
-		return poolOther, nil
-	case want != "":
-		if want == luxPool {
-			return poolSame, nil
-		}
-		return poolOther, nil
-	case recorded.OtherPool != "" && recorded.OtherPool == target.SizeID:
-		return poolNotDefault, nil
+	want, current := deref(target.PoolID), luxPool
+	if current == "" {
+		current = deref(recorded.PoolID)
+	}
+	if want == current {
+		return "", nil
+	}
+	if want != "" {
+		return want, nil
 	}
 	pools, err := c.Pools(ctx)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	for _, p := range pools {
-		if p.IsDefault && p.ID == luxPool {
-			return poolSame, nil
+		if p.IsDefault {
+			if p.ID == current {
+				return "", nil
+			}
+			return p.ID, nil
 		}
 	}
-	return poolNotDefault, nil
+	return "", fmt.Errorf("lux reports no default pool")
 }
 
-// ResumeSized resumes with the plan's resources. lux refusing them — a Run
-// already resuming with others (409 not_resumable: lux's docs make a resume
-// without resources the retry), a lux from before lux#51 that does not know
-// them (400), or lux refusing these resources (422) — is answered by the
-// same resume without them.
+// ValidateResize checks the exact sized resume without stopping the Run.
+// Older lux refuses validateOnly with 400: the real resume keeps its safe
+// fallback, so lack of dry-run support never fails the agent's Run. A plan
+// lux's pools could not be read for is delivery.ErrPoolsUnread: there is
+// nothing to check, and nothing may be parked.
+func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *ResizePlan) error {
+	if plan != nil && plan.unknown {
+		return delivery.ErrPoolsUnread
+	}
+	if plan == nil || plan.Send == nil {
+		return nil
+	}
+	in := lux.ResumeInput{Resources: plan.Send, ValidateOnly: true}
+	if plan.Pool != "" {
+		in.Placement = &lux.PlacementSpec{PoolID: plan.Pool}
+	}
+	_, err := c.Resume(ctx, runID, in)
+	if le, ok := lux.AsError(err); ok && le.Status == http.StatusBadRequest {
+		return nil
+	}
+	return err
+}
+
+// ResumeSized resumes with the plan's resources and placement. lux refusing
+// them — a Run already resuming with others (409 not_resumable: lux's docs
+// make a resume without resources the retry), a lux from before lux#51 that
+// does not know them (400), or lux refusing these resources (422) — is
+// answered by the same resume without resources or placement. The input is
+// rewritten for a pending machine move: told it moved when lux is asked for
+// the size, told what lux kept and why after a 400 or 422; otherwise kept.
 func ResumeSized(ctx context.Context, c lux.Client, runID string, in lux.ResumeInput, plan *ResizePlan) (lux.Run, error) {
 	if plan == nil || plan.Send == nil || plan.refused != nil {
-		in.Resources = nil
+		in.Resources, in.Placement = nil, nil
+		switch {
+		case plan != nil && plan.refused != nil && plan.refused.Status != http.StatusConflict:
+			in.Input = plan.keptInput(plan.refused, in.Input)
+		case plan != nil && plan.refused == nil:
+			in.Input = plan.movedInput(in.Input)
+		}
 		return c.Resume(ctx, runID, in)
 	}
-	in.Resources = plan.Send
+	asked := in.Input
+	in.Resources, in.Input = plan.Send, plan.movedInput(asked)
+	if plan.Pool != "" {
+		in.Placement = &lux.PlacementSpec{PoolID: plan.Pool}
+	}
 	res, err := c.Resume(ctx, runID, in)
 	if le, ok := lux.AsError(err); ok && resourcesRefused(le) {
 		slog.Warn("lux refused a resume's resources; resuming without them", "luxRun", runID,
 			"status", le.Status, "code", le.Code, "error", le.Message)
 		plan.refused = le
-		in.Resources = nil
+		// A 409 is a resume under way, whose outcome the answer shows; 400
+		// and 422 refuse these resources for good and are kept.
+		if plan.onRefused != nil && le.Status != http.StatusConflict {
+			if err := plan.onRefused(le); err != nil {
+				return lux.Run{}, err
+			}
+		}
+		in.Resources, in.Placement = nil, nil
+		in.Input = plan.keptInput(le, asked)
 		return c.Resume(ctx, runID, in)
 	}
 	return res, err
@@ -177,7 +247,15 @@ func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
 		return nil
 	}
 	rec := *p.Recorded
-	rec.Note, rec.DiskKept, rec.OtherPool = p.Note, nil, p.otherPool
+	rec.Note, rec.DiskKept = p.Note, nil
+	if p.Send != nil && answer.PoolID != "" {
+		pool := answer.PoolID
+		rec.PoolID = &pool
+	}
+	if answer.Placement != nil {
+		pool, name := answer.Placement.PoolID, answer.Placement.Pool
+		rec.PoolID, rec.Pool = &pool, &name
+	}
 	if p.Send == nil {
 		return &rec
 	}
@@ -207,6 +285,10 @@ func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
 		rec.Note = partial
 	default:
 		rec.SizeID, rec.Name, rec.From = p.Target.SizeID, p.Target.Name, p.Target.From
+		rec.Raised = p.Target.Raised
+		if answer.PoolID == "" && answer.Placement == nil {
+			rec.PoolID, rec.Pool = p.Target.PoolID, p.Target.Pool
+		}
 	}
 	if r := answer.Resize; r != nil && r.Disk != nil {
 		rec.DiskKept = &delivery.DiskKept{RequestedGiB: r.Disk.Requested >> 30, Reason: r.Disk.Reason}
@@ -229,11 +311,212 @@ func (p *ResizePlan) keptNote() string {
 		return kept + " (lux did not apply it)."
 	case le.Status == http.StatusConflict:
 		return kept + " (lux said: " + le.Message + "). The next resume tries again."
+	case le.Status == http.StatusBadRequest && p.Pool != "":
+		return kept + ": this lux cannot move a stopped Run to another pool."
 	case le.Status == http.StatusBadRequest:
 		return kept + ": this lux cannot change a stopped Run's CPUs or memory."
 	default:
 		return kept + " (lux refused its resources)."
 	}
+}
+
+// pendingMove is a Run's unsettled machine move.
+type pendingMove struct {
+	ID, Role, Kind, To string
+	From               delivery.MoveFrom
+	// lux's definitive refusal, kept before the fallback resume.
+	Code, Message string
+	// A Reset's person and note.
+	By, Note string
+}
+
+func loadPendingMove(ctx context.Context, tx pgx.Tx, runID string) (*pendingMove, error) {
+	var m pendingMove
+	err := tx.QueryRow(ctx, `SELECT id, role, kind, COALESCE(to_size_id, ''), from_size, COALESCE(refused, ''), COALESCE(refused_message, ''),
+			COALESCE(by_person, ''), COALESCE(reason, '')
+		FROM machine_moves WHERE run_id = $1 AND settled_at IS NULL`, runID).Scan(&m.ID, &m.Role, &m.Kind, &m.To, &m.From, &m.Code, &m.Message, &m.By, &m.Note)
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	return &m, err
+}
+
+// movePlan ties a resume's plan to its Run's pending move: what the agent
+// is told when it applies, a refusal kept by an earlier attempt (resumed
+// without resources, told why), and a new refusal kept before the
+// fallback resume is asked for.
+func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) error {
+	if plan == nil {
+		return nil
+	}
+	var move *pendingMove
+	var person string
+	var asked delivery.Machine
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		if move, err = loadPendingMove(ctx, tx, r.ID); err != nil || move == nil {
+			return err
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		asked = sizes.ByID[move.To]
+		plan.moveTo = asked.Name
+		if move.Kind != "reset" {
+			return nil
+		}
+		person, err = delivery.PersonName(ctx, tx, move.By)
+		return err
+	}); err != nil || move == nil {
+		return err
+	}
+	if plan.unknown {
+		// The move's size cannot be planned without lux's pools, and an
+		// unsized resume would never settle it: the resume is retried.
+		return fmt.Errorf("machine move %s: lux's pools could not be read", move.ID)
+	}
+	if plan.moveTo == "" && plan.Target != nil {
+		plan.moveTo = plan.Target.Name
+		asked = *plan.Target
+	}
+	plan.moveKind = move.Kind
+	// onRefused and keptInput both word the same refusal: lux's pools are
+	// read once for it.
+	var pools []lux.Pool
+	poolsRead := false
+	plan.refusalOf = func(le *lux.Error) delivery.MoveRefusal {
+		if !poolsRead {
+			pools, _ = s.Lux.Pools(ctx)
+			poolsRead = true
+		}
+		return delivery.RefusalOf(le, asked, pools, plan.before)
+	}
+	// Told only of a move this resume asks lux for.
+	if plan.Target != nil && plan.Note == "" {
+		if move.Kind == "reset" {
+			plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + "."
+			if move.Note != "" {
+				plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + ": " + move.Note
+			}
+		} else {
+			where := ""
+			if plan.Pool != "" {
+				target := *plan.Target
+				target.Pool = nil
+				delivery.LoadPoolNames(ctx, s.Lux).Name(&target)
+				if target.Pool != nil {
+					where = " in " + *target.Pool
+				}
+			}
+			plan.moveTold = fmt.Sprintf("You now run on %s (%s)%s. Start again any server or watcher you had running. Carry on.",
+				plan.Target.Name, plan.Target.Spec(), where)
+		}
+	}
+	if move.Code != "" || move.Message != "" {
+		status := http.StatusUnprocessableEntity
+		if move.Code == "bad_request" {
+			// An older lux's unknown field, kept: told as one.
+			status = http.StatusBadRequest
+		}
+		plan.refused = &lux.Error{Status: status, Code: move.Code, Message: move.Message}
+	}
+	plan.onRefused = func(le *lux.Error) error {
+		// Kept in dude's words: the agent's resume and the person's notice
+		// both read them, never lux's message with its pool ids.
+		said := plan.refusalWords(le).ForPerson()
+		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `UPDATE machine_moves SET refused = $2, refused_message = $3 WHERE id = $1 AND settled_at IS NULL`,
+				move.ID, le.Code, said)
+			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			return restoreLayer(ctx, tx, r, move)
+		})
+	}
+	return nil
+}
+
+// restoreLayer puts back the layer a refused raise replaced, only while the
+// layer is still the one this move wrote: a later Reset or raise wins.
+func restoreLayer(ctx context.Context, tx pgx.Tx, r phaseRun, move *pendingMove) error {
+	if move.Kind != "raise" {
+		return nil
+	}
+	previous, _ := json.Marshal(move.From.PreviousRaise)
+	var err error
+	if r.SessionID != "" {
+		_, err = tx.Exec(ctx, `UPDATE sessions SET agent_machine = NULLIF($2::jsonb, 'null'::jsonb) WHERE id = $1 AND agent_machine->>'moveId' = $3`, r.SessionID, previous, move.ID)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE tasks SET agent_machines = CASE WHEN $3::jsonb = 'null'::jsonb THEN agent_machines - $2 ELSE jsonb_set(agent_machines, ARRAY[$2], $3::jsonb) END WHERE id = $1 AND agent_machines->$2->>'moveId' = $4`, r.TaskID, move.Role, previous, move.ID)
+	}
+	return err
+}
+
+// settleMachine settles the Run's pending move from what lux reports the
+// resumed Run has: moved when it is on the move's size, else refused. An
+// answer that does not say leaves it for the next resume.
+func (s *Syncer) settleMachine(ctx context.Context, r phaseRun, plan *ResizePlan, answer lux.Run) error {
+	if plan == nil {
+		return nil
+	}
+	if plan.Send != nil && answer.Resize == nil && answer.Spec.Resources == nil {
+		got, err := s.Lux.Get(ctx, r.LuxRunID)
+		if err != nil {
+			return err
+		}
+		answer = got
+	}
+	actual := plan.Outcome(answer)
+	if actual == nil {
+		return nil
+	}
+	names := delivery.LoadPoolNames(ctx, s.Lux)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		move, err := loadPendingMove(ctx, tx, r.ID)
+		if err != nil || move == nil {
+			return err
+		}
+		code, message := move.Code, move.Message
+		// A target removed meanwhile ("") left the layer to what the
+		// removal moved it to: whatever lux applied is the move's end.
+		moved := move.To == "" && code == "" && message == "" || actual.SizeID == move.To
+		if moved {
+			code, message = "", ""
+		} else if code == "" && message == "" {
+			// lux kept the Run on another size without refusing the move
+			// for good (a resume already under way): the layer stays.
+			message = actual.Note
+		}
+		tag, err := tx.Exec(ctx, `UPDATE machine_moves SET settled_at = now(), refused = $2, refused_message = $3,
+			pool = CASE WHEN $4::text IS DISTINCT FROM $5::text THEN jsonb_build_object('from', $4::text, 'to', $5::text) END
+			WHERE id = $1 AND settled_at IS NULL`, move.ID, db.Nullable(code), db.Nullable(message), move.From.PoolID, actual.PoolID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if moved {
+			// machine.raised (or machine.reset) told when the move started;
+			// run.resized says what lux applied.
+			return nil
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		asked, ok := sizes.ByID[move.To]
+		if !ok {
+			asked = delivery.Machine{SizeID: move.To}
+		}
+		payload := delivery.MovePayload(move.ID, move.Role, move.From.Machine, asked, names)
+		names.Name(actual)
+		payload["kind"], payload["kept"], payload["code"], payload["message"] = move.Kind, actual, code, message
+		if move.Code != "" || move.Message != "" {
+			if err := restoreLayer(ctx, tx, r, move); err != nil {
+				return err
+			}
+		}
+		_, err = ledger.Append(ctx, tx, r.ref().Event(delivery.EvMachineRefused, ledger.ActorSystem, payload))
+		return err
+	})
 }
 
 // runSizes is the size an agent Run's role names now (nil: the
