@@ -148,15 +148,18 @@ func askingAPeer(t *testing.T, machine string) (w *world, wi, peer string) {
 	return w, wi, peer
 }
 
-// told is how many times text reached the agent of lux Run live as input.
-func (w *world) told(live, text string) int {
+// told is how many times text reached the agent of lux Run live as input,
+// and the inputs it counted in.
+func (w *world) told(live, text string) (int, []string) {
 	n := 0
+	var inputs []string
 	for _, lr := range w.lux.Runs() {
 		if lr.ID == live {
 			n += strings.Count(strings.Join(lr.Inputs, "\n"), text)
+			inputs = append(inputs, lr.Inputs...)
 		}
 	}
-	return n
+	return n, inputs
 }
 
 // An agent that waits on a peer and then moves machine keeps waiting: the
@@ -196,8 +199,8 @@ func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T
 		t.Errorf("%d received events on the waiting Run, want 1", n)
 	}
 	live := w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, runID)
-	if n := w.told(live, reply); n != 1 {
-		t.Errorf("the reply reached the agent %d times", n)
+	if n, inputs := w.told(live, reply); n != 1 {
+		t.Errorf("the reply reached the agent %d times: %q", n, inputs)
 	}
 }
 
@@ -292,8 +295,8 @@ func TestAResetResumesARunParkedOnlyOnAPeersReply(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message.received'`, runID); n != 1 {
 		t.Errorf("%d received events, want 1", n)
 	}
-	if n := w.told(live, reply); n != 1 {
-		t.Errorf("the reply reached the agent %d times", n)
+	if n, inputs := w.told(live, reply); n != 1 {
+		t.Errorf("the reply reached the agent %d times: %q", n, inputs)
 	}
 }
 
