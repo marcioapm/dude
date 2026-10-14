@@ -405,6 +405,8 @@ Add these to `packages/domain/src/events/types.ts`, with Go constants:
   sizeId, to: sizeId, by, pool?: {from, to}, note? }`. `note` is the
   person's, as the agent was told it.
 - **`run.resized`** stays as it is, with the pool lux reported.
+- **`run.told`**, on the Run: `{ epoch, moveId, kind, text }`. No Chat
+  notice of its own: it is a Told turn.
 
 | Event | Notice in the task's Chat (or the session) |
 |---|---|
@@ -412,6 +414,7 @@ Add these to `packages/domain/src/events/types.ts`, with Go constants:
 | `machine.raised` with `pool` | "Moving the implementer to XL, in the highmem pool: …" (the same sentence) |
 | `machine.raised`, the conductor | "Moving the conductor to Large: it keeps this conversation and its checkout; running processes stop. Later conductors in this task run on Large too." |
 | `run.resized` after a move | "The implementer moved to Large in 41s, with its conversation and work." (`unparked`) |
+| `run.told` | No notice of its own; a Told turn with `{epoch, moveId, kind, text}`. |
 | `machine.reset` | "Márcio moved the implementer back to Standard: "<note>"." |
 
 ## The prompt line
@@ -624,7 +627,7 @@ have been resumed…"). Nobody sees any of it today.
 - **How dude's words to an agent are shown today.** A task's prompt and a
   conductor's or session's briefing are `ChatMessage role="system"`, with
   dude's face and the task's dude name, tagged Task or Briefing. A
-  session's `session.told` is the same frame (tagged Task: see below). A
+  session's `session.told` is the same frame (tagged Told). A
   peer's message is a `PeerMessage`, an agent's words and not dude's. A
   person's message carried with a resume is that person's own turn. The
   idle nudge, a live conductor's wake note, lux's carry-on after a host
@@ -705,7 +708,7 @@ recorded today:
     without the move's sentence, and a session's resume adds a newly
     linked repository's line after it (`sessionResume`).
 
-**Proposed event: `run.told`**, on the Run: `{ epoch, moveId, kind:
+**Event: `run.told`**, on the Run: `{ epoch, moveId, kind:
 "moved" | "kept", text }`. `text` is the resume's input exactly as lux
 accepted it; `epoch` the placement it resumed into. Written in `resume`'s
 deferred step, beside `RecordResize`, once lux has accepted a resume whose
