@@ -50,6 +50,36 @@ async function onServers(page: HTMLElement) {
   await until(() => panel.querySelector("[data-testid=servers-panel]"), "the servers in the selected panel");
 }
 
+describe("Waiting routes and sidebar", () => {
+  test("the others deep link selects its tab and sidebar row; tabs and sidebar keep the original you link", async () => {
+    const page = await app("#/waiting/others", new FixtureClient("a"));
+    const inbox = await until(() => page.querySelector<HTMLElement>("[data-testid=inbox]"), "Waiting");
+    await until(() => page.querySelector("[data-testid=waiting-on-others]"), "others sidebar link");
+    expect(inbox.querySelector("[role=tab][aria-selected=true]")?.textContent).toStartWith("On others");
+    expect(page.querySelector("[data-testid=waiting-on-others]")?.getAttribute("aria-current")).toBe("page");
+    expect(page.querySelector("[data-testid=waiting-on-you]")?.hasAttribute("aria-current")).toBe(false);
+    await act(async () => inbox.querySelector<HTMLElement>("[role=tab]")!.focus());
+    expect(window.location.hash).toBe("#/waiting");
+    expect(page.querySelector("[data-testid=waiting-on-you]")?.getAttribute("aria-current")).toBe("page");
+    await click(page.querySelector("[data-testid=waiting-on-others]")!);
+    expect(window.location.hash).toBe("#/waiting/others");
+    expect(inbox.querySelector("[role=tab][aria-selected=true]")?.textContent).toStartWith("On others");
+    window.history.replaceState(null, "", "#/waiting");
+    await act(async () => window.dispatchEvent(new HashChangeEvent("hashchange")));
+    expect(inbox.querySelector("[role=tab][aria-selected=true]")?.textContent).toStartWith("On you");
+  });
+
+  test("Waiting with no projects still lists a real session question", async () => {
+    const client = new FixtureClient("a");
+    const navigation = client.navigation.bind(client);
+    client.navigation = async () => ({ ...await navigation(), projects: [] });
+    client.sessions = async () => ({ sessions: [], invitations: [], questions: [{ id: "question", sessionId: "private", title: null, prompt: "Choose", options: [], askedAt: new Date().toISOString() }] });
+    const page = await app("#/waiting", client);
+    await until(() => page.querySelector("[data-testid=session-question]"), "the session question without projects");
+    expect(page.querySelector("[data-testid=inbox]")).not.toBeNull();
+  });
+});
+
 describe("an epic's page reads its open waits cheaply", () => {
   test("the Board tab counts waits without loading threads; Coordination loads them once a reload", async () => {
     localStorage.setItem("dude.fixtures.run", "peers");

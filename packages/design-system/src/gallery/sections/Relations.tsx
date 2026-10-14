@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Block, Col, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
+import { Block, Col, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { Board } from "../../components/Board.tsx";
 import { ProposalCard, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { AutoStartDialog, RelationPicker, StartAnywayDialog, type PickableTask } from "../../components/RelationDialogs.tsx";
@@ -286,6 +286,8 @@ export function RelationsSection({ mode }: { readonly mode: PaneMode }) {
             <RelationList groups={groups()} onRemove={() => undefined} onAdd={() => undefined} />
             <RelationList groups={groups(true)} onRemove={() => undefined} onAdd={() => undefined} hinting="blocks:CP-45" />
             <RelationList groups={groups()} />
+            <Label>Full main column (wide)</Label>
+            <RelationList wide groups={groups()} onRemove={() => undefined} onAdd={() => undefined} />
             <RelationList groups={[]} onAdd={() => undefined} />
           </Col>
         </Panes>

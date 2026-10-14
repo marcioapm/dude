@@ -5,6 +5,7 @@ import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { CostDisplay, Duration, TokenCount } from "../../components/Numbers.tsx";
 import { MetricGroup, MetricTile } from "../../components/MetricTile.tsx";
+import { Timeline, TimelineItem } from "../../components/Timeline.tsx";
 import { EventDayDivider, EventRow, EventStream } from "../../components/EventRow.tsx";
 import { SessionTree, SessionTreeNode } from "../../components/SessionTreeNode.tsx";
 import { DiffView, parseUnifiedDiff } from "../../components/DiffView.tsx";
@@ -194,12 +195,32 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
               <MetricTile label="Failed (24h)" value={1} unit="count" delta={{ value: -2, goodDirection: "down" }} />
               <MetricTile label="Success rate" value={0.94} unit="percent" delta={{ value: 0.02, kind: "percent", goodDirection: "up" }} />
             </MetricGroup>
+            <Label>Joined, filling the main column (fill)</Label>
+            <MetricGroup joined fill>
+              <MetricTile label="Lead time" value={1_640_000} unit="ms" />
+              <MetricTile label="Agents working" value={920_000} unit="ms" />
+              <MetricTile label="Cost" value={2.12} unit="usd" />
+            </MetricGroup>
             <Row top>
               <MetricTile label="Run budget" value={2.12} unit="usd" max={2.5} sub="of $2.50" size="sm" style={{ width: 180 }} />
               <MetricTile label="Run budget" value={2.71} unit="usd" max={2.5} sub="over by $0.21" size="sm" style={{ width: 180 }} />
               <MetricTile label="Run budget" value={0.6} unit="usd" max={2.5} size="sm" style={{ width: 180 }} />
               <MetricTile label="Flat, large" value="a3f9c1e" size="lg" flat unitLabel="sha" />
             </Row>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block id="c-timeline" title="Timeline" note="Newest first, with a default 820px measure; wide fills a rail page's main column.">
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>Default measure</Label>
+            <Timeline><TimelineItem who={<AgentAvatar role="implementer" />} when="4m">The implementer started.</TimelineItem></Timeline>
+            <Label>Full main column (wide)</Label>
+            <Timeline wide>
+              <TimelineItem who={<AgentAvatar role="implementer" />} when="2m" quote="Keep the public API.">Márcio steered the implementer.</TimelineItem>
+              <TimelineItem who={<AgentAvatar role="implementer" />} when="4m">The implementer started.</TimelineItem>
+            </Timeline>
           </Col>
         </Panes>
       </Block>

@@ -58,7 +58,7 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   /** Open "Waiting on you" (or on others): a full inbox. Without it the rows are not drawn. */
   readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
   /** The inbox is what is open: its row is current. */
-  readonly waitingSelected?: boolean | undefined;
+  readonly waitingSelected?: boolean | "you" | "others" | undefined;
   /** Waiting on you beyond the tree's tasks: session invitations and questions put to you. */
   readonly waitingExtra?: number | undefined;
   /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
@@ -322,7 +322,7 @@ export function Sidebar({
           {onWaitingSelect ? (
             <SidebarRailItem label={yoursWaiting ? `Waiting on you: ${yoursWaiting}` : "Waiting on you"}
               tip={yoursWaiting ? `Waiting on you · ${yoursWaiting}` : "Nothing waiting on you"}
-              current={waitingSelected} onClick={() => onWaitingSelect("you")} data-testid="rail-waiting">
+              current={Boolean(waitingSelected)} onClick={() => onWaitingSelect("you")} data-testid="rail-waiting">
               {/* With something waiting the count is the item: its diamond is the needs-you shape. */}
               {yoursWaiting ? <NeedsYouCount count={yoursWaiting} /> : <Icon name="inbox" size={16} />}
             </SidebarRailItem>
@@ -420,15 +420,15 @@ export function Sidebar({
       {onWaitingSelect ? (
         <nav className={styles["waiting"]} aria-label="Waiting">
           <SidebarLink
-            current={waitingSelected}
+            current={waitingSelected === true || waitingSelected === "you"}
             onClick={() => openWaiting("you")}
             leading={waiting.yours.length + waitingExtra > 0 ? <NeedsYouCount count={waiting.yours.length + waitingExtra} /> : undefined}
             data-testid="waiting-on-you"
           >
             Waiting on you
           </SidebarLink>
-          {waiting.others.length > 0 ? (
-            <SidebarLink onClick={() => openWaiting("others")} count={waiting.others.length} data-testid="waiting-on-others">
+          {waiting.others.length > 0 || waitingSelected === "others" ? (
+            <SidebarLink current={waitingSelected === "others"} onClick={() => openWaiting("others")} count={waiting.others.length} data-testid="waiting-on-others">
               Waiting on others
             </SidebarLink>
           ) : null}

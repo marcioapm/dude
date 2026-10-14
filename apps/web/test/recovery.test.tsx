@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
@@ -219,6 +219,21 @@ describe("a task started over", () => {
   const activityLine = (page: HTMLElement, text: string) =>
     until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes(text)), text);
 
+  test("a file publisher facet resets on an attempt switch instead of leaving an un-clearable filter", async () => {
+    const client = restarted();
+    const artifacts = (await client.listArtifacts()).artifacts;
+    client.listArtifacts = async () => ({ artifacts: artifacts.map((a) => a.runId === "run_attempt2" ? { ...a, phase: "fix" } : a) });
+    const page = await taskPage(client, { tab: "files" });
+    const source = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File source"]'), "publisher facets");
+    await click(facetCheckbox(source, "Fix"));
+    expect(source.querySelectorAll('[aria-checked="true"]').length).toBe(1);
+    await pick(page, 1);
+    await until(() => page.querySelector('[data-testid="file-row"]'), "attempt 1's file");
+    expect(page.textContent).not.toContain("No matching files");
+    expect(page.querySelectorAll('[aria-label="File source"] [aria-checked="true"]').length).toBe(0);
+    expect(page.querySelector<HTMLButtonElement>('[data-testid="download-all"]')?.disabled).toBe(false);
+  });
+
   test("an earlier attempt stopped at its failed replacement, not the restarted Run", async () => {
     const client = restarted();
     const endedAt = new Date(Date.now() - 1000).toISOString();
@@ -274,6 +289,8 @@ describe("a task started over", () => {
     expect(texts(page, "[data-testid=activity-item]").join()).toContain("created the task");
     expect(texts(page, "[data-testid=activity-item]").filter((t) => t.includes("raised") || t.includes("saved"))).toHaveLength(0);
     expect(count(page, "[data-testid=activity-open]")).toBe(0);
+    expect(count(page, '[aria-label="Activity attempt"]')).toBe(0);
+    expect(page.querySelector('[aria-label="Activity filters"]')?.textContent).not.toContain("Attempt");
   });
 
   test("Activity is not worked out again for what an agent says as it works", async () => {
@@ -365,8 +382,9 @@ describe("a task started over", () => {
     expect(titles.join()).not.toContain("Totals rounded");
 
     await openTab(page, "Sessions");
+    await sessionOptions(page);
     const sessions = await until(() => {
-      const s = texts(page, "[data-testid=session]");
+      const s = texts(document.body, "[data-testid=sessions] [data-testid=session]");
       return s.length === 4 ? s : null;
     }, "attempt 1's sessions");
     expect(sessions.map((s) => s.split("claude")[0])).toEqual(["Fix", "Simplify", "Review · correctness", "Implement"]);

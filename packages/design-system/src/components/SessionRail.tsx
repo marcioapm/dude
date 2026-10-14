@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { KeyValueList } from "../primitives/Layout.tsx";
 import { DiffStat } from "./DiffStat.tsx";
@@ -6,39 +6,8 @@ import { ARTIFACT_KIND_SPECS, artifactKind } from "./ArtifactRow.tsx";
 import { Icon } from "../icons/index.tsx";
 import styles from "./SessionRail.module.css";
 
-export interface SessionRailProps extends HTMLAttributes<HTMLElement> {
-  readonly children?: ReactNode;
-}
-
-/**
- * Beside a session's conversation, on the chrome shade: what it is running
- * on, what it has used, and the files it has changed so far. Blocks under
- * small caps labels; no lines between them, the shade and space do that.
- */
-export function SessionRail({ className, children, ...rest }: SessionRailProps) {
-  return (
-    <aside className={cx(styles["rail"], className)} {...rest}>
-      {children}
-    </aside>
-  );
-}
-
-export function SessionRailBlock({ label, live, children, ...rest }: Omit<HTMLAttributes<HTMLElement>, "title"> & {
-  readonly label: ReactNode;
-  /** What it lists is changing now: a breathing dot beside the label. */
-  readonly live?: boolean | undefined;
-  readonly children?: ReactNode;
-}) {
-  return (
-    <section className={styles["block"]} {...rest}>
-      <h3 className={cx("ds-label", styles["label"])}>
-        {label}
-        {live ? <span className="ds-live-dot" aria-label="live" /> : null}
-      </h3>
-      {children}
-    </section>
-  );
-}
+export { PageRail as SessionRail, PageRailBlock as SessionRailBlock } from "./PageWithRail.tsx";
+export type { PageRailProps as SessionRailProps } from "./PageWithRail.tsx";
 
 /** Label and value pairs (a `KeyValueList`), the values on the right as a rail reads them. */
 export function SessionFacts({ facts }: { readonly facts: ReadonlyArray<{ readonly label: ReactNode; readonly value: ReactNode; readonly mono?: boolean }> }) {

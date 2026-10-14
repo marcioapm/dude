@@ -354,6 +354,8 @@ export function RelationRow({ group, row: r, hintId, onRemove, onOpen, onHint }:
 
 export interface RelationListProps {
   readonly groups: ReadonlyArray<RelationGroupData>;
+  /** Fill a rail page's main column instead of the default relations measure. */
+  readonly wide?: boolean | undefined;
   /** Given, each row the reader may change has a quiet remove. */
   readonly onRemove?: ((group: RelationGroupKind, key: string) => void) | undefined;
   /** Given, the head has Add relation (any member may add). */
@@ -373,12 +375,12 @@ export interface RelationListProps {
  * is, in the group's head, on its hover or focus, so nothing in the row
  * moves under the pointer; the same words are the row's description.
  */
-export function RelationList({ groups, onRemove, onAdd, onOpen, adding, hinting }: RelationListProps) {
+export function RelationList({ groups, onRemove, onAdd, onOpen, adding, hinting, wide }: RelationListProps) {
   const shown = groups.filter((g) => g.rows.length > 0);
   const headId = useId();
   const [hovered, setHovered] = useState<string | null>(hinting ?? null);
   return (
-    <section className={styles["relations"]} aria-labelledby={headId} data-testid="relations">
+    <section className={cx(styles["relations"], wide && styles["relationsWide"])} aria-labelledby={headId} data-testid="relations">
       <header className={styles["relationsHead"]}>
         <h2 id={headId} className="ds-label">Relations</h2>
         {onAdd && !adding ? <Button variant="quiet" size="sm" leadingIcon="plus" onClick={onAdd} data-testid="add-relation">Add relation</Button> : null}

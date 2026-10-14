@@ -245,7 +245,7 @@ export function TaskRelationsSection({ client, taskId, taskKey, relations, tree,
   };
   return (
     <div className="taskBlock">
-      <RelationList groups={groups(relations)} onRemove={remove} onAdd={() => setAdding(true)} onOpen={onOpen}
+      <RelationList wide groups={groups(relations)} onRemove={remove} onAdd={() => setAdding(true)} onOpen={onOpen}
         adding={adding ? <RelationPicker here={{ key: taskKey }} related={keys} find={find} onAdd={add} onClose={() => setAdding(false)} /> : undefined} />
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
     </div>

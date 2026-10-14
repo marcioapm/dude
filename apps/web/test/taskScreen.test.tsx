@@ -6,14 +6,290 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PersistedEvent, Run } from "@dude/domain";
-import { act, click, mount, settle, until } from "./dom.ts";
+import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
-import { TaskScreen, activityLines } from "../src/screens/TaskScreen.tsx";
+import { TaskScreen, activityLines, filterActivity, filterFindings } from "../src/screens/TaskScreen.tsx";
+import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSection.tsx";
+import type { Artifact, Finding } from "../src/api/client.ts";
+import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
+import { emit } from "../src/fixtures/client.ts";
+import { ORG, PEOPLE, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
+import type { ReactNode } from "react";
+
+import { unzipSync } from "fflate";
+import { ToastProvider } from "@dude/design-system/primitives";
+
+describe("task rail filtering", () => {
+  test("status and severity compose without treating an open note as settled", () => {
+    const findings = [
+      { id: "note", status: "open", severity: "note" },
+      { id: "fixed", status: "resolved", severity: "blocking" },
+      { id: "accepted", status: "accepted", severity: "low" },
+      { id: "replaced", status: "superseded", severity: "high" },
+    ] as Finding[];
+    expect(filterFindings(findings, ["open"], []).map((f) => f.id)).toEqual(["note"]);
+    expect(filterFindings(findings, ["resolved", "accepted"], ["blocking"]).map((f) => f.id)).toEqual(["fixed"]);
+    expect(filterFindings(findings, [], []).length).toBe(4);
+  });
+
+  test("publisher and kind use latest versions, ZIP reads exactly the displayed IDs and keeps paths", async () => {
+    const artifact = (id: string, name: string, phase: string, contentType: string) => ({ id, name, phase, role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;
+    const files = filesOf([artifact("new", "notes/report.md", "fix", "text/markdown"), artifact("old", "notes/report.md", "implement", "text/markdown"), artifact("image", "shot.png", "implement", "image/png")]);
+    const displayed = filterFiles(files, ["documents"], ["Fix"]);
+    expect(displayed.map((f) => f.name)).toEqual(["notes/report.md"]);
+    expect(displayed[0]!.versions.map((v) => v.id)).toEqual(["new", "old"]);
+    expect(filterFiles(files, ["media"], ["Fix"])).toEqual([]);
+    const reads: string[] = [];
+    const zip = await displayedFilesZip({ artifactContent: async (id) => { reads.push(id); return new Blob([id]); } }, displayed);
+    expect(reads).toEqual(["new"]);
+    const entries = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+    expect(Object.keys(entries)).toEqual(["notes/report.md"]);
+    expect(new TextDecoder().decode(entries["notes/report.md"])).toBe("new");
+    expect(files.length).toBe(2);
+  });
+
+  test("finding controls compose in the mounted tab and their base counts stay unchanged", async () => {
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
+    const status = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding status"]'), "status filters");
+    await until(() => page.querySelectorAll('[data-testid="finding"]').length > 0 ? true : null, "findings");
+    const severity = page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]')!;
+    const counts = status.textContent;
+    const pick = (group: HTMLElement, label: string) => click(facetCheckbox(group, label));
+    await pick(status, "Open");
+    expect(page.querySelectorAll('[data-testid="finding"]').length).toBeGreaterThan(0);
+    expect([...page.querySelectorAll('[data-testid="finding"]')].every((f) => f.getAttribute("data-status") === "open")).toBe(true);
+    await pick(severity, "Note");
+    expect([...page.querySelectorAll('[data-testid="finding"]')].map((f) => f.getAttribute("data-severity"))).toEqual(["note"]);
+    await pick(severity, "Blocking");
+    expect([...page.querySelectorAll('[data-testid="finding"]')].map((f) => f.getAttribute("data-severity"))).toEqual(["note"]);
+    expect(status.textContent).toBe(counts);
+  });
+
+  test("findings filtered to nothing shows one empty state, without the empty group", async () => {
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings" });
+    const severity = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="Finding severity"]'), "severity filters");
+    await click(facetCheckbox(severity, "High"));
+    expect(page.textContent).toContain("No matching findings");
+    expect(page.textContent).not.toContain("No findings.");
+    expect(page.textContent).not.toContain("Review findings");
+    expect(page.querySelectorAll('[data-testid="findings"]').length).toBe(0);
+    expect(page.querySelectorAll('[data-testid="finding"]').length).toBe(0);
+  });
+
+  test("the findings rail names each review run with its status, opens it, and counts fix runs", async () => {
+    const opened: string[] = [];
+    const page = await taskPage(new FixtureClient("d"), { tab: "findings", onOpenRun: (id) => opened.push(id) });
+    const rows = await until(() => {
+      const found = [...page.querySelectorAll<HTMLElement>('[data-testid="reviewer"]')];
+      return found.length > 0 ? found : null;
+    }, "reviewer rows");
+    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["run_d2", "run_d4"]);
+    for (const row of rows) {
+      expect(row.querySelector('[data-status="completed"]')?.textContent).toBe("Completed");
+      expect(row.closest("div")?.querySelector("dt")?.textContent).toBe("Review · correctness");
+    }
+    await click(rows[1]!);
+    expect(opened).toEqual(["run_d4"]);
+    const fix = [...page.querySelectorAll("dt")].find((dt) => dt.textContent === "Fix runs");
+    expect(fix?.nextElementSibling?.textContent).toBe("1");
+  });
+
+  test("toggling a kind facet keeps the attempt's thumbnails instead of reading them again", async () => {
+    const client = new FixtureClient("a");
+    const artifacts = [
+      { id: "image-a", name: "a.png", phase: "implement", role: "implementer", contentType: "image/png", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+      { id: "image-b", name: "b.png", phase: "implement", role: "implementer", contentType: "image/png", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+      { id: "doc", name: "report.md", phase: "implement", role: "implementer", contentType: "text/markdown", sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" },
+    ] as Artifact[];
+    client.listArtifacts = async () => ({ artifacts });
+    const reads: string[] = [];
+    client.artifactContent = async (id) => { reads.push(id); return new Blob([id]); };
+    const page = await taskPage(client, { tab: "files" });
+    await until(() => reads.length === 2 ? true : null, "the two image thumbnails");
+    await settle();
+    const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
+    const doc = facetCheckbox(kinds, "Documents");
+    await click(doc);
+    await settle();
+    await click(doc);
+    await settle();
+    expect(reads).toEqual(["image-a", "image-b"]);
+  });
+
+  test("task chatter from other runs does not re-render the open RunScreen", async () => {
+    const memo = RunScreen as unknown as { type: (props: RunScreenProps) => ReactNode };
+    const screen = memo.type;
+    let renders = 0;
+    memo.type = (props) => { renders++; return screen(props); };
+    const source = globalThis.EventSource;
+    const windowSource = window.EventSource;
+    class ScopedSource extends source {
+      constructor(url: string | URL) {
+        super(url);
+        const scope = new URL(String(url), window.location.origin).searchParams;
+        let message: EventSource["onmessage"] = null;
+        Object.defineProperty(this, "onmessage", {
+          configurable: true,
+          get: () => (e: MessageEvent) => {
+            const event = JSON.parse(e.data) as PersistedEvent;
+            if (["taskId", "runId", "sessionId"].every((k) => !scope.get(k) || scope.get(k) === event[k as "runId"])) message?.call(this, e);
+          },
+          set: (value: EventSource["onmessage"]) => { message = value; },
+        });
+      }
+    }
+    globalThis.EventSource = window.EventSource = ScopedSource;
+    try {
+      const page = await taskPage(new FixtureClient("a"), { tab: "sessions", runId: RUN_ID });
+      await until(() => page.querySelector('[data-testid="run-screen"]'), "the open run");
+      await settle(500);
+      expect(renders).toBeGreaterThan(0);
+      renders = 0;
+      const frame = (runId: string) => emit({ eventType: "agent.thought", occurredAt: new Date().toISOString(), organizationId: ORG.id,
+        projectId: PROJECT.id, taskId: TASK_ID, runId, sessionId: null, workflowRunId: null,
+        actor: { type: "system", id: "dude" }, source: "control-plane", correlationId: null, causationId: null, payload: { text: "Thinking" } });
+      for (let i = 0; i < 10; i++) {
+        await act(async () => frame("run_unrelated_probe"));
+        await settle(10);
+      }
+      await settle(350);
+      expect(renders).toBe(0);
+      await act(async () => frame(RUN_ID));
+      await settle();
+      expect(renders).toBeGreaterThan(0);
+    } finally {
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      memo.type = screen;
+      globalThis.EventSource = source;
+      window.EventSource = windowSource;
+    }
+  });
+
+  for (const error of [new Error("boom"), new ApiError(404, "not_found", "missing")]) {
+    test(`Sessions keeps its switcher when the open run rejects with ${error.message}`, async () => {
+      const client = new FixtureClient("d");
+      client.getRun = async () => { throw error; };
+      const opened: string[] = [];
+      const page = await taskPage(client, { tab: "sessions", onOpenRun: (id) => opened.push(id) });
+      await until(() => page.textContent?.includes(error instanceof ApiError ? "doesn't exist" : "boom") ? true : null, "the run error");
+      const list = await sessionOptions(page);
+      const rows = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      expect(rows.length).toBe(5);
+      const other = rows.find((r) => r.getAttribute("aria-current") !== "true")!;
+      await act(async () => { other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+      expect(opened).toEqual([other.getAttribute("data-run")!]);
+    });
+  }
+
+  test("Files kind counts stay put and Download all reads only displayed latest versions", async () => {
+    const client = new FixtureClient("a");
+    const artifact = (id: string, name: string, contentType: string) => ({ id, name, phase: "implement", role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;
+    client.listArtifacts = async () => ({ artifacts: [artifact("latest", "notes.md", "text/markdown"), artifact("old", "notes.md", "text/markdown"), artifact("image", "shot.png", "image/png")] });
+    const reads: string[] = [];
+    client.artifactContent = async (id) => { reads.push(id); return new Blob([id]); };
+    const page = await taskPage(client, { tab: "files" });
+    await until(() => reads.includes("image") ? true : null, "thumbnail read");
+    const kinds = await until(() => page.querySelector<HTMLElement>('[role="group"][aria-label="File kind"]'), "kind facets");
+    const counts = kinds.textContent;
+    await click(facetCheckbox(kinds, "Documents"));
+    expect(kinds.textContent).toBe(counts);
+    expect(page.querySelectorAll('[data-testid="file-row"]').length).toBe(1);
+    expect(page.querySelectorAll('[data-testid="file-card"]').length).toBe(0);
+    reads.length = 0;
+    const anchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = () => {};
+    try {
+      await click(page.querySelector('[data-testid="download-all"]')!);
+      await until(() => reads.length ? true : null, "zip reads");
+      await settle();
+      expect(reads).toEqual(["latest"]);
+    } finally {
+      HTMLAnchorElement.prototype.click = anchorClick;
+    }
+  });
+
+  test("Activity facets classify real steers and filter kind and person without changing counts", async () => {
+    const client = new FixtureClient("d");
+    const base = (await client.events({ taskId: TASK_ID })).events[0]!;
+    const actors = PEOPLE.slice(0, 2);
+    const events: PersistedEvent[] = [
+      { ...base, eventId: "steer-a", cursor: 90001, eventType: "run.steered", actor: { type: "human", id: actors[0]!.id }, payload: { text: "First steer" } },
+      { ...base, eventId: "steer-b", cursor: 90002, eventType: "run.steered", actor: { type: "human", id: actors[1]!.id }, payload: { text: "Second steer" } },
+      { ...base, eventId: "created", cursor: 90003, eventType: "task.created", actor: { type: "human", id: actors[0]!.id }, payload: {} },
+    ];
+    client.events = async () => ({ events, nextCursor: 90003 });
+    const page = await taskPage(client, { tab: "activity" });
+    await until(() => page.querySelectorAll('[data-testid="activity-item"]').length === 3 ? true : null, "three real events");
+    const facet = (group: string, label: string) => {
+      const found = [...page.querySelectorAll<HTMLElement>(`[role="group"][aria-label="${group}"] [role="checkbox"]`)].find((b) => b.parentElement?.textContent?.startsWith(label));
+      expect(found).toBeDefined();
+      return found!;
+    };
+    const kinds = page.querySelector('[aria-label="Event kind"]')!;
+    const counts = kinds.textContent;
+    await click(facet("Event kind", "Steers & decisions"));
+    expect([...page.querySelectorAll('[data-testid="activity-item"]')].map((l) => l.textContent)).toEqual([
+      expect.stringContaining("Second steer"), expect.stringContaining("First steer"),
+    ]);
+    expect(kinds.textContent).toBe(counts);
+    await click(facet("Activity person", actors[1]!.name));
+    const lines = [...page.querySelectorAll('[data-testid="activity-item"]')];
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.textContent).toContain("Second steer");
+    expect(lines[0]!.textContent).toContain(actors[1]!.name);
+    expect(kinds.textContent).toBe(counts);
+  });
+
+  for (const decider of ["policy", "conductor"] as const) {
+    test(`the Overview rail says who decides for a ${decider} task`, async () => {
+      const client = new FixtureClient("d");
+      const getTask = client.getTask.bind(client);
+      client.getTask = async (id) => ({ ...(await getTask(id)), decider });
+      const page = await taskPage(client);
+      const term = await until(() => [...page.querySelectorAll("dt")].find((dt) => dt.textContent === "Decides"), "Decides");
+      expect(term.nextElementSibling?.textContent).toBe(decider === "conductor" ? "Conductor" : "Deliver");
+    });
+  }
+
+  test("the session selector searches model and status words", async () => {
+    const client = new FixtureClient("d");
+    const getTask = client.getTask.bind(client);
+    const runs = (await getTask(TASK_ID)).runs;
+    const target = runs.find((r) => r.phase !== null)!;
+    const failed = runs.find((r) => r.id !== target.id)!;
+    client.getTask = async (id) => {
+      const task = await getTask(id);
+      return { ...task, runs: task.runs.map((r) => r.id === target.id ? { ...r, model: "zz-unique-model" } : r.id === failed.id ? { ...r, status: "failed" as const } : r) };
+    };
+    const page = await taskPage(client, { tab: "sessions" });
+    const list = await sessionOptions(page);
+    const all = list.querySelectorAll('[role="option"]').length;
+    const input = document.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+    const search = async (words: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, words);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await settle(20);
+      return [...document.querySelectorAll<HTMLElement>('[data-testid="sessions"] [role="option"]')].map((o) => o.getAttribute("data-run"));
+    };
+    expect(all).toBeGreaterThan(1);
+    expect(await search("zz-unique-model")).toEqual([target.id]);
+    expect(await search("failed")).toEqual([failed.id]);
+  });
+
+  test("activity filters structured person, event kind and attempt independently of prose", () => {
+    const lines = [{ kind: "decisions", personId: "ana", attempt: 2 }, { kind: "sessions", personId: "agents", attempt: 1 }, { kind: "decisions", personId: "ana", attempt: 1 }] as ReturnType<typeof activityLines>;
+    expect(filterActivity(lines, ["decisions"], ["ana"], ["2"])).toEqual([lines[0]!]);
+    expect(filterActivity(lines, [], [], []).length).toBe(3);
+  });
+});
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -23,9 +299,9 @@ afterEach(async () => {
 
 export async function taskPage(client: FixtureClient, props: Partial<Parameters<typeof TaskScreen>[0]> = {}) {
   const { container, unmount } = await mount(
-    <PeopleProvider client={client}>
+    <ToastProvider><PeopleProvider client={client}>
       <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} {...props} />
-    </PeopleProvider>,
+    </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
@@ -304,6 +580,16 @@ describe("a branch preview on the Servers tab", () => {
       if (timestamp) expect(active.textContent).toMatch(/\b2[4-6]s\b/);
     });
   }
+  test("the server rail names the normal server states, not dangling separators", async () => {
+    const page = await taskPage(new FixtureClient("a"), { tab: "servers" });
+    const rail = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"]'), "the server rail");
+    await until(() => rail.textContent?.includes("Setups") ? true : null, "server setups");
+    const setups = [...rail.querySelectorAll("section")].find((s) => s.textContent?.includes("Setups"));
+    expect(setups).toBeDefined();
+    expect([...setups!.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["web · Ready", "api · Starting", "storybook · Stopped"]);
+    expect(setups!.querySelectorAll('[data-server-state]').length).toBe(3);
+  });
+
   test("a stopping preview says Stopping, not starting, on its run and its tab", async () => {
     class StoppingPreview extends FixtureClient {
       override taskServers() {
@@ -316,7 +602,7 @@ describe("a branch preview on the Servers tab", () => {
     const progress = await until(() => page.querySelector<HTMLElement>('[aria-label="Preview progress"]'), "progress");
     expect(progress.getAttribute("data-stage")).toBe("stopping");
     const panel = page.querySelector<HTMLElement>("[data-testid=servers-panel]")!;
-    const mark = await until(() => panel.querySelector<HTMLElement>("[data-status]"), "the run's mark");
+    const mark = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"] [data-status]'), "the run's mark");
     expect(mark.getAttribute("data-status")).not.toBe("starting");
     expect(mark.textContent).toBe("Stopping");
     // The tab reads the same servers: nothing on, and no "Preview starting" dot.
@@ -348,6 +634,9 @@ describe("a branch preview on the Servers tab", () => {
     expect(button(page, "stop-preview") !== null).toBe(true);
     const startAll = await until(() => button(page, "start-all"), "Start all on the preview");
     expect(button(page, "stop-all") !== null).toBe(true);
+    for (const id of ["start-all", "stop-all", "stop-preview"]) {
+      expect(button(page, id)?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(1);
+    }
 
     await click(startAll);
     await until(() => all(page, "starting", "ready"), "every server starting");
@@ -375,10 +664,11 @@ describe("a branch preview on the Servers tab", () => {
     }
     const page = await taskPage(new AsleepPreview("e"), { tab: "servers" });
     const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=servers-panel][data-run=preview]"), "the preview's panel");
-    await until(() => (panel.textContent?.includes("· asleep") ? true : null), "the asleep detail");
-    expect(panel.textContent).toContain("sleeps after 30m without a request");
-    expect(panel.textContent).not.toContain("parks after");
-    expect(panel.textContent).toContain("opening one wakes it on the branch’s latest commit");
+    const rail = await until(() => page.querySelector<HTMLElement>('[aria-label="Serving run and server actions"]'), "the run rail");
+    await until(() => (rail.textContent?.includes("· asleep") ? true : null), "the asleep detail");
+    expect(rail.textContent).toContain("sleeps after 30m without a request");
+    expect(rail.textContent).not.toContain("parks after");
+    expect(rail.textContent).toContain("Opening its stable URLs wakes it on the branch's latest commit");
     expect(button(page, "add-server")?.disabled).toBe(true);
     expect(page.querySelector("[data-testid=preview-error]")).toBe(null);
   });

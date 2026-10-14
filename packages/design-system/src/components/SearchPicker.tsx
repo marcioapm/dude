@@ -54,17 +54,26 @@ export interface SearchPickerProps<T> {
   readonly onSubmit?: (() => void) | undefined;
   /** Keys (`optionKey`) never shown: what is already picked. Hidden as found, never found again. */
   readonly exclude?: ReadonlySet<string> | undefined;
+  /** Extra attributes on an option's `<li>`, such as test ids. */
+  readonly optionAttributes?: ((option: T) => Record<string, string | undefined>) | undefined;
+  readonly listTestId?: string | undefined;
+  /** What is open now: `aria-selected` and `aria-current` follow this instead of the keyboard's row. */
+  readonly optionCurrent?: ((option: T) => boolean) | undefined;
+  /** Escape always cancels the picker (`onCancel`), even with the list open: for a picker in a popover. */
+  readonly escapeClosesPicker?: boolean | undefined;
 }
 
 export function SearchPicker<T>({
   find, optionKey, renderOption, onPick, onCancel, placeholder, label, autoFocus, delay = 200, size,
-  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, exclude,
+  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, exclude, optionCurrent, escapeClosesPicker, optionAttributes, listTestId,
 }: SearchPickerProps<T>) {
   const listId = useId();
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<ReadonlyArray<T>>([]);
   // The words the options answer: an empty answer to words is "nothing found".
   const [answered, setAnswered] = useState<string | null>(null);
+  const answeredWords = useRef(answered);
+  answeredWords.current = answered;
   const [active, setActive] = useState(0);
   // Escape closed the list; typing or an arrow opens it again.
   const [closed, setClosed] = useState(false);
@@ -86,8 +95,15 @@ export function SearchPicker<T>({
         (found) => {
           if (mine !== latest.current) return;
           setFound(found);
+          // A fresh answer to the same words (the app's options re-read) keeps the highlight.
+          if (answeredWords.current !== words) {
+            setActive(0);
+            // New words put the highlight back on the first row: bring the list's
+            // own scroll back with it (never scrollIntoView, which moves the page).
+            const list = document.getElementById(listId);
+            if (list) list.scrollTop = 0;
+          }
           setAnswered(words);
-          setActive(0);
         },
         () => {
           if (mine !== latest.current) return;
@@ -124,7 +140,13 @@ export function SearchPicker<T>({
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && (open || closed)) {
       e.preventDefault();
       if (closed) setClosed(false);
-      else setActive(step(current, e.key === "ArrowDown" ? 1 : -1));
+      else {
+        const next = step(current, e.key === "ArrowDown" ? 1 : -1);
+        setActive(next);
+        // Only the keyboard scrolls the list: a picker that mounts open (the
+        // gallery, a dialog) must never pull its page to itself.
+        document.getElementById(optionId(next))?.scrollIntoView?.({ block: "nearest" });
+      }
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault();
       onSubmit();
@@ -138,7 +160,10 @@ export function SearchPicker<T>({
     } else if (e.key === "Escape") {
       // Inside a dialog: close the list first, the picker next, the dialog last.
       e.stopPropagation();
-      if (open || nothing) {
+      if (escapeClosesPicker) {
+        e.preventDefault();
+        onCancel?.();
+      } else if (open || nothing) {
         e.preventDefault();
         setClosed(true);
       } else {
@@ -158,10 +183,12 @@ export function SearchPicker<T>({
     const off = why(o);
     rows.push(
       <li
+        {...optionAttributes?.(o)}
         key={optionKey(o)}
         id={optionId(i)}
         role="option"
-        aria-selected={i === current}
+        aria-selected={optionCurrent ? optionCurrent(o) : i === current}
+        aria-current={optionCurrent?.(o) ? "true" : undefined}
         aria-disabled={off ? true : undefined}
         className={cx(styles["option"], i === current && !off && styles["active"], off && styles["disabled"])}
         // mousedown, not click: the field keeps its focus.
@@ -197,7 +224,7 @@ export function SearchPicker<T>({
         }}
         onKeyDown={onKeyDown}
       />
-      <ul id={listId} role="listbox" aria-label={label} className={styles["list"]} hidden={!open && !nothing}>
+      <ul data-testid={listTestId} id={listId} role="listbox" aria-label={label} className={styles["list"]} hidden={!open && !nothing}>
         {open ? rows : nothing ? <li role="presentation" className={styles["empty"]}>{empty(answered)}</li> : null}
       </ul>
     </div>

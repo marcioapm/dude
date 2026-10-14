@@ -22,7 +22,7 @@ export type Place =
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
-  | { view: "inbox" }
+  | { view: "inbox"; tab?: "you" | "others" }
   // Brainstorm sessions: the list, and one (`#/sessions/<id>`; `#/session/<id>`
   // is an agent's session inside a task's Run).
   | { view: "sessions" }
@@ -82,7 +82,7 @@ export function parsePlace(full: string): Place | null {
     return sub ? { view: "orgSettings", page: view, sub } : { view: "orgSettings", page: view };
   }
   if (kind === "me" && id === "settings") return { view: "mySettings" };
-  if (kind === "waiting") return { view: "inbox" };
+  if (kind === "waiting") return id === "others" ? { view: "inbox", tab: "others" } : { view: "inbox" };
   if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
@@ -117,7 +117,7 @@ function bareHash(place: Place | null): string {
     case "mySettings":
       return "#/me/settings";
     case "inbox":
-      return "#/waiting";
+      return place.tab === "others" ? "#/waiting/others" : "#/waiting";
     case "sessions":
       return "#/sessions";
     case "brainstorm":

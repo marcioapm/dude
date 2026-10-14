@@ -59,5 +59,6 @@
   overflow: hidden;
 }
 .trailing {
+  margin-left: auto;
   display: inline-flex;
 }

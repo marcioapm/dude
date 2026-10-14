@@ -230,6 +230,23 @@ export function restartedMetrics(attempt?: number): TaskMetrics {
   };
 }
 
+/**
+ * `dude.fixtures.run` = asks: two of the viewer's own tasks wait on them, in
+ * the tree's shapes: WC-205's implementer asks a question and API-10's plan
+ * needs confirming, so Waiting's On you has rows.
+ */
+export function withViewerAsks(projects: NavProject[]): NavProject[] {
+  const me = PEOPLE.find((p) => p.id === YOU)!;
+  const P = { id: me.id, name: me.name, online: me.online };
+  const asking = { id: "t_205", key: "WC-205", title: "Goal weights", status: "running" as const, people: [P], statusSince: iso(35 * MIN), costUsd: 0.6,
+    runs: [{ id: "run_205", attempt: 1, status: "running" as const, sessions: [{ id: "run_205", role: "implementer" as const, status: "awaiting_input" as const,
+      title: "Implement", activity: "asked whether weights may sum to more than 100%" }] }] };
+  const deciding = { id: "t_a10", key: "API-10", title: "Idempotency keys on POST /payments", status: "awaiting_confirmation" as const, people: [P], statusSince: iso(55 * MIN) };
+  return projects.map((p) => ({ ...p,
+    epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === asking.id ? asking : t)) })),
+    tasks: p.id === "p_api" ? [...(p.tasks ?? []), deciding] : p.tasks }));
+}
+
 export function navigationFor(scenario: ServerScenario): NavProject[] {
   const inReview = scenario === "d";
   const task = taskFor(scenario);

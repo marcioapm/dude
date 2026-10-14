@@ -131,6 +131,9 @@
   gap: var(--ds-space-12) var(--ds-space-32);
   grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
 }
+.groupFill {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
 .groupJoined > .root {
   padding: 0;
   background: transparent;

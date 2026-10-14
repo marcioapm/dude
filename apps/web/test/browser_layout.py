@@ -47,16 +47,85 @@ class PageHoldsStill(unittest.TestCase):
         page = context.new_page()
         page.goto(f"{URL}/?fixtures={scenario}#/task/{TASK}")
         page.get_by_role("tab", name="Sessions").click()
+        if box == '[data-testid="sessions"]':
+            page.get_by_test_id("search-selector-trigger").click()
         page.locator(f"{box} .ds-sr-only").first.wait_for(state="attached", timeout=15000)
         return page.evaluate(OVERFILL, box)
 
     def test_a_long_session_list_scrolls_in_itself(self):
         # Scenario d has a completed session, whose mark is an sr-only word.
-        self.assertEqual(self.page_overflow("d", ".taskSessionList"), 0)
+        self.assertEqual(self.page_overflow("d", '[data-testid="sessions"]'), 0)
 
     def test_a_long_rail_scrolls_in_itself(self):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.
         self.assertEqual(self.page_overflow("a", ".runRail"), 0)
+
+    def test_relations_metrics_and_timeline_fill_the_rail_pages_main_column(self):
+        context = self.browser.new_context(viewport={"width": 1920, "height": 1200}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}/overview")
+        page.get_by_test_id("task-metrics").wait_for()
+        widths = page.evaluate("""() => {
+          const relations = document.querySelector('[data-testid=relations]');
+          const tiles = [...document.querySelectorAll('[data-testid=task-metrics] [class*="_group_"] > div')];
+          const group = tiles[0].parentElement;
+          return { relations: relations.getBoundingClientRect().width, parent: relations.parentElement.getBoundingClientRect().width,
+            group: group.getBoundingClientRect().width, tiles: tiles.map(t => t.getBoundingClientRect().width),
+            right: tiles.at(-1).getBoundingClientRect().right, edge: group.getBoundingClientRect().right };
+        }""")
+        self.assertGreater(widths["parent"], 820)
+        self.assertAlmostEqual(widths["relations"], widths["parent"], delta=1)
+        self.assertAlmostEqual(widths["right"], widths["edge"], delta=1)
+        self.assertLess(max(widths["tiles"]) - min(widths["tiles"]), 1)
+        page.get_by_role("tab", name="Activity").click()
+        page.get_by_test_id("activity-item").first.wait_for()
+        timeline = page.get_by_test_id("activity")
+        sizes = timeline.evaluate("""el => {
+          const p = el.parentElement; const s = getComputedStyle(p);
+          return [el.getBoundingClientRect().width, p.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)];
+        }""")
+        self.assertGreater(sizes[1], 820)
+        self.assertAlmostEqual(sizes[0], sizes[1], delta=1)
+
+    def test_rail_notes_use_muted_ink(self):
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}/findings")
+        note = page.get_by_text("Counts cover every finding in this attempt, before filters.", exact=True)
+        note.wait_for()
+        self.assertTrue(note.evaluate("""el => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--ds-color-text-muted)';
+          el.append(probe);
+          const muted = getComputedStyle(probe).color;
+          probe.remove();
+          return getComputedStyle(el).color === muted;
+        }"""))
+
+    def test_the_open_session_is_drawn_in_the_selector(self):
+        # Open the third session, reopen the list: the keyboard's row is the
+        # first, the open one is the third, and only the open one is washed.
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+        page.get_by_role("tab", name="Sessions").click()
+        trigger = page.get_by_test_id("search-selector-trigger")
+        trigger.click()
+        options = page.get_by_test_id("sessions").get_by_role("option")
+        options.nth(2).wait_for()
+        options.nth(2).dispatch_event("mousedown")
+        trigger.click()
+        options.nth(2).wait_for()
+        page.mouse.move(0, 0)
+        self.assertEqual(options.nth(2).get_attribute("aria-current"), "true")
+        washes = page.evaluate("""() => [...document.querySelectorAll('[data-testid="sessions"] [role=option]')]
+          .map((o) => getComputedStyle(o).backgroundColor)""")
+        clear = washes[1]
+        self.assertNotIn(washes[2], (clear, washes[0]))
+        self.assertEqual([w for i, w in enumerate(washes) if i not in (0, 2)], [clear] * (len(washes) - 2))
 
 
 if __name__ == "__main__":

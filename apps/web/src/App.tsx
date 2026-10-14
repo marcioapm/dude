@@ -468,6 +468,14 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       }} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
+  } else if (place?.view === "inbox") {
+    flush = true;
+    main = <InboxScreen client={client} projects={projects} sessions={sessionsList} tab={place.tab ?? "you"}
+      onTabChange={(tab) => go(tab === "others" ? { view: "inbox", tab } : { view: "inbox" })}
+      onSelect={(ref) => go(inTree(ref))} onOpenSession={openSession} onChanged={() => {
+        void load();
+        void loadSessions();
+      }} />;
   } else if (projects.length === 0) {
     main = (
       <EmptyState
@@ -480,13 +488,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         ) : undefined}
       />
     );
-  } else if (place?.view === "inbox") {
-    flush = true;
-    main = <InboxScreen client={client} projects={projects} sessions={sessionsList} onSelect={(ref) => go(inTree(ref))}
-      onOpenSession={openSession} onChanged={() => {
-        void load();
-        void loadSessions();
-      }} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -715,8 +716,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         you={people.you}
         // You first, then the others as the organization lists them.
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
-        onWaitingSelect={() => go({ view: "inbox" })}
-        waitingSelected={place?.view === "inbox"}
+        onWaitingSelect={(tab) => go(tab === "others" ? { view: "inbox", tab } : { view: "inbox" })}
+        waitingSelected={place?.view === "inbox" ? place.tab ?? "you" : false}
         waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
         sessions={
           <SidebarSessions
@@ -842,7 +843,7 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
     case "mySettings":
       return "Your settings";
     case "inbox":
-      return "Waiting on you";
+      return "Waiting";
     // Never a session's title: the tab's words reach teammates as presence.
     case "sessions":
       return "Sessions";

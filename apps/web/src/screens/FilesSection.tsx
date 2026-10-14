@@ -12,12 +12,15 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArtifactPreview, FileGallery, FileViewer, artifactKind } from "@dude/design-system/components";
+import { ArtifactPreview, FileGallery, FileViewer, artifactKind, PageWithRail, PageRail, PageRailBlock, FacetList } from "@dude/design-system/components";
+import { formatBytes } from "@dude/design-system";
+import { zipSync } from "fflate";
 import type { FileVersion, GalleryFile } from "@dude/design-system/components";
-import { useToast } from "@dude/design-system/primitives";
+import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { inFacet, withCounts } from "./facets.ts";
 
 /** Past this, a text file is downloaded rather than shown: the tab would not survive it. */
 const PREVIEW_LIMIT = 2 * 1024 * 1024;
@@ -51,6 +54,18 @@ export function save(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export const fileKindFacet = (f: GalleryFile) => ["image", "video"].includes(artifactKind(f.versions[0]!.contentType, f.name)) ? "media" : "documents";
+const sourceOf = (f: GalleryFile) => f.versions[0]!.session;
+
+export function filterFiles(files: readonly GalleryFile[], kinds: readonly string[], sources: readonly string[]) {
+  return files.filter((f) => inFacet(kinds, fileKindFacet(f)) && inFacet(sources, sourceOf(f)));
+}
+
+export async function displayedFilesZip(client: Pick<ApiClient, "artifactContent">, files: readonly GalleryFile[]): Promise<Blob> {
+  const entries = await Promise.all(files.map(async (f) => [f.name, new Uint8Array(await (await client.artifactContent(f.versions[0]!.id)).arrayBuffer())] as const));
+  return new Blob([zipSync(Object.fromEntries(entries), { level: 0 })], { type: "application/zip" });
+}
+
 export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: {
   client: ApiClient;
   taskId: string;
@@ -64,22 +79,37 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   const [open, setOpen] = useState<string | null>(null);
   const fail = (err: unknown) => toast({ title: errorText(err), tone: "danger" });
   const download = useDownload(client);
+  const [kinds, setKinds] = useState<string[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
+  const [zipping, setZipping] = useState(false);
+  const displayed = filterFiles(files, kinds, sources);
+  const total = displayed.reduce((n, f) => n + f.versions[0]!.sizeBytes, 0);
   const thumbnails = useThumbnails(client, files);
-  if (files.length === 0) return null;
   return (
-    <div data-testid="files">
-      <FileGallery
-        files={files}
+    <PageWithRail data-testid="files" rail={<PageRail aria-label="File filters and downloads">
+      <PageRailBlock label="Kind"><FacetList label="File kind" value={kinds} onValueChange={setKinds}
+        options={withCounts([{ value: "documents", label: "Documents" }, { value: "media", label: "Images & video" }], files, fileKindFacet)} /></PageRailBlock>
+      <PageRailBlock label="Published by"><FacetList label="File source" value={sources} onValueChange={setSources}
+        options={withCounts([...new Set(files.map(sourceOf))].map((s) => ({ value: s, label: s })), files, sourceOf)} /></PageRailBlock>
+      <PageRailBlock label="Scope"><span className="muted">Files and counts belong to the attempt selected in the task header. No selections means all files in that attempt.</span></PageRailBlock>
+      <PageRailBlock label="Download"><Button size="sm" variant="secondary" data-testid="download-all" disabled={zipping || !displayed.length}
+        onClick={() => { setZipping(true); void displayedFilesZip(client, displayed).then((b) => save(b, `${taskKey ?? taskId}-files.zip`), fail).finally(() => setZipping(false)); }}>
+        {zipping ? "Preparing…" : `Download all · ${formatBytes(total)}`}</Button><p className="muted">One ZIP of every file shown, latest versions only.</p></PageRailBlock>
+    </PageRail>}>
+      <div className="taskPane">
+      {displayed.length ? <FileGallery
+        controls={false}
+        files={displayed}
         thumbnail={(v) => thumbnails.get(v.id)}
         onOpen={(f) => setOpen(f.name)}
         onDownload={download}
-        onDownloadAll={() => void client.artifactsZip(taskId).then((b) => save(b, `${taskKey ?? taskId}-files.zip`), fail)}
-      />
-      <ArtifactViewer client={client} files={files} open={open} onOpenChange={setOpen} onOpenSession={(v) => {
+      /> : <EmptyState compact icon="file" title="No matching files" description="Clear a kind or publisher filter to show more files." />}
+      <ArtifactViewer client={client} files={displayed} open={open} onOpenChange={setOpen} onOpenSession={(v) => {
         const a = artifacts.find((x) => x.id === v.id);
         if (a?.runId) onOpenRun(a.runId);
       }} />
-    </div>
+      </div>
+    </PageWithRail>
   );
 }
 

@@ -66,7 +66,7 @@ export function TaskMetricsSection({ client, taskId, attempt, setAside, live, do
   const m = read.metrics;
   return (
     <Section title="Time & cost" data-testid="task-metrics">
-      <MetricGroup joined>
+      <MetricGroup joined fill>
         <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={setAside ? "start to set aside" : done ? "asked to done" : "so far"} />
         <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" live={live} />
         <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />

@@ -173,17 +173,17 @@ export function FindingRow({
       </div>
       {open ? (
         <div id={bodyId} className={styles["body"]}>
-          {description ? <Markdown source={description} className={styles["prose"]} /> : null}
+          {description ? <Markdown unmeasured source={description} className={styles["prose"]} /> : null}
           {suggestedFix ? (
             <div className={styles["section"]}>
               <div className={cx("ds-label", styles["sectionLabel"])}>Suggested fix</div>
-              <Markdown source={suggestedFix} className={styles["prose"]} />
+              <Markdown unmeasured source={suggestedFix} className={styles["prose"]} />
             </div>
           ) : null}
           {resolutionNote ? (
             <div className={styles["section"]}>
               <div className={cx("ds-label", styles["sectionLabel"])}>{st.label}</div>
-              <Markdown source={resolutionNote} className={styles["prose"]} />
+              <Markdown unmeasured source={resolutionNote} className={styles["prose"]} />
             </div>
           ) : null}
         </div>
