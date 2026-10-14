@@ -16,7 +16,7 @@ import (
 // prActors may call them; delivery decides which action each may take.
 var prActors = []string{delivery.RoleConductor, "implementer"}
 
-// Calls a Run may make to each in its lifetime.
+// Calls a Run may make to each in its lifetime, counting those GitHub refused.
 const (
 	reviewRequestsPerRun = 20
 	threadsPerRun        = 50
@@ -78,14 +78,14 @@ func recordPRAction(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.PRActio
 var prActionTools = []tool{
 	around(define("request_review", "Ask people for a review of one of your task's pull requests, on GitHub, as dude. "+
 		"Only the repository's collaborators: anyone else is refused and named. Refused for another task's pull request.",
-		conductors, requestReview).before(forgeFor).limit(reviewRequestsPerRun), doPRAction, recordPRAction),
+		conductors, requestReview).before(forgeFor).limit(reviewRequestsPerRun).countingAttempts(), doPRAction, recordPRAction),
 	around(define("resolve_thread", "Resolve a review thread on one of your task's pull requests, once what it asked for "+
 		"is done (say so in it first, with reply_on_pull_request in_reply_to the thread's comment). A fixer answering pull "+
 		"request feedback resolves only the threads in its feedback. Refused for another pull request's thread.",
-		prActors, resolveThread).before(forgeFor).limit(threadsPerRun), doPRAction, recordPRAction),
+		prActors, resolveThread).before(forgeFor).limit(threadsPerRun).countingAttempts(), doPRAction, recordPRAction),
 	around(define("mark_ready", "Mark one of your task's draft pull requests ready for review, on GitHub. Only when "+
-		"the person agreed it is ready.", conductors, markReady).before(forgeFor).limit(readiesPerRun), doPRAction, recordPRAction),
+		"the person agreed it is ready.", conductors, markReady).before(forgeFor).limit(readiesPerRun).countingAttempts(), doPRAction, recordPRAction),
 	around(define("rerun_failed_checks", "Run the failed checks on one of your task's pull requests again, on GitHub: "+
 		"once per head, for a failure that is not the code's (a flaky runner, an outage). A real failure is a fix's.",
-		conductors, rerunFailedChecks).before(forgeFor).limit(rerunsPerRun), doPRAction, recordPRAction),
+		conductors, rerunFailedChecks).before(forgeFor).limit(rerunsPerRun).countingAttempts(), doPRAction, recordPRAction),
 }

@@ -8,8 +8,10 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -175,6 +177,39 @@ func TestTheConductorIsRefusedOutsideItsOwnPullRequest(t *testing.T) {
 	w.gh.Set(func(s *fakegithub.Server) { resolved = len(s.ResolvedThreads) })
 	if resolved != 0 {
 		t.Errorf("%d threads resolved", resolved)
+	}
+}
+
+// A request GitHub refuses still spends the tool's budget: past it, no
+// call reaches GitHub. A success is counted once.
+func TestRefusedReviewRequestsSpendTheBudget(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	var reads atomic.Int64
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Permissions["stranger"] = "none"
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/collaborators/") {
+				reads.Add(1)
+			}
+			return 0
+		}
+	})
+	w.must(task, "request_review", `{"pr":"1","logins":["ana"]}`)
+	for range 19 {
+		w.refused(task, "request_review", `{"pr":"1","logins":["stranger"]}`, "not collaborators")
+	}
+	if n := reads.Load(); n != 20 {
+		t.Fatalf("%d permission reads before the budget, want 20", n)
+	}
+	for range 3 {
+		w.refused(task, "request_review", `{"pr":"1","logins":["stranger"]}`, "limited to 20 calls")
+	}
+	if n := reads.Load(); n != 20 {
+		t.Errorf("%d permission reads, want them to stop at 20", n)
 	}
 }
 
