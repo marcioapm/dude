@@ -303,10 +303,9 @@ const fixContract = "## How you fix\n\n" +
 	"For each problem, reproduce it first where it can be reproduced: a failing test, a script, or the " +
 	"reviewer's or tester's steps. Then fix it, and add or update a regression test that fails without the " +
 	"fix where practical. Before you finish, rerun the affected tests and the project's checks.\n\n" +
-	"If a finding is wrong, say so with your evidence instead of changing code to satisfy it. Put that " +
-	"evidence where a person can see it: in your final reply, and in a file published with `dude publish` as " +
-	"`pushback.md`, one section per finding you dispute: its title, why it is wrong, and the evidence. The " +
-	"finding stays open until a reviewer or a person judges it."
+	"If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final " +
+	"reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its " +
+	"title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it."
 
 // implementContract asks the implementer to check its own work: the
 // independent tester after it verifies, but does not do this for it.
@@ -360,8 +359,7 @@ const testerTools = "Drive a real browser with Playwright (Python: `python3 -m p
 	"Record each journey as a video — create the browser context with `record_video_dir` and a " +
 	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` of about " +
 	"250 ms and pause about one second on each state that matters. Keep a failure in the recording; do not cut it " +
-	"out. Take a screenshot of each state that decides a criterion. When you are done, " +
-	"close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with " +
+	"out. When you are done, close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with " +
 	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish /tmp/videos/abc.webm " +
 	"--name walkthrough.webm --description \"The sign-in flow, end to end\"`, `--name 01-signed-in.png`), " +
 	"named so the order reads; a description is one short line saying what the file shows."

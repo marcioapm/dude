@@ -1953,19 +1953,8 @@ func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
 	w.start(wi, policy)
-	var prompt string
-	w.until("a test to reach lux", func() bool {
-		for _, r := range w.lux.Runs() {
-			var spec lux.Spec
-			_ = json.Unmarshal(r.Spec, &spec)
-			if spec.Labels["dude.phase"] == "test" {
-				prompt = spec.Workload.Prompt
-				return true
-			}
-		}
-		return false
-	})
-	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
+	w.until("a test to reach lux", func() bool { return w.specOf("test") != nil })
+	if prompt := w.specOf("test").Workload.Prompt; !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
 		t.Errorf("the tester was not told the policy's blocking severities:\n%s", prompt)
 	}
 }
