@@ -56,7 +56,7 @@ import {
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskStatus } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -91,7 +91,7 @@ import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refus
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -354,7 +354,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       artifacts: artifacts.filter((a) => attemptOfWork(a.runId, byId, current) === n),
     });
     return {
-      prs: allPrs.filter((pr) => attemptOfPr(pr, byId, current) === shown),
+      prs: allPrs.filter((pr) => prInAttempt(pr, shown, byId, current, item?.source)),
       mine: ofAttempt(shown),
       others: attempts.filter((n) => n !== shown).map((n) => {
         const theirs = ofAttempt(n);
@@ -780,7 +780,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="activity" className="railPanel">
-          <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown} taskKey={item.key ?? null}
+          <Activity events={events} people={people} runs={item.runs} prs={allPrs} source={item.source ?? null} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>
@@ -815,7 +815,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
       const started = starts.get(n);
       const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
       const branch = runs.find((r) => r.branch)?.branch;
-      const mine = prs.filter((pr) => attemptOfPr(pr, byId, current) === n);
+      const mine = prs.filter((pr) => prInAttempt(pr, n, byId, current, item.source));
       const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
       return {
         value: String(n),
@@ -1062,15 +1062,15 @@ function resolvedIn(item: TaskDetail, reviewId: string, onOpenRun: (id: string) 
  * attempt's, each line marked with its attempt once there are several.
  * A line's way to what it names opens it on that line's attempt.
  */
-function Activity({ events, people, runs, prs, current, many, shown, taskKey, onOpenRun, onShow }: {
-  events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
+function Activity({ events, people, runs, prs, source, current, many, shown, taskKey, onOpenRun, onShow }: {
+  events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; source: TaskSource | null; current: number;
   many: boolean; shown: number; taskKey: string | null; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
 }) {
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
-    const all = activityLines(events, people, runs, prs, current, taskKey);
+    const all = activityLines(events, people, runs, prs, current, taskKey, source);
     return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
-  }, [events, people, runs, prs, current, many, taskKey]);
+  }, [events, people, runs, prs, current, many, taskKey, source]);
   const [kinds, setKinds] = useState<string[]>([]);
   const [persons, setPersons] = useState<string[]>([]);
   const [attempts, setAttempts] = useState<string[]>([]);
@@ -1133,9 +1133,9 @@ interface ActivityLine {
 }
 
 /** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
-export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number, key?: string | null): ActivityLine[] {
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number, key?: string | null, source?: TaskSource | null): ActivityLine[] {
   const out: ActivityLine[] = [];
-  const attemptOf = eventAttempts(runs, prs, current);
+  const attemptOf = eventAttempts(runs, prs, current, source);
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
   const labels = new Map(runs.map((r) => [r.id, runDoer(r)]));
