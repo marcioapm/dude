@@ -82,6 +82,53 @@ describe("where the task came from, on Overview", () => {
   });
 });
 
+const phases = (page: HTMLElement) => [...page.querySelectorAll("[data-testid=phase]")].map((p) => p.getAttribute("data-phase"));
+
+describe("the pipeline of adopted work", () => {
+  test("an adopted pull request starts at review, with no Implement step, and its pull request is already open", async () => {
+    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [ADOPTED]));
+    expect(phases(page)).toEqual(["review", "fix", "review", "simplify"]);
+    expect(page.querySelectorAll("[data-phase=implement]").length).toBe(0);
+    expect(page.textContent).not.toContain("skipped");
+    const step = page.querySelector("[data-testid=pr-step]")!;
+    expect(step.getAttribute("data-adopted")).toBe("true");
+    expect(text(step)).toStartWith("Pull request · #12 already open");
+  });
+
+  test("an adopted branch's pull request, once opened, is the ordinary step", async () => {
+    const opened = { ...ADOPTED, id: "pr_13", runId: "run_d5", number: 13, headBranch: "stack/top", baseBranch: "stack/base" };
+    const page = await taskPage(new AdoptedClient({ source: BRANCH_SOURCE }, [opened]));
+    expect(phases(page)).toEqual(["review", "fix", "review", "simplify"]);
+    const step = page.querySelector("[data-testid=pr-step]")!;
+    expect(step.getAttribute("data-adopted")).toBeNull();
+    expect(text(step)).toStartWith("Pull request #13");
+    expect(text(step)).not.toContain("already open");
+  });
+
+  test("new work keeps its Implement step and its pull request step", async () => {
+    const page = await taskPage(new AdoptedClient({ source: null }, [PULL_REQUEST]));
+    expect(phases(page)).toEqual(["implement", "review", "fix", "review", "simplify"]);
+    expect(text(page.querySelector("[data-testid=pr-step]"))).toStartWith("Pull request #482");
+  });
+
+  test("not started, Deliver promises no implementer for existing work", async () => {
+    const said = async (source: TaskSource | null) => {
+      const client = new AdoptedClient({ source, status: "received", runs: [] }, []);
+      const { container, unmount } = await mount(
+        <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+          <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
+        </PeopleProvider></ToastProvider></TooltipProvider>,
+      );
+      mounted.push(unmount);
+      const card = await until(() => container.querySelector("[data-testid=start-choice] [data-option=deliver]"), "the Deliver card");
+      return text(card);
+    };
+    expect(await said(PR_SOURCE)).toContain("The automatic pipeline: reviewers, a fixer if they find problems, a simplifier, then pull request #12's feedback.");
+    expect(await said(BRANCH_SOURCE)).toContain("The automatic pipeline: reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft.");
+    expect(await said(null)).toContain("The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request.");
+  });
+});
+
 describe("the adopted pull request across attempts", () => {
   // Picks attempt `n` in the header's picker, as a person would.
   const press = (el: Element) =>

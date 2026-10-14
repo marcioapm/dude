@@ -486,6 +486,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
   const source = item.source ?? null;
+  // Existing work starts at review: no implementer is promised.
+  const deliverSteps = source === null ? "an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request"
+    : source.kind === "pr" ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
+    : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft";
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -643,7 +647,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
                     {prs.map((pr) => (
-                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
+                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} adopted={isAdoptedPr(pr, source)} />
                     ))}
                   </StepList>
                 ) : blocked ? (
@@ -659,7 +663,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       foot: "The conductor, in Chat",
                       action: <Button size="sm" onClick={() => void talk()} disabled={delivering} data-testid="start-talk">Talk it through</Button> },
                     { id: "deliver", icon: "zap", title: "Deliver",
-                      description: "The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request. Nobody needs to be here.",
+                      description: `The automatic pipeline: ${deliverSteps}. Nobody needs to be here.`,
                       points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"],
                       foot: "The project's pipeline",
                       action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
@@ -669,7 +673,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     description="Nothing is built until the conductor and you agree: talk it through in Chat." />
                 ) : (
                   <EmptyState compact icon="git-pr" title="Not started"
-                    description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request." />
+                    description={source === null ? "Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
+                      : `Deliver runs ${deliverSteps}.`} />
                 )}
               </section>
 
@@ -1026,17 +1031,21 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
 
 /**
  * A pull request as the pipeline's last step. With several (work across
- * repositories), each names its repository; they share the branch.
+ * repositories), each names its repository; they share the branch. One the
+ * task took over was already open: a state, not a step dude ran.
  */
-function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
+function PullRequestStep({ pr, named, adopted }: { pr: PullRequest; named: boolean; adopted: boolean }) {
+  const label = adopted ? <>Pull request · #{pr.number} already open</>
+    : named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>;
   return (
     <StepRow
       data-testid="pr-step"
       data-phase="pr"
       data-status={pr.state}
+      data-adopted={adopted || undefined}
       href={pr.url}
       avatar={<DudeMark size={32} />}
-      label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
+      label={label}
       note={pr.title}
       status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
       meta={pr.headBranch}
