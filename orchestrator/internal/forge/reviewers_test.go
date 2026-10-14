@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -222,6 +223,29 @@ func TestStaleReviewersReadsEveryPage(t *testing.T) {
 				t.Errorf("stale %+v, want only bo on head %s", got, head)
 			}
 		})
+	}
+}
+
+func TestStaleReviewersRejectsAnIncompleteReviewList(t *testing.T) {
+	fake, gh, _, old := stalePull(t)
+	for i := range 150 {
+		reviewed(fake, on(fmt.Sprintf("u%d", i), "COMMENTED", old))
+	}
+	fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/reviews") && r.URL.Query().Get("page") == "2" {
+				return http.StatusInternalServerError
+			}
+			return 0
+		}
+	})
+	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1)
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Status != http.StatusInternalServerError {
+		t.Fatalf("error = %v, want GitHub 500", err)
+	}
+	if got.Head != "" || len(got.Logins) != 0 {
+		t.Fatalf("partial result = %+v, want no result", got)
 	}
 }
 
