@@ -122,6 +122,7 @@ def gallery_url(env: TestEnvironment) -> str:
             env.gallery_proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             env.gallery_proc.kill()
+            env.gallery_proc.wait()
         env.gallery_proc = None
 
 @pytest.fixture
