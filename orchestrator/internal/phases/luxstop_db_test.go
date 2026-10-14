@@ -51,13 +51,22 @@ func newHeldWorld(t *testing.T, broken string, heldFor time.Duration) *heldWorld
 }
 
 // eventsLux is lux as far as a held turn's decision goes: Events answers
-// the page set (none by default), or err.
+// the page set (none by default), or err; Get answers getErr, counted.
 type eventsLux struct {
 	lux.Client
-	mu    sync.Mutex
-	page  []lux.Frame
-	err   error
-	reads int
+	mu     sync.Mutex
+	page   []lux.Frame
+	err    error
+	reads  int
+	getErr error
+	gets   int
+}
+
+func (f *eventsLux) Get(_ context.Context, id string) (lux.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets++
+	return lux.Run{ID: id, State: "running", Epoch: 2}, f.getErr
 }
 
 func (f *eventsLux) Events(context.Context, string, int64) ([]lux.Frame, error) {
@@ -242,5 +251,37 @@ func TestAnOverdueHoldLuxCannotBeReadForIsRetriedLater(t *testing.T) {
 	}
 	if status, _, failed := w.status(); status != "running" || failed != 0 || fake.reads != 1 {
 		t.Errorf("run %s, %d run.failed, %d reads; want running, one read", status, failed, fake.reads)
+	}
+}
+
+// A person's resume of a paused Run: lux is asked about it only when dude
+// saw lux move it, and a failed read of it waits out the retry spacing.
+func TestAResumedRunsLuxReadIsSpacedAndOnlyForAMove(t *testing.T) {
+	for _, c := range []struct {
+		name, state string
+		gets, due   int
+	}{
+		{"paused by dude, no move", `{}`, 0, 1},
+		{"moved by lux", `{"luxStop": {"reason": "preempt", "epoch": 1}}`, 1, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newHeldWorld(t, heldExit, 0)
+			fake := w.s.Lux.(*eventsLux)
+			fake.getErr = errors.New("lux unreachable")
+			if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET status = 'paused', control = 'resume', lux_state = 'stopping',
+				lux_stop_reason = 'pause', harness_state = $2::jsonb WHERE id = $1`, w.id, c.state); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.s.advance(w.ctx, w.snapshot()); err != nil {
+				t.Fatal(err)
+			}
+			runs, err := w.s.due(w.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fake.gets != c.gets || len(runs) != c.due {
+				t.Errorf("%d reads of lux, the next sweep takes up %d runs; want %d and %d", fake.gets, len(runs), c.gets, c.due)
+			}
+		})
 	}
 }

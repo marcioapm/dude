@@ -392,15 +392,8 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	if r.Control != "resume" || r.RepoApproved || r.talker() || r.LuxRunID == "" {
 		return false, nil
 	}
-	cur, err := s.Lux.Get(ctx, r.LuxRunID)
-	if err != nil {
-		s.logger().Warn("reading a resumed Run from lux failed", "run", r.ID, "error", err)
-		return false, nil
-	}
-	state := lux.Recorded(cur.State, cur.StateReason)
-	if !liveInLux(state) {
-		return false, nil
-	}
+	// Only a Run dude saw lux move is asked about: any other is stopping
+	// at dude's request, and lux is not asked on every sweep while it does.
 	var moved stopState
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
@@ -411,7 +404,20 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun) (bool, error) {
 	}); err != nil {
 		return false, err
 	}
-	if !replacedByLux(cur, moved) {
+	if movedFrom(moved) == 0 {
+		return false, nil
+	}
+	cur, err := s.Lux.Get(ctx, r.LuxRunID)
+	if err != nil {
+		// Asked again after the usual retry spacing, not on every sweep.
+		if lux.IsNotFound(err) {
+			return false, nil
+		}
+		s.follow(r)
+		return true, s.retryLater(ctx, r, err)
+	}
+	state := lux.Recorded(cur.State, cur.StateReason)
+	if !liveInLux(state) || !replacedByLux(cur, moved) {
 		return false, nil
 	}
 	// The follower is stopped first, and waited for: a batch of its
@@ -463,14 +469,8 @@ func liveInLux(state string) bool {
 // after dude's own stop (a pause lux has not applied yet) is not: it
 // still stops, and is resumed as any.
 func replacedByLux(cur lux.Run, st stopState) bool {
-	movedFrom := 0
-	if st.LuxStop != nil && lux.Moved(st.LuxStop.Reason) {
-		movedFrom = st.LuxStop.Epoch
-	}
-	if st.Broken != nil && st.Broken.Moved != "" {
-		movedFrom = max(movedFrom, st.Broken.Epoch)
-	}
-	if movedFrom == 0 || cur.Epoch <= movedFrom {
+	from := movedFrom(st)
+	if from == 0 || cur.Epoch <= from {
 		return false
 	}
 	for _, p := range cur.Placements {
@@ -479,4 +479,17 @@ func replacedByLux(cur lux.Run, st stopState) bool {
 		}
 	}
 	return true
+}
+
+// movedFrom is the latest placement dude saw lux move the Run from, 0
+// for none.
+func movedFrom(st stopState) int {
+	from := 0
+	if st.LuxStop != nil && lux.Moved(st.LuxStop.Reason) {
+		from = st.LuxStop.Epoch
+	}
+	if st.Broken != nil && st.Broken.Moved != "" {
+		from = max(from, st.Broken.Epoch)
+	}
+	return from
 }
