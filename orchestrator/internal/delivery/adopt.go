@@ -54,12 +54,13 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err != nil {
 		var refusal SourceRefusal
 		if errors.As(err, &refusal) {
-			return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": refusal.Error(), "code": refusal.Code})
+			return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": sourceChanged(refusal.Error()), "code": refusal.Code})
 		}
 		return workflow.Result{}, err
 	}
 	if checked.HeadBranch != src.HeadBranch || checked.BaseBranch != src.BaseBranch {
-		return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": "Pull request head or base changed; reattach before starting delivery."})
+		return w.escalate(ctx, sc, st, "source_changed", map[string]any{"reason": sourceChanged(fmt.Sprintf(
+			"it was %s → %s, and is now %s → %s", src.HeadBranch, src.BaseBranch, checked.HeadBranch, checked.BaseBranch))})
 	}
 	slug := forge.SlugFromURL(repo.URL)
 	head, err := gh.BranchSHA(ctx, slug, src.HeadBranch)
@@ -106,6 +107,13 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 
 // adoptedPR says the delivery took over a pull request.
 func (st *State) adoptedPR() bool { return st.Source != nil && st.Source.Kind == SourcePR }
+
+// sourceChanged is a source_changed escalation's reason: the saved source
+// is immutable once delivery started, so only these two ways out work.
+func sourceChanged(what string) string {
+	return "GitHub's pull request (or branch) no longer matches what this task adopted: " + what +
+		". Put it back on GitHub and Try again, or stop this task and adopt it in a new one."
+}
 
 // keepAdoptedPullRequest is the pull request step of a delivery that took
 // one over: what the loop pushed on it is put before its reviewers again,

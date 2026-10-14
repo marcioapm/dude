@@ -344,6 +344,46 @@ func TestAStoppedAdoptedTaskCannotTakeBackABranchAnotherTaskAdopted(t *testing.T
 	}
 }
 
+// A pull request retargeted before its adoption ran stops the task, saying
+// the two ways on that work: put it back and Try again, or stop and adopt
+// it in a new task.
+func TestARetargetedAdoptedPullRequestOffersWaysOnThatWork(t *testing.T) {
+	retargeted := func(t *testing.T) (*world, *fakegithub.Pull, int, string) {
+		w := newWorld(t)
+		w.gh.Branch("stack/base", "main", "The base")
+		n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+		pr := w.gh.Pull(n)
+		w.gh.Set(func(*fakegithub.Server) { pr.Base = "stack/base" })
+		first := w.adopting("pr", n, "feature/greet", "main")
+		w.until("source refusal", func() bool { return w.taskStatus(first) == "awaiting_input" })
+		var reason string
+		_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail'->>'reason' FROM events
+			WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY occurred_at DESC LIMIT 1`, first).Scan(&reason)
+		if want := "GitHub's pull request (or branch) no longer matches what this task adopted: it was feature/greet → main, " +
+			"and is now feature/greet → stack/base. Put it back on GitHub and Try again, or stop this task and adopt it in a new one."; reason != want {
+			t.Fatalf("source_changed says %q", reason)
+		}
+		return w, pr, n, first
+	}
+	t.Run("put back and Try again", func(t *testing.T) {
+		w, pr, _, first := retargeted(t)
+		w.gh.Set(func(*fakegithub.Server) { pr.Base = "main" })
+		if status, body := w.call("/internal/tasks/"+first+"/decide", map[string]any{"action": "retry"}); status != 200 {
+			t.Fatalf("try again: %d %v", status, body)
+		}
+		w.until("review of the restored pull request", func() bool { return slices.Contains(w.phasesRun(first), "review") })
+	})
+	t.Run("stop and adopt in a new task", func(t *testing.T) {
+		w, _, n, first := retargeted(t)
+		if status, body := w.call("/internal/tasks/"+first+"/decide", map[string]any{"action": "stop"}); status != 200 {
+			t.Fatalf("stop: %d %v", status, body)
+		}
+		w.until("the first task stopped", func() bool { return w.taskStatus(first) == "aborted" })
+		second := w.adopting("pr", n, "feature/greet", "stack/base")
+		w.until("review of the retargeted pull request", func() bool { return slices.Contains(w.phasesRun(second), "review") })
+	})
+}
+
 // commitFile commits path with content on top of branch in the fake's
 // repository, as a person's push does; its SHA.
 func (w *world) commitFile(branch, path, content, message string) string {
