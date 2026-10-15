@@ -1372,8 +1372,10 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 
 // candidateBranch is the delivery's CandidateBranch: beside its task
 // branch, which a delivery from before attempts were kept names alone.
+// Always under dude/: an adopted source's head branch is a person's, and
+// a name beside it could be theirs too (dropCandidateBranches deletes it).
 func (st *State) candidateBranch() string {
-	if st.Branch != "" {
+	if st.Branch != "" && st.Source == nil {
 		return st.Branch + candidateSuffix
 	}
 	return CandidateBranch(st.TaskID, max(st.Attempt, 1))

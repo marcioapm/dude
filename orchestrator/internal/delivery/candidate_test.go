@@ -18,6 +18,10 @@ func TestTheCandidateBranchIsBesideTheTaskBranch(t *testing.T) {
 	if got := (&State{TaskID: "t1"}).candidateBranch(); got != "dude/t1/attempt-1-candidate" {
 		t.Errorf("a delivery naming no branch: %q", got)
 	}
+	adopted := &State{TaskID: "t1", Attempt: 2, Branch: "feature/half", Source: &Source{Kind: SourcePR, HeadBranch: "feature/half"}}
+	if got := adopted.candidateBranch(); got != "dude/t1/attempt-2-candidate" {
+		t.Errorf("an adopted source's candidate = %q, want under dude/, never beside the person's branch", got)
+	}
 }
 
 // Refreshing a pull request's description replaces its Review and
