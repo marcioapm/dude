@@ -704,8 +704,8 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 }
 
 // One of two pull requests is merged while their fix is checked: the
-// other takes the fix, the merged one's branch is never moved, and nobody
-// is told someone pushed to it.
+// merged pull request stays merged, and the checked work gets a follow-up
+// pull request rather than being discarded or merged without a person.
 func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 	w := newPRFixWorldIn(t, true)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
@@ -713,20 +713,51 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
 		}
 	}
-	w.onTest = func() { w.web.Merge(1); w.sync() }
-	w.comment("Please rename the greeting.")
-	w.until("the fix on target's pull request", func() bool {
+	var mainAfterMerge string
+	var pullsAtTest int
+	w.onTest = func() {
+		w.web.Merge(1)
 		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+		mainAfterMerge = w.web.SHA("main")
+		pullsAtTest = len(w.web.Pulls())
+	}
+	w.comment("Please rename the greeting.")
+	w.until("the checked fix on target and a follow-up pull request in web", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && len(w.web.Pulls()) == 2 && w.taskStatus(w.wi) == "review"
 	})
-	if at := w.web.SHA(w.branch); at != w.webBefore {
-		t.Errorf("the merged pull request's branch moved from %s to %s", w.webBefore, at)
+	if p := w.web.Pull(1); p.State != "closed" || p.MergedAt == nil {
+		t.Errorf("the original pull request is no longer merged: %+v", p)
+	}
+	followup := w.web.Pull(2)
+	head := w.web.SHA(followup.Head)
+	if followup.State != "open" || followup.MergedAt != nil || head == "" || head == w.webBefore || followup.Base != "main" {
+		t.Fatalf("the checked fix has no open follow-up: %+v at %s", followup, head)
+	}
+	if at := w.web.SHA("main"); mainAfterMerge == "" || at != mainAfterMerge || at == head {
+		t.Errorf("main moved from %s to %s without a person merging the follow-up at %s", mainAfterMerge, at, head)
+	}
+	if shown := w.shownBeforeTheGate(); len(shown) > 0 || pullsAtTest != 1 {
+		t.Errorf("unchecked work exposed: target heads %v, web pull requests at test %d", shown, pullsAtTest)
+	}
+	for i, sha := range w.seenWeb {
+		if sha != w.webBefore {
+			t.Errorf("web's branch was at %s as %s started", sha, w.phases[i])
+		}
+	}
+	if !slices.Equal(w.phases, []string{"fix", "review", "test"}) {
+		t.Errorf("after the comment: %v, want the fix, its review and the test", w.phases)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+		AND review_range->>'of' = $2 AND base_refs->>'web' = $3`, w.wi, delivery.RangePullRequestFix, head); n != 1 {
+		t.Errorf("%d completed reviews of the follow-up head", n)
+	}
+	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND heads->>'web' = $2
+		AND status = 'pass'`, w.wi, head); n != 2 {
+		t.Errorf("%d passing criteria at the follow-up head, want both", n)
 	}
 	if r := w.escalationReason(w.wi); r == delivery.ReasonPullRequestMoved {
 		t.Errorf("escalated %s for a merged pull request", r)
-	}
-	if n := len(w.web.Pulls()); n != 1 {
-		t.Errorf("%d pull requests in web, want the merged one alone", n)
 	}
 }
 

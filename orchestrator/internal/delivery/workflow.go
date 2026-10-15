@@ -1543,20 +1543,6 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	for _, p := range states {
-		if p.State == forge.StateMerged || p.State == forge.StateClosed {
-			// Never moved, and the delivery stands where it ended:
-			// candidateMoved's pullRequestEnded weighs it.
-			delete(slugs, p.Repo)
-			if from, ok := c.From[p.Repo]; ok {
-				st.Heads[p.Repo] = from
-			}
-		}
-	}
 	// Every branch read before any moves: one someone pushed to refuses
 	// the promotion with nothing moved. One at the candidate's head was
 	// moved by an earlier run of this step.
