@@ -89,7 +89,8 @@ func (a *AdoptedContext) note() string {
 
 // continueNote tells an implementer that the branch it starts on is
 // someone's unfinished work: carried on, not redone, and possibly done
-// already, which committing nothing says.
+// already. Done already still answers to the testing requirement after it:
+// committing nothing says the goal is met and tested, not just met.
 func continueNote(src *Source) string {
 	what := fmt.Sprintf("`%s` in %s", src.HeadBranch, src.Repository)
 	if src.Number > 0 {
@@ -98,7 +99,8 @@ func continueNote(src *Source) string {
 	return fmt.Sprintf("## Work in progress\n\nThis is someone's work in progress on %s, based on `%s`: your checkout "+
 		"is its head. Carry it toward the goal below. Build on what is there; do not rewrite it, and keep its "+
 		"author's approach unless it cannot meet the goal. Read what it already does first (`git log origin/%s..HEAD`, "+
-		"`git diff origin/%s...HEAD`). If the goal is already met, commit nothing and say so in your reply.",
+		"`git diff origin/%s...HEAD`). If the goal already looks met, check it and meet the testing requirement "+
+		"below; if that needs no change, commit nothing and say so in your reply.",
 		what, src.BaseBranch, src.BaseBranch, src.BaseBranch)
 }
 

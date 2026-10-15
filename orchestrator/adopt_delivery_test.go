@@ -93,8 +93,9 @@ func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
 	}
 }
 
-// The implementer on work to continue is told whose work it is and that
-// committing nothing is how it says the goal is met; one on work to review
+// The implementer on work to continue is told whose work it is, and that
+// committing nothing says the goal is met and tested, so the two never ask
+// for opposite things; one on work to review
 // is never started, and one on new work is told neither.
 func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testing.T) {
 	w := newWorld(t)
@@ -105,7 +106,8 @@ func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testi
 	fresh := w.task()
 	w.deliver(fresh)
 	want := "This is someone's work in progress on pull request #1 (`feature/half` in target), based on `main`"
-	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "If the goal is already met, commit nothing and say so") {
+	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "meet the testing requirement below; if that needs no change, commit nothing and say so") ||
+		!strings.Contains(p, "add a test for each acceptance criterion that can be tested") {
 		t.Fatalf("implementer prompt does not say it continues someone's work:\n%s", p)
 	}
 	if p := w.implementerPrompt(fresh); strings.Contains(p, "Work in progress") {
