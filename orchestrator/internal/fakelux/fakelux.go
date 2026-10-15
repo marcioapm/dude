@@ -670,6 +670,10 @@ type Server struct {
 	// next, 503 host_unreachable, as a luxd with no connection to the Run's
 	// host answers when several luxds share no sticky routing.
 	HostUnreachable int
+	// dropExecs: how many of the next execs whose command has dropExecsOf
+	// in it end their stream before any exit code (DropExecs).
+	dropExecs   int
+	dropExecsOf string
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -2465,6 +2469,14 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			sha, err = pushWorkspace(work, path, branch, base)
 		} else {
 			sha, err = commit(path, base, branch, files, run.behavior.Message)
+			if err == nil && work != "" && sha != base {
+				// lux pushes what is in the checkout: the scripted commit
+				// made in the repository is the checkout's too, its objects
+				// fetched in (HEAD is left where the agent's edits are).
+				if out, ferr := exec.Command("git", "-C", work, "fetch", "-q", path, sha).CombinedOutput(); ferr != nil {
+					err = fmt.Errorf("fetching the commit into the checkout: %v: %s", ferr, out)
+				}
+			}
 		}
 		switch {
 		case err != nil:

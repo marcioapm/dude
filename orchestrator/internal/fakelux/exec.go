@@ -189,6 +189,17 @@ func (s *Server) Timeout(id string) {
 	}
 }
 
+// DropExecs makes the next n execs whose command contains of end their
+// stream before the command's exit code, as an exec does whose host went
+// away; it answers how many of an earlier call's were still to drop.
+func (s *Server) DropExecs(of string, n int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	left := s.dropExecs
+	s.dropExecs, s.dropExecsOf = n, of
+	return left
+}
+
 // exec is lux's exec stream: refused over plain HTTP when the Run is not
 // running, else a WebSocket whose first message names the command, then its
 // output as {"data","ch"} messages, then {"exitCode"}.
@@ -235,7 +246,15 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	args := append([]string{open.Command[0]}, s.inWorkspace(run, open.Command[1:])...)
 	ps, fails := s.PS, s.ExecFails
+	drop := s.dropExecs > 0 && slices.ContainsFunc(open.Command, func(a string) bool { return strings.Contains(a, s.dropExecsOf) })
+	if drop {
+		s.dropExecs--
+	}
 	s.mu.Unlock()
+	if drop {
+		_ = ws.Close(websocket.StatusGoingAway, "host gone")
+		return
+	}
 	if args[0] == "ps" {
 		// The fake has no processes: what lux's would print is the test's.
 		if ps == nil || fails != "" {

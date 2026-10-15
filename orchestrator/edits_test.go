@@ -654,6 +654,9 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.current()
 		settled(t, e, "nothing to publish")
 	})
+	// The base is what sync_base fetched into the checkout as lux/main:
+	// only that is evidence of what came from the base.
+	syncBase := func(e *editing) { e.git("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/lux/main") }
 	t.Run("a large clean base import is not the conductor's edit", func(t *testing.T) {
 		e := newEditing(t)
 		e.wokenWith(e.task, "after implement")
@@ -664,7 +667,8 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.commit(map[string]string{"BASE.md": strings.Repeat("base\n", 200)})
 		e.git("push", "-q", "origin", "HEAD:refs/heads/main", "--force")
 		e.git("switch", "-q", e.branch)
-		e.git("merge", "-q", "--no-edit", "origin/main")
+		syncBase(e)
+		e.git("merge", "-q", "--no-edit", "lux/main")
 		if status, why := e.published(e.publish()); status != delivery.PublishPublished {
 			t.Fatalf("publish %s: %s", status, why)
 		}
@@ -675,9 +679,26 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.current()
 		e.commit(map[string]string{"MINE.md": strings.Repeat("mine\n", 61)})
 		e.gh.AdvanceBase("main", "Base moved")
-		e.git("fetch", "-q", "origin")
-		e.git("merge", "-q", "--no-edit", "origin/main")
+		syncBase(e)
+		e.git("merge", "-q", "--no-edit", "lux/main")
 		settled(t, e, "this is 61 lines in 1 files")
+	})
+	t.Run("a base that moved on GitHub, never fetched, does not stop a small edit", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.commit(map[string]string{"MINE.md": "mine\n"})
+		e.gh.AdvanceBase("main", "Base moved")
+		if status, why := e.published(e.publish()); status != delivery.PublishPublished {
+			t.Fatalf("publish %s: %s", status, why)
+		}
+	})
+	t.Run("a binary change is past the line limit", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.commit(map[string]string{"logo.bin": "\x00\x01\x02"})
+		settled(t, e, "target has a change git cannot count in lines")
 	})
 }
 

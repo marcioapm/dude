@@ -775,3 +775,49 @@ func TestSyncBaseOnALuxWithoutSyncModesIsRefused(t *testing.T) {
 		t.Errorf("synced: %+v", run.Syncs)
 	}
 }
+
+// The base moves on GitHub while an implementer works and it never calls
+// sync_base; then lux cannot reach the Run's host for the accounting's
+// exec. The publish is accounted against what the checkout holds, retried
+// past the outage, and the implementer completes with its own file.
+func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
+	w := newWorld(t)
+	w.lux.HoldPushes = true
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer pushing", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
+	})
+	w.gh.AdvanceBase("main", "Someone else's merge")
+	w.lux.DropExecs("DUDE_ACCOUNTING", 1)
+	w.lux.HoldPushes = false
+	w.lux.ReleasePushes()
+	w.until("the implementer completed", func() bool {
+		if e := w.runError(wi, "implement"); e != "" {
+			t.Fatalf("the implementer failed: %s", e)
+		}
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	if w.lux.DropExecs("", 0) != 0 {
+		t.Fatal("the accounting never met the outage")
+	}
+	var paths string
+	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'changedPaths' FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&paths)
+	if paths != `["FACTORY.md"]` {
+		t.Fatalf("changed paths %s", paths)
+	}
+}
+
+// A conductor's publish whose accounting meets a lux that cannot reach its
+// host is tried again, not refused.
+func TestAConductorPublishWaitsOutALuxOutage(t *testing.T) {
+	e, _ := newCommitted(t)
+	e.gh.AdvanceBase("main", "Base moved")
+	e.lux.DropExecs("DUDE_ACCOUNTING", 1)
+	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	if e.lux.DropExecs("", 0) != 0 {
+		t.Fatal("the accounting never met the outage")
+	}
+}

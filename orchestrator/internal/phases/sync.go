@@ -1714,7 +1714,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if heads, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
 			// refusal (not a fast-forward, a bad push) will not.
-			if forge.Transient(err) {
+			if forge.Transient(err) || accountingTransient(err) {
 				return true, s.retryLater(ctx, r, err)
 			}
 			return true, s.fail(ctx, r, err.Error())
@@ -1856,11 +1856,10 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if baseBranch == "" {
 			baseBranch = repo.DefaultBranch
 		}
-		baseHead, err := gh.BranchSHA(ctx, slug, baseBranch)
-		if err != nil {
-			return nil, err
-		}
-		paths, lines, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, baseHead, repo.Name)
+		// The base as the checkout holds it (sync_base's lux/<base>), never
+		// GitHub's now: only what the checkout proves came from the base is
+		// left out.
+		acc, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, "refs/remotes/lux/"+baseBranch, repo.Name)
 		if accountErr != nil {
 			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
 		}
@@ -1869,9 +1868,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
-		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(paths), Lines: lines,
-			AccountingBase: base, AccountingHead: res.Commit, AccountingVerified: true}
-		changed := paths
+		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(acc.Paths)}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
@@ -1886,7 +1883,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 				return err
 			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
+				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": acc.Paths})
 		}); err != nil {
 			return nil, err
 		}
