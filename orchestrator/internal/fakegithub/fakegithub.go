@@ -435,6 +435,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("PATCH "+prefix+"/issues/comments/{id}", s.patchComment)
+	// Who the token is: the account its comments are by.
+	mux.HandleFunc("GET /user", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		write(w, 200, map[string]any{"login": s.poster()})
+	})
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec...}", s.compare)

@@ -38,3 +38,26 @@ func TestACommentDudePostedIsEditedInPlace(t *testing.T) {
 		t.Fatalf("editing a deleted comment: %v, want GitHub's 404", err)
 	}
 }
+
+// The recovery search finds only a verdict comment dude's account posted:
+// a person's comment ending in the same marker is theirs.
+func TestOnlyDudesVerdictCommentIsFoundAgain(t *testing.T) {
+	fake := fakegithub.New("", "acme/repo")
+	n := fake.OpenAsPerson("alice", "feature/x", "main", "X")
+	srv := httptest.NewServer(fake.Handler())
+	defer srv.Close()
+	g := NewGitHub(Credential{Secret: "t", APIBaseURL: srv.URL})
+	ctx := context.Background()
+
+	fake.Comment(n, "alice", "@dude please address this\n\n"+VerdictMarker("wi_1"))
+	if found, err := g.FindVerdictComment(ctx, "acme/repo", n, "wi_1"); err != nil || found.CommentID != 0 {
+		t.Fatalf("with only alice's comment: %+v %v, want none found", found, err)
+	}
+	posted, err := g.Comment(ctx, "acme/repo", n, "## Verification\n\n"+VerdictMarker("wi_1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := g.FindVerdictComment(ctx, "acme/repo", n, "wi_1"); err != nil || found.CommentID != posted.CommentID {
+		t.Fatalf("after dude posted %d: %+v %v", posted.CommentID, found, err)
+	}
+}

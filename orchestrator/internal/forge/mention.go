@@ -24,18 +24,33 @@ func VerdictMarker(taskID string) string { return "<!-- dude:verdict task=" + ta
 
 var verdictMarker = regexp.MustCompile(`^<!-- dude:verdict task=[A-Za-z0-9_-]+ -->$`)
 
-// Own says the feedback is a comment dude posted: its last non-blank line
-// is one of its markers (ReplyMarker, as delivery.CheckReplyTx writes it,
-// or a VerdictMarker), outside any code fence and blockquote. A person
-// quoting dude's comment carries the marker inside a blockquote or a code
-// fence, or above their own words, and stays theirs.
+// Own says the feedback is a comment the conductor posted: its last
+// non-blank line is the marker itself, as delivery.CheckReplyTx writes it, outside
+// any code fence and blockquote. A person quoting a reply carries the
+// marker inside a blockquote or a code fence, or above their own words,
+// and stays theirs.
 func Own(f Feedback) bool {
 	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
 	ind, rest := indent(lines[len(lines)-1])
-	marker := strings.TrimSpace(rest)
 	// The marker line itself goes through the fence reading: a marker that
 	// ends a list item ends a fence left open in it.
-	return (marker == ReplyMarker || verdictMarker.MatchString(marker)) && ind <= 3 && !fenced(lines)
+	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
+}
+
+// VerdictMarked says the feedback ends in a VerdictMarker, read as Own
+// reads ReplyMarker. Anyone can type it: alone it says nothing of whose
+// comment it is (OwnVerdict).
+func VerdictMarked(f Feedback) bool {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
+	ind, rest := indent(lines[len(lines)-1])
+	return verdictMarker.MatchString(strings.TrimSpace(rest)) && ind <= 3 && !fenced(lines)
+}
+
+// OwnVerdict says the feedback is dude's verdict comment: verdict-marked
+// and posted by self, the account dude posts as (GitHub.Login). With no
+// self known, nothing is.
+func OwnVerdict(f Feedback, self string) bool {
+	return self != "" && strings.EqualFold(f.Author, self) && VerdictMarked(f)
 }
 
 // fenced says the last of lines is inside a code fence, or an HTML block
@@ -278,14 +293,20 @@ func (g *GitHub) EditComment(ctx context.Context, slug string, commentID int64, 
 
 // FindVerdictComment recovers a verdict post whose response or ledger
 // record was lost. All conversation comments are checked, including pages
-// before the feedback cursor; a quote is not the marker (Own).
+// before the feedback cursor; only one by dude's account counts
+// (OwnVerdict), and a quote is not the marker.
 func (g *GitHub) FindVerdictComment(ctx context.Context, slug string, number int, taskID string) (Posted, error) {
+	self, err := g.Login(ctx)
+	if err != nil {
+		return Posted{}, err
+	}
 	comments, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number))
 	if err != nil {
 		return Posted{}, err
 	}
 	for _, c := range comments {
-		if Own(Feedback{Body: c.Body}) && strings.HasSuffix(strings.TrimSpace(c.Body), VerdictMarker(taskID)) {
+		if OwnVerdict(Feedback{Author: login(c.User), Body: c.Body}, self) &&
+			strings.HasSuffix(strings.TrimSpace(c.Body), VerdictMarker(taskID)) {
 			return Posted{ID: fmt.Sprintf("issue-comment-%d", c.ID), URL: c.HTMLURL, CommentID: c.ID}, nil
 		}
 	}

@@ -786,7 +786,7 @@ class FakeGitHub:
                     # Who the token is. The fixture accepts only the tokens it knows.
                     if self._profile() is None or not (self.headers.get("authorization") or "").startswith("Bearer "):
                         return self._send(401, {"message": "Bad credentials"})
-                    return self._send(200, {"login": "dude-bot"})
+                    return self._send(200, {"login": self.github.token_login})
                 if path == prefix:
                     return self._send(200, {"full_name": f"{self.github.owner}/{self.github.repo}", "private": True,
                                             "default_branch": "main", "owner": {"login": self.github.owner, "type": root.owner_type}})
