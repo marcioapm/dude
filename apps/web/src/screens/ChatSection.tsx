@@ -11,7 +11,7 @@
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
-import { Button, Callout, Dialog } from "@dude/design-system/primitives";
+import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
@@ -24,6 +24,7 @@ import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
+import type { DriverControl } from "./DriverSwitch.tsx";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -49,6 +50,8 @@ export interface ChatSectionProps {
   /** An earlier attempt is shown: only to read, so who decides is said without the way to hand it back. */
   setAside?: boolean | undefined;
   onBack: () => void;
+  driverControl: DriverControl;
+  canSwitchDriver: boolean;
 }
 
 /**
@@ -81,7 +84,7 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, setAside = false, onBack }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, setAside = false, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
@@ -178,54 +181,38 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     return conducted.map((l) => ({ id: l.id, at: l.at, node: lineNode(l) }));
   }, [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
 
-  // Who decides, while a delivery is in progress, and the way to hand it back.
-  const [handing, setHanding] = useState(false);
-  // At the pull request gate, the person confirms that Deliver opens it now.
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const inProgress = !["done", "aborted", "failed"].includes(task.status) && task.runs.some((r) => r.phase || isConductor(r));
   const waiting = task.awaitingDecision ? DECISION_POINT_LABEL[task.awaitingDecision.point] : undefined;
-  const handBack = useMemo(() => async (openPullRequest: boolean) => {
-    setHanding(true);
-    setProblem(null);
-    try {
-      await client.setDecider(task.id, "policy", openPullRequest);
-      onSent();
-    } catch (err) {
-      if (!openPullRequest && err instanceof ApiError && err.code === "pull_request_gate") setConfirmOpen(true);
-      else setProblem(err instanceof ApiError ? `Could not hand it back: ${err.message}` : "Could not hand it back.");
-    } finally {
-      setHanding(false);
-    }
-  }, [client, task.id, onSent]);
-  // A gate the conductor entered that Deliver now holds, parked until the
-  // person's Open or Draft, or their confirmation here: whether or not a
-  // conductor is live to ask them.
   const gateHeld = task.decider !== "conductor" && task.awaitingDecision?.point === "before_pull_request";
   const above = useMemo(() => {
-    if (!inProgress || (task.decider !== "conductor" && !gateHeld)) return null;
-    return <DeciderLine data-testid="decider-line" decider={gateHeld ? "policy" : "conductor"} waiting={waiting}
-      action={setAside ? undefined
-        : <Button variant="quiet" size="sm" disabled={handing} onClick={() => void handBack(false)} data-testid="let-deliver-finish">Let Deliver finish it</Button>} />;
-  }, [task.decider, gateHeld, inProgress, waiting, handing, handBack, setAside]);
+    if (!inProgress) return null;
+    const conductor = task.decider === "conductor";
+    return <DeciderLine data-testid="decider-line" decider={task.decider} waiting={waiting}
+      detail={conductor ? undefined : task.handedBack
+        ? "messages here are answered, and take no decisions back"
+        : "the conductor answers here; a message from you gives it the decisions"}
+      action={!canSwitchDriver ? undefined : <>
+        <Button variant="quiet" size="sm" disabled={driverControl.busy}
+          onClick={() => void driverControl.change(conductor ? "policy" : "conductor")}
+          data-testid={conductor ? "let-deliver-finish" : "give-to-conductor"}>
+          {conductor ? "Let Deliver finish it" : "Give decisions to the conductor"}
+        </Button>
+        {gateHeld ? <Button variant="quiet" size="sm" disabled={driverControl.busy} onClick={() => void driverControl.change("policy")} data-testid="let-deliver-finish">Let Deliver finish it</Button> : null}
+      </>} />;
+  }, [task.decider, task.handedBack, gateHeld, inProgress, waiting, driverControl.busy, driverControl.change, setAside, canSwitchDriver]);
+  const to = inProgress ? task.decider === "conductor" ? <>To <b>Conductor</b></>
+    : task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</>
+    : <>To <b>Conductor</b> · sending gives it the decisions</>
+    : firstMessage(task, inProgress).readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>;
   const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld,
-    briefedBefore: briefedAgain }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, briefedAgain]);
+    to, briefedBefore: briefedAgain }),
+    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, briefedAgain, inProgress, task.decider, task.handedBack]); // eslint-disable-line react-hooks/exhaustive-deps -- to follows the mode
 
   if (conductorId) {
     return (
       <div className="taskChat" data-testid="task-chat">
         <RunScreen key={conductorId} client={client} runId={conductorId} onBack={onBack} task={owner} chat={chat} />
         {problem ? <Callout tone="danger" data-testid="chat-problem">{problem}</Callout> : null}
-        <Dialog open={confirmOpen} onOpenChange={(o) => !o && setConfirmOpen(false)} size="sm" tone="attention"
-          title="Let Deliver finish it?"
-          description="Deliver will open the pull request now. The person has not answered Open or Draft to the conductor's question."
-          footer={<>
-            <Button variant="quiet" onClick={() => setConfirmOpen(false)} data-testid="hand-back-keep">Keep deciding in Chat</Button>
-            <Button variant="primary" data-testid="hand-back-open" onClick={() => {
-              setConfirmOpen(false);
-              void handBack(true);
-            }}>Open it and let Deliver finish</Button>
-          </>} />
       </div>
     );
   }
@@ -240,7 +227,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
           fill
           pinned={head}
           emptyMessage={first.empty}
-          footer={
+          footer={<>{above}
             <ChatComposer
               mode="chat"
               value={draft.value} onValueChange={draft.onValueChange}
@@ -257,9 +244,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
                 }
               }}
               sentAs={you ? firstName(you) : undefined}
-              to={first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>}
+              to={to}
             />
-          }
+          </>}
         >
           {/* With no conductor yet, dude's lines (a person's machine Reset, a task relation) are the Chat's only turns. */}
           {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}

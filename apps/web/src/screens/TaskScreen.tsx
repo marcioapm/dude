@@ -95,6 +95,8 @@ import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 import { SourceLine } from "./StartsFrom.tsx";
 import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
+import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
+import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -261,6 +263,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     void load();
   }, [load]);
   const reload = useCallback(() => void load(), [load]);
+  const driverControl = useDriverSwitch(client, taskId, reload);
 
   // What an agent says and does as it works changes nothing on this page
   // but the open session, which has its own stream: no re-read for those.
@@ -545,6 +548,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
+            {earlier ? (item.deciders?.find((d) => d.attempt === shown) ?
+              <DriverEnded decider={item.deciders.find((d) => d.attempt === shown)!.decider} note={`Last known decider of attempt ${shown}. This attempt is read-only.`} /> : null)
+              : ["done", "failed", "aborted"].includes(item.status) ? <DriverEnded decider={item.decider} />
+              : !NOT_STARTED_STATUSES.includes(item.status) ? <DriverSwitch
+                mode={driverMode(item.decider, conductors.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status)))}
+                handedBack={item.handedBack} canSwitch={yours} ownerName={owner ? firstName(owner.name) : undefined}
+                busy={driverControl.busy} running={working ? runDoer(working) : undefined}
+                waiting={item.awaitingDecision ? { point: item.awaitingDecision.point, on: item.decider === "conductor" ? "it" : yours ? "you" : owner ? firstName(owner.name) : "the owner" } : undefined}
+                onSwitch={(to) => void driverControl.change(to)} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -566,6 +578,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
+      <DriverConfirmation control={driverControl} />
+      {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
       {item.escalation || stop || aside || problem || blocked || openOrDraft || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
@@ -623,7 +637,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
-            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack} />
+            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack}
+            driverControl={driverControl} canSwitchDriver={yours && !earlier} />
         </TabPanel>
 
         <TabPanel value="overview" className="railPanel">
@@ -702,7 +717,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <PageRail aria-label="Pull requests, machines and servers">
                 <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
-                  { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
+
                   // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
                   ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
                     <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} /></span> }] : []),
@@ -1232,6 +1247,15 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: face, text: <>{person} handed the task to <b>{to ?? "someone else"}</b></> });
         break;
       }
+      case "task.decider_changed":
+        // Talk it through's own start line says it; the change is not said twice.
+        if (p.why === "talk it through") break;
+        out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
+          text: <>{by ? person : <b>{dude}</b>} {p.to === "policy" ? "let Deliver finish it"
+            : p.why === "a person wrote in Chat" ? "wrote in Chat, which gave the decisions to the conductor"
+            : "gave the decisions to the conductor"}</>,
+          quote: `${p.from === "conductor" ? "Conductor" : "Deliver"} → ${p.to === "conductor" ? "Conductor" : "Deliver"}` });
+        break;
       case "task.decided":
         out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;

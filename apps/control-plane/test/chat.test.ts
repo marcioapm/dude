@@ -194,3 +194,37 @@ test("the conductor is first in its task's sessions, quiet when parked, needs yo
   task = await navTask("wi_nav");
   expect(task.runs[0]!.sessions[0]).toMatchObject({ id: "run_cond", status: "awaiting_input", activity: "Make it a follow-up task?" });
 });
+
+test("the board's driver: who its latest delivery's decider is and whether a conductor is live, read apart", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_drv_p', ${ORG}, ${PROJECT}, 10, 'Deliver', 'running'), ('wi_drv_pc', ${ORG}, ${PROJECT}, 11, 'Deliver, conductor in Chat', 'running'),
+           ('wi_drv_c', ${ORG}, ${PROJECT}, 12, 'Conductor', 'running'), ('wi_drv_none', ${ORG}, ${PROJECT}, 13, 'Not started', 'queued')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+    ('wfr_drv_p', ${ORG}, 'task.delivery', 'delivery:wi_drv_p', 'waiting', 'awaitFix', '{}', 'wi_drv_p'),
+    ('wfr_drv_pc', ${ORG}, 'task.delivery', 'delivery:wi_drv_pc', 'waiting', 'awaitFix', '{"decider":"policy","handedBack":true}', 'wi_drv_pc'),
+    ('wfr_drv_c', ${ORG}, 'task.delivery', 'delivery:wi_drv_c', 'waiting', 'awaitFix', '{"decider":"conductor"}', 'wi_drv_c')`;
+  // A live conductor under Deliver, an ended one under the conductor: neither makes the decider.
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role) VALUES
+    ('run_drv_pc', ${ORG}, ${PROJECT}, 'wi_drv_pc', 1, 'paused', 'conductor'),
+    ('run_drv_c', ${ORG}, ${PROJECT}, 'wi_drv_c', 1, 'completed', 'conductor')`;
+  const said = async (id: string) => {
+    const t = (await navTask(id)) as unknown as { decider: string; conductorLive: boolean };
+    return [t.decider, t.conductorLive];
+  };
+  expect(await said("wi_drv_p")).toEqual(["policy", false]);
+  expect(await said("wi_drv_pc")).toEqual(["policy", true]);
+  expect(await said("wi_drv_c")).toEqual(["conductor", false]);
+  expect(await said("wi_drv_none")).toEqual(["policy", false]);
+});
+
+test("a task carries each attempt's own last decider, the first delivery's as attempt 1, and none it never had", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_att', ${ORG}, ${PROJECT}, 20, 'Started over', 'running')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id, created_at) VALUES
+    ('wfr_att1', ${ORG}, 'task.delivery', 'delivery:wi_att', 'completed', 'awaitFix', '{"decider":"conductor"}', 'wi_att', now() - interval '1 hour'),
+    ('wfr_att2', ${ORG}, 'task.delivery', 'delivery:wi_att:attempt-2', 'waiting', 'awaitFix', '{"attempt":2}', 'wi_att', now())`;
+  const t = (await (await call("GET", "/v1/tasks/wi_att")).json()) as { decider: string; deciders: unknown };
+  expect(t.decider).toBe("policy");
+  expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }, { attempt: 2, decider: "policy" }]);
+  const none = (await (await call("GET", "/v1/tasks/wi_none")).json()) as { deciders: unknown };
+  expect(none.deciders).toEqual([]);
+});

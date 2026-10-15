@@ -46,6 +46,9 @@ const DECIDING_JSON = `
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
+  (SELECT COALESCE(json_agg(json_build_object('attempt', COALESCE((w.state->>'attempt')::int, 1),
+      'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
+    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;

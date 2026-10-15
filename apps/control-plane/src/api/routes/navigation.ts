@@ -53,6 +53,8 @@ interface TaskRow {
   statusSince: string;
   escalation: Escalation | null;
   merged: boolean;
+  decider: "policy" | "conductor";
+  conductorLive: boolean;
 }
 
 interface RunRow {
@@ -204,7 +206,14 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              ) AS "statusSince",
              -- Merged: done, with a merged pull request (task_blocked_by's
              -- rule). Per row, through pull_requests_task_idx.
-             w.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = w.id AND pr.state = 'merged') AS merged
+             w.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = w.id AND pr.state = 'merged') AS merged,
+             -- Who decides its latest delivery (work.ts's DECIDING_JSON), and
+             -- whether its conductor is live (runs_live_conductor_idx's rule):
+             -- the card's driver. Neither alone says it.
+             COALESCE((SELECT wf.state->>'decider' FROM workflow_runs wf WHERE wf.task_id = w.id
+               ORDER BY wf.created_at DESC LIMIT 1), 'policy') AS decider,
+             EXISTS (SELECT 1 FROM runs c WHERE c.task_id = w.id AND c.role = 'conductor' AND c.phase IS NULL
+               AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')) AS "conductorLive"
       FROM tasks w JOIN projects p ON p.id = w.project_id
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
 
@@ -306,6 +315,9 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         // Why delivery stopped for a person, so "Needs you" can say it.
         escalation: w.escalation,
         merged: w.merged,
+        // Who decides, and whether a conductor is live: the board's driver mark.
+        decider: w.decider,
+        conductorLive: w.conductorLive,
         blockedBy,
         // What it holds up: not-started dependants, while it has not merged.
         blocks: w.merged ? [] : blocks,

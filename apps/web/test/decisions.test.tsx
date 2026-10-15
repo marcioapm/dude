@@ -189,14 +189,19 @@ describe("a conducted task's Chat", () => {
     ];
   };
 
-  test("who decides, what it waits on, and Let Deliver finish it", async () => {
+  const decidesIn = (p: HTMLElement, decider: string) =>
+    until(() => p.querySelector(`[data-testid=decider-line][data-decider=${decider}]`) &&
+      p.querySelector(`[data-testid=task-header] [data-testid=driver][data-driver=${decider === "policy" ? "deliver-chat" : "conductor"}]`) ? true : null,
+    `the header and Chat both on ${decider}`);
+
+  test("who decides, what it waits on, and Let Deliver finish it: the header and Chat agree after", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "after_review" } }, events());
     const p = await page(client);
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     expect(line.textContent).toContain("The conductor decides · waiting on it: what to do with the review's findings");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
     expect(client.deciders).toEqual(["policy"]);
-    await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "the line gone once Deliver decides");
+    await decidesIn(p, "policy");
   });
 
   test("at the pull request gate, Deliver opens it only once the person confirms", async () => {
@@ -208,9 +213,24 @@ describe("a conducted task's Chat", () => {
     const open = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-open]"), "the confirmation");
     expect(document.body.textContent).toContain("Deliver will open the pull request now.");
     expect(client.deciders).toEqual(["policy"]);
+    // Refused: nothing changed on the page.
+    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("conductor");
     await click(open);
     expect(client.deciders).toEqual(["policy", "policy+open"]);
-    await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "Deliver decides");
+    await decidesIn(p, "policy");
+  });
+
+  test("at the gate, keeping deciding in Chat asks nothing more and changes nothing", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "before_pull_request" } }, events());
+    client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
+    const p = await page(client);
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
+    await click(await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-keep]"), "Keep deciding in Chat"));
+    await until(() => document.querySelectorAll("[data-testid=hand-back-open]").length === 0 ? true : null, "the confirmation closed");
+    expect(client.deciders).toEqual(["policy"]);
+    expect(p.querySelector("[data-testid=decider-line]")?.getAttribute("data-decider")).toBe("conductor");
+    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("conductor");
   });
 
   // Handed back while the conductor entered the gate, and its conductor
@@ -225,31 +245,74 @@ describe("a conducted task's Chat", () => {
       const p = await page(client);
       const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "the gate's line");
       expect(line.textContent).toContain("Deliver decides · waiting on the person: whether to open the pull request");
-      expect(p.querySelector("[data-testid=task-chat]")?.textContent).toContain("read-only");
+      expect(p.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · answers only, Deliver decides");
       await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
       const open = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-open]"), "the confirmation");
       expect(client.deciders).toEqual(["policy"]);
       await click(open);
       expect(client.deciders).toEqual(["policy", "policy+open"]);
-      await until(() => p.querySelector("[data-testid=decider-line]") ? null : true, "the gate no longer held");
+      await until(() => p.querySelector("[data-testid=decider-line]")?.textContent?.includes("waiting on") ? null : true, "the gate no longer held");
     });
   }
 
-  test("Deliver deciding anywhere but a held gate shows no line", async () => {
-    const p = await page(new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs,
-      awaitingDecision: null }, events()));
-    await until(() => p.querySelector("[data-testid=chat-screen]"), "the Chat");
-    expect(p.querySelectorAll("[data-testid=decider-line]").length).toBe(0);
+  test("handed back, Chat says messages are answered and take nothing back, and offers the decisions to the conductor", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs, awaitingDecision: null }, events());
+    const p = await page(client);
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    expect(line.textContent).toContain("Deliver decides · messages here are answered, and take no decisions back");
+    expect(p.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · answers only, Deliver decides");
+    await click(line.querySelector<HTMLButtonElement>("[data-testid=give-to-conductor]")!);
+    expect(client.deciders).toEqual(["conductor"]);
+    await decidesIn(p, "conductor");
+    expect(p.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor");
   });
 
-  test("a hand-back that fails says why beside the conductor's Chat", async () => {
+  test("the header's switch and Chat's are one: switching from the header moves Chat too", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null }, events());
+    const p = await page(client);
+    const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "the chip");
+    expect(chip.getAttribute("data-switchable")).toBe("true");
+    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const deliver = await until(() => document.querySelector<HTMLElement>("[role=menuitemradio][data-testid=rowmenu-policy]"), "Let Deliver finish it");
+    expect(deliver.textContent).toContain("Let Deliver finish it");
+    await click(deliver);
+    expect(client.deciders).toEqual(["policy"]);
+    await decidesIn(p, "policy");
+  });
+
+  test("a switch that fails leaves both as they were and says why", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "policy", runs, awaitingDecision: null }, events());
+    client.refuse = new ApiError(409, "conflict", "task has no delivery in progress");
+    const p = await page(client);
+    const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
+    expect(line.textContent).toContain("a message from you gives it the decisions");
+    await click(line.querySelector<HTMLButtonElement>("[data-testid=give-to-conductor]")!);
+    const problem = await until(() => p.querySelector<HTMLElement>("[data-testid=driver-problem]"), "the problem");
+    expect(problem.textContent).toBe("Could not change who decides: task has no delivery in progress");
+    expect(client.deciders).toEqual(["conductor"]);
+    expect(p.querySelector("[data-testid=decider-line]")?.getAttribute("data-decider")).toBe("policy");
+    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("deliver-chat");
+  });
+
+  test("someone else's task: the same chip, no switch, and Chat offers no switch either", async () => {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null,
+      owner: { id: "u_ana", name: "Ana Ribeiro" } as TaskDetail["owner"] }, events());
+    const p = await page(client);
+    const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "the chip");
+    expect(chip.getAttribute("data-switchable")).toBe("false");
+    expect(chip.getAttribute("aria-label")).toContain("Only the owner can change who decides. Ana owns this task.");
+    await until(() => p.querySelector("[data-testid=decider-line]"), "who decides");
+    expect(p.querySelectorAll("[data-testid=let-deliver-finish], [data-testid=give-to-conductor]").length).toBe(0);
+  });
+
+  test("a hand-back that fails says why", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs }, events());
     client.refuse = new ApiError(403, "forbidden", "only the task's owner decides");
     const p = await page(client);
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
-    const problem = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-problem]"), "the problem");
-    expect(problem.textContent).toBe("Could not hand it back: only the task's owner decides");
+    const problem = await until(() => p.querySelector<HTMLElement>("[data-testid=driver-problem]"), "the problem");
+    expect(problem.textContent).toBe("Could not change who decides: only the task's owner decides");
   });
 
   test("each Run it started is a line that opens its session; the decision waited on and an approval are dude's notices", async () => {
@@ -328,8 +391,9 @@ describe("a conducted task with two attempts", () => {
     cursor = 0;
     return [ev("task.recovered", { action: "restart", attempt: 2 }, 25)];
   };
-  async function showing(attempt: number | undefined, tab: string | undefined, opened: string[] = [], runId?: string, expect = attempt ?? 2) {
-    const client = new DecisionsClient({ status: "running", decider: "conductor", runs: two }, restart());
+  async function showing(attempt: number | undefined, tab: string | undefined, opened: string[] = [], runId?: string, expect = attempt ?? 2,
+    deciders?: TaskDetail["deciders"]) {
+    const client = new DecisionsClient({ status: "running", decider: "conductor", runs: two, ...(deciders ? { deciders } : {}) }, restart());
     const { container, unmount } = await mount(
       <TooltipProvider>
         <ToastProvider>
@@ -411,6 +475,22 @@ describe("a conducted task with two attempts", () => {
   test("on the current attempt, Chat keeps Let Deliver finish it", async () => {
     const { p } = await showing(undefined, "chat");
     await until(() => p.querySelector("[data-testid=let-deliver-finish]"), "Let Deliver finish it");
+  });
+
+  test("an earlier attempt's header says who decided it last, read-only, never the current attempt's conductor", async () => {
+    const header = (p: HTMLElement) => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]");
+    // Attempt 1 was Deliver's; the current one's conductor is live and decides.
+    const known = await showing(1, "findings", [], undefined, 1, [{ attempt: 1, decider: "policy" }, { attempt: 2, decider: "conductor" }]);
+    const chip = await until(() => header(known.p), "attempt 1's driver");
+    expect(chip.textContent).toBe("Decided by Deliver");
+    expect(chip.hasAttribute("data-ended")).toBe(true);
+    expect(known.p.querySelectorAll("[data-testid=task-header] button[data-testid=driver]").length).toBe(0);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    // Unknown for attempt 1: nothing is said rather than something made up.
+    const unknown = await showing(1, "findings", [], undefined, 1, [{ attempt: 2, decider: "conductor" }]);
+    await settle();
+    expect(unknown.p.querySelectorAll("[data-testid=task-header] [data-testid=driver]").length).toBe(0);
   });
 
   // A new attempt queued (POST /v1/tasks/:id/runs) and not started: its
