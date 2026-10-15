@@ -10,7 +10,7 @@ import type { Decider, PersistedEvent } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PULL_REQUEST, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, TASK_ID } from "../src/fixtures/data.ts";
-import { ApiClient, type EscalationAction, type PullRequest, type TaskDetail, type TaskSource } from "../src/api/client.ts";
+import { ApiClient, ApiError, type EscalationAction, type PullRequest, type TaskDetail, type TaskSource } from "../src/api/client.ts";
 import { eventAttempts } from "../src/attempts.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -185,6 +185,49 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
     expect(card.querySelectorAll("button").length).toBe(0);
     expect(text(card.querySelector(".escalationWaiting"))).toBe("Waiting for Ana Ribeiro to decide.");
     expect(client.deciders).toEqual([]);
+  });
+
+  const buttons = (page: HTMLElement) => [...page.querySelectorAll<HTMLButtonElement>("[data-testid=open-or-draft] button")];
+
+  test("refused, it says why, keeps the notice, and Open and Draft work again", async () => {
+    const client = held();
+    const succeed = client.setDecider.bind(client);
+    client.setDecider = async () => { throw new ApiError(502, "github_unavailable", "GitHub unavailable"); };
+    const page = await taskPage(client);
+    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
+    const alert = await until(() => page.querySelector("[data-testid=open-or-draft] [role=alert]"), "the refusal");
+    expect(text(alert)).toBe("Could not open the pull request: GitHub unavailable");
+    expect(page.querySelectorAll("[data-testid=open-or-draft]").length).toBe(1);
+    expect(buttons(page).map((b) => [b.textContent, b.disabled])).toEqual([["Open", false], ["Draft", false]]);
+    client.setDecider = succeed;
+    await click(page.querySelector("[data-testid=open-or-draft-draft]")!);
+    await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go after the retry");
+    expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft: true }]);
+  });
+
+  test("while the answer is on its way both buttons are disabled and a second click sends nothing", async () => {
+    const client = held();
+    const succeed = client.setDecider.bind(client);
+    let calls = 0;
+    let land!: () => void;
+    const landed = new Promise<void>((resolve) => { land = resolve; });
+    client.setDecider = async (...args: Parameters<Held["setDecider"]>) => {
+      calls++;
+      await landed;
+      return succeed(...args);
+    };
+    const page = await taskPage(client);
+    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
+    expect(buttons(page).map((b) => b.disabled)).toEqual([true, true]);
+    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
+    await click(page.querySelector("[data-testid=open-or-draft-draft]")!);
+    await settle();
+    expect(calls).toBe(1);
+    expect(client.deciders).toEqual([]);
+    await act(async () => land());
+    await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go once answered");
+    expect(calls).toBe(1);
+    expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft: false }]);
   });
 
   test("an adopted pull request, new work, or a conductor deciding gets no Open or Draft card", async () => {
