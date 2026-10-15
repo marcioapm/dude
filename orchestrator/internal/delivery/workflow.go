@@ -41,6 +41,7 @@ type State struct {
 	Policy           Policy            `json:"policy"`
 	Integration      *Integration      `json:"integration,omitempty"`
 	IntegrationPairs map[string]string `json:"integrationPairs,omitempty"`
+	PendingConflicts []forge.Signal    `json:"pendingConflicts,omitempty"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
@@ -1094,6 +1095,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
 		return workflow.Result{}, err
 	}
+	if len(st.PendingConflicts) > 0 {
+		return workflow.Result{Next: "awaitPullRequest", State: st}, nil
+	}
 	return waitForPR(st), nil
 }
 
@@ -1133,14 +1137,30 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			ended = true
 		case "readiness":
 			readiness = true
-		case "conflict", "ci_stuck":
+		case "conflict":
+			if stop != nil && stop.Kind == "conflict" {
+				st.PendingConflicts = append(st.PendingConflicts, *stop)
+			}
+			stop = &s
+		case "ci_stuck":
+			if stop != nil && stop.Kind == "conflict" {
+				st.PendingConflicts = append(st.PendingConflicts, *stop)
+			}
 			stop = &s
 		default:
 			actionable = append(actionable, s.Feedback...)
 			if s.Conflict {
+				if stop != nil && stop.Kind == "conflict" {
+					st.PendingConflicts = append(st.PendingConflicts, *stop)
+				}
 				stop = &forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number}
 			}
 		}
+	}
+	if stop == nil && len(st.PendingConflicts) > 0 {
+		s := st.PendingConflicts[0]
+		st.PendingConflicts = st.PendingConflicts[1:]
+		stop = &s
 	}
 	if ended {
 		res, finished, err := w.pullRequestEnded(ctx, sc, st)
@@ -1259,20 +1279,27 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		return workflow.Result{}, err
 	}
 	if st.Integration != nil {
-		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
-				return err
-			}
-			var writer bool
-			if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
-				return err
-			}
-			if writer {
-				return workflow.Wait{After: time.Second, Why: "integration waits for the current writer"}
-			}
-			return nil
-		}); err != nil {
+		k := key(sc, st, ":prfix:", max(st.PRFixKey, st.PRIteration)+1)
+		existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
+		if err != nil {
 			return workflow.Result{}, err
+		}
+		if existing == "" {
+			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+					return err
+				}
+				var writer bool
+				if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
+					return err
+				}
+				if writer {
+					return workflow.Wait{After: time.Second, Why: "integration waits for the current writer"}
+				}
+				return nil
+			}); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 	}
 	total := forge.DefaultSettings().FixRoundsPerPR
@@ -1297,6 +1324,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			}
 		}
 	}
+	if st.Integration != nil && !slices.Contains(repos, st.Integration.Repo) {
+		repos = append(repos, st.Integration.Repo)
+	}
 	for _, repo := range repos {
 		if st.PRFixes == nil {
 			st.PRFixes = map[string]int{}
@@ -1307,6 +1337,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 	}
 	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
+		if st.Integration != nil {
+			return w.integrationFailure(ctx, sc, st, "integration fix budget exhausted")
+		}
 		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
 			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
 	}
@@ -1664,8 +1697,12 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
 		if st.Integration != nil {
+			beforePR := st.Integration.BeforePR
 			st.Integration = nil
 			st.ActingOnPR = false
+			if beforePR {
+				return workflow.Result{Next: "openPullRequest", State: st}, nil
+			}
 			if len(st.PRFeedback) > 0 {
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
@@ -1737,6 +1774,9 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 		// The same fix again, not the next: what the stopped one counted
 		// is given back. A budget spent is a new one.
 		st.PRIteration--
+		if st.Integration != nil && !slices.Contains(feedbackRepos(st.PRFeedback), st.Integration.Repo) && st.PRFixes[st.Integration.Repo] > 0 {
+			st.PRFixes[st.Integration.Repo]--
+		}
 		for _, repo := range feedbackRepos(st.PRFeedback) {
 			if st.PRFixes[repo] > 0 {
 				st.PRFixes[repo]--
@@ -1788,5 +1828,8 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 // waitForPR waits on the task's pull requests: what the forge says of
 // them, or a person's decision.
 func waitForPR(st *State) workflow.Result {
+	if len(st.PendingConflicts) > 0 {
+		return workflow.Result{Next: "awaitPullRequest", State: st}
+	}
 	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
 }

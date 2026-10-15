@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -31,6 +32,42 @@ func (w *world) toolsWithSync() string {
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.syncer.Agent.ToolsService = true
 	return tools.URL
+}
+
+func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.task()
+	w.deliver(wi)
+	w.until("implemented", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
+	})
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.HasSuffix(r.URL.Path, "/merges") {
+				return 409
+			}
+			return 0
+		}
+	})
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.integration"] == "true" {
+			return fakelux.Behaviour{Crash: true}
+		}
+		return fakelux.Behaviour{Reply: "No findings."}
+	}
+	w.until("failed integration", func() bool { return w.escalationReason(wi) == "pull_request_conflict" })
+	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+	w.lux.Decide = nil
+	branch := delivery.BranchFor(wi, 1)
+	// A person brings the base in before choosing wait.
+	gitOut(t, w.gh.Repo, "update-ref", "refs/heads/"+branch, w.gh.SHA("main"))
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+		t.Fatal(code, body)
+	}
+	w.until("PR after human wait", func() bool { return len(w.gh.Pulls()) == 1 })
 }
 
 func TestBeforePRTellDoesNotMergeBase(t *testing.T) {
