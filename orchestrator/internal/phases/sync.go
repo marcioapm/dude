@@ -1267,6 +1267,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					return fmt.Errorf("load the project's secrets: %w", err)
 				}
 			}
+			if gone := missingNames(names, projectSecrets); len(gone) > 0 {
+				return errSecretsGone(gone)
+			}
 		}
 		// What people decided on this task, across its Runs.
 		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
@@ -2131,6 +2134,13 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
+	var gone errSecretsGone
+	if errors.As(err, &gone) && r.TaskID != "" {
+		if retired, rerr := s.retireForSecrets(ctx, r, gone); retired || rerr != nil {
+			return true, rerr
+		}
+		return true, s.fail(ctx, r, "cannot resume: "+gone.Error())
+	}
 	if errors.As(err, &noLogin) {
 		return true, s.waitForLogin(ctx, r, noLogin)
 	}
@@ -2247,8 +2257,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, sizes, _, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
-	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
+	spec, sizes, _, given, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
+	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) || errors.As(err, new(errSecretsGone)) {
 		return lux.Run{}, 0, err
 	}
 	if err != nil {
@@ -2283,6 +2293,13 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		}
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
+	// The copy is what the new process is given, before lux starts it: its
+	// first output is redacted with these values.
+	if len(given) > 0 {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { return replaceRunCopy(ctx, tx, r, given) }); err != nil {
+			return lux.Run{}, foreseen, err
+		}
+	}
 	defer func() {
 		answer := resumed
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {

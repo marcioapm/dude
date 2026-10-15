@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -88,6 +89,51 @@ func acceptedProjectSecrets(lr lux.Run, sent []lux.Secret) []lux.Secret {
 		}
 	}
 	return out
+}
+
+// errSecretsGone: names the Run was submitted with that the project no
+// longer gives its phase (removed, or its recipients changed). lux refuses
+// a resume missing a declared secret, so the Run is retired and a fresh
+// one takes its slot (retireForSecrets), as a preview is replaced.
+type errSecretsGone []string
+
+func (e errSecretsGone) Error() string {
+	return "the project no longer gives this phase " + strings.Join(e, ", ")
+}
+
+// missingNames are the recorded names have has no value for.
+func missingNames(recorded []string, have []lux.Secret) []string {
+	var gone []string
+	for _, n := range recorded {
+		if !slices.ContainsFunc(have, func(s lux.Secret) bool { return s.Name == n }) {
+			gone = append(gone, n)
+		}
+	}
+	return gone
+}
+
+// retireForSecrets ends a paused Run that cannot be resumed for gone and
+// starts a fresh one of its phase in its slot, which is given the
+// project's secrets now. Not a failure: neither Run fails, and the
+// delivery waits on the fresh one. false: the delivery does not wait on
+// this Run (the restart was refused), and the caller fails it instead.
+func (s *Syncer) retireForSecrets(ctx context.Context, r phaseRun, gone errSecretsGone) (bool, error) {
+	var refused bool
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := delivery.RestartRunTx(ctx, tx, r.Org, r.TaskID, delivery.Restart{RunID: r.ID, ByDude: true,
+			Note:  "a secret it was given, " + strings.Join(gone, ", ") + ", is no longer given to its phase",
+			Actor: delivery.Writer{ActorType: ledger.ActorSystem, ActorID: "dude"}})
+		if delivery.IsRefusal(err) {
+			refused = true
+			return nil
+		}
+		return err
+	})
+	if err != nil || refused {
+		return false, err
+	}
+	s.Log.Info("a secret the paused Run was given is no longer its phase's; started a fresh Run", "run", r.ID, "secrets", []string(gone))
+	return true, nil
 }
 
 // secretNames are the names of list, in its order.

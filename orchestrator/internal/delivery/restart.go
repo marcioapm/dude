@@ -35,6 +35,9 @@ type Restart struct {
 	Actor             Writer
 	// The conductor's Run, for its restart_run; "" for a person.
 	Conductor string
+	// dude's own: a paused Run that cannot be resumed (a project secret it
+	// was given is no longer its phase's). Payload by "dude".
+	ByDude bool
 }
 
 // RestartRunTx aborts a live phase Run the task's delivery waits on and
@@ -97,7 +100,7 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 		TaskID: taskID, Phase: phase, BaseRefs: d.State.Heads, ParentRunID: d.State.HeadRunID, Attempt: attempt,
 		Category: category, FindingIDs: findingIDs, BlockingSeverities: blocking, PRFeedback: prFeedback,
 		ConductorRunID: conductorRun, ConductorNote: conductorNote,
-		RestartNote: restartLine(in.Conductor != "", note), Tier: tierID,
+		RestartNote: restartLine(in, note), Tier: tierID,
 	})
 	if err != nil {
 		return "", err
@@ -130,6 +133,9 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	if in.Conductor != "" {
 		payload["by"] = "conductor"
 	}
+	if in.ByDude {
+		payload["by"] = "dude"
+	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunRestarted, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		RunID: in.RunID, ActorType: in.Actor.ActorType, ActorID: in.Actor.ActorID, Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: payload})
@@ -137,9 +143,12 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 }
 
 // restartLine is what a restarted Run's agent is told of why.
-func restartLine(byConductor bool, note string) string {
+func restartLine(in Restart, note string) string {
 	who := "a person"
-	if byConductor {
+	switch {
+	case in.ByDude:
+		who = "dude"
+	case in.Conductor != "":
 		who = "the conductor"
 	}
 	if note == "" {

@@ -174,21 +174,93 @@ func TestEachPhaseRunReceivesTheSecretsTickedForIt(t *testing.T) {
 // given: what dude redacts its output with and scans its push for.
 func TestARunningAgentsCopyHoldsExactlyTheValuesItWasGiven(t *testing.T) {
 	w := newWorld(t)
-	w.lux.Decide = hang
 	w.grant("SNOWFLAKE_PASSWORD", snowflakePassword, "previews", "tester")
 	w.grant("IMPL_TOKEN", implToken, "implementer")
-	task := w.task()
-	w.deliver(task)
-	var runID string
-	w.until("the implementer to run", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task).Scan(&runID)
-		return runID != ""
-	})
+	_, runID, _ := w.liveImplementer()
 	if got := w.runCopy(runID); len(got) != 1 || got["IMPL_TOKEN"] != implToken {
 		t.Errorf("copy = %v names, want IMPL_TOKEN only", slices.Sorted(maps.Keys(got)))
 	}
 	if got := projectSecretsOf(submitted(t, w.luxRunFor(runID))); len(got) != 1 || got["IMPL_TOKEN"] != implToken {
 		t.Errorf("implementer declares %v", slices.Sorted(maps.Keys(got)))
+	}
+}
+
+const implTokenRotated = "impl-test-not-a-real-token-ROTATED"
+
+// Paused, the implementer's secret is rotated and another is ticked for it:
+// the resume sends the recorded name's current value and nothing added
+// since, and the Run's copy becomes exactly what the new process has.
+func TestAResumeSuppliesCurrentValuesAndReplacesTheCopy(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	_, runID, _ := w.liveImplementer()
+	w.pausePhase(runID)
+	w.until("paused", func() bool { return w.personallyPaused(runID) })
+	w.grant("IMPL_TOKEN", implTokenRotated, "implementer")
+	w.grant("EVERYONE_KEY", everyoneKey, "implementer")
+	w.resumePhase(runID)
+	lr := w.luxRunFor(runID)
+	if len(lr.ResumeSecrets) != 1 {
+		t.Fatalf("%d resumes", len(lr.ResumeSecrets))
+	}
+	sent := secretsByName(lr.ResumeSecrets[0])
+	if sent["IMPL_TOKEN"] != implTokenRotated {
+		t.Errorf("the resume did not send IMPL_TOKEN's current value")
+	}
+	if _, ok := sent["EVERYONE_KEY"]; ok {
+		t.Error("the resume sent a secret added after the Run was submitted")
+	}
+	if got := w.runCopy(runID); len(got) != 1 || got["IMPL_TOKEN"] != implTokenRotated {
+		t.Errorf("copy after the resume has %v, want IMPL_TOKEN at its current value", slices.Sorted(maps.Keys(got)))
+	}
+	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+		t.Errorf("names after the resume = %v", got)
+	}
+}
+
+// Paused, a secret the implementer was submitted with is removed, or no
+// longer ticked for it: lux would refuse a resume without it, so the Run
+// is retired and a fresh one takes its slot with the project's secrets now,
+// as a preview is replaced; neither Run is failed.
+func TestAResumeMissingARecordedSecretStartsAFreshRun(t *testing.T) {
+	for _, how := range []string{"removed", "withdrawn"} {
+		t.Run(how, func(t *testing.T) {
+			w := newWorld(t)
+			w.grant("IMPL_TOKEN", implToken, "implementer")
+			w.grant("EVERYONE_KEY", everyoneKey, "implementer")
+			task, runID, _ := w.liveImplementer()
+			w.pausePhase(runID)
+			w.until("paused", func() bool { return w.personallyPaused(runID) })
+			if how == "removed" {
+				w.removeSecret("IMPL_TOKEN")
+			} else {
+				w.grant("IMPL_TOKEN", implToken, "previews", "tester")
+			}
+			if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+				t.Fatalf("resume: %d %v", status, body)
+			}
+			var next string
+			w.until("a fresh implementer running", func() bool {
+				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND id <> $2
+					AND status = 'running'`, task, runID).Scan(&next)
+				return next != ""
+			})
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, runID, next); n != 1 {
+				t.Errorf("the old Run was not retired for the fresh one")
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.failed'`, task); n != 0 {
+				t.Errorf("%d run.failed; a retired Run is no failure", n)
+			}
+			if lr := w.luxRunFor(runID); lr.Resumed != 0 {
+				t.Errorf("the old lux Run was resumed %d times", lr.Resumed)
+			}
+			if got := projectSecretsOf(submitted(t, w.luxRunFor(next))); len(got) != 1 || got["EVERYONE_KEY"] != everyoneKey {
+				t.Errorf("fresh Run declares %v", slices.Sorted(maps.Keys(got)))
+			}
+			if got := w.runCopy(next); len(got) != 1 || got["EVERYONE_KEY"] != everyoneKey {
+				t.Errorf("fresh Run's copy has %v", slices.Sorted(maps.Keys(got)))
+			}
+		})
 	}
 }
 

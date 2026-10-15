@@ -347,7 +347,8 @@ export const EventTypes = {
    * A phase Run was stopped and a fresh one put in its slot. On the old
    * Run. Payload: `{ from, to, note, phase, category?, tier?, by? }`:
    * `by: "conductor"` for the conductor's restart_run (the actor is its
-   * Run), absent for a person's.
+   * Run), `by: "dude"` for a paused Run a project secret it was given is no
+   * longer its phase's (it cannot resume), absent for a person's.
    */
   RunRestarted: "run.restarted",
   /**

@@ -68,7 +68,7 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
         if (typeof p.from !== "string" || typeof p.to !== "string") break;
         const from = task.runs.find((r) => r.id === p.from);
         const what = from ? runWhat(from) : typeof p.phase === "string" ? p.phase : "phase";
-        const who = p.by === "conductor" ? "The conductor" : "A person";
+        const who = p.by === "conductor" ? "The conductor" : p.by === "dude" ? "dude" : "A person";
         const note = typeof p.note === "string" && p.note ? `: ${p.note}` : ".";
         const tier = typeof p.tier === "string" && p.tier ? " on another tier" : "";
         out.push({ kind: "restart", id: e.eventId, at: e.occurredAt, from: p.from, to: p.to, by: p.by === "conductor" ? "conductor" : "person",
