@@ -420,6 +420,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		// A scripted fixer carries out "tool: NAME {json}" lines its feedback
 		// names, as a conductor does in Chat: how a test drives its tool calls.
 		if in.Phase == "fix" {
+			if strings.Contains(in.Prompt, "Base integration:") {
+				spec.Labels["dude.integration"] = "true"
+				spec.Labels["dude.integration.prompt"] = in.Prompt
+			}
 			if calls := fakeagent.ConductorCalls(in.Prompt); len(calls) > 0 {
 				raw, _ := json.Marshal(calls)
 				spec.Labels[fakeagent.CallsLabel] = string(raw)

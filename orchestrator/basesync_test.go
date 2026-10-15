@@ -5,7 +5,9 @@ package orchestrator_test
 // of the base counts as.
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
@@ -13,6 +15,8 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -24,6 +28,104 @@ func (w *world) toolsWithSync() string {
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	return tools.URL
+}
+
+func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.gh.AdvanceBase("main", "Moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("integration exhausted", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
+		t.Fatalf("integration runs %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND pr_feedback::text LIKE '%remerge-diff%'`, wi); n != 1 {
+		t.Fatalf("integration reviews %d", n)
+	}
+}
+
+func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	before := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi)
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.gh.Comment(1, "alice", "Please preserve this feedback too.")
+	w.until("integration fixer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%Base integration%'`, wi) == 1
+	})
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("reviewed integration back waiting", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi) > before &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'`, wi) == 1
+	})
+	if w.escalationReason(wi) != "" {
+		t.Fatal(w.escalationReason(wi))
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 1 {
+		t.Fatal("feedback lost")
+	}
+	branch := w.gh.Pull(1).Head
+	if out := gitOut(t, w.gh.Repo, "rev-list", "--count", branch+"..main"); out != "0" {
+		t.Fatal("base not integrated", out)
+	}
+}
+
+func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
+	for _, tell := range []bool{false, true} {
+		t.Run(fmt.Sprint(tell), func(t *testing.T) {
+			w := newWorld(t)
+			w.toolsWithSync()
+			wi := w.reviewing()
+			if tell {
+				mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+			}
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
+			w.gh.AdvanceBase("main", "Base moved")
+			w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+			w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+			var raw []byte
+			if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var e delivery.Escalation
+			if err := json.Unmarshal(raw, &e); err != nil {
+				t.Fatal(err)
+			}
+			want := "retry wait stop"
+			if tell {
+				want = "wait stop"
+			}
+			if strings.Join(e.Actions(), " ") != want {
+				t.Fatalf("actions %v, want %s", e.Actions(), want)
+			}
+			attempts := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi)
+			if tell && attempts != 0 || !tell && attempts != 1 {
+				t.Fatalf("attempts %d", attempts)
+			}
+			for range 3 {
+				w.sync()
+				w.pump()
+			}
+			if !tell {
+				if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "retry"}); code != 200 {
+					t.Fatal(code, body)
+				}
+				w.until("one explicit retry", func() bool {
+					w.sync()
+					return w.escalationReason(wi) == "pull_request_conflict" && w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 2
+				})
+			}
+		})
+	}
 }
 
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {

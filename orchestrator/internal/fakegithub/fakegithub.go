@@ -684,6 +684,9 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	}
 	var mergeable any = true
 	state := "clean"
+	if _, err := s.git("merge-tree", "--write-tree", p.Head, p.Base); err != nil {
+		mergeable, state = false, "dirty"
+	}
 	if s.Conflicting[p.Number] {
 		mergeable, state = false, "dirty"
 	}

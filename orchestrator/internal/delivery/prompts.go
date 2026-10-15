@@ -702,6 +702,11 @@ func Prompt(phase string, in PromptInput) string {
 		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
 		add(lead...)
 		add("The task under review:\n\n"+in.task(), reviewContract, findingFormat, reviewSummary)
+		for _, f := range in.PRFeedback {
+			if f.Source == "integration" {
+				add(f.Body)
+			}
+		}
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}

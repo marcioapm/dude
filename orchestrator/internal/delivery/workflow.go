@@ -36,9 +36,11 @@ const (
 
 // State is everything the workflow remembers between steps.
 type State struct {
-	TaskID    string `json:"taskId"`
-	ProjectID string `json:"projectId"`
-	Policy    Policy `json:"policy"`
+	TaskID           string            `json:"taskId"`
+	ProjectID        string            `json:"projectId"`
+	Policy           Policy            `json:"policy"`
+	Integration      *Integration      `json:"integration,omitempty"`
+	IntegrationPairs map[string]string `json:"integrationPairs,omitempty"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
@@ -209,7 +211,16 @@ func (e *Escalation) Actions() []string {
 		// Test again (after someone told dude how to run it), or ship what
 		// could not be checked, with a reason.
 		out = append(out, "retry", ActionWaive)
-	case "pull_request_conflict", "ci_stuck":
+	case "pull_request_conflict":
+		var d struct {
+			Integration bool `json:"integration"`
+		}
+		e.decode(&d)
+		if d.Integration {
+			out = append(out, "retry")
+		}
+		out = append(out, "wait")
+	case "ci_stuck":
 		// A person resolves the conflict, or sees to CI, on GitHub; dude
 		// waits on the pull request again.
 		out = append(out, "wait")
@@ -596,6 +607,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	var runIDs []string
 	for _, c := range categories {
 		k := key(sc, st, ":review:", st.Iteration, ":", c)
+		if st.Integration != nil {
+			k = key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
+		}
 		if d != nil {
 			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
 		}
@@ -603,6 +617,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 				d.apply(p)
+				if st.Integration != nil {
+					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Heads[st.Integration.Repo], st.Heads[st.Integration.Repo])}}
+				}
 			})
 		if err != nil {
 			return workflow.Result{}, err
@@ -705,6 +722,9 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
+		if st.Integration != nil {
+			return workflow.Result{Next: "test", State: st}, nil
+		}
 		if st.ActingOnPR && !st.RetestDue {
 			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
@@ -777,6 +797,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		}
 	}
 	k := key(sc, st, ":fix:", st.Iteration)
+	if st.Integration != nil {
+		k = key(sc, st, ":integration:", st.Integration.RunID, ":fix:", st.Iteration)
+	}
 	if len(st.TestFindingIDs) > 0 {
 		// A failed test's findings, those still open, in a Run of their own.
 		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
@@ -909,6 +932,9 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 // testRoundKey is key, distinct per fix round a failed test started: the
 // simplify and test after it are new Runs, not the ones before it.
 func testRoundKey(sc workflow.StepContext, st *State, part string) string {
+	if st.Integration != nil {
+		return key(sc, st, ":integration:", st.Integration.RunID, part, ":test-round:", st.TestFixRounds)
+	}
 	if st.TestFixRounds > 0 {
 		return key(sc, st, part, ":after-test:", st.TestFixRounds)
 	}
@@ -955,6 +981,35 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Integration != nil && st.Integration.Published {
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		for _, p := range states {
+			if p.Repo != st.Integration.Repo || p.Number != st.Integration.Number || p.State == forge.StateClosed || p.State == forge.StateMerged {
+				continue
+			}
+			fresh, err := gh.PullRequest(ctx, p.Slug, p.Number)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if fresh.Mergeable == forge.MergeConflicting {
+				return w.integrationFailure(ctx, sc, st, "still conflicting after integration")
+			}
+			if fresh.Mergeable == forge.MergeUnknown {
+				return workflow.Result{Next: "openPullRequest", State: st, SleepUntil: time.Now().Add(time.Second)}, nil
+			}
+		}
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
+			return workflow.Result{}, err
+		}
+		st.Integration, st.PRFeedback = nil, nil
 	}
 	acting := st.ActingOnPR
 	st.ActingOnPR = false
@@ -1104,6 +1159,18 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		// Kept for after: a person who resolves the conflict and waits
 		// again has the feedback that arrived with it fixed then.
 		st.PRFeedback = append(st.PRFeedback, actionable...)
+		if stop.Kind == "conflict" {
+			start, err := w.prepareIntegration(ctx, sc, st, stop)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if start {
+				return workflow.Result{Next: "prFix", State: st}, nil
+			}
+			if st.Integration != nil {
+				return w.integrationFailure(ctx, sc, st, "this head/base pair was already attempted")
+			}
+		}
 		reason := "pull_request_conflict"
 		if stop.Kind == "ci_stuck" {
 			reason = "ci_stuck"
@@ -1225,9 +1292,20 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	// Several comments arriving together cost one fix Run, not one each.
 	d := directed(st, PhaseFix)
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback; d.apply(p) })
+	feedback := st.PRFeedback
+	if st.Integration != nil {
+		feedback = append(slices.Clone(feedback), forge.ActionableFeedback{Repo: st.Integration.Repo, Source: "integration", Body: st.Integration.brief()})
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = feedback; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Integration != nil {
+		st.Integration.RunID = runID
+		if st.IntegrationPairs == nil {
+			st.IntegrationPairs = map[string]string{}
+		}
+		st.IntegrationPairs[st.Integration.pair()] = runID
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
 }
@@ -1311,7 +1389,17 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
+		if st.Integration != nil {
+			return w.integrationFailure(ctx, sc, st, out.Error)
+		}
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
+	}
+	if st.Integration != nil {
+		st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
+		st.Integration.Published = true
+		st.Iteration = 0
+		st.ActingOnPR = true
+		return workflow.Result{Next: "review", State: st}, nil
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
 	st.ActingOnPR = false
@@ -1434,6 +1522,10 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
 	switch reason {
+	case "pull_request_conflict":
+		if st.Integration != nil {
+			st.Escalation.Step = "prFix"
+		}
 	case "review_failed":
 		// Its retry is the failed reviewers again, not a fix.
 		st.Escalation.Step = "review"
@@ -1525,6 +1617,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
+		st.Integration = nil
 		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil

@@ -809,6 +809,10 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		}
 		step = fakeagent.Tester(str("dude.model"), criteria, fixes)
 	}
+	if str("dude.integration") == "true" {
+		step.Commit = nil
+		step.Tools = fakeagent.IntegrationCalls(str("dude.integration.prompt"))
+	}
 	if raw := str(fakeagent.CallsLabel); raw != "" {
 		var calls [][2]string
 		_ = json.Unmarshal([]byte(raw), &calls)

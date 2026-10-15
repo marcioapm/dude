@@ -205,6 +205,8 @@ func (s *Server) localCall(run *Run, tool, args string) {
 			problem = out
 		}
 		s.workspaceGit(run, []string{"commit", "-q", "-m", in.Message})
+	case fakeagent.LocalIntegrate:
+		problem = s.integrateWorkspace(run, in.Args)
 	case fakeagent.LocalGit:
 		s.workspaceGit(run, in.Args)
 	case fakeagent.LocalArtifact:
@@ -233,6 +235,53 @@ func (s *Server) workspaceWrite(run *Run, path, content string) string {
 	_ = os.MkdirAll(filepath.Dir(full), 0o755)
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		return err.Error()
+	}
+	return ""
+}
+
+// integrateWorkspace resolves text fixtures by retaining both conflicting sides.
+func (s *Server) integrateWorkspace(run *Run, args []string) string {
+	work, err := s.firstCheckout(run)
+	if err != nil {
+		return err.Error()
+	}
+	git := func(a ...string) ([]byte, error) {
+		c := exec.Command("git", append([]string{"-C", work, "-c", "user.name=Acme", "-c", "user.email=agent@example.com"}, a...)...)
+		return c.CombinedOutput()
+	}
+	if out, err := git(args...); err == nil {
+		return ""
+	} else if op, _ := operation(work); op != lux.OperationMerge {
+		return string(out)
+	}
+	paths, err := git("diff", "--name-only", "--diff-filter=U", "-z")
+	if err != nil {
+		return string(paths)
+	}
+	for _, p := range strings.Split(string(paths), "\x00") {
+		if p == "" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(work, p))
+		if err != nil {
+			return err.Error()
+		}
+		var lines []string
+		for _, line := range strings.Split(string(content), "\n") {
+			if strings.HasPrefix(line, "<<<<<<< ") || line == "=======" || strings.HasPrefix(line, ">>>>>>> ") {
+				continue
+			}
+			lines = append(lines, line)
+		}
+		if err := os.WriteFile(filepath.Join(work, p), []byte(strings.Join(lines, "\n")), 0644); err != nil {
+			return err.Error()
+		}
+		if out, err := git("add", "--", p); err != nil {
+			return string(out)
+		}
+	}
+	if out, err := git("commit", "--no-edit"); err != nil {
+		return string(out)
 	}
 	return ""
 }

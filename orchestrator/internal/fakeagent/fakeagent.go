@@ -498,16 +498,28 @@ const CallsLabel = "dude.calls"
 // {"path","content","description"} publishes a file for people with
 // lux-shim publish.
 const (
-	LocalWrite    = "write"
-	LocalCommit   = "commit"
-	LocalGit      = "git"
-	LocalArtifact = "artifact"
+	LocalWrite     = "write"
+	LocalCommit    = "commit"
+	LocalGit       = "git"
+	LocalArtifact  = "artifact"
+	LocalIntegrate = "integrate"
 )
 
 // Local says whether a call is the scripted conductor's own work in its
 // container rather than one of dude's tools.
 func Local(name string) bool {
-	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+	return name == LocalIntegrate || name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+}
+
+// IntegrationCalls exercises the real fetch tool before merging in the checkout.
+func IntegrationCalls(prompt string) [][2]string {
+	_, rest, ok := strings.Cut(prompt, "Base integration: this branch conflicts with `")
+	if !ok {
+		return nil
+	}
+	base, _, _ := strings.Cut(rest, "`")
+	args, _ := json.Marshal(map[string]any{"args": []string{"merge", "--no-edit", "lux/" + base}})
+	return [][2]string{{"sync_base", "{}"}, {LocalIntegrate, string(args)}}
 }
 
 // ConductorCalls are the tool calls an input asks the scripted conductor
