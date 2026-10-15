@@ -430,7 +430,7 @@ describe("creating a task with images", () => {
       override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1], taskId?: string) {
         this.lookups.push(taskId);
         return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console", number: 12,
-          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main", mode: "review" as const });
       }
       override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
         const out = await super.createTask(input);
@@ -510,17 +510,18 @@ describe("where a task starts from", () => {
   const MERGED = "pull request #7 is merged: only an open one can be adopted";
   /** Answers lookups as the backend would, and records what is created. */
   class Sources extends EpicsClient {
-    created: unknown[] = [];
+    created: Parameters<FixtureClient["createTask"]>[0][] = [];
     asked: unknown[] = [];
     override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
       this.asked.push(source);
       if (source.kind === "pr" && source.pullRequest === "7") return Promise.reject(new ApiError(422, "pr_merged", MERGED));
       if (source.kind === "pr") {
         return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console",
-          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main",
+          mode: "review" as const });
       }
       return Promise.resolve({ kind: "branch" as const, repositoryId: source.repositoryId, repository: "web-console",
-        headBranch: source.branch, baseBranch: source.base ?? "main" });
+        headBranch: source.branch, baseBranch: source.base ?? "main", mode: "continue" as const });
     }
     override createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
       this.created.push(input);
@@ -572,6 +573,56 @@ describe("where a task starts from", () => {
     await act(async () => d.save().click());
     await until(() => client.created.length > 0, "the create");
     expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12" } });
+  });
+
+  const modeChosen = () => document.querySelector("[data-testid=task-source-mode] [aria-checked=true]")?.textContent ?? null;
+  const chooseMode = (label: string) => act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>("[data-testid=task-source-mode] [role=radio]")]
+      .find((b) => b.textContent?.startsWith(label))!.click();
+  });
+
+  test("what dude does first defaults to what the source says, and the person's choice is created with it", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    expect(document.querySelector("[data-testid=task-source-mode]")).toBeNull();
+    await pick("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => modeChosen(), "the choice");
+    // The lookup said ready for review: Review it as is.
+    expect(modeChosen()).toBe("Review it as isStraight to review: nothing is implemented first.");
+    await chooseMode("Continue the work");
+    expect(modeChosen()).toBe("Continue the workAn implementer builds on it first, then review.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]!.source).toEqual({ kind: "pr", repositoryId: "repo_wc", pullRequest: "#12", mode: "continue" });
+  });
+
+  test("a default left as it is is not sent: the backend's default for the source holds", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await pickBranch("task-source-branch", "top", "stack/top");
+    await until(() => modeChosen()?.startsWith("Continue the work"), "a branch continues");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    // No base picked, no mode chosen: neither is sent.
+    expect(client.created[0]!.source).toEqual({ kind: "branch", repositoryId: "repo_wc", branch: "stack/top" });
+  });
+
+  test("once started, the saved choice is shown and cannot change", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
+        baseBranch: "main", mode: "continue" } }, client);
+    expect(modeChosen()?.startsWith("Continue the work")).toBe(true);
+    await chooseMode("Review it as is");
+    expect(modeChosen()?.startsWith("Continue the work")).toBe(true);
+    expect(document.querySelector<HTMLFieldSetElement>("[data-testid=task-source]")!.disabled).toBe(true);
   });
 
   test("a refused pull request says why on its field, and Create stays off", async () => {
@@ -676,7 +727,7 @@ describe("where a task starts from", () => {
     await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
       savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
-        baseBranch: "main" } }, client);
+        baseBranch: "main", mode: "review" } }, client);
     const kind = document.querySelector("[data-testid=task-source-kind]")!;
     expect(kind.querySelector("[aria-pressed=true]")?.textContent).toBe("Existing PR");
     expect([...kind.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
@@ -690,7 +741,7 @@ describe("where a task starts from", () => {
     const client = new Sources("a");
     await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the stacked branch on top of the base one.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
-      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" } }, client);
+      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base", mode: "continue" } }, client);
     expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("stack/top → stack/base");
     expect(client.asked.length).toBe(0);
   });
@@ -711,7 +762,7 @@ describe("where a task starts from", () => {
     const d = await open({ id: "task_draft", fixed: null, title: "Take over", goal: "Finish the Portuguese greeting already open.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: repoId, access: "write" }, { id: "repo_api", access: "write" }],
       savedSource: { kind: "pr", repositoryId: repoId, repository: PROJECT.repositories[0]!.name, number: 12, title: "Greet",
-        headBranch: "feature/greet", baseBranch: "main" } }, client);
+        headBranch: "feature/greet", baseBranch: "main", mode: "review" } }, client);
     await d.title("Take over the greeting");
     await until(() => !d.save().disabled, "Save on");
     const access = document.querySelector(`[aria-label="What the work does in ${PROJECT.repositories[0]!.name}"]`)!;

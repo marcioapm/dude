@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 const HEAD = "feature/greet";
-const PR_SOURCE: TaskSource = { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet in Portuguese", headBranch: HEAD, baseBranch: "main" };
+const PR_SOURCE: TaskSource = { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet in Portuguese", headBranch: HEAD, baseBranch: "main", mode: "review" };
 /** The adopted pull request as dude records it: no Run opened it. */
 const ADOPTED: PullRequest = { ...PULL_REQUEST, id: "pr_12", runId: null, number: 12, title: "Greet in Portuguese", headBranch: HEAD,
   url: "https://github.com/example/web-console/pull/12" };
@@ -36,7 +36,7 @@ class AdoptedClient extends FixtureClient {
   }
   override async getTask(id: string): Promise<TaskDetail> {
     const t = await super.getTask(id);
-    return { ...t, runs: t.runs.filter((r) => this.patch.source === null || r.phase !== "implement"), ...this.patch } as TaskDetail;
+    return { ...t, runs: t.runs.filter((r) => this.patch.source === null || this.patch.source?.mode === "continue" || r.phase !== "implement"), ...this.patch } as TaskDetail;
   }
   override listPullRequests(_taskId: string) {
     return Promise.resolve({ pullRequests: this.prs });
@@ -57,13 +57,13 @@ async function taskPage(client: FixtureClient) {
 }
 
 const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim() ?? "";
-const BRANCH_SOURCE: TaskSource = { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" };
+const BRANCH_SOURCE: TaskSource = { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base", mode: "review" };
 
 describe("where the task came from, on Overview", () => {
   test("an adopted pull request: #N title linking to GitHub, and head → base in mono", async () => {
     const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [ADOPTED]));
     const fact = page.querySelector<HTMLElement>("[data-testid=task-source-fact]")!;
-    expect(text(fact.closest("div"))).toBe("Starts from#12 Greet in Portuguese · feature/greet → main");
+    expect(text(fact.closest("div"))).toBe("Starts from#12 Greet in Portuguese · feature/greet → main · Review it as is");
     expect(fact.querySelector<HTMLAnchorElement>("[data-testid=task-source-link]")!.href).toBe("https://github.com/example/web-console/pull/12");
     expect([...fact.querySelectorAll(".ds-mono")].map((m) => m.textContent)).toEqual(["feature/greet", "main"]);
   });
@@ -71,8 +71,13 @@ describe("where the task came from, on Overview", () => {
   test("an adopted branch: head → base, no link", async () => {
     const page = await taskPage(new AdoptedClient({ source: BRANCH_SOURCE }, []));
     const fact = page.querySelector<HTMLElement>("[data-testid=task-source-fact]")!;
-    expect(text(fact)).toBe("stack/top → stack/base");
+    expect(text(fact)).toBe("stack/top → stack/base · Review it as is");
     expect(fact.querySelectorAll("a").length).toBe(0);
+  });
+
+  test("work to continue says so", async () => {
+    const page = await taskPage(new AdoptedClient({ source: { ...BRANCH_SOURCE, mode: "continue" } }, []));
+    expect(text(page.querySelector("[data-testid=task-source-fact]"))).toBe("stack/top → stack/base · Continue the work");
   });
 
   test("new work says nothing about a source", async () => {
@@ -111,6 +116,29 @@ describe("the pipeline of adopted work", () => {
     expect(text(page.querySelector("[data-testid=pr-step]"))).toStartWith("Pull request #482");
   });
 
+  test("work to continue keeps its Implement step, which reads nothing to add when it committed nothing", async () => {
+    const CONTINUE: TaskSource = { ...PR_SOURCE, mode: "continue" };
+    const implemented = await taskPage(new AdoptedClient({ source: CONTINUE }, [ADOPTED]));
+    expect(phases(implemented)).toEqual(["implement", "review", "fix", "review", "simplify"]);
+    expect(text(implemented.querySelector("[data-phase=implement]"))).not.toContain("nothing to add");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+
+    class NothingToAdd extends AdoptedClient {
+      override async events(q: Parameters<FixtureClient["events"]>[0]) {
+        const out = await super.events(q);
+        if (!out.events[0] || (q.after ?? 0) >= 99_999) return out;
+        const implement = (await this.getTask(TASK_ID)).runs.find((r) => r.phase === "implement")!;
+        const said = { ...out.events[0]!, cursor: 99_999, eventId: "evt_nothing", eventType: "run.nothing_to_add", runId: implement.id,
+          payload: { heads: {} } } as PersistedEvent;
+        return { ...out, events: [...out.events, said] };
+      }
+    }
+    const page = await taskPage(new NothingToAdd({ source: CONTINUE }, [ADOPTED]));
+    await until(() => page.querySelector("[data-phase=implement][data-nothing-added]"), "nothing to add");
+    expect(text(page.querySelector("[data-phase=implement]"))).toStartWith("Implement · nothing to add");
+  });
+
   test("not started, Deliver promises no implementer for existing work", async () => {
     const said = async (source: TaskSource | null) => {
       const client = new AdoptedClient({ source, status: "received", runs: [] }, []);
@@ -126,6 +154,8 @@ describe("the pipeline of adopted work", () => {
     expect(await said(PR_SOURCE)).toContain("The automatic pipeline: reviewers, a fixer if they find problems, a simplifier, then pull request #12's feedback.");
     expect(await said(BRANCH_SOURCE)).toContain("The automatic pipeline: reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft.");
     expect(await said(null)).toContain("The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request.");
+    expect(await said({ ...BRANCH_SOURCE, mode: "continue" })).toContain(
+      "The automatic pipeline: an implementer on the existing work, reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft.");
   });
 });
 
