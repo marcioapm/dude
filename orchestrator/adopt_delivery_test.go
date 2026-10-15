@@ -111,6 +111,41 @@ func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testi
 	}
 }
 
+// An implementer on work to continue that commits nothing says the goal
+// is met: the work goes to review on its unchanged head, said in the
+// ledger on that Run. Not an escalation, not a second implementer.
+func TestWorkToContinueWithNothingToAddIsReviewedAsItIs(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Reply: "The goal is met already; nothing to add."}
+		}
+		return scripted(spec)
+	}
+	n := w.gh.OpenAsPerson("alice", "feature/done", "main", "Already done")
+	start := w.gh.SHA("feature/done")
+	wi := w.adopted("pr", n, "feature/done", "main", delivery.ModeContinue)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	w.until("the first review", func() bool { return w.phaseRuns(wi, "review") > 0 })
+	if got := w.phasesRun(wi); got[0] != "implement" || w.phaseRuns(wi, "implement") != 1 {
+		t.Fatalf("phases %v, want one implementer then review", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs r JOIN runs i ON i.id = r.parent_run_id
+		WHERE r.task_id = $1 AND r.phase = 'review' AND i.phase = 'implement' AND r.base_refs->>'target' = $2`, wi, start); n == 0 {
+		t.Fatalf("the first review is not on the unchanged head %s", start)
+	}
+	if n := w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+		WHERE e.task_id = $1 AND e.event_type = 'run.nothing_to_add' AND r.phase = 'implement'`, wi); n != 1 {
+		t.Fatalf("nothing to add recorded %d times on the implementer", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
+		t.Fatal("nothing to add escalated as no changes")
+	}
+}
+
 // Under the conductor, work to continue waits for its call at the start,
 // which may be the implementer or a review of the work as it is.
 func TestTheConductorStartsWorkToContinueWithAReviewIfItChooses(t *testing.T) {
