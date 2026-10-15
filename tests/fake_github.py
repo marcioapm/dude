@@ -22,6 +22,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import uuid
 import subprocess
@@ -151,6 +152,19 @@ class FakeGitHub:
         self.resolved_threads: set[str] = set()
         self.outdated_threads: set[str] = set()
         self.marked_ready: list[int] = []
+        # GitHub works mergeability out from git as well as the flag
+        # (set_conflicting): a branch that cannot merge into its base
+        # conflicts, and one fixed by a merge stops conflicting.
+        self.mergeability_from_git = False
+
+    def _conflicting(self, pr: PullRequest) -> bool:
+        if pr.conflicting:
+            return True
+        if not self.mergeability_from_git:
+            return False
+        result = subprocess.run(["git", "merge-tree", "--write-tree", f"refs/heads/{pr.head}", f"refs/heads/{pr.base}"],
+                                cwd=self.bare, capture_output=True, text=True)
+        return result.returncode != 0
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
@@ -353,6 +367,25 @@ class FakeGitHub:
             pr.merged_at = _now()
         self.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": number}})
 
+    def merge_into_base(self, number: int) -> str:
+        """A person merges the pull request on GitHub with a merge commit:
+        its base moves; the other open pull requests on that base hear of it
+        (GitHub sends them a `synchronize` as their mergeability changes).
+        The base's new commit."""
+        pr = self.pulls[number]
+        base, head = self.branch_sha(pr.base), self.branch_sha(pr.head)
+        assert base and head, (pr.base, pr.head)
+        tree = self._git_out("merge-tree", "--write-tree", base, head)
+        sha = self._git_out("commit-tree", tree, "-p", base, "-p", head, "-m", f"Merge pull request #{number}",
+                            env={"GIT_AUTHOR_NAME": "Gus Human", "GIT_AUTHOR_EMAIL": "gus@example.com",
+                                 "GIT_COMMITTER_NAME": "Gus Human", "GIT_COMMITTER_EMAIL": "gus@example.com"})
+        self._git_out("update-ref", f"refs/heads/{pr.base}", sha, base)
+        self.merge(number)
+        for other in list(self.pulls.values()):
+            if other.number != number and other.base == pr.base and other.state == "open":
+                self.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": other.number}})
+        return sha
+
     def close(self, number: int) -> None:
         """Closed without merging."""
         with self._lock:
@@ -380,6 +413,27 @@ class FakeGitHub:
         with self._lock:
             self.resolved_threads.add(self.thread_id(root_comment))
         self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
+
+    def commit_file(self, branch: str, path: str, content: str, message: str, author: str = "Gus Human") -> str:
+        """Replace one file on a branch and send the synchronize webhook."""
+        index = self.root / f"index-{self.owner}-{self.repo}-{branch.replace('/', '_')}"
+        subprocess.run(["git", "-C", str(self.bare), "read-tree", f"refs/heads/{branch}"],
+                       env={**os.environ, "GIT_INDEX_FILE": str(index)}, check=True)
+        blob = subprocess.run(["git", "-C", str(self.bare), "hash-object", "-w", "--stdin"], input=content,
+                              text=True, capture_output=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(self.bare), "update-index", "--add", "--cacheinfo", "100644," + blob + "," + path],
+                       env={**os.environ, "GIT_INDEX_FILE": str(index)}, check=True)
+        tree = subprocess.run(["git", "-C", str(self.bare), "write-tree"], env={**os.environ, "GIT_INDEX_FILE": str(index)},
+                              capture_output=True, text=True, check=True).stdout.strip()
+        email = author.split()[0].lower() + "@example.com"
+        sha = self._git_out("commit-tree", tree, "-p", f"refs/heads/{branch}", "-m", message,
+                            env={"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": email,
+                                 "GIT_COMMITTER_NAME": author, "GIT_COMMITTER_EMAIL": email})
+        self._git_out("update-ref", f"refs/heads/{branch}", sha)
+        for pr in list(self.pulls.values()):
+            if pr.head == branch and pr.state == "open":
+                self.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr.number}})
+        return sha
 
     def commit(self, branch: str, message: str, author: str = "Gus Human") -> str:
         """A person pushes a commit to a branch on GitHub; its sha. A push to
@@ -534,8 +588,8 @@ class FakeGitHub:
                     "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40, "ref": pr.head,
                              "repo": {"full_name": pr.head_repo or full}},
                     "base": {"ref": pr.base, "repo": {"full_name": full}},
-                    "mergeable": not pr.conflicting,
-                    "mergeable_state": "dirty" if pr.conflicting else "clean",
+                    "mergeable": not self.github._conflicting(pr),
+                    "mergeable_state": "dirty" if self.github._conflicting(pr) else "clean",
                     "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
                     "user": {"login": pr.author, "type": "Bot" if pr.author.endswith("[bot]") else "User"},
                 }
