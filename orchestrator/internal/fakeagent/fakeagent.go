@@ -517,8 +517,9 @@ func IntegrationCalls(prompt string) [][2]string {
 	if !ok {
 		return nil
 	}
-	base, _, _ := strings.Cut(rest, "`")
-	args, _ := json.Marshal(map[string]any{"args": []string{"merge", "--no-edit", "lux/" + base}})
+	base, after, _ := strings.Cut(rest, "`")
+	repo, _, _ := strings.Cut(strings.TrimPrefix(after, " in "), ".")
+	args, _ := json.Marshal(map[string]any{"args": []string{"merge", "--no-edit", "lux/" + base}, "repo": repo})
 	return [][2]string{{"sync_base", "{}"}, {LocalIntegrate, string(args)}}
 }
 

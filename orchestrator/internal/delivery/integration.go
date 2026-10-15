@@ -70,6 +70,11 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if e != nil {
 			return workflow.Result{}, false, e
 		}
+		if head != st.Heads[repo.Name] {
+			st.Heads[repo.Name] = head
+			st.Integration = &Integration{Repo: repo.Name, Base: base, Head: head, BaseHead: bh, BeforePR: true, Published: true, RunID: "server-" + head}
+			return workflow.Result{Next: "test", State: st}, true, nil
+		}
 		if cmp.BehindBy == 0 {
 			continue
 		}
@@ -118,6 +123,7 @@ type Integration struct {
 	BaseHead  string `json:"baseHead"`
 	RunID     string `json:"runId,omitempty"`
 	Published bool   `json:"published,omitempty"`
+	MergeSHA  string `json:"mergeSha,omitempty"`
 	BeforePR  bool   `json:"beforePr,omitempty"`
 }
 

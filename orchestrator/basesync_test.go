@@ -127,6 +127,45 @@ func TestBeforePRMergesMovedBaseAndAdoptsHead(t *testing.T) {
 	}
 }
 
+func TestIntegrationWaitsForAnExistingWriter(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
+	w.gh.AdvanceBase("main", "Moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 0 {
+		t.Fatalf("integration raced writer: %d", n)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
+	w.until("integration after writer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 1
+	})
+}
+
+func TestIntegrationRejectsAStaleConflictAndKeepsFeedback(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.sync()
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("stale signal consumed", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id=(SELECT id FROM workflow_runs WHERE task_id=$1) AND consumed_at IS NULL`, wi) == 0
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 0 {
+		t.Fatalf("stale conflict ran %d integrations", n)
+	}
+	if w.escalationReason(wi) != "" {
+		t.Fatal("stale conflict escalated")
+	}
+}
+
 func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()

@@ -192,8 +192,8 @@ func pushWorkspace(work, bare, branch, base string) (string, error) {
 // went wrong is said in its reply. Callers hold s.mu.
 func (s *Server) localCall(run *Run, tool, args string) {
 	var in struct {
-		Path, Content, Message, Description string
-		Args                                []string
+		Path, Content, Message, Description, Repo string
+		Args                                      []string
 	}
 	_ = json.Unmarshal([]byte(args), &in)
 	var problem string
@@ -206,7 +206,7 @@ func (s *Server) localCall(run *Run, tool, args string) {
 		}
 		s.workspaceGit(run, []string{"commit", "-q", "-m", in.Message})
 	case fakeagent.LocalIntegrate:
-		problem = s.integrateWorkspace(run, in.Args)
+		problem = s.integrateWorkspace(run, in.Repo, in.Args)
 	case fakeagent.LocalGit:
 		s.workspaceGit(run, in.Args)
 	case fakeagent.LocalArtifact:
@@ -240,8 +240,11 @@ func (s *Server) workspaceWrite(run *Run, path, content string) string {
 }
 
 // integrateWorkspace resolves text fixtures by retaining both conflicting sides.
-func (s *Server) integrateWorkspace(run *Run, args []string) string {
+func (s *Server) integrateWorkspace(run *Run, repo string, args []string) string {
 	work, err := s.firstCheckout(run)
+	if err == nil && repo != "" {
+		work = filepath.Join(filepath.Dir(work), lux.SpecName(repo))
+	}
 	if err != nil {
 		return err.Error()
 	}

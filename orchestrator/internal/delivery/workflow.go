@@ -618,7 +618,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 				d.apply(p)
 				if st.Integration != nil {
-					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Heads[st.Integration.Repo], st.Heads[st.Integration.Repo])}}
+					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Integration.MergeSHA, st.Integration.MergeSHA)}}
 				}
 			})
 		if err != nil {
@@ -1002,6 +1002,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 			if err != nil {
 				return workflow.Result{}, err
 			}
+			if fresh.State == forge.StateClosed || fresh.State == forge.StateMerged {
+				continue
+			}
 			if fresh.Mergeable == forge.MergeConflicting {
 				return w.integrationFailure(ctx, sc, st, "still conflicting after integration")
 			}
@@ -1176,6 +1179,16 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if st.Integration != nil {
 				return w.integrationFailure(ctx, sc, st, "this head/base pair was already attempted")
 			}
+			gh, err := w.forges.For(ctx, sc.OrganizationID)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if gh != nil && gh.Settings.WhenBehind == "update" {
+				if len(st.PRFeedback) > 0 {
+					return workflow.Result{Next: "prFix", State: st}, nil
+				}
+				return waitForPR(st), nil
+			}
 		}
 		reason := "pull_request_conflict"
 		if stop.Kind == "ci_stuck" {
@@ -1245,6 +1258,23 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if st.Integration != nil {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+				return err
+			}
+			var writer bool
+			if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
+				return err
+			}
+			if writer {
+				return workflow.Wait{After: time.Second, Why: "integration waits for the current writer"}
+			}
+			return nil
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	total := forge.DefaultSettings().FixRoundsPerPR
 	if gh != nil {
 		total = gh.Settings.FixRoundsPerPR
@@ -1295,6 +1325,15 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
 			return workflow.Result{}, err
 		}
+	}
+	if st.Integration != nil && existing == "" {
+		if st.IntegrationPairs == nil {
+			st.IntegrationPairs = map[string]string{}
+		}
+		if st.Integration.Head != st.Heads[st.Integration.Repo] {
+			st.Integration.Head = st.Heads[st.Integration.Repo]
+		}
+		st.Integration.Published = false
 	}
 	// Several comments arriving together cost one fix Run, not one each.
 	d := directed(st, PhaseFix)
@@ -1403,6 +1442,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if st.Integration != nil {
 		st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
 		st.Integration.Published = true
+		st.Integration.MergeSHA = st.Heads[st.Integration.Repo]
 		st.Iteration = 0
 		st.ActingOnPR = true
 		return workflow.Result{Next: "review", State: st}, nil
@@ -1623,7 +1663,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
-		st.Integration = nil
+		if st.Integration != nil {
+			st.Integration = nil
+			st.ActingOnPR = false
+			if len(st.PRFeedback) > 0 {
+				return workflow.Result{Next: "prFix", State: st}, nil
+			}
+		}
 		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil
