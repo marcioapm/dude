@@ -1,7 +1,9 @@
 /**
  * What a pipeline step says woke it, and which fixes the Findings rail
  * counts as the reviewers': a fix sent by the tester is "for the test", one
- * for a pull request's feedback names it, and neither is a review fix.
+ * for a pull request's feedback names it, and neither is a review fix. Why
+ * a fix ran is first what its run.created says: an adopted pull request is
+ * recorded as opened before its first review.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -55,4 +57,38 @@ describe("what woke a step", () => {
     const kinds = phases.filter((r) => r.phase === "fix").map((r) => fixFor(r, phases, findings, prEvents));
     expect(kinds).toEqual(["review", "test", "pull_request", "review"]);
   });
+});
+
+const eventAt = (eventType: string, occurredAt: string, payload: Record<string, unknown> = {}): PersistedEvent => ({
+  eventId: `e_${eventType}_${occurredAt}`, eventType, occurredAt, organizationId: "o", projectId: null, taskId: "t", runId: null,
+  sessionId: null, workflowRunId: null, actor: { type: "system", id: "forge" }, source: "github",
+  correlationId: null, causationId: null, payload: { number: 1, repo: "greeter", ...payload }, cursor: 1,
+}) as PersistedEvent;
+
+const runAt = (id: string, phase: string, createdAt: string): Run =>
+  ({ id, attempt: 1, phase, role: null, kind: "agent", createdAt, status: "completed" }) as unknown as Run;
+
+test("adopted pull request: the internal review's fix is for the review, the pull request loop's for reviewer-acme's", () => {
+  // Recorded at adoption, with reviewer-acme's line comment already on it.
+  const prEvents = [eventAt("pull_request.opened", "2026-10-15T10:00:00Z"),
+    eventAt("pull_request.commented", "2026-10-15T10:00:01Z", { author: "reviewer-acme" })];
+  const review = runAt("r1", "review", "2026-10-15T10:00:02Z");
+  const first = runAt("r2", "fix", "2026-10-15T10:00:10Z");
+  const loop = runAt("r5", "fix", "2026-10-15T10:01:00Z");
+  const phases = [review, first, runAt("r3", "review", "2026-10-15T10:00:20Z"), runAt("r4", "simplify", "2026-10-15T10:00:30Z"), loop];
+  expect(whyItRan(first, 1, phases, [], prEvents, { phase: "fix", findingIds: ["fnd_1"] })).toBe("for the review");
+  expect(whyItRan(loop, 4, phases, [], prEvents, { phase: "fix", prFeedbackCount: 1 })).toBe("for reviewer-acme's review");
+});
+
+test("new work: a fix before its pull request is for the review, one after it for the pull request's feedback", () => {
+  const prEvents = [eventAt("pull_request.opened", "2026-10-15T10:05:00Z"),
+    eventAt("pull_request.reviewed", "2026-10-15T10:06:00Z", { author: "ana" })];
+  const first = runAt("r2", "fix", "2026-10-15T10:01:00Z");
+  const later = runAt("r6", "fix", "2026-10-15T10:07:00Z");
+  const phases = [runAt("r1", "implement", "2026-10-15T10:00:00Z"), first, later];
+  expect(whyItRan(first, 1, phases, [], prEvents, { phase: "fix", findingIds: ["fnd_1"] })).toBe("for the review");
+  expect(whyItRan(later, 2, phases, [], prEvents, { phase: "fix", prFeedbackCount: 1 })).toBe("for ana's review");
+  // A run.created that says neither (or none read): when it ran decides, as before.
+  expect(whyItRan(first, 1, phases, [], prEvents)).toBe("for the review");
+  expect(whyItRan(later, 2, phases, [], prEvents, { phase: "fix" })).toBe("for ana's review");
 });

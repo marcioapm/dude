@@ -274,6 +274,9 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the conductor is waiting on the pull request")
 	case "start_phase":
 		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note, By: t.By}
+		// Started while the delivery waited on its pull requests: it waits
+		// on them again once this is done (startAtPRWait).
+		st.ActingOnPR = d.Policy == "awaitPullRequest"
 		return workflow.Result{Next: phaseStep(t.Phase, d.Point), State: st}, nil
 	}
 	return workflow.Result{}, fmt.Errorf("decision %q cannot be carried out", t.Action)
@@ -385,6 +388,11 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 			"policy": "openPullRequest", "actions": []string{}, "phases": []string{}, "note": note})
 	}); err != nil {
 		return workflow.Result{}, err
+	}
+	if st.adoptedBranch() && !st.conducted() {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", "Open or Draft the pull request"); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
 }

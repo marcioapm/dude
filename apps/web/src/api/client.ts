@@ -23,6 +23,8 @@ import type {
   SessionLink,
   SessionsList,
   TaskRepository,
+  TaskSource,
+  TaskSourceInput,
   Decider,
   DeliveryPolicy,
   Directive,
@@ -267,9 +269,19 @@ export interface TaskFields {
   epicId: string | null;
   /** The repositories it works on; none is work that changes no code. */
   repositories: TaskRepository[];
+  /** Existing work it starts from (a pull request or a branch), or null for new work; fixed once delivery starts. */
+  source?: TaskSourceInput | null;
 }
 
-export type { TaskRepository } from "@dude/domain";
+export type { TaskRepository, TaskSource, TaskSourceInput } from "@dude/domain";
+
+/** A project repository as the source picker offers it: writable says dude may push to it; reason says why not. */
+export interface SourceRepository {
+  id: string;
+  name: string;
+  writable: boolean;
+  reason?: string;
+}
 
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
@@ -962,6 +974,25 @@ export class ApiClient {
     return this.#request("PATCH", `/v1/tasks/${id}`, changes);
   }
 
+  /**
+   * Look up the existing work a task would start from: the pull request's
+   * title, head and base, or the branch and its base — or why dude will not
+   * take it over (an ApiError with the rule's code).
+   */
+  checkTaskSource(projectId: string, source: TaskSourceInput, taskId?: string): Promise<TaskSource> {
+    return this.#request("POST", `/v1/projects/${projectId}/sources/check`, { source, ...(taskId ? { taskId } : {}) });
+  }
+
+  /** The project's repositories, each with whether dude may push to it (GitHub asked). */
+  sourceRepositories(projectId: string): Promise<{ repositories: SourceRepository[] }> {
+    return this.#request("GET", `/v1/projects/${projectId}/sources/repositories`);
+  }
+
+  /** A project repository's branches whose names contain `q`: at most 50, `more` when cut short. */
+  sourceBranches(projectId: string, repositoryId: string, q: string): Promise<{ branches: string[]; more: boolean }> {
+    return this.#request("GET", `/v1/projects/${projectId}/sources/repositories/${encodeURIComponent(repositoryId)}/branches?q=${encodeURIComponent(q)}`);
+  }
+
   /** Hand a task to someone else to drive: they hear of it, and answer for it. */
   reassignTask(id: string, ownerId: string): Promise<Task> {
     return this.#request("PATCH", `/v1/tasks/${id}`, { ownerId });
@@ -1531,10 +1562,12 @@ export class ApiClient {
 
   /**
    * Who takes the delivery's decisions from the next one on: "policy" is Let Deliver finish it.
-   * openPullRequest confirms that Deliver opens the pull request now, past the conductor's gate question.
+   * openPullRequest confirms that Deliver opens the pull request now, past the conductor's gate question;
+   * with it, draft is the person's Open (false) or Draft (true).
    */
-  setDecider(taskId: string, decider: Decider, openPullRequest = false): Promise<{ taskId: string; decider: Decider }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/decider`, openPullRequest ? { decider, openPullRequest } : { decider });
+  setDecider(taskId: string, decider: Decider, openPullRequest = false, draft?: boolean): Promise<{ taskId: string; decider: Decider }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/decider`,
+      openPullRequest ? { decider, openPullRequest, ...(draft === undefined ? {} : { draft }) } : { decider });
   }
 
   // -- servers: a project's recipes, and what a run serves ---------------

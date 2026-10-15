@@ -184,6 +184,7 @@ func run(log *slog.Logger) error {
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
+	store.SyncPullRequest = pullRequests.Sync
 
 	embedder, notifier := memoryAndPush(set, database, log)
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
@@ -275,7 +276,7 @@ func run(log *slog.Logger) error {
 	var tools *http.Server
 	if addr := set.ToolsListen; addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
-			Kick: serverService.Kick, Forges: forges, Lux: luxClient,
+			Kick: serverService.Kick, Forges: forges, Lux: luxClient, SyncPullRequest: pullRequests.Sync,
 			ValidateMachine: func(ctx context.Context, runID string, recorded, target *delivery.Machine, before lux.Run) error {
 				return phases.ValidateResize(ctx, luxClient, runID, phases.PlanResize(ctx, luxClient, recorded, target, before))
 			}}).Handler(),

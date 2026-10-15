@@ -10,7 +10,7 @@
 import { firstName } from "@dude/design-system";
 import type { Status } from "@dude/design-system/tokens";
 import { TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
-import type { PullRequest, Run, TaskDetail } from "./api/client.ts";
+import type { PullRequest, Run, TaskDetail, TaskSource } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
 import { instant } from "./instant.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
@@ -44,6 +44,13 @@ export function attemptOfWork(runId: string | null, runs: RunsById, current: num
 }
 
 /**
+ * The pull request the task took over (its source). No Run opened it and
+ * start over keeps it, so every attempt works on the same one.
+ */
+export const isAdoptedPr = (pr: PullRequest, source: TaskSource | null | undefined): boolean =>
+  source?.kind === "pr" && pr.repositoryId === source.repositoryId && pr.number === source.number;
+
+/**
  * The attempt a pull request belongs to: that of the Run that opened it;
  * with that Run unknown, the one its branch names (`dude/<task>/attempt-N`),
  * else the current one, as for a finding or a file.
@@ -54,6 +61,10 @@ export function attemptOfPr(pr: PullRequest, runs: RunsById, current: number): n
   const named = /\/attempt-([1-9]\d*)$/.exec(pr.headBranch);
   return named ? Number(named[1]) : current;
 }
+
+/** Whether attempt `n` shows the pull request: the one it opened, or the adopted one, which every attempt has. */
+export const prInAttempt = (pr: PullRequest, n: number, runs: RunsById, current: number, source: TaskSource | null | undefined): boolean =>
+  isAdoptedPr(pr, source) || attemptOfPr(pr, runs, current) === n;
 
 /** The pull request a `pull_request.*` event is about: by its number, and its repository when several share the number. */
 export function prOfEvent(e: PersistedEvent, prs: readonly PullRequest[]): PullRequest | undefined {
@@ -92,7 +103,7 @@ export function attemptStarts(runs: readonly Run[]): Map<number, string> {
  * one on the task's conductor, which is no attempt's. Built once per pass
  * over the ledger; asked only of the events that make a line.
  */
-export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number | null {
+export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number, source?: TaskSource | null): (e: PersistedEvent) => number | null {
   const byId = runsById(runs);
   // Latest first, for an event on no known Run.
   const begun = [...attemptStarts(runs)].sort((a, b) => b[0] - a[0]);
@@ -103,7 +114,8 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
     if (run) return attemptOfRun(run, current);
     if (e.eventType.startsWith("pull_request.")) {
       const pr = prOfEvent(e, prs);
-      if (pr) return attemptOfPr(pr, byId, current);
+      // The adopted pull request is every attempt's: what happened on it is the attempt's under way then.
+      if (pr && !isAdoptedPr(pr, source)) return attemptOfPr(pr, byId, current);
     }
     return begun.find(([, at]) => instant(at) <= instant(e.occurredAt))?.[0] ?? 1;
   };

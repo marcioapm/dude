@@ -30,6 +30,9 @@ type Signal struct {
 type ActionableFeedback struct {
 	// "review" or "checks".
 	Source string `json:"source"`
+	// The feedback's id (Feedback.ID: line-comment-…, issue-comment-…,
+	// review-…); "" for checks. What the fixer may answer and resolve.
+	ID string `json:"id,omitempty"`
 	// Which repository's pull request it is on, when a task has several.
 	Repo   string `json:"repo,omitempty"`
 	Author string `json:"author,omitempty"`
@@ -132,6 +135,9 @@ func isBot(author string) bool {
 	return strings.HasSuffix(author, "[bot]") || strings.HasSuffix(author, "-bot") || author == "github-actions"
 }
 
+// IsBot says a login is a bot's: its comments never wake a fixer.
+func IsBot(author string) bool { return isBot(author) }
+
 // IsActionableComment decides whether one piece of feedback asks for a change.
 func IsActionableComment(f Feedback, factoryLogins []string) bool {
 	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) {
@@ -172,7 +178,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 	var actionable []ActionableFeedback
 	for _, f := range feedback {
 		if IsActionableComment(f, factoryLogins) && !AddressedToDude(f, factoryLogins) {
-			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
+			actionable = append(actionable, ActionableFeedback{Source: "review", ID: f.ID, Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}
 	// A check turning red is worth a fixer; one already red is not news, and

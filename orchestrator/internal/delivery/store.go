@@ -62,6 +62,9 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
+	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
+	// is recorded before its first reviewer starts. nil skips it.
+	SyncPullRequest func(ctx context.Context, org, prID string) error
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -1052,12 +1055,13 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
 	draft := gh.Settings.OpenAs == "draft" || st.Draft
-	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch, Draft: draft}
+	base := st.BaseFor(repo)
+	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: base, Draft: draft}
 	var ref forge.PullRequestRef
 	var err error
 	fresh := false
 	if gh.UsesApp() {
-		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		existing, lookupErr := gh.FindPullRequest(ctx, slug, st.Branch, base)
 		if lookupErr != nil {
 			return "", lookupErr
 		}
@@ -1088,7 +1092,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.
-		existing, ferr := gh.FindPullRequest(ctx, slug, st.Branch, repo.DefaultBranch)
+		existing, ferr := gh.FindPullRequest(ctx, slug, st.Branch, base)
 		if ferr != nil {
 			return "", ferr
 		}
@@ -1119,7 +1123,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state, 'unknown')
 			ON CONFLICT (repository_id, number) DO NOTHING`,
 			id, org, st.ProjectID, st.TaskID, db.Nullable(st.HeadRunID), repo.ID, ref.Number,
-			db.Nullable(ref.NodeID), ref.URL, st.Branch, repo.DefaultBranch, ref.HeadSHA, title, body, ref.State)
+			db.Nullable(ref.NodeID), ref.URL, st.Branch, base, ref.HeadSHA, title, body, ref.State)
 		if err != nil {
 			return err
 		}
@@ -1132,7 +1136,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 			CorrelationID: st.TaskID,
 			Payload: map[string]any{"number": ref.Number, "url": ref.URL, "repo": repo.Name,
-				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": ref.State == forge.StateDraft,
+				"headBranch": st.Branch, "baseBranch": base, "draft": ref.State == forge.StateDraft,
 				"reviewersRequested": db.NonNil(asked)},
 		})
 		return err
@@ -1166,7 +1170,7 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 // with what finds it on GitHub.
 type PullRequestState struct {
 	forge.Status
-	Repo, Slug string
+	ID, Repo, Slug string
 }
 
 // PullRequestStates reads the pull requests as last synced.
@@ -1174,7 +1178,7 @@ func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []strin
 	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT pr.state::text, pr.checks::text, pr.review::text, pr.mergeable_state,
-				pr.unresolved_threads, pr.number, COALESCE(pr.head_sha, ''), r.name, r.url
+				pr.unresolved_threads, pr.number, COALESCE(pr.head_sha, ''), r.name, r.url, pr.id
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 			WHERE pr.id = ANY($1) ORDER BY pr.created_at, pr.id`, prIDs)
 		if err != nil {
@@ -1185,7 +1189,7 @@ func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []strin
 			var p PullRequestState
 			var url string
 			if err := rows.Scan(&p.State, &p.Checks, &p.Review, &p.Mergeable, &p.UnresolvedThreads, &p.Number,
-				&p.HeadSHA, &p.Repo, &url); err != nil {
+				&p.HeadSHA, &p.Repo, &url, &p.ID); err != nil {
 				return err
 			}
 			p.Slug = forge.SlugFromURL(url)

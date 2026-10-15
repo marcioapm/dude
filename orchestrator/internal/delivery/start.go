@@ -131,8 +131,11 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, in.TaskID).Scan(&attempt); err != nil {
 		return out, err
 	}
-	st := State{TaskID: in.TaskID, ProjectID: projectID, Policy: policy, Branch: BranchFor(in.TaskID, attempt),
-		Overridden: in.Override != nil}
+	st, err := NewState(ctx, tx, in.TaskID, projectID, policy, attempt)
+	if err != nil {
+		return out, err
+	}
+	st.Overridden = in.Override != nil
 	if in.How == HowTalk {
 		st.Decider = DeciderConductor
 	}

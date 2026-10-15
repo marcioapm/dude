@@ -98,7 +98,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     assert len(fix_runs()) == fixes_before, "a courtesy comment woke a fixer"
 
     # A real request does.
-    fake_github.comment(pr["number"], "Please also note the date in FIXED.md.", path="FIXED.md")
+    line = fake_github.comment(pr["number"], "Please also note the date in FIXED.md.", path="FIXED.md")
     wait_until(lambda: len(fix_runs()) > fixes_before, timeout=30, message="a change request did not wake a fixer")
     assert len(fix_runs()) == fixes_before + 1, "the courtesy comment also woke a fixer"
 
@@ -115,8 +115,9 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         message="task did not return to review after the fix",
     )
 
-    # Approved, and the fixture has no CI: ready to merge, and it is a
-    # person's merge — the factory never does it.
+    # Its thread resolved and approved, and the fixture has no CI: ready to
+    # merge, and it is a person's merge — the factory never does it.
+    fake_github.resolve_thread(pr["number"], line)
     fake_github.approve(pr["number"])
     wait_until(
         lambda: _task(client, task["id"])["status"] == "ready_to_merge",

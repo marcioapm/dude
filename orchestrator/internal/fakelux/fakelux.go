@@ -809,6 +809,11 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		}
 		step = fakeagent.Tester(str("dude.model"), criteria, fixes)
 	}
+	if raw := str(fakeagent.CallsLabel); raw != "" {
+		var calls [][2]string
+		_ = json.Unmarshal([]byte(raw), &calls)
+		step.Tools = append(step.Tools, calls...)
+	}
 	if str("dude.phase") == "review" && len(specRepos(spec)) == 0 {
 		// No checkout: the reviewer reads what was published, and the
 		// scripted one is content with it.

@@ -349,7 +349,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	case "fail":
 		if st.TestFixRounds < MaxTestFixRounds {
 			st.TestFixRounds++
-			st.TestFindingIDs = g.Findings
+			st.TestFindingIDs, st.RetestDue = g.Findings, true
 			if st.checkingCandidate() {
 				return workflow.Result{Next: "fix", State: st}, nil
 			}
@@ -364,7 +364,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		// A pull request's fix, checked: the pull request takes it now.
 		return workflow.Result{Next: "promoteCandidate", State: st}, nil
 	}
-	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
+	return w.beforePR(ctx, sc, st, fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
 }
 
 // criteriaOf names the criteria in a gate's detail: number and text.

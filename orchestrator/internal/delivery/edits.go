@@ -224,8 +224,10 @@ type PublishTarget struct {
 	WorkflowID string
 	Branch     string
 	// The task branch's head per repository; a repository missing has
-	// none yet, and starts from its default branch.
+	// none yet, and starts from its default branch — or from the task
+	// branch, where the task took that branch over (Adopted names its base).
 	Heads              map[string]string
+	Adopted            map[string]string
 	MaxLines, MaxFiles int
 	// Why it may not be published now, for good (a Refusal's words), or
 	// "" to go on.
@@ -335,6 +337,7 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarg
 		return t, err
 	}
 	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.Branch(p.TaskID), nonNilMap(d.State.Heads), !held
+	t.Adopted = d.State.Bases
 	var projectPolicy, orgPolicy []byte
 	if err := tx.QueryRow(ctx, `SELECT p.delivery_policy, o.delivery_policy FROM tasks t JOIN projects p ON p.id = t.project_id
 		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, p.TaskID).Scan(&projectPolicy, &orgPolicy); err != nil {

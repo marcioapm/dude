@@ -84,6 +84,10 @@ class PullRequest:
     conflicting: bool = False
     # Review threads nobody has resolved (only GraphQL says).
     unresolved_threads: int = 0
+    # The repository its head is in, owner/name, when not this one (a fork).
+    head_repo: str | None = None
+    # Who opened it.
+    author: str = "dude-bot"
 
 
 class FakeGitHub:
@@ -140,6 +144,13 @@ class FakeGitHub:
         self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
         self.receive_requests: list[str] = []
+        # Branches GitHub reports as protected.
+        self.protected: set[str] = set()
+        # Review threads by GraphQL id (thread_id): resolved, outdated; and
+        # draft pull requests marked ready, through GraphQL.
+        self.resolved_threads: set[str] = set()
+        self.outdated_threads: set[str] = set()
+        self.marked_ready: list[int] = []
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
@@ -162,6 +173,48 @@ class FakeGitHub:
 
     def _for_repo(self, repo: str) -> "FakeGitHub":
         return self.siblings.get(repo, self)
+
+    # -- GraphQL review threads ----------------------------------------------
+
+    def node_id(self, number: int) -> str:
+        return f"PR_{self.owner}__{self.repo}_{number}"
+
+    def thread_id(self, root_comment: int) -> str:
+        """The GraphQL id of the review thread a root line comment opened."""
+        return f"PRRT_{self.owner}__{self.repo}_{root_comment}"
+
+    def _threads(self, pr: PullRequest) -> list[dict]:
+        """One thread per root line comment, its replies in it."""
+        out = []
+        for c in pr.comments:
+            if not c.get("path") or c.get("in_reply_to_id"):
+                continue
+            ids = [{"databaseId": c["id"]}] + [{"databaseId": r["id"]} for r in pr.comments if r.get("in_reply_to_id") == c["id"]]
+            tid = self.thread_id(c["id"])
+            out.append({"id": tid, "isResolved": tid in self.resolved_threads, "isOutdated": tid in self.outdated_threads,
+                        "comments": {"nodes": ids}})
+        return out
+
+    def _by_node(self, query: str, node: str) -> dict:
+        """A query or mutation by node id, across this and sibling repositories:
+        a review thread read or resolved, or a draft marked ready."""
+        for gh in [self, *self.siblings.values()]:
+            with gh._lock:
+                for pr in gh.pulls.values():
+                    if "markPullRequestReadyForReview" in query and node == gh.node_id(pr.number):
+                        pr.draft = False
+                        gh.marked_ready.append(pr.number)
+                        return {"data": {"markPullRequestReadyForReview": {"pullRequest": {"id": node, "isDraft": False}}}}
+                    for t in gh._threads(pr):
+                        if t["id"] != node:
+                            continue
+                        if "resolveReviewThread" in query:
+                            gh.resolved_threads.add(node)
+                            return {"data": {"resolveReviewThread": {"thread": {"id": node, "isResolved": True}}}}
+                        return {"data": {"node": {**t, "pullRequest": {
+                            "number": pr.number, "repository": {"nameWithOwner": f"{gh.owner}/{gh.repo}"}}}}}
+        return {"data": {"node": None}, "errors": [
+            {"type": "NOT_FOUND", "message": f"Could not resolve to a node with the global id of '{node}'"}]}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -288,7 +341,7 @@ class FakeGitHub:
             self._next_id += 1
             pr = self.pulls[number]
             pr.reviews.append({"id": self._next_id, "user": {"login": reviewer}, "state": state,
-                               "body": body, "submitted_at": _now()})
+                               "body": body, "submitted_at": _now(), "commit_id": self.branch_sha(pr.head)})
             if reviewer in pr.requested_reviewers:
                 pr.requested_reviewers.remove(reviewer)
         self.send_webhook("pull_request_review", {"action": "submitted", "pull_request": {"number": number}})
@@ -320,6 +373,12 @@ class FakeGitHub:
     def set_unresolved(self, number: int, threads: int) -> None:
         with self._lock:
             self.pulls[number].unresolved_threads = threads
+        self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
+
+    def resolve_thread(self, number: int, root_comment: int) -> None:
+        """A person resolves the review thread a root line comment opened."""
+        with self._lock:
+            self.resolved_threads.add(self.thread_id(root_comment))
         self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
 
     def commit(self, branch: str, message: str, author: str = "Gus Human") -> str:
@@ -364,15 +423,23 @@ class FakeGitHub:
             if status == "completed":
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
-    def open_pull(self, head: str) -> str:
-        """A person's pull request from a new branch off main, opened before
-        dude was watching (no webhook); its head commit."""
-        self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha("main"))
+    def open_pull(self, head: str, base: str = "main", title: str | None = None, author: str = "gus",
+                  head_repo: str | None = None) -> str:
+        """A person's pull request from a new branch off base, opened before
+        dude was watching (no webhook); its head commit. head_repo names a
+        fork's repository its head is in."""
+        self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha(base))
         sha = self.commit(head, f"work on {head}")
         with self._lock:
             number = len(self.pulls) + 1
-            self.pulls[number] = PullRequest(number=number, head=head, base="main", title=head, body="", draft=False)
+            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body="", draft=False,
+                                             head_repo=head_repo, author=author)
         return sha
+
+    def push_branch(self, branch: str, base: str = "main") -> str:
+        """A person pushes a new branch off base, one commit on it; its sha."""
+        self._git_out("update-ref", f"refs/heads/{branch}", self.branch_sha(base))
+        return self.commit(branch, f"work on {branch}")
 
     def add_check_run(self, sha: str, name: str = "ci") -> None:
         """A completed check run on a commit, with no webhook: CI that ran
@@ -455,19 +522,23 @@ class FakeGitHub:
                 return False
 
             def _pull_json(self, pr: PullRequest) -> dict:
+                full = f"{self.github.owner}/{self.github.repo}"
                 return {
                     "number": pr.number,
-                    "node_id": f"PR_{pr.number}",
+                    "node_id": self.github.node_id(pr.number),
                     "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/pull/{pr.number}",
+                    "title": pr.title,
                     "draft": pr.draft,
                     "state": pr.state,
                     "merged_at": pr.merged_at,
-                    "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40},
-                    "base": {"ref": pr.base},
+                    "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40, "ref": pr.head,
+                             "repo": {"full_name": pr.head_repo or full}},
+                    "base": {"ref": pr.base, "repo": {"full_name": full}},
                     "mergeable": not pr.conflicting,
                     "mergeable_state": "dirty" if pr.conflicting else "clean",
                     "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
                     "body": pr.body,
+                    "user": {"login": pr.author, "type": "Bot" if pr.author.endswith("[bot]") else "User"},
                 }
 
             def _body(self) -> dict:
@@ -640,6 +711,9 @@ class FakeGitHub:
                 """The queries dude sends: a pull request's review threads,
                 and who could review it (REVIEWERS; the first two suggested)."""
                 v = body.get("variables") or {}
+                query = body.get("query", "")
+                if v.get("id"):
+                    return self._send(200, root._by_node(query, v["id"]))
                 gh = root._for_repo(v.get("name", "")) if v.get("owner") == root.owner else None
                 if "teams(" in body.get("query", ""):
                     # The owner's teams: none, as for a repository a user owns.
@@ -657,10 +731,14 @@ class FakeGitHub:
                 if pr is None:
                     return self._send(200, {"data": {"repository": None}, "errors": [
                         {"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]})
-                nodes = [{"isResolved": True}] + [{"isResolved": False}] * pr.unresolved_threads
+                if "databaseId" in query:
+                    return self._send(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                        "nodes": gh._threads(pr), "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}})
+                # The line comments' real threads, then set_unresolved's synthetic ones.
+                nodes = ([{"isResolved": True}] + [{"isResolved": t["isResolved"]} for t in gh._threads(pr)]
+                         + [{"isResolved": False}] * pr.unresolved_threads)
                 self._send(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {
                     "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}})
-
             def _checks(self, sha: str, kind: str) -> list[dict]:
                 with self.github._lock:
                     return [dict(c) for c in self.github.checks.get(sha, {}).values() if c["kind"] == kind]
@@ -728,6 +806,14 @@ class FakeGitHub:
                     if not sha:
                         return self._send(404, {"message": "Not Found"})
                     return self._send(200, {"ref": path[len(f"{prefix}/git/ref/"):], "object": {"sha": sha, "type": "commit"}})
+                if path == f"{prefix}/branches":
+                    # As GitHub lists them: by name, a page at a time, and an empty page past the last.
+                    from urllib.parse import parse_qs
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    per_page, page = min(int(q.get("per_page", 30)), 100), max(int(q.get("page", 1)), 1)
+                    names = sorted(self.github.branches())[(page - 1) * per_page:page * per_page]
+                    return self._send(200, [{"name": n, "commit": {"sha": self.github.branch_sha(n)},
+                                             "protected": n in self.github.protected} for n in names])
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
                     diff = self._git("diff", "--numstat", m[1], m[2])
                     if diff.returncode:
@@ -743,7 +829,21 @@ class FakeGitHub:
                     ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
                     return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0)})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
+                    if int(m[1]) not in self.github.pulls:
+                        return self._send(404, {"message": "Not Found"})
                     return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
+                if m := re.fullmatch(rf"{prefix}/git/ref/heads/(.+)", path):
+                    sha = self.github.branch_sha(m[1])
+                    if not sha:
+                        return self._send(404, {"message": "Not Found"})
+                    return self._send(200, {"ref": f"refs/heads/{m[1]}", "object": {"sha": sha}})
+                if m := re.fullmatch(rf"{prefix}/branches/(.+)", path):
+                    from urllib.parse import unquote
+                    branch = unquote(m[1])
+                    sha = self.github.branch_sha(branch)
+                    if not sha:
+                        return self._send(404, {"message": "Branch not found"})
+                    return self._send(200, {"name": branch, "protected": branch in self.github.protected, "commit": {"sha": sha}})
                 if m := re.fullmatch(rf"/orgs/([^/]+)/members/([^/]+)", path):
                     if m[2] not in root.members:
                         return self._send(404, {"message": "Not Found"})

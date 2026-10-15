@@ -2,7 +2,9 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,6 +66,38 @@ type ReplyPost struct {
 	// conversation.
 	thread int64
 	body   string
+	// Who posted it: the conductor, or a fixer in its own batch.
+	by string
+}
+
+// actingRun is the Run calling a PR tool: who it is, its status, and the
+// feedback ids a fixer was given (bots' left out: they are not its to answer).
+type actingRun struct {
+	role, phase, status string
+	batch               []string
+}
+
+// ended says the Run is over. lux's lifecycle trails the agent's records,
+// so a Run still starting is acting, and live.
+func (r actingRun) ended() bool {
+	return r.status == "completed" || r.status == "failed" || r.status == "aborted"
+}
+
+func actingRunTx(ctx context.Context, tx pgx.Tx, ref RunRef) (actingRun, error) {
+	var r actingRun
+	var feedback []byte
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(role::text, ''), COALESCE(phase::text, ''), status::text, COALESCE(pr_feedback, '[]')
+		FROM runs WHERE id = $1 AND task_id = $2`, ref.RunID, ref.TaskID).Scan(&r.role, &r.phase, &r.status, &feedback); err != nil {
+		return r, err
+	}
+	var items []forge.ActionableFeedback
+	_ = json.Unmarshal(feedback, &items)
+	for _, f := range items {
+		if f.ID != "" && f.Source != forge.SourceBot {
+			r.batch = append(r.batch, f.ID)
+		}
+	}
+	return r, nil
 }
 
 // CheckReplyTx is step 1: the reply as it will be posted, or a Refusal.
@@ -71,8 +105,30 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return ReplyPost{}, err
 	}
+	caller, err := actingRunTx(ctx, tx, ref)
+	if err != nil {
+		return ReplyPost{}, err
+	}
+	// A fixer answering pull request feedback replies only to its own
+	// batch's comments, while it runs.
+	var batch []string
+	if caller.phase == PhaseFix {
+		batch = caller.batch
+		switch {
+		case caller.ended():
+			return ReplyPost{}, refusef("your Run is %s: it posts nothing", caller.status)
+		case len(batch) == 0:
+			return ReplyPost{}, refusef("you reply only to the pull request feedback you were given, and you were given none")
+		case !slices.Contains(batch, strings.TrimSpace(in.InReplyTo)):
+			return ReplyPost{}, refusef("in_reply_to must be one of the comments in your feedback: %s", strings.Join(batch, ", "))
+		}
+	} else if caller.role != RoleConductor {
+		return ReplyPost{}, refusef("a task's conductor replies on its pull requests")
+	}
 	var live bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
+	if batch != nil {
+		live = true
+	} else if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
 		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
 		return ReplyPost{}, err
 	}
@@ -104,7 +160,10 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if gh == nil || slug == "" {
 		return ReplyPost{}, refusef("%s#%d is not on a GitHub dude is connected to: there is nowhere to post", repo, number)
 	}
-	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo)}
+	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
+	if batch != nil {
+		p.by = "fixer"
+	}
 	var author, said string
 	if p.inReplyTo != "" {
 		// Its words as last read: an edit since it was first recorded is
@@ -159,7 +218,7 @@ func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Pos
 		g["inReplyTo"] = p.inReplyTo
 	}
 	_, err := ledger.Append(ctx, tx, p.ref.Event(EvChatMessage, ledger.ActorAgent,
-		map[string]any{"text": p.text, "by": "conductor", "github": g}))
+		map[string]any{"text": p.text, "by": p.by, "github": g}))
 	return Replied{Repo: p.repo, Number: p.number, CommentID: posted.ID, URL: posted.URL}, err
 }
 

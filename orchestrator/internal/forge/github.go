@@ -455,11 +455,15 @@ type ghPull struct {
 	MergedAt       *string `json:"merged_at"`
 	Mergeable      *bool   `json:"mergeable"`
 	MergeableState string  `json:"mergeable_state"`
+	Title          string  `json:"title"`
 	Head           struct {
-		SHA string `json:"sha"`
+		SHA  string  `json:"sha"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		Ref string `json:"ref"`
+		Ref  string  `json:"ref"`
+		Repo *ghRepo `json:"repo"`
 	} `json:"base"`
 	RequestedReviewers []ghUser `json:"requested_reviewers"`
 	RequestedTeams     []struct {
@@ -795,13 +799,19 @@ type gqlError struct {
 // error, GitHub's to say again later; the rest are returned for the caller
 // to judge, beside whatever data came with them.
 func (g *GitHub) graphql(ctx context.Context, query string, vars map[string]any, data any) ([]gqlError, error) {
-	var out struct {
-		Data   json.RawMessage `json:"data"`
-		Errors []gqlError      `json:"errors"`
-	}
 	scope, _ := vars["owner"].(string)
 	if name, ok := vars["name"].(string); ok && scope != "" {
 		scope += "/" + name
+	}
+	return g.graphqlIn(ctx, scope, query, vars, data)
+}
+
+// graphqlIn is graphql authenticated for scope (owner/name), for a query
+// whose variables do not name the repository.
+func (g *GitHub) graphqlIn(ctx context.Context, scope, query string, vars map[string]any, data any) ([]gqlError, error) {
+	var out struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []gqlError      `json:"errors"`
 	}
 	if err := g.doURL(ctx, scope, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": vars}, &out); err != nil {
 		return nil, err

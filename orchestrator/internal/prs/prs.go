@@ -404,6 +404,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	prior := forge.Status{PullRequestRef: forge.PullRequestRef{State: pr.State, HeadSHA: pr.HeadSHA}, Checks: pr.Checks,
 		Review: pr.Review, Mergeable: pr.Mergeable, UnresolvedThreads: pr.UnresolvedThreads}
 	signal := forge.Classify(prior, status, permitted, s.FactoryLogins)
+	if signal != nil && signal.Kind == "actionable" {
+		if signal.Feedback, err = s.withBots(ctx, org, gh, pr, signal.Feedback); err != nil {
+			return err
+		}
+	}
 	stuckFor := 0 // how many of the organization's patiences checks have been pending on this head
 	if signal == nil && status.Checks == forge.ChecksPending && isOpen(status.State) {
 		stuckFor = int(time.Since(headSeenAt) / gh.Settings.CIStuck())
@@ -429,6 +434,80 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	return nil
 }
 
+// withBots adds to a batch a requested reviewer's review woke the bots'
+// comments on the pull request since the task's last pull request fix
+// (forge.RideAlong). Who was requested is read from the pull request as
+// recorded before this sync, and the organization's own reviewers.
+func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr tracked,
+	batch []forge.ActionableFeedback) ([]forge.ActionableFeedback, error) {
+	var before []forge.Review
+	_ = json.Unmarshal(pr.ReviewsJSON, &before)
+	requested := forge.Requested(before)
+	var bots []forge.Feedback
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// Logins GitHub accepted a request for: the snapshot loses one once they submit.
+		rows, err := tx.Query(ctx, `SELECT DISTINCT l FROM events e,
+				jsonb_array_elements_text(COALESCE(e.payload->'reviewersRequested', e.payload->'logins', '[]'::jsonb)) l
+			WHERE e.task_id = $1 AND (e.payload->>'number')::int = $2 AND e.payload->>'repo' = $3
+			  AND (e.event_type IN ($4, $5) OR e.event_type = $6 AND e.payload->>'action' = $7)`,
+			pr.TaskID, pr.Number, pr.RepoName, delivery.EvPullRequestOpened, delivery.EvPullRequestReviewRerequested,
+			delivery.EvPullRequestAction, delivery.ActionRequestReview)
+		if err != nil {
+			return err
+		}
+		asked, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		requested = append(requested, asked...)
+		if !forge.WokenByRequestedReview(batch, requested) {
+			return nil
+		}
+		// Each as last recorded: a later comment_edited carries its new body.
+		rows, err = tx.Query(ctx, `SELECT COALESCE(e.payload->>'feedbackId', ''), COALESCE(e.payload->>'author', ''),
+				COALESCE((SELECT l.payload->>'body' FROM events l WHERE l.task_id = e.task_id AND l.event_type IN ($2, $5)
+				  AND l.payload->>'feedbackId' = e.payload->>'feedbackId' ORDER BY l.cursor DESC LIMIT 1), ''),
+				COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'kind', '')
+			FROM events e WHERE e.task_id = $1 AND e.event_type = $2 AND (e.payload->>'number')::int = $3 AND e.payload->>'repo' = $4
+			  AND e.occurred_at > COALESCE((SELECT max(r.created_at) FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix'
+			      AND r.pr_feedback <> '[]'::jsonb), '-infinity')
+			ORDER BY e.cursor`, pr.TaskID, delivery.EvPullRequestCommented, pr.Number, pr.RepoName, delivery.EvPullRequestCommentEdited)
+		if err != nil {
+			return err
+		}
+		bots, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (forge.Feedback, error) {
+			var f forge.Feedback
+			err := r.Scan(&f.ID, &f.Author, &f.Body, &f.Path, &f.Kind)
+			return f, err
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(bots) == 0 {
+		return batch, nil
+	}
+	// A bot's line comment in a thread resolved or outdated is no longer open; a
+	// top-level comment has no resolution and stays. Unread, the batch goes
+	// without bots: its feedback is already recorded, and no later sync
+	// would deliver it again.
+	closed, err := gh.ClosedThreadComments(ctx, forge.SlugFromURL(pr.RepoURL), pr.Number)
+	if err != nil {
+		if s.Log != nil {
+			s.Log.Warn("bot thread states unread: the batch goes without bots", "pr", pr.Number, "repo", pr.RepoName, "error", err)
+		}
+		return batch, nil
+	}
+	open := bots[:0]
+	for _, b := range bots {
+		if id := forge.LineCommentID(b.ID); id == 0 || !closed[id] {
+			open = append(open, b)
+		}
+	}
+	return forge.RideAlong(batch, requested, open), nil
+}
+
 // signal tells the workflow what a sync found. One signal per distinct
 // change, however many deliveries report it.
 func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forge.Status, signal *forge.Signal,
@@ -437,9 +516,15 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	for i := range signal.Feedback {
 		signal.Feedback[i].Repo = pr.RepoName
 	}
-	ids := make([]string, len(permitted))
-	for i, f := range permitted {
-		ids[i] = f.ID
+	// A bot's comment in the batch is part of what it is.
+	ids := make([]string, 0, len(permitted))
+	for _, f := range permitted {
+		ids = append(ids, f.ID)
+	}
+	for _, f := range signal.Feedback {
+		if f.Source == forge.SourceBot {
+			ids = append(ids, f.ID)
+		}
 	}
 	// One signal per distinct change, however many deliveries report it.
 	// The head is part of it: checks failing again after a fix is a new
