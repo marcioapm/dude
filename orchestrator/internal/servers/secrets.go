@@ -30,7 +30,7 @@ const previewSecretAs = "env"
 
 // loadSecrets are the project's secrets, by name, as a preview's spec declares them.
 func loadSecrets(ctx context.Context, tx pgx.Tx, projectID string) ([]lux.Secret, error) {
-	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 ORDER BY name`, projectID)
+	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND 'previews' = ANY(recipients) ORDER BY name`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (p *Previews) resumeSecrets(ctx context.Context, r previewRun) (secrets []l
 			return nil
 		}
 		// Only the declared names' values: one added since is not sent.
-		rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2)`,
+		rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2) AND 'previews' = ANY(recipients)`,
 			r.ProjectID, recorded)
 		if err != nil {
 			return err
