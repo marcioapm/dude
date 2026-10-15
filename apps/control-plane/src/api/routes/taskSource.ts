@@ -6,7 +6,7 @@
  * the goal is.
  */
 
-import { taskSourceInputSchema, type TaskSource, type TaskSourceInput } from "@dude/domain";
+import { taskSourceInputSchema, taskSourceModeSchema, type TaskSource, type TaskSourceInput } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { HttpError } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -17,14 +17,15 @@ export const taskSourceInput = taskSourceInputSchema.nullable();
 
 /** The SELECT expression for a task's source, as JSON or null, for `tasks` rows. */
 export const SOURCE_JSON = `(SELECT json_strip_nulls(json_build_object('kind', s.kind, 'repositoryId', s.repository_id, 'repository', r.name,
-    'number', s.number, 'title', s.title, 'headBranch', s.head_branch, 'baseBranch', s.base_branch))
+    'number', s.number, 'title', s.title, 'headBranch', s.head_branch, 'baseBranch', s.base_branch, 'mode', s.mode))
   FROM task_sources s JOIN repositories r ON r.id = s.repository_id WHERE s.task_id = tasks.id) AS source`;
 
 /**
  * The orchestrator's verdict on a source: resolved, or why not, as the
  * error the API answers (422 with the rule's code; 502 when GitHub could
  * not be asked). taskId names the task it is for, so its own branch is not
- * another task's.
+ * another task's. Its mode is the one asked for, else the orchestrator's
+ * default for what the source is.
  */
 export async function checkTaskSource(ctx: RequestContext, projectId: string, source: TaskSourceInput,
   taskId: string | null): Promise<TaskSource> {
@@ -38,16 +39,19 @@ export async function checkTaskSource(ctx: RequestContext, projectId: string, so
   if (!res.ok) {
     throw new HttpError(res.status, out.error?.message ?? "GitHub could not be asked about the source", out.error?.code ?? "error");
   }
+  const found = taskSourceModeSchema.safeParse(out.mode);
   return {
     kind: out.kind as TaskSource["kind"], repositoryId: out.repositoryId as string, repository: out.repository as string,
     ...(typeof out.number === "number" ? { number: out.number, title: (out.title as string) ?? "" } : {}),
     headBranch: out.headBranch as string, baseBranch: out.baseBranch as string,
+    mode: source.mode ?? (found.success ? found.data : "review"),
   };
 }
 
 /**
  * The source a request names is the one kept: a dialog sends every field,
- * and saving it unchanged is no change (and asks GitHub nothing).
+ * and saving it unchanged is no change (and asks GitHub nothing). Its mode
+ * is not part of where it is (sourceMode).
  */
 export function sameSource(stored: TaskSource | null, given: TaskSourceInput | null): boolean {
   if (!stored || !given) return !stored && !given;
@@ -57,6 +61,22 @@ export function sameSource(stored: TaskSource | null, given: TaskSourceInput | n
     return n !== null && Number(n[1]) === stored.number;
   }
   return given.branch === stored.headBranch && (given.base === undefined || given.base === stored.baseBranch);
+}
+
+/**
+ * A resolved source the request named another way (a pull request's URL)
+ * that is the stored one keeps the stored mode unless the request named one.
+ */
+export function keepMode(stored: TaskSource | null, given: TaskSourceInput, resolved: TaskSource): TaskSource {
+  if (!stored || given.mode || stored.kind !== resolved.kind || stored.repositoryId !== resolved.repositoryId) return resolved;
+  const same = resolved.kind === "pr" ? resolved.number === stored.number
+    : resolved.headBranch === stored.headBranch && resolved.baseBranch === stored.baseBranch;
+  return same ? { ...resolved, mode: stored.mode } : resolved;
+}
+
+/** The same source with another mode, when the request names one: else null (no change). */
+export function sourceMode(stored: TaskSource, given: TaskSourceInput): TaskSource | null {
+  return given.mode && given.mode !== stored.mode ? { ...stored, mode: given.mode } : null;
 }
 
 /**
@@ -80,9 +100,9 @@ export async function setTaskSource(scope: OrgScope, organizationId: string, tas
   await scope.sql`DELETE FROM task_sources WHERE task_id = ${taskId}`;
   if (!source) return;
   await scope.sql`
-    INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch)
+    INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch, mode)
     VALUES (${taskId}, ${organizationId}, ${source.repositoryId}, ${source.kind}, ${source.number ?? null},
-            ${source.title ?? null}, ${source.headBranch}, ${source.baseBranch})`;
+            ${source.title ?? null}, ${source.headBranch}, ${source.baseBranch}, ${source.mode})`;
   await scope.sql`
     INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
     VALUES (${organizationId}, ${taskId}, ${source.repositoryId}, 'write')

@@ -37,7 +37,8 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
         source={"kind": "pr", "repositoryId": _repo_id(forge_project), "pullRequest": "#1"},
     )
     assert task["source"] == {"kind": "pr", "repositoryId": _repo_id(forge_project), "repository": "greeter",
-                              "number": 1, "title": "Greet in Portuguese", "headBranch": "feature/greet", "baseBranch": "main"}
+                              "number": 1, "title": "Greet in Portuguese", "headBranch": "feature/greet", "baseBranch": "main",
+                              "mode": "review"}
     resp = client.post(f"/v1/tasks/{task['id']}/deliver")
     assert resp.status_code == 201, resp.text
 
@@ -72,15 +73,17 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
 def test_an_adopted_branch_opens_its_pull_request_into_the_chosen_base(
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
-    """A stacked branch: reviewed, fixed on itself, then a pull request into its base, not main."""
+    """A stacked branch to review as it is: reviewed, fixed on itself, then a pull request into its base, not main."""
     fake_github.push_branch("stack/base")
     fake_github.push_branch("stack/top", base="stack/base")
     task = client.create_task(
         forge_project["id"], "Finish the stacked change",
         goal="Take over the stacked branch and open its pull request.",
-        source={"kind": "branch", "repositoryId": _repo_id(forge_project), "branch": "stack/top", "base": "stack/base"},
+        source={"kind": "branch", "repositoryId": _repo_id(forge_project), "branch": "stack/top", "base": "stack/base",
+                "mode": "review"},
     )
     assert task["source"]["headBranch"] == "stack/top" and task["source"]["baseBranch"] == "stack/base"
+    assert task["source"]["mode"] == "review"
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
     # A person's branch is never published without their Open or Draft, even under Deliver.
@@ -172,3 +175,106 @@ def test_a_started_tasks_source_is_fixed(client: ApiClient, forge_project: dict,
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     resp = client.patch(f"/v1/tasks/{task['id']}", {"source": None})
     assert resp.status_code == 409, resp.text
+
+
+def _phases(client: ApiClient, task_id: str) -> list[str]:
+    return [r["phase"] for r in client.task_runs(task_id) if r["phase"]]
+
+
+def _simplified(client: ApiClient, task_id: str) -> bool:
+    return any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(task_id))
+
+
+def test_a_draft_pull_request_is_continued_on_its_own_branch_then_reviewed(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """(a) A draft is unfinished: by default an implementer builds on it, pushing onto the same head, then review; one PR."""
+    person_head = fake_github.open_pull("feature/half", title="Half a greeting", draft=True)
+    task = client.create_task(
+        forge_project["id"], "Finish the half greeting",
+        goal="Carry the draft greeting on to done.",
+        source={"kind": "pr", "repositoryId": _repo_id(forge_project), "pullRequest": "#1"},
+    )
+    assert task["source"]["mode"] == "continue"
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    wait_until(lambda: _task(client, task["id"])["status"] == "review" and _simplified(client, task["id"]),
+               timeout=120, message="the continued draft never got back to review")
+    phases = _phases(client, task["id"])
+    assert phases[:2] == ["implement", "review"], phases
+    log = fake_github.branch_log("feature/half")
+    assert any(m.startswith("Add FACTORY.md") for m in log) and "work on feature/half" in log, log
+    assert fake_github._git_out("merge-base", "--is-ancestor", person_head, "feature/half") == ""
+    assert len(fake_github.pulls) == 1, "dude opened a second pull request"
+    assert [pr["number"] for pr in _pull_requests(client, task["id"])] == [1]
+
+
+def test_a_ready_pull_request_to_continue_with_nothing_to_add_is_reviewed_as_it_is(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """(b) Ready, but Continue chosen; the implementer commits nothing: review on the unchanged head, said in the ledger."""
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/done"})})
+    assert resp.status_code == 200, resp.text
+    person_head = fake_github.open_pull("feature/done", title="Done already")
+    task = client.create_task(
+        forge_project["id"], "Check the finished greeting",
+        goal="Carry the greeting on to done, if it is not.",
+        source={"kind": "pr", "repositoryId": _repo_id(forge_project), "pullRequest": "#1", "mode": "continue"},
+    )
+    assert task["source"]["mode"] == "continue"
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    review = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "review"), None),
+                        timeout=90, message="no review after an implementer with nothing to add")
+    implement = [r for r in client.task_runs(task["id"]) if r["phase"] == "implement"]
+    assert len(implement) == 1 and implement[0]["status"] == "completed", implement
+    assert client.get_run(review["id"])["baseRefs"] == {"greeter": person_head}
+    events = client.events(taskId=task["id"])
+    said = [e for e in events if e["eventType"] == "run.nothing_to_add"]
+    assert [e["runId"] for e in said] == [implement[0]["id"]], said
+    assert not any(e["eventType"] == "task.status_changed" and e["payload"].get("reason") == "no_changes" for e in events)
+    wait_until(lambda: _simplified(client, task["id"]), timeout=120, message="the review loop never finished")
+    assert "work on feature/done" in fake_github.branch_log("feature/done")
+    assert not any(m.startswith("Add FACTORY.md") for m in fake_github.branch_log("feature/done"))
+    assert len(fake_github.pulls) == 1
+
+
+def test_a_bare_branch_is_continued_then_held_for_open_or_draft(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """(c) A branch continues by default: implement → review → the Open/Draft gate, as a branch to review is held."""
+    person_head = fake_github.push_branch("feature/bare")
+    task = client.create_task(
+        forge_project["id"], "Finish the bare branch",
+        goal="Carry the bare branch on and open its pull request.",
+        source={"kind": "branch", "repositoryId": _repo_id(forge_project), "branch": "feature/bare"},
+    )
+    assert task["source"]["mode"] == "continue"
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    wait_until(lambda: _task(client, task["id"])["status"] == "awaiting_input", timeout=120,
+               message="the continued branch never waited for Open or Draft")
+    assert _pull_requests(client, task["id"]) == [] and len(fake_github.pulls) == 0
+    phases = _phases(client, task["id"])
+    assert phases[:2] == ["implement", "review"], phases
+    assert fake_github._git_out("merge-base", "--is-ancestor", person_head, "feature/bare") == ""
+    resp = client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy", "openPullRequest": True, "draft": False})
+    assert resp.status_code == 200, resp.text
+    pr = wait_until(lambda: _pull_requests(client, task["id"]), timeout=90, message="no pull request after Open")[0]
+    assert (pr["headBranch"], pr["baseBranch"]) == ("feature/bare", "main")
+
+
+def test_a_ready_pull_request_by_default_is_reviewed_with_no_implementer(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """(d) Ready for review and nothing chosen: review as it is, as before (no implementer)."""
+    fake_github.open_pull("feature/ready", title="Ready greeting")
+    task = client.create_task(
+        forge_project["id"], "Review the ready greeting", goal="Get the ready greeting merged.",
+        source={"kind": "pr", "repositoryId": _repo_id(forge_project), "pullRequest": "#1"},
+    )
+    assert task["source"]["mode"] == "review"
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    wait_until(lambda: _simplified(client, task["id"]), timeout=120, message="the review loop never finished")
+    phases = _phases(client, task["id"])
+    assert "implement" not in phases and phases[0] == "review", phases

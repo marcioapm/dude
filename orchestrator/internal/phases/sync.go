@@ -1320,6 +1320,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Bases: taskBranch.Bases, Adopted: adopted,
 	}
+	if r.Phase == delivery.PhaseImplement && taskBranch.Source.Continues() {
+		// An implementer on adopted work carries someone's work on.
+		promptIn.Continues = taskBranch.Source
+	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
 	// have theirs, in the workspace note).

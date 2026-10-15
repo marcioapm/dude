@@ -12,8 +12,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Callout, Fieldset, Input, SearchPicker, Segmented, Select } from "@dude/design-system";
-import { ApiError, type ApiClient, type Repository, type SourceRepository, type TaskSource, type TaskSourceInput } from "../api/client.ts";
+import { Callout, ChoiceList, Fieldset, Input, SearchPicker, Segmented, Select } from "@dude/design-system";
+import { ApiError, type ApiClient, type Repository, type SourceRepository, type TaskSource, type TaskSourceInput, type TaskSourceMode } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
 export type StartsFrom = "new" | "pr" | "branch";
@@ -25,24 +25,33 @@ export interface SourceDraft {
   pullRequest: string;
   branch: string;
   base: string;
+  /** Continue the work or review it as is; null: what the source says (the lookup's default). */
+  mode: TaskSourceMode | null;
 }
 
 export function sourceDraft(saved: TaskSource | null | undefined, repositories: Repository[]): SourceDraft {
-  if (!saved) return { from: "new", repositoryId: repositories[0]?.id ?? "", pullRequest: "", branch: "", base: "" };
+  if (!saved) return { from: "new", repositoryId: repositories[0]?.id ?? "", pullRequest: "", branch: "", base: "", mode: null };
   return {
     from: saved.kind, repositoryId: saved.repositoryId, pullRequest: saved.number ? String(saved.number) : "",
-    branch: saved.kind === "branch" ? saved.headBranch : "", base: saved.kind === "branch" ? saved.baseBranch : "",
+    branch: saved.kind === "branch" ? saved.headBranch : "", base: saved.kind === "branch" ? saved.baseBranch : "", mode: saved.mode,
   };
 }
 
-/** The source the draft names, for the API; null for new work, undefined while incomplete. */
-export function sourceInput(d: SourceDraft): TaskSourceInput | null | undefined {
+/** The source the draft names, for the API; null for new work, undefined while incomplete. Its mode only when `withMode`. */
+export function sourceInput(d: SourceDraft, withMode = false): TaskSourceInput | null | undefined {
   if (d.from === "new") return null;
   if (!d.repositoryId) return undefined;
-  if (d.from === "pr") return d.pullRequest.trim() ? { kind: "pr", repositoryId: d.repositoryId, pullRequest: d.pullRequest.trim() } : undefined;
+  const mode = withMode && d.mode ? { mode: d.mode } : {};
+  if (d.from === "pr") return d.pullRequest.trim() ? { kind: "pr", repositoryId: d.repositoryId, pullRequest: d.pullRequest.trim(), ...mode } : undefined;
   if (!d.branch.trim()) return undefined;
-  return { kind: "branch", repositoryId: d.repositoryId, branch: d.branch.trim(), ...(d.base.trim() ? { base: d.base.trim() } : {}) };
+  return { kind: "branch", repositoryId: d.repositoryId, branch: d.branch.trim(), ...(d.base.trim() ? { base: d.base.trim() } : {}), ...mode };
 }
+
+/** What dude does first with the work, and what each choice means. */
+const MODES: ReadonlyArray<{ value: TaskSourceMode; label: string; description: string }> = [
+  { value: "continue", label: "Continue the work", description: "An implementer builds on it first, then review." },
+  { value: "review", label: "Review it as is", description: "Straight to review: nothing is implemented first." },
+];
 
 /** A lookup's outcome: what dude found, or why it will not take it over. */
 export type SourceCheck = { state: "idle" } | { state: "checking" } | { state: "ok"; source: TaskSource }
@@ -115,13 +124,20 @@ export interface StartsFromFieldProps {
 }
 
 export function StartsFromField({ client, projectId, repositories, access, draft, onChange, check, locked, saved }: StartsFromFieldProps) {
-  const set = (patch: Partial<SourceDraft>) => onChange({ ...draft, ...patch });
+  // Another source has its own default: a choice made for the last one does not carry over.
+  const set = (patch: Partial<SourceDraft>) => onChange({ ...draft, mode: null, ...patch });
   const repo = repositories.find((r) => r.id === draft.repositoryId);
   // The person set the draft's repository to Reads it: the task would not change what it starts from.
   const onlyRead = !locked && draft.from !== "new" && draft.repositoryId !== "" && !repo;
   const readName = (Array.isArray(access) ? access.find((a) => a.id === draft.repositoryId)?.name : undefined) ?? "the repository";
   const refused = check.state === "refused" ? check.message : undefined;
   const found = check.state === "ok" ? check.source : null;
+  // The person's choice, else what the source says (the lookup's default); started, the saved one.
+  const mode = locked ? saved?.mode ?? null : draft.mode ?? found?.mode ?? null;
+  const modeChoice = mode === null ? null : (
+    <ChoiceList<TaskSourceMode> label="What dude does first" value={mode} options={MODES} data-testid="task-source-mode"
+      onChange={(m) => !locked && onChange({ ...draft, mode: m })} />
+  );
   const writableIds = Array.isArray(access) ? new Set(access.filter((a) => a.writable).map((a) => a.id)) : null;
   const whyNot = (id: string) => (Array.isArray(access) ? access.find((a) => a.id === id)?.reason : undefined);
   const usable = writableIds ? repositories.filter((r) => writableIds.has(r.id)) : [];
@@ -134,6 +150,7 @@ export function StartsFromField({ client, projectId, repositories, access, draft
     <Fieldset legend="Starts from" disabled={locked} data-testid="task-source"
       hint={locked ? "Delivery has started: where it started from is fixed."
         : draft.from === "new" ? "New work: an implementer starts from the default branch."
+        : mode === "continue" ? "An implementer carries the existing work on first, on the same branch; then review, fixes, and the pull request."
         : "dude reviews the existing work first, fixes what review finds on the same branch, then the pull request."}>
       <Segmented<StartsFrom> label="Starts from" size="sm" disabled={locked} value={draft.from} onChange={(from) => set({ from })}
         data-testid="task-source-kind"
@@ -143,7 +160,10 @@ export function StartsFromField({ client, projectId, repositories, access, draft
           { value: "branch", label: "Existing branch", disabled: repositories.length === 0 },
         ]} />
       {draft.from === "new" ? null : locked ? (
-        <LockedSource draft={draft} repo={repo} saved={saved} />
+        <>
+          <LockedSource draft={draft} repo={repo} saved={saved} />
+          {modeChoice}
+        </>
       ) : onlyRead ? (
         <Callout tone="attention" data-testid="task-source-read">
           This task only reads {readName}, which it starts from: set it to Changes it, or start from New work.
@@ -178,6 +198,7 @@ export function StartsFromField({ client, projectId, repositories, access, draft
             </>
           )}
           {found ? <SourceFound source={found} testId="task-source-found" /> : null}
+          {found ? modeChoice : null}
         </>
       )}
     </Fieldset>
