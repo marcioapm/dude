@@ -46,7 +46,10 @@ const DECIDING_JSON = `
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
-  (SELECT COALESCE(json_agg(json_build_object('attempt', COALESCE((w.state->>'attempt')::int, 1),
+  -- Each delivery's own decider, by attempt: a start over writes state.attempt; a first start
+  -- does not, and its branch (dude/<task>/attempt-N) names it, else it is attempt 1.
+  (SELECT COALESCE(json_agg(json_build_object('attempt', COALESCE((w.state->>'attempt')::int,
+      (substring(w.state->>'branch' from '/attempt-([0-9]+)$'))::int, 1),
       'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,

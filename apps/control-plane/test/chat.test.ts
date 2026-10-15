@@ -228,3 +228,11 @@ test("a task carries each attempt's own last decider, the first delivery's as at
   const none = (await (await call("GET", "/v1/tasks/wi_none")).json()) as { deciders: unknown };
   expect(none.deciders).toEqual([]);
 });
+
+test("a first delivery started on a later attempt's branch is that attempt's, as its branch names it", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_att3', ${ORG}, ${PROJECT}, 21, 'Queued again', 'running')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+    ('wfr_att3', ${ORG}, 'task.delivery', 'delivery:wi_att3', 'waiting', 'awaitFix', '{"decider":"conductor","branch":"dude/wi_att3/attempt-3"}', 'wi_att3')`;
+  const t = (await (await call("GET", "/v1/tasks/wi_att3")).json()) as { deciders: unknown };
+  expect(t.deciders).toEqual([{ attempt: 3, decider: "conductor" }]);
+});
