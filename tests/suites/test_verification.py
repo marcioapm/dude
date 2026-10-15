@@ -127,3 +127,52 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     expect(rows.nth(0)).to_have_attribute("data-state", "waived")
     expect(rows.nth(0).get_by_test_id("criterion-decision")).to_have_text("Waived by e2e user: Checked by hand on staging.")
     assert console_errors == []
+
+
+def test_a_pull_request_fix_reaches_the_pull_request_only_once_tested_again(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
+):
+    """A comment on the pull request brings a fixer. Its fix is reviewed and
+    tested on a candidate branch first: the pull request's branch does not
+    move until the re-test has passed, and then the task page shows a
+    verdict at the new commit, not a stale one."""
+    task = _deliver_with_tester(client, forge_project, "fake/scripted", "Greet, then rename it")
+    pr = _pull_request(client, task["id"])
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the task never waited on the pull request")
+    before = fake_github.branch_sha(pr["headBranch"])
+    tests_before = [r["id"] for r in client.task_runs(task["id"]) if r["phase"] == "test"]
+
+    fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
+
+    def moved():
+        sha = fake_github.branch_sha(pr["headBranch"])
+        if sha == before:
+            return None
+        # The branch moved: by then the fix's re-test has passed.
+        retests = [r for r in client.task_runs(task["id"]) if r["phase"] == "test" and r["id"] not in tests_before]
+        assert retests and all(r["status"] == "completed" for r in retests), \
+            f"the pull request moved to {sha} before its fix was tested: {retests}"
+        return sha
+
+    head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
+    runs = client.task_runs(task["id"])
+    fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
+    assert fix["branch"] == f"{pr['headBranch']}-candidate", fix
+    assert any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix" for r in runs), [r["phase"] for r in runs]
+
+    latest = wait_until(lambda: next((v for v in client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
+                                      if v["heads"].get("greeter") == head), None), timeout=30,
+                        message="no verdict at the pull request's new head")
+    assert latest["stale"] is False, latest
+    body = fake_github.pulls[pr["number"]].body
+    assert f"Tested at `{head[:7]}`." in body and "Stale" not in body, body
+
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    expect(page.get_by_test_id("phase").filter(has_text="of the pull request's fix").first).to_be_visible()
+    page.get_by_role("tab", name="Findings").click()
+    section = page.get_by_test_id("verification")
+    expect(section.get_by_test_id("verification-heads")).to_have_text(f"tested at {head[:7]}")
+    expect(section.get_by_test_id("verification-stale")).to_have_count(0)
+    assert console_errors == []
