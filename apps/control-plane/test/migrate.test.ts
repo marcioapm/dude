@@ -790,7 +790,7 @@ test("a database main left at 114 takes 115 to 117, keeps its relations, and tas
       ('org_u', 'wi_off', 'wi_a', 'blocks', 'per_u'), ('org_u', 'wi_a', 'wi_off', 'related', 'per_u')`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql", "119_github_owner_oauth.sql", "120_agent_machine_moves.sql", "121_pull_request_rerequests.sql", "122_push_per_organization.sql", "123_acceptance_verdicts.sql", "124_review_range.sql"]);
-    expect((await recorded(url)).map((m) => m.name).slice(-10)).toEqual(["114_preview_wake_timeouts.sql",
+    expect((await recorded(url)).map((m) => m.name).slice(-11)).toEqual(["114_preview_wake_timeouts.sql",
       "115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql", "119_github_owner_oauth.sql", "120_agent_machine_moves.sql", "121_pull_request_rerequests.sql", "122_push_per_organization.sql", "123_acceptance_verdicts.sql", "124_review_range.sql"]);
     expect([...await sql`SELECT from_task_id, to_task_id, kind::text FROM task_relations ORDER BY kind`]).toEqual([
       { from_task_id: "wi_off", to_task_id: "wi_a", kind: "blocks" },
