@@ -105,10 +105,11 @@ var tools = []tool{
 		"the person answered Open or Draft to that question, at the task's current head.", conductors, decide),
 	define("dismiss_finding", "Leave an open review finding as it is, with the reason — shown with the finding, as a "+
 		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
-	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, resume, done, wait or "+
+	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, waive, resume, done, wait or "+
 		"stop, as it offers), with a note: only after the task's owner answered your question about this escalation in "+
-		"their own words, handing it to you. A choice they pick decides it without you; otherwise the person decides on "+
-		"the banner. Allowed once per escalation.", conductors, decideEscalation),
+		"their own words, handing it to you; otherwise the person decides on the banner. A choice they pick decides "+
+		"it without you, except a waiver or an acceptance of a failed test, which is never a choice: it needs the "+
+		"person's own words. Allowed once per escalation.", conductors, decideEscalation),
 	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
 		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
 		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
@@ -423,7 +424,7 @@ type askIn struct {
 	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
 	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer, when there are some"`
 	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; the person answers them all at once"`
-	Actions   []string    `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it"`
+	Actions   []string    `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it, except a waiver or an acceptance of a failed test, which needs the person's own words"`
 }
 
 type askOut struct {

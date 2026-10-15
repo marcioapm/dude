@@ -27,6 +27,27 @@ export function shortError(error: string, max = 160): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
+/** The criteria a test escalation is about, as the gate named them. */
+export function testCriteria(e: Escalation): Array<{ criterion: number; text: string; status: string }> {
+  const list = e.detail?.criteria;
+  if (!Array.isArray(list)) return [];
+  return list.filter((c): c is { criterion: number; text: string; status: string } =>
+    typeof c === "object" && c !== null && typeof c.criterion === "number" && typeof c.text === "string");
+}
+
+/** "#1 “it greets” and #3 “it pays”", short. */
+function criteriaList(criteria: Array<{ criterion: number; text: string }>): string {
+  const one = (c: { criterion: number; text: string }) => `#${c.criterion} “${shortError(c.text, 60)}”`;
+  const shown = criteria.slice(0, 3).map(one);
+  if (criteria.length > 3) shown.push(`${criteria.length - 3} more`);
+  return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}` : shown[0]!;
+}
+
+/** An action that ships past a criterion nobody saw work: it needs the person's reason. */
+export function needsReason(reason: string, action: string): boolean {
+  return (reason === "test_failed_criteria" && action === "accept") || (reason === "test_blocked" && action === "waive");
+}
+
 export function escalationWords(e: Escalation): EscalationWords {
   const d = e.detail ?? {};
   const num = (k: string) => (typeof d[k] === "number" ? (d[k] as number) : 0);
@@ -56,6 +77,24 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Fixer");
     case "test_failed":
       return failed("Tester");
+    case "test_failed_criteria":
+    case "test_blocked": {
+      const criteria = testCriteria(e);
+      const named = criteria.length ? ` ${criteriaList(criteria)}` : "";
+      const findings = Array.isArray(d.findingIds) ? d.findingIds.length : 0;
+      if (e.reason === "test_failed_criteria") {
+        return {
+          short: criteria.length ? `${plural(criteria.length, "criterion", "criteria")} still failing` : "Test still failing",
+          sentence: `The tester still finds${named || ` ${plural(findings, "blocking problem")}`} failing after ${plural(num("rounds"), "fix round")}. Send it back once more, or accept the failure with your reason.`,
+          runId,
+        };
+      }
+      return {
+        short: "Test blocked",
+        sentence: `The tester could not check${named || " the change"}${findings ? ": it could not run the application" : ""}. Tell it how (the project's notes) and try again, or waive what could not be checked with your reason.`,
+        runId,
+      };
+    }
     case "review_failed": {
       const category = typeof d.category === "string" && d.category ? `${d.category} ` : "";
       return {

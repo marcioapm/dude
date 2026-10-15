@@ -57,6 +57,42 @@ func ParseFindings(output string) []Finding {
 }
 
 func parseFinding(doc string) (Finding, bool) {
+	fields := readFields(doc)
+
+	// A finding with no title says nothing actionable, whatever else it has.
+	title := fields["title"]
+	if title == "" {
+		return Finding{}, false
+	}
+
+	severity := strings.ToLower(fields["severity"])
+	if !validSeverities[severity] {
+		// An improvised severity is recorded rather than dropped, at the
+		// level that cannot block: a reviewer inventing "critical" should
+		// not silently gain the power to stop a task.
+		severity = "note"
+	}
+
+	line := 0
+	if n, err := strconv.Atoi(fields["line"]); err == nil && n > 0 {
+		line = n
+	}
+
+	return Finding{
+		Severity:     severity,
+		Category:     valueOr(fields["category"], "correctness"),
+		Title:        title,
+		Description:  fields["description"],
+		SuggestedFix: valueOr(fields["suggested_fix"], fields["suggestedfix"]),
+		Repo:         fields["repo"],
+		File:         fields["file"],
+		Line:         line,
+	}, true
+}
+
+// readFields reads one document's flat `key: value` lines, lower-cased
+// keys, continuation lines joined to the field above them.
+func readFields(doc string) map[string]string {
 	fields := map[string]string{}
 	// The field a continuation line belongs to, and what has accumulated
 	// under it. Any field can continue: a model wrapping a long description
@@ -114,36 +150,7 @@ func parseFinding(doc string) (Finding, bool) {
 		currentKey = key
 	}
 	flush()
-
-	// A finding with no title says nothing actionable, whatever else it has.
-	title := fields["title"]
-	if title == "" {
-		return Finding{}, false
-	}
-
-	severity := strings.ToLower(fields["severity"])
-	if !validSeverities[severity] {
-		// An improvised severity is recorded rather than dropped, at the
-		// level that cannot block: a reviewer inventing "critical" should
-		// not silently gain the power to stop a task.
-		severity = "note"
-	}
-
-	line := 0
-	if n, err := strconv.Atoi(fields["line"]); err == nil && n > 0 {
-		line = n
-	}
-
-	return Finding{
-		Severity:     severity,
-		Category:     valueOr(fields["category"], "correctness"),
-		Title:        title,
-		Description:  fields["description"],
-		SuggestedFix: valueOr(fields["suggested_fix"], fields["suggestedfix"]),
-		Repo:         fields["repo"],
-		File:         fields["file"],
-		Line:         line,
-	}, true
+	return fields
 }
 
 func valueOr(value, fallback string) string {

@@ -11,6 +11,7 @@ import { SessionTree, SessionTreeNode } from "../../components/SessionTreeNode.t
 import { DiffView, parseUnifiedDiff } from "../../components/DiffView.tsx";
 import { LogStream, type LogLine } from "../../components/LogStream.tsx";
 import { FindingGroup, FindingRow, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES } from "../../components/FindingRow.tsx";
+import { CriterionRow, VerificationGroup, CRITERION_STATES, CRITERION_STATE_SPECS } from "../../components/CriterionRow.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { ArtifactGroup, ArtifactRow, type ArtifactChange } from "../../components/ArtifactRow.tsx";
 import { ArtifactPreview } from "../../components/ArtifactPreview.tsx";
@@ -352,6 +353,46 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
                 <FindingRow severity="blocking" status="open" category="correctness" title="Retry loop never terminates on 4xx" file="apps/control-plane/src/webhooks.ts" line={118} />
                 <FindingRow severity="note" status="resolved" category="style" title="Prefer `for…of` over `forEach` here" file="apps/control-plane/src/webhooks.ts" line={130} />
               </ul>
+            </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="c-criterion"
+        title="CriterionRow / VerificationGroup"
+        note="The tester's verdict on each acceptance criterion: the verdict as glyph + word in its tone, the criterion's number and text, then the evidence (links the app makes to the published files), what was seen, and why dude disagreed (an unverified pass) or who waived or accepted it and why. A person's decision is neutral and names the verdict it settled. The group names the commits tested, and marks the verdict Stale once the branch has moved past them."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <Label>Every state</Label>
+            <Row style={{ gap: 16 }}>
+              {CRITERION_STATES.map((s) => (
+                <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: `var(--ds-tone-${CRITERION_STATE_SPECS[s].tone}-fg)` }}>
+                  <Icon name={CRITERION_STATE_SPECS[s].glyph} size={12} />
+                  {CRITERION_STATE_SPECS[s].label}
+                </span>
+              ))}
+            </Row>
+            <Label>A test, current</Label>
+            <VerificationGroup heads={{ api: "3adab691c0ffee00" }}>
+              <CriterionRow number={1} text="The cart lists each item with its price" status="pass" observed="Both items listed, 12.00 and 30.00." evidence={<><a href="#c-criterion">walkthrough.webm</a><a href="#c-criterion">01-cart.png</a></>} />
+              <CriterionRow number={2} text="Removing an item updates the total" status="fail" observed="The total stays at 42.00." evidence={<a href="#c-criterion">03-totals.png</a>} />
+              <CriterionRow number={3} text="Paying sends a receipt" status="unverified" observed="A receipt arrived." problem="receipt.png is not a file this test published." />
+              <CriterionRow number={4} text="It works on a phone" status="not-applicable" observed="The app has no mobile layout." />
+            </VerificationGroup>
+            <Label>Stale, with a person's decisions</Label>
+            <VerificationGroup heads={{ api: "3adab691c0ffee00", web: "9f1e2d3c4b5a6978" }} stale>
+              <CriterionRow number={1} text="Paying sends a receipt" status="blocked" decision="waived" decidedBy="Cy" decisionNote="Checked by hand on staging." observed="The sandbox key is missing." />
+              <CriterionRow number={2} text="Removing an item updates the total" status="fail" decision="accepted" decidedBy="Ana" decisionNote="Ships with the fix in BILL-14." />
+            </VerificationGroup>
+            <Label>Grayscale</Label>
+            <div style={{ filter: "grayscale(1)" }}>
+              <VerificationGroup heads={{ api: "3adab691c0ffee00" }}>
+                <CriterionRow number={1} text="Passes" status="pass" />
+                <CriterionRow number={2} text="Fails" status="fail" />
+                <CriterionRow number={3} text="Blocked" status="blocked" />
+              </VerificationGroup>
             </div>
           </Col>
         </Panes>

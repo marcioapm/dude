@@ -86,6 +86,7 @@ def preview_project(client: ApiClient, env, org: dict):
     project = client.create_project(
         name="Previews on lux", slug=f"pv-{os.urandom(3).hex()}", runtimeImage=FAKE_IMAGE,
         agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
+        deliveryPolicy={"test": False},  # no tester (on by default): a preview needs none
         repositories=[{"name": "app", "url": gh.clone_url, "defaultBranch": "main"}],
     )
     # lux-fake's app: the checkout's message.txt and commit, a visit counter

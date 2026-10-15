@@ -47,7 +47,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -147,12 +147,13 @@ export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low"
  * The reviewer flavours the factory has prompts for. A project names the
  * ones every delivery runs; others join when a change touches their paths.
  */
-export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api", "frontend", "performance"] as const;
+export const REVIEWER_CATEGORIES = ["correctness", "tests", "security", "database", "api", "frontend", "performance"] as const;
 export type ReviewerCategory = (typeof REVIEWER_CATEGORIES)[number];
 
 /** A reviewer flavour as a person reads it. */
 export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   correctness: "Correctness",
+  tests: "Tests",
   security: "Security",
   database: "Database",
   api: "API",
@@ -443,7 +444,7 @@ export type Task = z.infer<typeof taskSchema>;
  * accept the findings a review got stuck on and go on; take what was
  * merged as the task; wait on the pull requests still open; or stop.
  */
-export const escalationActionSchema = z.enum(["resume", "retry", "accept", "done", "wait", "stop"]);
+export const escalationActionSchema = z.enum(["resume", "retry", "accept", "waive", "done", "wait", "stop"]);
 export type EscalationAction = z.infer<typeof escalationActionSchema>;
 
 /**
@@ -794,6 +795,44 @@ export const findingSchema = z.object({
   createdAt: z.string(),
 });
 export type Finding = z.infer<typeof findingSchema>;
+
+/**
+ * The tester's verdict on one acceptance criterion, as dude recorded it
+ * (acceptance_verdicts): `unverified` is a pass whose evidence is not a
+ * file the test published, and counts as blocked. `decision` is a
+ * person's: a blocked check waived, or a failure accepted.
+ */
+export const verdictStatusSchema = z.enum(["pass", "fail", "blocked", "unverified", "not-applicable"]);
+export type VerdictStatus = z.infer<typeof verdictStatusSchema>;
+
+export const criterionVerdictSchema = z.object({
+  criterion: z.number().int(),
+  text: z.string(),
+  status: verdictStatusSchema,
+  /** Published file names, as `dude publish --name` gave them. */
+  evidence: z.array(z.string()),
+  observed: z.string(),
+  /** Why dude's status is not the tester's. */
+  problem: z.string(),
+  decision: z.enum(["waived", "accepted"]).nullable(),
+  decidedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
+  decisionNote: z.string().nullable(),
+});
+export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
+
+/**
+ * A test Run's verdict: the heads (repository → commit) it tested, and
+ * whether the task's work has moved past them since (`stale`).
+ */
+export const verificationSchema = z.object({
+  runId: z.string(),
+  attempt: z.number().int(),
+  heads: z.record(z.string(), z.string()),
+  stale: z.boolean(),
+  createdAt: z.string(),
+  criteria: z.array(criterionVerdictSchema),
+});
+export type Verification = z.infer<typeof verificationSchema>;
 
 export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed"]);
 export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);

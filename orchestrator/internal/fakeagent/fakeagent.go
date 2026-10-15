@@ -183,6 +183,120 @@ const (
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
 
+// The scripted tester (Tester). Any scripted model passes every criterion
+// with a published video; these play the gate's other outcomes.
+const (
+	// Fails criterion 1 every time, with a blocking finding.
+	TestFailModel = "fake/test-fail"
+	// Fails criterion 1 until a fix after the review loop's own is in the
+	// tree (fake lux only: it counts the fixer's commits), then passes.
+	TestFailOnceModel = "fake/test-fail-once"
+	// Cannot start the application: every criterion blocked, and a
+	// `Test environment:` finding.
+	TestBlockedModel = "fake/test-blocked"
+	// Passes, citing a screenshot it never published.
+	TestUnverifiedModel = "fake/test-unverified"
+	// Finishes saying it tested, with no verdict at all.
+	TestSilentModel = "fake/test-silent"
+	// Fails criterion 1 as TestFailOnceModel does, then passes, never
+	// writing a finding or judging one: dude's own say why it failed.
+	TestFailQuietModel = "fake/test-fail-quiet"
+)
+
+// Evidence is what the scripted tester publishes for a pass.
+const Evidence = "walkthrough.webm"
+
+// EnvironmentFinding is TestBlockedModel's finding.
+const EnvironmentFinding = "---\n" +
+	"severity: blocking\n" +
+	"category: acceptance\n" +
+	"title: \"Test environment: the application does not start\"\n" +
+	"description: Reproduced: `npm start` exits with code 1; no notes say how to run it.\n"
+
+// FailingFinding is the failing testers' finding about criterion 1.
+const FailingFinding = "---\n" +
+	"severity: blocking\n" +
+	"category: acceptance\n" +
+	"title: Criterion 1 is not met\n" +
+	"description: Reproduced: the page does not greet anyone.\n"
+
+// Criteria counts the acceptance criteria a phase prompt lists ("" or
+// none: zero), so the scripted tester answers each one.
+func Criteria(prompt string) int {
+	_, after, ok := strings.Cut(prompt, "Acceptance criteria:\n")
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(after, "\n") {
+		if strings.HasPrefix(line, "- ") {
+			n++
+		} else if !strings.HasPrefix(line, "  ") {
+			break
+		}
+	}
+	return n
+}
+
+// Tester is the scripted tester's step: criteria is how many the task
+// has (none: one derived check), fixes how many commits of the fixer's
+// file the tree holds.
+func Tester(model string, criteria, fixes int) Step {
+	n := max(criteria, 1)
+	status := func(i int) string { return "pass" }
+	evidence := Evidence
+	var b strings.Builder
+	b.WriteString("Ran the application and walked each criterion.\n\n```yaml\n")
+	switch {
+	case model == TestFailModel, model == TestFailOnceModel && fixes < 2:
+		status = func(i int) string {
+			if i == 1 {
+				return "fail"
+			}
+			return "pass"
+		}
+		// Raised by the first test (the review loop's one fix in the
+		// tree); a later one judges it still there, as it is told to.
+		if fixes < 2 {
+			b.WriteString(FailingFinding)
+		}
+		b.WriteString("---\nverdicts:\n  F1: still\n")
+	case model == TestFailQuietModel && fixes < 2:
+		status = func(i int) string {
+			if i == 1 {
+				return "fail"
+			}
+			return "pass"
+		}
+	case model == TestFailQuietModel:
+	case model == TestBlockedModel:
+		status = func(int) string { return "blocked" }
+		b.WriteString(EnvironmentFinding)
+	case model == TestUnverifiedModel:
+		evidence = "missing.png"
+	case model == TestSilentModel:
+		return Step{Reply: "Tested it; it works.", Publish: map[string]string{"acceptance.md": "# Acceptance\n\nIt works."}}
+	default:
+		b.WriteString("---\nverdicts:\n  F1: fixed\n")
+	}
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "---\ncriterion: %d\n", i)
+		if criteria == 0 {
+			b.WriteString("check: The task's goal\n")
+		}
+		fmt.Fprintf(&b, "status: %s\n", status(i))
+		switch status(i) {
+		case "blocked":
+			b.WriteString("observed: The application did not start.\n")
+		default:
+			fmt.Fprintf(&b, "evidence: %s\nobserved: Criterion %d, as seen in the video.\n", evidence, i)
+		}
+	}
+	b.WriteString("```\n")
+	return Step{Reply: b.String(), Publish: map[string]string{Evidence: "a video of the journey",
+		"acceptance.md": "# Acceptance\n\nEach criterion, with its evidence."}}
+}
+
 // FixedFile is what the fixer writes, and what tells the reviewer a fix
 // has been made.
 const FixedFile = "FIXED.md"
@@ -494,6 +608,10 @@ func For(phase, model, runID string, fixed bool) Step {
 	case "simplify":
 		return Step{Commit: map[string]string{"SIMPLE.md": "simplified by " + runID},
 			Message: "Simplify " + runID, Reply: "Simplified."}
+	case "test":
+		// The fake lux and a real lux's script give it the criteria
+		// (Tester, TesterScript); alone, a task of one.
+		return Tester(model, 1, 0)
 	case "review":
 		if fixed && model == StuckModel {
 			return Step{Reply: "The finding is still there.\n\n" + StillVerdict}
@@ -512,6 +630,26 @@ func For(phase, model, runID string, fixed bool) Step {
 		return step
 	}
 	return Step{Reply: "Nothing to do for " + phase + "."}
+}
+
+// TesterScript is Tester as a lux-fake script, for a task of criteria:
+// its files published, then its reply read back from a file, as the
+// reviewer's is. A real lux cannot count the fixer's commits, so
+// TestFailOnceModel fails there every time.
+func TesterScript(model string, criteria int) string {
+	step := Tester(model, criteria, 0)
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(step.Publish)) {
+		b.WriteString(publishScript(name, step.Publish[name], Description(name)))
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(step.Reply, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		b.WriteString("append /tmp/test.yaml " + line + "\n")
+	}
+	b.WriteString("read /tmp/test.yaml\necho tested")
+	return b.String()
 }
 
 // Script compiles the agent's step to lux-fake's script language

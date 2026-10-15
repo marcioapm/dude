@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,11 +118,21 @@ func TestAnOrganizationsDeliveryPolicyAppliesUnderItsProjects(t *testing.T) {
 	}
 	var simplify bool
 	var rounds int
-	if err := w.owner.QueryRow(context.Background(), `SELECT (state->'policy'->>'simplify')::bool, (state->'policy'->>'maxReviewIterations')::int
-		FROM workflow_runs WHERE task_id = $1`, wi).Scan(&simplify, &rounds); err != nil {
+	var reviewersJSON []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT (state->'policy'->>'simplify')::bool, (state->'policy'->>'maxReviewIterations')::int,
+		state->'policy'->'requiredReviewers'
+		FROM workflow_runs WHERE task_id = $1`, wi).Scan(&simplify, &rounds, &reviewersJSON); err != nil {
 		t.Fatal(err)
 	}
 	if simplify || rounds != 4 {
 		t.Errorf("simplify=%v rounds=%d: want the organization's simplify and the project's rounds", simplify, rounds)
+	}
+	// Neither sets reviewers, so the factory's default is what is recorded.
+	var reviewers []string
+	if err := json.Unmarshal(reviewersJSON, &reviewers); err != nil {
+		t.Fatalf("requiredReviewers %s: %v", reviewersJSON, err)
+	}
+	if want := []string{"correctness", "tests", "performance"}; !slices.Equal(reviewers, want) {
+		t.Errorf("requiredReviewers = %v, want the factory's %v", reviewers, want)
 	}
 }

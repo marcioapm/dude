@@ -109,7 +109,9 @@ type PromptRepo struct {
 }
 
 // workspaceNote says where the code is, when that is not simply "here".
-func workspaceNote(repos []PromptRepo, review bool) string {
+// A reviewer and a tester check work and change none of it, so neither is
+// told to commit.
+func workspaceNote(repos []PromptRepo, phase string) string {
 	if len(repos) == 0 {
 		return "No repository is checked out for this work: it changes no code. Its result is what you " +
 			"publish (see below) and what you reply."
@@ -121,15 +123,21 @@ func workspaceNote(repos []PromptRepo, review bool) string {
 	b.WriteString("## Repositories\n\nThis work spans these checkouts:\n")
 	for _, r := range repos {
 		access := "you may change it"
+		if phase == PhaseTest {
+			access = "the change under test"
+		}
 		if r.ReadOnly {
 			access = "read only: for reference, do not change it — changes there are never kept"
 		}
 		fmt.Fprintf(&b, "\n- `%s` at `%s` — %s", r.Name, r.Path, access)
 	}
-	if review {
-		b.WriteString("\n\nReview the changes in each checkout: `git log` and `git diff` against its default branch. " +
+	switch phase {
+	case PhaseReview:
+		b.WriteString("\n\nName the repository in each finding's `repo` field.")
+	case PhaseTest:
+		b.WriteString("\n\nTest the changes in each checkout together, and commit in none of them. " +
 			"Name the repository in each finding's `repo` field.")
-	} else {
+	default:
 		b.WriteString("\n\nCommit in each repository you change. Each changed repository gets its own pull request.")
 	}
 	return b.String()
@@ -177,20 +185,60 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
 var reviewFocus = map[string]string{
-	"correctness": "Does this do what it claims? Look for logic errors, unhandled cases, " +
-		"race conditions, and assumptions the code makes but does not check.",
-	"security": "Look for credentials that reach somewhere they should not, missing " +
-		"authorization checks, injection, and data crossing a tenant boundary.",
-	"performance": "Look for work repeated per item that could be done once, queries in " +
-		"loops, and anything that grows worse than linearly with real data.",
+	"correctness": "Does the change do what the task and its acceptance criteria say? Look at empty, edge " +
+		"and error cases, concurrency and ordering, state transitions, and assumptions the code makes but " +
+		"does not check. Look hardest where the change meets what it did not change: its callers and the " +
+		"data already stored.",
+	"tests": "Judge the tests, not the code they test. Each should assert behaviour through the public " +
+		"interface, not implementation details, and fail if the change were reverted or broken: mutate the " +
+		"change, in your head or for real, and check that a test fails. Look for tests deleted, skipped or " +
+		"weakened to make the change pass, unrealistic fixtures, and concurrency or time tests that are not " +
+		"deterministic. A missing test for an acceptance criterion or a fixed defect is a finding.",
+	"security": "Look for missing authentication or authorization checks, data crossing a tenant boundary, " +
+		"injection, untrusted input treated as trusted, and credentials that reach somewhere they should not: " +
+		"logs, clients, other tenants.",
+	"performance": "Look for work repeated per item or per request that could be done once, growth without " +
+		"bound under realistic data, blocking I/O or locks held across slow work, avoidable allocation or " +
+		"serialization on hot paths, and N+1 calls to a database or over the network. Back a claim with a " +
+		"measurement or a realistic size.",
 	"frontend": "Look for accessibility gaps, layout that breaks at other sizes, state " +
 		"that can render an impossible combination, and re-render storms.",
-	"database": "Look for migrations that lock or cannot be rolled back, missing " +
+	"database": "Look for migrations that lock a busy table or cannot be rolled back, missing " +
 		"indexes on new query paths, and constraints the code assumes but the " +
 		"schema does not enforce.",
 	"api": "Look for breaking changes to existing callers, inconsistent error " +
 		"shapes, and endpoints that leak more than the caller should see.",
 }
+
+// reviewContract is how every reviewer works and what its reply carries,
+// whatever its instructions say: findings a fixer can act on and a person
+// can trust, and an account of what the review did and did not cover.
+const reviewContract = "## How you review\n\n" +
+	"First establish what is under review: in each checkout, the base (where the branch leaves its default " +
+	"branch: `git merge-base`) and the head, then `git log` and `git diff` from the base. Read the changed code " +
+	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n" +
+	"Every finding says how it is known, as the first word of its description, on the same line as " +
+	"`description:`: `Reproduced:` (you ran something and saw it; say what), `Traced:` (a concrete sequence " +
+	"through named code, with file:line) or `Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, " +
+	"hypothetical future requirements, or advice that would apply to any codebase. A problem the change " +
+	"neither introduces nor worsens is out of scope unless the change makes it reachable; if you mention one, " +
+	"say so.\n\n" +
+	"Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or " +
+	"an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` " +
+	"is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request.\n\n" +
+	"A suggested fix is the minimal local change that removes the defect. Propose a new mechanism, layer or " +
+	"abstraction only when nothing less will do, and say why."
+
+// reviewSummary closes a review's reply. Its fields sit indented under
+// `review_summary:`, so ParseFindings reads the document as one untitled
+// block and drops it, as it drops any document without a title.
+const reviewSummary = "End your reply with a summary of the review, as one more YAML document; it is not a finding:\n\n" +
+	"```yaml\n" +
+	"review_summary:\n" +
+	"  read: the code you read\n" +
+	"  ran: each command you ran, and its result\n" +
+	"  not_checked: what you could not check, and why\n" +
+	"```"
 
 const findingFormat = "Report each finding as one YAML document, separated by `---`:\n\n" +
 	"```yaml\n" +
@@ -214,7 +262,8 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 func earlierFindings(findings []Finding) string {
 	var b strings.Builder
 	b.WriteString("## Findings from the last review\n\nA fix has been made since. For each finding below, " +
-		"check the code as it is now and say whether it is fixed — every one, whatever its category or the " +
+		"read the code as it is now, run it where you can, and say whether it is fixed — never judge by which " +
+		"files the fix touched. Judge every one, whatever its category or the " +
 		"reviewer that raised it: you are the one judging it this round. Report a problem that is still there " +
 		"in your verdicts, not as a new finding; report anything new as a finding as usual.")
 	for i, f := range findings {
@@ -255,6 +304,22 @@ func severityNote(blocking []string) string {
 		"however small the fix.", strings.Join(names, ", "), strings.Join(names, ", "))
 }
 
+// fixContract is how every fix is made, whatever the fixer's instructions
+// say: a defect shown before it is changed, and shown gone after.
+const fixContract = "## How you fix\n\n" +
+	"For each problem, reproduce it first where it can be reproduced: a failing test, a script, or the " +
+	"reviewer's or tester's steps. Then fix it, and add or update a regression test that fails without the " +
+	"fix where practical. Before you finish, rerun the affected tests and the project's checks.\n\n" +
+	"If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final " +
+	"reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its " +
+	"title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it."
+
+// implementContract asks the implementer to check its own work: the
+// independent tester after it verifies, but does not do this for it.
+const implementContract = "Before you finish, exercise the changed behaviour yourself, and add a test for each " +
+	"acceptance criterion that can be tested. A later independent tester verifies your work; it does not " +
+	"replace your own testing."
+
 // Every phase that changes code commits it; lux pushes what was committed.
 // Uncommitted work is not part of the result, and saying so is cheaper than
 // discovering an empty push. The image's commit hook adds the task's people
@@ -262,17 +327,60 @@ func severityNote(blocking []string) string {
 const commitNote = "Commit your work when you are done. Only committed changes are kept. " +
 	"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them."
 
+// testerContract is what a person merging the change relies on from the
+// tester, whatever its instructions say: every criterion accounted for in
+// one report, evidence behind each pass, and a product it did not touch.
+const testerContract = "## Your part\n\n" +
+	"You are independent verification: show, as a user would see it, whether this change does what the task says. " +
+	"Do not change the product to make a check pass: commit nothing in the repositories under test. Scripts and " +
+	"test data of your own, outside the product's source, are fine. Something broken is a finding: someone else " +
+	"fixes it.\n\n" +
+	"First establish what you test: the head commit of each checkout, and how you ran it — the command that " +
+	"started it and the data it used. Run it the way the project documents (its notes, README, scripts). Test the " +
+	"real, integrated application; a mock or fixture demo shows a criterion only when the criterion is about that " +
+	"component alone, and the report says which it was.\n\n" +
+	"Account for every acceptance criterion in a Markdown report published as `acceptance.md`. For each " +
+	"criterion: what you expected, the steps you took, what you observed, its status, and the evidence (file " +
+	"names, and video timestamps where useful). The status is exactly one of `pass`, `fail`, `blocked` (you could " +
+	"not run or reach it; say why) or `not-applicable` (rarely, with the reason). A criterion you did not check " +
+	"is `blocked`, never `pass`; a `pass` without evidence is not a pass. If the task has no acceptance criteria, " +
+	"derive the checks from its goal and say that you did.\n\n" +
+	"The evidence fits the criterion. What a person sees in the UI: a video of the real journey and screenshots " +
+	"of the states that decide it. Behaviour behind an API, a CLI or a job: the request or command and its " +
+	"actual output. Where a criterion depends on them, also check what a video cannot show: the state after a " +
+	"reload, permissions, the obvious failure case, and the flows next to the change. Open each screenshot " +
+	"before you rely on it: a blank frame, a sign-in page or an error overlay is not evidence. Check that each " +
+	"video was written and is not empty.\n\n" +
+	"If you cannot start or reach the application, or cannot tell how to test this project, do not guess and do " +
+	"not report success: mark the criteria it affects `blocked`, report a `blocking` finding titled " +
+	"`Test environment: …` that says exactly what you tried, publish the report, and stop.\n\n" +
+	"A criterion that fails is a `blocking` finding: the step it failed at, what you expected and what happened, " +
+	"and the evidence. Report the console errors and failed network requests you saw during the flows; those " +
+	"that show a defect are findings.\n\n" +
+	"End your reply with one YAML document per criterion, separated by `---`, after any findings: `criterion` is " +
+	"its number in the task's list, from 1 (for derived checks, number them and give each one's text in `check`); " +
+	"`evidence` names the files you published for it, by their `--name`, comma-separated; `observed` is one line. " +
+	"dude reads these, not `acceptance.md`: a criterion missing here is blocked, and a `pass` whose evidence names " +
+	"no file you published is not a pass.\n\n" +
+	"```yaml\n" +
+	"criterion: 1\n" +
+	"status: pass | fail | blocked | not-applicable\n" +
+	"evidence: walkthrough.webm, 01-signed-in.png\n" +
+	"observed: One line: what you saw.\n" +
+	"```"
+
 // testerTools is how the tester drives a browser and records it. Playwright
 // and Chromium are in the runtime image (images/runtime); the evidence is
 // published as files people open next to the task.
 const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
-	"package; Chromium is installed). Record the whole flow as a video — create the browser context with " +
-	"`record_video_dir` — and take a screenshot at each step that matters. When you are done, close the " +
-	"context so the video is written, then publish the video and each screenshot with " +
+	"package; Chromium is installed), at a 1920×1080 viewport unless a criterion is about another size. " +
+	"Record each journey as a video — create the browser context with `record_video_dir` and a " +
+	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` of about " +
+	"250 ms and pause about one second on each state that matters. Keep a failure in the recording; do not cut it " +
+	"out. When you are done, close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with " +
 	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish /tmp/videos/abc.webm " +
 	"--name walkthrough.webm --description \"The sign-in flow, end to end\"`, `--name 01-signed-in.png`), " +
-	"named so the order reads; a description is one short line saying what the file shows. Read the browser console as you go, and report what it says. A flow that does " +
-	"not work is a finding, with the step it failed at; one that works needs no finding — say what you did."
+	"named so the order reads; a description is one short line saying what the file shows."
 
 // publishNote tells an agent how to hand a person something that is not
 // code. Every phase may: an implementer's design notes, a reviewer's
@@ -370,7 +478,8 @@ var builtinInstructions = map[string][]string{
 			"addRelations, blocked_by), saying why.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
-			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
+			"stands for; the owner picking one decides it, and they may use the banner on the task instead. A waiver or " +
+			"an acceptance of a failed test is never a choice: it needs the person's own words. If the owner " +
 			"answers in their own words (\"your call\"), decide it yourself with decide_escalation, once. While the " +
 			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
@@ -431,13 +540,8 @@ var builtinInstructions = map[string][]string{
 			"introduced, and consolidate obvious duplication.",
 		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
 			"if they do not pass, your simplification was not behaviour-preserving."},
-	"qa_browser": {"Exercise this change the way a person would. Start the application, drive it in a " +
-		"browser, and confirm it does what the task asked.",
-		"You are not looking for what the unit tests already cover. You are looking for what they " +
-			"cannot: does the feature actually work when used.",
-		"How to start the application and what data it needs are the project's to say (in the " +
-			"project notes below); if they say nothing, find out from the repository — its README, " +
-			"its scripts — and say in your report what you did."},
+	"qa_browser": {"Start the application and use this change the way a person would.",
+		"Look for what the unit tests cannot show: whether the feature works when someone uses it."},
 }
 
 // BuiltinPrompt is a role's instructions as dude ships them: what an
@@ -579,7 +683,7 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add(lead...)
-		add(commitNote)
+		add(implementContract, commitNote)
 		add(in.task())
 		add(in.ask()...)
 
@@ -590,7 +694,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
 		add(lead...)
-		add("The task under review:\n\n"+in.task(), findingFormat)
+		add("The task under review:\n\n"+in.task(), reviewContract, findingFormat, reviewSummary)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}
@@ -666,6 +770,7 @@ func Prompt(phase string, in PromptInput) string {
 			}
 		}
 		add(tail...)
+		add(fixContract)
 		add(commitNote)
 		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
@@ -677,8 +782,14 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseTest:
 		add(lead...)
-		add(testerTools)
+		add(testerContract, testerTools)
 		add(in.task(), findingFormat)
+		if note := severityNote(in.BlockingSeverities); note != "" {
+			add(note)
+		}
+		if len(in.Findings) > 0 {
+			add(earlierFindings(in.Findings))
+		}
 
 	default:
 		add(in.task())
@@ -693,7 +804,7 @@ func Prompt(phase string, in PromptInput) string {
 	if c := strings.TrimSpace(in.Coordination); c != "" {
 		add(c)
 	}
-	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
+	if note := workspaceNote(in.Repositories, phase); note != "" {
 		add(note)
 	}
 	if note := baseNote(in.Bases); note != "" {

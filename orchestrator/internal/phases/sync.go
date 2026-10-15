@@ -1884,30 +1884,15 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 // Replaces what an earlier report of the same Run recorded, so a retry does
 // not double a review's findings.
 func (s *Syncer) reportFindings(ctx context.Context, r phaseRun) error {
-	var reply strings.Builder
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT payload->>'text' FROM events
-			WHERE run_id = $1 AND event_type = 'agent.message' ORDER BY cursor`, r.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var text string
-			if err := rows.Scan(&text); err != nil {
-				return err
-			}
-			// Messages end where the agent stopped to call a tool; a finding
-			// starting the next one must still begin on a line of its own.
-			reply.WriteString(text)
-			reply.WriteString("\n")
-		}
-		return rows.Err()
+	var reply string
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		reply, err = delivery.RunReplyTx(ctx, tx, r.ID)
+		return err
 	}); err != nil {
 		return err
 	}
-	return RecordFindings(ctx, s.DB, r.Org, r.ID, delivery.ParseFindings(reply.String()),
-		judged(r.FindingIDs, delivery.ParseVerdicts(reply.String())))
+	return RecordFindings(ctx, s.DB, r.Org, r.ID, delivery.ParseFindings(reply),
+		judged(r.FindingIDs, delivery.ParseVerdicts(reply)))
 }
 
 // judged maps a re-review's verdicts, given by position, to the findings it

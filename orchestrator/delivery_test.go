@@ -133,9 +133,12 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(w.lux.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image)
-		VALUES ($1, $2, 'P', $1, 'P', 'agent:test')`, w.project, w.org)
-	for _, role := range []string{"implementer", "reviewer", "simplifier"} {
+	// One required reviewer, so a delivery's Runs are few enough to count;
+	// the factory's default requires several (scriptedPolicy). No tester,
+	// which the factory runs by default: tests of the gate turn it on.
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image, delivery_policy)
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false}')`, w.project, w.org)
+	for _, role := range []string{"implementer", "reviewer", "simplifier", "qa_browser"} {
 		w.onModel(role, "fake/scripted")
 	}
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -287,7 +290,16 @@ func (w *world) deliver(taskID string) string {
 	}); err != nil {
 		w.t.Fatal(err)
 	}
-	return w.start(taskID, delivery.DefaultPolicy())
+	return w.start(taskID, scriptedPolicy())
+}
+
+// scriptedPolicy is the policy the world's project resolves to: the
+// factory's, with correctness its only required reviewer and no tester.
+func scriptedPolicy() delivery.Policy {
+	p := delivery.DefaultPolicy()
+	p.RequiredReviewers = []string{"correctness"}
+	p.Test = false // the world's project pins it off; the gate's tests turn it on
+	return p
 }
 
 // start starts the delivery workflow as the API does, with a policy.
@@ -1249,7 +1261,18 @@ func (w *world) withTools() {
 	w.syncer.Agent.ToolsService = true
 }
 
+// lux's lifecycle events trail the agent's records, so its "running" can be
+// read after the question and the turn's end: the agent waits either way.
 func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
+	t.Run("as lux reports it", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, false)
+	})
+	t.Run("running read after the turn", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, true)
+	})
+}
+
+func testAnAgentThatAsksWaits(t *testing.T, trailing bool) {
 	w := newWorld(t)
 	w.withTools()
 	question := `{"question":"Should the table be sorted?","choices":["yes","no"]}`
@@ -1260,8 +1283,30 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		return fakelux.Behaviour{Ask: question, Reply: "Sorted it, as asked.",
 			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
+	release := func() {}
+	if trailing {
+		held := make(chan struct{})
+		release = sync.OnceFunc(func() { close(held) })
+		w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
+			if typ == "state" && w.lux.EventState(id, eventID) == "running" {
+				<-held
+			}
+		})
+		t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
+	}
 	wi := w.task()
 	w.deliver(wi)
+	if trailing {
+		// Nothing follows the Run between pumps: its turn ends in lux before
+		// dude reads any of it, so its records are read before lux's running.
+		w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) == 1 })
+		luxID := w.lux.Runs()[0].ID
+		for deadline := time.Now().Add(20 * time.Second); !turnEnded(w.lux.Records(luxID)); time.Sleep(untilPoll) {
+			if time.Now().After(deadline) {
+				t.Fatal("the agent's turn never ended")
+			}
+		}
+	}
 	w.until("the question to reach a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 
 	var qid, prompt string
@@ -1277,8 +1322,18 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	w.until("the agent to wait", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND waiting_since IS NOT NULL`, wi) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND turn_done_at IS NULL`, wi); n != 1 {
-		t.Fatalf("the asking run is not still running")
+	if trailing {
+		if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'scheduled'`, wi); n != 1 {
+			t.Fatalf("lux's running was read before the agent waited\nruns:\n%s", w.describeRuns())
+		}
+	}
+	release()
+	// lux's running, read now if not before, does not end the wait.
+	w.until("lux's running to be read", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND waiting_since IS NOT NULL AND turn_done_at IS NULL`, wi); n != 1 {
+		t.Fatalf("the asking run is not still waiting\nruns:\n%s", w.describeRuns())
 	}
 	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed {
 		t.Fatalf("the run was pushed before its question was answered")
@@ -1909,7 +1964,7 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	wi := w.task()
-	policy := delivery.DefaultPolicy()
+	policy := scriptedPolicy()
 	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
@@ -1928,6 +1983,30 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	})
 	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
 		t.Errorf("the reviewer was not told the policy's blocking severities:\n%s", prompt)
+	}
+}
+
+// The tester's severities have the same consequences as a reviewer's, so
+// it is told the delivery's policy too.
+func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("qa_browser", "llm-test")
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "test" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.task()
+	policy := scriptedPolicy()
+	policy.Test = true
+	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
+		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
+	w.start(wi, policy)
+	w.until("a test to reach lux", func() bool { return w.specOf("test") != nil })
+	if prompt := w.specOf("test").Workload.Prompt; !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
+		t.Errorf("the tester was not told the policy's blocking severities:\n%s", prompt)
 	}
 }
 
@@ -3631,7 +3710,7 @@ func TestABranchBehindMainIsUpdatedWhenItMergesCleanly(t *testing.T) {
 // request bounds them all.
 func TestPullRequestFixesAreBudgetedPerReviewRound(t *testing.T) {
 	w := newWorld(t)
-	policy := delivery.DefaultPolicy()
+	policy := scriptedPolicy()
 	policy.MaxPRFixIterations = 1
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"fixRoundsPerPr":3}' WHERE organization_id = $1`, w.org)
 	wi := w.task()

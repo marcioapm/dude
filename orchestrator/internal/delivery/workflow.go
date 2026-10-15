@@ -97,6 +97,14 @@ type State struct {
 	// Fix attempts per finding a person granted beyond the policy's, by
 	// sending a stuck review back to try again.
 	ExtraFixAttempts int `json:"extraFixAttempts,omitempty"`
+	// The test Run whose verdict the gate weighs (testVerdict).
+	TestRunID string `json:"testRunId,omitempty"`
+	// Fixes a failed test sent this attempt back for: bounded by
+	// MaxTestFixRounds.
+	TestFixRounds int `json:"testFixRounds,omitempty"`
+	// The tester's findings the next fix is sent, besides the reviewers'
+	// open ones: set by a failed test, cleared once the fix is in.
+	TestFindingIDs []string `json:"testFindingIds,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -187,6 +195,14 @@ func (e *Escalation) Actions() []string {
 		}
 	case "stuck", "exhausted":
 		out = append(out, "retry", "accept")
+	case ReasonTestFailedCriteria:
+		// Another fix round, or ship with the failure: a person's call,
+		// with their reason.
+		out = append(out, "retry", "accept")
+	case ReasonTestBlocked:
+		// Test again (after someone told dude how to run it), or ship what
+		// could not be checked, with a reason.
+		out = append(out, "retry", ActionWaive)
 	case "pull_request_conflict", "ci_stuck":
 		// A person resolves the conflict, or sees to CI, on GitHub; dude
 		// waits on the pull request again.
@@ -243,6 +259,15 @@ func (e *Escalation) categories() []string {
 	return d.Categories
 }
 
+// findingIDs are the findings a gate escalation is about.
+func (e *Escalation) findingIDs() []string {
+	var d struct {
+		FindingIDs []string `json:"findingIds"`
+	}
+	e.decode(&d)
+	return d.FindingIDs
+}
+
 // detail reads a number the escalation's detail carries, as JSON left it.
 func (e *Escalation) detail(key string) (float64, bool) {
 	var m map[string]any
@@ -273,8 +298,9 @@ func (e *Escalation) spent() []string {
 // kept on it once taken (Escalation.Decided).
 type HumanDecision struct {
 	// "resume" the Run that failed; "retry" the step that stopped; "accept"
-	// the findings a review got stuck on and go on; "done" — what is merged
-	// is the task; "wait" on the pull requests still open; "stop".
+	// the findings a review got stuck on, or a test's failed criteria, and
+	// go on; "waive" the criteria a test could not check; "done" — what is
+	// merged is the task; "wait" on the pull requests still open; "stop".
 	Action string `json:"action"`
 	// What they said, for the agents from here on.
 	Note string `json:"note,omitempty"`
@@ -325,6 +351,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"awaitSimplify":     w.awaitSimplify,
 			"test":              w.test,
 			"awaitTest":         w.awaitTest,
+			"testVerdict":       w.testVerdict,
 			"openPullRequest":   w.openPullRequest,
 			"awaitPullRequest":  w.awaitPullRequest,
 			"prFix":             w.prFix,
@@ -703,6 +730,19 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		}
 	}
 	k := key(sc, st, ":fix:", st.Iteration)
+	if len(st.TestFindingIDs) > 0 {
+		// A failed test's findings, those still open, in a Run of their own.
+		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
+		all, err := w.s.FixFindings(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		for _, f := range all {
+			if f.Status == "open" && slices.Contains(st.TestFindingIDs, f.ID) && !slices.Contains(open, f.ID) {
+				open = append(open, f.ID)
+			}
+		}
+	}
 	d := directed(st, PhaseFix)
 	if d != nil {
 		k = conductorKey(sc, st, d, ":fix:", st.Iteration)
@@ -737,6 +777,8 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
+	// The tester's findings were sent; the next test judges them.
+	st.TestFindingIDs = nil
 	return w.next(ctx, sc, st, PointFixed, "review", out.line(runID, "fix"))
 }
 
@@ -750,7 +792,7 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
-	k := key(sc, st, ":simplify")
+	k := testRoundKey(sc, st, ":simplify")
 	d := directed(st, PhaseSimplify)
 	if d != nil {
 		k = conductorKey(sc, st, d, ":simplify")
@@ -793,18 +835,36 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
 		return w.beforePR(ctx, sc, st, "")
 	}
-	k := key(sc, st, ":test")
+	k := testRoundKey(sc, st, ":test")
 	if d != nil {
 		k = conductorKey(sc, st, d, ":test")
 	}
 	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseTest, k, d.apply)
+	// The tester's own findings a fix was sent are its to judge again,
+	// never a reviewer's.
+	judge, err := w.s.TesterFindingsToJudge(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
+		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
+		d.apply(p)
+	})
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	return park("awaitTest", st, []string{runID}), nil
+}
+
+// testRoundKey is key, distinct per fix round a failed test started: the
+// simplify and test after it are new Runs, not the ones before it.
+func testRoundKey(sc workflow.StepContext, st *State, part string) string {
+	if st.TestFixRounds > 0 {
+		return key(sc, st, part, ":after-test:", st.TestFixRounds)
+	}
+	return key(sc, st, part)
 }
 
 func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
@@ -821,12 +881,12 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
-		// A tester that found a real problem must not be papered over by
-		// opening the PR anyway.
+		// A tester that did not finish proved nothing: a person decides.
 		return w.escalate(ctx, sc, st, "test_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
-	st.PendingRunIDs = nil
-	return w.beforePR(ctx, sc, st, out.line(runID, "test"))
+	// Finished is not passed: the gate weighs what it found.
+	st.PendingRunIDs, st.TestRunID = nil, runID
+	return workflow.Result{Next: "testVerdict", State: st}, nil
 }
 
 // beforePR goes to the pull request step, through the decision before it
@@ -1325,9 +1385,13 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 // resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
-	if reason == "review_failed" {
+	switch reason {
+	case "review_failed":
 		// Its retry is the failed reviewers again, not a fix.
 		st.Escalation.Step = "review"
+	case ReasonTestFailedCriteria:
+		// One more fix round; a blocked test's retry is the tester again.
+		st.Escalation.Step = "fix"
 	}
 	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
@@ -1358,6 +1422,10 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 			"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
 			"you decide_escalation.",
 			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
+		if reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked {
+			line += " The test's verdict per criterion and its evidence are on the task; " +
+				"accept or waive ships past a criterion nobody saw work, and needs the person's reason."
+		}
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
 				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
@@ -1377,6 +1445,7 @@ var RetryStep = map[string]string{
 	"awaitReview": "fix",
 	"awaitFix":    "fix",
 	"awaitTest":   "test",
+	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
 }
@@ -1419,7 +1488,12 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	switch d.Action {
-	case "accept":
+	case "accept", ActionWaive:
+		if e.Reason == ReasonTestFailedCriteria || e.Reason == ReasonTestBlocked {
+			// The person's waiver or acceptance is on the verdict (taken
+			// with the decision): the gate weighs it again.
+			return workflow.Result{Next: "testVerdict", State: st}, nil
+		}
 		if e.Reason == "review_failed" {
 			// The round goes on without the reviewers that failed: its
 			// findings are what the others reported.
@@ -1459,6 +1533,11 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 		st.Iteration = 0
 		if e != nil && e.Reason == "stuck" {
 			st.ExtraFixAttempts += st.Policy.MaxAttemptsPerFinding
+		}
+		if e != nil && e.Reason == ReasonTestFailedCriteria {
+			// One more round past the bound, with the test's findings.
+			st.TestFixRounds++
+			st.TestFindingIDs = e.findingIDs()
 		}
 	case "prFix":
 		// The same fix again, not the next: what the stopped one counted

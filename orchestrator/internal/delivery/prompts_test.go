@@ -175,3 +175,138 @@ func TestAMultiLineCriterionStaysOneItem(t *testing.T) {
 		t.Errorf("{{task.criteria}} not one item each:\n%s", got)
 	}
 }
+
+// underEveryInstructions renders a phase's prompt with dude's built-in
+// instructions, an organization's, and a project's that replaces them: a
+// contract the workflow or a person relies on must survive all three.
+func underEveryInstructions(phase string, in PromptInput) map[string]string {
+	org, project := "ORG: do it our way.", "PROJECT: do it this way only."
+	withOrg, replaced := in, in
+	withOrg.OrgPrompt = &org
+	replaced.OrgPrompt = &org
+	replaced.ProjectPrompt, replaced.ProjectPromptMode = project, "replace"
+	return map[string]string{"built-in": Prompt(phase, in), "organization": Prompt(phase, withOrg),
+		"project replace": Prompt(phase, replaced)}
+}
+
+func twoRepos() []PromptRepo {
+	return []PromptRepo{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/workspace/repos/web"}}
+}
+
+// The tester accounts for every criterion, changes nothing, knows what its
+// severities cause, and records its evidence, whatever its instructions say.
+func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads", "Totals match"},
+		Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true, CLI: true}
+	for kind, got := range underEveryInstructions(PhaseTest, in) {
+		for _, want := range []string{testerContract, testerTools, findingFormat,
+			severityNote(in.BlockingSeverities), "commit in none of them"} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the tester's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+		for _, never := range []string{"Commit in each repository you change", commitNote, "you may change it", "asked to check again"} {
+			if strings.Contains(got, never) {
+				t.Errorf("%s: the tester is told %q:\n%s", kind, never, got)
+			}
+		}
+	}
+	// The contract's anchors, so a rewrite of it cannot drop one unnoticed.
+	for _, want := range []string{"`acceptance.md`", "`pass`, `fail`, `blocked`", "`not-applicable`",
+		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty"} {
+		if !strings.Contains(testerContract, want) {
+			t.Errorf("the tester's contract lacks %q", want)
+		}
+	}
+	if !strings.Contains(testerTools, "1920×1080 viewport") {
+		t.Error("the tester does not record at 1920×1080 by default")
+	}
+}
+
+// Every reviewer establishes what is under review, grades its evidence,
+// and ends with what it read, ran and could not check, whatever its
+// instructions say; each category has a focus of its own.
+func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
+	for _, category := range reviewerOrder {
+		in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Category: category,
+			Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true,
+			Findings: []Finding{{Severity: "high", Title: "Totals off by one"}}}
+		for kind, got := range underEveryInstructions(PhaseReview, in) {
+			for _, want := range []string{"for **" + category + "**", reviewFocus[category], reviewContract,
+				findingFormat, reviewSummary, severityNote(in.BlockingSeverities), "verdicts:"} {
+				if strings.Count(got, want) != 1 {
+					t.Errorf("%s/%s: the reviewer's prompt should say %q once:\n%s", category, kind, want, got)
+				}
+			}
+			// How to diff is the contract's to say, once, whatever the checkouts.
+			if n := strings.Count(got, "`git diff`"); n != 1 {
+				t.Errorf("%s/%s: the reviewer is told how to diff %d times:\n%s", category, kind, n, got)
+			}
+			if s, f := strings.Index(got, reviewSummary), strings.Index(got, findingFormat); s < f {
+				t.Errorf("%s/%s: the summary is asked for before the findings", category, kind)
+			}
+		}
+	}
+	for _, want := range []string{"`Reproduced:`", "`Traced:`", "`Suspected:`", "same line as `description:`", "`low` or `note` at most",
+		"`git merge-base`", "minimal local change", "`blocking` is wrong behaviour"} {
+		if !strings.Contains(reviewContract, want) {
+			t.Errorf("the reviewer's contract lacks %q", want)
+		}
+	}
+	if !strings.Contains(reviewSummary, "review_summary:") || !strings.Contains(reviewSummary, "not_checked") {
+		t.Errorf("the summary asks for no account of what was not checked:\n%s", reviewSummary)
+	}
+	// What the summary asks for is dropped by the parser, so its example is
+	// never taken for a finding.
+	if got := ParseFindings(reviewSummary); len(got) != 0 {
+		t.Errorf("the summary's own example parses as findings: %+v", got)
+	}
+	if !strings.Contains(earlierFindings([]Finding{{Title: "x"}}), "never judge by which files the fix touched") {
+		t.Error("a re-review is not told to judge a fix by the code")
+	}
+}
+
+// Every fixer reproduces before it changes code, leaves a regression test,
+// reruns the checks, and may say a finding is wrong, whatever its
+// instructions say; dude's own keep the fix to what was raised.
+func TestTheFixersContractSurvivesAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Repositories: twoRepos(),
+		Tools: true, Findings: []Finding{{Severity: "high", Title: "Totals off by one", File: "src/export.ts", Line: 40}}}
+	for kind, got := range underEveryInstructions(PhaseFix, in) {
+		for _, want := range []string{fixContract, commitNote, "Totals off by one"} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the fixer's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+		if f, c := strings.Index(got, "Totals off by one"), strings.Index(got, fixContract); c < f {
+			t.Errorf("%s: how to fix comes before what to fix:\n%s", kind, got)
+		}
+	}
+	if got := Prompt(PhaseFix, in); !strings.Contains(got, "Fix only what is raised above") {
+		t.Errorf("the built-in fixer lost its scope rule:\n%s", got)
+	}
+	for _, want := range []string{"reproduce it first", "regression test that fails without the fix",
+		"rerun the affected tests", "say so with your evidence", "`pushback.md`"} {
+		if !strings.Contains(fixContract, want) {
+			t.Errorf("the fixer's contract lacks %q", want)
+		}
+	}
+}
+
+// The implementer tests its own work, whatever its instructions say: the
+// tester after it does not do that for it.
+func TestTheImplementerTestsItsOwnWorkUnderAnyInstructions(t *testing.T) {
+	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads"}, Repositories: twoRepos(), Tools: true}
+	for kind, got := range underEveryInstructions(PhaseImplement, in) {
+		for _, want := range []string{implementContract, commitNote} {
+			if strings.Count(got, want) != 1 {
+				t.Errorf("%s: the implementer's prompt should say %q once:\n%s", kind, want, got)
+			}
+		}
+	}
+	for _, want := range []string{"exercise the changed behaviour yourself", "a test for each acceptance criterion"} {
+		if !strings.Contains(implementContract, want) {
+			t.Errorf("the implementer's contract lacks %q", want)
+		}
+	}
+}

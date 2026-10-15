@@ -63,7 +63,7 @@ beforeAll(async () => {
     return Response.json(new URL(req.url).pathname.endsWith("builtin")
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
       requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
-      maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false,
+      maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true,
       parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5,
     });
   } });

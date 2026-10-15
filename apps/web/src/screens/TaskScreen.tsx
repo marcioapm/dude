@@ -56,7 +56,7 @@ import {
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskStatus } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -67,6 +67,7 @@ import { useTaskImages } from "../hooks/useTaskImages.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
+import { VerificationSection } from "./VerificationSection.tsx";
 import { inFacet, withCounts } from "./facets.ts";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { StalledPanel, stalledForOwner } from "./StalledPanel.tsx";
@@ -191,6 +192,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [verifications, setVerifications] = useState<Verification[]>([]);
   const [findingStatuses, setFindingStatuses] = useState<string[]>([]);
   const [findingSeverities, setFindingSeverities] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -227,16 +229,19 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     const since = ledger.current.at(-1)?.cursor ?? 0;
     const more = allEvents(client, taskId, since).catch(() => [] as PersistedEvent[]);
     try {
-      const [fresh, f, p, a] = await Promise.all([
+      const [fresh, f, p, a, v] = await Promise.all([
         client.getTask(taskId),
         client.listFindings(taskId),
         client.listPullRequests(taskId),
         client.listArtifacts(taskId),
+        // Only the tester's: a backend without it leaves the page as it was.
+        client.listVerification(taskId).catch(() => ({ verifications: [] as Verification[] })),
       ]);
       if (seq > applied.current) {
         applied.current = seq;
         setItem(fresh);
         setFindings(f.findings);
+        setVerifications(v.verifications);
         setArtifacts(a.artifacts);
         setPullRequests(p.pullRequests);
       }
@@ -361,6 +366,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return {
       prs: allPrs.filter((pr) => prInAttempt(pr, shown, byId, current, item?.source)),
       mine: ofAttempt(shown),
+      verifications: verifications.filter((v) => v.attempt === shown),
       others: attempts.filter((n) => n !== shown).map((n) => {
         const theirs = ofAttempt(n);
         return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
@@ -369,7 +375,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       sessions: (item?.runs ?? []).filter((r) => isConductor(r) || attemptOfRun(r, current) === shown)
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
-  }, [findings, artifacts, allPrs, item, byId, attempts, current, shown]);
+  }, [findings, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
   const sessionSelector = useCallback((title: ReactNode) => latest.current.selector(title), [parts.sessions]);
 
   // What the attempt's pull requests heard, for why a fix ran: a few of the ledger's many.
@@ -567,7 +573,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
-              onOpenRun={onOpenRun} onDecided={() => void load()} />
+              youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
           ) : null}
           {!earlier && !item.escalation ? stalledForOwner(item.runs).map((r) => (
             <StalledPanel key={r.id} client={client} run={{ ...r, stalled: r.stalled! }} owner={item.owner} you={people.you}
@@ -751,6 +757,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix").length) }]} />
               <p className="muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
+            <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
             {mine.findings.length > 0 && visibleFindings.length === 0 ? (
               <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." />
             ) : visibleFindings.length > 0 ? (

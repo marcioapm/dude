@@ -156,10 +156,14 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
     assert resp.status_code == 200, resp.text
     fake_github.webhook_url = env.control_plane_url + resp.json()["webhookPath"]
     fake_github.webhook_secret = webhook_secret(env.owner_dsn, org["id"])
+    # One required reviewer, so a delivery's Runs are few enough to count;
+    # the factory's default requires several. No tester (on by default):
+    # test_verification.py delivers with it.
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
         agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")}),
+        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
         repositories=[
             {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}
         ],

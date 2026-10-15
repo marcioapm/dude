@@ -199,7 +199,7 @@ def test_another_organization_cannot_touch_my_structure(client: ApiClient, secon
 
 def test_the_factorys_delivery_defaults_are_readable(client: ApiClient):
     defaults = client.get("/v1/delivery-defaults").json()
-    assert defaults["requiredReviewers"] == ["correctness"]
+    assert defaults["requiredReviewers"] == ["correctness", "tests", "performance"]
     assert defaults["blockingSeverities"] == ["blocking", "high"]
     assert defaults["maxReviewIterations"] >= 1
 
