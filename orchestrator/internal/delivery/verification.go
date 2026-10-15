@@ -442,7 +442,9 @@ func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forge
 	var prID, repo, repoURL, body string
 	var number int
 	var commentID int64
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	var section, link string
+	var err error
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.number
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND pr.adopted AND pr.state IN ('open', 'draft')`,
@@ -452,15 +454,10 @@ func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forge
 			}
 			return err
 		}
-		v, err := latestVerification(ctx, tx, st)
+		section, link, err = verificationText(ctx, tx, st)
 		if err != nil {
 			return err
 		}
-		link, err := taskLink(ctx, tx, st.TaskID)
-		if err != nil {
-			return err
-		}
-		section := verificationSection(v, st.Heads, link)
 		if section == "" {
 			return nil
 		}
@@ -559,16 +556,8 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 		if err != nil || len(prs) == 0 {
 			return err
 		}
-		v, err := latestVerification(ctx, tx, st)
-		if err != nil {
-			return err
-		}
-		link, err := taskLink(ctx, tx, st.TaskID)
-		if err != nil {
-			return err
-		}
-		section = verificationSection(v, st.Heads, link)
-		return nil
+		section, _, err = verificationText(ctx, tx, st)
+		return err
 	})
 	if err != nil {
 		slog.Warn("reading pull request verification failed", "task", st.TaskID, "error", err)
@@ -667,6 +656,18 @@ const (
 
 func markedVerification(section string) string {
 	return verificationStart + "\n" + section + "\n" + verificationEnd
+}
+
+func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string, error) {
+	v, err := latestVerification(ctx, tx, st)
+	if err != nil {
+		return "", "", err
+	}
+	link, err := taskLink(ctx, tx, st.TaskID)
+	if err != nil {
+		return "", "", err
+	}
+	return verificationSection(v, st.Heads, link), link, nil
 }
 
 // replaceVerification puts section between dude's markers in body, keeping
