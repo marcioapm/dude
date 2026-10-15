@@ -87,7 +87,8 @@ type State struct {
 	// The conductor started a phase while the delivery waited on its pull
 	// requests: once that work is done (a review loop clear, a fix, a
 	// test), the delivery waits on them again, with no simplify and no
-	// pull request decision in between.
+	// pull request decision in between. A failed test's fix is tested
+	// again first (RetestDue).
 	ActingOnPR bool `json:"actingOnPr,omitempty"`
 	// Why the workflow stopped for a person, while it waits on one.
 	Escalation *Escalation `json:"escalation,omitempty"`
@@ -105,6 +106,10 @@ type State struct {
 	// The tester's findings the next fix is sent, besides the reviewers'
 	// open ones: set by a failed test, cleared once the fix is in.
 	TestFindingIDs []string `json:"testFindingIds,omitempty"`
+	// A failed test sent a fix round: the next clear review goes to a
+	// test, even at the pull request wait or with the policy's tester off.
+	// Cleared once that test's Run is created.
+	RetestDue bool `json:"retestDue,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -658,10 +663,10 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
-		if st.ActingOnPR {
+		if st.ActingOnPR && !st.RetestDue {
 			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
-		if st.Policy.Simplify {
+		if st.Policy.Simplify && !st.ActingOnPR {
 			return workflow.Result{Next: "simplify", State: st}, nil
 		}
 		return workflow.Result{Next: "test", State: st}, nil
@@ -832,7 +837,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 		return workflow.Result{}, err
 	}
 	d := directed(st, PhaseTest)
-	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
+	if !st.Policy.Test && !st.RetestDue && (d == nil || d.Phase != PhaseTest) {
 		return w.beforePR(ctx, sc, st, "")
 	}
 	k := testRoundKey(sc, st, ":test")
@@ -855,6 +860,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	st.RetestDue = false
 	return park("awaitTest", st, []string{runID}), nil
 }
 
@@ -1538,6 +1544,7 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 			// One more round past the bound, with the test's findings.
 			st.TestFixRounds++
 			st.TestFindingIDs = e.findingIDs()
+			st.RetestDue = true
 		}
 	case "prFix":
 		// The same fix again, not the next: what the stopped one counted

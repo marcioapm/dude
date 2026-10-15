@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
 
 // waitingOnPR says the task's delivery is parked on its pull requests.
@@ -52,7 +53,8 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w.until("the review's decision", func() bool { return w.decisionAt(task) == "after_review" })
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
-	if got := w.phasesRun(task)[phases+1:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") {
+	if got := w.phasesRun(task)[phases+1:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
+		slices.Contains(got, "test") {
 		t.Fatalf("phases after start_phase review: %v", got)
 	}
 	if len(w.gh.Pulls()) != 1 {
@@ -111,6 +113,82 @@ func TestATestStartedAtThePullRequestWaitWaitsOnItAgainOncePassed(t *testing.T) 
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
+	}
+}
+
+// fixFailedTestAtPRWait carries a failed test's fix round through as a
+// conductor deciding next at each point does: the fix, its review, then the
+// test that judges the fix. Fails if the delivery waits on the pull request
+// again with the failure untested.
+func (w *world) fixFailedTestAtPRWait(task string) {
+	w.t.Helper()
+	w.until("the failed test's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	tests := w.phaseRuns(task, "test")
+	for _, at := range []string{delivery.PointReviewed, delivery.PointFixed, delivery.PointReviewed} {
+		w.until("the "+at+" decision", func() bool { return w.decisionAt(task) == at })
+		w.must(task, "decide", `{"action":"next"}`)
+	}
+	w.until("a re-test, or the wait", func() bool { return w.phaseRuns(task, "test") > tests || w.waitingOnPR(task) })
+	if w.phaseRuns(task, "test") == tests {
+		w.t.Fatalf("waiting on the pull request again after a failed test's fix, with no re-test; verdicts %v", w.verdicts(task))
+	}
+}
+
+// A test the conductor starts while the pull request waits, failing, sends
+// its fix round through review and then tests again, as any failed test
+// does; the re-test passing, the delivery waits on that pull request again.
+func TestAFailedTestAtThePullRequestWaitIsTestedAgainAfterItsFix(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", fakeagent.TestFailOnceModel)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	phases := len(w.phasesRun(task))
+
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.fixFailedTestAtPRWait(task)
+	w.until("the re-test, then waiting again", func() bool { return w.waitingOnPR(task) })
+	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"test", "fix", "review", "test"}) {
+		t.Errorf("phases after start_phase test: %v", got)
+	}
+	if got := w.verdicts(task); !slices.Equal(got, []string{"pass"}) {
+		t.Errorf("the re-test's verdicts = %v, want passed", got)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Errorf("%d pull requests", len(w.gh.Pulls()))
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state ? 'actingOnPr' OR state ? 'retestDue')`, task); n != 0 {
+		t.Errorf("waiting again still acting on the pull request, or a re-test still pending")
+	}
+}
+
+// A test at the pull request wait that keeps failing stops for a person
+// after its fix rounds, as anywhere else.
+func TestATestAtThePullRequestWaitThatKeepsFailingEscalates(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", fakeagent.TestFailModel)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	tests := w.phaseRuns(task, "test")
+
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	for range delivery.MaxTestFixRounds {
+		w.fixFailedTestAtPRWait(task)
+	}
+	w.until("the gate to stop", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	if r := w.escalationReason(task); r != delivery.ReasonTestFailedCriteria {
+		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonTestFailedCriteria, w.describeRuns())
+	}
+	if n := w.phaseRuns(task, "test") - tests; n != delivery.MaxTestFixRounds+1 {
+		t.Errorf("%d tests, want the first and one after each of %d fix rounds", n, delivery.MaxTestFixRounds)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Errorf("%d pull requests", len(w.gh.Pulls()))
 	}
 }
 

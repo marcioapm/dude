@@ -349,7 +349,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	case "fail":
 		if st.TestFixRounds < MaxTestFixRounds {
 			st.TestFixRounds++
-			st.TestFindingIDs = g.Findings
+			st.TestFindingIDs, st.RetestDue = g.Findings, true
 			return w.next(ctx, sc, st, PointReviewed, "fix", fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
 				"of the tester's; test fix round %d of %d.", runID, g.Criteria, len(g.Findings), st.TestFixRounds, MaxTestFixRounds))
 		}

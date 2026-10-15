@@ -39,6 +39,9 @@ func TestAReviewerOfAnAdoptedPullRequestIsGivenWhatWasRaised(t *testing.T) {
 	if strings.Contains(review, "leaves its default branch") {
 		t.Errorf("a reviewer of a stacked branch told its base is the default branch:\n%s", review)
 	}
+	if !strings.Contains(review, "the default branch unless a Base section names another: `git merge-base`") {
+		t.Errorf("a reviewer not told a Base section overrides the default branch:\n%s", review)
+	}
 }
 
 // A fixer of pull request feedback with dude's tools is given each
