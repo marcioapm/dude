@@ -350,12 +350,19 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		if st.TestFixRounds < MaxTestFixRounds {
 			st.TestFixRounds++
 			st.TestFindingIDs = g.Findings
+			if st.checkingCandidate() {
+				return workflow.Result{Next: "fix", State: st}, nil
+			}
 			return w.next(ctx, sc, st, PointReviewed, "fix", fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
 				"of the tester's; test fix round %d of %d.", runID, g.Criteria, len(g.Findings), st.TestFixRounds, MaxTestFixRounds))
 		}
 		return w.escalate(ctx, sc, st, ReasonTestFailedCriteria, detail)
 	case "blocked":
 		return w.escalate(ctx, sc, st, ReasonTestBlocked, detail)
+	}
+	if st.Candidate != nil {
+		// A pull request's fix, checked: the pull request takes it now.
+		return workflow.Result{Next: "promoteCandidate", State: st}, nil
 	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
 }

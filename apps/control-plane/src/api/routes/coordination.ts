@@ -201,7 +201,7 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
              ORDER BY h.at DESC NULLS LAST LIMIT 1), '') AS sha,
            -- delivery.TaskHeads' branch: the newest Run that has heads here, not the latest phase Run.
            (SELECT rr.branch FROM runs rr WHERE rr.task_id = t.id AND rr.heads ? repo.name AND rr.branch IS NOT NULL
-             ORDER BY rr.ended_at DESC NULLS LAST LIMIT 1) AS branch
+             AND rr.branch NOT LIKE '%-candidate' ORDER BY rr.ended_at DESC NULLS LAST LIMIT 1) AS branch
          FROM task_repositories tr JOIN repositories repo ON repo.id = tr.repository_id
          WHERE tr.task_id = t.id ORDER BY repo.name LIMIT 1) heads ON true
        WHERE t.epic_id = ${epicId} ORDER BY p.key_prefix, t.number`) as Array<Record<string, unknown>>;

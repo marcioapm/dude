@@ -66,6 +66,8 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       ].filter(Boolean);
       return parts.length ? { ...system(parts.join("; ")), byDude: true } : null;
     }
+    case "pull_request.fix_moved":
+      return { ...system(`moved ${pr} to ${str(p.to).slice(0, 7)}, a fix reviewed and tested before ${pr} showed it`), byDude: true };
     case "pull_request.commented": {
       const ignored = p.ignored === "not_permitted" ? " — not acted on: they may not wake a fixer" : "";
       // A review's body: the verdict has a line of its own (pull_request.reviewed),

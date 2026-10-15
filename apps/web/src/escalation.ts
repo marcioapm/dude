@@ -127,6 +127,14 @@ export function escalationWords(e: Escalation): EscalationWords {
         runId,
       };
     }
+    case "pull_request_moved": {
+      const which = typeof d.repo === "string" && d.repo ? `${d.repo}${d.number ? ` #${num("number")}` : ""}` : `#${num("number")}`;
+      return {
+        short: "The pull request moved",
+        sentence: `Someone pushed to pull request ${which} while dude checked a fix for it. The fix was not moved over their commit: fix the feedback again from what the branch holds now, or wait on the pull request without it.`,
+        runId,
+      };
+    }
     case "ci_stuck": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
       return {

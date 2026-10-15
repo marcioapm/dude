@@ -49,8 +49,9 @@ func TaskHeads(ctx context.Context, tx pgx.Tx, taskID string) ([]RepoHead, error
 		         WHERE p.task_id = $1 AND p.status = 'published' AND p.heads ? repo.name) h
 		     ORDER BY h.at DESC NULLS LAST LIMIT 1),
 		    ''),
+		  -- The task branch: a pull request's candidate fix (CandidateBranch) is not on it yet.
 		  COALESCE((SELECT r.branch FROM runs r WHERE r.task_id = $1 AND r.heads ? repo.name AND r.branch IS NOT NULL
-		       ORDER BY r.ended_at DESC NULLS LAST LIMIT 1), '')
+		       AND r.branch NOT LIKE '%-candidate' ORDER BY r.ended_at DESC NULLS LAST LIMIT 1), '')
 		FROM task_repositories tr JOIN repositories repo ON repo.id = tr.repository_id
 		WHERE tr.task_id = $1 ORDER BY repo.name`, taskID)
 	if err != nil {

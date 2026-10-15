@@ -112,7 +112,7 @@ is not the current one.
 `prompts.go` what each agent is told.
 
 ```
-implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → wait ⟲ fix → done
+implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix on the candidate → review ⟲ fix → test → move the PR branch) → done
 ```
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
@@ -168,6 +168,28 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   organization admin; they are recorded on the verdict. The tester's
   findings are judged by the next test, never by a reviewer. A verdict
   whose heads the task has moved past is shown stale.
+- **Nothing reaches the tester or the pull request unreviewed.** A
+  simplifier that changed something is followed by a review round over its
+  diff alone (`runs.review_range`, `{of: "simplify", base}`: the reviewer is
+  told `<base>..HEAD` in place of `git merge-base`), by the policy's required
+  reviewers; its findings go through the fixer and the usual loop, which
+  then goes to the test, never to the simplifier again. Under the conductor,
+  the simplifier it starts is its own to follow up.
+- **A fix for an open pull request is checked before the pull request shows
+  it.** `prFix` starts from the pull request's heads on GitHub, and the fix
+  Run, and every fix of it, publishes to the candidate branch
+  (`dude/<task>/attempt-N-candidate`, `runs.branch`), not the task branch.
+  The fix's range is reviewed (`{of: "pull_request_fix"}`), the review loop
+  runs with its bounds, the tester checks every criterion, and only once the
+  gate passes or a person settles it does `promoteCandidate` fast-forward
+  each pull request's branch to the candidate (`gh.FastForward`, never
+  forced) and refresh the description's Review and Verification sections.
+  A branch someone pushed to meanwhile is not moved: `pull_request_moved`
+  asks a person (retry from their commit, or wait). Reviews are asked again
+  after the move. The round counts once against `MaxPRFixIterations` and
+  `FixRoundsPerPR`, in `prFix`. These steps are mechanics under the
+  conductor too; it is told only at escalations. A conductor's publish is
+  refused while a candidate is checked.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.

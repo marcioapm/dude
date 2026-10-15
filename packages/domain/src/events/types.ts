@@ -401,6 +401,12 @@ export const EventTypes = {
    * `{ number, repo, head, reviewersRequested?, reviewersRefused?, error? }`.
    */
   PullRequestReviewRerequested: "pull_request.review_rerequested",
+  /**
+   * dude moved an open pull request's branch to a fix for its feedback,
+   * once the fix was reviewed and tested on the candidate branch. Payload:
+   * `{ repo, number, from, to, candidate }`.
+   */
+  PullRequestFixMoved: "pull_request.fix_moved",
 
   // Agent sessions
   SessionStarted: "agent.session.started",

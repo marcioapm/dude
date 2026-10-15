@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -202,6 +203,10 @@ func (e *Escalation) Actions() []string {
 		// A person resolves the conflict, or sees to CI, on GitHub; dude
 		// waits on the pull request again.
 		out = append(out, "wait")
+	case ReasonPullRequestMoved:
+		// The same feedback fixed again from what the branch holds now, or
+		// back to waiting on the pull request without the fix.
+		out = append(out, "retry", "wait")
 	default:
 		// A Run that failed is kept a while (phases.keep): the same agent
 		// can carry on where it stopped. Whether it still is, the API checks.
@@ -319,8 +324,10 @@ func BranchFor(taskID string, attempt int) string {
 // branch (the pull request's head) is fast-forwarded to it only once the
 // gate passes (promoteCandidate).
 func CandidateBranch(taskID string, attempt int) string {
-	return BranchFor(taskID, attempt) + "-candidate"
+	return BranchFor(taskID, attempt) + candidateSuffix
 }
+
+const candidateSuffix = "-candidate"
 
 // Candidate is one round of pull request feedback being fixed on the
 // candidate branch.
@@ -373,6 +380,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"awaitPullRequest":  w.awaitPullRequest,
 			"prFix":             w.prFix,
 			"awaitPRFix":        w.awaitPRFix,
+			"promoteCandidate":  w.promoteCandidate,
 			"decide":            w.decide,
 			"recover":           w.recover,
 		},
@@ -684,7 +692,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	st.Iteration++
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings)
-	if exit == nil || exit.Reason == "clear" {
+	if (exit == nil || exit.Reason == "clear") && !st.checkingCandidate() {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage, if it decides as
 		// the transition commits (recheck).
@@ -774,6 +782,15 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = append(open, f.ID)
 		}
 	}
+	if r := st.reviewRange(); r != nil && r.Of == RangePullRequestFix {
+		// A pull request's fix fixes what its own reviews raised, never the
+		// findings a person let the pull request open with.
+		ours, err := w.s.rangeFindings(ctx, sc.OrganizationID, st, r)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
+	}
 	k := key(sc, st, ":fix:", st.Iteration)
 	if len(st.TestFindingIDs) > 0 {
 		// A failed test's findings, those still open, in a Run of their own.
@@ -824,6 +841,9 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
 	// The tester's findings were sent; the next test judges them.
 	st.TestFindingIDs = nil
+	if st.checkingCandidate() {
+		return workflow.Result{Next: "review", State: st}, nil
+	}
 	return w.next(ctx, sc, st, PointFixed, "review", out.line(runID, "fix"))
 }
 
@@ -910,6 +930,10 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	st.SimplifyBase = nil
 	d := directed(st, PhaseTest)
 	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
+		if st.Candidate != nil {
+			// No tester: a pull request's fix, reviewed, is the pull request's.
+			return workflow.Result{Next: "promoteCandidate", State: st}, nil
+		}
 		return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 	}
 	k := testRoundKey(sc, st, ":test")
@@ -1189,6 +1213,8 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
 	}
+	// A new round's candidate: its Runs are keyed apart from the last's.
+	st.Candidate = nil
 	k := key(sc, st, ":prfix:", st.PRFixKey)
 	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
 	if err != nil {
@@ -1201,7 +1227,20 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
 			return workflow.Result{}, err
 		}
+		// The last round's candidate branch, if a person's push left it
+		// off the pull request's line, would refuse this fix's move.
+		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
+			return workflow.Result{}, err
+		}
+	} else if existing != "" {
+		// A replay: the fix started from the heads it was created with.
+		if st.Heads, err = w.s.runBaseRefs(ctx, sc.OrganizationID, existing); err != nil {
+			return workflow.Result{}, err
+		}
 	}
+	// The fix goes to the candidate branch, not the pull request's: it is
+	// reviewed and tested there first (promoteCandidate moves it).
+	st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
 	// Several comments arriving together cost one fix Run, not one each.
 	d := directed(st, PhaseFix)
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback; d.apply(p) })
@@ -1209,6 +1248,15 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		return workflow.Result{}, err
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
+}
+
+// candidateBranch is the delivery's CandidateBranch: beside its task
+// branch, which a delivery from before attempts were kept names alone.
+func (st *State) candidateBranch() string {
+	if st.Branch != "" {
+		return st.Branch + candidateSuffix
+	}
+	return CandidateBranch(st.TaskID, max(st.Attempt, 1))
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.
@@ -1279,17 +1327,149 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
-	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
+	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
+	if len(out.Heads) == 0 || st.Candidate == nil {
+		// Nothing changed (or a fix from before candidates, already on the
+		// pull request): nothing to check, nothing to move.
+		return w.candidateMoved(ctx, sc, st, out.Heads)
+	}
+	// On the candidate branch: reviewed over the fix alone, then tested on
+	// every criterion, before the pull request shows it. The review loop
+	// and the test's fix rounds are this round's, bounded as before the
+	// pull request; the round counted once, against PRIteration and
+	// PRFixes, in prFix.
+	st.Candidate.Base = map[string]string{}
+	for repo := range out.Heads {
+		if base := cmp.Or(st.Candidate.From[repo], out.Bases[repo]); base != "" {
+			st.Candidate.Base[repo] = base
+		}
+	}
+	st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
+	// Mechanics, whoever decides: the conductor chose the fix; checking it
+	// before the pull request shows it is not a choice (checkingCandidate).
+	return workflow.Result{Next: "review", State: st}, nil
+}
+
+// checkingCandidate says the delivery is checking a pull request's fix on
+// its candidate branch: its review loop and test go on by the policy's
+// rules whoever decides, and a bound reached escalates to a person.
+func (st *State) checkingCandidate() bool { return st.Candidate != nil && len(st.Candidate.Base) > 0 }
+
+// ReasonPullRequestMoved: a pull request's branch moved while a fix for
+// it was checked on the candidate branch; the candidate would overwrite
+// it, so it is not moved.
+const ReasonPullRequestMoved = "pull_request_moved"
+
+// promoteCandidate moves each pull request's branch to the candidate's
+// head, once its review and test passed (or a person settled the test):
+// a fast-forward from the head the fix started from, never a force. A
+// branch someone moved meanwhile is not overwritten: a person decides.
+func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	c := st.Candidate
+	if c == nil {
+		return waitForPR(st), nil
+	}
+	// Never unreviewed at the pull request: a head a conductor's simplifier
+	// or fix left after the last review goes back to one.
+	if unreviewed, err := w.s.unreviewedHeads(ctx, sc.OrganizationID, st, c); err != nil {
+		return workflow.Result{}, err
+	} else if len(unreviewed) > 0 {
+		return workflow.Result{Next: "review", State: st}, nil
+	}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if gh == nil {
+		return workflow.Result{}, fmt.Errorf("no forge credential to move the pull request's branch with")
+	}
+	slugs, err := w.s.writableSlugs(ctx, sc.OrganizationID, st.TaskID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	moved := map[string]string{}
+	for _, repo := range slices.Sorted(maps.Keys(st.Heads)) {
+		to, from := st.Heads[repo], c.From[repo]
+		if to == from || slugs[repo] == "" {
+			continue
+		}
+		at, err := gh.BranchSHA(ctx, slugs[repo], st.Branch)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		switch at {
+		case to:
+			// Moved already: this step ran before.
+		case from:
+			err := gh.FastForward(ctx, slugs[repo], st.Branch, to)
+			var fe *forge.Error
+			if errors.As(err, &fe) && fe.Status == 422 {
+				// Someone pushed between the read and the move.
+				at, _ = gh.BranchSHA(ctx, slugs[repo], st.Branch)
+				return w.candidateRefused(ctx, sc, st, repo, at)
+			}
+			if err != nil {
+				return workflow.Result{}, err
+			}
+		default:
+			return w.candidateRefused(ctx, sc, st, repo, at)
+		}
+		moved[repo] = to
+	}
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
+		return workflow.Result{}, err
+	}
+	for repo := range moved {
+		// Best effort: on the pull request's line now, it is clutter.
+		_ = gh.DeleteBranch(ctx, slugs[repo], c.Branch)
+	}
+	return w.candidateMoved(ctx, sc, st, moved)
+}
+
+// candidateRefused stops for a person: the pull request's branch in repo
+// is at found, not where the fix started. Nothing moved there; the
+// delivery goes on from what the branch holds.
+func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string) (workflow.Result, error) {
+	c := st.Candidate
+	detail := map[string]any{"repo": repo, "expected": c.From[repo], "found": found, "candidate": st.Heads[repo],
+		"branch": c.Branch}
+	if n, err := w.s.pullRequestNumber(ctx, sc.OrganizationID, st, repo); err != nil {
+		return workflow.Result{}, err
+	} else if n > 0 {
+		detail["number"] = n
+	}
+	// What the pull request shows is what the delivery stands on now; a
+	// retry fixes the same feedback again from there.
+	st.Heads = maps.Clone(c.From)
+	if found != "" {
+		st.Heads[repo] = found
+	}
+	st.Candidate = nil
+	return w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
+}
+
+// candidateMoved is what follows a fix reaching the pull requests (heads,
+// by repository, those it moved): reviewers asked again, a pull request
+// opened for a repository newly changed, the bodies' review and
+// verification brought up to the commit they show, and back to waiting.
+func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
+	promoted := len(heads) > 0 && st.Candidate != nil
+	st.Candidate, st.PRFeedback = nil, nil
 	// Who reviewed an open pull request's older head is asked to look at
 	// the fix. Before opening any new pull request, so that nothing that
 	// opening parks on leaves the open ones unasked; a replay of this step
 	// asks nobody twice (RerequestReviews).
-	if len(out.Heads) > 0 {
-		gh, err := w.forges.For(ctx, sc.OrganizationID)
-		if err != nil {
+	var gh *forge.GitHub
+	if len(heads) > 0 {
+		var err error
+		if gh, err = w.forges.For(ctx, sc.OrganizationID); err != nil {
 			return workflow.Result{}, err
 		}
-		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, out.Heads); err != nil {
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, heads); err != nil {
 			return workflow.Result{}, err
 		}
 	}
@@ -1303,6 +1483,13 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return workflow.Result{}, err
 	}
 	st.PullRequestIDs = prIDs
+	if promoted {
+		// What they say about review and test is about the commit they
+		// show now.
+		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
@@ -1460,6 +1647,8 @@ var RetryStep = map[string]string{
 	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
+	// The fix again, from what the pull request's branch holds now.
+	"promoteCandidate": "prFix",
 }
 
 // decide carries out a person's decision on an escalation.
@@ -1489,6 +1678,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
+		if e.Reason == ReasonPullRequestMoved {
+			// The fix stays on its candidate branch: not the pull request's.
+			st.PRFeedback = nil
+		}
 		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil

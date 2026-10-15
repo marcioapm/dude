@@ -26,10 +26,13 @@ import (
 
 // Refusals a publish can meet, in the words the conductor is told.
 const (
-	refusedWriter  = "an implementer is working on this task; wait for it, or steer it"
-	refusedPolicy  = "Deliver decides this task: steer its agents, or ask the person to hand it to you."
-	RefusedBehind  = "your checkout is behind the task branch; `git merge lux/%s` first"
-	RefusedNothing = "nothing to publish: you have no commits on top of the task branch's head"
+	refusedWriter = "an implementer is working on this task; wait for it, or steer it"
+	refusedPolicy = "Deliver decides this task: steer its agents, or ask the person to hand it to you."
+	// A fix for the open pull request is on its candidate branch, being
+	// reviewed and tested.
+	refusedCandidate = "a fix for the pull request is being reviewed and tested; publish once it has reached the pull request"
+	RefusedBehind    = "your checkout is behind the task branch; `git merge lux/%s` first"
+	RefusedNothing   = "nothing to publish: you have no commits on top of the task branch's head"
 	// RefusedTooBig takes the lines, files, and the limits.
 	RefusedTooBig = "this is %d lines in %d files, past the conductor's limit of %d lines / %d files: " +
 		"delegate this (start_phase implement)"
@@ -125,6 +128,9 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	if inFlight {
 		return "", refusef("a publish of yours is under way: you are woken when it is done")
+	}
+	if d.State.Candidate != nil {
+		return "", refusef("%s", refusedCandidate)
 	}
 	id := ids.New("pub")
 	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message,
@@ -297,6 +303,10 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 		return d, refusedPolicy, nil
 	case writer:
 		return d, refusedWriter, nil
+	case d.State.Candidate != nil:
+		// The task branch is the pull request's head: a publish would reach
+		// the pull request before the fix being checked does, unchecked.
+		return d, refusedCandidate, nil
 	}
 	return d, "", nil
 }

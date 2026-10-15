@@ -952,6 +952,23 @@ func (g *GitHub) Head(ctx context.Context, slug string, number int) (string, err
 	return p.Head.SHA, nil
 }
 
+// Body is a pull request's description as GitHub has it now, a person's
+// edits included.
+func (g *GitHub) Body(ctx context.Context, slug string, number int) (string, error) {
+	var p struct {
+		Body *string `json:"body"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil || p.Body == nil {
+		return "", err
+	}
+	return *p.Body, nil
+}
+
+// SetBody replaces a pull request's description.
+func (g *GitHub) SetBody(ctx context.Context, slug string, number int, body string) error {
+	return g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), map[string]any{"body": body}, nil)
+}
+
 // CommitAuthor is who made a commit, by GitHub login when GitHub knows
 // the address, else by the name in the commit.
 func (g *GitHub) CommitAuthor(ctx context.Context, slug, sha string) (string, error) {

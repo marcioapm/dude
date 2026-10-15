@@ -1015,7 +1015,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 	body := prBody(goal, criteria, findings, reviewers)
 	if v := verificationSection(verified, st.Heads, link); v != "" {
 		// Before the factory's sign-off line.
-		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
+		i := strings.LastIndex(body, signOff)
 		body = body[:i] + v + "\n\n" + body[i:]
 	}
 	return title, body, err
@@ -1158,7 +1158,7 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 		sections = append(sections, fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
 			len(findings), reviewers, addressed, strings.Join(lines, "\n")))
 	}
-	sections = append(sections, "---\n\nOpened by the dude factory.")
+	sections = append(sections, signOff)
 	return joinNonEmpty(sections, "\n\n")
 }
 

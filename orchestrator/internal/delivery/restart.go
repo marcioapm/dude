@@ -52,12 +52,14 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	var attempt int
 	var findingIDs, blocking []string
 	var feedback json.RawMessage
-	var conductorRun, conductorNote string
+	var conductorRun, conductorNote, branch string
+	var reviewRange *ReviewRange
 	err = tx.QueryRow(ctx, `SELECT COALESCE(task_id, ''), COALESCE(phase::text, ''), COALESCE(category, ''), status::text,
 			COALESCE(role::text, ''), attempt, finding_ids, blocking_severities, pr_feedback,
-			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, '')
+			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, ''), COALESCE(branch, ''), review_range
 		FROM runs WHERE id = $1 FOR UPDATE`, in.RunID).
-		Scan(&runTask, &phase, &category, &status, &role, &attempt, &findingIDs, &blocking, &feedback, &conductorRun, &conductorNote)
+		Scan(&runTask, &phase, &category, &status, &role, &attempt, &findingIDs, &blocking, &feedback, &conductorRun, &conductorNote,
+			&branch, &reviewRange)
 	switch {
 	case db.IsNotFound(err) || err == nil && runTask != taskID:
 		return "", refusef("%s is not a Run of this task: only this task's Runs are restarted here", in.RunID)
@@ -98,6 +100,8 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 		Category: category, FindingIDs: findingIDs, BlockingSeverities: blocking, PRFeedback: prFeedback,
 		ConductorRunID: conductorRun, ConductorNote: conductorNote,
 		RestartNote: restartLine(in.Conductor != "", note), Tier: tierID,
+		// Where it publishes and what it reviews, as the Run it replaces.
+		Branch: branch, ReviewRange: reviewRange,
 	})
 	if err != nil {
 		return "", err

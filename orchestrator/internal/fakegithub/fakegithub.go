@@ -374,12 +374,18 @@ func (s *Server) Handler() http.Handler {
 		if p == nil {
 			return
 		}
-		var in struct{ State string }
+		var in struct {
+			State string
+			Body  *string
+		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if in.State == "closed" && p.MergedAt == nil {
 			p.State = "closed"
+		}
+		if in.Body != nil {
+			p.Body = *in.Body
 		}
 		write(w, 200, s.pullJSON(p))
 	})
@@ -623,7 +629,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	return map[string]any{
 		"number": p.Number, "node_id": fmt.Sprintf("PR_%d", p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "body": p.Body,
 		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author),
