@@ -223,6 +223,9 @@ def test_a_persons_push_is_where_the_next_fix_starts(client: ApiClient, forge_pr
 def test_a_conflict_stops_for_a_person_and_waits_again_once_resolved(
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
+    # A person resolves conflicts only where the organisation asked to be
+    # told; with `update` dude integrates them itself (test_base_sync).
+    assert client.patch("/v1/forge/settings", {"whenBehind": "tell"}).status_code == 200
     task, pr = _open_pr(client, forge_project)
     fake_github.set_conflicting(pr["number"])
     t = wait_for_escalation(client, task["id"], timeout=30, message="a conflict did not stop for a person")
