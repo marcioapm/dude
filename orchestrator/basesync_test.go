@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -370,6 +371,56 @@ func TestResolveConflictsIsAPersonsExplicitIntegration(t *testing.T) {
 	}
 	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
 		t.Fatalf("a second resolve while integrating: %d", code)
+	}
+}
+
+// The orchestrator dies after the integration Run is created and before its
+// step commits: the replayed step finds that Run by its key and starts no
+// second one for the pair. A base that moves again is a new pair and gets
+// its own Run.
+func TestAnIntegrationReplayedAfterARestartKeepsItsRun(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step != "prFix" || next != "awaitPRFix" {
+			return
+		}
+		once.Do(func() {
+			mustExec(t, w.owner, `UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE locked_by IS NOT NULL`)
+		})
+	})
+	wi := w.reviewing()
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	armed.Store(true)
+	w.until("the integration Run", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step <> 'awaitPullRequest' AND step <> 'prFix'`, wi) == 1 &&
+			w.count(integrations, wi) >= 1
+	})
+	var lost bool
+	once.Do(func() { lost = true })
+	if lost {
+		t.Fatal("the step never reached its commit after creating the Run")
+	}
+	if n := w.count(integrations, wi); n != 1 {
+		t.Fatalf("integration Runs after a replay: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-started'`, wi); n != 1 {
+		t.Fatalf("integration-started events after a replay: %d", n)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("back waiting", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'`, wi) == 1
+	})
+	w.gh.AdvanceBase("main", "Base moved again")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("a second pair's Run", func() bool { w.sync(); return w.count(integrations, wi) == 2 })
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatalf("a new pair escalated: %s", r)
 	}
 }
 
