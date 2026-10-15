@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -543,6 +544,62 @@ func TestAConductorPublishWaitsForALiveIntegration(t *testing.T) {
 	w.refused(task, "publish", `{"message":"a small fix"}`, "an implementer is working on this task; wait for it, or steer it")
 	if n := w.count(`SELECT count(*) FROM conductor_publishes WHERE task_id = $1`, task); n != 0 {
 		t.Fatalf("%d publishes recorded beside a live integration", n)
+	}
+}
+
+// GitHub merged the base into the task branch but its answer was lost: the
+// retried step finds the branch moved, adopts that head and tests it, and
+// asks for no second merge.
+func TestALostCleanMergeIsAdoptedAndTestedAgain(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.task()
+	w.names(wi, w.repoID)
+	policy := scriptedPolicy()
+	policy.Test = true
+	w.start(wi, policy)
+	w.until("implementer finished", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
+	})
+	branch := delivery.BranchFor(wi, 1)
+	var merges atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if !strings.HasSuffix(r.URL.Path, "/merges") {
+				return 0
+			}
+			if merges.Add(1) > 1 {
+				return 0
+			}
+			// GitHub does the merge; the answer never arrives.
+			tree := gitOut(t, w.gh.Repo, "merge-tree", "--write-tree", "main", branch)
+			sha := gitOut(t, w.gh.Repo, "-c", "user.name=Acme", "-c", "user.email=a@example.com",
+				"commit-tree", tree, "-p", branch, "-p", "main", "-m", "Merge main")
+			gitOut(t, w.gh.Repo, "update-ref", "refs/heads/"+branch, sha)
+			return http.StatusBadGateway
+		}
+	})
+	base := w.gh.AdvanceBase("main", "Other work")
+	w.until("pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := merges.Load(); n != 1 {
+		t.Fatalf("merges asked %d, want the lost one only", n)
+	}
+	head := w.gh.SHA(branch)
+	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", head+".."+base); got != "0" {
+		t.Fatalf("the pull request lacks the base: %s", got)
+	}
+	var recorded string
+	if err := w.owner.QueryRow(context.Background(), `SELECT state->'heads'->>'target' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != head {
+		t.Fatalf("state head %s, forge %s", recorded, head)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed'`, wi); n != 2 {
+		t.Fatalf("test Runs %d: the adopted head was not tested again", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='merge-base'`, wi); n > 1 {
+		t.Fatalf("merge-base events %d", n)
 	}
 }
 
