@@ -17,17 +17,25 @@ const DudeMention = "dude"
 // who may be a person whose comments otherwise count.
 const ReplyMarker = "<!-- dude:conductor -->"
 
-// Own says the feedback is a comment the conductor posted: its last
-// non-blank line is the marker itself, as delivery.CheckReplyTx writes it, outside
-// any code fence and blockquote. A person quoting a reply carries the
-// marker inside a blockquote or a code fence, or above their own words,
-// and stays theirs.
+// VerdictMarker ends the comment that carries dude's test verdict on a
+// pull request it took over: hidden, as ReplyMarker, and naming the task
+// whose verdict it is.
+func VerdictMarker(taskID string) string { return "<!-- dude:verdict task=" + taskID + " -->" }
+
+var verdictMarker = regexp.MustCompile(`^<!-- dude:verdict task=[A-Za-z0-9_-]+ -->$`)
+
+// Own says the feedback is a comment dude posted: its last non-blank line
+// is one of its markers (ReplyMarker, as delivery.CheckReplyTx writes it,
+// or a VerdictMarker), outside any code fence and blockquote. A person
+// quoting dude's comment carries the marker inside a blockquote or a code
+// fence, or above their own words, and stays theirs.
 func Own(f Feedback) bool {
 	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
 	ind, rest := indent(lines[len(lines)-1])
+	marker := strings.TrimSpace(rest)
 	// The marker line itself goes through the fence reading: a marker that
 	// ends a list item ends a fence left open in it.
-	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
+	return (marker == ReplyMarker || verdictMarker.MatchString(marker)) && ind <= 3 && !fenced(lines)
 }
 
 // fenced says the last of lines is inside a code fence, or an HTML block

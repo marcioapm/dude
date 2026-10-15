@@ -43,6 +43,11 @@ func TestWhoseCommentIsDudes(t *testing.T) {
 		{"a horizontal rule of dashes, then a pasted reply in an unclosed fence", "@dude explain this quoted reply\n\n- - -\n  ```\n  Because.\n" + m, false},
 		{"a horizontal rule of stars, then a pasted reply in an unclosed fence", "@dude explain this\n\n* * *\n  ```\n  Because.\n" + m, false},
 		{"a horizontal rule of underscores, then a pasted reply in an unclosed fence", "@dude explain this\n\n_ _ _\n  ```\n  Because.\n" + m, false},
+
+		{"a verdict comment", "## Verification\n- **pass** — it greets\n\n" + VerdictMarker("wi_1"), true},
+		{"a verdict marker quoted above a person's words", "> " + VerdictMarker("wi_1") + "\n\n@dude why did it fail?", false},
+		{"a verdict marker in an unclosed fence", "@dude look\n```\n" + VerdictMarker("wi_1"), false},
+		{"a marker naming no task", "Because.\n\n<!-- dude:verdict task= -->", false},
 	} {
 		if got := Own(Feedback{Body: c.body}); got != c.own {
 			t.Errorf("%s: Own = %v, want %v\n%s", c.name, got, c.own, c.body)
