@@ -465,7 +465,8 @@ var builtinInstructions = map[string][]string{
 			"addRelations, blocked_by), saying why.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
-			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
+			"stands for; the owner picking one decides it, and they may use the banner on the task instead. A waiver or " +
+			"an acceptance of a failed test is never a choice: it needs the person's own words. If the owner " +
 			"answers in their own words (\"your call\"), decide it yourself with decide_escalation, once. While the " +
 			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +

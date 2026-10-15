@@ -315,13 +315,20 @@ func TestATestWithNoVerdictIsBlocked(t *testing.T) {
 
 // A test that could not run the app has not judged what an earlier test
 // found: that finding, still open, is a check to make, not a fix to send.
+// So is one that judged no criterion at all.
 func TestABlockedRetestOfAnOpenFailureIsBlockedNotFixed(t *testing.T) {
+	for _, retest := range []string{fakeagent.TestBlockedModel, fakeagent.TestSilentModel} {
+		t.Run(retest, func(t *testing.T) { blockedRetest(t, retest) })
+	}
+}
+
+func blockedRetest(t *testing.T, retest string) {
 	w := newWorld(t)
 	wi := w.testing(fakeagent.TestFailModel)
 	// The first test failed and its fix round began: the next test cannot
-	// start the app.
+	// start the app, or judges nothing.
 	w.until("the test's fix round", func() bool { return w.phaseRuns(wi, "fix") == 2 })
-	w.onModel("qa_browser", fakeagent.TestBlockedModel)
+	w.onModel("qa_browser", retest)
 	w.until("the gate to stop", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != delivery.ReasonTestBlocked {
 		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonTestBlocked, w.describeRuns())

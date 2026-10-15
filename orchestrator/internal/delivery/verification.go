@@ -279,11 +279,14 @@ type gate struct {
 // that is not about its environment; failing outranks blocked, since a fix
 // is needed whatever else could not be checked. A person's decision on a
 // criterion settles it. An earlier test's finding is a failure only when
-// this test ran the application: one that could not has not judged it, so
-// it is still to be checked, not to be fixed.
+// this test ran the application — judged some criterion and raised no
+// environment finding: one that did not has not judged it, so it is still
+// to be checked, not to be fixed.
 func judgeGate(p Policy, in gateInput) gate {
 	var failed, blocked gate
-	ran := !slices.ContainsFunc(in.Findings, func(f TestFinding) bool { return f.Environment() && f.RunID == in.RunID })
+	ran := slices.ContainsFunc(in.Verdicts, func(v StoredVerdict) bool {
+		return v.Status == VerdictPass || v.Status == VerdictFail || v.Status == VerdictNotApplicable
+	}) && !slices.ContainsFunc(in.Findings, func(f TestFinding) bool { return f.Environment() && f.RunID == in.RunID })
 	for _, v := range in.Verdicts {
 		if v.Decision != "" {
 			continue
