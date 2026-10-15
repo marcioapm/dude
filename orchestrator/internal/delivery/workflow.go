@@ -1570,7 +1570,17 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	}
 	for _, repo := range repos {
 		to := st.Heads[repo]
-		err := gh.FastForwardExisting(ctx, slugs[repo], st.Branch, to)
+		move := gh.FastForwardExisting
+		if at[repo] == "" {
+			// A branch never on the forge here is created (a repository the
+			// fix changed first); one that was is a person's deletion.
+			if fresh, err := w.s.neverPublished(ctx, sc.OrganizationID, st, repo); err != nil {
+				return workflow.Result{}, err
+			} else if fresh {
+				move = gh.FastForward
+			}
+		}
+		err := move(ctx, slugs[repo], st.Branch, to)
 		var fe *forge.Error
 		if errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
 			// Someone pushed or deleted the branch between the read and the move.

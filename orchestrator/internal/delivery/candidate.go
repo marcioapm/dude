@@ -118,6 +118,25 @@ func (s *Store) dropCandidateBranches(ctx context.Context, org string, st *State
 	return nil
 }
 
+// neverPublished says the task branch was never on the forge in repo:
+// no pull request opened from it, no Run or conductor publish moved it,
+// and no adopted source names it there. Such a branch missing was not
+// deleted by a person, so promotion may create it.
+func (s *Store) neverPublished(ctx context.Context, org string, st *State, repo string) (bool, error) {
+	var published bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			  WHERE pr.task_id = $1 AND r.name = $2 AND pr.head_branch = $3)
+			OR EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND branch = $3 AND heads ? $2)
+			OR EXISTS (SELECT 1 FROM conductor_publishes WHERE task_id = $1 AND branch = $3
+			  AND status IN ('moving', 'published', 'stalled') AND moves ? $2)
+			OR EXISTS (SELECT 1 FROM task_sources ts JOIN repositories r ON r.id = ts.repository_id
+			  WHERE ts.task_id = $1 AND r.name = $2 AND ts.head_branch = $3)`,
+			st.TaskID, repo, st.Branch).Scan(&published)
+	})
+	return !published, err
+}
+
 // pullRequestNumber is the number of the delivery's pull request in repo,
 // 0 for none.
 func (s *Store) pullRequestNumber(ctx context.Context, org string, st *State, repo string) (int, error) {
