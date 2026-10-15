@@ -1246,11 +1246,12 @@ func (w *world) withTools() {
 // lux's lifecycle events trail the agent's records, so its "running" can be
 // read after the question and the turn's end: the agent waits either way.
 func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
-	for _, trailing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "as lux reports it", true: "running read after the turn"}[trailing], func(t *testing.T) {
-			testAnAgentThatAsksWaits(t, trailing)
-		})
-	}
+	t.Run("as lux reports it", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, false)
+	})
+	t.Run("running read after the turn", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, true)
+	})
 }
 
 func testAnAgentThatAsksWaits(t *testing.T, trailing bool) {
@@ -1264,7 +1265,7 @@ func testAnAgentThatAsksWaits(t *testing.T, trailing bool) {
 		return fakelux.Behaviour{Ask: question, Reply: "Sorted it, as asked.",
 			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	release := sync.OnceFunc(func() {})
+	release := func() {}
 	if trailing {
 		held := make(chan struct{})
 		release = sync.OnceFunc(func() { close(held) })
