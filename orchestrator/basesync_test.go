@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +29,102 @@ func (w *world) toolsWithSync() string {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
+	w.syncer.Agent.ToolsService = true
 	return tools.URL
+}
+
+func TestBeforePRTellDoesNotMergeBase(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("implemented", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
+	})
+	base := w.gh.AdvanceBase("main", "Other work")
+	w.until("PR", func() bool { return len(w.gh.Pulls()) == 1 })
+	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", w.gh.Pull(1).Head+".."+base); got != "1" {
+		t.Fatalf("tell merged automatically: %s", got)
+	}
+}
+
+func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	seed := t.TempDir()
+	gitOut(t, seed, "clone", "-q", w.gh.Repo, "work")
+	work := filepath.Join(seed, "work")
+	if err := os.WriteFile(filepath.Join(work, "FACTORY.md"), []byte("original\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, work, "add", ".")
+	gitOut(t, work, "-c", "user.name=Acme", "-c", "user.email=a@example.com", "commit", "-qm", "Seed")
+	gitOut(t, work, "push", "-q", "origin", "main")
+	wi := w.task()
+	p := scriptedPolicy()
+	p.Test = true
+	w.names(wi, w.repoID)
+	w.start(wi, p)
+	w.until("implementer finished", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
+	})
+	if err := os.WriteFile(filepath.Join(work, "FACTORY.md"), []byte("base intent\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, work, "add", ".")
+	gitOut(t, work, "-c", "user.name=Acme", "-c", "user.email=a@example.com", "commit", "-qm", "Base change")
+	gitOut(t, work, "push", "-q", "origin", "main")
+	w.until("integrated PR", func() bool {
+		if r := w.escalationReason(wi); r != "" {
+			var s string
+			_ = w.owner.QueryRow(context.Background(), `SELECT state::text FROM workflow_runs WHERE task_id=$1`, wi).Scan(&s)
+			t.Fatal(r, s)
+		}
+		return len(w.gh.Pulls()) == 1
+	})
+	branch := w.gh.Pull(1).Head
+	content := gitOut(t, w.gh.Repo, "show", branch+":FACTORY.md")
+	if !strings.Contains(content, "base intent") || !strings.Contains(content, "Written by run") {
+		t.Fatalf("lost intent %s", content)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND pr_feedback::text LIKE '%remerge-diff%'`, wi); n < 1 {
+		t.Fatalf("integration reviews %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed'`, wi); n < 2 {
+		t.Fatalf("verification was not repeated: %d", n)
+	}
+}
+
+func TestBeforePRMergesMovedBaseAndAdoptsHead(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.task()
+	w.names(wi, w.repoID)
+	policy := scriptedPolicy()
+	policy.Test = true
+	w.start(wi, policy)
+	w.until("implementer finished", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
+	})
+	base := w.gh.AdvanceBase("main", "Other work")
+	w.until("pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	branch := w.gh.Pull(1).Head
+	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", branch+".."+base); got != "0" {
+		t.Fatalf("PR omitted base: %s", got)
+	}
+	var head string
+	if err := w.owner.QueryRow(context.Background(), `SELECT state->'heads'->>'target' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&head); err != nil {
+		t.Fatal(err)
+	}
+	if head != w.gh.SHA(branch) {
+		t.Fatalf("state %s forge %s", head, w.gh.SHA(branch))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed'`, wi); n != 2 {
+		t.Fatalf("server merge verification runs %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='merge-base'`, wi); n != 1 {
+		t.Fatalf("merge events %d", n)
+	}
 }
 
 func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {

@@ -967,6 +967,9 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 // (Open or Draft) — except for a pull request taken over, which is open
 // already and has nothing to decide.
 func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
+	if st.Integration != nil {
+		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	}
 	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
@@ -1060,6 +1063,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	}
 	if st.GateRequired && st.GateAt != nil {
 		st.Draft = st.GateAt.Draft
+	}
+	if res, diverted, err := w.syncBeforePR(ctx, sc, st); diverted || err != nil {
+		return res, err
 	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if errors.As(err, new(forge.OwnerAuthorizationError)) {

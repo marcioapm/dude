@@ -400,6 +400,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, map[string]any{"default_branch": "main"})
 	})
+	mux.HandleFunc("POST "+prefix+"/merges", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Base, Head string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		from := s.SHA(in.Base)
+		if from == "" {
+			fail(w, 404, "Base not found")
+			return
+		}
+		if _, err := s.git("merge-base", "--is-ancestor", in.Head, from); err == nil {
+			w.WriteHeader(204)
+			return
+		}
+		tree, err := s.git("merge-tree", "--write-tree", from, in.Head)
+		if err != nil {
+			fail(w, 409, "Merge conflict")
+			return
+		}
+		sha, err := s.gitAs("Acme", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
+		if err == nil {
+			_, err = s.git("update-ref", "refs/heads/"+in.Base, sha, from)
+		}
+		if err != nil {
+			fail(w, 409, "Branch moved")
+			return
+		}
+		write(w, 201, map[string]string{"sha": sha})
+	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
 		owner, _, _ := strings.Cut(s.Slug, "/")

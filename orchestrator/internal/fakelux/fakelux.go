@@ -1767,6 +1767,15 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	id, from := InboxLast(run.Inputs)
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
+	if tool == "sync_base" {
+		deadline := time.Now().Add(5 * time.Second)
+		for status == 422 && strings.Contains(string(body), "container is not running") && time.Now().Before(deadline) {
+			s.mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			s.mu.Lock()
+			status, body, err = s.toolRequest(run, tool, args)
+		}
+	}
 	s.saidOfTool(run, tool, status, err)
 	if err == nil && status != 0 && status < 300 {
 		var answer struct{ ID string }

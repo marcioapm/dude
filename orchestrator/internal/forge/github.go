@@ -1056,6 +1056,15 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
+// MergeBase merges an exact base commit into the task branch without a PR.
+func (g *GitHub) MergeBase(ctx context.Context, slug, branch, head string) (string, error) {
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	err := g.do(ctx, "POST", "/repos/"+slug+"/merges", map[string]string{"base": branch, "head": head}, &out)
+	return out.SHA, err
+}
+
 // ClosePullRequest closes a pull request without merging it. One already
 // closed or merged is left as it is.
 func (g *GitHub) ClosePullRequest(ctx context.Context, slug string, number int) error {

@@ -3,10 +3,111 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+// syncBeforePR runs while the workflow holds its step lease. A moving
+// conductor publish is refused before any network move; its reservation
+// cannot start while stepHolds is true.
+func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil || gh == nil {
+		return workflow.Result{}, false, err
+	}
+	if gh.Settings.WhenBehind != "update" {
+		return workflow.Result{}, false, nil
+	}
+	var repos []Repository
+	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := RefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+			return err
+		}
+		var writer bool
+		if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
+			return err
+		}
+		if writer {
+			return workflow.Wait{After: time.Second, Why: "a phase is still writing the task branch"}
+		}
+		var e error
+		repos, e = TaskRepositories(ctx, tx, st.TaskID)
+		return e
+	})
+	if err != nil {
+		return workflow.Result{}, false, err
+	}
+	for _, repo := range repos {
+		if repo.Access != "write" || st.Heads[repo.Name] == "" {
+			continue
+		}
+		var open bool
+		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pull_requests WHERE task_id=$1 AND repository_id=$2 AND head_branch=$3 AND state IN ('open','draft'))`, st.TaskID, repo.ID, st.Branch).Scan(&open)
+		})
+		if err != nil {
+			return workflow.Result{}, false, err
+		}
+		if open {
+			continue
+		}
+		slug := forge.SlugFromURL(repo.URL)
+		base := st.BaseFor(repo)
+		head, e := gh.BranchSHA(ctx, slug, st.Branch)
+		if e != nil {
+			return workflow.Result{}, false, e
+		}
+		bh, e := gh.BranchSHA(ctx, slug, base)
+		if e != nil {
+			return workflow.Result{}, false, e
+		}
+		cmp, e := gh.Compare(ctx, slug, bh, head)
+		if e != nil {
+			return workflow.Result{}, false, e
+		}
+		if cmp.BehindBy == 0 {
+			continue
+		}
+		i := &Integration{Repo: repo.Name, Base: base, Head: head, BaseHead: bh, BeforePR: true}
+		if run := st.IntegrationPairs[i.pair()]; run != "" {
+			i.RunID = run
+			st.Integration = i
+			r, e := w.integrationFailure(ctx, sc, st, "this head/base pair was already attempted")
+			return r, true, e
+		}
+		merged, e := gh.MergeBase(ctx, slug, st.Branch, bh)
+		if e != nil {
+			if fe, ok := e.(*forge.Error); ok && fe.Status == 409 {
+				st.Integration = i
+				st.Heads[repo.Name] = head
+				return workflow.Result{Next: "prFix", State: st}, true, nil
+			}
+			return workflow.Result{}, false, e
+		}
+		if merged == "" {
+			continue
+		}
+		st.Heads[repo.Name] = merged
+		// A changed head is tested again even when Git merged it without conflicts.
+		st.Integration = i
+		st.Integration.Published = true
+		st.Integration.RunID = "server-" + merged
+		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, e := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: map[string]any{"action": "merge-base", "repo": repo.Name, "base": base, "head": merged}})
+			return e
+		})
+		if err != nil {
+			return workflow.Result{}, false, err
+		}
+		return workflow.Result{Next: "test", State: st}, true, nil
+	}
+	return workflow.Result{}, false, nil
+}
 
 // Integration keeps the attempted pair and continuation through review and test.
 type Integration struct {
