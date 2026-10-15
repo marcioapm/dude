@@ -44,9 +44,13 @@ type EscalationDecision struct {
 	QuestionID, AnsweredBy string
 	// Taken by the conductor, on that answer: its Run.
 	Conductor string
+	// The person deciding (the banner's), for a waiver's or acceptance's
+	// record; AnsweredBy stands for it on an answer.
+	Person string
 	// Checks who may decide, once the escalation and action are known to
-	// be valid; nil when the caller checked already.
-	Authorize func() error
+	// be valid, given the escalation's reason; nil when the caller checked
+	// already.
+	Authorize func(reason string) error
 }
 
 // LockEscalationTx takes the locks a path that reads or changes an
@@ -140,11 +144,22 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			in.Action, e.Reason, strings.Join(e.Actions(), ", "))
 	}
 	if in.Authorize != nil {
-		if err := in.Authorize(); err != nil {
+		if err := in.Authorize(e.Reason); err != nil {
 			return err
 		}
 	}
 	note := strings.TrimSpace(in.Note)
+	if NeedsReason(e.Reason, in.Action) {
+		// Shipping past a criterion nobody saw work is on the record, with
+		// why.
+		if note == "" {
+			return escalationErr("bad_request", "%s needs a note: say why the task may ship with %s", in.Action,
+				map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
+		}
+		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
+			return err
+		}
+	}
 	if in.Action == "resume" {
 		// The Run that failed, taken back up now; the workflow waits on it.
 		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), note); err != nil {

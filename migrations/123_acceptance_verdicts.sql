@@ -42,3 +42,13 @@ CREATE POLICY tenant_isolation ON acceptance_verdicts
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE ON acceptance_verdicts TO dude_app;
+
+-- The scripted tester's outcomes other than a pass are test models a tier
+-- may request (fakeagent.TestFailModel…): this check replaces 120's whole.
+ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
+  CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',
+                   'fake/command', 'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup', 'fake/subagent', 'fake/subagent-ask',
+                   'fake/peer', 'fake/machine', 'fake/test-fail', 'fake/test-fail-once', 'fake/test-blocked',
+                   'fake/test-unverified', 'fake/test-silent')
+         OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

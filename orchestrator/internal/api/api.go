@@ -598,6 +598,24 @@ func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) er
 	return fail(http.StatusForbidden, "not_owner", "only %s can %s this — reassign the task to %s it", *ownerName, verb, verb)
 }
 
+// ownerOrAdmin is ownerOnly that an organization admin also passes: for
+// waiving or accepting what a test could not show, which a person outside
+// the task may need to unblock. Admin-ness is the member's role as
+// resolvePrincipal read it, the backend's isOrgAdmin source.
+func ownerOrAdmin(ctx context.Context, tx pgx.Tx, taskID string, p principal, verb string) error {
+	if p.Admin {
+		return nil
+	}
+	if err := ownerOnly(ctx, tx, taskID, p.Person, verb); err != nil {
+		var he *httpError
+		if errors.As(err, &he) && he.status == http.StatusForbidden {
+			return fail(http.StatusForbidden, "not_owner", "only the task's owner or an organisation admin can %s this", verb)
+		}
+		return err
+	}
+	return nil
+}
+
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ string, p principal, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID,
@@ -1140,8 +1158,13 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 	p := principalOf(r)
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		return escalationFailure(delivery.DecideEscalationTx(r.Context(), tx, org, taskID, delivery.EscalationDecision{
-			Action: body.Action, Note: body.Note, ActorType: p.ActorType, ActorID: p.Actor,
-			Authorize: func() error { return ownerOnly(r.Context(), tx, taskID, p.Person, "decide") }}))
+			Action: body.Action, Note: body.Note, ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person,
+			Authorize: func(reason string) error {
+				if delivery.NeedsReason(reason, body.Action) {
+					return ownerOrAdmin(r.Context(), tx, taskID, p, body.Action)
+				}
+				return ownerOnly(r.Context(), tx, taskID, p.Person, "decide")
+			}}))
 	})
 	if err != nil {
 		return err

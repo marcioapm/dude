@@ -848,6 +848,8 @@ test("120 widens the pause and resume checks to a machine move without scanning 
     const tier = (id: string, model: string) =>
       sql`INSERT INTO model_tiers (id, organization_id, name, model) VALUES (${id}, 'org_m', ${id}, ${model})`;
     for (const [id, model] of [["t_sub", "fake/subagent"], ["t_ask", "fake/subagent-ask"], ["t_peer", "fake/peer"], ["t_machine", "fake/machine"]]) await tier(id!, model!);
+    // 123 adds the scripted tester's outcomes, keeping the rest.
+    for (const [id, model] of [["t_fail", "fake/test-fail"], ["t_blocked", "fake/test-blocked"], ["t_silent", "fake/test-silent"]]) await tier(id!, model!);
     expect(await tier("t_bad", "fake/nonesuch").then(() => "inserted", () => "refused")).toBe("refused");
   } finally {
     await sql.end();

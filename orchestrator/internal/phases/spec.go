@@ -417,6 +417,12 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Workload.Command = []string{"lux-fake", "acp"}
 		}
 		spec.Workload.Prompt = fakeagent.Script(step, in.Model, in.RunID)
+		if in.Phase == delivery.PhaseTest {
+			// The fake lux plays the tester from labels, not the script.
+			criteria := fakeagent.Criteria(in.Prompt)
+			spec.Workload.Prompt = fakeagent.TesterScript(in.Model, criteria)
+			spec.Labels["dude.criteria"] = strconv.Itoa(criteria)
+		}
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
