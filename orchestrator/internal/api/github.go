@@ -247,7 +247,7 @@ const backgroundRegistration = 10 * time.Minute
 // pullRequestAction does to a pull request what a person asked, on GitHub.
 func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org string) error {
 	id, action := r.PathValue("id"), r.PathValue("action")
-	if !slices.Contains([]string{"merge", "update-branch", "rerun-failed", "reviewers"}, action) {
+	if !slices.Contains([]string{"merge", "update-branch", "rerun-failed", "reviewers", "resolve-conflicts"}, action) {
 		return fail(http.StatusNotFound, "not_found", "no pull request action %q", action)
 	}
 	var body struct {
@@ -260,14 +260,15 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 	var pr struct {
 		Number                                       int
 		State, HeadSHA, URL, Repo, ProjectID, TaskID string
+		Mergeable                                    string
 		Checks                                       []forge.Check
 	}
 	var checks []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		return tx.QueryRow(r.Context(), `SELECT pr.number, pr.state::text, COALESCE(pr.head_sha, ''), r.url, r.name,
-				pr.project_id, pr.task_id, pr.checks_json
+				pr.project_id, pr.task_id, pr.checks_json, pr.mergeable_state
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, id).
-			Scan(&pr.Number, &pr.State, &pr.HeadSHA, &pr.URL, &pr.Repo, &pr.ProjectID, &pr.TaskID, &checks)
+			Scan(&pr.Number, &pr.State, &pr.HeadSHA, &pr.URL, &pr.Repo, &pr.ProjectID, &pr.TaskID, &checks, &pr.Mergeable)
 	})
 	if db.IsNotFound(err) {
 		return fail(http.StatusNotFound, "not_found", "pull request %s not found", id)
@@ -277,6 +278,9 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 	}
 	if pr.State != forge.StateOpen && pr.State != forge.StateDraft {
 		return fail(http.StatusConflict, "conflict", "the pull request is %s", pr.State)
+	}
+	if action == "resolve-conflicts" {
+		return s.resolveConflicts(w, r, org, id, pr.TaskID, pr.Repo, pr.Number, pr.HeadSHA, pr.Mergeable)
 	}
 	slug := forge.SlugFromURL(pr.URL)
 	gh, err := s.forge(r.Context(), org)
@@ -354,6 +358,40 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		if err := s.PRs.Sync(r.Context(), org, id); err != nil {
 			s.Log.Warn("reading a pull request back after an action failed", "pr", id, "action", action, "error", err)
 		}
+	}
+	s.kick()
+	write(w, http.StatusOK, out)
+	return nil
+}
+
+// resolveConflicts asks the task's workflow to integrate the pull request's
+// base, as the owner deciding its escalation would. Only a pull request dude
+// last read as conflicting; the workflow checks GitHub again before it
+// starts the integration Run.
+func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, id, taskID, repo string, number int,
+	head, mergeable string) error {
+	if mergeable != forge.MergeConflicting {
+		return fail(http.StatusConflict, "conflict", "the pull request does not conflict with its base")
+	}
+	p := principalOf(r)
+	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo}
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
+			return err
+		}
+		if err := escalationFailure(delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head,
+			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})); err != nil {
+			return err
+		}
+		var projectID string
+		if err := tx.QueryRow(r.Context(), `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
+			return err
+		}
+		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID},
+			delivery.EvPullRequestAction, p, out)
+	})
+	if err != nil {
+		return err
 	}
 	s.kick()
 	write(w, http.StatusOK, out)

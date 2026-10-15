@@ -3,6 +3,9 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -132,9 +135,93 @@ func (i *Integration) brief() string {
 	return fmt.Sprintf("Base integration: this branch conflicts with `%s` in %s. Call sync_base, then `git merge lux/%s`. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Never rebase or force. The recorded base head is %s.", i.Base, i.Repo, i.Base, i.BaseHead)
 }
 
+// ResolveConflictsTx is a person's "Resolve conflicts" on a pull request:
+// the workflow waiting on that pull request is signalled to integrate its
+// base, whatever whenBehind says; one stopped at that pull request's
+// conflict escalation is decided so (retry for a failed integration, else
+// wait with the request queued). Anything else is a conflict: the handler
+// starts no phase itself. authorize checks who may decide an escalation.
+func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head string,
+	in EscalationDecision) error {
+	_, d, err := LockEscalationTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if d == nil || !d.Live() || !slices.Contains(d.State.PullRequestIDs, prID) {
+		return escalationErr("conflict", "dude is not waiting on this pull request: it is busy with the task or has stopped")
+	}
+	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
+	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, head)
+	if e := d.State.Escalation; e != nil {
+		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
+			return escalationErr("conflict", "dude is waiting on a decision about something else")
+		}
+		in.Action = "wait"
+		if slices.Contains(e.Actions(), "retry") {
+			in.Action = "retry"
+		}
+		if err := DecideEscalationTx(ctx, tx, org, taskID, in); err != nil || in.Action == "retry" {
+			return err
+		}
+		return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+	}
+	if d.Step != "awaitPullRequest" || d.State.Integration != nil {
+		return escalationErr("conflict", "dude is already working on the task; try again once it waits on the pull request")
+	}
+	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+}
+
+// about says the escalation names this pull request.
+func (e *Escalation) about(repo string, number int) bool {
+	var d struct {
+		Repo   string `json:"repo"`
+		Number int    `json:"number"`
+	}
+	e.decode(&d)
+	return d.Repo == repo && d.Number == number
+}
+
 func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext, st *State, problem string) (workflow.Result, error) {
 	i := st.Integration
-	return w.escalate(ctx, sc, st, "pull_request_conflict", map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "runId": i.RunID, "error": problem, "integration": true})
+	detail := map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "error": problem, "integration": true}
+	if i.agentRun() {
+		detail["runId"] = i.RunID
+	}
+	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"error": problem}); err != nil {
+		return workflow.Result{}, err
+	}
+	return w.escalate(ctx, sc, st, "pull_request_conflict", detail)
+}
+
+// agentRun says the integration was an agent's Run; a merge GitHub made
+// carries a "server-<sha>" key that names no Run.
+func (i *Integration) agentRun() bool { return i.RunID != "" && !strings.HasPrefix(i.RunID, "server-") }
+
+// integrationEvent records an integration's start, completion or refusal on
+// the task's activity, once per action and attempt however often the step
+// is replayed.
+func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, st *State, action string, extra map[string]any) error {
+	i := st.Integration
+	payload := map[string]any{"action": action, "repo": i.Repo, "base": i.Base, "attempt": i.pair() + ":" + i.RunID}
+	if i.Number > 0 {
+		payload["number"] = i.Number
+	}
+	if i.agentRun() {
+		payload["runId"] = i.RunID
+	}
+	maps.Copy(payload, extra)
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var seen bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+				AND payload->>'action' = $3 AND payload->>'attempt' = $4)`,
+			st.TaskID, EvPullRequestAction, action, payload["attempt"]).Scan(&seen); err != nil || seen {
+			return err
+		}
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID,
+			ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+			Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: payload})
+		return err
+	})
 }
 
 func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext, st *State, stop *forge.Signal) (bool, error) {
@@ -142,7 +229,7 @@ func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext,
 	if err != nil || gh == nil {
 		return false, err
 	}
-	if gh.Settings.WhenBehind != "update" {
+	if gh.Settings.WhenBehind != "update" && !stop.Requested {
 		return false, nil
 	}
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)

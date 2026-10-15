@@ -1016,6 +1016,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
 			return workflow.Result{}, err
 		}
+		if err := w.integrationEvent(ctx, sc, st, "integration-completed", map[string]any{"head": st.Heads[st.Integration.Repo]}); err != nil {
+			return workflow.Result{}, err
+		}
 		st.Integration, st.PRFeedback = nil, nil
 	}
 	acting := st.ActingOnPR
@@ -1203,7 +1206,9 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			if gh != nil && gh.Settings.WhenBehind == "update" {
+			// Nothing to integrate after all: a person's request, or the
+			// automatic setting, goes back to waiting rather than escalating.
+			if stop.Requested || gh != nil && gh.Settings.WhenBehind == "update" {
 				if len(st.PRFeedback) > 0 {
 					return workflow.Result{Next: "prFix", State: st}, nil
 				}
@@ -1384,6 +1389,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			st.IntegrationPairs = map[string]string{}
 		}
 		st.IntegrationPairs[st.Integration.pair()] = runID
+		if err := w.integrationEvent(ctx, sc, st, "integration-started", nil); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
 }

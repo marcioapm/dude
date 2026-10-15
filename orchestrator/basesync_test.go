@@ -340,6 +340,39 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 	}
 }
 
+// whenBehind=tell leaves a conflict to a person; their "Resolve conflicts"
+// on the pull request starts the one integration the setting withheld.
+func TestResolveConflictsIsAPersonsExplicitIntegration(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
+	me := w.person("owner")
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
+		t.Fatalf("resolve on a clean pull request: %d %v", code, body)
+	}
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	if n := w.count(integrations, wi); n != 0 {
+		t.Fatalf("tell integrated by itself: %d", n)
+	}
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
+		t.Fatalf("resolve: %d %v", code, body)
+	}
+	w.until("integration started", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action'
+		AND payload->>'action'='integration-started' AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
+		t.Fatalf("integration-started events %d", n)
+	}
+	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
+		t.Fatalf("a second resolve while integrating: %d", code)
+	}
+}
+
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true
