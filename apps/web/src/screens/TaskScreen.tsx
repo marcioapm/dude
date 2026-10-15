@@ -381,6 +381,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       return pr !== undefined && mine.has(pr);
     });
   }, [events, parts.prs, allPrs]);
+  // Each Run's run.created payload: what it was started for.
+  const createdFor = useMemo(() => new Map(events.filter((e) => e.eventType === "run.created" && e.runId)
+    .map((e) => [e.runId as string, e.payload])), [events]);
 
   // How it stopped, read from the runs and the ledger once per change of them.
   const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
@@ -650,7 +653,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {phases.length > 0 ? (
                   <StepList data-testid="pipeline">
                     {phases.map((run, index) => (
-                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents)}
+                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents, createdFor.get(run.id))}
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
                     {prs.map((pr) => (
@@ -977,9 +980,14 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * what can be read from the runs, findings and events; nothing guessed.
  * Exported for its unit test: the step row is its only caller.
  */
-export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
+export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[],
+  created?: Record<string, unknown>): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
+    // What the fix was started for, when its run.created says; an adopted
+    // pull request is recorded as opened before its first review.
+    if (Array.isArray(created?.findingIds) && created.findingIds.length > 0) return "for the review";
+    if (typeof created?.prFeedbackCount === "number" && created.prFeedbackCount > 0) return prFeedbackReason(prEvents, run.createdAt);
     if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
       return prFeedbackReason(prEvents, run.createdAt);
     }
