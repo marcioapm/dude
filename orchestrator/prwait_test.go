@@ -41,8 +41,14 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w.until("the fix on the branch, and waiting again", func() bool {
 		return w.gh.SHA(branch) != before && w.waitingOnPR(task)
 	})
-	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix"}) {
+	// Checked on its candidate before the pull request shows it, whoever
+	// started it: a review of its own range (this policy has no tester).
+	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix", "review"}) {
 		t.Fatalf("phases after start_phase fix: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+		AND review_range->'base'->>'target' = $3`, task, delivery.RangePullRequestFix, before); n == 0 {
+		t.Fatal("the fix reached the pull request without a review of its range")
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
@@ -53,7 +59,7 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w.until("the review's decision", func() bool { return w.decisionAt(task) == "after_review" })
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
-	if got := w.phasesRun(task)[phases+1:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
+	if got := w.phasesRun(task)[phases+2:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
 		slices.Contains(got, "test") {
 		t.Fatalf("phases after start_phase review: %v", got)
 	}
