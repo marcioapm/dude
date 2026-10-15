@@ -25,7 +25,7 @@ describe("project secret recipients", () => {
   });
 
   test("only the six recipients are accepted, and at least one is required", () => {
-    for (const recipient of ["previews", "tester", "implementer", "fixer", "simplifier", "reviewer"]) {
+    for (const recipient of ["previews", "tester", "implementer", "fixer", "simplifier", "reviewer"] as const) {
       expect(secrets.secretRecipientsSchema.parse([recipient])).toEqual([recipient]);
     }
     for (const recipients of [[], ["conductor"], ["brainstorm"], ["qa_browser"], ["tester", null], ["tester", "tester"]]) {

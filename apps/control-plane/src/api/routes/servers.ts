@@ -12,6 +12,7 @@
 
 import { auditActor } from "../auth.ts";
 import {
+  DEFAULT_SECRET_RECIPIENTS,
   EventTypes,
   addSecretSchema,
   changeSecretRecipientsSchema,
@@ -199,7 +200,7 @@ async function addProjectSecret(ctx: RequestContext): Promise<Response> {
     if (problem) throw problem.kind === "conflict" ? conflict(problem.message) : badRequest(problem.message);
     await scope.sql`
       INSERT INTO project_secrets (project_id, organization_id, name, value, hint, updated_by, recipients)
-      VALUES (${projectId}, ${scope.organizationId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId}, ${scope.sql.array(input.recipients, "text")}::text[])`;
+      VALUES (${projectId}, ${scope.organizationId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId}, ${scope.sql.array(input.recipients ?? [...DEFAULT_SECRET_RECIPIENTS], "text")}::text[])`;
     await recordChange(scope, ctx, projectId, { secrets: { [input.name]: "added" } });
     return (await listSecrets(scope, projectId, input.name))[0]!;
   });

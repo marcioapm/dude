@@ -106,8 +106,8 @@ export class FixtureClient extends ApiClient {
     this.#recipes = [...serverRecipes];
     this.#previews = { image: null, imageId: null, egress: [...previewEgress], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null };
     this.#secrets = [
-      { name: "DATABASE_SEED_URL", hint: "8a1c", updatedAt: new Date(Date.now() - 14 * 864e5).toISOString(), updatedBy: { id: PEOPLE[1]?.id ?? YOU, name: PEOPLE[1]?.name ?? PEOPLE[0]!.name } },
-      { name: "SEED_LLM_KEY", hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } },
+      { name: "DATABASE_SEED_URL", recipients: ["previews"], hint: "8a1c", updatedAt: new Date(Date.now() - 14 * 864e5).toISOString(), updatedBy: { id: PEOPLE[1]?.id ?? YOU, name: PEOPLE[1]?.name ?? PEOPLE[0]!.name } },
+      { name: "SEED_LLM_KEY", recipients: ["previews"], hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } },
     ];
     const base = taskFor(scenario);
     this.#task = base;
@@ -620,7 +620,7 @@ export class FixtureClient extends ApiClient {
     await wait(120);
     const problem = secretNameProblem(name, { secrets: this.#secrets.map((s) => s.name), recipes: this.#recipes });
     if (problem) throw new ApiError(problem.kind === "conflict" ? 409 : 400, problem.kind, problem.message);
-    const saved: PreviewSecret = { name, hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    const saved: PreviewSecret = { name, recipients: ["previews", "tester"], hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
     this.#secrets = [...this.#secrets, saved].sort((a, b) => a.name.localeCompare(b.name));
     return saved;
   }
@@ -628,7 +628,7 @@ export class FixtureClient extends ApiClient {
     await wait(120);
     const at = this.#secrets.findIndex((s) => s.name === name);
     if (at < 0) throw new ApiError(404, "not_found", `no secret ${name}`);
-    const saved: PreviewSecret = { name, hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    const saved: PreviewSecret = { name, recipients: this.#secrets[at]!.recipients, hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
     this.#secrets[at] = saved;
     return saved;
   }

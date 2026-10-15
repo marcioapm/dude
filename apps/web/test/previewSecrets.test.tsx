@@ -23,8 +23,8 @@ afterEach(async () => {
 });
 
 const SECRETS: PreviewSecret[] = [
-  { name: "SEED_LLM_KEY", hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: "u_m", name: "Márcio" } },
-  { name: "STRIPE_TEST_KEY", hint: "x7Qb", updatedAt: new Date(Date.now() - 3 * 864e5).toISOString(), updatedBy: { id: "u_r", name: "Rui" } },
+  { name: "SEED_LLM_KEY", recipients: ["previews"], hint: "3f9a", updatedAt: new Date(Date.now() - 2 * 36e5).toISOString(), updatedBy: { id: "u_m", name: "Márcio" } },
+  { name: "STRIPE_TEST_KEY", recipients: ["previews"], hint: "x7Qb", updatedAt: new Date(Date.now() - 3 * 864e5).toISOString(), updatedBy: { id: "u_r", name: "Rui" } },
 ];
 const RECIPES: RecipeEnvNames[] = [{ name: "web", env: [{ name: "PORT" }, { name: "NODE_ENV" }] }];
 const PEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nk3Lq9bF0rT2yVf8mWJxQ1s0ZpN4cD6eH5aR7uGvKtYwE9iL3oM\n-----END PRIVATE KEY-----";
@@ -269,12 +269,12 @@ describe("a request outlives the dialog that made it", () => {
     override async addProjectSecret(projectId: string, name: string, value: string) {
       this.asked.push(`add ${name}`);
       await this.pending.promise;
-      return { name, hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
+      return { name, recipients: ["previews" as const], hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
     }
     override async replaceProjectSecret(projectId: string, name: string, value: string) {
       this.asked.push(`replace ${name}`);
       await this.pending.promise;
-      return { name, hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
+      return { name, recipients: ["previews" as const], hint: value.slice(-4), updatedAt: new Date().toISOString(), updatedBy: null };
     }
     override async removeProjectSecret(projectId: string, name: string) {
       this.asked.push(`remove ${name}`);
