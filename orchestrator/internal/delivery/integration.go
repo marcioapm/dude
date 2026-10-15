@@ -211,6 +211,8 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 	}
 	maps.Copy(payload, extra)
 	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		// The workflow's step lease admits one runner of this step at a
+		// time, which is what makes this read-then-append write once.
 		var seen bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
 				AND payload->>'action' = $3 AND payload->>'attempt' = $4)`,
