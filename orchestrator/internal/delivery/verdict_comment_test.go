@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -229,7 +230,8 @@ func TestOpenedPRVerdictLeavesAMarkedExampleInAListAlone(t *testing.T) {
 
 // manyOpened makes the task's pull requests six, one in each of six
 // repositories, every one with a person's body; their fakes, by repo name.
-func (f *verdictFixture) manyOpened() (*State, map[string]*fakegithub.Server) {
+// options configure the GitHub client the step uses for them.
+func (f *verdictFixture) manyOpened(options ...func(*forge.GitHub)) (*State, map[string]*fakegithub.Server) {
 	f.t.Helper()
 	st := f.openedState()
 	if _, err := f.owner.Exec(f.ctx, `DELETE FROM pull_requests WHERE id = 'pr_c'`); err != nil {
@@ -262,7 +264,7 @@ func (f *verdictFixture) manyOpened() (*State, map[string]*fakegithub.Server) {
 	}
 	srv := httptest.NewServer(mux)
 	f.t.Cleanup(srv.Close)
-	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
+	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL}, options...)}
 	return st, fakes
 }
 
@@ -324,9 +326,13 @@ func TestOpenedPRVerdictRefreshesSixPullRequestsFourAtATimeInOneBudget(t *testin
 			t.Errorf("pull request %v not refreshed: %v", e["repo"], e["error"])
 		}
 	}
+	// The fixture's test Run tested repo alone, so beside these six it is stale.
+	section := markedVerification(verificationSection(&prVerification{Heads: map[string]string{"repo": "abc1234"},
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
 	for name, g := range fakes {
-		if body := g.Pull(1).Body; !strings.HasPrefix(body, "Body of "+name+".\n\n"+verificationStart) {
-			t.Errorf("%s body %q", name, body)
+		want := "Body of " + name + ".\n\n" + section
+		if body := g.Pull(1).Body; body != want {
+			t.Errorf("%s body %q, want %q", name, body, want)
 		}
 	}
 	if peak > 4 {
@@ -335,11 +341,13 @@ func TestOpenedPRVerdictRefreshesSixPullRequestsFourAtATimeInOneBudget(t *testin
 }
 
 // GitHub never answering: the six pull requests share one budget, each
-// records its own failure, and the step goes on.
+// records its own failure, and the step goes on. Every request dude sends
+// carries the same deadline, the one budget's.
 func TestOpenedPRVerdictGitHubNeverAnsweringCostsOneBudget(t *testing.T) {
 	f := newVerdictFixture(t)
 	f.steps.s.CommentTimeout = time.Second
-	st, fakes := f.manyOpened()
+	deadlines := &deadlineTransport{}
+	st, fakes := f.manyOpened(forge.WithTransport(deadlines))
 	for _, g := range fakes {
 		g.Set(func(s *fakegithub.Server) {
 			s.Intercept = func(r *http.Request) int {
@@ -350,12 +358,21 @@ func TestOpenedPRVerdictGitHubNeverAnsweringCostsOneBudget(t *testing.T) {
 	}
 	start := time.Now()
 	res, err := f.verdictStep(st)
-	// Serially, with a budget each, this is six seconds at least.
-	if took := time.Since(start); took > 4*time.Second {
-		t.Errorf("the refresh took %v with GitHub hanging, want one 1s budget", took)
+	// A guard against a refresh that never ends, not a timing check.
+	if took := time.Since(start); took > 30*time.Second {
+		t.Errorf("the refresh took %v with GitHub hanging", took)
 	}
 	if err != nil || res.Next != "fix" {
 		t.Fatalf("step: next %q, %v", res.Next, err)
+	}
+	seen := deadlines.seen()
+	if len(seen) != 6 {
+		t.Fatalf("%d requests reached GitHub, want the first of each of the 6 pull requests: %v", len(seen), seen)
+	}
+	for _, d := range seen {
+		if d.IsZero() || !d.Equal(seen[0]) {
+			t.Fatalf("request deadlines %v, want all six the one budget's", seen)
+		}
 	}
 	events := f.refreshEvents()
 	repos := map[any]bool{}
@@ -368,6 +385,27 @@ func TestOpenedPRVerdictGitHubNeverAnsweringCostsOneBudget(t *testing.T) {
 	if len(events) != 6 || len(repos) != 6 {
 		t.Fatalf("refresh events %v, want one failure for each of the 6 pull requests", events)
 	}
+}
+
+// deadlineTransport records the deadline each request's context carries,
+// zero for none, and sends it on.
+type deadlineTransport struct {
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (d *deadlineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	at, _ := r.Context().Deadline()
+	d.mu.Lock()
+	d.deadlines = append(d.deadlines, at)
+	d.mu.Unlock()
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func (d *deadlineTransport) seen() []time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.deadlines)
 }
 
 // personEdits has a person edit the pull request's body before GitHub
@@ -435,13 +473,22 @@ func TestOpenedPRVerdictKeepsAPersonsEditMadeWhileItUpdates(t *testing.T) {
 func TestOpenedPRVerdictGivesUpOnABodyThatKeepsChanging(t *testing.T) {
 	f := newVerdictFixture(t)
 	st := f.openedState()
-	patches := f.personEdits(func(i int) string { return fmt.Sprintf("Edit %d.\n", i) })
+	var mu sync.Mutex
+	lastEdit := ""
+	patches := f.personEdits(func(i int) string {
+		mu.Lock()
+		defer mu.Unlock()
+		lastEdit = fmt.Sprintf("Edit %d.\n", i)
+		return lastEdit
+	})
 	if _, err := f.verdictStep(st); err != nil {
 		t.Fatal(err)
 	}
-	body := f.gh.Pull(f.number).Body
-	if patches() != 0 || strings.Contains(body, verificationStart) || !strings.HasPrefix(body, "Edit ") {
-		t.Fatalf("%d PATCHes, body %q: want the person's last edit, untouched", patches(), body)
+	mu.Lock()
+	want := lastEdit
+	mu.Unlock()
+	if body := f.gh.Pull(f.number).Body; patches() != 0 || body != want {
+		t.Fatalf("%d PATCHes, body %q: want the person's last edit %q, untouched", patches(), body, want)
 	}
 	events := f.refreshEvents()
 	if len(events) != 1 || events[0]["error"] != "body changed during update" {

@@ -68,6 +68,15 @@ func TestTheBodyRefreshTouchesOnlyDudesMarkedSection(t *testing.T) {
 		{"a start marker left without its end is a person's text",
 			"<!-- dude:verification -->\nHalf.\n\n" + old,
 			"<!-- dude:verification -->\nHalf.\n\n" + wantMarked(section, "\n")},
+		{"a lone start marker with no pair anywhere",
+			"<!-- dude:verification -->\nHalf.",
+			"<!-- dude:verification -->\nHalf.\n\n" + wantMarked(section, "\n")},
+		{"an unclosed backtick fence",
+			"```md\nExample.",
+			"```md\nExample.\n```\n\n" + wantMarked(section, "\n")},
+		{"an unclosed tilde fence",
+			"~~~~\nExample.\n",
+			"~~~~\nExample.\n~~~~\n\n" + wantMarked(section, "\n")},
 		{"an empty body", "", wantMarked(section, "\n")},
 	}
 	for _, c := range cases {
