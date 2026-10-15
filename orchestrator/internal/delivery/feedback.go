@@ -505,12 +505,18 @@ func steerFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemIDs []strin
 	if err != nil {
 		return err
 	}
+	return recordGivenTx(ctx, tx, ref.RunID, directiveID, itemIDs)
+}
+
+// recordGivenTx records items as carried to Run runID by a directive, and
+// part of what the Run was given (a restart is given them again).
+func recordGivenTx(ctx context.Context, tx pgx.Tx, runID, directiveID string, itemIDs []string) error {
 	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET delivered_run_id = $2, directive_id = $3, updated_at = now()
-		WHERE id = ANY($1)`, itemIDs, ref.RunID, directiveID); err != nil {
+		WHERE id = ANY($1)`, itemIDs, runID, directiveID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE runs SET feedback_item_ids = feedback_item_ids || ARRAY(
-			SELECT unnest($2::text[]) EXCEPT SELECT unnest(feedback_item_ids)) WHERE id = $1`, ref.RunID, itemIDs)
+	_, err := tx.Exec(ctx, `UPDATE runs SET feedback_item_ids = feedback_item_ids || ARRAY(
+			SELECT unnest($2::text[]) EXCEPT SELECT unnest(feedback_item_ids)) WHERE id = $1`, runID, itemIDs)
 	return err
 }
 

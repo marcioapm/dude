@@ -319,7 +319,8 @@ const fixContract = "## How you fix\n\n" +
 	"fix where practical. Before you finish, rerun the affected tests and the project's checks.\n\n" +
 	"If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final " +
 	"reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its " +
-	"title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it."
+	"title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it. " +
+	"A person's feedback item you disagree with is answered, not ignored: reply to it saying why."
 
 // implementContract asks the implementer to check its own work: the
 // independent tester after it verifies, but does not do this for it.
@@ -622,11 +623,14 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"On an epic, list_tasks with peers and run_diff with task read the other tasks on it; message asks one of them " +
 	"something (never blocking; wait_for_reply ends your turn until its reply), and note pins a fact every agent on " +
 	"the epic must follow. What they said to each other reaches you in your next briefing or wake, never as a wake. " +
-	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, " +
+	"People's feedback on the task (feedback) is theirs in their own words: it stays open until a worker resolves it or " +
+	"someone replies (feedback_reply), whatever you decide, and holds the pull request; pass items to a working fixer with " +
+	"steer's feedbackIds, which gives it their words, or start a fix, which is given every open one. " +
+	"From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, `dude feedback [ID...]`, `dude feedback reply ID TEXT`, " +
 	"`dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, " +
 	"`dude task list --peers`, `dude diff --task KEY`, `dude message KEY TEXT [--reply-to MSG]`, `dude wait MSG`, " +
 	"`dude note TEXT [--replaces N]`, " +
-	"`dude phase start PHASE`, `dude steer RUN TEXT`, `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
+	"`dude phase start PHASE`, `dude steer RUN TEXT` (`--feedback ID` passes an item), `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, " +
 	"`dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A` (one question; several at once: " +
 	"`dude ask --questions-json '[{\"header\":H,\"question\":Q,\"choices\":[{\"label\":L}]},...]'`), " +
 	"`dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`."

@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,15 @@ import (
 // directive and where the Run's harness last said a steer lands ("" when
 // lux has not said yet).
 func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string, interrupt bool) (Steered, string, error) {
+	return ConductSteerFeedback(ctx, tx, ref, runID, text, interrupt, nil)
+}
+
+// ConductSteerFeedback is ConductSteer passing people's feedback items by
+// id: dude adds each one's words to the steer (FeedbackText), never the
+// conductor's summary of them, and records them as given to the Run. Only
+// to an implementer or fixer, and only items of the task's current
+// attempt still to be handled.
+func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string, interrupt bool, feedbackIDs []string) (Steered, string, error) {
 	// As parked(): the Chat lock serialises the check with a conductor's
 	// end or replacement, so a superseded conductor's late call does nothing.
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
@@ -38,7 +48,7 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 		return Steered{}, "", refusef("this task is %s: you are read-only now and steer nothing. Offer to record the change as a "+
 			"follow-up task (create_task), linked to this one, and create it once the person agrees", status)
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(feedbackIDs) == 0 {
 		return Steered{}, "", refusef("say what to tell the Run: text is required")
 	}
 	if len(text) > SteerTextMax {
@@ -78,6 +88,29 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 	default:
 		return Steered{}, "", refusef("%s has ended (%s): start another phase instead of steering it", runID, rstatus)
 	}
+	var items []FeedbackItem
+	if len(feedbackIDs) > 0 {
+		if phase != PhaseImplement && phase != PhaseFix {
+			return Steered{}, "", refusef("%s is a %s Run: feedback goes to an implementer or fixer, which can change the code", runID, phase)
+		}
+		open, err := OpenFeedbackTx(ctx, tx, ref.TaskID, 0)
+		if err != nil {
+			return Steered{}, "", err
+		}
+		for _, id := range feedbackIDs {
+			i := slices.IndexFunc(open, func(it FeedbackItem) bool { return it.ID == id })
+			if i < 0 {
+				return Steered{}, "", refusef("%s is not an open feedback item of this task's current attempt (feedback lists them)", id)
+			}
+			items = append(items, open[i])
+		}
+		words := FeedbackText(items, true)
+		if strings.TrimSpace(text) != "" {
+			text = strings.TrimSpace(text) + "\n\n" + words
+		} else {
+			text = words
+		}
+	}
 	out, err := Steer(ctx, tx, ref.Org, SteerInput{RunID: runID, Text: text, Interrupt: interrupt,
 		Actor: Writer{ActorType: ledger.ActorAgent, ActorID: ref.RunID}, Conductor: ref.RunID})
 	if se, ok := err.(SteerError); ok {
@@ -85,6 +118,11 @@ func ConductSteer(ctx context.Context, tx pgx.Tx, ref RunRef, runID, text string
 	}
 	if err != nil {
 		return Steered{}, "", err
+	}
+	if len(items) > 0 {
+		if err := recordGivenTx(ctx, tx, runID, out.ID, feedbackIDs); err != nil {
+			return Steered{}, "", err
+		}
 	}
 	var lands string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'lands' FROM events WHERE run_id = $1

@@ -22,6 +22,10 @@
 //	dude message KEY TEXT [--reply-to MSG]
 //	dude wait MSG                         end the turn until MSG's reply
 //	dude note TEXT [--replaces N]         pin a note on the epic
+//	dude feedback [ID...] [--all]         people's feedback on the task, in their words
+//	dude feedback reply ID TEXT           answer an item without changing the code
+//	dude feedback resolve ID --commit HEAD [--repo R]
+//	                                      the commit that fixed an item
 //	dude findings [ID...]                 a conductor's: the task's findings
 //	dude prs                              a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
@@ -103,7 +107,8 @@ func run(args []string, out io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
-		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "machine" || cmd == "git") {
+		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "machine" || cmd == "git" ||
+		cmd == "feedback" && (rest[0] == "reply" || rest[0] == "resolve")) {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -408,15 +413,62 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("start_phase", body))
 	case "steer":
 		interrupt := fs.Bool("interrupt", false, "stop its current turn so it hears this now")
+		var feedback many
+		fs.Var(&feedback, "feedback", "a person's open feedback item to pass on in their words (repeatable)")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
-		if len(args) < 2 || !runID.MatchString(args[0]) {
-			return errors.New(`usage: dude steer RUN "what to tell it" [--interrupt]`)
+		if len(args) < 1 || !runID.MatchString(args[0]) || len(args) < 2 && len(feedback) == 0 {
+			return errors.New(`usage: dude steer RUN "what to tell it" [--interrupt] [--feedback ID]...`)
 		}
-		return show(out, *asJSON, call("steer", map[string]any{"run": args[0], "text": strings.Join(args[1:], " "),
-			"interrupt": *interrupt}))
+		body := map[string]any{"run": args[0], "text": strings.Join(args[1:], " "), "interrupt": *interrupt}
+		if len(feedback) > 0 {
+			body["feedbackIds"] = []string(feedback)
+		}
+		return show(out, *asJSON, call("steer", body))
+	case "feedback":
+		all := fs.Bool("all", false, "the handled items too")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{}
+		if len(args) > 0 {
+			body["ids"] = args
+		}
+		if *all {
+			body["all"] = true
+		}
+		return show(out, *asJSON, call("feedback", body))
+	case "feedback reply":
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) < 2 {
+			return errors.New(`usage: dude feedback reply ID "why you are not changing it"`)
+		}
+		return show(out, *asJSON, call("feedback_reply", map[string]any{"id": args[0], "text": strings.Join(args[1:], " ")}))
+	case "feedback resolve":
+		commit := fs.String("commit", "", "the commit that fixed it: a SHA, or HEAD (resolved here)")
+		repo := fs.String("repo", "", "the repository the commit is in, with several and an item that names none")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || *commit == "" {
+			return errors.New("usage: dude feedback resolve ID --commit HEAD|SHA [--repo NAME]")
+		}
+		sha, err := revParse(*commit, *repo)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{"id": args[0], "commit": sha}
+		if *repo != "" {
+			body["repo"] = *repo
+		}
+		return show(out, *asJSON, call("feedback_resolve", body))
 	case "restart":
 		tier := fs.String("tier", "", "a model tier to run the new Run on")
 		args, err := parse(fs, rest)
@@ -556,6 +608,36 @@ func run(args []string, out io.Writer) error {
 }
 
 const askUsage = `usage: dude ask "question" [--choice C]... [--action A]..., or dude ask --questions-json '[{"header":…,"question":…,"choices":[{"label":…}]},…]'`
+
+// fullSHA is a commit's full SHA, as git rev-parse prints it.
+var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// revParse is the commit a resolution names, as git in the checkout reads
+// it (HEAD, a branch, an abbreviated SHA): in the repository's checkout
+// when one is named, else the current directory's.
+func revParse(commit, repo string) (string, error) {
+	args := []string{"rev-parse", "--verify", "--quiet", commit + "^{commit}"}
+	if repo != "" {
+		if dir := repoDir(repo); dir != "" {
+			args = append([]string{"-C", dir}, args...)
+		}
+	}
+	out, err := exec.Command("git", args...).Output()
+	sha := strings.TrimSpace(string(out))
+	if err != nil || !fullSHA.MatchString(sha) {
+		return "", fmt.Errorf("git does not know the commit %q here: commit your fix, then resolve with --commit HEAD", commit)
+	}
+	return sha, nil
+}
+
+// repoDir is where a repository is checked out in a Run, when it is.
+func repoDir(repo string) string {
+	dir := filepath.Join("/workspace/repos", repo)
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return dir
+	}
+	return ""
+}
 
 // list is a repeatable flag's values as JSON reads them: [] for none.
 func list(m many) []string {
@@ -808,6 +890,12 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              the reply lands at your next step
   dude wait MSG                              end your turn until the reply to your message MSG comes
   dude note "…" [--replaces N]               pin a note every agent on your epic must follow
+  dude feedback [ID...] [--all]              people's feedback on your task, in their words: the open
+                                             items; with IDs (fbi_…), those with their history
+  dude feedback reply ID "…"                 answer an item you will not change the code for, saying why
+  dude feedback resolve ID --commit HEAD [--repo NAME]
+                                             an implementer's or fixer's: the commit that fixed it; it
+                                             holds until your work is published with that commit
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
   dude prs                                   a conductor's: the task's pull requests, their checks,
@@ -815,7 +903,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude phase start PHASE [--category C]... [--finding ID]... [--note N]
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test
-  dude steer RUN TEXT [--interrupt]          a conductor's: tell a running phase Run of this task
+  dude steer RUN TEXT [--interrupt] [--feedback ID]...
+                                             a conductor's: tell a running phase Run of this task
+                                             something; --feedback passes people's items in their words
   dude restart RUN NOTE [--tier T]           a conductor's: restart a phase Run in its slot, fresh
                                              something, read at its next step (--interrupt stops
                                              its turn: only when its current work is wasted)

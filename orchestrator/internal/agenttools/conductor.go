@@ -315,13 +315,14 @@ func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalat
 }
 
 type steerIn struct {
-	Run       string `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
-	Text      string `json:"text" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
-	Interrupt bool   `json:"interrupt,omitempty" jsonschema:"stop its current turn so it hears this now; only when the work it is doing is wasted"`
+	Run         string   `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
+	Text        string   `json:"text,omitempty" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
+	Interrupt   bool     `json:"interrupt,omitempty" jsonschema:"stop its current turn so it hears this now; only when the work it is doing is wasted"`
+	FeedbackIDs []string `json:"feedbackIds,omitempty" jsonschema:"people's open feedback items (fbi_…) to pass to an implementer or fixer: dude adds their own words, never a summary"`
 }
 
 func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any, error) {
-	st, lands, err := delivery.ConductSteer(ctx, tx, c.run(), strings.TrimSpace(in.Run), in.Text, in.Interrupt)
+	st, lands, err := delivery.ConductSteerFeedback(ctx, tx, c.run(), strings.TrimSpace(in.Run), in.Text, in.Interrupt, uniquePaths(in.FeedbackIDs))
 	if err != nil {
 		return conducted[map[string]any](nil, err)
 	}
