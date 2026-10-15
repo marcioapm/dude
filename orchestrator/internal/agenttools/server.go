@@ -60,6 +60,9 @@ type Server struct {
 	// Forges finds the organization's GitHub client, for a conductor's
 	// reply on a pull request; nil, no forge.
 	Forges delivery.Forges
+	// SyncPullRequest is prs.Syncer.Sync: a pull request is read back after
+	// a PR action succeeded on it. nil skips it.
+	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -535,6 +538,13 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	// What GitHub says now, without waiting for its webhook. A read that
+	// fails is not the action failing: the webhook or the reconciler reads it later.
+	if p, ok := checked.(delivery.PRActionCheck); ok && err == nil && s.SyncPullRequest != nil {
+		if serr := s.SyncPullRequest(ctx, c.Org, p.PullRequestID()); serr != nil {
+			s.Log.Warn("reading a pull request back after an action failed", "pr", p.PullRequestID(), "tool", t.name, "error", serr)
+		}
+	}
 	return out, err
 }
 

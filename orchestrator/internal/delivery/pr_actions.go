@@ -45,6 +45,7 @@ type PRAction struct {
 type PRActionCheck struct {
 	ref          RunRef
 	action       string
+	prID         string
 	repo, slug   string
 	number       int
 	nodeID, head string
@@ -112,10 +113,10 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	var url, state string
 	var nodeID, head *string
 	var checks []byte
-	err = tx.QueryRow(ctx, `SELECT r.name, r.url, pr.state::text, pr.node_id, pr.head_sha, pr.checks_json
+	err = tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.state::text, pr.node_id, pr.head_sha, pr.checks_json
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
-		ref.TaskID, number, repo).Scan(&repo, &url, &state, &nodeID, &head, &checks)
+		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks)
 	if db.IsNotFound(err) {
 		return c, refusef("%s is not a pull request of your task: you act only on your task's (pull_requests lists them)", in.PR)
 	}
@@ -194,6 +195,8 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	}
 	return c, nil
 }
+
+func (c PRActionCheck) PullRequestID() string { return c.prID }
 
 // maxReviewLogins bounds one request_review.
 const maxReviewLogins = 10

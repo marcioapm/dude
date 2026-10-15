@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -78,11 +79,85 @@ func TestTheConductorActsOnItsOwnPullRequest(t *testing.T) {
 			t.Errorf("jobs re-run %v", s.JobsRerun)
 		}
 	})
-	// Once per head.
+	// Once per head, even when the re-run fails again.
+	w.gh.SetChecks("run:failure")
+	w.sync()
 	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "already")
 
 	if got := w.prActions(task); !slices.Equal(got, []string{"request_review", "resolve_thread", "mark_ready", "rerun_failed_checks"}) {
 		t.Errorf("recorded %v", got)
+	}
+}
+
+// storedPR is the task's pull request as dude has it recorded: its state,
+// checks rollup, unresolved threads, and who is asked for a review.
+func (w *world) storedPR(task string) (state, checks string, unresolved int, requested []string) {
+	w.t.Helper()
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT state::text, checks::text, unresolved_threads, reviews_json
+		FROM pull_requests WHERE task_id = $1`, task).Scan(&state, &checks, &unresolved, &raw); err != nil {
+		w.t.Fatal(err)
+	}
+	var reviews []forge.Review
+	_ = json.Unmarshal(raw, &reviews)
+	return state, checks, unresolved, forge.Requested(reviews)
+}
+
+// Each action the conductor takes on GitHub is in dude's record of the pull
+// request when the call returns: no webhook, no reconciler pass after it.
+// The read back records a person's comment once and signals it once,
+// however often the pull request is read again.
+func TestAConductorsActionIsInThePullRequestRecordWithoutAWebhook(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	line := w.gh.LineComment(1, "ana", "FACTORY.md", "Say why.")
+	pull := w.gh.Pull(1)
+	w.gh.Set(func(s *fakegithub.Server) { s.Unresolved[1] = 1; pull.Draft = true })
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	if state, checks, unresolved, _ := w.storedPR(task); state != "draft" || checks != "failing" || unresolved != 1 {
+		t.Fatalf("before: %s, checks %s, %d unresolved", state, checks, unresolved)
+	}
+	// Said after the last read: the read after the action is what records it.
+	comment := w.gh.Comment(1, "bo", "Please rename the greeting.")
+
+	w.must(task, "request_review", `{"pr":"1","logins":["cy"]}`)
+	if _, _, _, requested := w.storedPR(task); !slices.Contains(requested, "cy") {
+		t.Errorf("after request_review, recorded as asked: %v", requested)
+	}
+	w.must(task, "resolve_thread", fmt.Sprintf(`{"pr":"1","thread":"line-comment-%d"}`, line))
+	if _, _, unresolved, _ := w.storedPR(task); unresolved != 0 {
+		t.Errorf("after resolve_thread, %d unresolved recorded", unresolved)
+	}
+	w.must(task, "mark_ready", `{"pr":"1"}`)
+	if state, _, _, _ := w.storedPR(task); state != "open" {
+		t.Errorf("after mark_ready, recorded as %s", state)
+	}
+	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
+	if _, checks, _, _ := w.storedPR(task); checks != "pending" {
+		t.Errorf("after rerun_failed_checks, checks recorded as %s", checks)
+	}
+
+	feedback := fmt.Sprintf("issue-comment-%d", comment)
+	signalled := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = 'pr.feedback' AND s.idempotency_key LIKE '%' || $2 || '%'`, task, feedback)
+	}
+	recorded := func() int {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+			AND payload->>'feedbackId' = $2`, task, feedback)
+	}
+	if r, s := recorded(), signalled(); r != 1 || s != 1 {
+		t.Fatalf("bo's comment recorded %d times, signalled %d times, want once each", r, s)
+	}
+	for range 3 {
+		w.sync()
+	}
+	if r, s := recorded(), signalled(); r != 1 || s != 1 {
+		t.Errorf("after more reads, bo's comment recorded %d times, signalled %d times, want once each", r, s)
 	}
 }
 

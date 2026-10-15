@@ -1240,6 +1240,7 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+		SyncPullRequest: w.prs.Sync,
 		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
 			return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
 		}}).Handler())
@@ -3805,6 +3806,9 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != 77 || len(w.gh.Rerequested) != 0 {
 		t.Errorf("jobs re-run %v, check runs re-requested %v", w.gh.JobsRerun, w.gh.Rerequested)
 	}
+	// The re-run fails again.
+	w.gh.SetChecks("run:failure")
+	w.sync()
 	// Who to ask: GitHub's suggestions first, then a search.
 	if code, body := w.get("/internal/pull-requests/"+prID+"/reviewer-candidates", w.org); code != 200 ||
 		!strings.Contains(body, `"login":"ana"`) || !strings.Contains(body, `"reason":"commented"`) {

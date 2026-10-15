@@ -587,6 +587,10 @@ func (s *Server) Handler() http.Handler {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
 		s.JobsRerun = append(s.JobsRerun, id)
+		// As GitHub: the job re-run is queued again, not failed.
+		if strings.HasPrefix(s.checks, "run:") {
+			s.checks = "run:pending"
+		}
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})

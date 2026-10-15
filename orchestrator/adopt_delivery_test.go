@@ -240,8 +240,11 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	w.gh.ReviewSaying(n, "jerv", "APPROVED", "")
 
 	wi := w.adopting("pr", n, "feature/greet", "main")
+	// jerv's approval stands on GitHub and its checks pass: once the pull
+	// request is read back, it is ready to merge.
 	w.until("waiting on the pull request", func() bool {
-		return w.taskStatus(wi) == "review" && w.fixes(wi) == 0 &&
+		s := w.taskStatus(wi)
+		return (s == "review" || s == "ready_to_merge") && w.fixes(wi) == 0 &&
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
 

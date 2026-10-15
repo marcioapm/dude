@@ -11,6 +11,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // reviewRequests is every review request the fake GitHub received.
@@ -126,6 +127,39 @@ func TestAFixDudePushesIsPutBeforeItsReviewersAgain(t *testing.T) {
 	}
 	if n := len(w.rerequests(wi)); n != 1 {
 		t.Errorf("%d re-request events, want 1", n)
+	}
+}
+
+// The reviewer dude asks again is in dude's record of the pull request as
+// asked once the fix's step is done: no webhook, no reconciler pass.
+func TestAReviewerAskedAgainIsRecordedAsAskedWithoutAWebhook(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Review(1, "jerv", "COMMENTED")
+	w.sync()
+	rerequested := func() bool {
+		var raw []byte
+		if err := w.owner.QueryRow(context.Background(), `SELECT reviews_json FROM pull_requests WHERE task_id = $1`,
+			wi).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var reviews []forge.Review
+		_ = json.Unmarshal(raw, &reviews)
+		return slices.ContainsFunc(reviews, func(r forge.Review) bool { return r.Login == "jerv" && r.Rerequested })
+	}
+	if rerequested() {
+		t.Fatal("jerv recorded as asked again before the fix")
+	}
+	// No sync from here on: until pumps the workflow and the Runs only.
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.sync()
+	w.until("the fix pushed and jerv asked again", func() bool {
+		return w.gh.SHA(branch) != before && len(w.rerequests(wi)) == 1
+	})
+	if !rerequested() {
+		t.Errorf("jerv was asked again on GitHub (%v) but dude's record does not say so", w.reviewRequests())
 	}
 }
 
