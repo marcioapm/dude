@@ -730,6 +730,36 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 	}
 }
 
+// A person's push after the promotion's GET but before its PATCH returns
+// 422: the escalation names their SHA, not the candidate's or the old head.
+func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
+	w := newPRFixWorld(t)
+	var raced atomic.Bool
+	var theirs atomic.Value
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && raced.CompareAndSwap(false, true) {
+				theirs.Store(w.gh.CommitOnTop(w.branch, "A person's racing push"))
+			}
+			return 0
+		}
+	})
+	w.comment("Please rename the greeting.")
+	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	person, _ := theirs.Load().(string)
+	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	var detail map[string]any
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if person == "" || w.gh.SHA(w.branch) != person || detail["found"] != person || detail["expected"] != w.before {
+		t.Errorf("person's head %q, branch %s, escalation %v", person, w.gh.SHA(w.branch), detail)
+	}
+}
+
 // GitHub rate-limits the promotion's move: the step waits and moves the
 // branch after, without counting the refusal against its attempts.
 func TestARateLimitedPromotionWaitsAndMoves(t *testing.T) {

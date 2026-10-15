@@ -69,12 +69,12 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
 
     # CI on the updated head: one check red. Re-run it from here.
     fake_github.set_check(n, "unit", conclusion="success")
+    updated_at = fake_github.branch_sha(pr["headBranch"])
     fake_github.set_check(n, "e2e (chrome)", conclusion="failure")
     expect(panel).to_contain_text("1 of 2 checks failing", timeout=30_000)
     expect(panel).to_contain_text("e2e (chrome)")
     expect(page.get_by_test_id("pr-merge")).to_be_disabled()
     expect(page.get_by_test_id("pr-blocked")).to_contain_text("e2e (chrome) failing")
-    updated_at = fake_github.branch_sha(pr["headBranch"])
     page.get_by_test_id("pr-rerun").click()
     wait_until(lambda: len(fake_github.jobs_rerun) == 1, timeout=10, message="Re-run failed did not reach GitHub")
     # The failure woke a fixer too: its fix lands before anything is merged.

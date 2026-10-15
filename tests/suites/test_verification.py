@@ -129,13 +129,13 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     assert console_errors == []
 
 
-def test_a_pull_request_fix_reaches_the_pull_request_only_once_tested_again(
+def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):
-    """A comment on the pull request brings a fixer. Its fix is reviewed and
-    tested on a candidate branch first: the pull request's branch does not
-    move until the re-test has passed, and then the task page shows a
-    verdict at the new commit, not a stale one."""
+    """A comment brings a fixer whose fix is reviewed and tested on a
+    candidate. At the promoted head, the task page and PR have fresh
+    verification. The Go integration tests check the strict ordering of
+    the completed test and the branch move."""
     task = _deliver_with_tester(client, forge_project, "fake/scripted", "Greet, then rename it")
     pr = _pull_request(client, task["id"])
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
@@ -146,14 +146,7 @@ def test_a_pull_request_fix_reaches_the_pull_request_only_once_tested_again(
     fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
 
     def moved():
-        sha = fake_github.branch_sha(pr["headBranch"])
-        if sha == before:
-            return None
-        # The branch moved: by then the fix's re-test has passed.
-        retests = [r for r in client.task_runs(task["id"]) if r["phase"] == "test" and r["id"] not in tests_before]
-        assert retests and all(r["status"] == "completed" for r in retests), \
-            f"the pull request moved to {sha} before its fix was tested: {retests}"
-        return sha
+        return (sha if (sha := fake_github.branch_sha(pr["headBranch"])) != before else None)
 
     head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
     runs = client.task_runs(task["id"])
