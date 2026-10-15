@@ -55,10 +55,41 @@ func (w *world) reachGate(task string) {
 	w.talk(task)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-	// Straight on to the pull request: a simplifier, then (the test step is
-	// off) the gate.
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.finishSimplifierReview(task)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+}
+
+// finishSimplifierReview waits for the review of the simplifier's diff at
+// the delivery's heads, which runs whoever decides, and lets the conductor
+// go on past it (finishReview).
+func (w *world) finishSimplifierReview(task string) {
+	w.t.Helper()
+	w.until("after the simplifier's narrow review", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && w.count(`SELECT count(*) FROM runs r
+			JOIN workflow_runs wf ON wf.task_id = r.task_id
+			WHERE r.task_id = $1 AND r.phase = 'review' AND r.status = 'completed'
+			AND r.review_range->>'of' = 'simplify' AND r.base_refs = wf.state->'heads'`, task) > 0
+	})
+	w.finishReview(task)
+}
+
+// finishReview is the conductor at a review round: each open finding
+// dismissed with a reason, then next.
+func (w *world) finishReview(task string) {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	findings, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	for _, id := range findings {
+		w.must(task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"FACTORY.md is generated; the record is elsewhere"}`, id))
+	}
+	w.must(task, "decide", `{"action":"next"}`)
 }
 
 // decisionAt is the decision point the task's delivery is parked on for
@@ -247,6 +278,7 @@ func TestTalkItThroughToAPullRequest(t *testing.T) {
 		return w.decisionAt(task) == delivery.PointReviewed && w.phaseRuns(task, "review") == 2
 	})
 	w.must(task, "decide", `{"action":"next"}`)
+	w.finishSimplifierReview(task)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
 
 	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not been asked")
@@ -264,9 +296,15 @@ func TestTalkItThroughToAPullRequest(t *testing.T) {
 	if body := w.gh.Pulls()[0].Body; !strings.Contains(body, "it says olá") {
 		t.Errorf("the pull request does not carry the agreed criteria:\n%s", body)
 	}
-	// Every phase Run was the conductor's.
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND conductor_run_id IS NULL`, task); n != 0 {
+	// Every phase Run was the conductor's, except the review of the
+	// simplifier's diff, which the workflow runs whoever decides.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND conductor_run_id IS NULL
+		AND NOT (phase = 'review' AND review_range->>'of' = 'simplify')`, task); n != 0 {
 		t.Errorf("%d phase Runs not marked the conductor's", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = 'simplify'
+		AND conductor_run_id IS NULL`, task); n == 0 {
+		t.Error("no review of the simplifier's diff")
 	}
 }
 
@@ -547,6 +585,7 @@ func TestThePullRequestGateFollowsTheHead(t *testing.T) {
 	w.chat(task, "Open")
 	// Another round moves the head.
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.finishSimplifierReview(task)
 	w.until("before the pull request again", func() bool {
 		return w.decisionAt(task) == delivery.PointBeforePR && w.phaseRuns(task, "simplify") == 2
 	})

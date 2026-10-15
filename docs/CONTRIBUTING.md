@@ -173,8 +173,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   diff alone (`runs.review_range`, `{of: "simplify", base}`: the reviewer is
   told `<base>..HEAD` in place of `git merge-base`), by the policy's required
   reviewers; its findings go through the fixer and the usual loop, which
-  then goes to the test, never to the simplifier again. Under the conductor,
-  the simplifier it starts is its own to follow up.
+  then goes to the test, never to the simplifier again. The round starts
+  whoever decides; under the conductor its findings are the conductor's to
+  triage, as any round's are.
 - **A fix for an open pull request is checked before the pull request shows
   it.** `prFix` starts from the pull request's heads on GitHub, and the fix
   Run, and every fix of it, publishes to the candidate branch

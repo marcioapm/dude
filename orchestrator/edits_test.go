@@ -663,6 +663,7 @@ func TestThePullRequestGateWaitsForAReviewOfTheConductorsCommit(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
 	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	e.finishSimplifierReview(e.task)
 	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.wokenWith(e.task, "before the pull request")
 	e.current()
@@ -680,6 +681,7 @@ func TestThePullRequestGateWaitsForAReviewOfTheConductorsCommit(t *testing.T) {
 	// The scripted reviewer raises its finding: dismissed, then on.
 	e.dismissOpenFinding()
 	e.must(e.task, "decide", `{"action":"next"}`)
+	e.finishSimplifierReview(e.task)
 	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.must(e.task, "decide", `{"action":"ask_person"}`)
 	if status, out := e.chat(e.task, "Open"); status != 200 || out["questionId"] == nil {
@@ -701,6 +703,7 @@ func TestAnEarlierReviewDoesNotClearALaterConductorCommit(t *testing.T) {
 	}
 	e.dismissOpenFinding()
 	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	e.finishSimplifierReview(e.task)
 	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.wokenWith(e.task, "before the pull request")
 	e.current()
@@ -713,6 +716,7 @@ func TestAnEarlierReviewDoesNotClearALaterConductorCommit(t *testing.T) {
 	e.until("the new head's review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
 	e.dismissOpenFinding()
 	e.must(e.task, "decide", `{"action":"next"}`)
+	e.finishSimplifierReview(e.task)
 	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.must(e.task, "decide", `{"action":"ask_person"}`)
 }
@@ -734,6 +738,7 @@ func TestDeliverReviewsTheConductorsCommitBeforeThePullRequest(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
 	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	e.finishSimplifierReview(e.task)
 	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
 	e.current()
 	e.commit(map[string]string{"README.md": "# target\n\nnit\n"})

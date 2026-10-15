@@ -888,12 +888,6 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	if !out.Succeeded || len(out.Heads) == 0 {
 		return workflow.Result{Next: "test", State: st}, nil
 	}
-	if st.conducted() {
-		// The conductor chose the simplifier and decides what follows; the
-		// person's Open at the pull request gate is at these heads.
-		st.HeadRunID, st.Heads = runID, out.advance(st.Heads)
-		return workflow.Result{Next: "test", State: st}, nil
-	}
 	// What it changed was never reviewed: a review round over its diff
 	// alone, from where each repository it changed stood before it, then
 	// the loop as usual (afterReview takes it to the test).
