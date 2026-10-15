@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -443,5 +444,82 @@ func TestReviewersAreAskedBeforeASiblingPullRequestOpens(t *testing.T) {
 	}
 	if e := w.rerequests(wi); len(e) != 1 || e[0]["head"] != head || e[0]["repo"] != "target" {
 		t.Errorf("recorded %v", e)
+	}
+}
+
+// The promotion created web's task branch, then opening web's pull request
+// failed, and a person deleted the branch before the step ran again: the
+// retry does not create it a second time, and stops for a person with the
+// checked head.
+func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
+		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	w.askingFor("jerv")
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("target's pull request in review", func() bool {
+		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
+	})
+	w.gh.Review(1, "jerv", "COMMENTED")
+	branch := w.gh.Pull(1).Head
+	var deleted atomic.Bool
+	var creates atomic.Int32
+	var created atomic.Value
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if deleted.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs") {
+				creates.Add(1)
+			}
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls") {
+				if !deleted.Load() {
+					created.Store(w.web.SHA(branch))
+					if err := w.web.DeleteBranch(branch); err != nil {
+						t.Errorf("delete web's branch: %v", err)
+					}
+					deleted.Store(true)
+				}
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("a person asked, or web's branch created again", func() bool {
+		w.sync()
+		return deleted.Load() && (w.taskStatus(wi) == "awaiting_input" || creates.Load() > 0)
+	})
+	checked, _ := created.Load().(string)
+	if checked == "" {
+		t.Fatal("web's branch was not created before its pull request was opened")
+	}
+	if n := creates.Load(); n != 0 {
+		t.Errorf("%d create-ref POSTs on web after the deletion", n)
+	}
+	if at := w.web.SHA(branch); at != "" {
+		t.Errorf("deleted web branch recreated at %s", at)
+	}
+	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q", r)
+	}
+	var detail map[string]any
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["repo"] != "web" || detail["found"] != "" || detail["expected"] != "" || detail["candidate"] != checked ||
+		detail["branch"] != delivery.CandidateBranch(wi, 1) {
+		t.Errorf("refusal %v, want web missing with candidate %s", detail, checked)
 	}
 }

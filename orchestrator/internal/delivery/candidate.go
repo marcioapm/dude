@@ -118,10 +118,15 @@ func (s *Store) dropCandidateBranches(ctx context.Context, org string, st *State
 	return nil
 }
 
+// EvTaskBranchCreated: promotion is about to create the task branch in a
+// repository it was never published to, recorded before the create is
+// sent. Payload: {repo, branch}.
+const EvTaskBranchCreated = "task_branch.created"
+
 // neverPublished says the task branch was never on the forge in repo:
 // no pull request opened from it, no Run or conductor publish moved it,
-// and no adopted source names it there. Such a branch missing was not
-// deleted by a person, so promotion may create it.
+// no adopted source names it there, and promotion never created it. Such
+// a branch missing was not deleted by a person, so promotion may create it.
 func (s *Store) neverPublished(ctx context.Context, org string, st *State, repo string) (bool, error) {
 	var published bool
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -131,10 +136,25 @@ func (s *Store) neverPublished(ctx context.Context, org string, st *State, repo 
 			OR EXISTS (SELECT 1 FROM conductor_publishes WHERE task_id = $1 AND branch = $3
 			  AND status IN ('moving', 'published', 'stalled') AND moves ? $2)
 			OR EXISTS (SELECT 1 FROM task_sources ts JOIN repositories r ON r.id = ts.repository_id
-			  WHERE ts.task_id = $1 AND r.name = $2 AND ts.head_branch = $3)`,
-			st.TaskID, repo, st.Branch).Scan(&published)
+			  WHERE ts.task_id = $1 AND r.name = $2 AND ts.head_branch = $3)
+			OR EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $4
+			  AND payload->>'repo' = $2 AND payload->>'branch' = $3)`,
+			st.TaskID, repo, st.Branch, EvTaskBranchCreated).Scan(&published)
 	})
 	return !published, err
+}
+
+// branchCreatingTx records, committed before the create is sent, that
+// promotion creates the task branch in repo: a retry or replay that then
+// finds it missing reads a person's deletion, never a branch to create.
+func (s *Store) branchCreatingTx(ctx context.Context, org string, st *State, repo string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvTaskBranchCreated, OrganizationID: org,
+			ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+			Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,
+			Payload: map[string]any{"repo": repo, "branch": st.Branch}})
+		return err
+	})
 }
 
 // pullRequestNumber is the number of the delivery's pull request in repo,

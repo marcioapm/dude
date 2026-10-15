@@ -1577,6 +1577,9 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 			if fresh, err := w.s.neverPublished(ctx, sc.OrganizationID, st, repo); err != nil {
 				return workflow.Result{}, err
 			} else if fresh {
+				if err := w.s.branchCreatingTx(ctx, sc.OrganizationID, st, repo); err != nil {
+					return workflow.Result{}, err
+				}
 				move = gh.FastForward
 			}
 		}
