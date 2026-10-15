@@ -347,6 +347,12 @@ func CandidateBranch(taskID string, attempt int) string {
 
 const candidateSuffix = "-candidate"
 
+// NotGeneratedCandidateSQL (SQL, over runs aliased run) holds when the
+// Run's branch is not its own CandidateBranch: a fix not yet checked.
+func NotGeneratedCandidateSQL(run string) string {
+	return fmt.Sprintf(`%[1]s.branch <> ('dude/' || %[1]s.task_id || '/attempt-' || %[1]s.attempt || '%[2]s')`, run, candidateSuffix)
+}
+
 // Candidate is one round of pull request feedback being fixed on the
 // candidate branch.
 type Candidate struct {
@@ -982,11 +988,7 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	// the loop as usual (afterReview takes it to the test).
 	st.SimplifyBase = map[string]string{}
 	for repo := range out.Heads {
-		base := st.Heads[repo]
-		if b := out.Bases[repo]; b != "" {
-			base = b
-		}
-		if base != "" {
+		if base := cmp.Or(out.Bases[repo], st.Heads[repo]); base != "" {
 			st.SimplifyBase[repo] = base
 		}
 	}

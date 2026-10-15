@@ -1001,8 +1001,11 @@ export function whyItRan(run: Run, index: number, phases: readonly Run[], findin
   created?: Record<string, unknown>): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
-    const fix = fixFor(run, phases, findings, prEvents, created);
-    return fix === "pull_request" ? prFeedbackReason(prEvents, run.createdAt) : fix === "test" ? "for the test" : "for the review";
+    switch (fixFor(run, phases, findings, prEvents, created)) {
+      case "pull_request": return prFeedbackReason(prEvents, run.createdAt);
+      case "test": return "for the test";
+      case "review": return "for the review";
+    }
   }
   if (run.phase === "review" && run.reviewOf) return REVIEW_OF[run.reviewOf];
   if (run.phase === "test" && earlier.some((r) => r.attempt === run.attempt &&
@@ -1037,9 +1040,6 @@ const REVIEW_OF: Readonly<Record<NonNullable<Run["reviewOf"]>, string>> = {
   pull_request_fix: "of the pull request's fix",
 };
 
-const prOpenedBefore = (run: Run, prEvents: readonly PersistedEvent[]) =>
-  prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt));
-
 /**
  * Whose findings a fix Run was sent: the tester's (any of them is), the
  * reviewers', or a pull request's feedback. What its run.created says
@@ -1055,7 +1055,8 @@ export function fixFor(run: Run, phases: readonly Run[], findings: readonly Find
   if (findings.some((f) => ids.includes(f.id) && f.runId && tests.has(f.runId))) return "test";
   if (ids.length > 0) return "review";
   if (typeof created?.prFeedbackCount === "number" && created.prFeedbackCount > 0) return "pull_request";
-  return prOpenedBefore(run, prEvents) ? "pull_request" : "review";
+  return prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))
+    ? "pull_request" : "review";
 }
 
 /** Which pull request feedback, at or before `at`, a fix answered. */
