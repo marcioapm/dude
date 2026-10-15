@@ -1714,6 +1714,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return false, nil
 		}
 		reqID := pushRequest(r)
+		// Once GitHub has the per-Run branch it has every value in it.
+		if ok, err := s.pushScanned(ctx, r); !ok {
+			return true, err
+		}
 		creds, err := s.runCredentials(ctx, r.Org, r.ID)
 		if forge.Refused(err) {
 			return true, s.failKept(ctx, r, "GitHub would not give dude a token to push the agent's work: "+err.Error())

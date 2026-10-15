@@ -315,6 +315,13 @@ export const EventTypes = {
    * `{ names }`, never a value. The conductor and brainstorm get none.
    */
   RunSecretsGiven: "run.secrets.given",
+  /**
+   * dude did not ask lux to push a Run's work: the work to be pushed holds
+   * a value of a project secret the Run was given, in some form. The Run
+   * fails, kept, and its task escalates. Payload: `{ secrets, files }`:
+   * names and paths only, never a value.
+   */
+  RunPushRefused: "run.push.refused",
 
   // Run lifecycle
   RunCreated: "run.created",
