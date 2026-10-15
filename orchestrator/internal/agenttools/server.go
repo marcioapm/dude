@@ -14,6 +14,7 @@ package agenttools
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -27,6 +28,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jackc/pgx/v5"
@@ -63,6 +65,10 @@ type Server struct {
 	// SyncPullRequest is prs.Syncer.Sync: a pull request is read back after
 	// a PR action succeeded on it. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
+	// SyncBase asks lux for sync_base's fetch; nil, sync_base is refused.
+	SyncBase SyncBaseFunc
+	// How long sync_base waits for lux's reports; zero, syncBaseWait.
+	SyncBaseWait time.Duration
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -85,6 +91,8 @@ type env struct {
 	validateMachine func(context.Context, string, *delivery.Machine, *delivery.Machine, lux.Run) error
 	kick            func()
 	forges          delivery.Forges
+	syncBase        SyncBaseFunc
+	syncBaseWait    time.Duration
 	prepared        any
 }
 
@@ -382,7 +390,7 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, coordinationTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, baseSyncTools, coordinationTools, brainstormTools)
 }
 
 // define makes a tool from a typed function: its input schema from In,
@@ -454,7 +462,8 @@ const (
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
-	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine}
+	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait)}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}

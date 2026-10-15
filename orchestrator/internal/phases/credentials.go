@@ -155,6 +155,16 @@ func SyncRun(ctx context.Context, c lux.Client, log *slog.Logger, runID, request
 	})
 }
 
+// SyncBase asks lux for a sync of one of this syncer's running Runs with
+// the credentials its push would take: an agent's sync_base.
+func (s *Syncer) SyncBase(ctx context.Context, org, runID, luxRunID, requestID string, refs []lux.SyncRef) error {
+	creds, err := s.runCredentials(ctx, org, runID)
+	if err != nil {
+		return err
+	}
+	return SyncRun(ctx, s.Lux, s.Log, luxRunID, requestID, refs, creds)
+}
+
 // runCredentials are OperationCredentials for one of this syncer's Runs: a
 // task's repositories, or a session's.
 func (s *Syncer) runCredentials(ctx context.Context, org, runID string) (map[string]string, error) {
