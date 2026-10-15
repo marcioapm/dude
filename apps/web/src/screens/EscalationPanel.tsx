@@ -61,7 +61,10 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   const owner: Person | null = task.owner;
   const someoneElse = owner !== null && you !== null && owner.id !== you;
   const theirs = you !== null && !someoneElse;
-  const actions = theirs ? all : youAdmin && you !== null ? all.filter((a) => needsReason(reason, a)) : [];
+  // An admin who is not the owner may take only the actions that need a reason.
+  let actions: typeof all = [];
+  if (theirs) actions = all;
+  else if (youAdmin && you !== null) actions = all.filter((a) => needsReason(reason, a));
 
   const decide = async (action: EscalationAction) => {
     if (needsReason(reason, action) && !note.trim()) {

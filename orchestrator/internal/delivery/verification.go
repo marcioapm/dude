@@ -62,6 +62,9 @@ func RunReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 		return "", err
 	}
 	texts, err := pgx.CollectRows(rows, pgx.RowTo[*string])
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	for _, t := range texts {
 		// Messages end where the agent stopped to call a tool; a document
@@ -71,7 +74,7 @@ func RunReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 		}
 		b.WriteString("\n")
 	}
-	return b.String(), err
+	return b.String(), nil
 }
 
 // artifactsRecheckTx is how long to wait before judging the test Run
@@ -412,7 +415,7 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 	return err
 }
 
-// VerificationSection is the pull request's account of the test: each
+// verificationSection is the pull request's account of the test: each
 // criterion's status, any waiver or acceptance and its reason, the heads
 // it tested and whether the branch has moved since. "" when no test ran.
 func verificationSection(v *prVerification, heads map[string]string, taskLink string) string {
@@ -423,10 +426,11 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 	b.WriteString("## Verification\n")
 	var at []string
 	for _, repo := range slices.Sorted(maps.Keys(v.Heads)) {
-		at = append(at, fmt.Sprintf("`%s`", short(v.Heads[repo])))
+		head := fmt.Sprintf("`%s`", short(v.Heads[repo]))
 		if len(v.Heads) > 1 {
-			at[len(at)-1] = repo + " " + at[len(at)-1]
+			head = repo + " " + head
 		}
+		at = append(at, head)
 	}
 	if len(at) > 0 {
 		fmt.Fprintf(&b, "Tested at %s.", strings.Join(at, ", "))
@@ -442,10 +446,11 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 		}
 		fmt.Fprintf(&b, "- **%s** — %s\n", status, oneLine(CriteriaImagesAsText([]string{c.Text})[0]))
 	}
+	b.WriteString("\nThe evidence (video, screenshots, `acceptance.md`) is on the task in dude")
 	if taskLink != "" {
-		fmt.Fprintf(&b, "\nThe evidence (video, screenshots, `acceptance.md`) is on the task in dude: %s", taskLink)
+		b.WriteString(": " + taskLink)
 	} else {
-		b.WriteString("\nThe evidence (video, screenshots, `acceptance.md`) is on the task in dude.")
+		b.WriteString(".")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

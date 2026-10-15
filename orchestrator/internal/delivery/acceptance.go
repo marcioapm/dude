@@ -65,9 +65,8 @@ func ParseAcceptance(output string) []Acceptance {
 		if err != nil || n <= 0 {
 			continue
 		}
-		a := Acceptance{Criterion: n, Check: fields["check"], Evidence: evidenceNames(fields["evidence"]),
-			Observed: fields["observed"]}
-		a.Status = acceptanceStatus(fields["status"])
+		a := Acceptance{Criterion: n, Check: fields["check"], Status: acceptanceStatus(fields["status"]),
+			Evidence: evidenceNames(fields["evidence"]), Observed: fields["observed"]}
 		if a.Status == VerdictBlocked && !strings.EqualFold(strings.TrimSpace(fields["status"]), VerdictBlocked) {
 			a.Reported = fields["status"]
 		}

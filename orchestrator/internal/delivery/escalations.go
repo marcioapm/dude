@@ -367,7 +367,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 	if len(choices) == 0 || len(actions) != len(choices) {
 		return "", refusef("the task's escalation waits on a person: this question is its question. Offer choices, and "+
 			"actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the "+
-			"escalation, as the banner does, except a waiver or acceptance, which needs the person's own words",
+			"escalation, as the banner does, except a waiver or an acceptance of a failed test, which needs the person's own words",
 			listOr(offered))
 	}
 	reason := d.State.Escalation.Reason
@@ -454,13 +454,12 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			listOr(d.State.Escalation.Actions()))
 	}
 	if NeedsReason(d.State.Escalation.Reason, action) {
-		// The answer is the waiver's or acceptance's reason: the person's
-		// own words, not a choice, from the owner or, on an ownerless
-		// task, an organization admin (the banner's ownerOrAdmin).
+		// The answer is the waiver's or acceptance's reason: the item's own
+		// text, never picks (one or several) nor a choice's label typed
+		// back; from the owner or, on an ownerless task, an organization
+		// admin (the banner's ownerOrAdmin).
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
-		// The item's own text is the person's words; picks, one or several,
-		// are not, and neither is a choice's label typed back.
 		var items []ItemAnswer
 		_ = json.Unmarshal(rawAnswers, &items)
 		words := answer
@@ -471,8 +470,8 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
 				"they say why in their own words, or decide on the banner", qID, action)
 		}
-		var admin bool
 		if owner == "" {
+			var admin bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND role = 'admin'
 				AND removed_at IS NULL)`, by).Scan(&admin); err != nil {
 				return nil, err

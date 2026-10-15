@@ -706,8 +706,10 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = append(open, f.ID)
 		}
 	}
+	k := key(sc, st, ":fix:", st.Iteration)
 	if len(st.TestFindingIDs) > 0 {
-		// A failed test's findings, those still open.
+		// A failed test's findings, those still open, in a Run of their own.
+		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
 		all, err := w.s.FixFindings(ctx, sc.OrganizationID, st)
 		if err != nil {
 			return workflow.Result{}, err
@@ -717,10 +719,6 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 				open = append(open, f.ID)
 			}
 		}
-	}
-	k := key(sc, st, ":fix:", st.Iteration)
-	if len(st.TestFindingIDs) > 0 {
-		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
 	}
 	d := directed(st, PhaseFix)
 	if d != nil {
