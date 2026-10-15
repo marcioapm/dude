@@ -355,7 +355,7 @@ const testerContract = "## Your part\n\n" +
 // and Chromium are in the runtime image (images/runtime); the evidence is
 // published as files people open next to the task.
 const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
-	"package; Chromium is installed), at a desktop viewport (1280×800) unless a criterion is about another size. " +
+	"package; Chromium is installed), at a 1920×1080 viewport unless a criterion is about another size. " +
 	"Record each journey as a video — create the browser context with `record_video_dir` and a " +
 	"`record_video_size` equal to the viewport — at a pace a person can follow: launch with `slow_mo` of about " +
 	"250 ms and pause about one second on each state that matters. Keep a failure in the recording; do not cut it " +

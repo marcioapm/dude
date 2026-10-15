@@ -218,6 +218,9 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 			t.Errorf("the tester's contract lacks %q", want)
 		}
 	}
+	if !strings.Contains(testerTools, "1920×1080 viewport") {
+		t.Error("the tester does not record at 1920×1080 by default")
+	}
 }
 
 // Every reviewer establishes what is under review, grades its evidence,
