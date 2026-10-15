@@ -34,6 +34,11 @@ func TestAReviewerOfAnAdoptedPullRequestIsGivenWhatWasRaised(t *testing.T) {
 	if strings.Contains(fresh, "## Base") || strings.Contains(fresh, "continues") {
 		t.Errorf("new work told of a base or a pull request:\n%s", fresh)
 	}
+	// How every reviewer works names no base of its own that the Base
+	// section would contradict.
+	if strings.Contains(review, "leaves its default branch") {
+		t.Errorf("a reviewer of a stacked branch told its base is the default branch:\n%s", review)
+	}
 }
 
 // A fixer of pull request feedback with dude's tools is given each

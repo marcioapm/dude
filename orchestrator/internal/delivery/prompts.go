@@ -214,8 +214,9 @@ var reviewFocus = map[string]string{
 // whatever its instructions say: findings a fixer can act on and a person
 // can trust, and an account of what the review did and did not cover.
 const reviewContract = "## How you review\n\n" +
-	"First establish what is under review: in each checkout, the base (where the branch leaves its default " +
-	"branch: `git merge-base`) and the head, then `git log` and `git diff` from the base. Read the changed code " +
+	"First establish what is under review: in each checkout, the base (where the branch leaves what it merges " +
+	"into, the default branch unless a Base section names another: `git merge-base`) and the head, then " +
+	"`git log` and `git diff` from the base. Read the changed code " +
 	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n" +
 	"Every finding says how it is known, as the first word of its description, on the same line as " +
 	"`description:`: `Reproduced:` (you ran something and saw it; say what), `Traced:` (a concrete sequence " +
