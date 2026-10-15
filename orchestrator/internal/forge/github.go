@@ -526,6 +526,18 @@ func (g *GitHub) OpenPullRequestAs(ctx context.Context, in OpenPullRequest, toke
 	return creation.OpenPullRequest(ctx, in)
 }
 
+func (g *GitHub) PullRequestBody(ctx context.Context, slug string, number int) (string, error) {
+	var p struct {
+		Body string `json:"body"`
+	}
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p)
+	return p.Body, err
+}
+
+func (g *GitHub) EditPullRequest(ctx context.Context, slug string, number int, body string) error {
+	return g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", slug, number), map[string]string{"body": body}, nil)
+}
+
 func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullRequestRef, error) {
 	var p ghPull
 	err := g.do(ctx, "POST", "/repos/"+in.Slug+"/pulls", map[string]any{

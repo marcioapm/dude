@@ -432,6 +432,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
+	mux.HandleFunc("PATCH "+prefix+"/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
+		p := s.number(w, r)
+		if p == nil {
+			return
+		}
+		var in struct{ Body string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		p.Body = in.Body
+		write(w, 200, s.pullJSON(p))
+	})
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("PATCH "+prefix+"/issues/comments/{id}", s.patchComment)
@@ -704,7 +719,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	return map[string]any{
 		"number": p.Number, "node_id": s.NodeID(p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title,
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title, "body": p.Body,
 		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,

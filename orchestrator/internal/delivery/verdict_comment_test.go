@@ -106,9 +106,145 @@ func (f *verdictFixture) testVerdict() (workflow.Result, error) {
 		PullRequestIDs: []string{"pr_c"}, Heads: map[string]string{"repo": "abc1234"},
 		Source: &Source{Kind: SourcePR, RepositoryID: "repo_c", Repository: "repo", Number: f.number,
 			HeadBranch: "feature", BaseBranch: "main"}}
+	return f.verdictStep(st)
+}
+
+func (f *verdictFixture) verdictStep(st *State) (workflow.Result, error) {
 	raw, _ := json.Marshal(st)
 	return f.steps.testVerdict(f.ctx, workflow.StepContext{WorkflowRunID: "wf_c", OrganizationID: f.org,
 		Step: "testVerdict", State: raw})
+}
+
+func (f *verdictFixture) openedState() *State {
+	f.t.Helper()
+	if _, err := f.owner.Exec(f.ctx, `UPDATE pull_requests SET adopted = false WHERE id = 'pr_c'`); err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET base_refs = '{"repo":"abc1234"}' WHERE id = 'run_c'`); err != nil {
+		f.t.Fatal(err)
+	}
+	return &State{TaskID: "wi_c", ProjectID: "prj_c", Attempt: 1, TestRunID: "run_c", Policy: DefaultPolicy(),
+		PullRequestIDs: []string{"pr_c"}, Heads: map[string]string{"repo": "abc1234"}}
+}
+
+func TestOpenedPRVerdictRefreshPreservesHumanContent(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	before, after := "A person's introduction.\n\n", "\n\n## Notes\nA person's closing paragraph.\n"
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) {
+		pr.Title = "A person's title"
+		pr.Body = before + "## Verification\nOld verdict." + after
+	})
+	res, err := f.verdictStep(st)
+	if err != nil || res.Next != "fix" {
+		t.Fatalf("first verdict: next %q, %v", res.Next, err)
+	}
+	first := verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, "")
+	if got := f.gh.Pull(f.number).Body; got != before+first+after {
+		t.Fatalf("first verdict body:\n%s\nwant:\n%s", got, before+first+after)
+	}
+	_, err = f.owner.Exec(f.ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at, base_refs)
+		VALUES ('run_c2', $1, 'prj_c', 'wi_c', 1, 'completed', 'test', 'qa_browser', 'agent', now(), '{"repo":"def5678"}')`, f.org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := "```yaml\n---\ncriterion: 1\nstatus: not-applicable\nobserved: No greeting required.\n```\n"
+	_, err = f.owner.Exec(f.ctx, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_c2', $1, 'agent.message', 'run_c2', 'wi_c', 'agent', 'run_c2', 'test', jsonb_build_object('text', $2::text))`, f.org, reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before = "Human edit after the first verdict.\n\n"
+	f.gh.Set(func(s *fakegithub.Server) { pr.Body = before + first + after })
+	st.TestRunID, st.Heads["repo"] = "run_c2", "def5678"
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	second := verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictNotApplicable}}}, st.Heads, "")
+	pr = f.gh.Pull(f.number)
+	if pr.Body != before+second+after || pr.Title != "A person's title" || len(pr.Comments) != 0 {
+		t.Fatalf("re-test PR: %+v; want preserved human content and updated verdict:\n%s", pr, before+second+after)
+	}
+}
+
+func TestOpenedPRVerdictAppendsMissingSection(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) { pr.Body = "Human text.\n" })
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	section := verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, "")
+	if got := f.gh.Pull(f.number).Body; got != "Human text.\n\n"+section {
+		t.Fatalf("appended body %q", got)
+	}
+}
+
+func TestOpenedPRVerdictHoldsNoRowOrConnection(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	entered, letGo := f.holdPost()
+	done := make(chan error, 1)
+	go func() { _, err := f.verdictStep(st); done <- err }()
+	wait(t, entered)
+	tx, err := f.owner.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lockErr := tx.Exec(f.ctx, `SELECT id FROM pull_requests WHERE id = 'pr_c' FOR UPDATE NOWAIT`)
+	_ = tx.Rollback(f.ctx)
+	if lockErr != nil {
+		t.Errorf("PR row locked during GitHub: %v", lockErr)
+	}
+	if n := f.pool.Stat().AcquiredConns(); n != 0 {
+		t.Errorf("%d connections held during GitHub", n)
+	}
+	letGo()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("verdict step did not return")
+	}
+}
+
+func TestOpenedPRVerdictGitHubFailureProceedsAndRetries(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	f.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "PATCH" {
+				return http.StatusServiceUnavailable
+			}
+			return 0
+		}
+	})
+	res, err := f.verdictStep(st)
+	if err != nil || res.Next != "fix" {
+		t.Fatalf("GitHub failure stopped delivery: next %q, %v", res.Next, err)
+	}
+	var failures int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_c'
+		AND event_type = 'pull_request.verification_updated' AND payload ? 'error'`).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 {
+		t.Fatalf("%d recorded GitHub failures, want 1", failures)
+	}
+	f.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.gh.Pull(f.number).Body, "## Verification\n") || len(f.gh.Pull(f.number).Comments) != 0 {
+		t.Fatalf("retry PR: %+v", f.gh.Pull(f.number))
+	}
 }
 
 func (f *verdictFixture) verdictEvents() []map[string]any {

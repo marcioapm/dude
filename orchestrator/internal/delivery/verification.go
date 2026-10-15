@@ -342,6 +342,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
 	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {
 		return workflow.Result{}, err
@@ -530,6 +531,115 @@ func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug
 	}
 	posted, err = gh.Comment(ctx, slug, number, body)
 	return posted, false, err
+}
+
+// RefreshVerification updates only dude's section in the current GitHub body.
+// Database reads and ledger writes finish in separate transactions around GitHub.
+func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, forges Forges) {
+	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {
+		return
+	}
+	type target struct {
+		ID, Repo, URL string
+		Number        int
+	}
+	var prs []target
+	var section string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.number
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND NOT pr.adopted AND pr.state IN ('open', 'draft')`,
+			st.PullRequestIDs, st.TaskID)
+		if err != nil {
+			return err
+		}
+		prs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[target])
+		if err != nil || len(prs) == 0 {
+			return err
+		}
+		v, err := latestVerification(ctx, tx, st)
+		if err != nil {
+			return err
+		}
+		link, err := taskLink(ctx, tx, st.TaskID)
+		if err != nil {
+			return err
+		}
+		section = verificationSection(v, st.Heads, link)
+		return nil
+	})
+	if err != nil {
+		slog.Warn("reading pull request verification failed", "task", st.TaskID, "error", err)
+		return
+	}
+	if section == "" {
+		return
+	}
+	for _, pr := range prs {
+		updateErr := func() error {
+			timeout := s.CommentTimeout
+			if timeout == 0 {
+				timeout = verdictCommentTimeout
+			}
+			callCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			gh, err := forges.For(callCtx, org)
+			if err != nil {
+				return err
+			}
+			if gh == nil {
+				return fmt.Errorf("no forge credential to update verification with")
+			}
+			slug := forge.SlugFromURL(pr.URL)
+			body, err := gh.PullRequestBody(callCtx, slug, pr.Number)
+			if err != nil {
+				return err
+			}
+			return gh.EditPullRequest(callCtx, slug, pr.Number, replaceVerification(body, section))
+		}()
+		payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
+		if updateErr != nil {
+			slog.Warn("updating pull request verification failed", "pr", pr.ID, "error", updateErr)
+			payload["error"] = updateErr.Error()
+		}
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			return emitTx(ctx, tx, org, st, "pull_request.verification_updated", payload)
+		}); err != nil {
+			slog.Warn("recording pull request verification update failed", "pr", pr.ID, "error", err)
+		}
+	}
+}
+
+func replaceVerification(body, section string) string {
+	start, end, offset := -1, len(body), 0
+	for line := range strings.SplitAfterSeq(body, "\n") {
+		heading := strings.TrimSpace(line)
+		if start >= 0 && strings.HasPrefix(heading, "## ") {
+			end = offset
+			break
+		}
+		if heading == "## Verification" {
+			start = offset
+		}
+		offset += len(line)
+	}
+	if start < 0 {
+		separator := "\n\n"
+		if body == "" {
+			separator = ""
+		} else if strings.HasSuffix(body, "\n\n") {
+			separator = ""
+		} else if strings.HasSuffix(body, "\n") {
+			separator = "\n"
+		}
+		return body + separator + section
+	}
+	// Keep the spacing before the following human-owned heading unchanged.
+	contentEnd := end
+	for contentEnd > start && (body[contentEnd-1] == '\n' || body[contentEnd-1] == '\r') {
+		contentEnd--
+	}
+	return body[:start] + section + body[contentEnd:]
 }
 
 // verificationSection is the pull request's account of the test: each
