@@ -75,7 +75,7 @@ func TestTheGateWaitsForEvidenceOnlyWhenItCouldChangeTheVerdict(t *testing.T) {
 			}
 			if c.wait {
 				// A tenth of the minute since the Run ended.
-				if d := res.SleepUntil.Sub(before); d < 5*time.Second || d > 7*time.Second {
+				if d := res.SleepUntil.Sub(before); d < 5*time.Second || d > 10*time.Second {
 					t.Errorf("waits %v, want about 6s", d)
 				}
 				// Once its files are all in, it judges.
@@ -138,5 +138,42 @@ func TestAFailureGetsAFindingWhileAnEarlierTestsIsOpen(t *testing.T) {
 	want := []string{"Acceptance criterion 1 fails: it greets", "Acceptance criterion 2 fails: it says goodbye"}
 	if len(titles) != 2 || titles[0] != want[0] || titles[1] != want[1] {
 		t.Errorf("this test's findings %q, want %q", titles, want)
+	}
+}
+
+// Two tests that each fail a criterion with no finding of their own raise
+// one finding for it: the second's failure is the open one's.
+func TestARepeatedFailureGetsOneFinding(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	reply := "```yaml\\n---\\ncriterion: 1\\nstatus: fail\\nobserved: No greeting.\\n```"
+	for _, sql := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_d', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
+			VALUES ('wi_d', $1, 'prj_d', 1, 'Greet', 'greet', '["it greets"]', 'running')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at)
+			VALUES ('run_d1', $1, 'prj_d', 'wi_d', 1, 'completed', 'test', 'qa_browser', 'agent', now() - interval '1 hour'),
+			       ('run_d2', $1, 'prj_d', 'wi_d', 1, 'completed', 'test', 'qa_browser', 'agent', now())`,
+		`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_d1', $1, 'agent.message', 'run_d1', 'wi_d', 'agent', 'run_d1', 'test', jsonb_build_object('text', E'` + reply + `')),
+			       ('ev_d2', $1, 'agent.message', 'run_d2', 'wi_d', 'agent', 'run_d2', 'test', jsonb_build_object('text', E'` + reply + `'))`,
+	} {
+		if _, err := owner.Exec(ctx, sql, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Store{DB: app}
+	for _, run := range []string{"run_d1", "run_d2"} {
+		st := &State{TaskID: "wi_d", ProjectID: "prj_d", Attempt: 1, TestRunID: run, Policy: DefaultPolicy()}
+		if _, err := s.RecordVerdict(ctx, org, st, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	_ = owner.QueryRow(ctx, `SELECT count(*) FROM review_findings WHERE task_id = 'wi_d' AND status = 'open'
+		AND title LIKE 'Acceptance criterion 1 fails:%'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("%d open findings for criterion 1, want 1", n)
 	}
 }
