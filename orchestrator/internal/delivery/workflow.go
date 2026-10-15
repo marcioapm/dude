@@ -509,7 +509,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if len(out.ChangedPaths) == 0 && st.Source.continues() {
+	if len(out.ChangedPaths) == 0 && st.Source.Continues() {
 		// Work to continue that already met its goal: reviewed as it is,
 		// on its unchanged head, by the reviewers its own changes pick.
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
@@ -534,7 +534,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 	if len(out.ChangedPaths) == 0 && (writable || !out.Published) {
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
 	}
-	if st.Source.continues() {
+	if st.Source.Continues() {
 		// The review is of the whole work, the person's and the implementer's.
 		out.ChangedPaths = withPaths(out.ChangedPaths, st.ChangedPaths)
 	}

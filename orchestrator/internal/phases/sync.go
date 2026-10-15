@@ -1320,7 +1320,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Bases: taskBranch.Bases, Adopted: adopted,
 	}
-	if r.Phase == delivery.PhaseImplement && taskBranch.Source != nil && taskBranch.Source.Mode == delivery.ModeContinue {
+	if r.Phase == delivery.PhaseImplement && taskBranch.Source.Continues() {
 		// An implementer on adopted work carries someone's work on.
 		promptIn.Continues = taskBranch.Source
 	}

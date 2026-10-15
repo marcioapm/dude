@@ -102,7 +102,7 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.ChangedPaths = append(st.ChangedPaths, repo.Name+"/"+p)
 	}
 	line := fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch)
-	if !src.continues() {
+	if !src.Continues() {
 		return w.next(ctx, sc, st, PointImplemented, "review", line+" Saved as work to review as it is.")
 	}
 	// Work to continue: the implementer, which under the conductor is its
@@ -115,8 +115,8 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	return w.next(ctx, sc, st, PointStart, "implementRun", line+" Saved as work to continue: an implementer carries it on.")
 }
 
-// continues says the work taken over goes to an implementer before review.
-func (s *Source) continues() bool { return s != nil && s.Mode == ModeContinue }
+// Continues says the work taken over goes to an implementer before review.
+func (s *Source) Continues() bool { return s != nil && s.Mode == ModeContinue }
 
 // adoptedPR and adoptedBranch say what existing work the delivery took over.
 func (st *State) adoptedPR() bool     { return st.Source != nil && st.Source.Kind == SourcePR }
