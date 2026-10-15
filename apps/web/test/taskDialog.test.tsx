@@ -510,7 +510,7 @@ describe("where a task starts from", () => {
   const MERGED = "pull request #7 is merged: only an open one can be adopted";
   /** Answers lookups as the backend would, and records what is created. */
   class Sources extends EpicsClient {
-    created: unknown[] = [];
+    created: Parameters<FixtureClient["createTask"]>[0][] = [];
     asked: unknown[] = [];
     override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
       this.asked.push(source);
@@ -596,7 +596,7 @@ describe("where a task starts from", () => {
     expect(modeChosen()).toBe("Continue the workAn implementer builds on it first, then review.");
     await act(async () => d.save().click());
     await until(() => client.created.length > 0, "the create");
-    expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12", mode: "continue" } });
+    expect(client.created[0]!.source).toEqual({ kind: "pr", repositoryId: "repo_wc", pullRequest: "#12", mode: "continue" });
   });
 
   test("a default left as it is is not sent: the backend's default for the source holds", async () => {
@@ -609,8 +609,8 @@ describe("where a task starts from", () => {
     await until(() => modeChosen()?.startsWith("Continue the work"), "a branch continues");
     await act(async () => d.save().click());
     await until(() => client.created.length > 0, "the create");
-    expect(client.created[0]).toHaveProperty("source");
-    expect((client.created[0] as { source: object }).source).not.toHaveProperty("mode");
+    // No base picked, no mode chosen: neither is sent.
+    expect(client.created[0]!.source).toEqual({ kind: "branch", repositoryId: "repo_wc", branch: "stack/top" });
   });
 
   test("once started, the saved choice is shown and cannot change", async () => {
