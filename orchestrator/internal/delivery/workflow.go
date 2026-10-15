@@ -1570,7 +1570,7 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	}
 	for _, repo := range repos {
 		to := st.Heads[repo]
-		move := gh.FastForwardExisting
+		move, creating := gh.FastForwardExisting, false
 		if at[repo] == "" {
 			// A branch never on the forge here is created (a repository the
 			// fix changed first); one that was is a person's deletion.
@@ -1580,10 +1580,18 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 				if err := w.s.branchCreatingTx(ctx, sc.OrganizationID, st, repo); err != nil {
 					return workflow.Result{}, err
 				}
-				move = gh.FastForward
+				// Only the create is sent: any request failing after the
+				// record makes a replay read the branch as deleted.
+				move, creating = gh.CreateBranch, true
 			}
 		}
 		err := move(ctx, slugs[repo], st.Branch, to)
+		if creating && forge.Transient(err) {
+			// GitHub may have created it before failing: at to, it did.
+			if found, rerr := gh.BranchSHA(ctx, slugs[repo], st.Branch); rerr == nil && found == to {
+				err = nil
+			}
+		}
 		var fe *forge.Error
 		if errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
 			// Someone pushed or deleted the branch between the read and the move.

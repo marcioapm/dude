@@ -1242,9 +1242,15 @@ func (g *GitHub) FastForward(ctx context.Context, slug, branch, sha string) erro
 	err := g.FastForwardExisting(ctx, slug, branch, sha)
 	var e *Error
 	if asError(err, &e) && (e.NotFound() || e.Status == 422 && strings.Contains(e.Message, "does not exist")) {
-		return g.do(ctx, "POST", "/repos/"+slug+"/git/refs", map[string]any{"ref": "refs/heads/" + branch, "sha": sha}, nil)
+		return g.CreateBranch(ctx, slug, branch, sha)
 	}
 	return err
+}
+
+// CreateBranch creates branch at sha, never moving one that exists: GitHub
+// answers 422 "Reference already exists" for it.
+func (g *GitHub) CreateBranch(ctx context.Context, slug, branch, sha string) error {
+	return g.do(ctx, "POST", "/repos/"+slug+"/git/refs", map[string]any{"ref": "refs/heads/" + branch, "sha": sha}, nil)
 }
 
 // FastForwardExisting never recreates a branch deleted before the update.

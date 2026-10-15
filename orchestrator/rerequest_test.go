@@ -1,9 +1,12 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -496,7 +499,7 @@ func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testin
 		}
 	})
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.until("a person asked, or web's branch created again", func() bool {
+	w.until("web's branch deleted on its pull request's first open, then a person asked or it was created again", func() bool {
 		w.sync()
 		return deleted.Load() && (w.taskStatus(wi) == "awaiting_input" || creates.Load() > 0)
 	})
@@ -521,5 +524,111 @@ func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testin
 	if detail["repo"] != "web" || detail["found"] != "" || detail["expected"] != "" || detail["candidate"] != checked ||
 		detail["branch"] != delivery.CandidateBranch(wi, 1) {
 		t.Errorf("refusal %v, want web missing with candidate %s", detail, checked)
+	}
+}
+
+// siblingFixWorld is a task whose pull request on target is reviewed by
+// jerv, and whose next fix changes web, which has no task branch yet:
+// promoting it creates web's branch and opens web's pull request.
+func siblingFixWorld(t *testing.T) (*world, string) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
+		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	w.askingFor("jerv")
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("target's pull request in review", func() bool {
+		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
+	})
+	w.gh.Review(1, "jerv", "COMMENTED")
+	return w, wi
+}
+
+// GitHub failing a request on web's task branch before the create is sent
+// leaves nothing to mistake for a deletion: the step runs again, creates
+// the branch and opens web's pull request.
+func TestATransientFailureBeforeASiblingBranchIsCreatedStillOpensItsPullRequest(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var failed atomic.Int32
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+branch) && failed.Add(1) == 1 {
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
+		t.Fatalf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
+		delivery.EvTaskBranchCreating); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+}
+
+// GitHub creates web's branch, then answers 502: the branch at the
+// candidate's head is the create landing, moved in the same step, never a
+// wait and never a person's deletion.
+func TestASiblingBranchCreatedBehindA502IsMovedWithoutWaiting(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var failed atomic.Int32
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") {
+				return 0
+			}
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var in struct{ Ref, SHA string }
+			_ = json.Unmarshal(body, &in)
+			if in.Ref != "refs/heads/"+branch || failed.Add(1) != 1 {
+				return 0
+			}
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", in.Ref, in.SHA, "").CombinedOutput(); err != nil {
+				t.Errorf("create web's branch: %v %s", err, out)
+			}
+			return http.StatusBadGateway
+		}
+	})
+	var waited atomic.Bool
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND last_error LIKE '%502%'`, wi) > 0 {
+			waited.Store(true)
+		}
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	if failed.Load() == 0 {
+		t.Fatal("web's branch was never created through the API")
+	}
+	if waited.Load() {
+		t.Error("the step waited on a create that landed")
+	}
+	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
+		t.Errorf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
+		delivery.EvTaskBranchCreating); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
 	}
 }
