@@ -351,6 +351,103 @@ func TestOpenedPRVerdictGitHubNeverAnsweringCostsOneBudget(t *testing.T) {
 	}
 }
 
+// personEdits has a person edit the pull request's body before GitHub
+// answers dude's request i to it (1 is the first), when edit(i) is not "":
+// the body they leave. patches counts the PATCHes dude sent.
+func (f *verdictFixture) personEdits(edit func(i int) string) (patches func() int) {
+	var mu sync.Mutex
+	requests, patched := 0, 0
+	pr := f.gh.Pull(f.number)
+	paths := []string{fmt.Sprintf("/pulls/%d", f.number), fmt.Sprintf("/issues/%d", f.number)}
+	f.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if !strings.HasSuffix(r.URL.Path, paths[0]) && !strings.HasSuffix(r.URL.Path, paths[1]) {
+				return 0
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			requests++
+			if r.Method == "PATCH" {
+				patched++
+			}
+			if body := edit(requests); body != "" {
+				f.gh.Set(func(*fakegithub.Server) { pr.Body = body })
+			}
+			return 0
+		}
+	})
+	return func() int { mu.Lock(); defer mu.Unlock(); return patched }
+}
+
+func (f *verdictFixture) currentSection(st *State) string {
+	return markedVerification(verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
+}
+
+// A person edits the body after dude read it and before dude writes it:
+// their edit stays, and dude's section is current in it.
+func TestOpenedPRVerdictKeepsAPersonsEditMadeWhileItUpdates(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) { pr.Body = "Before.\n" })
+	edited := "Edited while dude was updating.\n"
+	f.personEdits(func(i int) string {
+		if i == 2 {
+			return edited
+		}
+		return ""
+	})
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.gh.Pull(f.number).Body, edited+"\n"+f.currentSection(st); got != want {
+		t.Fatalf("body %q\nwant %q", got, want)
+	}
+	for _, e := range f.refreshEvents() {
+		if e["error"] != nil {
+			t.Fatalf("refresh recorded %v", e["error"])
+		}
+	}
+}
+
+// A body that changes on every look: dude gives up for this verdict,
+// writes nothing, and says so; the person's last edit stands.
+func TestOpenedPRVerdictGivesUpOnABodyThatKeepsChanging(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	patches := f.personEdits(func(i int) string { return fmt.Sprintf("Edit %d.\n", i) })
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	body := f.gh.Pull(f.number).Body
+	if patches() != 0 || strings.Contains(body, verificationStart) || !strings.HasPrefix(body, "Edit ") {
+		t.Fatalf("%d PATCHes, body %q: want the person's last edit, untouched", patches(), body)
+	}
+	events := f.refreshEvents()
+	if len(events) != 1 || events[0]["error"] != "body changed during update" {
+		t.Fatalf("refresh events %v, want the give-up recorded", events)
+	}
+}
+
+// A body already current is not written again.
+func TestOpenedPRVerdictWritesNothingWhenTheSectionIsCurrent(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) { pr.Body = "Intro.\n\n" + f.currentSection(st) })
+	patches := f.personEdits(func(int) string { return "" })
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	if patches() != 0 {
+		t.Fatalf("%d PATCHes of a body already current", patches())
+	}
+	if events := f.refreshEvents(); len(events) != 1 || events[0]["error"] != nil {
+		t.Fatalf("refresh events %v", events)
+	}
+}
+
 func TestOpenedPRVerdictHoldsNoRowOrConnection(t *testing.T) {
 	f := newVerdictFixture(t)
 	st := f.openedState()

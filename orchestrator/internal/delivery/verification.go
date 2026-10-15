@@ -625,13 +625,37 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 // GitHub about at once.
 const refreshWorkers = 4
 
-// refreshBody writes section into the pull request's current body.
+// refreshAttempts bounds how many times one refresh merges its section into
+// a body a person keeps editing before it leaves it to the next verdict.
+const refreshAttempts = 3
+
+var errBodyChanged = errors.New("body changed during update")
+
+// refreshBody writes section into the pull request's current body. GitHub
+// has no conditional update for an issue body, so the body is read again
+// just before the PATCH and, if a person changed it since, merged again
+// from theirs. A person's edit landing between that last read and the PATCH
+// itself, about one round-trip, is still overwritten.
 func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, section string) error {
 	body, err := gh.PullRequestBody(ctx, slug, number)
 	if err != nil {
 		return err
 	}
-	return gh.EditPullRequest(ctx, slug, number, replaceVerification(body, section))
+	for range refreshAttempts {
+		merged := replaceVerification(body, section)
+		if merged == body {
+			return nil
+		}
+		fresh, err := gh.PullRequestBody(ctx, slug, number)
+		if err != nil {
+			return err
+		}
+		if fresh == body {
+			return gh.EditPullRequest(ctx, slug, number, merged)
+		}
+		body = fresh
+	}
+	return errBodyChanged
 }
 
 // The hidden lines around the verification section dude writes into a pull
