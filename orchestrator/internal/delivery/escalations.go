@@ -459,11 +459,15 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		// task, an organization admin (the banner's ownerOrAdmin).
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
-		// Picks alone, one or several, are not words: the item's own text is.
+		// The item's own text is the person's words; picks, one or several,
+		// are not, and neither is a choice's label typed back.
 		var items []ItemAnswer
 		_ = json.Unmarshal(rawAnswers, &items)
-		picked := len(items) > 0 && strings.TrimSpace(items[0].Text) == ""
-		if picked || choiceOf(options, answer) >= 0 {
+		words := answer
+		if len(items) > 0 {
+			words = items[0].Text
+		}
+		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
 			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
 				"they say why in their own words, or decide on the banner", qID, action)
 		}

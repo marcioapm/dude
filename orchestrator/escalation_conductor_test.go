@@ -412,6 +412,14 @@ func TestAWaiverOnSeveralPicksIsNotTheOwnersWords(t *testing.T) {
 		t.Fatalf("the answer: %d %v", status, out)
 	}
 	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
+	// A choice's label typed back beside a pick is not a reason either.
+	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
+		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
+		map[string]any{"answers": []map[string]any{{"choices": []int{0}, "text": "Stop"}}}); status != 200 {
+		t.Fatalf("the second answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
 	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision IS NOT NULL`, task); n != 0 {
 		t.Errorf("%d criteria waived on picks alone", n)
 	}

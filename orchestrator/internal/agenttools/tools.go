@@ -105,9 +105,9 @@ var tools = []tool{
 		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
 	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, waive, resume, done, wait or "+
 		"stop, as it offers), with a note: only after the task's owner answered your question about this escalation in "+
-		"their own words, handing it to you. A choice they pick decides it without you; a waiver or an acceptance is "+
-		"never a choice, it needs the person's own words. Otherwise the person decides on the banner. Allowed "+
-		"once per escalation.", conductors, decideEscalation),
+		"their own words, handing it to you; otherwise the person decides on the banner. A choice they pick decides "+
+		"it without you, except a waiver or accepting a failed test, which is never a choice: it needs the "+
+		"person's own words. Allowed once per escalation.", conductors, decideEscalation),
 	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
 		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
 		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
