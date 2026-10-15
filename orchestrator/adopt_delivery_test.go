@@ -20,11 +20,27 @@ import (
 // what the backend checked) and starts its delivery through the API.
 func (w *world) adopting(kind string, number int, head, base string) string {
 	w.t.Helper()
-	wi := w.adopted(kind, number, head, base, delivery.ModeReview)
+	return w.startDelivery(w.adopted(kind, number, head, base, delivery.ModeReview))
+}
+
+// startDelivery starts the task's delivery through the API.
+func (w *world) startDelivery(wi string) string {
+	w.t.Helper()
 	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
 		w.t.Fatalf("deliver: %d %v", status, body)
 	}
 	return wi
+}
+
+// implementerPrompt waits for the task's implementer on lux: its prompt.
+func (w *world) implementerPrompt(wi string) string {
+	w.t.Helper()
+	var impl string
+	w.until("the implementer submitted", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
+		return impl != "" && w.promptOf(impl) != ""
+	})
+	return w.promptOf(impl)
 }
 
 // adopted makes a task that starts from source in mode, not started.
@@ -51,10 +67,7 @@ func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
 	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
 	start := w.gh.SHA("feature/half")
 	w.gh.Comment(n, "jerv", "Still needs the farewell.")
-	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
+	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
 	w.until("waiting on the pull request", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
@@ -88,25 +101,14 @@ func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testi
 	// A model of its own: the scripted agent's prompt is its script.
 	w.onModel("implementer", "llm-impl")
 	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
-	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
+	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
 	fresh := w.task()
 	w.deliver(fresh)
-	promptOf := func(task string) string {
-		var impl string
-		w.until("the implementer submitted", func() bool {
-			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task).Scan(&impl)
-			return impl != "" && w.promptOf(impl) != ""
-		})
-		return w.promptOf(impl)
-	}
 	want := "This is someone's work in progress on pull request #1 (`feature/half` in target), based on `main`"
-	if p := promptOf(wi); !strings.Contains(p, want) || !strings.Contains(p, "If the goal is already met, commit nothing and say so") {
+	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "If the goal is already met, commit nothing and say so") {
 		t.Fatalf("implementer prompt does not say it continues someone's work:\n%s", p)
 	}
-	if p := promptOf(fresh); strings.Contains(p, "Work in progress") {
+	if p := w.implementerPrompt(fresh); strings.Contains(p, "Work in progress") {
 		t.Fatalf("new work's implementer told it continues someone's:\n%s", p)
 	}
 }
@@ -123,12 +125,7 @@ func TestAnImplementerTheConductorStartsOnWorkToReviewIsNotToldToContinueIt(t *t
 	}
 	w.until("the adopted work's decision", func() bool { return w.decisionAt(wi) == delivery.PointImplemented })
 	w.must(wi, "start_phase", `{"phase":"implement"}`)
-	var impl string
-	w.until("the implementer submitted", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
-		return impl != "" && w.promptOf(impl) != ""
-	})
-	if p := w.promptOf(impl); strings.Contains(p, "## Work in progress") {
+	if p := w.implementerPrompt(wi); strings.Contains(p, "## Work in progress") {
 		t.Fatalf("an implementer on work to review was told to continue it:\n%s", p)
 	}
 }
@@ -147,10 +144,7 @@ func TestWorkToContinueWithNothingToAddIsReviewedAsItIs(t *testing.T) {
 	}
 	n := w.gh.OpenAsPerson("alice", "feature/done", "main", "Already done")
 	start := w.gh.SHA("feature/done")
-	wi := w.adopted("pr", n, "feature/done", "main", delivery.ModeContinue)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
-		t.Fatalf("deliver: %d %v", status, body)
-	}
+	wi := w.startDelivery(w.adopted("pr", n, "feature/done", "main", delivery.ModeContinue))
 	w.until("the first review", func() bool { return w.phaseRuns(wi, "review") > 0 })
 	if got := w.phasesRun(wi); got[0] != "implement" || w.phaseRuns(wi, "implement") != 1 {
 		t.Fatalf("phases %v, want one implementer then review", got)
