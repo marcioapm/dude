@@ -237,9 +237,11 @@ func AddressedToDude(f Feedback, factoryLogins []string) bool {
 }
 
 // Posted is a comment dude posted: its feedback id (as Feedback names
-// comments) and where a person reads it.
+// comments), where a person reads it, and GitHub's id of a conversation
+// comment (what EditComment takes).
 type Posted struct {
-	ID, URL string
+	ID, URL   string
+	CommentID int64
 }
 
 type ghPosted struct {
@@ -253,7 +255,17 @@ func (g *GitHub) Comment(ctx context.Context, slug string, number int, body stri
 	if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), map[string]string{"body": body}, &out); err != nil {
 		return Posted{}, err
 	}
-	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL}, nil
+	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL, CommentID: out.ID}, nil
+}
+
+// EditComment replaces the body of a conversation comment the token
+// posted. A comment deleted on GitHub is a 404 (Error.NotFound).
+func (g *GitHub) EditComment(ctx context.Context, slug string, commentID int64, body string) (Posted, error) {
+	var out ghPosted
+	if err := g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/comments/%d", slug, commentID), map[string]string{"body": body}, &out); err != nil {
+		return Posted{}, err
+	}
+	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL, CommentID: out.ID}, nil
 }
 
 // ReplyToLineComment answers a line comment in its review thread.

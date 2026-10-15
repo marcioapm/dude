@@ -434,6 +434,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
+	mux.HandleFunc("PATCH "+prefix+"/issues/comments/{id}", s.patchComment)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec...}", s.compare)
@@ -966,6 +967,44 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	c.ID, c.Path = nextID.Add(1), parent.Path
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
+}
+
+// patchComment edits a conversation comment by its id, wherever it is, as
+// GitHub's issue comment endpoint does: 404 for one that is not there (or
+// was deleted), 403 when only its author may and the token is not.
+func (s *Server) patchComment(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var in struct {
+		Body string `json:"body"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.pulls {
+		for i := range p.Comments {
+			c := &p.Comments[i]
+			if c.ID != id {
+				continue
+			}
+			if c.Author != s.poster() {
+				fail(w, 403, "Resource not accessible by personal access token")
+				return
+			}
+			c.Body, c.UpdatedAt = in.Body, time.Now().UTC().Format(time.RFC3339)
+			write(w, 200, s.commentsJSON(p, []Comment{*c}, "issuecomment")[0])
+			return
+		}
+	}
+	fail(w, 404, "Not Found")
+}
+
+// DeleteComment removes a conversation comment, as a person deleting it on
+// GitHub does.
+func (s *Server) DeleteComment(number int, id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	p.Comments = slices.DeleteFunc(p.Comments, func(c Comment) bool { return c.ID == id })
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
