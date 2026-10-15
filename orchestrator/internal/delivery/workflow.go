@@ -536,14 +536,25 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 	}
 	if st.Source.continues() {
 		// The review is of the whole work, the person's and the implementer's.
-		for _, p := range st.ChangedPaths {
-			if !slices.Contains(out.ChangedPaths, p) {
-				out.ChangedPaths = append(out.ChangedPaths, p)
-			}
-		}
+		out.ChangedPaths = withPaths(out.ChangedPaths, st.ChangedPaths)
 	}
 	st.HeadRunID, st.Heads, st.ChangedPaths, st.PendingRunIDs = runID, out.advance(st.Heads), out.ChangedPaths, nil
 	return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement"))
+}
+
+// withPaths appends to paths each of more it lacks, once, keeping both orders.
+func withPaths(paths, more []string) []string {
+	seen := make(map[string]struct{}, len(paths)+len(more))
+	for _, p := range paths {
+		seen[p] = struct{}{}
+	}
+	for _, p := range more {
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			paths = append(paths, p)
+		}
+	}
+	return paths
 }
 
 // review fans reviewers out over the current head. Parallel Runs rather than
