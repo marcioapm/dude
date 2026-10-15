@@ -247,6 +247,7 @@ def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     project = client.create_project(
         name="Restarts", slug=f"rst-{os.urandom(3).hex()}",
         agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier", "conductor")}),
+        deliveryPolicy={"test": False},  # no tester (on by default): its Runs are counted
         repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
     )
     yield project, gh

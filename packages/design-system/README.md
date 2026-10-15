@@ -1286,6 +1286,16 @@ here.
   nothing is struck through. `FindingGroup` puts open findings first, most
   severe first (`sortFindings`), and counts what is still open; `fixedIn` is
   a slot for the app's link to the fix run.
+- **CriterionRow** is the only way the tester's verdict on an acceptance
+  criterion is drawn: the verdict as glyph + word in its tone
+  (`CRITERION_STATE_SPECS`, keyed on the domain's `VerdictStatus` plus a
+  person's `waived` / `accepted`), the criterion's number and text, then
+  the evidence (the app's links), what was seen, why dude disagreed, and
+  who decided and why. A decision is neutral and names the verdict it
+  settled: an accepted failure still reads as one. `VerificationGroup`
+  names the commits tested and marks the verdict **Stale** (an attention
+  `Badge`) once the branch has moved past them. Never a pass in a colour
+  alone, and never a `StatusBadge`: these are not Run or Task states.
 - **ArtifactRow** is a file an agent published: a glyph for its kind
   (`artifactKind` — content type first, extension when the type is generic,
   because agents are careless with media types), the path in mono, the
@@ -2063,6 +2073,9 @@ MarkdownCheatsheet.
 - **FindingRow / FindingGroup** — a review finding, and the open-first list
   of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
   vocabulary.
+- **CriterionRow / VerificationGroup** — the tester's verdict per
+  acceptance criterion, under the commits tested; `CRITERION_STATE_SPECS`
+  is the vocabulary.
 - **ArtifactRow / ArtifactGroup / ArtifactPreview** — files an agent
   published, expandable to their content; `artifactKind` and
   `ARTIFACT_KIND_SPECS` are the vocabulary.

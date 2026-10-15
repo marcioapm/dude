@@ -40,11 +40,11 @@ def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url})
     assert resp.status_code == 200, resp.text
     # One required reviewer, so a delivery's Runs are few enough to count;
-    # the factory's default requires several.
+    # the factory's default requires several. No tester (on by default).
     project = client.create_project(
         name="On lux", slug=f"lux-{os.urandom(3).hex()}",
         agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
-        deliveryPolicy={"requiredReviewers": ["correctness"]},
+        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
         repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
     )
     yield project, gh

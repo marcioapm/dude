@@ -234,6 +234,14 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 	w, task := stuck(t)
 	w.must(task, "ask_person", escalationQuestion)
 	q := w.conductorQuestion(task)
+	// A tester's finding of the attempt is the next test's to judge, not
+	// accepted with the review's.
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind)
+		SELECT 'run_tested', organization_id, project_id, task_id, attempt, 'completed', 'test', 'qa_browser', 'agent'
+		FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
+		SELECT 'fnd_tested', organization_id, task_id, id, 'acceptance', 'blocking', 'Criterion 1 is not met', 'No greeting.'
+		FROM runs WHERE id = 'run_tested'`)
 	if status, out := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "accept"}); status != 200 {
 		t.Fatalf("the banner: %d %v", status, out)
 	}
@@ -249,6 +257,9 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 		t.Errorf("the conductor was told %q", note)
 	}
 	w.until("the delivery to go on", func() bool { return w.phaseRuns(task, "simplify") == 1 })
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE id = 'fnd_tested' AND status = 'open'`); n != 1 {
+		t.Errorf("accepting the review's findings settled the tester's")
+	}
 }
 
 // ask_person while an escalation waits is its question: each choice must
@@ -319,4 +330,120 @@ func TestAReplacementConductorDecidesOnlyOnItsOwnQuestion(t *testing.T) {
 	if d := w.decided(task); d != nil {
 		t.Errorf("decided on the earlier conductor's answer: %v", d)
 	}
+}
+
+// testBlocked is a conducted delivery whose test could not run the app:
+// escalated test_blocked, the conductor told.
+func testBlocked(t *testing.T, owner func(w *world, task string)) (*world, string) {
+	w := conducting(t)
+	w.onModel("qa_browser", fakeagent.TestBlockedModel)
+	task := w.task()
+	owner(w, task)
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.until("blocked", func() bool { return w.escalationReason(task) == delivery.ReasonTestBlocked })
+	w.wokenWith(task, "Escalated to a person: test blocked")
+	return w, task
+}
+
+const blockedQuestion = `{"question":"The app would not start. Test again, or stop?",
+	"choices":["Test again","Stop"],"actions":["retry","stop"]}`
+
+// waiverNote is the note recorded on the task's waived criteria, "" for none.
+func (w *world) waiverNote(task string) string {
+	var note string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(max(decision_note), '') FROM acceptance_verdicts
+		WHERE task_id = $1 AND decision = 'waived'`, task).Scan(&note)
+	return note
+}
+
+// A waiver is never one of the conductor's choices: the person's own words
+// are its reason, so the conductor's decide_escalation records them even
+// with no note of its own.
+func TestAWaiverCarriesTheOwnersOwnWords(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	w.refused(task, "ask_person", `{"question":"The app would not start. Test again, or ship it unchecked?",
+		"choices":["Test again","Waive"],"actions":["retry","waive"]}`, "own words")
+	w.must(task, "ask_person", blockedQuestion)
+	if status, out := w.answerAs(ana, task, "Ship it, I checked it by hand on staging."); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	w.must(task, "decide_escalation", `{"action":"waive"}`)
+	w.until("the waiver on the verdict", func() bool { return w.waiverNote(task) != "" })
+	if note := w.waiverNote(task); !strings.Contains(note, "The owner answered: Ship it, I checked it by hand on staging.") {
+		t.Errorf("the waiver's note %q is not the owner's words", note)
+	}
+}
+
+// An owner's answer that is a choice of the question — one asked before
+// waivers were refused as choices — is no reason: the conductor may not
+// waive on it, note or not.
+func TestAWaiverPickedFromTheConductorsQuestionDecidesNothing(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	w.must(task, "ask_person", blockedQuestion)
+	mustExec(t, w.owner, `UPDATE questions SET options = '["Test again","Waive"]', actions = '["retry","waive"]'
+		WHERE id = $1`, w.conductorQuestion(task))
+	if status, out := w.answerAs(ana, task, "Waive"); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if d := w.decided(task); d != nil {
+		t.Fatalf("a waiver with no reason of the owner's decided the escalation: %v", d)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
+	w.refused(task, "decide_escalation", `{"action":"waive","note":"Ana said to."}`, "not their reason")
+	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision IS NOT NULL`, task); n != 0 {
+		t.Errorf("%d criteria waived with no reason", n)
+	}
+}
+
+// Several boxes ticked are still picks, not the person's words: the conductor
+// cannot waive on them.
+func TestAWaiverOnSeveralPicksIsNotTheOwnersWords(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
+		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
+		map[string]any{"answers": []map[string]any{{"choices": []int{0, 1}}}}); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
+	// A choice's label typed back beside a pick is not a reason either.
+	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
+		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
+		map[string]any{"answers": []map[string]any{{"choices": []int{0}, "text": "Stop"}}}); status != 200 {
+		t.Fatalf("the second answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
+	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision IS NOT NULL`, task); n != 0 {
+		t.Errorf("%d criteria waived on picks alone", n)
+	}
+}
+
+// On a task nobody owns, a waiver through the conductor is an admin's, as
+// on the banner: a member's answer does not hand it over.
+func TestAWaiverOnAnOwnerlessTaskIsAnAdminsThroughTheConductorToo(t *testing.T) {
+	w, task := testBlocked(t, func(*world, string) {})
+	bo, cy := w.person("Bo"), w.person("Cy")
+	mustExec(t, w.owner, `UPDATE people SET role = CASE WHEN name = 'Cy' THEN 'admin' ELSE 'member' END
+		WHERE organization_id = $1`, w.org)
+	w.must(task, "ask_person", blockedQuestion)
+	if status, out := w.answerAs(bo, task, "Just ship it, I checked it."); status != 200 {
+		t.Fatalf("the member's answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive","note":"Bo checked."}`, "owner or an organisation admin")
+	if d := w.decided(task); d != nil {
+		t.Fatalf("a member's answer waived an ownerless task: %v", d)
+	}
+	w.must(task, "ask_person", blockedQuestion)
+	if status, out := w.answerAs(cy, task, "Waive it, checked on staging."); status != 200 {
+		t.Fatalf("the admin's answer: %d %v", status, out)
+	}
+	w.must(task, "decide_escalation", `{"action":"waive","note":"Cy checked."}`)
+	w.until("the waiver on the verdict", func() bool { return w.waiverNote(task) != "" })
 }

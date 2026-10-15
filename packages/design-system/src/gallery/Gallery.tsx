@@ -106,6 +106,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["c-diff", "DiffView"],
       ["c-log", "LogStream"],
       ["c-finding", "FindingRow"],
+      ["c-criterion", "CriterionRow / Verification"],
       ["c-artifact", "ArtifactRow / Preview"],
       ["c-breadcrumb", "Breadcrumb"],
       ["c-composed", "Composed"],

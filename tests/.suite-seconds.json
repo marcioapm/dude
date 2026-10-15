@@ -44,5 +44,6 @@
   "suites/test_shard.py": 0.0,
   "suites/test_stalled_runs.py": 49.7,
   "suites/test_structure.py": 11.5,
+  "suites/test_verification.py": 55.0,
   "suites/test_web_ui.py": 211.7
 }

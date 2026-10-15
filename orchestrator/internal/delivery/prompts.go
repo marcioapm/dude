@@ -349,7 +349,18 @@ const testerContract = "## Your part\n\n" +
 	"`Test environment: …` that says exactly what you tried, publish the report, and stop.\n\n" +
 	"A criterion that fails is a `blocking` finding: the step it failed at, what you expected and what happened, " +
 	"and the evidence. Report the console errors and failed network requests you saw during the flows; those " +
-	"that show a defect are findings."
+	"that show a defect are findings.\n\n" +
+	"End your reply with one YAML document per criterion, separated by `---`, after any findings: `criterion` is " +
+	"its number in the task's list, from 1 (for derived checks, number them and give each one's text in `check`); " +
+	"`evidence` names the files you published for it, by their `--name`, comma-separated; `observed` is one line. " +
+	"dude reads these, not `acceptance.md`: a criterion missing here is blocked, and a `pass` whose evidence names " +
+	"no file you published is not a pass.\n\n" +
+	"```yaml\n" +
+	"criterion: 1\n" +
+	"status: pass | fail | blocked | not-applicable\n" +
+	"evidence: walkthrough.webm, 01-signed-in.png\n" +
+	"observed: One line: what you saw.\n" +
+	"```"
 
 // testerTools is how the tester drives a browser and records it. Playwright
 // and Chromium are in the runtime image (images/runtime); the evidence is
@@ -454,7 +465,8 @@ var builtinInstructions = map[string][]string{
 			"addRelations, blocked_by), saying why.",
 		"When the delivery escalates to a person (a stuck review, a failed Run), only a person decides: you explain and " +
 			"propose. Ask with ask_person, offering the escalation's actions as choices, with actions naming what each " +
-			"stands for; the owner picking one decides it, and they may use the banner on the task instead. If the owner " +
+			"stands for; the owner picking one decides it, and they may use the banner on the task instead. A waiver or " +
+			"an acceptance of a failed test is never a choice: it needs the person's own words. If the owner " +
 			"answers in their own words (\"your call\"), decide it yourself with decide_escalation, once. While the " +
 			"delivery waits at the escalation, start_phase, dismiss_finding and decide are refused: do not try them.",
 		"Steer a running Run (steer) that is going the wrong way, or to give it something the person just said: it " +
@@ -744,6 +756,9 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task(), findingFormat)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
+		}
+		if len(in.Findings) > 0 {
+			add(earlierFindings(in.Findings))
 		}
 
 	default:

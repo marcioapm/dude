@@ -44,9 +44,13 @@ type EscalationDecision struct {
 	QuestionID, AnsweredBy string
 	// Taken by the conductor, on that answer: its Run.
 	Conductor string
+	// The person deciding (the banner's), for a waiver's or acceptance's
+	// record; AnsweredBy stands for it on an answer.
+	Person string
 	// Checks who may decide, once the escalation and action are known to
-	// be valid; nil when the caller checked already.
-	Authorize func() error
+	// be valid, given the escalation's reason; nil when the caller checked
+	// already.
+	Authorize func(reason string) error
 }
 
 // LockEscalationTx takes the locks a path that reads or changes an
@@ -140,11 +144,22 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			in.Action, e.Reason, strings.Join(e.Actions(), ", "))
 	}
 	if in.Authorize != nil {
-		if err := in.Authorize(); err != nil {
+		if err := in.Authorize(e.Reason); err != nil {
 			return err
 		}
 	}
 	note := strings.TrimSpace(in.Note)
+	if NeedsReason(e.Reason, in.Action) {
+		// Shipping past a criterion nobody saw work is on the record, with
+		// why.
+		if note == "" {
+			return escalationErr("bad_request", "%s needs a note: say why the task may ship with %s", in.Action,
+				map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
+		}
+		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
+			return err
+		}
+	}
 	if in.Action == "resume" {
 		// The Run that failed, taken back up now; the workflow waits on it.
 		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), note); err != nil {
@@ -253,8 +268,9 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
 // to the conductor's question about it picks one of its choices: the
 // action the choice names, the answer and the conductor's proposal its
-// note. A free answer, or one to an escalation no longer waiting, decides
-// nothing: it reaches the conductor, which may then decide_escalation.
+// note. A free answer, one to an escalation no longer waiting, or a choice
+// whose action needs the person's reason (NeedsReason) decides nothing: it
+// reaches the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
 	// The answer routes took the delivery and the task's row before the
 	// question (LockEscalationTx); taken again here, they are held already.
@@ -277,6 +293,11 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 		return nil
 	}
 	if !waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != key {
+		return nil
+	}
+	// A choice carries no reason of the person's: a waiver or acceptance
+	// picked so is a free answer, for decide_escalation once they say why.
+	if NeedsReason(d.State.Escalation.Reason, actions[i]) {
 		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
@@ -346,11 +367,18 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 	if len(choices) == 0 || len(actions) != len(choices) {
 		return "", refusef("the task's escalation waits on a person: this question is its question. Offer choices, and "+
 			"actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the "+
-			"escalation, as the banner does", listOr(offered))
+			"escalation, as the banner does, except a waiver or an acceptance of a failed test, which needs the person's own words",
+			listOr(offered))
 	}
+	reason := d.State.Escalation.Reason
 	for _, a := range actions {
 		if !slices.Contains(offered, a) {
 			return "", refusef("%q is not one of this escalation's actions: %s", a, listOr(offered))
+		}
+		// A pick carries no reason of the person's.
+		if NeedsReason(reason, a) {
+			return "", refusef("%q is not a choice: shipping past %s needs the person's own reason. They %s from the "+
+				"banner, or answer your question in their own words", a, strings.ReplaceAll(reason, "_", " "), a)
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
@@ -395,9 +423,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
 	var qID, prompt, answer, by, asker string
-	err = tx.QueryRow(ctx, `SELECT q.id, q.prompt, COALESCE(q.answer, ''), COALESCE(q.answered_by_person, ''), q.run_id
+	var rawOpts, rawAnswers []byte
+	err = tx.QueryRow(ctx, `SELECT q.id, q.prompt, COALESCE(q.answer, ''), COALESCE(q.answered_by_person, ''), q.run_id,
+			q.options, q.answers
 		FROM questions q WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered'
-		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker)
+		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker, &rawOpts, &rawAnswers)
 	if db.IsNotFound(err) {
 		return nil, refusef("the owner has not answered your question about this escalation: only a person decides it. "+
 			"Ask them, or end your turn; %s", banner)
@@ -422,6 +452,34 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if !slices.Contains(d.State.Escalation.Actions(), action) {
 		return nil, refusef("%q is not a way to go on after %s; one of %s", action, d.State.Escalation.Reason,
 			listOr(d.State.Escalation.Actions()))
+	}
+	if NeedsReason(d.State.Escalation.Reason, action) {
+		// The answer is the waiver's or acceptance's reason: the item's own
+		// text, never picks (one or several) nor a choice's label typed
+		// back; from the owner or, on an ownerless task, an organization
+		// admin (the banner's ownerOrAdmin).
+		var options []string
+		_ = json.Unmarshal(rawOpts, &options)
+		var items []ItemAnswer
+		_ = json.Unmarshal(rawAnswers, &items)
+		words := answer
+		if len(items) > 0 {
+			words = items[0].Text
+		}
+		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
+			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
+				"they say why in their own words, or decide on the banner", qID, action)
+		}
+		if owner == "" {
+			var admin bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND role = 'admin'
+				AND removed_at IS NULL)`, by).Scan(&admin); err != nil {
+				return nil, err
+			}
+			if !admin {
+				return nil, refusef("only the task's owner or an organisation admin can %s this; %s", action, banner)
+			}
+		}
 	}
 	err = DecideEscalationTx(ctx, tx, ref.Org, ref.TaskID, EscalationDecision{Action: action,
 		Note:      escalationNote(prompt, answer, note),

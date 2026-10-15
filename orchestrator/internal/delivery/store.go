@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -426,11 +427,27 @@ func nonNilMap(m map[string]string) map[string]string {
 // afresh; what an earlier attempt's reviewers found stays with it.
 const thisAttempt = `($2 = 0 OR EXISTS (SELECT 1 FROM runs fr WHERE fr.id = review_findings.run_id AND fr.attempt = $2))`
 
+// fromReview (SQL, over review_findings): a finding a reviewer raised, not
+// the tester. The review loop and its reviewers weigh only these; the
+// tester's are its own to judge, at the next test (testerFindings).
+const fromReview = `NOT EXISTS (SELECT 1 FROM runs tr WHERE tr.id = review_findings.run_id AND tr.phase = 'test')`
+
+// Findings is the review loop's findings: a reviewer's, of this attempt.
 func (s *Store) Findings(ctx context.Context, org string, st *State) ([]FindingState, error) {
+	return s.findings(ctx, org, st, fromReview)
+}
+
+// FixFindings is every finding of this attempt a fix may be sent: a
+// reviewer's and the tester's.
+func (s *Store) FixFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
+	return s.findings(ctx, org, st, "true")
+}
+
+func (s *Store) findings(ctx context.Context, org string, st *State, which string) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts FROM review_findings
-			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
+			WHERE task_id = $1 AND `+thisAttempt+` AND `+which+` ORDER BY created_at`, st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -446,18 +463,19 @@ func (s *Store) AcceptFindings(ctx context.Context, org string, st *State) error
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted',
 			resolution_note = 'accepted by a person', updated_at = now()
-			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt, st.TaskID, st.Attempt)
+			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND `+fromReview, st.TaskID, st.Attempt)
 		return err
 	})
 }
 
 // AttemptedFindings is, per category, the open findings a fix has been
-// sent — what the next reviewer of that category is asked to judge.
+// sent — what the next reviewer of that category is asked to judge. Never
+// the tester's: the next test judges those.
 func (s *Store) AttemptedFindings(ctx context.Context, org string, st *State) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
-			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 AND `+thisAttempt+` ORDER BY created_at`,
+			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 AND `+thisAttempt+` AND `+fromReview+` ORDER BY created_at`,
 			st.TaskID, st.Attempt)
 		if err != nil {
 			return err
@@ -926,6 +944,8 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 	var criteria []string
 	var findings []struct{ Category, Severity, Status, Title string }
 	var reviewers int
+	var verified *prVerification
+	var link string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, taskID).
@@ -941,11 +961,37 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 		if findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, Severity, Status, Title string }]); err != nil {
 			return err
 		}
+		if verified, err = latestVerification(ctx, tx, st); err != nil {
+			return err
+		}
+		if link, err = taskLink(ctx, tx, taskID); err != nil {
+			return err
+		}
 		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
 			WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
 			taskID, st.Attempt).Scan(&reviewers)
 	})
-	return title, prBody(goal, criteria, findings, reviewers), err
+	body := prBody(goal, criteria, findings, reviewers)
+	if v := verificationSection(verified, st.Heads, link); v != "" {
+		// Before the factory's sign-off line.
+		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
+		body = body[:i] + v + "\n\n" + body[i:]
+	}
+	return title, body, err
+}
+
+// taskLink is the task's page in dude, where its evidence is: on the
+// public address the organization's webhooks were registered at, "" when
+// dude does not know it.
+func taskLink(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	var base, slug string
+	err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT public_url FROM forge_credentials
+			WHERE public_url IS NOT NULL ORDER BY public_url LIMIT 1), ''), o.slug
+		FROM tasks t JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, taskID).Scan(&base, &slug)
+	if err != nil || base == "" {
+		return "", err
+	}
+	return strings.TrimRight(base, "/") + "/#/o/" + url.PathEscape(slug) + "/task/" + url.PathEscape(taskID), nil
 }
 
 func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *forge.GitHub, repo Repository,

@@ -31,6 +31,7 @@ import type {
   Escalation,
   EscalationAction,
   Finding,
+  Verification,
   RecoverAction,
   RecoveryOptions,
   Repository,
@@ -101,10 +102,13 @@ import type { ServerLogLine } from "@dude/design-system";
 // ---------------------------------------------------------------------------
 
 export type {
+  CriterionVerdict,
   Epic,
   Escalation,
   EscalationAction,
   Finding,
+  Verification,
+  VerdictStatus,
   RecoverAction,
   RecoveryOptions,
   Person,
@@ -704,6 +708,11 @@ export class ApiClient {
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
+  }
+
+  /** Each test's verdict per acceptance criterion, the latest first. */
+  listVerification(taskId: string): Promise<{ verifications: Verification[] }> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/verification`);
   }
 
   forgeConnection(): Promise<ForgeConnection> {

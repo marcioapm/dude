@@ -445,7 +445,7 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		if len(args) != 1 {
-			return errors.New("usage: dude escalation decide retry|accept|resume|done|wait|stop [--note N]")
+			return errors.New("usage: dude escalation decide retry|accept|waive|resume|done|wait|stop [--note N]")
 		}
 		return show(out, *asJSON, call("decide_escalation", map[string]any{"action": args[0], "note": *note}))
 	case "finding dismiss":
