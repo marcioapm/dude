@@ -424,15 +424,15 @@ class FakeGitHub:
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
     def open_pull(self, head: str, base: str = "main", title: str | None = None, author: str = "gus",
-                  head_repo: str | None = None) -> str:
+                  head_repo: str | None = None, draft: bool = False) -> str:
         """A person's pull request from a new branch off base, opened before
         dude was watching (no webhook); its head commit. head_repo names a
-        fork's repository its head is in."""
+        fork's repository its head is in; draft opens it as a draft."""
         self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha(base))
         sha = self.commit(head, f"work on {head}")
         with self._lock:
             number = len(self.pulls) + 1
-            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body="", draft=False,
+            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body="", draft=draft,
                                              head_repo=head_repo, author=author)
         return sha
 

@@ -1443,6 +1443,12 @@ here.
   it to Changes it, or start from New work."). Once delivery has started
   the fieldset is disabled, its hint "Delivery has started: where it
   started from is fixed.", and the saved source shown as found.
+  Under what dude found, a `ChoiceList` "What dude does first": **Continue
+  the work** ("An implementer builds on it first, then review.") or
+  **Review it as is** ("Straight to review: nothing is implemented
+  first."), pre-selected from what the source says (a draft pull request or
+  a branch continues, a pull request marked ready is reviewed); started, it
+  shows the saved choice and does not change.
 
 ### Markdown
 
@@ -2470,6 +2476,10 @@ skipped. The pull request step of a pull request it took over reads
 adopted branch's pull request, once opened, is the ordinary step. That
 pull request's `PullRequestPanel` carries, as its `note`, "Existing pull
 request: dude pushes to it and opened none", above why merge waits.
+Starts from ends with the saved choice: "· Continue the work" or "· Review
+it as is". Work to continue keeps its Implement step, as new work does; an
+implementer that committed nothing on it reads "Implement · nothing to add",
+an ordinary completed step, and review follows on the unchanged head.
 
 ## What is deliberately not here
 

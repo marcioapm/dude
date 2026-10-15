@@ -51,6 +51,9 @@ const (
 	// review from whoever had reviewed an older head (rerequestReviews).
 	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
 	EvGitCommitCreated             = "git.commit_created"
+	// An implementer on work to continue committed nothing: the goal was
+	// met already, and the work is reviewed on its unchanged head. On the Run.
+	EvNothingToAdd = "run.nothing_to_add"
 )
 
 // Store is the delivery workflow's side effects. Each is one durable action;

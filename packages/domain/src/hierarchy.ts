@@ -47,7 +47,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet", "fake/done"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -283,18 +283,29 @@ export type TaskRepository = z.infer<typeof taskRepositorySchema>;
  * it. A branch's `base` is what its pull request will merge into, the
  * repository's default branch when omitted; a pull request's head and base
  * are GitHub's.
+ *
+ * `mode` is what dude does first: `continue` (an implementer carries the
+ * work on, then the review loop) or `review` (the review loop at once).
+ * Omitted on a new source, it is what the source says: a draft pull
+ * request or a branch continues, a pull request marked ready is reviewed;
+ * omitted on a saved one, it stays as saved.
  */
+export const taskSourceModeSchema = z.enum(["continue", "review"]);
+export type TaskSourceMode = z.infer<typeof taskSourceModeSchema>;
+
 export const taskSourceInputSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("pr"),
     repositoryId: z.string().min(1),
     pullRequest: z.string().trim().min(1).max(500),
+    mode: taskSourceModeSchema.optional(),
   }).strict(),
   z.object({
     kind: z.literal("branch"),
     repositoryId: z.string().min(1),
     branch: z.string().trim().min(1).max(255),
     base: z.string().trim().min(1).max(255).optional(),
+    mode: taskSourceModeSchema.optional(),
   }).strict(),
 ]);
 export type TaskSourceInput = z.infer<typeof taskSourceInputSchema>;
@@ -309,6 +320,7 @@ export const taskSourceSchema = z.object({
   title: z.string().optional(),
   headBranch: z.string(),
   baseBranch: z.string(),
+  mode: taskSourceModeSchema,
 });
 export type TaskSource = z.infer<typeof taskSourceSchema>;
 

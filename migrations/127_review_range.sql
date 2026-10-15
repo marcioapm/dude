@@ -1,4 +1,4 @@
--- 124_review_range.sql — a review Run limited to a range of commits
+-- 127_review_range.sql — a review Run limited to a range of commits
 -- (delivery.ReviewRange): what the simplifier changed, or a fix for an open
 -- pull request's feedback. `of` says which (`simplify`, `pull_request_fix`)
 -- and `base` is the commit per repository the range starts after; the

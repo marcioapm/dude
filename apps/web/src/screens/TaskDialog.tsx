@@ -156,7 +156,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const sourceFixed = existing?.fixed != null;
   const sourceCheck = useSourceCheck(client, projectId, source, created ?? existing?.id, sourceFixed || choices === null);
   const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
-  const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== JSON.stringify(sourceInput(saved) ?? null);
+  const sourceChanged = draft !== null && JSON.stringify(sourceInput(source, true) ?? null) !== JSON.stringify(sourceInput(saved, true) ?? null);
   // New work is always fine; existing work only once dude has found it, in a
   // repository the task changes (one set to Reads it is not saved as its source).
   const sourceReady = sourceFixed || source.from === "new"
@@ -300,7 +300,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       if (existing?.fixed !== "repositories") fields.repositories = choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const }));
       // Sent when it is new, or changed: saving it unchanged asks GitHub nothing. Once created, a retry is
       // an edit of what the POST saved: New work is sent as null, so a source saved by then is cleared.
-      if (existing ? sourceChanged : created !== null || source.from !== "new") fields.source = sourceInput(source) ?? null;
+      if (existing ? sourceChanged : created !== null || source.from !== "new") fields.source = sourceInput(source, true) ?? null;
     }
     let id = existing?.id ?? created ?? "";
     void save(

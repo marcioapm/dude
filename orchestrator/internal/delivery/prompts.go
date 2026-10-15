@@ -64,6 +64,9 @@ type PromptInput struct {
 	// unresolved threads, changes requested and red checks are the
 	// reviewers' context.
 	Adopted *AdoptedContext
+	// Implement phase of a task that took over unfinished work: the work
+	// it carries on. nil for new work.
+	Continues *Source
 	// What the task's conductor asked of this Run, when it started it.
 	ConductorNote string
 	// Why this Run replaces one restarted in its step (RestartRunTx).
@@ -729,6 +732,9 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add(lead...)
+		if in.Continues != nil {
+			add(continueNote(in.Continues))
+		}
 		add(implementContract, commitNote)
 		add(in.task())
 		add(in.ask()...)

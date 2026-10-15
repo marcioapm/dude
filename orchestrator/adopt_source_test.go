@@ -56,6 +56,30 @@ func TestASourceIsResolvedFromGitHub(t *testing.T) {
 	}
 }
 
+// What a source says decides what dude does first by default: a pull
+// request marked ready is reviewed as it is; a draft, or a bare branch, is
+// unfinished work an implementer carries on.
+func TestASourcesDefaultModeIsWhatItSays(t *testing.T) {
+	w := newWorld(t)
+	ready := w.gh.OpenAsPerson("alice", "feature/ready", "main", "Ready")
+	draft := w.gh.OpenAsPerson("alice", "feature/draft", "main", "Draft")
+	pr := w.gh.Pull(draft)
+	w.gh.Set(func(*fakegithub.Server) { pr.Draft = true })
+	w.gh.Branch("feature/bare", "main", "Bare")
+	for _, c := range []struct {
+		source map[string]any
+		mode   string
+	}{
+		{map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(ready)}, delivery.ModeReview},
+		{map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(draft)}, delivery.ModeContinue},
+		{map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "feature/bare"}, delivery.ModeContinue},
+	} {
+		if status, out := w.checkSource(c.source); status != http.StatusOK || out["mode"] != c.mode {
+			t.Errorf("%v: %d %v, want mode %s", c.source, status, out, c.mode)
+		}
+	}
+}
+
 // Each rule a source can break is refused with its own reason, before
 // anything is kept.
 func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {

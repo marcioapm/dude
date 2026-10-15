@@ -20,19 +20,165 @@ import (
 // what the backend checked) and starts its delivery through the API.
 func (w *world) adopting(kind string, number int, head, base string) string {
 	w.t.Helper()
+	return w.startDelivery(w.adopted(kind, number, head, base, delivery.ModeReview))
+}
+
+// startDelivery starts the task's delivery through the API.
+func (w *world) startDelivery(wi string) string {
+	w.t.Helper()
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		w.t.Fatalf("deliver: %d %v", status, body)
+	}
+	return wi
+}
+
+// implementerPrompt waits for the task's implementer on lux: its prompt.
+func (w *world) implementerPrompt(wi string) string {
+	w.t.Helper()
+	var impl string
+	w.until("the implementer submitted", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
+		return impl != "" && w.promptOf(impl) != ""
+	})
+	return w.promptOf(impl)
+}
+
+// adopted makes a task that starts from source in mode, not started.
+func (w *world) adopted(kind string, number int, head, base, mode string) string {
+	w.t.Helper()
 	wi := w.task()
 	var n any
 	if kind == "pr" {
 		n = number
 	}
-	mustExec(w.t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch)
-		VALUES ($1, $2, $3, $4, $5, 'Taken over', $6, $7)`, wi, w.org, w.repoID, kind, n, head, base)
+	mustExec(w.t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch, mode)
+		VALUES ($1, $2, $3, $4, $5, 'Taken over', $6, $7, $8)`, wi, w.org, w.repoID, kind, n, head, base, mode)
 	mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
 		w.org, wi, w.repoID)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
-		w.t.Fatalf("deliver: %d %v", status, body)
-	}
 	return wi
+}
+
+// A draft pull request to continue is taken over as one to review is
+// (recorded, its feedback read), then an implementer told it carries
+// someone's work on builds on its head before the review loop; the
+// implementer's commit lands on the same branch, over the person's.
+func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
+	start := w.gh.SHA("feature/half")
+	w.gh.Comment(n, "jerv", "Still needs the farewell.")
+	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
+	w.until("waiting on the pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
+	})
+	got := w.phasesRun(wi)
+	if len(got) < 2 || got[0] != "implement" || got[1] != "review" {
+		t.Fatalf("phases %v, want implement then review", got)
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND adopted AND number = $2`, wi, n); n != 1 {
+		t.Fatalf("adopted pull request recorded %d times", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events e WHERE e.task_id = $1 AND e.event_type = 'pull_request.commented'
+		AND e.occurred_at <= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'implement')`, wi); n != 1 {
+		t.Fatalf("existing feedback recorded before the implementer: %d", n)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Fatalf("%d pull requests, want the one taken over", len(w.gh.Pulls()))
+	}
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", start, "refs/heads/feature/half").CombinedOutput(); err != nil {
+		t.Fatalf("the person's commit %s is not under feature/half's head: %v %s", start, err, out)
+	}
+	if w.gh.SHA("feature/half") == start {
+		t.Fatal("nothing was pushed onto the adopted branch")
+	}
+}
+
+// The implementer on work to continue is told whose work it is, and that
+// committing nothing says the goal is met and tested, so the two never ask
+// for opposite things; one on work to review
+// is never started, and one on new work is told neither.
+func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testing.T) {
+	w := newWorld(t)
+	// A model of its own: the scripted agent's prompt is its script.
+	w.onModel("implementer", "llm-impl")
+	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
+	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
+	fresh := w.task()
+	w.deliver(fresh)
+	want := "This is someone's work in progress on pull request #1 (`feature/half` in target), based on `main`"
+	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "meet the testing requirement below; if that needs no change, commit nothing and say so") ||
+		!strings.Contains(p, "add a test for each acceptance criterion that can be tested") {
+		t.Fatalf("implementer prompt does not say it continues someone's work:\n%s", p)
+	}
+	if p := w.implementerPrompt(fresh); strings.Contains(p, "Work in progress") {
+		t.Fatalf("new work's implementer told it continues someone's:\n%s", p)
+	}
+}
+
+// Work saved to review as it is that the conductor sends to an implementer
+// anyway (Talk it through, after adoption) is not briefed as work to continue.
+func TestAnImplementerTheConductorStartsOnWorkToReviewIsNotToldToContinueIt(t *testing.T) {
+	w := conducting(t)
+	w.onModel("implementer", "llm-impl")
+	w.gh.Branch("feature/review", "main", "Ready as it is")
+	wi := w.adopted("branch", 0, "feature/review", "main", delivery.ModeReview)
+	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 || out["decider"] != "conductor" {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("the adopted work's decision", func() bool { return w.decisionAt(wi) == delivery.PointImplemented })
+	w.must(wi, "start_phase", `{"phase":"implement"}`)
+	if p := w.implementerPrompt(wi); strings.Contains(p, "## Work in progress") {
+		t.Fatalf("an implementer on work to review was told to continue it:\n%s", p)
+	}
+}
+
+// An implementer on work to continue that commits nothing says the goal
+// is met: the work goes to review on its unchanged head, said in the
+// ledger on that Run. Not an escalation, not a second implementer.
+func TestWorkToContinueWithNothingToAddIsReviewedAsItIs(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Reply: "The goal is met already; nothing to add."}
+		}
+		return scripted(spec)
+	}
+	n := w.gh.OpenAsPerson("alice", "feature/done", "main", "Already done")
+	start := w.gh.SHA("feature/done")
+	wi := w.startDelivery(w.adopted("pr", n, "feature/done", "main", delivery.ModeContinue))
+	w.until("the first review", func() bool { return w.phaseRuns(wi, "review") > 0 })
+	if got := w.phasesRun(wi); got[0] != "implement" || w.phaseRuns(wi, "implement") != 1 {
+		t.Fatalf("phases %v, want one implementer then review", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs r JOIN runs i ON i.id = r.parent_run_id
+		WHERE r.task_id = $1 AND r.phase = 'review' AND i.phase = 'implement' AND r.base_refs->>'target' = $2`, wi, start); n == 0 {
+		t.Fatalf("the first review is not on the unchanged head %s", start)
+	}
+	if n := w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+		WHERE e.task_id = $1 AND e.event_type = 'run.nothing_to_add' AND r.phase = 'implement'`, wi); n != 1 {
+		t.Fatalf("nothing to add recorded %d times on the implementer", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
+		t.Fatal("nothing to add escalated as no changes")
+	}
+}
+
+// Under the conductor, work to continue waits for its call at the start,
+// which may be the implementer or a review of the work as it is.
+func TestTheConductorStartsWorkToContinueWithAReviewIfItChooses(t *testing.T) {
+	w := conducting(t)
+	w.gh.Branch("feature/half", "main", "Half done")
+	wi := w.adopted("branch", 0, "feature/half", "main", delivery.ModeContinue)
+	w.talk(wi)
+	if got := w.phasesRun(wi); len(got) != 0 {
+		t.Fatalf("phases before the conductor's call: %v", got)
+	}
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review", func() bool { return w.phaseRuns(wi, "review") == 1 })
+	if w.phaseRuns(wi, "implement") != 0 {
+		t.Fatal("an implementer ran though the conductor chose review")
+	}
 }
 
 func TestAnAdoptedSourceChangedBeforeExecutionCannotRun(t *testing.T) {

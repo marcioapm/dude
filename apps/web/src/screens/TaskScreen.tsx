@@ -390,6 +390,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Each Run's run.created payload: what it was started for.
   const createdFor = useMemo(() => new Map(events.filter((e) => e.eventType === "run.created" && e.runId)
     .map((e) => [e.runId as string, e.payload])), [events]);
+  // Implementers on work to continue that found it done already.
+  const nothingAdded = useMemo(() => new Set(events.filter((e) => e.eventType === EventTypes.RunNothingToAdd && e.runId)
+    .map((e) => e.runId as string)), [events]);
 
   // How it stopped, read from the runs and the ledger once per change of them.
   const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
@@ -501,10 +504,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const source = item.source ?? null;
   // An adopted branch reviewed under Deliver waits on its owner's Open or Draft.
   const openOrDraft = !earlier && source !== null && heldForOpenOrDraft(item);
-  // Existing work starts at review: no implementer is promised.
+  // Existing work to review starts at review: no implementer is promised. Work to continue gets one first.
+  const continues = source?.mode === "continue";
   const deliverSteps = source === null ? "an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request"
-    : source.kind === "pr" ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
-    : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft";
+    : (continues ? "an implementer on the existing work, " : "") + (source.kind === "pr"
+      ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
+      : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft");
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -660,6 +665,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <StepList data-testid="pipeline">
                     {phases.map((run, index) => (
                       <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents, createdFor.get(run.id))}
+                        nothingAdded={nothingAdded.has(run.id)}
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
                     {prs.map((pr) => (
@@ -705,7 +711,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
                   // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
                   ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
-                    <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} /></span> }] : []),
+                    <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} />
+                    <span data-testid="task-source-mode-fact"> · {continues ? "Continue the work" : "Review it as is"}</span></span> }] : []),
                   // A task never started over names no attempt anywhere.
                   ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
                 ]} /></PageRailBlock>
@@ -1058,8 +1065,9 @@ export function prFeedbackReason(prEvents: readonly PersistedEvent[], at: string
   return author ? `for ${author}'s review` : "for the pull request's feedback";
 }
 
-function PhaseStep({ run, findings, plan, why, onOpen }: {
-  run: Run; findings: Finding[]; plan: { done: number; total: number; current: string | null } | undefined; why: string | undefined; onOpen: () => void;
+function PhaseStep({ run, findings, plan, why, nothingAdded, onOpen }: {
+  run: Run; findings: Finding[]; plan: { done: number; total: number; current: string | null } | undefined; why: string | undefined;
+  nothingAdded: boolean; onOpen: () => void;
 }) {
   const blocking = findings.filter((f) => f.severity === "blocking" || f.severity === "high");
   const heads = Object.entries(run.heads);
@@ -1076,7 +1084,8 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
       data-status={runStatusShown(run)}
       onOpen={onOpen}
       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={running} />}
-      label={runLabel(run)}
+      label={nothingAdded ? `${runLabel(run)} · nothing to add` : runLabel(run)}
+      data-nothing-added={nothingAdded || undefined}
       note={note}
       status={<StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" iconOnly={run.status === "completed"} />}
       meta={heads.length === 0 ? undefined : heads.length === 1 ? heads[0]![1].slice(0, 7) : `${heads.length} repos`}

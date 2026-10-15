@@ -20,7 +20,7 @@ import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { SOURCE_JSON, checkTaskSource, sameSource, setTaskSource, taskSourceInput } from "./taskSource.ts";
+import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, taskSourceInput } from "./taskSource.ts";
 import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
@@ -374,7 +374,10 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     });
     if (!stored) throw notFound(`task ${id} not found`);
     if (!sameSource(stored.source, sourceGiven)) {
-      source = sourceGiven ? await checkTaskSource(ctx, stored.projectId, sourceGiven, id) : null;
+      source = sourceGiven ? keepMode(stored.source, sourceGiven, await checkTaskSource(ctx, stored.projectId, sourceGiven, id)) : null;
+    } else if (stored.source && sourceGiven) {
+      // The same source in another mode: nothing to ask GitHub.
+      source = sourceMode(stored.source, sourceGiven) ?? undefined;
     }
   }
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {

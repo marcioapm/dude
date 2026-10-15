@@ -15,6 +15,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -555,11 +556,52 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if len(out.ChangedPaths) == 0 && st.Source.Continues() {
+		// Work to continue that already met its goal: reviewed as it is,
+		// on its unchanged head, by the reviewers its own changes pick.
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			// Once per Run: a replayed step finds it written.
+			var said bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2)`,
+				runID, EvNothingToAdd).Scan(&said); err != nil || said {
+				return err
+			}
+			_, err := ledger.Append(ctx, tx, ledger.Event{
+				Type: EvNothingToAdd, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID,
+				ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,
+				Payload: map[string]any{"heads": st.Heads},
+			})
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+		st.HeadRunID, st.PendingRunIDs = runID, nil
+		return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement")+" Nothing to add: the work it continues is reviewed as it is.")
+	}
 	if len(out.ChangedPaths) == 0 && (writable || !out.Published) {
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
 	}
+	if st.Source.Continues() {
+		// The review is of the whole work, the person's and the implementer's.
+		out.ChangedPaths = withPaths(out.ChangedPaths, st.ChangedPaths)
+	}
 	st.HeadRunID, st.Heads, st.ChangedPaths, st.PendingRunIDs = runID, out.advance(st.Heads), out.ChangedPaths, nil
 	return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement"))
+}
+
+// withPaths appends to paths each of more it lacks, once, keeping both orders.
+func withPaths(paths, more []string) []string {
+	seen := make(map[string]struct{}, len(paths)+len(more))
+	for _, p := range paths {
+		seen[p] = struct{}{}
+	}
+	for _, p := range more {
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			paths = append(paths, p)
+		}
+	}
+	return paths
 }
 
 // review fans reviewers out over the current head. Parallel Runs rather than

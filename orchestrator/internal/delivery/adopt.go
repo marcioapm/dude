@@ -14,11 +14,11 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// adopt starts a delivery that took over existing work: nothing to
-// implement, so it goes to review. Where the work is the task branch's
-// head as GitHub has it now; an adopted pull request is recorded as the
-// task's, so the pull request step opens none and its feedback loop
-// follows it.
+// adopt starts a delivery that took over existing work. Where the work is
+// the task branch's head as GitHub has it now; an adopted pull request is
+// recorded as the task's, so the pull request step opens none and its
+// feedback loop follows it. Then the source's mode: work to continue goes
+// to an implementer on that head, work to review as it is to review.
 func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
@@ -101,9 +101,22 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	for _, p := range changed {
 		st.ChangedPaths = append(st.ChangedPaths, repo.Name+"/"+p)
 	}
-	return w.next(ctx, sc, st, PointImplemented, "review",
-		fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch))
+	line := fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch)
+	if !src.Continues() {
+		return w.next(ctx, sc, st, PointImplemented, "review", line+" Saved as work to review as it is.")
+	}
+	// Work to continue: the implementer, which under the conductor is its
+	// call at the start, as for new work (or a review of it as it is).
+	if st.conducted() {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
+			return workflow.Result{}, err
+		}
+	}
+	return w.next(ctx, sc, st, PointStart, "implementRun", line+" Saved as work to continue: an implementer carries it on.")
 }
+
+// Continues says the work taken over goes to an implementer before review.
+func (s *Source) Continues() bool { return s != nil && s.Mode == ModeContinue }
 
 // adoptedPR and adoptedBranch say what existing work the delivery took over.
 func (st *State) adoptedPR() bool     { return st.Source != nil && st.Source.Kind == SourcePR }

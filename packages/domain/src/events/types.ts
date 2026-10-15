@@ -345,6 +345,12 @@ export const EventTypes = {
    */
   RunRestarted: "run.restarted",
   /**
+   * An implementer on work a task continues (a source in mode `continue`)
+   * finished committing nothing: the goal was met already, and the work is
+   * reviewed on its unchanged head. On the Run. Payload: `{ heads }`.
+   */
+  RunNothingToAdd: "run.nothing_to_add",
+  /**
    * A Run's checkout changed: its diff against the commit it started from,
    * read live or left by the beforeStop hook as it stopped. Payload: a
    * summary with no lines (`RunDiffSummary`); the lines are
