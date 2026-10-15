@@ -111,6 +111,28 @@ func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testi
 	}
 }
 
+// Work saved to review as it is that the conductor sends to an implementer
+// anyway (Talk it through, after adoption) is not briefed as work to continue.
+func TestAnImplementerTheConductorStartsOnWorkToReviewIsNotToldToContinueIt(t *testing.T) {
+	w := conducting(t)
+	w.onModel("implementer", "llm-impl")
+	w.gh.Branch("feature/review", "main", "Ready as it is")
+	wi := w.adopted("branch", 0, "feature/review", "main", delivery.ModeReview)
+	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 || out["decider"] != "conductor" {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("the adopted work's decision", func() bool { return w.decisionAt(wi) == delivery.PointImplemented })
+	w.must(wi, "start_phase", `{"phase":"implement"}`)
+	var impl string
+	w.until("the implementer submitted", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
+		return impl != "" && w.promptOf(impl) != ""
+	})
+	if p := w.promptOf(impl); strings.Contains(p, "## Work in progress") {
+		t.Fatalf("an implementer on work to review was told to continue it:\n%s", p)
+	}
+}
+
 // An implementer on work to continue that commits nothing says the goal
 // is met: the work goes to review on its unchanged head, said in the
 // ledger on that Run. Not an escalation, not a second implementer.
