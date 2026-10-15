@@ -33,6 +33,12 @@ def _open_pr(client: ApiClient, project: dict) -> tuple[dict, dict]:
     return task, pr
 
 
+def _until_fix_lands(client: ApiClient, task_id: str, fake_github: FakeGitHub, branch: str, before: str | None) -> None:
+    """A fix for the pull request is on it: its branch moved past `before`, and the task waits on people again."""
+    wait_until(lambda: fake_github.branch_sha(branch) != before
+               and client.get(f"/v1/tasks/{task_id}").json()["status"] == "review", timeout=120, message="the fix did not land")
+
+
 def test_the_pull_request_panel_shows_github_and_acts_on_it(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):
@@ -40,10 +46,12 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     task, pr = _open_pr(client, forge_project)
     n = pr["number"]
     # Cy asks for a change; a fixer answers it, and it lands.
+    opened_at = fake_github.branch_sha(pr["headBranch"])
     fake_github.review(n, "CHANGES_REQUESTED", "Please keep fetchRevenue.", reviewer="cy")
     wait_until(lambda: [r for r in client.task_runs(task["id"]) if r["phase"] == "fix" and r["status"] == "completed"
                         and r["createdAt"] > pr["createdAt"]], timeout=90, message="the change request was not fixed")
-    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60, message="the fix did not land")
+    # Landed: reviewed and tested on its candidate, then on the pull request.
+    _until_fix_lands(client, task["id"], fake_github, pr["headBranch"], opened_at)
     fake_github.commit("main", "Someone else's work")
     fake_github.set_unresolved(n, 2)
 
@@ -66,10 +74,11 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     expect(panel).to_contain_text("e2e (chrome)")
     expect(page.get_by_test_id("pr-merge")).to_be_disabled()
     expect(page.get_by_test_id("pr-blocked")).to_contain_text("e2e (chrome) failing")
+    updated_at = fake_github.branch_sha(pr["headBranch"])
     page.get_by_test_id("pr-rerun").click()
     wait_until(lambda: len(fake_github.jobs_rerun) == 1, timeout=10, message="Re-run failed did not reach GitHub")
     # The failure woke a fixer too: its fix lands before anything is merged.
-    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=90, message="the CI fix did not land")
+    _until_fix_lands(client, task["id"], fake_github, pr["headBranch"], updated_at)
 
     # Asking for a review: GitHub's suggestions first, then anyone by name.
     page.get_by_test_id("pr-request-review").click()
