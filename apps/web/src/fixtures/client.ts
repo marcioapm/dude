@@ -418,6 +418,10 @@ export class FixtureClient extends ApiClient {
   override recentPullRequests() {
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
   }
+  // No workflow waits in the mockups' world: the request is accepted and nothing changes.
+  override resolvePullRequestConflicts(id: string): ReturnType<ApiClient["resolvePullRequestConflicts"]> {
+    return Promise.resolve({ pullRequestId: id, action: "resolve-conflicts" });
+  }
   // The mockups' world has no brainstorm sessions; a test's client adds its own.
   override sessions(): Promise<SessionsList> {
     return Promise.resolve({ sessions: [], invitations: [], questions: [] });

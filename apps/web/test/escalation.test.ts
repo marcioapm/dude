@@ -54,6 +54,18 @@ describe("escalationWords", () => {
     expect(escalationWords({ reason: "pr_loop_exhausted", detail: { spent: ["web"], total: 5 }, at }).sentence)
       .toBe("The pull request in web has had 5 fixes, the most the organisation allows for one.");
   });
+
+  test("a failed integration says what it tried, why it stopped, and links its Run only", () => {
+    const tried = escalationWords({ reason: "pull_request_conflict", at,
+      detail: { repo: "web", number: 4, base: "release", integration: true, runId: "run_9", error: "still conflicting after integration" } });
+    expect(tried.short).toBe("Could not resolve conflicts");
+    expect(tried.sentence).toBe("Pull request web #4 still conflicts with `release`: dude's attempt to merge it in did not finish (still conflicting after integration). Try again, or resolve it yourself and wait on it again.");
+    expect(tried.runId).toBe("run_9");
+    const beforePR = escalationWords({ reason: "pull_request_conflict", at,
+      detail: { repo: "web", number: 0, base: "main", integration: true, error: "this head/base pair was already attempted" } });
+    expect(beforePR.sentence).toStartWith("The branch in web still conflicts with `main`");
+    expect(beforePR.runId).toBeNull();
+  });
 });
 
 test("shortError keeps the first line, and cuts a long one", () => {

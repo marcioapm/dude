@@ -38,6 +38,67 @@ describe("pull request actions", () => {
   });
 });
 
+describe("resolving conflicts", () => {
+  const conflicting = pr({ mergeable: "conflicting", behindBy: 2, display: "conflict" });
+  const panel = async (client: ApiClient, changed: () => void) => {
+    const { mount } = await import("./dom.ts");
+    return mount(
+      <PullRequestActions client={client} pr={conflicting} defaultMethod="squash" onChanged={changed}>
+        {({ facts, note }) => <div>{facts.base}{note}</div>}
+      </PullRequestActions>,
+    );
+  };
+
+  test("a clean pull request offers no resolve, and a conflicting one no Update branch", () => {
+    expect(render(pr({ behindBy: 2 }))).not.toContain("pr-resolve-conflicts");
+    const h = renderToStaticMarkup(
+      <PullRequestActions client={{} as ApiClient} pr={conflicting} defaultMethod="squash" onChanged={() => {}}>
+        {({ facts }) => <div>{facts.base}</div>}
+      </PullRequestActions>,
+    );
+    expect(h).toContain('data-testid="pr-resolve-conflicts"');
+    expect(h).not.toContain("pr-update-branch");
+  });
+
+  test("asks the workflow once, disabled while asking, and reads the pull request back", async () => {
+    const { click, settle } = await import("./dom.ts");
+    let release!: () => void;
+    const asked: string[] = [];
+    let changed = 0;
+    const client = {
+      resolvePullRequestConflicts: (id: string) => {
+        asked.push(id);
+        return new Promise<void>((r) => { release = r; });
+      },
+    } as unknown as ApiClient;
+    const { container, unmount } = await panel(client, () => void changed++);
+    const button = () => container.querySelector<HTMLButtonElement>('[data-testid="pr-resolve-conflicts"]')!;
+    await click(button());
+    expect(button().disabled).toBe(true);
+    expect(button().textContent).toBe("Asking…");
+    release();
+    await settle();
+    expect(asked).toEqual(["pr_1"]);
+    expect(changed).toBe(1);
+    expect(button().disabled).toBe(false);
+    await unmount();
+  });
+
+  test("a refusal is shown in the server's words", async () => {
+    const { click, settle } = await import("./dom.ts");
+    const { ApiError } = await import("../src/api/client.ts");
+    const client = {
+      resolvePullRequestConflicts: () =>
+        Promise.reject(new ApiError(409, "conflict", "dude is already working on the task; try again once it waits on the pull request")),
+    } as unknown as ApiClient;
+    const { container, unmount } = await panel(client, () => {});
+    await click(container.querySelector('[data-testid="pr-resolve-conflicts"]')!);
+    await settle();
+    expect(container.querySelector('[data-testid="pr-problem"]')?.textContent).toContain("already working on the task");
+    await unmount();
+  });
+});
+
 describe("asking for a review", () => {
   test("picks from GitHub's suggestions and a search, and asks for them together", async () => {
     const { act, click, mount, settle, type } = await import("./dom.ts");

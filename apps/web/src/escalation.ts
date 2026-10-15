@@ -121,9 +121,19 @@ export function escalationWords(e: Escalation): EscalationWords {
     }
     case "pull_request_conflict": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
+      if (d.integration === true) {
+        const base = typeof d.base === "string" && d.base ? `\`${d.base}\`` : "its base";
+        const what = num("number") ? `Pull request ${which}` : `The branch in ${typeof d.repo === "string" ? d.repo : "the repository"}`;
+        const why = typeof d.error === "string" && d.error ? ` (${shortError(d.error)})` : "";
+        return {
+          short: "Could not resolve conflicts",
+          sentence: `${what} still conflicts with ${base}: dude's attempt to merge it in did not finish${why}. Try again, or resolve it yourself and wait on it again.`,
+          runId,
+        };
+      }
       return {
         short: "A pull request conflicts",
-        sentence: `Pull request ${which} conflicts with its base. Resolve it on GitHub (or update the branch), then wait on it again.`,
+        sentence: `Pull request ${which} conflicts with its base. Resolve it on GitHub, or ask dude to resolve it, then wait on it again.`,
         runId,
       };
     }

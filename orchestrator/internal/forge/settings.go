@@ -26,8 +26,9 @@ type Settings struct {
 	ReviewLogins      []string `json:"reviewLogins"`
 	// How dude's Merge button merges: squash, merge or rebase.
 	MergeMethod string `json:"mergeMethod"`
-	// When main moves ahead of a pull request: "update" its branch when it
-	// merges cleanly (else ask), or only "tell" the task's people.
+	// When a task's base moves ahead of its branch: "update" merges it in
+	// (an integration Run resolves conflicts, reviewed and tested), or only
+	// "tell" the task's people, who can still ask for the integration.
 	WhenBehind string `json:"whenBehind"`
 	// Fix rounds a pull request may have in all, across review rounds,
 	// before its owner decides how it goes on; 0, no limit but each

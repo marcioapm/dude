@@ -1,7 +1,8 @@
 /**
  * What a person can do to a pull request from dude, as GitHub's own page
  * would let them: merge it (by the organization's method, or another),
- * update its branch, re-run its failed checks, ask someone to review. Each
+ * update its branch, re-run its failed checks, ask someone to review — and
+ * ask dude to resolve its conflicts with its base. Each
  * goes to GitHub through the orchestrator, which records who asked and
  * reads the pull request back.
  *
@@ -82,13 +83,23 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
       </Button>
     );
   }
-  // GitHub cannot update a branch that conflicts: that one is a person's to resolve.
+  // GitHub cannot update a branch that conflicts: dude's integration Run
+  // resolves it instead, reviewed and tested before it is pushed.
   if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
     facts.base = (
       <Button size="sm" disabled={busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
         data-testid="pr-update-branch">
         {busy === "update" ? "Updating…" : "Update branch"}
       </Button>
+    );
+  } else if (pr.mergeable === "conflicting") {
+    facts.base = (
+      <Tooltip content="An agent merges the base into the branch and resolves the conflicts; dude reviews and tests it before pushing">
+        <Button size="sm" disabled={busy !== null} onClick={() => void act("resolve", () => client.resolvePullRequestConflicts(pr.id))}
+          data-testid="pr-resolve-conflicts">
+          {busy === "resolve" ? "Asking…" : "Resolve conflicts"}
+        </Button>
+      </Tooltip>
     );
   }
   if (pr.unresolvedThreads > 0) {

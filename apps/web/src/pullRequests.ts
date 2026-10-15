@@ -105,13 +105,23 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       if (p.to === "clean" && p.from !== "unknown") return system(`${pr} is up to date with its base`);
       return null;
     case "pull_request.action": {
+      const base = p.base ? `\`${str(p.base)}\`` : "its base";
+      const target = p.number ? pr : `the branch in ${str(p.repo)}`;
       const act = {
         merge: `merged ${pr}${p.method ? ` (${str(p.method)})` : ""}`,
         "update-branch": `updated ${pr}'s branch`,
         "rerun-failed": `re-ran ${plural(Number(p.rerun ?? 0), "failed check")} on ${pr}`,
         reviewers: `asked ${Array.isArray(p.logins) ? (p.logins as string[]).join(" and ") : "someone"} to review ${pr}`,
+        "resolve-conflicts": `asked dude to resolve the conflicts on ${pr}`,
+        "merge-base": `merged ${base} into ${target} on GitHub; it is tested again`,
+        "integration-started": `started resolving ${target}'s conflicts with ${base}`,
+        "integration-completed": `resolved ${target}'s conflicts with ${base}, reviewed and tested`,
+        "integration-refused": `could not resolve ${target}'s conflicts with ${base}${p.error ? `: ${str(p.error)}` : ""}`,
       }[str(p.action)];
-      return act ? { who: null, actorId: e.actor.id, text: act } : null;
+      if (!act) return null;
+      // dude's own: the workflow merged or resolved; a person's otherwise.
+      if (e.actor.type === "system") return { ...system(act), byDude: true };
+      return { who: null, actorId: e.actor.id, text: act };
     }
     case "pull_request.merged":
       return system(`${pr} was merged`);

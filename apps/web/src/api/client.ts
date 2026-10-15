@@ -796,6 +796,11 @@ export class ApiClient {
     return this.#request("POST", `/v1/pull-requests/${id}/rerun-failed`, {});
   }
 
+  /** Ask the task's workflow to merge the base in and resolve the conflicts. */
+  resolvePullRequestConflicts(id: string): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/resolve-conflicts`, {});
+  }
+
   requestReview(id: string, logins: string[]): Promise<unknown> {
     return this.#request("POST", `/v1/pull-requests/${id}/reviewers`, { logins });
   }
