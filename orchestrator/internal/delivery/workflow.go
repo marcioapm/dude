@@ -1364,7 +1364,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		// The last round's candidate branch, if a person's push left it
 		// off the pull request's line, would refuse this fix's move.
 		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 	} else if existing != "" {
 		// A replay: the fix started from the heads it was created with.
@@ -1543,6 +1543,20 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	for _, p := range states {
+		if p.State == forge.StateMerged || p.State == forge.StateClosed {
+			// Never moved, and the delivery stands where it ended:
+			// candidateMoved's pullRequestEnded weighs it.
+			delete(slugs, p.Repo)
+			if from, ok := c.From[p.Repo]; ok {
+				st.Heads[p.Repo] = from
+			}
+		}
+	}
 	// Every branch read before any moves: one someone pushed to refuses
 	// the promotion with nothing moved. One at the candidate's head was
 	// moved by an earlier run of this step.
@@ -1553,7 +1567,7 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 			continue
 		}
 		if at[repo], err = gh.BranchSHA(ctx, slugs[repo], st.Branch); err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 		if at[repo] == st.Heads[repo] {
 			moved[repo] = at[repo]
@@ -1576,7 +1590,7 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 			return w.candidateRefused(ctx, sc, st, repo, found, moved)
 		}
 		if err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 		moved[repo] = to
 	}
@@ -1589,6 +1603,18 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	}
 	return w.candidateMoved(ctx, sc, st, moved)
 }
+
+// forgeWait is err as a workflow.Wait when GitHub may answer later
+// (rate-limited, down, unreachable): the step runs again after GitHub's
+// Retry-After, at least forgeWaitMin, its attempt not counted.
+func forgeWait(err error) error {
+	if !forge.Transient(err) {
+		return err
+	}
+	return workflow.Wait{After: max(forge.RetryAfter(err), forgeWaitMin), Why: err.Error()}
+}
+
+const forgeWaitMin = 5 * time.Second
 
 // candidateRefused stops for a person: the pull request's branch in repo
 // is at found, not where the fix started, and is not moved. moved are the
@@ -1621,10 +1647,10 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 			return workflow.Result{}, err
 		}
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, moved); err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 	}
 	st.Candidate = nil
@@ -1666,7 +1692,7 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		// What they say about review and test is about the commit they
 		// show now.
 		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, err
+			return workflow.Result{}, forgeWait(err)
 		}
 	}
 	// The fast-forward updated the PRs; they are back with the reviewers.

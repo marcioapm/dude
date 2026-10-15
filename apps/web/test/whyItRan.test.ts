@@ -80,6 +80,12 @@ test("adopted pull request: the internal review's fix is for the review, the pul
   expect(whyItRan(loop, 4, phases, [], prEvents, { phase: "fix", prFeedbackCount: 1 })).toBe("for reviewer-acme's review");
 });
 
+test("adopted pull request: its first test, with no feedback fix before it, is not called a test of the pull request's fix", () => {
+  const prEvents = [eventAt("pull_request.opened", "2026-10-15T10:00:00Z")];
+  const phases = [runAt("r1", "review", "2026-10-15T10:00:02Z"), runAt("r2", "test", "2026-10-15T10:00:10Z")];
+  expect(whyItRan(phases[1]!, 1, phases, [], prEvents)).toBeUndefined();
+});
+
 test("new work: a fix before its pull request is for the review, one after it for the pull request's feedback", () => {
   const prEvents = [eventAt("pull_request.opened", "2026-10-15T10:05:00Z"),
     eventAt("pull_request.reviewed", "2026-10-15T10:06:00Z", { author: "ana" })];

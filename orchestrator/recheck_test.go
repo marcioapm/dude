@@ -702,3 +702,61 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 		t.Errorf("the finding was sent to %d fixes, want both after it was raised", n)
 	}
 }
+
+// One of two pull requests is merged while their fix is checked: the
+// other takes the fix, the merged one's branch is never moved, and nobody
+// is told someone pushed to it.
+func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
+	w := newPRFixWorldIn(t, true)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "fix" && n == 1 {
+			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
+		}
+	}
+	w.onTest = func() { w.web.Merge(1); w.sync() }
+	w.comment("Please rename the greeting.")
+	w.until("the fix on target's pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+	if at := w.web.SHA(w.branch); at != w.webBefore {
+		t.Errorf("the merged pull request's branch moved from %s to %s", w.webBefore, at)
+	}
+	if r := w.escalationReason(w.wi); r == delivery.ReasonPullRequestMoved {
+		t.Errorf("escalated %s for a merged pull request", r)
+	}
+	if n := len(w.web.Pulls()); n != 1 {
+		t.Errorf("%d pull requests in web, want the merged one alone", n)
+	}
+}
+
+// GitHub rate-limits the promotion's move: the step waits and moves the
+// branch after, without counting the refusal against its attempts.
+func TestARateLimitedPromotionWaitsAndMoves(t *testing.T) {
+	w := newPRFixWorld(t)
+	var limited atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && limited.Add(1) == 1 {
+				return http.StatusTooManyRequests
+			}
+			return 0
+		}
+	})
+	w.comment("Please rename the greeting.")
+	var attempt int
+	var waiting bool
+	settled := func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT attempt, wait_until > now() FROM workflow_runs WHERE task_id = $1`,
+			w.wi).Scan(&attempt, &waiting)
+		return attempt > 0 || waiting
+	}
+	w.until("the rate limit", func() bool { w.sync(); return limited.Load() >= 1 && settled() })
+	if attempt != 0 || !waiting {
+		t.Errorf("after a rate limit: attempt %d, waiting %v; want a wait, not a failure", attempt, waiting)
+	}
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+}

@@ -1005,7 +1005,12 @@ export function whyItRan(run: Run, index: number, phases: readonly Run[], findin
     return fix === "pull_request" ? prFeedbackReason(prEvents, run.createdAt) : fix === "test" ? "for the test" : "for the review";
   }
   if (run.phase === "review" && run.reviewOf) return REVIEW_OF[run.reviewOf];
-  if (run.phase === "test" && prOpenedBefore(run, prEvents)) return "of the pull request's fix";
+  if (run.phase === "test" && earlier.some((r) => r.attempt === run.attempt &&
+    (r.reviewOf === "pull_request_fix" || (r.phase === "fix" && fixFor(r, phases, findings, prEvents) === "pull_request")))) {
+    // An adopted pull request is recorded as opened before its first test:
+    // only a feedback fix before the test makes it one of that fix.
+    return "of the pull request's fix";
+  }
   if (run.phase === "review" && earlier.some((r) => r.phase === "fix")) {
     const found = findings.filter((f) => f.runId === run.id).length;
     return found === 0 ? "no findings" : undefined;
