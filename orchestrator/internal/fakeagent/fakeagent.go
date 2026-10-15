@@ -198,6 +198,9 @@ const (
 	TestUnverifiedModel = "fake/test-unverified"
 	// Finishes saying it tested, with no verdict at all.
 	TestSilentModel = "fake/test-silent"
+	// Fails criterion 1 as TestFailOnceModel does, then passes, never
+	// writing a finding or judging one: dude's own say why it failed.
+	TestFailQuietModel = "fake/test-fail-quiet"
 )
 
 // Evidence is what the scripted tester publishes for a pass.
@@ -258,6 +261,14 @@ func Tester(model string, criteria, fixes int) Step {
 			b.WriteString(FailingFinding)
 		}
 		b.WriteString("---\nverdicts:\n  F1: still\n")
+	case model == TestFailQuietModel && fixes < 2:
+		status = func(i int) string {
+			if i == 1 {
+				return "fail"
+			}
+			return "pass"
+		}
+	case model == TestFailQuietModel:
 	case model == TestBlockedModel:
 		status = func(int) string { return "blocked" }
 		b.WriteString(EnvironmentFinding)

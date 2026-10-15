@@ -50,5 +50,5 @@ ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check
   CHECK (model IN ('fake/scripted', 'fake/hang', 'fake/tools', 'fake/request', 'fake/wait', 'fake/live', 'fake/ask', 'fake/ask-several',
                    'fake/command', 'fake/stuck', 'fake/stall', 'fake/silent', 'fake/lookup', 'fake/subagent', 'fake/subagent-ask',
                    'fake/peer', 'fake/machine', 'fake/test-fail', 'fake/test-fail-once', 'fake/test-blocked',
-                   'fake/test-unverified', 'fake/test-silent')
+                   'fake/test-unverified', 'fake/test-silent', 'fake/test-fail-quiet')
          OR (length(model) BETWEEN 1 AND 200 AND model !~ '[[:space:]/]'));

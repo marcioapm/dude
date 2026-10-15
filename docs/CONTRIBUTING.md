@@ -487,10 +487,10 @@ plays every phase deterministically: the implementer commits, the reviewer
 raises one blocking finding unless the fixer's file is in its tree, the fixer
 and simplifier commit, and the tester passes every criterion with a published
 video (`fakeagent.Tester`; `fake/test-fail`, `fake/test-fail-once`,
-`fake/test-blocked`, `fake/test-unverified` and `fake/test-silent` play the
-gate's other outcomes). `fake/hang` never finishes its turn, for steering and
-pausing. The fake lux plays it directly; a real lux runs it as a lux-fake
-script.
+`fake/test-fail-quiet`, `fake/test-blocked`, `fake/test-unverified` and
+`fake/test-silent` play the gate's other outcomes). `fake/hang` never finishes
+its turn, for steering and pausing. The fake lux plays it directly; a real lux
+runs it as a lux-fake script.
 
 ### What CI runs
 

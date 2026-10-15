@@ -160,6 +160,34 @@ func TestACriterionThatKeepsFailingIsAPersonsToAccept(t *testing.T) {
 	if n := w.phaseRuns(wi, "test"); n != 3 {
 		t.Errorf("%d tests, want 3: the first and one after each of 2 fix rounds", n)
 	}
+	// One more fix round, sent the tester's finding again; failing still,
+	// it is back with the person.
+	var failing string
+	_ = w.owner.QueryRow(context.Background(), `SELECT f.id FROM review_findings f JOIN runs r ON r.id = f.run_id AND r.phase = 'test'
+		WHERE f.task_id = $1 AND f.title = 'Criterion 1 is not met'`, wi).Scan(&failing)
+	fixes, escalated := w.phaseRuns(wi, "fix"), w.count(`SELECT count(*) FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi)
+	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
+		t.Fatalf("the owner's retry: %d %v", code, body)
+	}
+	w.until("the gate to stop again", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+			AND payload->>'kind' = 'escalation'`, wi) == escalated+1 && w.taskStatus(wi) == "awaiting_input"
+	})
+	if n := w.phaseRuns(wi, "fix"); n != fixes+1 {
+		t.Errorf("%d fixes after the retry, want one more", n-fixes)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND $2 = ANY(finding_ids)
+		AND created_at = (SELECT max(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix')`, wi, failing); n != 1 {
+		t.Errorf("the retry's fix was not given the tester's finding %s\n%s", failing, w.describeRuns())
+	}
+	if r := w.escalationReason(wi); r != delivery.ReasonTestFailedCriteria {
+		t.Fatalf("escalated %q after the retry, want %s", r, delivery.ReasonTestFailedCriteria)
+	}
+	if n := w.count(`SELECT (payload->'detail'->>'rounds')::int FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi); n != delivery.MaxTestFixRounds+1 {
+		t.Errorf("escalated after %d test fix rounds, want the retry's counted: %d", n, delivery.MaxTestFixRounds+1)
+	}
 	if code, body := w.decide(owner, wi, "accept", "  "); code != 400 || !strings.Contains(errMessage(body), "needs a note") {
 		t.Fatalf("accept without a note: %d %v", code, body)
 	}
@@ -250,17 +278,10 @@ func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	}
 }
 
-// ownerOf is the task's owner's key.
-func (w *world) ownerOf(wi string) string {
-	var key string
-	_ = w.owner.QueryRow(context.Background(), `SELECT k.id FROM task_people tp JOIN api_keys k ON k.person_id = tp.person_id
-		WHERE tp.task_id = $1 ORDER BY tp.position LIMIT 1`, wi).Scan(&key)
-	return key
-}
-
 func TestAPassCitingAFileNobodyPublishedIsUnverified(t *testing.T) {
 	w := newWorld(t)
 	wi := w.testing(fakeagent.TestUnverifiedModel)
+	owner, _, _ := w.people(wi)
 	w.until("the gate to stop", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != delivery.ReasonTestBlocked {
 		t.Fatalf("escalated %q, want %s", r, delivery.ReasonTestBlocked)
@@ -270,6 +291,13 @@ func TestAPassCitingAFileNobodyPublishedIsUnverified(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 0 || w.phaseRuns(wi, "fix") != 1 {
 		t.Errorf("an unverified pass opened a pull request or sent a fix")
+	}
+	if code, body := w.decide(owner, wi, "waive", "Seen by hand."); code != 200 {
+		t.Fatalf("the owner's waiver: %d %v", code, body)
+	}
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if got := w.verdicts(wi); strings.Join(got, ",") != "unverified/waived,unverified/waived" {
+		t.Errorf("verdicts = %v, want each unverified pass waived", got)
 	}
 }
 
@@ -309,5 +337,29 @@ func TestABlockedRetestOfAnOpenFailureIsBlockedNotFixed(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open' AND title = 'Criterion 1 is not met'`, wi); n != 1 {
 		t.Errorf("the first test's finding is not left open for a test that can check it")
+	}
+}
+
+// A criterion the tester failed without saying why gets dude's own
+// finding: the fixer is given it, and the passing re-test resolves it.
+func TestAFailureTheTesterGaveNoFindingForStillReachesTheFixer(t *testing.T) {
+	w := newWorld(t)
+	wi := w.testing(fakeagent.TestFailQuietModel)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var id, status string
+	_ = w.owner.QueryRow(context.Background(), `SELECT f.id, f.status::text FROM review_findings f
+		JOIN runs r ON r.id = f.run_id AND r.phase = 'test'
+		WHERE f.task_id = $1 AND f.title = 'Acceptance criterion 1 fails: it greets'`, wi).Scan(&id, &status)
+	if id == "" {
+		t.Fatalf("no finding for the failed criterion\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND $2 = ANY(finding_ids)`, wi, id); n != 1 {
+		t.Errorf("%d fixes were given the failed criterion's finding, want 1", n)
+	}
+	if status != "resolved" {
+		t.Errorf("the failed criterion's finding is %s after the passing test, want resolved", status)
+	}
+	if got := w.verdicts(wi); strings.Join(got, ",") != "pass,pass" {
+		t.Errorf("verdicts = %v", got)
 	}
 }

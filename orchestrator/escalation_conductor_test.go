@@ -234,6 +234,14 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 	w, task := stuck(t)
 	w.must(task, "ask_person", escalationQuestion)
 	q := w.conductorQuestion(task)
+	// A tester's finding of the attempt is the next test's to judge, not
+	// accepted with the review's.
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind)
+		SELECT 'run_tested', organization_id, project_id, task_id, attempt, 'completed', 'test', 'qa_browser', 'agent'
+		FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
+		SELECT 'fnd_tested', organization_id, task_id, id, 'acceptance', 'blocking', 'Criterion 1 is not met', 'No greeting.'
+		FROM runs WHERE id = 'run_tested'`)
 	if status, out := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "accept"}); status != 200 {
 		t.Fatalf("the banner: %d %v", status, out)
 	}
@@ -249,6 +257,9 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 		t.Errorf("the conductor was told %q", note)
 	}
 	w.until("the delivery to go on", func() bool { return w.phaseRuns(task, "simplify") == 1 })
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE id = 'fnd_tested' AND status = 'open'`); n != 1 {
+		t.Errorf("accepting the review's findings settled the tester's")
+	}
 }
 
 // ask_person while an escalation waits is its question: each choice must

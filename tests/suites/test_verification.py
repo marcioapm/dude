@@ -73,8 +73,10 @@ def test_a_criterion_that_fails_is_fixed_tested_again_and_shown_passing(
     page.get_by_role("tab", name="Findings").click()
     section = page.get_by_test_id("verification")
     expect(section.get_by_test_id("criterion")).to_have_count(2)
-    expect(section.get_by_test_id("criterion").nth(0)).to_have_attribute("data-state", "pass")
-    expect(section.get_by_test_id("criterion").nth(1)).to_have_attribute("data-state", "pass")
+    for i, c in enumerate(CRITERIA):
+        row = section.get_by_test_id("criterion").nth(i)
+        expect(row).to_have_attribute("data-state", "pass")
+        expect(row).to_contain_text(c)
     expect(section.get_by_test_id("verification-heads")).to_have_text(f"tested at {head[:7]}")
     expect(section.get_by_test_id("verification-stale")).to_have_count(0)
     # The evidence opens the video that test published.
@@ -109,6 +111,7 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     escalation.get_by_test_id("escalation-waive").click()
     # Not sent: it asks why first.
     expect(escalation.get_by_test_id("escalation-note")).to_have_attribute("required", "")
+    expect(escalation).to_contain_text("Say why: it is kept with the test's verdict and on the pull request.")
     assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "awaiting_input"
     escalation.get_by_test_id("escalation-note").fill("Checked by hand on staging.")
     escalation.get_by_test_id("escalation-waive").click()
