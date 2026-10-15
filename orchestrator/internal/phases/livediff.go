@@ -248,15 +248,22 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_diffs WHERE run_id = $1)`, runID).Scan(&existed); err != nil {
 			return err
 		}
+		// lux redacts no exec output and no artifact: the hunks are
+		// redacted here, with the Run's values, before they are stored.
+		red, err := ledger.Redactor(ctx, tx, runID)
+		if err != nil {
+			return err
+		}
+		stored := red.JSON(files)
 		// A final diff identical to the live one only marks it final.
-		err := tx.QueryRow(ctx, `INSERT INTO run_diffs (run_id, organization_id, base, files, checksum, final, epoch)
+		err = tx.QueryRow(ctx, `INSERT INTO run_diffs (run_id, organization_id, base, files, checksum, final, epoch)
 			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
 			ON CONFLICT (run_id) DO UPDATE SET base = EXCLUDED.base, files = EXCLUDED.files,
 				checksum = EXCLUDED.checksum, final = EXCLUDED.final, epoch = EXCLUDED.epoch, updated_at = now()
 			WHERE (run_diffs.checksum <> EXCLUDED.checksum OR run_diffs.final <> EXCLUDED.final)
 				AND (EXCLUDED.epoch > run_diffs.epoch
 					OR EXCLUDED.epoch = run_diffs.epoch AND (EXCLUDED.final OR NOT run_diffs.final))
-			RETURNING updated_at`, runID, org, diff.Base, files, diff.Checksum, final, epoch).Scan(&at)
+			RETURNING updated_at`, runID, org, diff.Base, []byte(stored), diff.Checksum, final, epoch).Scan(&at)
 		if err == pgx.ErrNoRows {
 			return nil
 		}

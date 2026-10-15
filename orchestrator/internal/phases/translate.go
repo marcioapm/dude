@@ -291,6 +291,15 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 	if err != nil {
 		return err
 	}
+	// The harness's task list is the agent's text too. The message and
+	// thought buffers are not redacted here: a value split across chunks
+	// is whole only when flushText records it, and the buffers are never
+	// shown.
+	red, err := ledger.Redactor(ctx, tx, t.run.ID)
+	if err != nil {
+		return err
+	}
+	state = red.JSON(state)
 	touched, dropped, allGone := t.facts.args()
 	// Each open call keeps the time it was first seen open
 	// (open_tool_calls_at): what "open for how long" is measured from. A
@@ -598,6 +607,12 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	}
 	t.Broken = nil
 	keep := stop == nil || stop.Reason != luxTimeout
+	red, err := ledger.Redactor(ctx, tx, t.run.ID)
+	if err != nil {
+		return err
+	}
+	// The harness's own words can quote what the agent ran.
+	why, event = red.String(why), red.String(event)
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
@@ -1282,6 +1297,11 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		}
 		t.FailedTurns++
 	}
+	red, err := ledger.Redactor(ctx, tx, t.run.ID)
+	if err != nil {
+		return err
+	}
+	reason = red.String(reason)
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = true
 		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
 	if err != nil || tag.RowsAffected() == 0 {

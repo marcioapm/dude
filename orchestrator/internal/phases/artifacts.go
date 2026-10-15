@@ -284,8 +284,13 @@ type artifactRun struct{ Org, ProjectID, TaskID, ID string }
 // in one transaction keep lux's order in the listing, which numbers them by
 // created_at.
 func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
+	red, err := ledger.Redactor(ctx, tx, r.ID)
+	if err != nil {
+		return err
+	}
 	id := ids.New(ids.Artifact)
-	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
+	name := red.String(strings.TrimPrefix(art.Path, lux.PublishedPrefix))
+	art.Description = red.String(art.Description)
 	ctype := art.ContentType
 	if ctype == "" {
 		ctype = "application/octet-stream"

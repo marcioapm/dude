@@ -15,6 +15,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
 // Source values the events table uses (eventSourceSchema in the domain package).
@@ -55,8 +56,12 @@ const insertColumns = `INSERT INTO events (id, organization_id, event_type, occu
 		                    actor_type, actor_id, source, correlation_id, causation_id, payload)`
 
 // Append writes one event in the caller's transaction, so it commits or
-// rolls back with the state change that produced it.
+// rolls back with the state change that produced it. An event of a Run is
+// redacted with that Run's secret values first (Redactor).
 func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
+	if err := redactRun(ctx, tx, &e); err != nil {
+		return "", err
+	}
 	id, args, err := row(e)
 	if err != nil {
 		return "", err
@@ -66,12 +71,58 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 	return id, err
 }
 
+// Redactor is the redactor of a Run's text: its secret values, as
+// run_secret_values (migration 129) reads them in tx. Empty for a Run given
+// none, and in a transaction whose role may not read them.
+func Redactor(ctx context.Context, tx pgx.Tx, runID string) (*redact.Redactor, error) {
+	if runID == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT name, value FROM run_secret_values($1)`, runID)
+	if err != nil {
+		return nil, err
+	}
+	values, err := pgx.CollectRows(rows, pgx.RowToStructByPos[redact.Secret])
+	if err != nil || len(values) == 0 {
+		return nil, err
+	}
+	return redact.FromList(values), nil
+}
+
+// redactRun redacts e's payload with its Run's values, through its JSON:
+// a payload may carry structs as well as maps and strings.
+func redactRun(ctx context.Context, tx pgx.Tx, e *Event) error {
+	if e.RunID == "" || e.Payload == nil {
+		return nil
+	}
+	r, err := Redactor(ctx, tx, e.RunID)
+	if err != nil || r.Empty() {
+		return err
+	}
+	raw, err := json.Marshal(e.Payload)
+	if err != nil {
+		return err
+	}
+	if _, found := r.Contains(string(raw)); !found {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(r.JSON(raw), &payload); err != nil {
+		return err
+	}
+	e.Payload = payload
+	return nil
+}
+
 // AppendOncePerEpoch writes e unless e's Run already has an event of e's
 // type whose payload epoch is epoch, in one statement; it says whether it
 // wrote. The check takes no lock: two transactions appending the same
 // epoch at once could both write, so a caller must be the Run's only
 // writer of that type.
 func AppendOncePerEpoch(ctx context.Context, tx pgx.Tx, e Event, epoch int) (bool, error) {
+	if err := redactRun(ctx, tx, &e); err != nil {
+		return false, err
+	}
 	_, args, err := row(e)
 	if err != nil {
 		return false, err

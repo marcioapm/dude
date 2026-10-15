@@ -34,6 +34,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -1077,14 +1078,25 @@ func errBody(code, message string) map[string]any {
 // them. The artifact is looked up in the caller's organization, so an id
 // from another one is simply not found; a brainstorm session Run's only for
 // an accepted member of its session, as the person the backend names.
+//
+// A text artifact of a Run given project secrets is read whole and served
+// redacted (ledger.Redactor); when that changes its bytes, its length is
+// the redacted one's and X-Content-SHA256 is left out, as lux's no longer
+// describes what is served. Binary artifacts are not scanned.
 func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org string) error {
-	var key, name, ctype, sum string
+	var key, name, ctype, sum, runID string
 	var size int64
+	var red *redact.Redactor
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT a.storage_key, a.name, a.content_type, a.size_bytes, a.sha256 FROM artifacts a
+		if err := tx.QueryRow(r.Context(), `SELECT a.storage_key, a.name, a.content_type, a.size_bytes, a.sha256, a.run_id FROM artifacts a
 			LEFT JOIN runs ar ON ar.id = a.run_id
 			WHERE a.id = $1 AND (ar.session_id IS NULL OR session_role(ar.session_id, $2) IS NOT NULL)`,
-			r.PathValue("id"), principalOf(r).Person).Scan(&key, &name, &ctype, &size, &sum)
+			r.PathValue("id"), principalOf(r).Person).Scan(&key, &name, &ctype, &size, &sum, &runID); err != nil {
+			return err
+		}
+		var err error
+		red, err = ledger.Redactor(r.Context(), tx, runID)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -1103,6 +1115,28 @@ func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org str
 		return err
 	}
 	defer body.Close()
+	if !red.Empty() && redact.TextType(ctype) {
+		if size > redact.MaxText {
+			return fail(http.StatusUnprocessableEntity, "too_large_to_redact",
+				"%s is text over %d MiB from an agent given project secrets: dude serves it only redacted, and redacts at most that much",
+				name, redact.MaxText>>20)
+		}
+		raw, err := io.ReadAll(io.LimitReader(body, redact.MaxText+1))
+		if err != nil {
+			return err
+		}
+		if out := red.String(string(raw)); out != string(raw) {
+			raw, sum = []byte(out), ""
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+		if sum != "" {
+			w.Header().Set("X-Content-SHA256", sum)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return nil
+	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("X-Content-SHA256", sum)
