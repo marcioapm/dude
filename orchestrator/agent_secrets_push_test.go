@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -99,4 +100,18 @@ func TestWorkWithoutASecretIsPushed(t *testing.T) {
 	task := w.task()
 	w.deliver(task)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+}
+
+// The scripted fake/commit-secrets implementer, as the E2E suite drives it:
+// it commits the env secrets its Run declares, and the push is refused.
+func TestTheScriptedSecretCommitterIsRefused(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("implementer", fakeagent.CommitSecretsModel)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	task := w.task()
+	w.deliver(task)
+	w.until("the implementer failed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'
+			AND error LIKE '%IMPL_TOKEN in `+fakeagent.SecretsFile+`%'`, task) == 1
+	})
 }
