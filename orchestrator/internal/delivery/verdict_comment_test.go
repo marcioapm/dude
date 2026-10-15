@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,6 +205,149 @@ func TestOpenedPRVerdictKeepsALegacyAndAFencedSectionAndMarksItsOwnOnce(t *testi
 		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
 	if got := f.gh.Pull(f.number).Body; got != human+"\n"+section {
 		t.Fatalf("body after two verdicts:\n%q\nwant:\n%q", got, human+"\n"+section)
+	}
+}
+
+// manyOpened makes the task's pull requests six, one in each of six
+// repositories, every one with a person's body; their fakes, by repo name.
+func (f *verdictFixture) manyOpened() (*State, map[string]*fakegithub.Server) {
+	f.t.Helper()
+	st := f.openedState()
+	if _, err := f.owner.Exec(f.ctx, `DELETE FROM pull_requests WHERE id = 'pr_c'`); err != nil {
+		f.t.Fatal(err)
+	}
+	st.PullRequestIDs, st.Heads = nil, map[string]string{}
+	fakes := map[string]*fakegithub.Server{}
+	mux := http.NewServeMux()
+	for i := range 6 {
+		name := fmt.Sprintf("r%d", i)
+		g := fakegithub.New("", "acme/"+name)
+		n := g.OpenAsPerson("alice", "feature", "main", "Greet")
+		p := g.Pull(n)
+		g.Set(func(s *fakegithub.Server) { p.Body = "Body of " + name + ".\n" })
+		fakes[name] = g
+		mux.Handle("/repos/acme/"+name+"/", g.Handler())
+		for _, s := range []string{
+			`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+				VALUES ('repo_' || $2, $1, 'prj_c', $2, 'https://github.com/acme/' || $2 || '.git', 'main')`,
+			`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+				base_branch, head_sha, title, body, state, checks)
+				VALUES ('pr_' || $2, $1, 'prj_c', 'wi_c', 'repo_' || $2, 1, '', 'feature', 'main', '', 'Greet', '', 'open', 'unknown')`,
+		} {
+			if _, err := f.owner.Exec(f.ctx, s, f.org, name); err != nil {
+				f.t.Fatal(err)
+			}
+		}
+		st.PullRequestIDs = append(st.PullRequestIDs, "pr_"+name)
+		st.Heads[name] = "abc1234"
+	}
+	srv := httptest.NewServer(mux)
+	f.t.Cleanup(srv.Close)
+	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
+	return st, fakes
+}
+
+func (f *verdictFixture) refreshEvents() []map[string]any {
+	f.t.Helper()
+	rows, err := f.owner.Query(f.ctx, `SELECT payload FROM events WHERE task_id = 'wi_c'
+		AND event_type = 'pull_request.verification_updated' ORDER BY cursor`)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[map[string]any])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return out
+}
+
+// GitHub answers no request until four are waiting on it at once: a
+// refresh that takes the pull requests one at a time never gets an answer
+// within its budget, one that takes them four at a time refreshes all six,
+// and never asks more than four at once.
+func TestOpenedPRVerdictRefreshesSixPullRequestsFourAtATimeInOneBudget(t *testing.T) {
+	f := newVerdictFixture(t)
+	f.steps.s.CommentTimeout = 2 * time.Second
+	st, fakes := f.manyOpened()
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	open := make(chan struct{})
+	var opened sync.Once
+	for _, g := range fakes {
+		g.Set(func(s *fakegithub.Server) {
+			s.Intercept = func(r *http.Request) int {
+				mu.Lock()
+				inFlight++
+				peak = max(peak, inFlight)
+				if inFlight >= 4 {
+					opened.Do(func() { close(open) })
+				}
+				mu.Unlock()
+				defer func() { mu.Lock(); inFlight--; mu.Unlock() }()
+				select {
+				case <-open:
+					return 0
+				case <-r.Context().Done():
+					return http.StatusGatewayTimeout
+				}
+			}
+		})
+	}
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	events := f.refreshEvents()
+	if len(events) != 6 {
+		t.Fatalf("%d refresh events, want one for each of the 6 pull requests: %v", len(events), events)
+	}
+	for _, e := range events {
+		if e["error"] != nil {
+			t.Errorf("pull request %v not refreshed: %v", e["repo"], e["error"])
+		}
+	}
+	for name, g := range fakes {
+		if body := g.Pull(1).Body; !strings.HasPrefix(body, "Body of "+name+".\n\n"+verificationStart) {
+			t.Errorf("%s body %q", name, body)
+		}
+	}
+	if peak > 4 {
+		t.Errorf("%d requests to GitHub at once, want at most 4", peak)
+	}
+}
+
+// GitHub never answering: the six pull requests share one budget, each
+// records its own failure, and the step goes on.
+func TestOpenedPRVerdictGitHubNeverAnsweringCostsOneBudget(t *testing.T) {
+	f := newVerdictFixture(t)
+	f.steps.s.CommentTimeout = time.Second
+	st, fakes := f.manyOpened()
+	for _, g := range fakes {
+		g.Set(func(s *fakegithub.Server) {
+			s.Intercept = func(r *http.Request) int {
+				<-r.Context().Done()
+				return http.StatusGatewayTimeout
+			}
+		})
+	}
+	start := time.Now()
+	res, err := f.verdictStep(st)
+	// Serially, with a budget each, this is six seconds at least.
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("the refresh took %v with GitHub hanging, want one 1s budget", took)
+	}
+	if err != nil || res.Next != "fix" {
+		t.Fatalf("step: next %q, %v", res.Next, err)
+	}
+	events := f.refreshEvents()
+	repos := map[any]bool{}
+	for _, e := range events {
+		if e["error"] == nil {
+			t.Errorf("pull request %v recorded as refreshed", e["repo"])
+		}
+		repos[e["repo"]] = true
+	}
+	if len(events) != 6 || len(repos) != 6 {
+		t.Fatalf("refresh events %v, want one failure for each of the 6 pull requests", events)
 	}
 }
 

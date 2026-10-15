@@ -12,6 +12,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -533,7 +534,8 @@ func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug
 	return posted, false, err
 }
 
-// RefreshVerification updates only dude's section in the current GitHub body.
+// RefreshVerification updates only dude's section in the current GitHub body
+// of each open pull request dude opened, at most refreshWorkers at once.
 // Database reads and ledger writes finish in separate transactions around GitHub.
 func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, forges Forges) {
 	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {
@@ -575,39 +577,61 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 	if section == "" {
 		return
 	}
-	for _, pr := range prs {
-		updateErr := func() error {
-			timeout := s.CommentTimeout
-			if timeout == 0 {
-				timeout = verdictCommentTimeout
-			}
-			callCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			gh, err := forges.For(callCtx, org)
-			if err != nil {
-				return err
-			}
-			if gh == nil {
-				return fmt.Errorf("no forge credential to update verification with")
-			}
-			slug := forge.SlugFromURL(pr.URL)
-			body, err := gh.PullRequestBody(callCtx, slug, pr.Number)
-			if err != nil {
-				return err
-			}
-			return gh.EditPullRequest(callCtx, slug, pr.Number, replaceVerification(body, section))
-		}()
-		payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
-		if updateErr != nil {
-			slog.Warn("updating pull request verification failed", "pr", pr.ID, "error", updateErr)
-			payload["error"] = updateErr.Error()
-		}
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			return emitTx(ctx, tx, org, st, "pull_request.verification_updated", payload)
-		}); err != nil {
-			slog.Warn("recording pull request verification update failed", "pr", pr.ID, "error", err)
-		}
+	// One budget for every pull request together, so a task over many
+	// repositories ends within it; the ledger writes keep the step's ctx and
+	// record a pull request the budget ran out on.
+	timeout := s.CommentTimeout
+	if timeout == 0 {
+		timeout = verdictCommentTimeout
 	}
+	budget, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gh, ghErr := forges.For(budget, org)
+	if ghErr == nil && gh == nil {
+		ghErr = fmt.Errorf("no forge credential to update verification with")
+	}
+	jobs := make(chan target)
+	var wg sync.WaitGroup
+	for range min(refreshWorkers, len(prs)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pr := range jobs {
+				updateErr := ghErr
+				if updateErr == nil {
+					updateErr = refreshBody(budget, gh, forge.SlugFromURL(pr.URL), pr.Number, section)
+				}
+				payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
+				if updateErr != nil {
+					slog.Warn("updating pull request verification failed", "pr", pr.ID, "error", updateErr)
+					payload["error"] = updateErr.Error()
+				}
+				if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					return emitTx(ctx, tx, org, st, "pull_request.verification_updated", payload)
+				}); err != nil {
+					slog.Warn("recording pull request verification update failed", "pr", pr.ID, "error", err)
+				}
+			}
+		}()
+	}
+	for _, pr := range prs {
+		jobs <- pr
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+// refreshWorkers bounds how many pull requests' bodies one refresh asks
+// GitHub about at once.
+const refreshWorkers = 4
+
+// refreshBody writes section into the pull request's current body.
+func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, section string) error {
+	body, err := gh.PullRequestBody(ctx, slug, number)
+	if err != nil {
+		return err
+	}
+	return gh.EditPullRequest(ctx, slug, number, replaceVerification(body, section))
 }
 
 // The hidden lines around the verification section dude writes into a pull
