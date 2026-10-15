@@ -276,6 +276,22 @@ func (g *GitHub) EditComment(ctx context.Context, slug string, commentID int64, 
 	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL, CommentID: out.ID}, nil
 }
 
+// FindVerdictComment recovers a verdict post whose response or ledger
+// record was lost. All conversation comments are checked, including pages
+// before the feedback cursor; a quote is not the marker (Own).
+func (g *GitHub) FindVerdictComment(ctx context.Context, slug string, number int, taskID string) (Posted, error) {
+	comments, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number))
+	if err != nil {
+		return Posted{}, err
+	}
+	for _, c := range comments {
+		if Own(Feedback{Body: c.Body}) && strings.HasSuffix(strings.TrimSpace(c.Body), VerdictMarker(taskID)) {
+			return Posted{ID: fmt.Sprintf("issue-comment-%d", c.ID), URL: c.HTMLURL, CommentID: c.ID}, nil
+		}
+	}
+	return Posted{}, nil
+}
+
 // ReplyToLineComment answers a line comment in its review thread.
 func (g *GitHub) ReplyToLineComment(ctx context.Context, slug string, number int, commentID int64, body string) (Posted, error) {
 	var out ghPosted

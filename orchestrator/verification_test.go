@@ -77,6 +77,9 @@ func TestATestThatPassesEveryCriterionWithEvidenceOpensThePullRequest(t *testing
 		FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id AND r.phase = 'test'
 		WHERE v.task_id = $1 AND v.criterion = 1`, wi).Scan(&heads, &evidence)
 	pr := w.gh.Pull(1)
+	if len(pr.Comments) != 0 {
+		t.Fatalf("a PR dude opened got verdict comments: %+v", pr.Comments)
+	}
 	if head := w.branchHead(wi); heads == "" || heads != head {
 		t.Errorf("tested at %q, the pull request is at %q", heads, head)
 	}

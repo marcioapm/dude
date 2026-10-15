@@ -47,6 +47,8 @@ const (
 	EvPullRequestAction = "pull_request.action"
 	// Mergeability or distance from the base changed.
 	EvPullRequestMergeable = "pull_request.mergeable_changed"
+	// Verdict comment post/edit, or its failure, on an adopted pull request.
+	EvPullRequestVerdictCommented = "pull_request.verdict_commented"
 	// dude pushed a fix to an open pull request and asked again for a
 	// review from whoever had reviewed an older head (rerequestReviews).
 	EvPullRequestReviewRerequested = "pull_request.review_rerequested"

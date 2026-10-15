@@ -401,6 +401,8 @@ export const EventTypes = {
   PullRequestCommented: "pull_request.commented",
   PullRequestMerged: "pull_request.merged",
   PullRequestClosed: "pull_request.closed",
+  // Adopted PR verdict post/edit: { pullRequestId, repo, number, head, commentId?, url?, edited, error? }.
+  PullRequestVerdictCommented: "pull_request.verdict_commented",
   /**
    * dude pushed a fix to an open pull request and asked again for a review
    * from those whose latest review was on an older head. Payload:

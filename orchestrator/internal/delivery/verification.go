@@ -6,7 +6,9 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -338,6 +341,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
+	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {
 		return workflow.Result{}, err
@@ -413,6 +417,90 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 	_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
 		WHERE id = ANY($1) AND status = 'open'`, findingIDs, decision+" by a person: "+note)
 	return err
+}
+
+// CommentVerdict keeps one verdict comment on each adopted pull request.
+// Its successful ledger event keeps the comment id across workflow replays
+// and attempts. The PR row serializes callers through the GitHub write and
+// its record; the marker recovers a post whose response or record was lost.
+// GitHub failures are recorded, never returned to the delivery.
+func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
+	if !st.adoptedPR() {
+		return
+	}
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var prID, repo, repoURL string
+		var number int
+		if err := tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.number
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND pr.adopted AND pr.state IN ('open', 'draft')
+			FOR UPDATE OF pr`, st.PullRequestIDs, st.TaskID).Scan(&prID, &repo, &repoURL, &number); err != nil {
+			if db.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		v, err := latestVerification(ctx, tx, st)
+		if err != nil {
+			return err
+		}
+		link, err := taskLink(ctx, tx, st.TaskID)
+		if err != nil {
+			return err
+		}
+		section := verificationSection(v, st.Heads, link)
+		if section == "" {
+			return nil
+		}
+		body := "dude's test verdict for this pull request"
+		if link != "" {
+			body += " — " + link
+		}
+		body += "\n\n" + section + "\n\n" + forge.VerdictMarker(st.TaskID)
+		var commentID int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT (payload->>'commentId')::bigint FROM events
+			WHERE event_type = $1 AND payload->>'pullRequestId' = $2 AND payload ? 'commentId'
+			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID); err != nil {
+			return err
+		}
+		payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
+		gh, postErr := forges.For(ctx, org)
+		if postErr == nil && gh == nil {
+			postErr = fmt.Errorf("no forge credential to post the verdict with")
+		}
+		slug := forge.SlugFromURL(repoURL)
+		if postErr == nil && commentID == 0 {
+			var found forge.Posted
+			found, postErr = gh.FindVerdictComment(ctx, slug, number, st.TaskID)
+			commentID = found.CommentID
+		}
+		var posted forge.Posted
+		edited := commentID != 0
+		if postErr == nil && edited {
+			posted, postErr = gh.EditComment(ctx, slug, commentID, body)
+			var refusal *forge.Error
+			if errors.As(postErr, &refusal) && refusal.NotFound() {
+				postErr, edited = nil, false
+			}
+		}
+		if postErr == nil && !edited {
+			posted, postErr = gh.Comment(ctx, slug, number, body)
+		}
+		payload["edited"] = edited
+		if postErr != nil {
+			slog.Warn("posting the adopted pull request's test verdict failed", "pr", prID, "error", postErr)
+			payload["error"] = postErr.Error()
+			if commentID != 0 {
+				payload["commentId"] = commentID
+			}
+		} else {
+			payload["commentId"], payload["url"] = posted.CommentID, posted.URL
+		}
+		return emitTx(ctx, tx, org, st, EvPullRequestVerdictCommented, payload)
+	})
+	if err != nil {
+		slog.Warn("recording the adopted pull request's test verdict comment failed", "task", st.TaskID, "error", err)
+	}
 }
 
 // verificationSection is the pull request's account of the test: each
