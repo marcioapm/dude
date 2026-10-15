@@ -32,9 +32,10 @@ const syncBaseDescription = "Fetch the base your task branch merges into (main, 
 	"checkout as lux/<base>, with credentials your checkout does not have: `git fetch origin` cannot. Nothing in your " +
 	"checkout moves. It answers, per repository, the ref to merge, how many commits the base is ahead of you, and how " +
 	"to see whether it conflicts (`git merge-tree --write-tree HEAD lux/<base>`). Then merge, never rebase, and never " +
-	"force anything: `git merge lux/<base>`, resolve every conflict keeping both sides' intent, run the affected " +
-	"tests, and commit with git's default merge message. It is published the normal way: your Run's work when it " +
-	"finishes, or a conductor's publish."
+	"force anything: `git merge lux/<base>`, resolve every conflict keeping both sides' intent, and commit with " +
+	"git's default merge message. Implementer, fixer and simplifier: run the affected tests before finishing your Run. " +
+	"Conductor: never build, install or run tests; resolve only small changes, publish, and delegate review and test " +
+	"before shipping. Delegate larger resolutions to a fix Run."
 
 // SyncBaseFunc asks lux for a sync of a running Run with that Run's push
 // credentials (phases.Syncer.SyncBase).

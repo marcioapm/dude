@@ -462,6 +462,10 @@ var PromptRoles = []string{"conductor", "brainstorm", "implementer", "reviewer",
 // The rest — the task, findings, formats, tools, committing and the
 // tester's recording — is dude's, and every phase gets it whatever its
 // instructions say, because the workflow depends on it.
+const baseIntegrationNote = "Call sync_base when you need the base's latest work: credentials stay outside your checkout. " +
+	"Merge lux/<base>, never rebase, and never force anything. Resolve every conflict keeping both sides' intent, " +
+	"run the affected tests, and commit with git's default merge message. Finish your Run to publish normally."
+
 var builtinInstructions = map[string][]string{
 	"conductor": {"You are this task's conductor. The people on the task talk to you in its Chat: answer " +
 		"their questions about the task, its code and how it was delivered, with the evidence — the file " +
@@ -518,7 +522,10 @@ var builtinInstructions = map[string][]string{
 			"run a review after you publish; the pull request gate refuses an unreviewed commit of yours. Whether " +
 			"tests passed is what the Runs that ran them reported; do not claim what you did not see a Run do. " +
 			"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change " +
-			"or remove them."},
+			"or remove them.",
+		"Call sync_base to fetch the base as lux/<base>. Merge it, never rebase, and never force anything. " +
+			"Resolve small conflicts keeping both sides' intent and commit with git's default merge message, then publish. " +
+			"For larger resolutions delegate fix; delegate review and test before shipping. Never run tests yourself."},
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"brainstorm": {"You think out loud with the members of this session about their projects: where something " +
@@ -533,17 +540,17 @@ var builtinInstructions = map[string][]string{
 		"Your checkouts are the linked projects' default branches, read only. Run `git fetch` and `git log` freely; " +
 			"never build, install or run tests: your machine is small."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
-		"finish — handing over code that does not build is not finishing."},
+		"finish — handing over code that does not build is not finishing.", baseIntegrationNote},
 	"reviewer": {"You may run the code, run the tests, and write throwaway scripts to check a hypothesis. " +
 		"Do not commit: your output is findings, and someone else will make the change."},
 	// The fixer's second paragraph follows the feedback it is given.
 	"fixer": {"Address the feedback below.",
-		"Fix only what is raised above. Widening the change makes the re-review harder and risks new findings."},
+		"Fix only what is raised above, including merging the base when an integration brief asks for it. Widening the change makes the re-review harder and risks new findings.", baseIntegrationNote},
 	"simplifier": {"Simplify the changes on this branch without changing what they do.",
 		"Remove needless complexity, improve names and structure, delete dead code the change " +
 			"introduced, and consolidate obvious duplication.",
 		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
-			"if they do not pass, your simplification was not behaviour-preserving."},
+			"if they do not pass, your simplification was not behaviour-preserving.", baseIntegrationNote},
 	"qa_browser": {"Start the application and use this change the way a person would.",
 		"Look for what the unit tests cannot show: whether the feature works when someone uses it."},
 }

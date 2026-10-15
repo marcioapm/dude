@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestBaseIntegrationPromptsRespectRolePermissions(t *testing.T) {
+	for _, role := range []string{"implementer", "fixer", "simplifier", "conductor"} {
+		p := BuiltinPrompt(role)
+		for _, want := range []string{"sync_base", "never rebase", "never force"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s lacks %s", role, want)
+			}
+		}
+	}
+	p := BuiltinPrompt("conductor")
+	if !strings.Contains(p, "delegate review and test") || !strings.Contains(p, "never build, install or run tests") {
+		t.Fatal("conductor testing permission changed", p)
+	}
+	b := baseNote(map[string]string{"target": "release"})
+	if strings.Contains(b, "git fetch origin") || !strings.Contains(b, "available") {
+		t.Fatal("private origin advice", b)
+	}
+}
+
 // A session's agent is told to name its session once the subject is clear
 // and to leave a member's name alone (with tools), and how to publish a
 // document for the members (always: it needs no tool), even under an
