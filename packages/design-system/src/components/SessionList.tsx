@@ -28,16 +28,22 @@ export interface SessionItemProps extends Omit<HTMLAttributes<HTMLLIElement>, "t
   readonly onOpen: () => void;
 }
 
+export function SessionItemContent({ avatar, title, detail, trailing }: Pick<SessionItemProps, "avatar" | "title" | "detail" | "trailing">) {
+  return <>
+    <span className={styles["avatar"]}>{avatar}</span>
+    <span className={styles["text"]}>
+      <span className={styles["title"]}>{title}</span>
+      {detail ? <span className={styles["detail"]}>{detail}</span> : null}
+    </span>
+    {trailing ? <span className={styles["trailing"]}>{trailing}</span> : null}
+  </>;
+}
+
 export function SessionItem({ avatar, title, detail, trailing, current, onOpen, className, children, ...rest }: SessionItemProps) {
   return (
     <li className={className} {...rest}>
       <button type="button" className={cx(styles["item"], current && styles["current"])} aria-current={current ? "true" : undefined} onClick={onOpen}>
-        <span className={styles["avatar"]}>{avatar}</span>
-        <span className={styles["text"]}>
-          <span className={styles["title"]}>{title}</span>
-          {detail ? <span className={styles["detail"]}>{detail}</span> : null}
-        </span>
-        {trailing ? <span className={styles["trailing"]}>{trailing}</span> : null}
+        <SessionItemContent avatar={avatar} title={title} detail={detail} trailing={trailing} />
       </button>
       {children}
     </li>

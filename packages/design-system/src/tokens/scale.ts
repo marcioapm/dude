@@ -145,6 +145,8 @@ export const letterSpacing = {
 
 /** Control, row, avatar, badge and icon sizes. */
 export const size = {
+  /** Shared desktop page rail, unchanged by density. */
+  pageRail: 360,
   controlSm: 28,
   controlMd: 32,
   controlLg: 36,

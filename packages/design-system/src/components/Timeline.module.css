@@ -4,6 +4,10 @@
   padding: 0;
   max-width: 820px;
 }
+.listWide {
+  max-width: none;
+  width: 100%;
+}
 .item {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;

@@ -4,12 +4,14 @@ import styles from "./Timeline.module.css";
 
 export interface TimelineProps extends HTMLAttributes<HTMLOListElement> {
   readonly children?: ReactNode;
+  /** Fill a rail page's main column instead of the default timeline measure. */
+  readonly wide?: boolean | undefined;
 }
 
 /** What happened to something, newest first: who, what, when. No frames, no rules. */
-export function Timeline({ className, children, ...rest }: TimelineProps) {
+export function Timeline({ className, children, wide, ...rest }: TimelineProps) {
   return (
-    <ol className={cx(styles["list"], className)} {...rest}>
+    <ol className={cx(styles["list"], wide && styles["listWide"], className)} {...rest}>
       {children}
     </ol>
   );

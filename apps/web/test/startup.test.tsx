@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, RunStatus, TaskServers } from "@dude/domain";
-import { act, mount, until } from "./dom.ts";
+import { act, mount, sessionOptions, until } from "./dom.ts";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { RUN_ID, TASK_ID, run } from "../src/fixtures/data.ts";
@@ -393,7 +393,8 @@ describe("a task's Run page", () => {
 
   test("the task's Sessions list and pipeline step for a Run lux placed read Starting", async () => {
     const sessions = await placedOnTaskPage("sessions");
-    const row = await until(() => sessions.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
+    await sessionOptions(sessions);
+    const row = await until(() => document.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
     expect(row.querySelector("[data-status]")!.getAttribute("data-status")).toBe("starting");
     const overview = await placedOnTaskPage("overview");
     const step = await until(() => overview.querySelector<HTMLElement>("[data-testid=phase][data-phase=implement]"), "the pipeline step");
@@ -403,7 +404,8 @@ describe("a task's Run page", () => {
   for (const stage of ["image", "container"] as const) {
     test(`the task's Sessions subtitle agrees with Starting at ${stage}`, async () => {
       const page = await placedOnTaskPage("sessions", { startStage: { stage, since: null, epoch: 1 } });
-      const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
+      await sessionOptions(page);
+      const row = await until(() => document.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the Sessions row");
       expect(row.querySelector("[data-status]")!.textContent).toBe("Starting");
       expect(row.textContent).toContain("fake/scripted · starting");
       expect(row.textContent).not.toContain("not started");
@@ -413,7 +415,8 @@ describe("a task's Run page", () => {
   for (const status of ["pending", "scheduled"] as const) {
     test(`the task's Sessions subtitle remains not started while ${status} and waiting for placement`, async () => {
       const page = await placedOnTaskPage("sessions", { status, startStage: { stage: "waiting", since: null, epoch: 1 } });
-      const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the waiting Sessions row");
+      await sessionOptions(page);
+      const row = await until(() => document.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the waiting Sessions row");
       expect(row.querySelector("[data-status]")!.getAttribute("data-status")).toBe(status);
       expect(row.textContent).toContain("fake/scripted · not started");
     });
@@ -421,7 +424,8 @@ describe("a task's Run page", () => {
 
   test("the task's Sessions subtitle keeps the elapsed duration after running starts", async () => {
     const page = await placedOnTaskPage("sessions", { status: "running", startedAt: new Date(Date.now() - 24_000).toISOString(), startStage: null });
-    const row = await until(() => page.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the running Sessions row");
+    await sessionOptions(page);
+    const row = await until(() => document.querySelector<HTMLElement>("[data-testid=session][data-run=run_placed]"), "the running Sessions row");
     expect(row.querySelector("[data-status]")!.textContent).toBe("Running");
     expect(row.querySelector("[data-live-dot]")!.textContent).toMatch(/2[4-6]s/);
     expect(row.textContent).not.toContain("not started");

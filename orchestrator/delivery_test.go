@@ -1253,7 +1253,18 @@ func (w *world) withTools() {
 	w.syncer.Agent.ToolsService = true
 }
 
+// lux's lifecycle events trail the agent's records, so its "running" can be
+// read after the question and the turn's end: the agent waits either way.
 func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
+	t.Run("as lux reports it", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, false)
+	})
+	t.Run("running read after the turn", func(t *testing.T) {
+		testAnAgentThatAsksWaits(t, true)
+	})
+}
+
+func testAnAgentThatAsksWaits(t *testing.T, trailing bool) {
 	w := newWorld(t)
 	w.withTools()
 	question := `{"question":"Should the table be sorted?","choices":["yes","no"]}`
@@ -1264,8 +1275,30 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		return fakelux.Behaviour{Ask: question, Reply: "Sorted it, as asked.",
 			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
+	release := func() {}
+	if trailing {
+		held := make(chan struct{})
+		release = sync.OnceFunc(func() { close(held) })
+		w.lux.BeforeEvent(func(id string, eventID int64, typ string) {
+			if typ == "state" && w.lux.EventState(id, eventID) == "running" {
+				<-held
+			}
+		})
+		t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
+	}
 	wi := w.task()
 	w.deliver(wi)
+	if trailing {
+		// Nothing follows the Run between pumps: its turn ends in lux before
+		// dude reads any of it, so its records are read before lux's running.
+		w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) == 1 })
+		luxID := w.lux.Runs()[0].ID
+		for deadline := time.Now().Add(20 * time.Second); !turnEnded(w.lux.Records(luxID)); time.Sleep(untilPoll) {
+			if time.Now().After(deadline) {
+				t.Fatal("the agent's turn never ended")
+			}
+		}
+	}
 	w.until("the question to reach a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 
 	var qid, prompt string
@@ -1281,8 +1314,18 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	w.until("the agent to wait", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND waiting_since IS NOT NULL`, wi) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND turn_done_at IS NULL`, wi); n != 1 {
-		t.Fatalf("the asking run is not still running")
+	if trailing {
+		if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'scheduled'`, wi); n != 1 {
+			t.Fatalf("lux's running was read before the agent waited\nruns:\n%s", w.describeRuns())
+		}
+	}
+	release()
+	// lux's running, read now if not before, does not end the wait.
+	w.until("lux's running to be read", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND waiting_since IS NOT NULL AND turn_done_at IS NULL`, wi); n != 1 {
+		t.Fatalf("the asking run is not still waiting\nruns:\n%s", w.describeRuns())
 	}
 	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed {
 		t.Fatalf("the run was pushed before its question was answered")

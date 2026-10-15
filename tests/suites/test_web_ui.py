@@ -153,8 +153,10 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # Sessions tab beside the others.
     page.get_by_test_id("phase").nth(1).click()
     expect(tabs.get_by_role("tab", name="Sessions")).to_have_attribute("aria-selected", "true")
+    page.get_by_test_id("search-selector-trigger").click()
     sessions = page.get_by_test_id("sessions")
     expect(sessions.locator('[aria-current="true"]')).to_contain_text("Review")
+    page.keyboard.press("Escape")
     expect(page.get_by_test_id("run-screen")).to_contain_text("Reviewer")
     # Back to the overview, and the URL says the task again.
     tabs.get_by_role("tab", name="Overview").click()

@@ -1,3 +1,5 @@
+export { PageWithRail, PageRail, PageRailBlock, FacetList } from "./PageWithRail.tsx";
+export type { PageWithRailProps, PageRailProps, PageRailBlockProps, FacetListProps, FacetOption } from "./PageWithRail.tsx";
 export { StatusBadge } from "./StatusBadge.tsx";
 export type { StatusBadgeProps } from "./StatusBadge.tsx";
 export { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
@@ -108,13 +110,15 @@ export { EpicCard, EpicRow, EpicProgress, EpicPullRequests } from "./EpicCard.ts
 export type { EpicCardProps, EpicRowProps, EpicSummary, EpicLanes } from "./EpicCard.tsx";
 export { ScreenHeader, Segmented } from "./ScreenHeader.tsx";
 export type { ScreenHeaderProps, SegmentedProps } from "./ScreenHeader.tsx";
-export { WaitingGroup, WaitingRow } from "./WaitingList.tsx";
+export { WaitingGroup, WaitingList, WaitingRow } from "./WaitingList.tsx";
 export type { WaitingGroupProps, WaitingRowProps } from "./WaitingList.tsx";
 export { PullRequestPanel } from "./PullRequestPanel.tsx";
 export type { FactKind, PullRequestPanelProps } from "./PullRequestPanel.tsx";
 export { Timeline, TimelineItem } from "./Timeline.tsx";
 export type { TimelineProps, TimelineItemProps } from "./Timeline.tsx";
-export { SessionList, SessionItem } from "./SessionList.tsx";
+export { SearchSelector, SearchSelectorAnchor } from "./SearchSelector.tsx";
+export type { SearchSelectorProps } from "./SearchSelector.tsx";
+export { SessionList, SessionItem, SessionItemContent } from "./SessionList.tsx";
 export { DiffStat } from "./DiffStat.tsx";
 export type { DiffStatProps } from "./DiffStat.tsx";
 export { SessionRail, SessionRailBlock, SessionFacts, ToolUsage, ChangedFiles, PublishedFiles } from "./SessionRail.tsx";

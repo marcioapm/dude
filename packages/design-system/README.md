@@ -868,12 +868,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   for each earlier one — how it stopped, and **Show attempt 1**, which
   folds it open: its steps as they ended, who stopped it and why, who set
   it aside and their note, its branch and last commit, and what lux still
-  keeps. The list of agent sessions on the task's Sessions tab groups by
-  attempt under small-caps heads
-  ("Attempt 2 · current", "Attempt 1 · set aside") once there is more than
-  one; a set-aside agent session reads as it ended, its strip saying it was set
-  aside and the way to where the work goes on. Activity is one timeline
-  across attempts.
+  keeps. The Sessions tab's title selector lists the shown attempt's agent
+  sessions, plus the task's conductor, grouped as Conductor, Started by …,
+  and Delivered automatically. A set-aside agent session reads as it ended,
+  its strip saying it was set aside and the way to where the work goes on.
+  Activity is one timeline across attempts.
 
 ### Nesting
 
@@ -1088,9 +1087,14 @@ not a task; see *Brainstorm sessions*. Components keep their names
 (`SessionList`, `SessionHeader`, `SessionRail`, …) but show agent sessions
 here.
 
-- The task's **Sessions** tab puts its agent sessions on the left
-  (`SessionList`, newest first, the open one `current`) and the open one
-  beside them. A link (`#/session/<id>`) opens it on that tab, not a
+- The task's **Sessions** tab selects its agent session through the open
+  `SessionHeader` title, using `SearchSelector`: a quiet chevron, a Radix
+  popover and SearchPicker's combobox/listbox. Search matches real role labels,
+  model and status; conductor/delivery grouping and newest-first order come
+  from the app. The current option (`aria-current`) sits on the active wash
+  whichever row the keyboard is on; the keyboard's row adds the hover wash.
+  The selector remains reachable with one session; no sessions is a meaningful
+  empty state. There is no separate selection column. A link (`#/session/<id>`) opens it on that tab, not a
   separate page: the task's people, pull requests and findings stay one
   tab away while you watch an agent. Only a session whose task cannot be
   learned stands alone; when it ends, it says the way to its task.
@@ -1126,14 +1130,14 @@ here.
   "(completed)" stay readable), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-  the diff's own list does. When the agent session is narrower than about
-  820px the rail goes and the conversation keeps the width. Narrower than
-  900px the list of agent sessions sits above the open one.
+  the diff's own list does.
+  The rail is 360px; at 920px of session width or less the conversation
+  keeps the width and the header keeps the terminal.
 - **The terminal is the rail's.** While the Run is alive and running
   (not paused, starting or ended) and lux gave it a terminal, the rail's
   Session block ends with `TerminalLink` ("Open terminal in lux", a new
-  tab). Where the rail is not — the agent session narrower than about
-  820px, or on Changes or Events — the header keeps the same link as a
+  tab). Where the rail is not — the agent session 920px wide or less,
+  or on Changes or Events — the header keeps the same link as a
   terminal icon (`LinkButton iconOnly`), chosen by the same container
   query on the agent session's width, so the terminal is never unreachable
   and never shown twice. A branch preview has no agent to hold it: its
@@ -1158,7 +1162,7 @@ here.
   above and below the run. Never one of them on its own at the
   transcript's edge. Inside it every row starts on the column and insets
   its glyph 8px, so a thought, an event and a tool call line up.
-- The list of agent sessions is 260px (200px below 1280px).
+- The task Sessions selector anchors under the header and sizes to the viewport.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
@@ -2189,7 +2193,9 @@ MarkdownCheatsheet.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
 - **SessionHeader** — the transcript's header on its own, for an agent
-  session whose views sit under it. `statusNote` sits beside the status;
+  session whose views sit under it. `titleSelector` optionally wraps only the
+  title, leaving owner/model/machine tips independent; standalone and
+  brainstorm headers keep plain titles by default. `statusNote` sits beside the status;
   the title row and the facts under it wrap rather than clip each other.
 - **While its agent starts, the header says where**: `StartChip` in a
   session's meta ("◐ Resuming · Checking out repositories · 00:12") and
@@ -2206,8 +2212,12 @@ MarkdownCheatsheet.
   ChangedFiles** — the column beside an agent session's conversation; its
   facts are a `KeyValueList`, values to the right. A brainstorm session's
   rail is the same `SessionRail` and `SessionRailBlock`.
-- **SessionList / SessionItem** — a task's agent sessions, the open one
-  `current`.
+- **SessionList / SessionItem / SessionItemContent** — a task's agent
+  sessions, the open one `current`; content is reusable inside a listbox.
+- **SearchSelector** — a title-button selector over `SearchPicker`. Inside a
+  `SessionHeader` its popup anchors (`SearchSelectorAnchor`) to the bottom-left
+  of the whole header, so the owner/model/machine line stays visible; elsewhere
+  it hangs below its title. Gallery `#l-selector` shows populated, empty, current, search and focus states.
 - **FileGallery / FileViewer** — a task's files and their versions. A
   `FileVersion`'s optional `description` (what its agent said the file is
   for) is a secondary line under the name, in a card and a row alike.
@@ -2330,6 +2340,68 @@ are in `docs/design/accounts.md`):
   footer holds its actions. `HowList` is how something works in a few
   named lines: a glyph, a bold lead-in, a muted sentence.
 
+## Page rails
+
+`PageWithRail` is opt-in layout, not the app shell. Pass main content as
+`children` and `<PageRail aria-label="…">…</PageRail>` as `rail`. Main content
+fills the remaining width without a prose/page measure. At container widths
+of 1080px and above, the right column uses `--ds-size-page-rail` (360px,
+canonical `size.pageRail` in `src/tokens/scale.ts`, regenerated with `bun run
+tokens`). This leaves at least 720px for the main column. Below that threshold
+there is no reserved column: the same rail is above the main content, with
+facets wrapping into compact controls. Controls are never hidden or remounted,
+so actions, selection and keyboard focus remain available. The rail comes
+first in DOM and focus order at every width, so its filters and actions are
+reached before the main content. The host owns page
+scrolling; the layout imposes no fixed height or independent width cap. In a
+flex-column host it grows to the remaining height, so the desktop rail's shade
+reaches the foot of the page however short its blocks are.
+
+Rail pages pass `RelationList wide` and `Timeline wide` to remove their default
+820px measure, and `MetricGroup joined fill` to spread tiles evenly across the
+main column; callers without those props keep their existing measure.
+
+`PageRail` uses the chrome shade and 16px padding in both densities.
+`PageRailBlock label={…}` names a section through its heading; `live` adds the
+shared live dot. Blocks are separated by space, never rules. `SessionRail`
+and `SessionRailBlock` are compatible aliases of these generic parts; session
+facts, tool usage and files retain their existing APIs.
+
+`FacetList` is a controlled multi-select group: `label`, `options` (`value`,
+`label`, optional `count`, `disabled`, `description`), `value: string[]`, and
+`onValueChange`. No selected options means what the caller defines (usually
+all). Zero counts remain visible and do not disable a choice. Counts are
+caller-supplied facts: calculate them from a documented base set, not from the
+accidentally filtered result. The DS neither filters records nor infers scope.
+`empty` supplies the meaningful empty line. Each choice uses the existing
+Checkbox's label, description, disabled and keyboard behavior. Gallery
+`#rail-populated`, `#rail-empty`, and `#rail-narrow` show selected, zero-count,
+disabled, interactive focus and action states in both themes and densities.
+
+### Task tab data mapping
+
+The app opts Overview, Findings, Files and Activity into `PageWithRail`; Servers
+moves its serving-run facts and bulk actions into the same rail. PR panels retain
+checks, reviewers and permission-aware actions. Overview facts use the real task
+owner and decider and the header's selected attempt; cost stays in Time & cost.
+Finding status/severity counts use all findings in the header-selected attempt,
+before composing filters. Status vocabulary is Open, Resolved, Superseded and
+Accepted (there is no separate dismissed status); Note is a severity. Expanded
+finding Markdown is unmeasured; document previews keep their document measure.
+Reviewer facts come from review Runs, and fix counts count actual fix Runs.
+
+Files facets count distinct paths by their latest version's kind and publishing
+phase, bounded to the header-selected attempt. Versions remain in the viewer.
+Download all builds a ZIP of exactly the displayed latest-version IDs via
+authenticated content reads, not the whole-task ZIP endpoint. This client-side
+ZIP holds the selected bytes in memory; a failed content read fails the download
+rather than silently omitting a file. `FileGallery controls={false}` leaves
+filtering and downloads to the host rail while preserving row/viewer actions.
+Activity facets use event types, structured actors and `eventAttempts`, never
+rendered sentences; counts cover the complete displayed timeline before filters,
+including every attempt. Empty selections mean all; dimensions compose with AND,
+multiple values within one dimension with OR.
+
 ## What is deliberately not here
 
 - A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`
@@ -2348,8 +2420,8 @@ are in `docs/design/accounts.md`):
 - Virtualisation. `Table`, `EventStream`, `LogStream` and `NavTree` render
   plain DOM so any row virtualiser can be applied by the consumer; the tree
   is already a flat list of rows for that reason.
-- A side panel or page layout. Those are app concerns; they compose the
-  pieces here. The `Sidebar` and `Board` are chrome, not a layout: the app
-  decides how they sit beside the transcript and how wide they are.
+- The application shell and navigation placement. `PageWithRail` supplies an
+  opt-in content/right-rail region; the app still decides where its sidebar,
+  headers and page regions sit. Non-rail pages need not adopt it.
 - Drag-and-drop on the board. The workflow owns every lane transition; see
   the Board rules.

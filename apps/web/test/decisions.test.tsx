@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Decider, PersistedEvent, Run } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, mount, settle, until } from "./dom.ts";
+import { act, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, type LedgerQuery } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -271,18 +271,23 @@ describe("a conducted task's Chat", () => {
     expect(notices[0]).toContain("Pull request #88 approved.");
   });
 
-  test("Sessions: the conductor's Runs under it, Deliver's under Delivered automatically", async () => {
-    const before = run({ id: "run_auto", createdAt: at(-100) });
-    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }));
+  // Opens Sessions and its selector: each option's place in the tree, and the Delivered automatically heading.
+  async function sessionTree(p: HTMLElement) {
     const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
     await act(async () => {
       tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
       tab.click();
     });
+    await sessionOptions(p);
     await settle();
-    const rows = [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
-      li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
-    expect(rows).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
+    return [...document.querySelectorAll('[data-testid=sessions] [role="option"], [data-testid=sessions] [role="presentation"]')].filter((li) => li.getAttribute("role") === "option" || li.textContent === "Delivered automatically").map((li) =>
+      li.getAttribute("role") === "presentation" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
+  }
+
+  test("Sessions: the conductor's Runs under it, Deliver's under Delivered automatically", async () => {
+    const before = run({ id: "run_auto", createdAt: at(-100) });
+    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }));
+    expect(await sessionTree(p)).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
   });
 
   // Deliver started it; the person took over, and the conductor steered it.
@@ -295,15 +300,7 @@ describe("a conducted task's Chat", () => {
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_auto]"), "the steered Run's line");
     expect(line.querySelector("[data-testid=conductor-steer]")?.getAttribute("data-directive")).toBe("dir_auto");
     expect(line.textContent).toContain("Use staging.");
-    const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
-    await act(async () => {
-      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      tab.click();
-    });
-    await settle();
-    const rows = [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
-      li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically" : `${li.getAttribute("data-under") ?? "top"}`);
-    expect(rows).toEqual(["top", "— Delivered automatically", "delivered"]);
+    expect(await sessionTree(p)).toEqual(["top", "— Delivered automatically", "delivered"]);
   });
 
   test("under Deliver, a Run the conductor steered still has its line", () => {
@@ -346,10 +343,11 @@ describe("a conducted task with two attempts", () => {
     mounted.push(unmount);
     await until(() => container.querySelector(`[data-testid=task-screen][data-attempt="${expect}"]`), `attempt ${expect}`);
     await settle();
+    if (tab === "sessions") { await sessionOptions(container); await settle(); }
     return { p: container, client };
   }
-  const tree = (p: HTMLElement) => [...p.querySelectorAll("[data-testid=sessions] li")].map((li) =>
-    li.getAttribute("data-testid") === "delivered-automatically" ? "— Delivered automatically"
+  const tree = (_p: HTMLElement) => [...document.querySelectorAll('[data-testid=sessions] li')].filter((li) => li.getAttribute("role") === "option" || li.textContent === "Delivered automatically").map((li) =>
+    li.getAttribute("role") === "presentation" ? "— Delivered automatically"
       : `${li.getAttribute("data-under") ?? "top"}:${li.getAttribute("data-run")}`);
 
   test("Sessions on the current attempt: the conductor, its Runs of this attempt under it, the attempt's others under Delivered automatically", async () => {

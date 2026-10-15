@@ -23,6 +23,10 @@ export function WaitingGroup({ title, count, empty, className, children, ...rest
   );
 }
 
+export function WaitingList({ className, ...props }: HTMLAttributes<HTMLUListElement>) {
+  return <ul className={cx(styles["list"], className)} {...props} />;
+}
+
 export interface WaitingRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "title"> {
   /** Whose it is: a face, with the asking agent on it. */
   readonly face: ReactNode;

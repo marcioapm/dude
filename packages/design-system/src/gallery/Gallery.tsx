@@ -24,9 +24,11 @@ import { BrainstormSection } from "./sections/Brainstorm.tsx";
 import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
+import { PageRailSection } from "./sections/PageRails.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+  ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Welcome",
@@ -98,6 +100,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["c-avatar", "AgentAvatar"],
       ["c-numbers", "Cost / Tokens / Duration"],
       ["c-metric", "MetricTile"],
+      ["c-timeline", "Timeline"],
       ["c-event", "EventRow"],
       ["c-tree", "SessionTreeNode"],
       ["c-diff", "DiffView"],
@@ -160,6 +163,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["nav-tree", "NavTree"],
       ["nav-tree-menus", "NavTree row menus"],
       ["nav-sidebar", "Sidebar (realistic)"],
+      ["nav-waiting-list", "WaitingList"],
+      ["nav-sidebar-others", "Sidebar on others"],
       ["nav-sidebar-states", "Sidebar states"],
     ],
   ],
@@ -363,6 +368,7 @@ function Shell() {
           <LiveSection mode={panes} />
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
+          <PageRailSection mode={panes} />
           <AccountsSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
