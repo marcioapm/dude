@@ -47,9 +47,9 @@ func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *Rev
 	return out, err
 }
 
-// unreviewedHeads are the repositories where the candidate's head is a
-// commit no completed review Run checked out, nor a person accepted
-// unreviewed: what must not reach the pull request.
+// unreviewedHeads are the repositories whose candidate heads have neither
+// a completed review covering that repository in this attempt nor a person's
+// acceptance of that exact commit.
 func (s *Store) unreviewedHeads(ctx context.Context, org string, st *State, c *Candidate) ([]string, error) {
 	var out []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -58,8 +58,10 @@ func (s *Store) unreviewedHeads(ctx context.Context, org string, st *State, c *C
 				continue
 			}
 			var reviewed bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND phase = 'review'
-				AND status = 'completed' AND base_refs->>$2 = $3)`, st.TaskID, repo, st.Heads[repo]).Scan(&reviewed); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1
+				AND attempt = COALESCE(NULLIF($4, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) AND phase = 'review'
+				AND status = 'completed' AND base_refs->>$2 = $3
+				AND (review_range IS NULL OR review_range->'base' ? $2))`, st.TaskID, repo, st.Heads[repo], st.Attempt).Scan(&reviewed); err != nil {
 				return err
 			}
 			if !reviewed {

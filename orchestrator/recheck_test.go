@@ -598,7 +598,8 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 		}
 	})
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.sync()
+	w.until("a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -622,6 +623,13 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 		JOIN repositories r ON r.id = pr.repository_id WHERE pr.task_id = $1 AND r.name = 'target'`, w.wi).Scan(&stored)
 	if stored != moved {
 		t.Errorf("target's pull request is recorded at %s; GitHub has %s", stored, moved)
+	}
+	var heads map[string]string
+	if err := json.Unmarshal([]byte(w.state("heads")), &heads); err != nil {
+		t.Fatal(err)
+	}
+	if heads["target"] != moved {
+		t.Errorf("delivery retained target at %s; GitHub has %s", heads["target"], moved)
 	}
 	if body := w.gh.Pull(1).Body; !strings.Contains(body, "target `"+moved[:7]+"`") {
 		t.Errorf("target's Verification is not about %s:\n%s", moved[:7], body)
