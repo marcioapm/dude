@@ -87,6 +87,11 @@ export interface NavTask {
   readonly autoStart?: NavAutoStart | null | undefined;
   /** The reader may start it: draws a Backlog card's start. */
   readonly canStart?: boolean | undefined;
+  /**
+   * Who drives its delivery while in progress (`driverMode`): its card and
+   * row carry the glyph, read-only. Absent for a task not started or ended.
+   */
+  readonly driver?: "deliver" | "conductor" | "deliver-chat" | undefined;
 }
 
 /** A related task, as a chip, a menu and the strip name it. */
@@ -116,6 +121,13 @@ export interface NavAutoStart {
 /** What a task that needs you, with no agent asking, says it waits for. */
 export function waitingWords(task: NavTask): string {
   return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
+}
+
+const NOT_IN_PROGRESS: ReadonlySet<TaskStatus> = new Set(["received", "intake", "awaiting_confirmation", "queued", "done", "failed", "aborted"]);
+
+/** The driver a card or row shows: only while the task is in progress. */
+export function shownDriver(task: NavTask): NavTask["driver"] {
+  return task.driver && !NOT_IN_PROGRESS.has(task.status) ? task.driver : undefined;
 }
 
 export interface NavEpic {

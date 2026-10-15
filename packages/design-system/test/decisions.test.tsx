@@ -91,6 +91,11 @@ describe("who decides", () => {
     expect(plain(html(<DeciderLine decider="policy" />))).toBe("Deliver decides · the pipeline runs to the pull request on its own");
   });
 
+  test("Deliver, with what a message here does in place of the default words", () => {
+    expect(plain(html(<DeciderLine decider="policy" detail="messages here are answered, and take no decisions back" />)))
+      .toBe("Deliver decides · messages here are answered, and take no decisions back");
+  });
+
   test("Deliver, holding a gate for the person", () => {
     expect(plain(html(<DeciderLine decider="policy" waiting="whether to open the pull request" action={<button>Let Deliver finish it</button>} />)))
       .toBe("Deliver decides · waiting on the person: whether to open the pull requestLet Deliver finish it");
