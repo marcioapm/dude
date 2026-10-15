@@ -71,10 +71,11 @@ beforeAll(async () => {
       return Response.json({ error: { code: "github_unavailable", message: "GitHub could not be asked about it: down" } }, { status: 502 });
     }
     if (body.kind === "pr") {
-      // #14 is a draft: unfinished work, which continues by default.
-      return Response.json({ kind: "pr", repositoryId: REPO, repository: "target", number: Number(body.pullRequest),
+      // A number or the pull request's URL. #14 is a draft: unfinished work, which continues by default.
+      const number = Number(/(\d+)$/.exec(String(body.pullRequest))?.[1]);
+      return Response.json({ kind: "pr", repositoryId: REPO, repository: "target", number,
         title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main",
-        mode: body.pullRequest === "14" ? "continue" : "review" });
+        mode: number === 14 ? "continue" : "review" });
     }
     return Response.json({ kind: "branch", repositoryId: REPO, repository: "target", headBranch: body.branch,
       baseBranch: body.base || "main", mode: "continue" });
@@ -133,6 +134,32 @@ test("a new source's mode is what it says unless the person chose one", async ()
   expect(await modeOf({ kind: "branch", repositoryId: REPO, branch: "feature/bare", mode: "review" })).toBe("review");
   const bad = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "rewrite" });
   expect(bad.status).toBe(400);
+});
+
+test("the same pull request named by its URL keeps the saved mode; a mode sent with it still applies", async () => {
+  const url = (n: number) => `https://github.com/acme/target/pull/${n}`;
+  const patch = async (taskId: string, source: unknown) => {
+    const res = await call("PATCH", `/v1/tasks/${taskId}`, { title: "Adopt by URL", source });
+    expect(res.status).toBe(200);
+    return (await storedSource(taskId))!.mode as string;
+  };
+  // Ready #12 defaults to review; the person chose continue.
+  const ready = ((await (await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "continue" })).json()) as { id: string }).id;
+  const asked = checks.length;
+  expect(await patch(ready, { kind: "pr", repositoryId: REPO, pullRequest: url(12) })).toBe("continue");
+  expect(checks.length).toBe(asked + 1);
+  // An explicit mode wins over the saved one.
+  expect(await patch(ready, { kind: "pr", repositoryId: REPO, pullRequest: url(12), mode: "review" })).toBe("review");
+  // Both pull requests share a head branch, which one live task holds at a time.
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${ready}`;
+
+  // Draft #14 defaults to continue; the person chose review.
+  const draft = ((await (await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "14", mode: "review" })).json()) as { id: string }).id;
+  expect(await patch(draft, { kind: "pr", repositoryId: REPO, pullRequest: url(14) })).toBe("review");
+  expect(await patch(draft, { kind: "pr", repositoryId: REPO, pullRequest: url(14), mode: "continue" })).toBe("continue");
+  // Another pull request takes its own default.
+  expect(await patch(draft, { kind: "pr", repositoryId: REPO, pullRequest: url(12) })).toBe("review");
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${draft}`;
 });
 
 test("a source saved before modes reviews, as it did", async () => {

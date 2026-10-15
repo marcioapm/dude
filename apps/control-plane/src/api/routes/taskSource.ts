@@ -63,6 +63,17 @@ export function sameSource(stored: TaskSource | null, given: TaskSourceInput | n
   return given.branch === stored.headBranch && (given.base === undefined || given.base === stored.baseBranch);
 }
 
+/**
+ * A resolved source the request named another way (a pull request's URL)
+ * that is the stored one keeps the stored mode unless the request named one.
+ */
+export function keepMode(stored: TaskSource | null, given: TaskSourceInput, resolved: TaskSource): TaskSource {
+  if (!stored || given.mode || stored.kind !== resolved.kind || stored.repositoryId !== resolved.repositoryId) return resolved;
+  const same = resolved.kind === "pr" ? resolved.number === stored.number
+    : resolved.headBranch === stored.headBranch && resolved.baseBranch === stored.baseBranch;
+  return same ? { ...resolved, mode: stored.mode } : resolved;
+}
+
 /** The same source with another mode, when the request names one: else null (no change). */
 export function sourceMode(stored: TaskSource, given: TaskSourceInput): TaskSource | null {
   return given.mode && given.mode !== stored.mode ? { ...stored, mode: given.mode } : null;
