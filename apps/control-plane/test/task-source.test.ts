@@ -71,11 +71,13 @@ beforeAll(async () => {
       return Response.json({ error: { code: "github_unavailable", message: "GitHub could not be asked about it: down" } }, { status: 502 });
     }
     if (body.kind === "pr") {
+      // #14 is a draft: unfinished work, which continues by default.
       return Response.json({ kind: "pr", repositoryId: REPO, repository: "target", number: Number(body.pullRequest),
-        title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+        title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main",
+        mode: body.pullRequest === "14" ? "continue" : "review" });
     }
     return Response.json({ kind: "branch", repositoryId: REPO, repository: "target", headBranch: body.branch,
-      baseBranch: body.base || "main" });
+      baseBranch: body.base || "main", mode: "continue" });
   } });
   useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
   router = buildRouter("");
@@ -99,18 +101,47 @@ const newTask = (source?: unknown) => call("POST", "/v1/tasks", {
 });
 
 const storedSource = async (taskId: string) => (await owner`
-  SELECT kind, number, title, head_branch, base_branch FROM task_sources WHERE task_id = ${taskId}`)[0] ?? null;
+  SELECT kind, number, title, head_branch, base_branch, mode FROM task_sources WHERE task_id = ${taskId}`)[0] ?? null;
 
 test("a task created from a pull request keeps it as GitHub said, and works on its repository", async () => {
   const res = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "12" });
   expect(res.status).toBe(201);
   const task = (await res.json()) as { id: string; source: unknown; repositories: unknown };
   expect(task.source).toEqual({ kind: "pr", repositoryId: REPO, repository: "target", number: 12, title: "Greet in Portuguese",
-    headBranch: "feature/greet", baseBranch: "main" });
+    headBranch: "feature/greet", baseBranch: "main", mode: "review" });
   expect(task.repositories).toEqual([{ id: REPO, access: "write" }]);
   expect(checks.at(-1)).toMatchObject({ path: `/internal/projects/${PROJECT}/sources/check`, kind: "pr", pullRequest: "12", taskId: "" });
   expect(await storedSource(task.id)).toEqual({ kind: "pr", number: 12, title: "Greet in Portuguese", head_branch: "feature/greet",
-    base_branch: "main" });
+    base_branch: "main", mode: "review" });
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
+});
+
+test("a new source's mode is what it says unless the person chose one", async () => {
+  const modeOf = async (source: unknown) => {
+    const res = await newTask(source);
+    expect(res.status).toBe(201);
+    const task = (await res.json()) as { id: string; source: { mode: string } };
+    const stored = (await storedSource(task.id))!.mode as string;
+    await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
+    expect(task.source.mode).toBe(stored);
+    return stored;
+  };
+  expect(await modeOf({ kind: "pr", repositoryId: REPO, pullRequest: "12" })).toBe("review");
+  expect(await modeOf({ kind: "pr", repositoryId: REPO, pullRequest: "14" })).toBe("continue");
+  expect(await modeOf({ kind: "branch", repositoryId: REPO, branch: "feature/bare" })).toBe("continue");
+  expect(await modeOf({ kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "continue" })).toBe("continue");
+  expect(await modeOf({ kind: "branch", repositoryId: REPO, branch: "feature/bare", mode: "review" })).toBe("review");
+  const bad = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "rewrite" });
+  expect(bad.status).toBe(400);
+});
+
+test("a source saved before modes reviews, as it did", async () => {
+  const task = (await (await newTask()).json()) as { id: string };
+  await owner`INSERT INTO task_sources (task_id, organization_id, repository_id, kind, head_branch, base_branch)
+    VALUES (${task.id}, ${ORG}, ${REPO}, 'branch', 'feature/old', 'main')`;
+  expect((await storedSource(task.id))!.mode).toBe("review");
+  const read = await router.handle(new Request(`http://dude.test/v1/tasks/${task.id}`, { headers: { authorization: `Bearer ${key}` } }));
+  expect(((await read.json()) as { source: { mode: string } }).source.mode).toBe("review");
   await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
 });
 
@@ -176,6 +207,17 @@ test("a task's source changes, or clears, until its delivery starts; then it is 
   expect((await call("PATCH", `/v1/tasks/${task.id}`, { source: null })).status).toBe(200);
   expect(await storedSource(task.id)).toBeNull();
   expect((await call("PATCH", `/v1/tasks/${task.id}`, { source: { kind: "pr", repositoryId: REPO, pullRequest: "12" } })).status).toBe(200);
+  expect(await storedSource(task.id)).toMatchObject({ mode: "review" });
+
+  // Its mode changes on its own, asking GitHub nothing; the same source sent with no mode keeps it.
+  const beforeMode = checks.length;
+  const switched = await call("PATCH", `/v1/tasks/${task.id}`, { source: { kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "continue" } });
+  expect(switched.status).toBe(200);
+  expect(((await switched.json()) as { source: { mode: string } }).source.mode).toBe("continue");
+  expect((await call("PATCH", `/v1/tasks/${task.id}`, { title: "Adopt the greeting",
+    source: { kind: "pr", repositoryId: REPO, pullRequest: "12" } })).status).toBe(200);
+  expect(checks.length).toBe(beforeMode);
+  expect(await storedSource(task.id)).toMatchObject({ number: 12, mode: "continue" });
 
   await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
     VALUES (${"wf_" + task.id}, ${ORG}, 'task.delivery', ${"delivery:" + task.id}, ${task.id}, 'waiting', 'review', '{}'::jsonb)`;
@@ -183,5 +225,7 @@ test("a task's source changes, or clears, until its delivery starts; then it is 
   expect(locked.status).toBe(409);
   const cleared = await call("PATCH", `/v1/tasks/${task.id}`, { source: null });
   expect(cleared.status).toBe(409);
-  expect(await storedSource(task.id)).toMatchObject({ number: 12 });
+  const remoded = await call("PATCH", `/v1/tasks/${task.id}`, { source: { kind: "pr", repositoryId: REPO, pullRequest: "12", mode: "review" } });
+  expect(remoded.status).toBe(409);
+  expect(await storedSource(task.id)).toMatchObject({ number: 12, mode: "continue" });
 });

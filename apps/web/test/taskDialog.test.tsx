@@ -430,7 +430,7 @@ describe("creating a task with images", () => {
       override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1], taskId?: string) {
         this.lookups.push(taskId);
         return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console", number: 12,
-          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main", mode: "review" as const });
       }
       override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
         const out = await super.createTask(input);
@@ -517,10 +517,11 @@ describe("where a task starts from", () => {
       if (source.kind === "pr" && source.pullRequest === "7") return Promise.reject(new ApiError(422, "pr_merged", MERGED));
       if (source.kind === "pr") {
         return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console",
-          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main",
+          mode: "review" as const });
       }
       return Promise.resolve({ kind: "branch" as const, repositoryId: source.repositoryId, repository: "web-console",
-        headBranch: source.branch, baseBranch: source.base ?? "main" });
+        headBranch: source.branch, baseBranch: source.base ?? "main", mode: "continue" as const });
     }
     override createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
       this.created.push(input);
@@ -676,7 +677,7 @@ describe("where a task starts from", () => {
     await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
       savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
-        baseBranch: "main" } }, client);
+        baseBranch: "main", mode: "review" } }, client);
     const kind = document.querySelector("[data-testid=task-source-kind]")!;
     expect(kind.querySelector("[aria-pressed=true]")?.textContent).toBe("Existing PR");
     expect([...kind.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
@@ -690,7 +691,7 @@ describe("where a task starts from", () => {
     const client = new Sources("a");
     await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the stacked branch on top of the base one.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
-      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" } }, client);
+      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base", mode: "continue" } }, client);
     expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("stack/top → stack/base");
     expect(client.asked.length).toBe(0);
   });
@@ -711,7 +712,7 @@ describe("where a task starts from", () => {
     const d = await open({ id: "task_draft", fixed: null, title: "Take over", goal: "Finish the Portuguese greeting already open.",
       acceptanceCriteria: [], epicId: null, repositories: [{ id: repoId, access: "write" }, { id: "repo_api", access: "write" }],
       savedSource: { kind: "pr", repositoryId: repoId, repository: PROJECT.repositories[0]!.name, number: 12, title: "Greet",
-        headBranch: "feature/greet", baseBranch: "main" } }, client);
+        headBranch: "feature/greet", baseBranch: "main", mode: "review" } }, client);
     await d.title("Take over the greeting");
     await until(() => !d.save().disabled, "Save on");
     const access = document.querySelector(`[aria-label="What the work does in ${PROJECT.repositories[0]!.name}"]`)!;

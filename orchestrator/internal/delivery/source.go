@@ -39,6 +39,14 @@ type SourceRequest struct {
 	TaskID string `json:"taskId,omitempty"`
 }
 
+// What a delivery does first with the work it took over (task_sources.mode).
+const (
+	// An implementer carries the work on, then the review loop.
+	ModeContinue = "continue"
+	// The review loop at once.
+	ModeReview = "review"
+)
+
 // Source is a checked source, as task_sources keeps it.
 type Source struct {
 	Kind         string `json:"kind"`
@@ -49,6 +57,10 @@ type Source struct {
 	URL          string `json:"url,omitempty"`
 	HeadBranch   string `json:"headBranch"`
 	BaseBranch   string `json:"baseBranch"`
+	// ModeContinue or ModeReview. A check answers the default for what the
+	// source is: a draft pull request or a bare branch is unfinished work.
+	// A delivery state from before modes has "": review.
+	Mode string `json:"mode,omitempty"`
 	// The head when the delivery took it over: a later head is someone's
 	// work on it, dude's or a person's.
 	HeadSHA string `json:"headSha,omitempty"`
@@ -130,7 +142,12 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 				n, slug)
 		}
 		out.Number, out.Title, out.URL, out.HeadBranch, out.BaseBranch = n, pr.Title, pr.URL, pr.HeadRef, pr.BaseRef
+		out.Mode = ModeReview
+		if pr.State == forge.StateDraft {
+			out.Mode = ModeContinue
+		}
 	case SourceBranch:
+		out.Mode = ModeContinue
 		out.HeadBranch, out.BaseBranch = strings.TrimSpace(in.Branch), strings.TrimSpace(in.Base)
 		if out.HeadBranch == "" {
 			return out, sourceRefusal("bad_branch", "name the branch to start from")
@@ -279,9 +296,9 @@ func TaskSource(ctx context.Context, tx pgx.Tx, taskID string) (*Source, error) 
 	var s Source
 	var number *int
 	var title *string
-	err := tx.QueryRow(ctx, `SELECT s.kind, s.repository_id, r.name, s.number, s.title, s.head_branch, s.base_branch
+	err := tx.QueryRow(ctx, `SELECT s.kind, s.repository_id, r.name, s.number, s.title, s.head_branch, s.base_branch, s.mode
 		FROM task_sources s JOIN repositories r ON r.id = s.repository_id WHERE s.task_id = $1`, taskID).
-		Scan(&s.Kind, &s.RepositoryID, &s.Repository, &number, &title, &s.HeadBranch, &s.BaseBranch)
+		Scan(&s.Kind, &s.RepositoryID, &s.Repository, &number, &title, &s.HeadBranch, &s.BaseBranch, &s.Mode)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}

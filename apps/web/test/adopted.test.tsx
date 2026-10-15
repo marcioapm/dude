@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 const HEAD = "feature/greet";
-const PR_SOURCE: TaskSource = { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet in Portuguese", headBranch: HEAD, baseBranch: "main" };
+const PR_SOURCE: TaskSource = { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet in Portuguese", headBranch: HEAD, baseBranch: "main", mode: "review" };
 /** The adopted pull request as dude records it: no Run opened it. */
 const ADOPTED: PullRequest = { ...PULL_REQUEST, id: "pr_12", runId: null, number: 12, title: "Greet in Portuguese", headBranch: HEAD,
   url: "https://github.com/example/web-console/pull/12" };
@@ -57,7 +57,7 @@ async function taskPage(client: FixtureClient) {
 }
 
 const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim() ?? "";
-const BRANCH_SOURCE: TaskSource = { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" };
+const BRANCH_SOURCE: TaskSource = { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base", mode: "review" };
 
 describe("where the task came from, on Overview", () => {
   test("an adopted pull request: #N title linking to GitHub, and head → base in mono", async () => {
