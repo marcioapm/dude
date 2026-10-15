@@ -84,8 +84,10 @@ var tools = []tool{
 	define("start_phase", "Take the decision the delivery waits on by starting a phase from the task's head: "+
 		"implement, review (some or all categories), fix (some or all open findings; at pull request feedback, the "+
 		"feedback), simplify or test. The workflow creates the Runs as it creates its own, waits for them, and wakes "+
-		"you at the next decision. Refused when you do not take the task's decisions, or past the policy's bounds: then "+
-		"ask the person.", conductors, startPhase),
+		"you at the next decision. While the delivery waits on its pull requests with nothing running, fix (say what, "+
+		"in note), review or test start too, on the pull request's branch, and it waits on them again after. Refused "+
+		"when you do not take the task's decisions, while a Run or publish is changing the branch, or past the policy's "+
+		"bounds: then ask the person.", conductors, startPhase),
 	define("steer", "Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: "+
 		"your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong "+
 		"way, or to add something the person just said; start another phase only once a Run has ended. interrupt "+
@@ -118,8 +120,9 @@ var tools = []tool{
 		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
 		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
 		"request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. "+
-		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted.",
-		conductors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
+		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted. A fixer answering pull "+
+		"request feedback replies only to the comments in its feedback, in_reply_to each.",
+		prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
 	define("publish", "Publish what you committed in your checkout to the task branch, as a phase's work is: lux "+
 		"pushes it, then dude fast-forwards the task branch to it. Only for small, well-understood changes while you "+
 		"take the decisions: refused while an implementer or fixer is at work, when your checkout is behind the task "+

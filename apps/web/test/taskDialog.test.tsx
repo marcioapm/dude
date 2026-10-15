@@ -421,6 +421,51 @@ describe("creating a task with images", () => {
     await until(() => document.body.textContent?.includes("A task shows at most 6 images; this one shows 7."), "the refusal");
     expect(client.calls).toEqual([]);
   });
+
+  test("created from a pull request, its upload failed, then switched to New work: the retry clears the stored source", async () => {
+    /** Keeps the task's source as the API does: set by the POST, changed by a PATCH that names it, kept by one that does not. */
+    class Stored extends SaveRecorder {
+      source: unknown = undefined;
+      lookups: Array<string | undefined> = [];
+      override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1], taskId?: string) {
+        this.lookups.push(taskId);
+        return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console", number: 12,
+          title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+      }
+      override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+        const out = await super.createTask(input);
+        this.source = input.source ?? null;
+        return out;
+      }
+      override async updateTask(id: string, fields: Parameters<FixtureClient["updateTask"]>[1]) {
+        const out = await super.updateTask(id, fields);
+        if ("source" in fields) this.source = fields.source;
+        return out;
+      }
+    }
+    const client = new Stored("a");
+    client.failing = { uploadAttachment: 1 };
+    const d = await withImages(client);
+    const kind = (label: string) => act(async () => {
+      [...document.querySelectorAll<HTMLButtonElement>("[data-testid=task-source-kind] button")].find((b) => b.textContent === label)!.click();
+    });
+    await kind("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => document.querySelector("[data-testid=task-source-found]") && !d.save().disabled, "the pull request found");
+    await press(d.save());
+    await until(() => document.body.textContent?.includes("uploadAttachment failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment"]);
+    expect(client.source).toMatchObject({ kind: "pr", pullRequest: "#12" });
+    // A lookup now is of the task just created, whose own pull request this is.
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "12");
+    await until(() => client.lookups.length > 1, "a second lookup");
+    expect(client.lookups.at(-1)).toBe("task_new");
+    await kind("New work");
+    await press(d.save());
+    await until(() => client.names().includes("updateTask"), "the PATCH");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "uploadAttachment", "updateTask"]);
+    expect(client.source).toBeNull();
+  });
 });
 
 describe("editing a task whose delivery stopped", () => {
@@ -458,5 +503,230 @@ describe("editing a task whose delivery stopped", () => {
     await until(() => sent.length > 0, "the save");
     expect(sent[0]).toMatchObject({ title: "Stopped task, reworded" });
     expect(sent[0]).not.toHaveProperty("repositories");
+  });
+});
+
+describe("where a task starts from", () => {
+  const MERGED = "pull request #7 is merged: only an open one can be adopted";
+  /** Answers lookups as the backend would, and records what is created. */
+  class Sources extends EpicsClient {
+    created: unknown[] = [];
+    asked: unknown[] = [];
+    override checkTaskSource(_projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
+      this.asked.push(source);
+      if (source.kind === "pr" && source.pullRequest === "7") return Promise.reject(new ApiError(422, "pr_merged", MERGED));
+      if (source.kind === "pr") {
+        return Promise.resolve({ kind: "pr" as const, repositoryId: source.repositoryId, repository: "web-console",
+          number: Number(source.pullRequest.replace("#", "")), title: "Greet in Portuguese", headBranch: "feature/greet", baseBranch: "main" });
+      }
+      return Promise.resolve({ kind: "branch" as const, repositoryId: source.repositoryId, repository: "web-console",
+        headBranch: source.branch, baseBranch: source.base ?? "main" });
+    }
+    override createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+      this.created.push(input);
+      return super.createTask(input);
+    }
+  }
+  const pick = (label: string) => act(async () => {
+    const group = document.querySelector("[data-testid=task-source-kind]")!;
+    [...group.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
+  });
+  const fieldError = (id: string) => {
+    const el = document.querySelector(`[data-testid=${id}]`)!;
+    return el.getAttribute("aria-invalid") === "true" ? document.getElementById(`${el.id}-hint`)?.textContent ?? "" : "";
+  };
+  /** Types words into a branch picker's search, and picks the option named. */
+  const pickBranch = async (id: string, words: string, branch: string) => {
+    const search = document.querySelector<HTMLInputElement>(`[data-testid=${id}] [role=combobox]`)!;
+    await set(search, HTMLInputElement.prototype, words);
+    await until(() => [...document.querySelectorAll(`[data-testid=${id}] [role=option]`)].some((o) => o.textContent === branch),
+      `${branch} offered`);
+    const option = [...document.querySelectorAll(`[data-testid=${id}] [role=option]`)].find((o) => o.textContent === branch)!;
+    await act(async () => option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  };
+
+  test("new work is the default, and creating sends no source", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    const pressed = document.querySelector("[data-testid=task-source-kind] [aria-pressed=true]");
+    expect(pressed?.textContent).toBe("New work");
+    await d.title("Show invoices in euros");
+    await d.goal("Keep invoices in euros for EU customers.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).not.toHaveProperty("source");
+    expect(client.asked.length).toBe(0);
+  });
+
+  test("an existing pull request is looked up, shows its title and head → base, and is created with it", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    expect(d.save().disabled).toBe(true);
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => document.querySelector("[data-testid=task-source-found]"), "the pull request found");
+    expect(document.querySelector("[data-testid=task-source-found]")!.textContent).toBe("#12 Greet in Portuguese · feature/greet → main");
+    expect(d.save().disabled).toBe(false);
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12" } });
+  });
+
+  test("a refused pull request says why on its field, and Create stays off", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "7");
+    await until(() => fieldError("task-source-pr") === MERGED, "the refusal");
+    expect(d.save().disabled).toBe(true);
+    expect(document.querySelectorAll("[data-testid=task-source-found]").length).toBe(0);
+  });
+
+  test("an existing branch and its base are picked from GitHub's branches", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await pickBranch("task-source-branch", "top", "stack/top");
+    await pickBranch("task-source-base", "base", "stack/base");
+    expect(document.querySelector<HTMLInputElement>("[data-testid=task-source-branch-value]")!.value).toBe("stack/top");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("stack/top → stack/base"), "the branch found");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "stack/top", base: "stack/base" } });
+  });
+
+  test("a branch past the listed ones is found by its exact name, picked, and created with it", async () => {
+    class Many extends Sources {
+      override sourceBranches(_projectId: string, _repositoryId: string, q: string) {
+        const listed = Array.from({ length: 50 }, (_, i) => `feature/${String(i).padStart(3, "0")}`).filter((b) => b.includes(q));
+        // As the server answers: the exact name GitHub has, ahead of the bounded scan's matches.
+        return Promise.resolve({ branches: q === "feature/599" ? ["feature/599"] : listed, more: true });
+      }
+    }
+    const client = new Many("a");
+    const d = await open(undefined, client);
+    await d.title("Take over a late branch");
+    await d.goal("Finish the branch the list does not reach.");
+    await pick("Existing branch");
+    await pickBranch("task-source-branch", "feature/599", "feature/599");
+    const value = document.querySelector<HTMLInputElement>("[data-testid=task-source-branch-value]")!;
+    expect(value.value).toBe("feature/599");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("feature/599 → main"), "the branch found");
+    expect(document.getElementById(`${value.id}-hint`)?.textContent).toBe(
+      "Not the default branch, a release branch, or a protected one. Not every branch is listed: type a branch's exact name to find it.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "branch", branch: "feature/599" } });
+  });
+
+  test("a repository dude may not push to is not offered, and none at all says why", async () => {
+    class NoWrite extends Sources {
+      override sourceRepositories() {
+        return Promise.resolve({ repositories: [{ id: "repo_wc", name: "web-console", writable: false, reason: "Git push access denied" }] });
+      }
+    }
+    const client = new NoWrite("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await until(() => document.querySelector("[data-testid=task-source-access]"), "the refusal");
+    expect(document.querySelector("[data-testid=task-source-access]")!.textContent).toContain("Git push access denied");
+    expect(document.querySelectorAll("[data-testid=task-source-branch]").length).toBe(0);
+    expect(d.save().disabled).toBe(true);
+  });
+
+  test("a lookup answered after a newer one is dropped, and the name typed stays", async () => {
+    let release: (() => void) | undefined;
+    class Slow extends Sources {
+      override checkTaskSource(projectId: string, source: Parameters<FixtureClient["checkTaskSource"]>[1]) {
+        if (source.kind === "pr" && source.pullRequest === "12") {
+          return new Promise<never>((_, reject) => {
+            release = () => reject(new ApiError(422, "pr_merged", MERGED));
+          });
+        }
+        return super.checkTaskSource(projectId, source);
+      }
+    }
+    const client = new Slow("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    await pick("Existing PR");
+    const field = document.querySelector<HTMLInputElement>("[data-testid=task-source-pr]")!;
+    await set(field, HTMLInputElement.prototype, "12");
+    await until(() => release !== undefined, "the first lookup");
+    await set(field, HTMLInputElement.prototype, "13");
+    await until(() => document.querySelector("[data-testid=task-source-found]")?.textContent?.includes("#13"), "the second answer");
+    await act(async () => release!());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(fieldError("task-source-pr")).toBe("");
+    expect(field.value).toBe("13");
+    expect(document.querySelector("[data-testid=task-source-found]")!.textContent).toContain("#13");
+  });
+
+  test("once delivery has started, where it starts from is shown and cannot change", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
+        baseBranch: "main" } }, client);
+    const kind = document.querySelector("[data-testid=task-source-kind]")!;
+    expect(kind.querySelector("[aria-pressed=true]")?.textContent).toBe("Existing PR");
+    expect([...kind.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
+    expect(document.querySelector<HTMLInputElement>("[data-testid=task-source-pr]")!.disabled).toBe(true);
+    expect(document.body.textContent).toContain("where it started from is fixed");
+    expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("#12 Greet · feature/greet → main");
+    expect(client.asked.length).toBe(0);
+  });
+
+  test("a started branch shows its saved head → base", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the stacked branch on top of the base one.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "branch", repositoryId: "repo_wc", repository: "web-console", headBranch: "stack/top", baseBranch: "stack/base" } }, client);
+    expect(document.querySelector("[data-testid=task-source-saved]")?.textContent).toBe("stack/top → stack/base");
+    expect(client.asked.length).toBe(0);
+  });
+
+  test("the source's repository set to Reads it says so, and Save stays off until it changes it again", async () => {
+    class TwoRepos extends Sources {
+      override getProject(id: string) {
+        return super.getProject(id).then((p) => ({ ...p, repositories: [...p.repositories,
+          { ...p.repositories[0]!, id: "repo_api", name: "api" }] }));
+      }
+      override sourceRepositories() {
+        return Promise.resolve({ repositories: [{ id: PROJECT.repositories[0]!.id, name: PROJECT.repositories[0]!.name, writable: true },
+          { id: "repo_api", name: "api", writable: true }] });
+      }
+    }
+    const client = new TwoRepos("a");
+    const repoId = PROJECT.repositories[0]!.id;
+    const d = await open({ id: "task_draft", fixed: null, title: "Take over", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: repoId, access: "write" }, { id: "repo_api", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: repoId, repository: PROJECT.repositories[0]!.name, number: 12, title: "Greet",
+        headBranch: "feature/greet", baseBranch: "main" } }, client);
+    await d.title("Take over the greeting");
+    await until(() => !d.save().disabled, "Save on");
+    const access = document.querySelector(`[aria-label="What the work does in ${PROJECT.repositories[0]!.name}"]`)!;
+    const choose = async (label: string) => {
+      await act(async () => access.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      await act(async () => access.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+      const option = await until(() => [...document.querySelectorAll("[role=option]")].find((o) => o.textContent === label), label);
+      await act(async () => (option as HTMLElement).click());
+    };
+    await choose("Reads it");
+    await until(() => document.querySelector("[data-testid=task-source-read]"), "the contradiction named");
+    expect(document.querySelector("[data-testid=task-source-read]")!.textContent)
+      .toBe(`This task only reads ${PROJECT.repositories[0]!.name}, which it starts from: set it to Changes it, or start from New work.`);
+    expect(d.save().disabled).toBe(true);
+    await choose("Changes it");
+    await until(() => !document.querySelector("[data-testid=task-source-read]") && !d.save().disabled, "Save on again");
   });
 });

@@ -11,7 +11,7 @@ import { z } from "zod";
 import {
   BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
   resolveAgentModel, resolveTier,
-  taskCriteriaInput, taskGoalInput, taskGoalShortBy,
+  taskCriteriaInput, taskGoalInput, taskGoalShortBy, taskSourceInputSchema,
 } from "@dude/domain";
 import type { AgentModels, BlockerRef } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
@@ -21,6 +21,7 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import { requireOrgAdmin } from "../access.ts";
 import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { SOURCE_JSON, checkTaskSource, setTaskSource, taskSourceInput } from "./taskSource.ts";
 import { ownerJson, peopleJson } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
 import { agentMachines } from "./machines.ts";
@@ -44,7 +45,7 @@ const DECIDING_JSON = `
    ORDER BY w.created_at DESC LIMIT 1) AS "awaitingDecision"`;
 
 const TASK_SELECT = `
-  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
+  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
@@ -128,12 +129,16 @@ const createTaskInput = z.object({
   title: z.string().min(1).max(500),
   goal: taskGoalInput.default(""),
   acceptanceCriteria: taskCriteriaInput.default([]),
+  /** Existing work it starts from (a pull request or a branch); omitted or null for new work. */
+  source: taskSourceInput.optional(),
 });
 
 async function createTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, createTaskInput);
   if (taskGoalShortBy(input.goal ?? "") > 0) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   const { organizationId } = ctx.principal;
+  // Asked of GitHub before the transaction: no row is held while it answers.
+  const source = input.source ? await checkTaskSource(ctx, input.projectId, input.source, null) : null;
 
   const result = await withOrg(organizationId, async (scope) => {
     // RLS already confines this to the caller's org, so a miss means the
@@ -160,6 +165,7 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     const missing = await setTaskRepositories(scope, organizationId, input.projectId, taskId, input.repositories ?? []);
     // Thrown, so the transaction and the task's number roll back.
     if (missing) throw notFound(`repository ${missing} is not in this project`);
+    await setTaskSource(scope, organizationId, taskId, source);
     await syncTaskAttachments(scope, taskId, input.goal ?? "", input.acceptanceCriteria ?? []);
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${taskId}`) as Array<Record<string, unknown>>;
@@ -181,6 +187,31 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 
   if ("missingProject" in result) throw notFound(`project ${input.projectId} not found`);
   return json(result.task, 201);
+}
+
+/**
+ * Look a source up before a task names it: the pull request's title, head
+ * and base, or the branch and its base — or why dude will not adopt it.
+ * The task dialog's lookup; writes nothing. `taskId` names the task it is
+ * for, when it exists.
+ */
+async function checkSource(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, z.object({ source: taskSourceInputSchema, taskId: z.string().min(1).optional() }));
+  return json(await checkTaskSource(ctx, ctx.params.id!, input.source, input.taskId ?? null));
+}
+
+/** The project's repositories, with whether dude may push to each: where existing work can be taken over from. */
+async function sourceRepositories(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET",
+    `/internal/projects/${encodeURIComponent(ctx.params.id!)}/sources/repositories`, undefined, ctx.principal);
+}
+
+/** A project repository's branches whose names contain `q`, bounded: the branch and base pickers'. */
+async function sourceBranches(ctx: RequestContext): Promise<Response> {
+  const q = (ctx.url.searchParams.get("q") ?? "").slice(0, 200);
+  return orchestrator(ctx.principal.organizationId, "GET",
+    `/internal/projects/${encodeURIComponent(ctx.params.id!)}/sources/repositories/${encodeURIComponent(ctx.params.repo!)}/branches?q=${encodeURIComponent(q)}`,
+    undefined, ctx.principal);
 }
 
 const deliverInput = z.object({
@@ -253,7 +284,9 @@ async function talkTask(ctx: RequestContext): Promise<Response> {
     JSON.stringify(input.data), ctx.principal);
 }
 
-const deciderInput = z.object({ decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional() }).strict();
+const deciderInput = z.object({
+  decider: z.enum(["policy", "conductor"]), openPullRequest: z.boolean().optional(), draft: z.boolean().optional(),
+}).strict();
 
 /**
  * Who takes the delivery's decisions from the next one on: "policy" is Let
@@ -547,6 +580,9 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
+  router.post("/v1/projects/:id/sources/check", checkSource);
+  router.get("/v1/projects/:id/sources/repositories", sourceRepositories);
+  router.get("/v1/projects/:id/sources/repositories/:repo/branches", sourceBranches);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

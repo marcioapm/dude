@@ -507,6 +507,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the briefing's grammar (dude's face and name, the prompt's neutral frame
   and clamp) tagged "Told", just before the agent's first words after it.
   A person's message read on the same resume stays their own turn.
+- **A decision with no agent to ask it** sits in the task's notices, in the
+  escalation's grammar, not as a `QuestionCard`: a `QuestionCard` is a turn
+  and needs a transcript. An adopted branch reviewed under Deliver waits on
+  its owner before dude publishes it: an attention `Callout`, "**Open the
+  pull request?** Review is done on `stack/top`. dude opens its pull request
+  into `stack/base` once you say how.", branch and base in mono, then
+  **Open** (primary) and **Draft** (secondary). Only the owner is offered
+  them; anyone else reads "Waiting for Ana to decide.". With a conductor
+  deciding, the same question is its gate question in Chat.
 
 ### A task's Chat (the conductor)
 
@@ -873,6 +882,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and Delivered automatically. A set-aside agent session reads as it ended,
   its strip saying it was set aside and the way to where the work goes on.
   Activity is one timeline across attempts.
+- **Adopted work is picked back up where it is.** A task that took over an
+  existing pull request or branch keeps it on every way back, Start over
+  included, and the dialog says so: Start over reads "The same pull request
+  and branch, reviewed again from the start." (or "The same branch, …"),
+  its Branch line is *kept* — "`feature/greet`, and pull request #12 on it,
+  which stays open." — and its Workspace is a clean checkout of that branch
+  as GitHub has it. Nothing promises a new `dude/…` branch or a checkout of
+  the default branch, and for an adopted pull request nothing promises it
+  closed. An adopted branch differs on one point: a pull request dude
+  opened from it is closed on Start over, and its Branch line says so —
+  "`stack/top`, into `stack/base`. A pull request dude opened from it is
+  closed." The adopted pull request is every attempt's: an earlier attempt
+  shows it too, only to read, and its note stays even if someone closed it
+  on GitHub.
+- **Adopted work that changed on GitHub** is an ordinary escalation with
+  its own words: "**Adopted work changed on GitHub.**" and the
+  orchestrator's reason in full (what changed, "Put it back on GitHub and
+  Try again, or stop this task and adopt it in a new one."), then **Try
+  again** and **Stop**. No banner of its own.
 
 ### Nesting
 
@@ -1398,6 +1426,23 @@ here.
   tile on the face on top can still cover the next face's initials. Past
   `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
+- **Where a task starts from** is a `Fieldset` "Starts from" in the task
+  dialog, a `Segmented` of New work (the default), Existing PR and
+  Existing branch. Existing work is picked from the project's repositories
+  the task changes, in a `Select` whose repositories dude may not push to
+  stay listed, disabled, with GitHub's reason as their `description`. A
+  pull request is an `Input` (number or URL); a branch and its base are
+  each a `SearchPicker` over the repository's branches, the pick shown in a
+  read-only mono `Input` above it, the base's placeholder the default
+  branch. When the listing is cut short the hint says "Not every branch is
+  listed: type a branch's exact name to find it." What dude found is a
+  neutral `Callout`: "**#12** Greet in Portuguese · `feature/greet` →
+  `main`"; its refusal is the field's `error`, and Save stays off until
+  the lookup succeeds. A repository the task only reads says so in an
+  attention `Callout` ("This task only reads web, which it starts from: set
+  it to Changes it, or start from New work."). Once delivery has started
+  the fieldset is disabled, its hint "Delivery has started: where it
+  started from is fixed.", and the saved source shown as found.
 
 ### Markdown
 
@@ -2414,6 +2459,17 @@ Activity facets use event types, structured actors and `eventAttempts`, never
 rendered sentences; counts cover the complete displayed timeline before filters,
 including every attempt. Empty selections mean all; dimensions compose with AND,
 multiple values within one dimension with OR.
+
+A task that took over existing work says so with the components already
+here. Overview's "This task" block adds **Starts from**: "#12 Greet in
+Portuguese · `feature/greet` → `main`", the pull request a link to GitHub,
+or for a branch "`stack/top` → `stack/base`"; new work has no such line.
+Its pipeline starts at Review: no Implement step is drawn, not even as
+skipped. The pull request step of a pull request it took over reads
+"Pull request · #12 already open" (a state, not a step dude ran); an
+adopted branch's pull request, once opened, is the ordinary step. That
+pull request's `PullRequestPanel` carries, as its `note`, "Existing pull
+request: dude pushes to it and opened none", above why merge waits.
 
 ## What is deliberately not here
 

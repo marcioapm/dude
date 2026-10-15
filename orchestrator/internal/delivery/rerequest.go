@@ -78,13 +78,20 @@ func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh 
 			continue
 		}
 		c := rerequestClaim{s: s, org: org, taskID: st.TaskID, repo: p.Repo, number: p.Number, head: head}
-		err := c.run(ctx, st, gh, p.Slug)
+		asked, err := c.run(ctx, st, gh, p.Slug)
 		if errors.Is(err, errClaimBusy) {
 			busy = true
 			continue
 		}
 		if err != nil {
 			return err
+		}
+		// What GitHub says now, without waiting for its webhook; best effort,
+		// as the request itself.
+		if asked && s.SyncPullRequest != nil {
+			if serr := s.SyncPullRequest(ctx, org, p.ID); serr != nil {
+				slog.Warn("reading a pull request back after re-requesting reviews failed", "pr", p.ID, "error", serr)
+			}
 		}
 	}
 	if busy {
@@ -113,22 +120,24 @@ type rerequestClaim struct {
 	asking []string
 }
 
-// run is one pull request's re-request, under its head's lock.
-func (c *rerequestClaim) run(ctx context.Context, st *State, gh *forge.GitHub, slug string) error {
+// run is one pull request's re-request, under its head's lock. asked: a
+// review was requested of someone on GitHub.
+func (c *rerequestClaim) run(ctx context.Context, st *State, gh *forge.GitHub, slug string) (asked bool, err error) {
 	unlock, err := c.lock(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer unlock()
 	done, err := c.take(ctx)
 	if err != nil || done {
-		return err
+		return false, err
 	}
 	payload, err := c.ask(ctx, gh, slug)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return c.finish(ctx, st, payload)
+	requested, _ := payload["reviewersRequested"].([]string)
+	return len(requested) > 0, c.finish(ctx, st, payload)
 }
 
 // lock takes a pool connection and the head's lock on it, or returns

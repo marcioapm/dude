@@ -42,6 +42,11 @@ import (
 // EventType is the ledger event for one call of a dude tool.
 const EventType = "agent.tool.dude"
 
+// AttemptEventType is the ledger event for a call of a countingAttempts
+// tool that passed its checks, written before its outside work; its
+// result's EventType event is marked attempted and not counted again.
+const AttemptEventType = "agent.tool.attempted"
+
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
 	DB              *db.DB
@@ -55,6 +60,9 @@ type Server struct {
 	// Forges finds the organization's GitHub client, for a conductor's
 	// reply on a pull request; nil, no forge.
 	Forges delivery.Forges
+	// SyncPullRequest is prs.Syncer.Sync: a pull request is read back after
+	// a PR action succeeded on it. nil skips it.
+	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -306,6 +314,9 @@ type tool struct {
 	// from either leaves the call unrecorded, as run's does.
 	outside func(ctx context.Context, c Caller, checked any) (any, error)
 	settle  func(ctx context.Context, tx pgx.Tx, c Caller, checked, done any) (any, error)
+	// attempts: a call that passes run spends the budgets before outside
+	// runs, so a call GitHub refuses still counts (see AttemptEventType).
+	attempts bool
 	// describeFor, when set, is the description for the calling Run (its
 	// own machine's sizes); "" or an error keeps description.
 	describeFor func(ctx context.Context, tx pgx.Tx, c Caller) (string, error)
@@ -371,7 +382,7 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, coordinationTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, coordinationTools, brainstormTools)
 }
 
 // define makes a tool from a typed function: its input schema from In,
@@ -405,6 +416,13 @@ func (t tool) limit(perRun int) tool {
 // before gives the tool a step outside its transaction (see tool.prepare).
 func (t tool) before(prepare func(ctx context.Context, c Caller, args json.RawMessage) any) tool {
 	t.prepare = prepare
+	return t
+}
+
+// countingAttempts makes a tool split by around spend its budgets on every
+// checked call, whatever outside then answers.
+func (t tool) countingAttempts() tool {
+	t.attempts = true
 	return t
 }
 
@@ -446,7 +464,9 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
-	// record keeps the call in the ledger, with its result, in tx.
+	// record keeps the call in the ledger, with its result, in tx. The
+	// result of a call already counted by its attempt is marked attempted,
+	// which withinLimits does not count again.
 	record := func(tx pgx.Tx, result any) error {
 		var err error
 		if out, err = json.Marshal(result); err != nil {
@@ -458,7 +478,11 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		if len(out) > resultInLedger {
 			recorded = map[string]any{"bytes": len(out), "truncated": true}
 		}
-		_, err = ledger.Append(ctx, tx, c.event(EventType, map[string]any{"tool": t.name, "arguments": args, "result": recorded}))
+		payload := map[string]any{"tool": t.name, "arguments": args, "result": recorded}
+		if t.attempts {
+			payload["attempted"] = true
+		}
+		_, err = ledger.Append(ctx, tx, c.event(EventType, payload))
 		return err
 	}
 	var checked any
@@ -472,6 +496,15 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		if t.outside != nil {
 			checked = result
+			if t.attempts {
+				// Again under the lock run took (the task's Chat for a PR
+				// action), so simultaneous calls cannot both take the last one.
+				if err := withinLimits(ctx, tx, c, t); err != nil {
+					return err
+				}
+				_, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args}))
+				return err
+			}
 			return nil
 		}
 		return record(tx, result)
@@ -505,6 +538,13 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	// What GitHub says now, without waiting for its webhook. A read that
+	// fails is not the action failing: the webhook or the reconciler reads it later.
+	if p, ok := checked.(delivery.PRActionCheck); ok && err == nil && s.SyncPullRequest != nil {
+		if serr := s.SyncPullRequest(ctx, c.Org, p.PullRequestID()); serr != nil {
+			s.Log.Warn("reading a pull request back after an action failed", "pr", p.PullRequestID(), "tool", t.name, "error", serr)
+		}
+	}
 	return out, err
 }
 
@@ -520,14 +560,15 @@ func oldName(tool string) string {
 }
 
 // withinLimits refuses a call past the Run's budget: counted from the
-// ledger, where every call is.
+// ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
 	var recent, sameTool int
 	if err := tx.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
 			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool, oldName(tool)).Scan(&recent, &sameTool); err != nil {
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool); err != nil {
 		return err
 	}
 	limit := t.perRun

@@ -189,6 +189,14 @@ type StartPhase struct {
 // ConductStartPhase takes start_phase as the decision the delivery waits on.
 func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase) (string, error) {
 	d, err := parked(ctx, tx, ref)
+	if errors.As(err, new(Refusal)) {
+		// Not at a decision: it may be waiting on its pull requests.
+		if w, werr := ReadDelivery(ctx, tx, ref.TaskID); werr != nil {
+			return "", werr
+		} else if w != nil && w.waitingOnPR() && w.State.conducted() && !Ended(w.TaskStatus) {
+			return startAtPRWait(ctx, tx, ref, w, in)
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -311,6 +319,11 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 // prFixBound refuses a pull request fix past the policy's rounds per
 // review, or a pull request's fix rounds in all, as prFix would escalate.
 func prFixBound(ctx context.Context, tx pgx.Tx, st *State) error {
+	return prFixBoundFor(ctx, tx, st, feedbackRepos(st.PRFeedback))
+}
+
+// prFixBoundFor is prFixBound for a fix of the pull requests in repos.
+func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) error {
 	if st.PRIteration >= st.Policy.MaxPRFixIterations {
 		return refusef("pull request fixes are at their bound: %d of %d this review round. Ask the person how to go on (ask_person)",
 			st.PRIteration, st.Policy.MaxPRFixIterations)
@@ -321,7 +334,7 @@ func prFixBound(ctx context.Context, tx pgx.Tx, st *State) error {
 		return err
 	}
 	total := forge.ReadSettings(raw).FixRoundsPerPR
-	for _, repo := range feedbackRepos(st.PRFeedback) {
+	for _, repo := range repos {
 		if total > 0 && st.PRFixes[repo] >= total {
 			return refusef("the pull request in %s has had %d fix rounds, the organization's bound: ask the person how to go on (ask_person)",
 				repo, st.PRFixes[repo])

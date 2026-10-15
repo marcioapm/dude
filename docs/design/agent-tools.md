@@ -140,6 +140,12 @@ on a peer's reply is waiting on a person, with a peer at the other end:
   the server lists only those to that Run.
 - Every call is a ledger event (`agent.tool.dude`) with its arguments and
   result, so the chat shows it like any other tool call.
+- The pull request actions (`request_review`, `resolve_thread`,
+  `mark_ready`, `rerun_failed_checks`) also write `agent.tool.attempted`
+  once a call passes dude's own checks and before GitHub is called. Their
+  per-Run and per-minute budgets count that attempt, so a call GitHub
+  refuses still spends them. The successful call's `agent.tool.dude` is
+  marked `attempted` and is not counted a second time.
 
 ## Child sessions
 

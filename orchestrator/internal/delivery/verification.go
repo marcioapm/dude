@@ -349,7 +349,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	case "fail":
 		if st.TestFixRounds < MaxTestFixRounds {
 			st.TestFixRounds++
-			st.TestFindingIDs = g.Findings
+			st.TestFindingIDs, st.RetestDue = g.Findings, true
 			return w.next(ctx, sc, st, PointReviewed, "fix", fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
 				"of the tester's; test fix round %d of %d.", runID, g.Criteria, len(g.Findings), st.TestFixRounds, MaxTestFixRounds))
 		}
@@ -357,7 +357,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	case "blocked":
 		return w.escalate(ctx, sc, st, ReasonTestBlocked, detail)
 	}
-	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
+	return w.beforePR(ctx, sc, st, fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
 }
 
 // criteriaOf names the criteria in a gate's detail: number and text.

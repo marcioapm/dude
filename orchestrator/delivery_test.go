@@ -99,6 +99,9 @@ func newWorld(t *testing.T) *world {
 	// The same repository as another owner's, for an App installed on two.
 	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
+	mux.Handle("/repos/acme/target", w.gh.Handler())
+	mux.Handle("/repos/acme/web", w.web.Handler())
+	mux.Handle("/repos/marcio/web", w.marcioWeb.Handler())
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
 	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
@@ -145,7 +148,8 @@ func newWorld(t *testing.T) *world {
 
 	forges := forge.Resolver{DB: app}
 	w.runtime = workflow.New(app, "test", quiet)
-	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
+	store := &delivery.Store{DB: app}
+	w.runtime.Register(delivery.Workflow(store, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
@@ -154,6 +158,7 @@ func newWorld(t *testing.T) *world {
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
+	store.SyncPullRequest = w.prs.Sync
 	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: quiet,
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
 	t.Cleanup(w.previews.Stop)
@@ -1247,6 +1252,7 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+		SyncPullRequest: w.prs.Sync,
 		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
 			return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
 		}}).Handler())
@@ -3879,6 +3885,9 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != 77 || len(w.gh.Rerequested) != 0 {
 		t.Errorf("jobs re-run %v, check runs re-requested %v", w.gh.JobsRerun, w.gh.Rerequested)
 	}
+	// The re-run fails again.
+	w.gh.SetChecks("run:failure")
+	w.sync()
 	// Who to ask: GitHub's suggestions first, then a search.
 	if code, body := w.get("/internal/pull-requests/"+prID+"/reviewer-candidates", w.org); code != 200 ||
 		!strings.Contains(body, `"login":"ana"`) || !strings.Contains(body, `"reason":"commented"`) {

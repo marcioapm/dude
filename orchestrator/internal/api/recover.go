@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -251,6 +252,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
 				return err
 			}
+		} else if src := t.State.Source; src != nil {
+			// The adopted branch was released when the task stopped.
+			if err := delivery.HoldBranchTx(r.Context(), tx, taskID, src); err != nil {
+				return err
+			}
 		}
 		// Out of aborted, the one way: the status change says who and why.
 		if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
@@ -285,6 +291,10 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			principalOf(r), map[string]any{"action": body.Action, "note": note, "attempt": max(attempt, t.Attempt),
 				"runIds": db.NonNil(t.Kept)})
 	})
+	var taken delivery.SourceRefusal
+	if errors.As(err, &taken) {
+		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
+	}
 	if err != nil {
 		return s.refusedStart(r.Context(), org, taskID, "start_over", principalOf(r), err)
 	}
@@ -347,11 +357,15 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 		WHERE task_id = $1 AND status <> 'completed'`, taskID); err != nil {
 		return "", err
 	}
+	st, err := delivery.NewState(ctx, tx, taskID, projectID, policy, attempt)
+	if err != nil {
+		return "", err
+	}
+	st.Attempt, st.Overridden = attempt, overridden
 	return s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
 		IdempotencyKey: fmt.Sprintf("delivery:%s:attempt-%d", taskID, attempt),
-		Input: delivery.State{TaskID: taskID, ProjectID: projectID, Policy: policy, Attempt: attempt,
-			Branch: delivery.BranchFor(taskID, attempt), Overridden: overridden},
+		Input:          st,
 	})
 }
 
@@ -368,7 +382,7 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 	var prs []openPR
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT p.number, r.url FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
-			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft')`, ids)
+			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft') AND NOT p.adopted`, ids)
 		if err != nil {
 			return err
 		}

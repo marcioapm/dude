@@ -56,7 +56,7 @@ import {
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskStatus } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, Verification } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -92,7 +92,9 @@ import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refus
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptOfPr, attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
+import { SourceLine } from "./StartsFrom.tsx";
+import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -137,6 +139,9 @@ function changesRun(payload: unknown): boolean {
 
 /** Both ways to start a task look alike: no project or button prefers one. */
 const START_VARIANT = "secondary" as const;
+
+/** Under the pull request the task took over: dude works on it and opened none of its own. */
+export const ADOPTED_PR_NOTE = "Existing pull request: dude pushes to it and opened none";
 
 const urlTab = (tab: string): TaskTab | undefined => (tab === "overview" ? undefined : (tab as TaskTab));
 const ago = (at: string) => <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" />;
@@ -359,7 +364,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       artifacts: artifacts.filter((a) => attemptOfWork(a.runId, byId, current) === n),
     });
     return {
-      prs: allPrs.filter((pr) => attemptOfPr(pr, byId, current) === shown),
+      prs: allPrs.filter((pr) => prInAttempt(pr, shown, byId, current, item?.source)),
       mine: ofAttempt(shown),
       verifications: verifications.filter((v) => v.attempt === shown),
       others: attempts.filter((n) => n !== shown).map((n) => {
@@ -382,6 +387,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       return pr !== undefined && mine.has(pr);
     });
   }, [events, parts.prs, allPrs]);
+  // Each Run's run.created payload: what it was started for.
+  const createdFor = useMemo(() => new Map(events.filter((e) => e.eventType === "run.created" && e.runId)
+    .map((e) => [e.runId as string, e.payload])), [events]);
 
   // How it stopped, read from the runs and the ledger once per change of them.
   const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
@@ -490,6 +498,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
+  const source = item.source ?? null;
+  // An adopted branch reviewed under Deliver waits on its owner's Open or Draft.
+  const openOrDraft = !earlier && source !== null && heldForOpenOrDraft(item);
+  // Existing work starts at review: no implementer is promised.
+  const deliverSteps = source === null ? "an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request"
+    : source.kind === "pr" ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
+    : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft";
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -551,10 +566,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </div>
       </div>
 
-      {item.escalation || stop || aside || problem || blocked || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
+          {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
@@ -643,11 +659,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {phases.length > 0 ? (
                   <StepList data-testid="pipeline">
                     {phases.map((run, index) => (
-                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents)}
+                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents, createdFor.get(run.id))}
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
                     {prs.map((pr) => (
-                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
+                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} adopted={isAdoptedPr(pr, source)} />
                     ))}
                   </StepList>
                 ) : blocked ? (
@@ -663,7 +679,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       foot: "The conductor, in Chat",
                       action: <Button size="sm" onClick={() => void talk()} disabled={delivering} data-testid="start-talk">Talk it through</Button> },
                     { id: "deliver", icon: "zap", title: "Deliver",
-                      description: "The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request. Nobody needs to be here.",
+                      description: `The automatic pipeline: ${deliverSteps}. Nobody needs to be here.`,
                       points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"],
                       foot: "The project's pipeline",
                       action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
@@ -673,7 +689,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     description="Nothing is built until the conductor and you agree: talk it through in Chat." />
                 ) : (
                   <EmptyState compact icon="git-pr" title="Not started"
-                    description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request." />
+                    description={source === null ? "Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
+                      : `Deliver runs ${deliverSteps}.`} />
                 )}
               </section>
 
@@ -683,9 +700,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             </div>
           } rail={
               <PageRail aria-label="Pull requests, machines and servers">
-                <PageRailBlock label="This task"><KeyValueList items={[
+                <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
                   { label: "Decides", value: item.decider === "conductor" ? "Conductor" : "Deliver" },
+                  // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
+                  ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
+                    <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} /></span> }] : []),
                   // A task never started over names no attempt anywhere.
                   ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
                 ]} /></PageRailBlock>
@@ -693,13 +713,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
+                    // Recovery never closes the adopted pull request, so its close is never read as Start over's.
+                    note={isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>
+                      : pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        factActions={actions.facts} factUnder={actions.under} note={actions.note}
+                        factActions={actions.facts} factUnder={actions.under}
+                        note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
                         diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
                         actions={
                           <>
@@ -787,7 +810,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="activity" className="railPanel">
-          <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown} taskKey={item.key ?? null}
+          <Activity events={events} people={people} runs={item.runs} prs={allPrs} source={source} current={current} many={many} shown={shown} taskKey={item.key ?? null}
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>
@@ -822,7 +845,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
       const started = starts.get(n);
       const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
       const branch = runs.find((r) => r.branch)?.branch;
-      const mine = prs.filter((pr) => attemptOfPr(pr, byId, current) === n);
+      const mine = prs.filter((pr) => prInAttempt(pr, n, byId, current, item.source));
       const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
       return {
         value: String(n),
@@ -964,9 +987,14 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * what can be read from the runs, findings and events; nothing guessed.
  * Exported for its unit test: the step row is its only caller.
  */
-export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
+export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[],
+  created?: Record<string, unknown>): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
+    // What the fix was started for, when its run.created says; an adopted
+    // pull request is recorded as opened before its first review.
+    if (Array.isArray(created?.findingIds) && created.findingIds.length > 0) return "for the review";
+    if (typeof created?.prFeedbackCount === "number" && created.prFeedbackCount > 0) return prFeedbackReason(prEvents, run.createdAt);
     if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
       return prFeedbackReason(prEvents, run.createdAt);
     }
@@ -1028,17 +1056,21 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
 
 /**
  * A pull request as the pipeline's last step. With several (work across
- * repositories), each names its repository; they share the branch.
+ * repositories), each names its repository; they share the branch. One the
+ * task took over was already open: a state, not a step dude ran.
  */
-function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
+function PullRequestStep({ pr, named, adopted }: { pr: PullRequest; named: boolean; adopted: boolean }) {
+  const label = adopted ? <>Pull request · #{pr.number} already open</>
+    : named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>;
   return (
     <StepRow
       data-testid="pr-step"
       data-phase="pr"
       data-status={pr.state}
+      data-adopted={adopted || undefined}
       href={pr.url}
       avatar={<DudeMark size={32} />}
-      label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
+      label={label}
       note={pr.title}
       status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
       meta={pr.headBranch}
@@ -1069,15 +1101,15 @@ function resolvedIn(item: TaskDetail, reviewId: string, onOpenRun: (id: string) 
  * attempt's, each line marked with its attempt once there are several.
  * A line's way to what it names opens it on that line's attempt.
  */
-function Activity({ events, people, runs, prs, current, many, shown, taskKey, onOpenRun, onShow }: {
-  events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
+function Activity({ events, people, runs, prs, source, current, many, shown, taskKey, onOpenRun, onShow }: {
+  events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; source: TaskSource | null; current: number;
   many: boolean; shown: number; taskKey: string | null; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
 }) {
   // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
   const lines = useMemo(() => {
-    const all = activityLines(events, people, runs, prs, current, taskKey);
+    const all = activityLines(events, people, runs, prs, current, taskKey, source);
     return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
-  }, [events, people, runs, prs, current, many, taskKey]);
+  }, [events, people, runs, prs, current, many, taskKey, source]);
   const [kinds, setKinds] = useState<string[]>([]);
   const [persons, setPersons] = useState<string[]>([]);
   const [attempts, setAttempts] = useState<string[]>([]);
@@ -1140,9 +1172,9 @@ interface ActivityLine {
 }
 
 /** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
-export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number, key?: string | null): ActivityLine[] {
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[], current: number, key?: string | null, source?: TaskSource | null): ActivityLine[] {
   const out: ActivityLine[] = [];
-  const attemptOf = eventAttempts(runs, prs, current);
+  const attemptOf = eventAttempts(runs, prs, current, source);
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
   const labels = new Map(runs.map((r) => [r.id, runDoer(r)]));

@@ -27,7 +27,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttachDropZone, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy } from "@dude/domain";
-import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository } from "../api/client.ts";
+import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository, type TaskSource } from "../api/client.ts";
+import { StartsFromField, sourceDraft, sourceInput, useSourceCheck, useSourceRepositories, type SourceDraft } from "./StartsFrom.tsx";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
@@ -61,13 +62,14 @@ function shortGoalText(goal: string): string | undefined {
  * for and where); "repositories" once that stopped, to be picked back up
  * where it was; nothing before it starts.
  */
-export type ExistingTask = { id: string; fixed: "all" | "repositories" | null } & TaskFields;
+export type ExistingTask = { id: string; fixed: "all" | "repositories" | null; savedSource?: TaskSource | null } & TaskFields;
 
 /** A task as the dialog edits it; `started` says delivery has begun. */
 export function existingTask(item: TaskDetail, started: boolean): ExistingTask {
   const { id, title, goal, acceptanceCriteria, epicId, repositories } = item;
   const stopped = item.status === "aborted" || item.status === "failed";
-  return { id, fixed: !started ? null : stopped ? "repositories" : "all", title, goal, acceptanceCriteria, epicId, repositories };
+  return { id, fixed: !started ? null : stopped ? "repositories" : "all", title, goal, acceptanceCriteria, epicId, repositories,
+    savedSource: item.source ?? null };
 }
 
 export interface TaskDialogProps {
@@ -145,6 +147,20 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
 
   const locked = existing?.fixed === "all";
   const repositories = choices?.repositories ?? [];
+  // Where existing work can be taken over from: the project's repositories
+  // this task does not only read.
+  const writable = repositories.filter((r) => chosen.find((c) => c.id === r.id)?.access !== "read");
+  const [draft, setDraft] = useState<SourceDraft | null>(null);
+  const saved = sourceDraft(existing?.savedSource, writable);
+  const source = draft ?? saved;
+  const sourceFixed = existing?.fixed != null;
+  const sourceCheck = useSourceCheck(client, projectId, source, created ?? existing?.id, sourceFixed || choices === null);
+  const sourceAccess = useSourceRepositories(client, projectId, !sourceFixed && source.from !== "new");
+  const sourceChanged = draft !== null && JSON.stringify(sourceInput(source) ?? null) !== JSON.stringify(sourceInput(saved) ?? null);
+  // New work is always fine; existing work only once dude has found it, in a
+  // repository the task changes (one set to Reads it is not saved as its source).
+  const sourceReady = sourceFixed || source.from === "new"
+    || (sourceCheck.state === "ok" && writable.some((r) => r.id === source.repositoryId));
   // One repository needs no choosing: it is where the work goes unless the
   // task says otherwise.
   const choosing = repositories.length > 1;
@@ -156,7 +172,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // Reading criteria only strips markers and indentation, so bounding their
   // Markdown source also bounds the total saved by the server.
   const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
-  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy && making === 0;
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !goalShortText && !criteriaError && !busy && making === 0 && sourceReady;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
   const imagesOff = locked ? "Delivery is running, so what the task asks for is fixed, and its images too."
     : limitsAnswer && !limitsAnswer.enabled ? "Image storage isn't set up" : undefined;
@@ -282,6 +298,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       // later must not leave this work with no checkout. A stopped
       // delivery's are fixed.
       if (existing?.fixed !== "repositories") fields.repositories = choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const }));
+      // Sent when it is new, or changed: saving it unchanged asks GitHub nothing. Once created, a retry is
+      // an edit of what the POST saved: New work is sent as null, so a source saved by then is cleared.
+      if (existing ? sourceChanged : created !== null || source.from !== "new") fields.source = sourceInput(source) ?? null;
     }
     let id = existing?.id ?? created ?? "";
     void save(
@@ -390,6 +409,10 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           />
           {choosing ? (
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={existing?.fixed != null} />
+          ) : null}
+          {choices !== null ? (
+            <StartsFromField client={client} projectId={projectId} repositories={writable} access={sourceAccess} draft={source}
+              onChange={setDraft} check={sourceCheck} locked={sourceFixed} saved={existing?.savedSource} />
           ) : null}
           {refusals.length > 0 ? (
             <Callout tone="attention" data-testid="task-image-refused">

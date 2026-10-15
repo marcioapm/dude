@@ -314,6 +314,8 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 		// The person confirmed that Deliver opens the pull request now,
 		// though the conductor's gate question is unanswered or not Open.
 		OpenPullRequest bool `json:"openPullRequest"`
+		// With openPullRequest, the person chose Draft rather than Open.
+		Draft bool `json:"draft"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -354,7 +356,7 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			case err != nil && !isRefusal:
 				return err
 			}
-			draft = err == nil && draft
+			draft = err == nil && draft || isRefusal && body.Draft
 			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = state || jsonb_build_object('gateOpened', true)
 					|| CASE WHEN $2 THEN '{"draft": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
 				d.WorkflowID, draft); err != nil {

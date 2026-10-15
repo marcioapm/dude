@@ -445,6 +445,13 @@ export class FixtureClient extends ApiClient {
   override getProject(id: string): Promise<ProjectDetail> {
     return id === PROJECT.id ? Promise.resolve(PROJECT) : Promise.reject(new ApiError(404, "not_found", "No such project."));
   }
+  override sourceRepositories(_projectId: string) {
+    return Promise.resolve({ repositories: PROJECT.repositories.map((r) => ({ id: r.id, name: r.name, writable: true })) });
+  }
+  override sourceBranches(_projectId: string, _repositoryId: string, q: string) {
+    const all = ["main", "feature/greet", "stack/base", "stack/top"];
+    return Promise.resolve({ branches: all.filter((b) => b.includes(q.toLowerCase())), more: false });
+  }
   override events(params: LedgerQuery & { limit?: number }) {
     const events = this.ledgerFor(params);
     return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });

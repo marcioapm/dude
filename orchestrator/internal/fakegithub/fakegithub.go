@@ -40,6 +40,8 @@ type Pull struct {
 	Reviews []Review
 	// GitHub refuses comments on it, as on a locked conversation.
 	Locked bool
+	// The repository its head is in, owner/name, when not this one (a fork).
+	HeadRepo string
 }
 
 type Review struct {
@@ -121,6 +123,47 @@ type Server struct {
 	ReviewRequestStatus int
 	// A user's GitHub type ("User", "Bot") when its login does not say.
 	UserTypes map[string]string
+	// Branches GitHub reports as protected (a rule or a ruleset applies).
+	Protected map[string]bool
+	// Review threads resolved, by thread id (ThreadID), and draft pull
+	// requests marked ready, through GraphQL.
+	ResolvedThreads map[string]bool
+	// Review threads GitHub reports as outdated, by thread id.
+	OutdatedThreads map[string]bool
+	MarkedReady     []int
+	// When set, the review-thread query (with comment ids) fails with it.
+	ThreadsStatus int
+}
+
+// NodeID is a pull request's GraphQL id.
+func (s *Server) NodeID(number int) string {
+	return fmt.Sprintf("PR_%s_%d", strings.ReplaceAll(s.Slug, "/", "__"), number)
+}
+
+// ThreadID is the GraphQL id of the review thread a root line comment
+// opened.
+func (s *Server) ThreadID(rootComment int64) string {
+	return fmt.Sprintf("RT_%s_%d", strings.ReplaceAll(s.Slug, "/", "__"), rootComment)
+}
+
+// OpenAsPerson opens a pull request from head into base as a person does
+// on GitHub, head branched from base with one commit; its number.
+func (s *Server) OpenAsPerson(author, head, base, title string) int {
+	s.Branch(head, base, "Start "+title)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := &Pull{Number: len(s.pulls) + 1, Head: head, Base: base, Title: title, State: "open", Author: author}
+	s.pulls[p.Number] = p
+	return p.Number
+}
+
+// Branch makes branch from base with one commit of a person's on it, as
+// pushing a branch to GitHub does; its SHA.
+func (s *Server) Branch(branch, from, message string) string {
+	if _, err := s.git("update-ref", "refs/heads/"+branch, "refs/heads/"+from, ""); err != nil {
+		return ""
+	}
+	return s.CommitOnTop(branch, message)
 }
 
 // ReviewRequest is one POST to a pull request's requested_reviewers.
@@ -354,6 +397,9 @@ func (s *Server) Handler() http.Handler {
 		}
 		_, _ = w.Write([]byte(body))
 	})
+	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
+		write(w, 200, map[string]any{"default_branch": "main"})
+	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
 		owner, _, _ := strings.Cut(s.Slug, "/")
@@ -390,7 +436,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
-	mux.HandleFunc("GET "+prefix+"/compare/{spec}", s.compare)
+	mux.HandleFunc("GET "+prefix+"/compare/{spec...}", s.compare)
 	mux.HandleFunc("PATCH "+prefix+"/git/refs/heads/{branch...}", s.updateRef)
 	mux.HandleFunc("GET "+prefix+"/git/ref/heads/{branch...}", func(w http.ResponseWriter, r *http.Request) {
 		sha := s.SHA(r.PathValue("branch"))
@@ -401,6 +447,26 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, map[string]any{"ref": "refs/heads/" + r.PathValue("branch"), "object": map[string]string{"sha": sha}})
 	})
 	mux.HandleFunc("POST "+prefix+"/git/refs", s.createRef)
+	mux.HandleFunc("GET "+prefix+"/branches", func(w http.ResponseWriter, r *http.Request) {
+		out, _ := s.git("for-each-ref", "--format=%(refname:short)", "refs/heads")
+		names := []map[string]any{}
+		for _, n := range strings.Fields(out) {
+			names = append(names, map[string]any{"name": n})
+		}
+		write(w, 200, page(r, names))
+	})
+	mux.HandleFunc("GET "+prefix+"/branches/{branch...}", func(w http.ResponseWriter, r *http.Request) {
+		branch := r.PathValue("branch")
+		sha := s.SHA(branch)
+		if sha == "" {
+			fail(w, 404, "Branch not found")
+			return
+		}
+		s.mu.Lock()
+		protected := s.Protected[branch]
+		s.mu.Unlock()
+		write(w, 200, map[string]any{"name": branch, "protected": protected, "commit": map[string]string{"sha": sha}})
+	})
 	mux.HandleFunc("DELETE "+prefix+"/git/refs/heads/{branch...}", s.deleteRef)
 	mux.HandleFunc("GET "+prefix+"/collaborators/{login}/permission", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -521,6 +587,10 @@ func (s *Server) Handler() http.Handler {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
 		s.JobsRerun = append(s.JobsRerun, id)
+		// As GitHub: the job re-run is queued again, not failed.
+		if strings.HasPrefix(s.checks, "run:") {
+			s.checks = "run:pending"
+		}
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})
@@ -620,11 +690,16 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	if s.MergeableUnknown[p.Number] {
 		mergeable, state = nil, "unknown"
 	}
+	headRepo := s.Slug
+	if p.HeadRepo != "" {
+		headRepo = p.HeadRepo
+	}
 	return map[string]any{
-		"number": p.Number, "node_id": fmt.Sprintf("PR_%d", p.Number),
+		"number": p.Number, "node_id": s.NodeID(p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
-		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title,
+		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
+		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author),
 	}
@@ -662,6 +737,7 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 				Owner, Name string
 				Number      int
 				Q           string
+				ID          string
 			} `json:"variables"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
@@ -671,12 +747,35 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 				"errors": []any{map[string]string{"type": "NOT_FOUND", "message": "Could not resolve to an Organization"}}})
 			return
 		}
+		// By node id: a review thread, or a pull request to mark ready.
+		if in.Variables.ID != "" {
+			for _, s := range servers {
+				if out, ok := s.byNode(in.Query, in.Variables.ID); ok {
+					write(w, 200, out)
+					return
+				}
+			}
+			write(w, 200, map[string]any{"data": map[string]any{"node": nil},
+				"errors": []any{map[string]string{"type": "NOT_FOUND", "message": "Could not resolve to a node with the global id of '" + in.Variables.ID + "'"}}})
+			return
+		}
 		for _, s := range servers {
 			if s.Slug != in.Variables.Owner+"/"+in.Variables.Name {
 				continue
 			}
 			if strings.Contains(in.Query, "suggestedReviewers") {
 				write(w, 200, s.reviewerCandidates(in.Variables.Number, in.Variables.Q))
+				return
+			}
+			if strings.Contains(in.Query, "databaseId") {
+				s.mu.Lock()
+				fail := s.ThreadsStatus
+				s.mu.Unlock()
+				if fail != 0 {
+					write(w, fail, map[string]any{"message": http.StatusText(fail)})
+					return
+				}
+				write(w, 200, s.threads(in.Variables.Number))
 				return
 			}
 			s.mu.Lock()
@@ -692,6 +791,75 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 		}
 		write(w, 200, map[string]any{"errors": []any{map[string]string{"message": "Could not resolve to a Repository"}}})
 	}
+}
+
+// threads is pull request number's review threads with their comments'
+// ids: one per root line comment, its replies in it.
+func (s *Server) threads(number int) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nodes := []any{}
+	if p := s.pulls[number]; p != nil {
+		for _, c := range p.LineComments {
+			if c.InReplyTo != 0 {
+				continue
+			}
+			ids := []any{map[string]any{"databaseId": c.ID}}
+			for _, r := range p.LineComments {
+				if r.InReplyTo == c.ID {
+					ids = append(ids, map[string]any{"databaseId": r.ID})
+				}
+			}
+			id := s.ThreadID(c.ID)
+			nodes = append(nodes, map[string]any{"id": id, "isResolved": s.ResolvedThreads[id], "isOutdated": s.OutdatedThreads[id],
+				"comments": map[string]any{"nodes": ids}})
+		}
+	}
+	return map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+		"reviewThreads": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": false}}}}}}
+}
+
+// byNode answers a query or mutation by node id when the node is one of
+// this repository's: a review thread (read or resolved) or a pull request
+// (marked ready). Resolving a thread takes one off Unresolved, as GitHub's
+// count would.
+func (s *Server) byNode(query, id string) (map[string]any, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.pulls {
+		if strings.Contains(query, "markPullRequestReadyForReview") && id == s.NodeID(p.Number) {
+			p.Draft = false
+			s.MarkedReady = append(s.MarkedReady, p.Number)
+			return map[string]any{"data": map[string]any{"markPullRequestReadyForReview": map[string]any{
+				"pullRequest": map[string]any{"id": id, "isDraft": false}}}}, true
+		}
+		for _, c := range p.LineComments {
+			if c.InReplyTo != 0 || id != s.ThreadID(c.ID) {
+				continue
+			}
+			if strings.Contains(query, "resolveReviewThread") {
+				if s.ResolvedThreads == nil {
+					s.ResolvedThreads = map[string]bool{}
+				}
+				if !s.ResolvedThreads[id] && s.Unresolved[p.Number] > 0 {
+					s.Unresolved[p.Number]--
+				}
+				s.ResolvedThreads[id] = true
+				return map[string]any{"data": map[string]any{"resolveReviewThread": map[string]any{
+					"thread": map[string]any{"id": id, "isResolved": true}}}}, true
+			}
+			comments := []any{map[string]any{"databaseId": c.ID}}
+			for _, r := range p.LineComments {
+				if r.InReplyTo == c.ID {
+					comments = append(comments, map[string]any{"databaseId": r.ID})
+				}
+			}
+			return map[string]any{"data": map[string]any{"node": map[string]any{"id": id, "isResolved": s.ResolvedThreads[id],
+				"pullRequest": map[string]any{"number": p.Number, "repository": map[string]any{"nameWithOwner": s.Slug}},
+				"comments":    map[string]any{"nodes": comments}}}}, true
+		}
+	}
+	return nil, false
 }
 
 func (s *Server) number(w http.ResponseWriter, r *http.Request) *Pull {
