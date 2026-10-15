@@ -274,6 +274,12 @@ func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	if body := w.gh.Pull(1).Body; !strings.Contains(body, "blocked, waived by Cy: Checked by hand on staging.") {
 		t.Errorf("the pull request does not carry the waiver:\n%s", body)
 	}
+	// Its environment finding reads Waived, as the criteria it blocked do,
+	// never Accepted.
+	if body := w.gh.Pull(1).Body; !strings.Contains(body, "Test environment: the application does not start _(waived)_") ||
+		strings.Contains(body, "_(accepted)_") {
+		t.Errorf("the pull request's Review does not show the finding waived:\n%s", body)
+	}
 }
 
 func TestAPassCitingAFileNobodyPublishedIsUnverified(t *testing.T) {

@@ -418,9 +418,23 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 		return nil
 	}
 	_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
-		WHERE id = ANY($1) AND status = 'open'`, findingIDs, decision+" by a person: "+note)
+		WHERE id = ANY($1) AND status = 'open'`, findingIDs, decision+settledByAPerson+note)
 	return err
 }
+
+// settledByAPerson joins how a person settled the tester's finding
+// ("waived", "accepted") to their reason in its resolution note. A waived
+// one is shown Waived, as its criteria are: its status stays accepted, and
+// WaivedNote (here, and in the web app's findingStatusLabel) tells it apart.
+const settledByAPerson = " by a person: "
+
+// WaivedNote starts the resolution note of a finding a person waived.
+const WaivedNote = "waived" + settledByAPerson
+
+// shownStatus (SQL, over review_findings) is a finding's status as a
+// person reads it: a waived one is "waived".
+const shownStatus = `CASE WHEN status = 'accepted' AND starts_with(COALESCE(resolution_note, ''), '` + WaivedNote + `')
+	THEN 'waived' ELSE status::text END`
 
 // verificationSection is the pull request's account of the test: each
 // criterion's status, any waiver or acceptance and its reason, the heads

@@ -15,7 +15,7 @@ import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
 import { TaskScreen, activityLines, filterActivity, filterFindings } from "../src/screens/TaskScreen.tsx";
 import { filesOf, filterFiles, displayedFilesZip } from "../src/screens/FilesSection.tsx";
-import type { Artifact, Finding } from "../src/api/client.ts";
+import type { Artifact, EscalationAction, Finding } from "../src/api/client.ts";
 import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
 import { emit } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
@@ -718,5 +718,71 @@ describe("a branch preview on the Servers tab", () => {
     const { emitForTest } = await import("./dom.ts");
     await emitForTest("servers.changed");
     await until(() => (page.querySelector("[data-testid=preview-error]") === null ? true : null), "the error gone after recovery");
+  });
+});
+
+describe("the tester's verdict on the task page", () => {
+  /** Scenario d's task started over: attempt 1's Runs, then attempt 2's implementer at work. */
+  class TwoAttempts extends FixtureClient {
+    override async getTask(id: string) {
+      const task = await super.getTask(id);
+      const second = { ...task.runs[0]!, id: "run_a2", attempt: 2, status: "running" as const, createdAt: new Date().toISOString() };
+      return { ...task, runs: [...task.runs, second] };
+    }
+    override listVerification() {
+      return Promise.resolve({ verifications: [{ runId: "run_d5", attempt: 1, heads: { "web-console": "c91f7e2b3c4d" }, stale: false,
+        createdAt: "2026-10-01T00:00:00Z", criteria: [{ criterion: 1, text: "it greets", status: "pass" as const, evidence: [],
+          observed: "", problem: "", decision: null, decidedBy: null, decisionNote: null }] }] });
+    }
+  }
+
+  test("a verdict of an earlier attempt shows on that attempt, never on the current one", async () => {
+    const current = await taskPage(new TwoAttempts("d"), { tab: "findings" });
+    await until(() => current.querySelector("[data-testid=attempt-picker]"), "the attempt picker");
+    await until(() => current.querySelector('[role="group"][aria-label="Finding status"]'), "the findings tab");
+    await settle(50);
+    expect(current.querySelectorAll("[data-testid=verification]").length).toBe(0);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const earlier = await taskPage(new TwoAttempts("d"), { tab: "findings", attempt: 1 });
+    await until(() => earlier.querySelector("[data-testid=verification]"), "attempt 1's verification");
+  });
+
+  test("an admin who does not own the task is offered the waiver of a blocked test, and only it", async () => {
+    class Blocked extends FixtureClient {
+      override async getTask(id: string) {
+        const task = await super.getTask(id);
+        return { ...task, owner: { id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: true },
+          escalation: { reason: "test_blocked", actions: ["retry", "waive", "stop"] as EscalationAction[], at: "2026-10-01T00:00:00Z",
+            detail: { runId: "run_d5", criteria: [{ criterion: 1, text: "it greets", status: "blocked" }], findingIds: [] } } };
+      }
+    }
+    // The fixture's reader, Márcio, is an admin; Ana owns the task.
+    const page = await taskPage(new Blocked("d"));
+    const banner = await until(() => page.querySelector<HTMLElement>("[data-testid=escalation]"), "the banner");
+    await until(() => banner.querySelector("[data-testid=escalation-waive]"), "the waiver, for an admin");
+    expect(banner.querySelectorAll("[data-testid=escalation-retry]").length).toBe(0);
+    expect(banner.querySelectorAll("[data-testid=escalation-stop]").length).toBe(0);
+  });
+
+  test("a tester's finding a person waived reads Waived in the Findings list, not Accepted", async () => {
+    class Waived extends FixtureClient {
+      override listFindings(taskId: string) {
+        return super.listFindings(taskId).then(({ findings }) => ({ findings: findings.map((f) => f.id === "f3"
+          ? { ...f, title: "Test environment: the application does not start", resolutionNote: "waived by a person: Checked by hand on staging." }
+          : f) }));
+      }
+    }
+    const page = await taskPage(new Waived("d"), { tab: "findings" });
+    const rows = await until(() => {
+      const r = [...page.querySelectorAll<HTMLElement>("[data-testid=finding]")];
+      return r.length === 4 ? r : null;
+    }, "the findings");
+    const waived = rows.find((r) => r.textContent?.includes("Test environment"))!;
+    expect(waived.textContent).toContain("Waived");
+    expect(waived.textContent).not.toContain("Accepted");
+    // A finding accepted any other way still reads Accepted.
+    await click(facetCheckbox(page.querySelector<HTMLElement>('[role="group"][aria-label="Finding status"]')!, "Accepted"));
+    expect([...page.querySelectorAll("[data-testid=finding]")].map((r) => r.textContent?.includes("Waived"))).toEqual([true]);
   });
 });

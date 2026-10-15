@@ -743,7 +743,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
                   category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}
-                  suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} fixAttempts={f.fixAttempts}
+                  suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} statusLabel={findingStatusLabel(f)} fixAttempts={f.fixAttempts}
                   fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />
               )} />
           ) : many ? (
@@ -981,6 +981,19 @@ export function whyItRan(run: Run, index: number, phases: readonly Run[], findin
   }
   return undefined;
 }
+
+/**
+ * A finding's status in a word closer than its own, when it has one: a
+ * tester's finding a person waived is Waived, as the criteria it blocked
+ * are. Its status stays accepted; the orchestrator's resolution note says
+ * how it was settled (delivery.WaivedNote).
+ */
+export function findingStatusLabel(f: Pick<Finding, "status" | "resolutionNote">): string | undefined {
+  return f.status === "accepted" && (f.resolutionNote ?? "").startsWith(WAIVED_NOTE) ? "Waived" : undefined;
+}
+
+/** delivery.WaivedNote. */
+const WAIVED_NOTE = "waived by a person: ";
 
 /** What a review limited to a range checks, as its step says it. */
 const REVIEW_OF: Readonly<Record<NonNullable<Run["reviewOf"]>, string>> = {
