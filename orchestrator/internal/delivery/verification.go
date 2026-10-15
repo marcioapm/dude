@@ -34,8 +34,11 @@ const (
 	artifactsWait       = 15 * time.Minute
 	artifactsRecheckMin = 500 * time.Millisecond
 	artifactsRecheckMax = 30 * time.Second
-	evidenceFindingCt   = "acceptance"
 )
+
+// acceptanceCategory is the category of the finding dude raises for a
+// failed criterion.
+const acceptanceCategory = "acceptance"
 
 // Escalation reasons of the gate, and the actions only they offer.
 const (
@@ -193,7 +196,7 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 				SELECT $3, $4, $1, $5, $6, $7::finding_severity, $8, $9
 				WHERE NOT EXISTS (SELECT 1 FROM review_findings WHERE task_id = $1 AND status = 'open'
 					AND title LIKE $10 AND `+thisAttempt+`)`,
-				st.TaskID, st.Attempt, ids.New(ids.Finding), org, runID, evidenceFindingCt, severity,
+				st.TaskID, st.Attempt, ids.New(ids.Finding), org, runID, acceptanceCategory, severity,
 				criterionFindingTitle(v.Criterion, v.Text),
 				"Reproduced: "+valueOr(v.Observed, "the tester reported it failing."),
 				criterionFindingTitle(v.Criterion, "")+"%"); err != nil {
@@ -397,15 +400,12 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 		WHERE run_id = $1 AND status = ANY($5) AND decision IS NULL`, runID, decision, db.Nullable(person), note, statuses); err != nil {
 		return err
 	}
-	var d struct {
-		FindingIDs []string `json:"findingIds"`
-	}
-	e.decode(&d)
-	if len(d.FindingIDs) == 0 {
+	findingIDs := e.findingIDs()
+	if len(findingIDs) == 0 {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
-		WHERE id = ANY($1) AND status = 'open'`, d.FindingIDs, decision+" by a person: "+note)
+		WHERE id = ANY($1) AND status = 'open'`, findingIDs, decision+" by a person: "+note)
 	return err
 }
 

@@ -10,7 +10,9 @@
 -- no later ones. `decision` is a person's: `waived` (a blocked check) or
 -- `accepted` (a failed one), with who and why.
 --
--- A new table only: nothing existing is rewritten or locked.
+-- A new table, and model_tiers_model_check rebuilt to allow the scripted
+-- tester's models: that takes an ACCESS EXCLUSIVE lock on model_tiers while
+-- it validates every row. No existing row is rewritten.
 
 CREATE TABLE acceptance_verdicts (
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
