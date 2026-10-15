@@ -222,6 +222,45 @@ func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
 	}
 }
 
+func TestBaseMovedNoticeReachesOtherConductorsOnce(t *testing.T) {
+	w := newWorld(t)
+	merging := w.reviewing()
+	other, readOnly, done := w.task(), w.task(), w.task()
+	for _, id := range []string{other, readOnly, done} {
+		access := "write"
+		if id == readOnly {
+			access = "read"
+		}
+		mustExec(t, w.owner, `INSERT INTO task_repositories(task_id, repository_id, access, organization_id) VALUES($1,$2,$3::repository_access,$4)`, id, w.repoID, access, w.org)
+		mustExec(t, w.owner, `INSERT INTO workflow_runs(id, organization_id, workflow_type, idempotency_key, task_id, status, step, state) VALUES($1,$2,$3,$1,$4,'waiting','awaitPullRequest','{}')`, "wf_"+id, w.org, delivery.WorkflowType, id)
+		mustExec(t, w.owner, `INSERT INTO runs(id, organization_id, project_id, task_id, attempt, status, role, kind) VALUES($1,$2,$3,$4,1,'paused','conductor','agent')`, "run_c_"+id, w.org, w.project, id)
+	}
+	mustExec(t, w.owner, `UPDATE tasks SET status='done' WHERE id=$1`, done)
+	w.gh.Merge(1)
+	w.until("merge recorded", func() bool {
+		var id string
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, merging).Scan(&id)
+		if err := w.prs.Sync(context.Background(), w.org, id); err != nil {
+			t.Fatal(err)
+		}
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND state='merged'`, merging) == 1
+	})
+	for range 3 {
+		w.sync()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='chat.notice' AND payload->>'about'='base_moved'`, other); n != 1 {
+		t.Fatalf("other task notices %d", n)
+	}
+	for _, id := range []string{merging, readOnly, done} {
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='chat.notice' AND payload->>'about'='base_moved'`, id); n != 0 {
+			t.Fatalf("excluded task %s got %d notices", id, n)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND key LIKE 'base-moved:%'`, other); n != 1 {
+		t.Fatalf("wakes %d", n)
+	}
+}
+
 func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()

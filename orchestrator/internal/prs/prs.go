@@ -368,6 +368,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				return err
 			}
 		}
+		if status.State == forge.StateMerged && pr.State != forge.StateMerged {
+			if err := delivery.NotifyBaseMovedTx(ctx, tx, org, pr.ID); err != nil {
+				return err
+			}
+		}
 		// The delivery the pull request is from: a task started over has a
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
