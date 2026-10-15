@@ -1568,10 +1568,10 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	}
 	for _, repo := range repos {
 		to := st.Heads[repo]
-		err := gh.FastForward(ctx, slugs[repo], st.Branch, to)
+		err := gh.FastForwardExisting(ctx, slugs[repo], st.Branch, to)
 		var fe *forge.Error
-		if errors.As(err, &fe) && fe.Status == 422 {
-			// Someone pushed between the read and the move.
+		if errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
+			// Someone pushed or deleted the branch between the read and the move.
 			found, _ := gh.BranchSHA(ctx, slugs[repo], st.Branch)
 			return w.candidateRefused(ctx, sc, st, repo, found, moved)
 		}

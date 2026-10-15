@@ -1113,6 +1113,11 @@ func (s *Server) createRef(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, map[string]any{"ref": in.Ref})
 }
 
+func (s *Server) DeleteBranch(branch string) error {
+	_, err := s.git("update-ref", "-d", "refs/heads/"+branch)
+	return err
+}
+
 func (s *Server) deleteRef(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.git("update-ref", "-d", "refs/heads/"+r.PathValue("branch")); err != nil {
 		fail(w, 422, "Reference does not exist")

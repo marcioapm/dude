@@ -799,6 +799,70 @@ func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
 	}
 }
 
+func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
+	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusNotFound} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			w := newPRFixWorld(t)
+			var raced atomic.Bool
+			var creates atomic.Int32
+			var checked string
+			w.onTest = func() {
+				checked = w.candidate()
+				w.gh.Merge(1)
+				w.sync()
+			}
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if raced.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs") {
+						creates.Add(1)
+					}
+					if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && raced.CompareAndSwap(false, true) {
+						if err := w.gh.DeleteBranch(w.branch); err != nil {
+							t.Errorf("delete source branch: %v", err)
+						}
+						if status == http.StatusNotFound {
+							return status
+						}
+					}
+					return 0
+				}
+			})
+			w.comment("Please rename the greeting.")
+			w.until("promotion settled", func() bool {
+				w.sync()
+				return raced.Load() && (w.taskStatus(w.wi) == "awaiting_input" || len(w.gh.Pulls()) > 1)
+			})
+			if at := w.gh.SHA(w.branch); at != "" {
+				t.Errorf("deleted source branch recreated at %s", at)
+			}
+			if n := creates.Load(); n != 0 {
+				t.Errorf("%d create-ref fallbacks during promotion", n)
+			}
+			if at := w.candidate(); checked == "" || at != checked {
+				t.Errorf("checked candidate %q was not retained: %q", checked, at)
+			}
+			if pulls := w.gh.Pulls(); len(pulls) != 1 {
+				t.Errorf("created a follow-up after source deletion: %v", pulls)
+			}
+			if p := w.gh.Pull(1); p.State != "closed" || p.MergedAt == nil {
+				t.Errorf("original pull request no longer merged: %+v", p)
+			}
+			if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
+				t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+			}
+			var detail map[string]any
+			if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+				AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail["found"] != "" || detail["expected"] != w.before || detail["candidate"] != checked ||
+				detail["branch"] != delivery.CandidateBranch(w.wi, 1) || detail["repo"] != "target" {
+				t.Errorf("missing-ref refusal = %v", detail)
+			}
+		})
+	}
+}
+
 // GitHub rate-limits the promotion's move: the step waits and moves the
 // branch after, without counting the refusal against its attempts.
 func TestARateLimitedPromotionWaitsAndMoves(t *testing.T) {
