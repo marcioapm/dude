@@ -419,22 +419,32 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 	return err
 }
 
+// verdictCommentTimeout bounds every GitHub call of one verdict comment
+// together: up to a recovery search, an edit and a post, each also under
+// forge's own per-request limit.
+const verdictCommentTimeout = 30 * time.Second
+
 // CommentVerdict keeps one verdict comment on each adopted pull request.
 // Its successful ledger event keeps the comment id across workflow replays
-// and attempts. The PR row serializes callers through the GitHub write and
-// its record; the marker recovers a post whose response or record was lost.
-// GitHub failures are recorded, never returned to the delivery.
+// and attempts; the marker recovers a post whose response or record was
+// lost. GitHub failures are recorded, never returned to the delivery.
+//
+// Two short transactions around the GitHub calls, none open across them:
+// what to post, then its record. No lock: the callers are steps of the
+// task's one delivery (testVerdict, awaitPRFix), which never run at once,
+// and an adopted pull request is one live task's.
 func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
 	if !st.adoptedPR() {
 		return
 	}
+	var prID, repo, repoURL, body string
+	var number int
+	var commentID int64
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var prID, repo, repoURL string
-		var number int
 		if err := tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.number
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND pr.adopted AND pr.state IN ('open', 'draft')
-			FOR UPDATE OF pr`, st.PullRequestIDs, st.TaskID).Scan(&prID, &repo, &repoURL, &number); err != nil {
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND pr.adopted AND pr.state IN ('open', 'draft')`,
+			st.PullRequestIDs, st.TaskID).Scan(&prID, &repo, &repoURL, &number); err != nil {
 			if db.IsNotFound(err) {
 				return nil
 			}
@@ -452,55 +462,74 @@ func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forge
 		if section == "" {
 			return nil
 		}
-		body := "dude's test verdict for this pull request"
+		body = "dude's test verdict for this pull request"
 		if link != "" {
 			body += " — " + link
 		}
 		body += "\n\n" + section + "\n\n" + forge.VerdictMarker(st.TaskID)
-		var commentID int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT (payload->>'commentId')::bigint FROM events
+		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT (payload->>'commentId')::bigint FROM events
 			WHERE event_type = $1 AND payload->>'pullRequestId' = $2 AND payload ? 'commentId'
-			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID); err != nil {
-			return err
-		}
-		payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
-		gh, postErr := forges.For(ctx, org)
-		if postErr == nil && gh == nil {
-			postErr = fmt.Errorf("no forge credential to post the verdict with")
-		}
-		slug := forge.SlugFromURL(repoURL)
-		if postErr == nil && commentID == 0 {
-			var found forge.Posted
-			found, postErr = gh.FindVerdictComment(ctx, slug, number, st.TaskID)
-			commentID = found.CommentID
-		}
-		var posted forge.Posted
-		edited := commentID != 0
-		if postErr == nil && edited {
-			posted, postErr = gh.EditComment(ctx, slug, commentID, body)
-			var refusal *forge.Error
-			if errors.As(postErr, &refusal) && refusal.NotFound() {
-				postErr, edited = nil, false
-			}
-		}
-		if postErr == nil && !edited {
-			posted, postErr = gh.Comment(ctx, slug, number, body)
-		}
-		payload["edited"] = edited
-		if postErr != nil {
-			slog.Warn("posting the adopted pull request's test verdict failed", "pr", prID, "error", postErr)
-			payload["error"] = postErr.Error()
-			if commentID != 0 {
-				payload["commentId"] = commentID
-			}
-		} else {
-			payload["commentId"], payload["url"] = posted.CommentID, posted.URL
-		}
-		return emitTx(ctx, tx, org, st, EvPullRequestVerdictCommented, payload)
+			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID)
 	})
-	if err != nil {
+	if err != nil || body == "" {
+		if err != nil {
+			slog.Warn("reading the adopted pull request's test verdict failed", "task", st.TaskID, "error", err)
+		}
+		return
+	}
+	payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
+	posted, edited, postErr := s.postVerdict(ctx, org, forges, forge.SlugFromURL(repoURL), number, st.TaskID, &commentID, body)
+	payload["edited"] = edited
+	if postErr != nil {
+		slog.Warn("posting the adopted pull request's test verdict failed", "pr", prID, "error", postErr)
+		payload["error"] = postErr.Error()
+		if commentID != 0 {
+			payload["commentId"] = commentID
+		}
+	} else {
+		payload["commentId"], payload["url"] = posted.CommentID, posted.URL
+	}
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return emitTx(ctx, tx, org, st, EvPullRequestVerdictCommented, payload)
+	}); err != nil {
 		slog.Warn("recording the adopted pull request's test verdict comment failed", "task", st.TaskID, "error", err)
 	}
+}
+
+// postVerdict is the GitHub side of CommentVerdict, within its time limit:
+// the comment *commentID names edited, else one found by its marker, else
+// a new one. *commentID ends as the comment tried.
+func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug string, number int, taskID string,
+	commentID *int64, body string) (posted forge.Posted, edited bool, err error) {
+	timeout := s.CommentTimeout
+	if timeout == 0 {
+		timeout = verdictCommentTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gh, err := forges.For(ctx, org)
+	if err == nil && gh == nil {
+		err = fmt.Errorf("no forge credential to post the verdict with")
+	}
+	if err != nil {
+		return posted, false, err
+	}
+	if *commentID == 0 {
+		found, err := gh.FindVerdictComment(ctx, slug, number, taskID)
+		if err != nil {
+			return posted, false, err
+		}
+		*commentID = found.CommentID
+	}
+	if *commentID != 0 {
+		posted, err = gh.EditComment(ctx, slug, *commentID, body)
+		var refusal *forge.Error
+		if !errors.As(err, &refusal) || !refusal.NotFound() {
+			return posted, true, err
+		}
+	}
+	posted, err = gh.Comment(ctx, slug, number, body)
+	return posted, false, err
 }
 
 // verificationSection is the pull request's account of the test: each

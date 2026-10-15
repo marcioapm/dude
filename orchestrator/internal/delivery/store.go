@@ -70,6 +70,9 @@ type Store struct {
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
+	// Bound on the GitHub calls of one verdict comment; zero means
+	// verdictCommentTimeout.
+	CommentTimeout time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
