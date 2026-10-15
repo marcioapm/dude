@@ -9,6 +9,7 @@
   "suites/test_conductor_github.py": 17.6,
   "suites/test_conductor_steer.py": 19.4,
   "suites/test_delivery.py": 64.5,
+  "suites/test_driving.py": 21.4,
   "suites/test_events.py": 1.3,
   "suites/test_gallery_build.py": 0.0,
   "suites/test_gallery_components.py": 261.7,
