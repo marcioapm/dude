@@ -48,6 +48,7 @@ export {
   currentRun,
   navKey,
   waitingWords,
+  shownDriver,
   liveSessions,
   waitingSplit,
   projectPeople,

@@ -8,7 +8,7 @@ import { statusSpec } from "../tokens/status.ts";
 import { sumTriage } from "../tokens/triage.ts";
 import { firstName, formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
-import { liveSessions, navKey, ownerAgents, projectPeople, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
+import { liveSessions, navKey, ownerAgents, projectPeople, shownDriver, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
 import {
   BOARD_COLUMN_KINDS,
   BOARD_COLUMN_SPECS,
@@ -34,6 +34,7 @@ import { PersonAvatarStack } from "./PersonAvatar.tsx";
 import { PrChip } from "./PrChip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { AutoStartMark, HOW_LABEL, RelationChip, relationWords, startsWhen } from "./Relations.tsx";
+import { DriverGlyph, driverLabel } from "./DriverMark.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
 import styles from "./Board.module.css";
@@ -505,9 +506,10 @@ interface BoardCardViewProps {
   readonly cardStart: BoardProps["cardStart"];
 }
 
-/** The card's name: its key and title, then why it can't start, and when it will. */
+/** The card's name: its key and title, who drives it, then why it can't start, and when it will. */
 function cardName(wi: NavTask): string {
-  const base = wi.key ? `${wi.key} ${wi.title}` : wi.title;
+  const driver = shownDriver(wi);
+  const base = `${wi.key ? `${wi.key} ${wi.title}` : wi.title}${driver ? `; ${driverLabel(driver)}` : ""}`;
   const blockers = isBlocked(wi) ? wi.blockedBy ?? [] : [];
   if (blockers.length === 0) return base;
   const why = `, ${relationWords("blocked-by", blockers).replace(/^B/, "b")}`;
@@ -570,6 +572,7 @@ const BoardCardView = memo(function BoardCardView({ card, now, showEpic, selecte
   const agents = ownerAgents(wi, working);
   const plan = working?.plan;
   const prs = wi.pullRequests ?? [];
+  const driver = shownDriver(wi);
   return (
     <li className={styles["cardItem"]} onMouseEnter={() => onHover(wi.key ?? null)}>
       <div
@@ -603,6 +606,7 @@ const BoardCardView = memo(function BoardCardView({ card, now, showEpic, selecte
             </span>
           ) : null}
           <span className={styles["topEnd"]}>
+            {driver ? <DriverGlyph mode={driver} className={styles["driver"]} /> : null}
             {needsYou ? (
               <StatusMark status="awaiting_input" size="sm" />
             ) : since !== null ? (

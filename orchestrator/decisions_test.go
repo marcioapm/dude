@@ -481,6 +481,50 @@ func TestTakingOverMidDelivery(t *testing.T) {
 	w.until("a review", func() bool { return w.phaseRuns(task, "review") == 1 })
 }
 
+// Give decisions to the conductor, from the header's switch, on a delivery
+// Deliver started and nobody wrote about: only the owner may; the step
+// running keeps running, its end parks for the conductor, and the
+// decision's wake starts the one conductor it has (no other start).
+func TestGivingTheDecisionsToTheConductorWithNoneYet(t *testing.T) {
+	w := conducting(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.deliver(task)
+	for w.phaseRuns(task, "implement") == 0 {
+		if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status, body := w.callAs(bo, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "conductor"}); status != 403 {
+		t.Fatalf("a non-owner's switch: %d %v", status, body)
+	}
+	if w.decider(task) != "policy" {
+		t.Fatalf("a refused switch changed the decider to %s", w.decider(task))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 0 {
+		t.Fatalf("%d conductors before the switch", n)
+	}
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "conductor"}); status != 200 || body["decider"] != "conductor" {
+		t.Fatalf("the owner's switch: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decider_changed'
+		AND payload->>'from' = 'policy' AND payload->>'to' = 'conductor' AND payload->>'why' = 'a person gave the decisions to the conductor'`, task); n != 1 {
+		t.Errorf("%d decider changes recorded", n)
+	}
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	if n := w.phaseRuns(task, "implement"); n != 1 {
+		t.Errorf("%d implementers: the switch restarted the step", n)
+	}
+	if n := w.phaseRuns(task, "review"); n != 0 {
+		t.Fatalf("a reviewer started after the switch")
+	}
+	w.wokenWith(task, "after implement")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 1 {
+		t.Errorf("%d conductors started for the decision", n)
+	}
+}
+
 // Let Deliver finish it: the decision waited on goes to the policy at once,
 // and the rest of the delivery is Deliver's — to a pull request with no
 // question. A later message does not take it over again.

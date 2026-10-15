@@ -360,7 +360,8 @@ describe("a task's Chat", () => {
       conduct = setConductorId;
       return (
         <ChatSection client={client} task={task} conductorId={conductorId} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
-          events={[]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}} />
+          events={[]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}}
+          driverControl={{ busy: false, problem: null, confirmOpen: false, change: async () => {}, cancel: () => {} }} canSwitchDriver />
       );
     }
     const { container, unmount } = await mount(

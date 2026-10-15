@@ -11,7 +11,7 @@
  * a new status is a compile error before it can be a blank row.
  */
 
-import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
+import { TERMINAL_TASK_STATUSES, notStarted, type AgentRole, type RunStatus, type SessionStatus, type TaskStatus } from "@dude/domain";
 import type { Person, PrChipPullRequest } from "./viewTypes.ts";
 import { toMs } from "./instant.ts";
 import {
@@ -87,6 +87,11 @@ export interface NavTask {
   readonly autoStart?: NavAutoStart | null | undefined;
   /** The reader may start it: draws a Backlog card's start. */
   readonly canStart?: boolean | undefined;
+  /**
+   * Who drives its delivery while in progress (`driverMode`): its card and
+   * row carry the glyph, read-only. Absent for a task not started or ended.
+   */
+  readonly driver?: "deliver" | "conductor" | "deliver-chat" | undefined;
 }
 
 /** A related task, as a chip, a menu and the strip name it. */
@@ -116,6 +121,12 @@ export interface NavAutoStart {
 /** What a task that needs you, with no agent asking, says it waits for. */
 export function waitingWords(task: NavTask): string {
   return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
+}
+
+/** The driver a card or row shows: only while the task is in progress. */
+export function shownDriver(task: NavTask): NavTask["driver"] {
+  if (notStarted(task.status) || TERMINAL_TASK_STATUSES.includes(task.status)) return undefined;
+  return task.driver;
 }
 
 export interface NavEpic {

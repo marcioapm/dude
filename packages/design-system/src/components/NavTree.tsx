@@ -11,6 +11,7 @@ import {
   navKey,
   projectPeople,
   ownerAgents,
+  shownDriver,
   type NavEpic,
   type NavFilter,
   type NavOverrides,
@@ -22,6 +23,7 @@ import {
   type NavTask,
 } from "../util/navModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { DriverGlyph, driverLabel } from "./DriverMark.tsx";
 import { PersonAvatarStack } from "./PersonAvatar.tsx";
 import { PrChip } from "./PrChip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -273,11 +275,12 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   );
 });
 
-/** A row's accessible name: its title, and a task's key before it. */
+/** A row's accessible name: its title, a task's key before it and who drives it after. */
 function treeItemLabel(row: NavRow): string {
   if (row.ref.kind === "task") {
     const wi = row.node as NavTask;
-    return wi.key ? `${wi.key} ${wi.title}` : wi.title;
+    const driver = shownDriver(wi);
+    return `${wi.key ? `${wi.key} ${wi.title}` : wi.title}${driver ? `; ${driverLabel(driver)}` : ""}`;
   }
   return rowLabel(row);
 }
@@ -400,6 +403,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const people = wi.people ?? [];
     const agents = ownerAgents(wi, working);
     const pr = currentPullRequest(wi);
+    const driver = shownDriver(wi);
     return (
       <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}>
         {chevron}
@@ -409,6 +413,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
             {wi.title}
           </span>
         </span>
+        {driver ? <DriverGlyph mode={driver} className={styles["driver"]} /> : null}
         {needsYou ? (
           <NeedsYouCount count={1} className={styles["count"]} />
         ) : pr ? (

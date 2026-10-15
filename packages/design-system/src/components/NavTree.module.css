@@ -204,6 +204,9 @@
 .pr {
   flex-shrink: 0;
 }
+.driver {
+  flex-shrink: 0;
+}
 .wiPeople {
   flex-shrink: 0;
 }

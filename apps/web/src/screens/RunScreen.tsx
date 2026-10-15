@@ -130,6 +130,7 @@ export interface ChatVariant {
   above?: ReactNode;
   /** The conductor only reads and answers, though there is a line above (Deliver decides). */
   readOnly?: boolean;
+  to?: ReactNode;
   /** The briefing of the failed conductor this one retries (Try again), from that Run's ledger. */
   briefedBefore?: string | undefined;
 }
@@ -658,7 +659,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
-                  to={chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>}
+                  to={chat.to ?? (chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>)}
                   toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
                 />
                 </>

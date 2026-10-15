@@ -46,6 +46,14 @@ const DECIDING_JSON = `
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
+  -- Each delivery's own decider, by attempt: a start over writes state.attempt; a first start
+  -- does not, and its generated branch (delivery.BranchFor: dude/<this task>/attempt-N) names it;
+  -- an adopted branch is not one, and neither is any other branch: attempt 1.
+  (SELECT COALESCE(json_agg(json_build_object('attempt', COALESCE((w.state->>'attempt')::int,
+      CASE WHEN w.state->>'branch' = 'dude/' || tasks.id || '/attempt-' || substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')
+        THEN substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')::int END, 1),
+      'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
+    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;

@@ -1,0 +1,88 @@
+/*
+ * Who drives a task: a chip in PrChip's shape on the neutral tint, its
+ * glyph alone on cards and rows. Never a tone: who decides is a fact, not
+ * a state, and the status beside it already carries the colour.
+ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  max-width: 100%;
+  min-width: 0;
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-tone-neutral-bg);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+button.chip:hover,
+button.chip[data-state="open"] {
+  background: var(--ds-color-active-wash);
+}
+.chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.ended {
+  padding-left: 0;
+  background: none;
+  color: var(--ds-color-text-muted);
+}
+.ended .zap,
+.ended .cond {
+  color: var(--ds-color-text-muted);
+}
+.icons {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 1px;
+}
+.zap {
+  color: var(--ds-color-text-secondary);
+}
+.cond {
+  color: var(--ds-role-conductor-fg);
+}
+/* The conductor is there but decides nothing: its glyph muted, after the bolt. */
+.condQuiet {
+  color: var(--ds-color-text-muted);
+}
+.who {
+  flex-shrink: 0;
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-muted);
+}
+/* What it waits on is the part worth reading: secondary ink, never attention. */
+.detailWaiting {
+  color: var(--ds-color-text-secondary);
+}
+.chev {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.menu {
+  max-width: 360px;
+}
+.glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: var(--ds-size-badge-md);
+  padding: 0 var(--ds-space-4);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-tone-neutral-bg);
+}
