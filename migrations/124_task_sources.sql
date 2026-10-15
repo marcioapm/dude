@@ -1,4 +1,4 @@
--- 123_task_sources.sql — a task may start from work that already exists: an
+-- 124_task_sources.sql — a task may start from work that already exists: an
 -- open pull request, or a branch, in one of its project's repositories
 -- (adopted work). The source is named before the task's delivery first
 -- starts and is fixed after; the delivery takes its head branch as the task
