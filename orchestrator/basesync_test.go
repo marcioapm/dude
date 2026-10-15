@@ -518,6 +518,34 @@ func TestAQueuedConflictOnAMergedSiblingIsSkipped(t *testing.T) {
 	}
 }
 
+// While an integration Run is merging the base into the task branch, the
+// conductor's publish is refused: the integration is the branch's writer.
+func TestAConductorPublishWaitsForALiveIntegration(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.integration"] == "true" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return scripted(spec)
+	}
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	integrating := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'
+		AND status IN ('pending','scheduled','starting','running')`
+	w.until("a live integration Run", func() bool { w.sync(); return w.count(integrating, task) == 1 })
+	w.refused(task, "publish", `{"message":"a small fix"}`, "an implementer is working on this task; wait for it, or steer it")
+	if n := w.count(`SELECT count(*) FROM conductor_publishes WHERE task_id = $1`, task); n != 0 {
+		t.Fatalf("%d publishes recorded beside a live integration", n)
+	}
+}
+
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true
