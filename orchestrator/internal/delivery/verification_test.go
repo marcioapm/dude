@@ -50,7 +50,7 @@ func TestTheGateFailsBeforeItBlocksAndHonoursAPersonsDecision(t *testing.T) {
 		{"the environment", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "pass"}},
 			Findings: []TestFinding{{ID: "f", Severity: "blocking", Title: "Test environment: no database"}}}, "blocked"},
 		{"an earlier test's finding, this one unable to run", gateInput{RunID: "t2",
-			Verdicts: []StoredVerdict{{Criterion: 1, Status: "blocked"}},
+			Verdicts: []StoredVerdict{{Criterion: 1, Status: "blocked"}, {Criterion: 2, Status: "pass"}},
 			Findings: []TestFinding{{ID: "f1", Severity: "blocking", Title: "Criterion 1 is not met", RunID: "t1"},
 				{ID: "f2", Severity: "blocking", Title: "Test environment: no database", RunID: "t2"}}}, "blocked"},
 		{"an earlier test's finding, this one ran", gateInput{RunID: "t2",

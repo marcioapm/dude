@@ -423,11 +423,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
 	var qID, prompt, answer, by, asker string
-	var rawOpts []byte
+	var rawOpts, rawAnswers []byte
 	err = tx.QueryRow(ctx, `SELECT q.id, q.prompt, COALESCE(q.answer, ''), COALESCE(q.answered_by_person, ''), q.run_id,
-			q.options
+			q.options, q.answers
 		FROM questions q WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered'
-		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker, &rawOpts)
+		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker, &rawOpts, &rawAnswers)
 	if db.IsNotFound(err) {
 		return nil, refusef("the owner has not answered your question about this escalation: only a person decides it. "+
 			"Ask them, or end your turn; %s", banner)
@@ -459,7 +459,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		// task, an organization admin (the banner's ownerOrAdmin).
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
-		if choiceOf(options, answer) >= 0 {
+		// Picks alone, one or several, are not words: the item's own text is.
+		var items []ItemAnswer
+		_ = json.Unmarshal(rawAnswers, &items)
+		picked := len(items) > 0 && strings.TrimSpace(items[0].Text) == ""
+		if picked || choiceOf(options, answer) >= 0 {
 			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
 				"they say why in their own words, or decide on the banner", qID, action)
 		}

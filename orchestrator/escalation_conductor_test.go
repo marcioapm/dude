@@ -400,6 +400,23 @@ func TestAWaiverPickedFromTheConductorsQuestionDecidesNothing(t *testing.T) {
 	}
 }
 
+// Several boxes ticked are still picks, not the person's words: the conductor
+// cannot waive on them.
+func TestAWaiverOnSeveralPicksIsNotTheOwnersWords(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
+		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
+		map[string]any{"answers": []map[string]any{{"choices": []int{0, 1}}}}); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
+	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision IS NOT NULL`, task); n != 0 {
+		t.Errorf("%d criteria waived on picks alone", n)
+	}
+}
+
 // On a task nobody owns, a waiver through the conductor is an admin's, as
 // on the banner: a member's answer does not hand it over.
 func TestAWaiverOnAnOwnerlessTaskIsAnAdminsThroughTheConductorToo(t *testing.T) {
