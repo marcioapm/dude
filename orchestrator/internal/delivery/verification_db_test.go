@@ -3,8 +3,11 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -18,13 +21,13 @@ func TestTheGateWaitsForEvidenceOnlyWhenItCouldChangeTheVerdict(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	ctx := context.Background()
-	exec := func(t *testing.T, _ any, sql string, args ...any) {
+	exec := func(t *testing.T, sql string, args ...any) {
 		t.Helper()
 		if _, err := owner.Exec(ctx, sql, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_v', $1, 'P', 'p', 'P')`, org)
+	exec(t, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_v', $1, 'P', 'p', 'P')`, org)
 	report := func(status, evidence string) string {
 		return "```yaml\n---\ncriterion: 1\nstatus: " + status + "\nevidence: " + evidence + "\nobserved: Seen.\n```\n"
 	}
@@ -42,18 +45,18 @@ func TestTheGateWaitsForEvidenceOnlyWhenItCouldChangeTheVerdict(t *testing.T) {
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			task, run := "wi_v"+string(rune('a'+i)), "run_v"+string(rune('a'+i))
-			exec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
+			exec(t, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
 				VALUES ($1, $2, 'prj_v', $3, 'Greet', 'greet', '["it greets"]', 'running')`, task, org, i+1)
 			// Ended a minute ago, its exit's files not all reported yet.
-			exec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind,
+			exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind,
 					ended_at, artifacts_due_at)
 				VALUES ($1, $2, 'prj_v', $3, 1, 'completed', 'test', 'qa_browser', 'agent', now() - interval '1 minute', now())`,
 				run, org, task)
-			exec(t, owner, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
 				VALUES ($1, $2, 'agent.message', $3, $4, 'agent', $3, 'test', jsonb_build_object('text', $5::text))`,
 				"ev_"+run, org, run, task, c.reply)
 			for _, name := range c.recorded {
-				exec(t, owner, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+				exec(t, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
 					VALUES ($1, $2, $3, 'published', $4, $1, 'x')`, "art_"+run, org, run, name)
 			}
 			st := &State{TaskID: task, ProjectID: "prj_v", Attempt: 1, TestRunID: run, Policy: DefaultPolicy()}
@@ -79,7 +82,7 @@ func TestTheGateWaitsForEvidenceOnlyWhenItCouldChangeTheVerdict(t *testing.T) {
 					t.Errorf("waits %v, want about 6s", d)
 				}
 				// Once its files are all in, it judges.
-				exec(t, owner, `UPDATE runs SET artifacts_due_at = NULL WHERE id = $1`, run)
+				exec(t, `UPDATE runs SET artifacts_due_at = NULL WHERE id = $1`, run)
 				res, err = w.testVerdict(ctx, workflow.StepContext{WorkflowRunID: "wf_" + run, OrganizationID: org,
 					Step: "testVerdict", State: raw})
 				if err != nil {
@@ -124,19 +127,16 @@ func TestAFailureGetsAFindingWhileAnEarlierTestsIsOpen(t *testing.T) {
 	if _, err := s.RecordVerdict(ctx, org, st, "run_q2"); err != nil {
 		t.Fatal(err)
 	}
-	var titles []string
 	rows, err := owner.Query(ctx, `SELECT title FROM review_findings WHERE run_id = 'run_q2' ORDER BY title`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rows.Next() {
-		var title string
-		_ = rows.Scan(&title)
-		titles = append(titles, title)
+	titles, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
 	}
-	rows.Close()
 	want := []string{"Acceptance criterion 1 fails: it greets", "Acceptance criterion 2 fails: it says goodbye"}
-	if len(titles) != 2 || titles[0] != want[0] || titles[1] != want[1] {
+	if !slices.Equal(titles, want) {
 		t.Errorf("this test's findings %q, want %q", titles, want)
 	}
 }

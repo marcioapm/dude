@@ -40,12 +40,9 @@ func (w *world) verdicts(wi string) []string {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		out = append(out, s)
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
 	}
 	return out
 }
