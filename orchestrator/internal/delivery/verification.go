@@ -670,7 +670,8 @@ func markedVerification(section string) string {
 }
 
 // replaceVerification puts section between dude's markers in body, keeping
-// every other byte. Marker lines inside a fenced code block are text. With
+// every other byte. A marker counts only as a whole line at column 0 and
+// outside a fenced code block; any other is text. With
 // no marked section it appends one: a `## Verification` without markers is a
 // person's, or one dude wrote before it marked its sections, and either way
 // is left as it is.
@@ -685,7 +686,9 @@ func replaceVerification(body, section string) string {
 		content := strings.TrimRight(line, "\r\n")
 		var code bool
 		fence, code = fenceAfter(fence, content)
-		switch strings.TrimSpace(content) {
+		// An indented marker is a person's, e.g. in a list item's fenced
+		// example, whose fence fenceAfter does not see.
+		switch content {
 		case verificationStart:
 			if !code {
 				start = offset

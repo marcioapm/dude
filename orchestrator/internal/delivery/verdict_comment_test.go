@@ -208,6 +208,25 @@ func TestOpenedPRVerdictKeepsALegacyAndAFencedSectionAndMarksItsOwnOnce(t *testi
 	}
 }
 
+// A fenced example indented under a list item, holding dude's markers, is
+// the person's text: dude only ever writes its markers at column 0.
+func TestOpenedPRVerdictLeavesAMarkedExampleInAListAlone(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	example := "- Example:\n\n    ```md\n    " + verificationStart + "\n    Human example, not a verdict.\n    " +
+		verificationEnd + "\n    ```\n\n"
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) {
+		pr.Body = example + verificationStart + "\n## Verification\nOld.\n" + verificationEnd + "\n"
+	})
+	if _, err := f.verdictStep(st); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.gh.Pull(f.number).Body, example+f.currentSection(st)+"\n"; got != want {
+		t.Fatalf("body:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 // manyOpened makes the task's pull requests six, one in each of six
 // repositories, every one with a person's body; their fakes, by repo name.
 func (f *verdictFixture) manyOpened() (*State, map[string]*fakegithub.Server) {
