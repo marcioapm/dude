@@ -1014,8 +1014,8 @@ def test_project_settings_manage_repositories_and_delivery(
     assert "docs" in [r["name"] for r in project["repositories"]]
     assert "bad" not in [r["name"] for r in project["repositories"]]
     # Only what differs from the factory's defaults is stored: the rest keeps
-    # following them.
-    assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
+    # following them. (forge_project's tester, off, differs.)
+    assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"], "test": False}
     assert console_errors == []
 
     # Its face: an image picked in General, resized in the browser, stored,
