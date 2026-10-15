@@ -423,6 +423,8 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			if strings.Contains(in.Prompt, "Base integration:") {
 				spec.Labels["dude.integration"] = "true"
 				spec.Labels["dude.integration.prompt"] = in.Prompt
+				// A real lux runs lux-fake: the same integration, as a script.
+				spec.Workload.Prompt = fakeagent.IntegrationScript(in.Prompt, RepoPath(fakeagent.IntegrationRepo(in.Prompt)))
 			}
 			if calls := fakeagent.ConductorCalls(in.Prompt); len(calls) > 0 {
 				raw, _ := json.Marshal(calls)
