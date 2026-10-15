@@ -181,7 +181,8 @@ type FindingState struct {
 	Severity    string
 	Status      string
 	FixAttempts int
-	Human       bool
+	// Not a column of review_findings: set only for a person's item.
+	Human bool `db:"-"`
 }
 
 // IsBlocking: only open findings block. A resolved one is fixed, a

@@ -553,8 +553,9 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	wi := w.task()
 	w.deliver(wi)
-	w.until("the delivery to end", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, wi) == 1
+	// It waits on a person reading it: their feedback, or their done.
+	w.until("the delivery to wait on its reader", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step = 'awaitRead'`, wi) == 1
 	})
 	if s := w.taskStatus(wi); s != "review" {
 		var why string
