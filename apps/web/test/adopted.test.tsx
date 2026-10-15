@@ -137,10 +137,12 @@ describe("the pull request panel", () => {
   });
 
   test("the note stays beside why merge waits", async () => {
-    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [{ ...ADOPTED, checkState: "failing", display: "ci_red" }]));
+    const failing: PullRequest = { ...ADOPTED, checks: [], review: "approved", reviews: [], mergeable: "clean", unresolvedThreads: 0,
+      checkState: "failing", display: "ci_red" };
+    const page = await taskPage(new AdoptedClient({ source: PR_SOURCE }, [failing]));
     const panel = page.querySelector("[data-testid=pr-panel][data-pr=pr_12]")!;
-    expect(panel.querySelectorAll("[data-testid=pr-adopted-note]").length).toBe(1);
-    expect(panel.querySelectorAll("[data-testid=pr-blocked]").length).toBe(1);
+    expect(text(panel.querySelector("[data-testid=pr-adopted-note]"))).toBe("Existing pull request: dude pushes to it and opened none");
+    expect(text(panel.querySelector("[data-testid=pr-blocked]"))).toBe("Blocked: checks failing");
   });
 
   test("a pull request dude opened has no such note, adopted branch or new work", async () => {
