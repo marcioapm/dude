@@ -406,7 +406,7 @@ export type Task = z.infer<typeof taskSchema>;
  * accept the findings a review got stuck on and go on; take what was
  * merged as the task; wait on the pull requests still open; or stop.
  */
-export const escalationActionSchema = z.enum(["resume", "retry", "accept", "done", "wait", "stop"]);
+export const escalationActionSchema = z.enum(["resume", "retry", "accept", "waive", "done", "wait", "stop"]);
 export type EscalationAction = z.infer<typeof escalationActionSchema>;
 
 /**
@@ -757,6 +757,44 @@ export const findingSchema = z.object({
   createdAt: z.string(),
 });
 export type Finding = z.infer<typeof findingSchema>;
+
+/**
+ * The tester's verdict on one acceptance criterion, as dude recorded it
+ * (acceptance_verdicts): `unverified` is a pass whose evidence is not a
+ * file the test published, and counts as blocked. `decision` is a
+ * person's: a blocked check waived, or a failure accepted.
+ */
+export const verdictStatusSchema = z.enum(["pass", "fail", "blocked", "unverified", "not-applicable"]);
+export type VerdictStatus = z.infer<typeof verdictStatusSchema>;
+
+export const criterionVerdictSchema = z.object({
+  criterion: z.number().int(),
+  text: z.string(),
+  status: verdictStatusSchema,
+  /** Published file names, as `dude publish --name` gave them. */
+  evidence: z.array(z.string()),
+  observed: z.string(),
+  /** Why dude's status is not the tester's. */
+  problem: z.string(),
+  decision: z.enum(["waived", "accepted"]).nullable(),
+  decidedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
+  decisionNote: z.string().nullable(),
+});
+export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
+
+/**
+ * A test Run's verdict: the heads (repository → commit) it tested, and
+ * whether the task's work has moved past them since (`stale`).
+ */
+export const verificationSchema = z.object({
+  runId: z.string(),
+  attempt: z.number().int(),
+  heads: z.record(z.string(), z.string()),
+  stale: z.boolean(),
+  createdAt: z.string(),
+  criteria: z.array(criterionVerdictSchema),
+});
+export type Verification = z.infer<typeof verificationSchema>;
 
 export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed"]);
 export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);

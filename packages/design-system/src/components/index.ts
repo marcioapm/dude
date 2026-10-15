@@ -76,6 +76,8 @@ export { AutoStartDialog, RelationPicker, StartAnywayDialog } from "./RelationDi
 export type { AutoStartDialogProps, DialogBlocker, PickableTask, RelationPickerProps, RelationSide, StartAnywayDialogProps } from "./RelationDialogs.tsx";
 export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES, FINDING_STATUS_SPECS } from "./FindingRow.tsx";
 export type { FindingRowProps, FindingGroupProps, FindingLike, FindingCounts, FindingSeveritySpec, FindingStatusSpec } from "./FindingRow.tsx";
+export { CriterionRow, VerificationGroup, criterionState, CRITERION_STATES, CRITERION_STATE_SPECS } from "./CriterionRow.tsx";
+export type { CriterionRowProps, VerificationGroupProps, CriterionState, CriterionStateSpec } from "./CriterionRow.tsx";
 export { Breadcrumb, elideMiddle } from "./Breadcrumb.tsx";
 export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";
 export { ArtifactRow, ArtifactGroup, artifactKind, ARTIFACT_KIND_SPECS } from "./ArtifactRow.tsx";
