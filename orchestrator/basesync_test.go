@@ -424,6 +424,100 @@ func TestAnIntegrationReplayedAfterARestartKeepsItsRun(t *testing.T) {
 	}
 }
 
+// twoConflictingPullRequests delivers a task across target and web, then
+// moves both bases so each pull request conflicts on FACTORY.md, read in one
+// reconcile so both conflicts reach the workflow in one batch.
+func (w *world) twoConflictingPullRequests() string {
+	w.t.Helper()
+	w.toolsWithSync()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:FACTORY.md": "task intent\n", "web:FACTORY.md": "task intent\n"}
+		}
+		return b
+	}
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "base intent\n", "Base change")
+	w.commitFileIn(w.web.Repo, "main", "FACTORY.md", "base intent\n", "Base change")
+	w.sync()
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND mergeable_state='conflicting'`, wi); n != 2 {
+		w.t.Fatalf("conflicting pull requests read: %d", n)
+	}
+	return wi
+}
+
+func TestTwoConflictingPullRequestsAreIntegratedInTurn(t *testing.T) {
+	w := newWorld(t)
+	wi := w.twoConflictingPullRequests()
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.until("both integrated and waiting", func() bool {
+		w.sync()
+		if r := w.escalationReason(wi); r != "" {
+			t.Fatalf("escalated: %s", r)
+		}
+		return w.count(integrations, wi) == 2 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+				AND COALESCE(jsonb_array_length(state->'pendingConflicts'), 0) = 0`, wi) == 1
+	})
+	for _, repo := range []struct {
+		name string
+		gh   *fakegithub.Server
+	}{{"target", w.gh}, {"web", w.web}} {
+		if n := w.count(integrations+` AND pr_feedback::text LIKE '%in `+repo.name+`.%'`, wi); n != 1 {
+			t.Errorf("%s integration Runs %d", repo.name, n)
+		}
+		branch := repo.gh.Pull(1).Head
+		if out := gitOut(t, repo.gh.Repo, "rev-list", "--count", branch+"..main"); out != "0" {
+			t.Errorf("%s: base not merged in (%s behind)", repo.name, out)
+		}
+		content := gitOut(t, repo.gh.Repo, "show", branch+":FACTORY.md")
+		if !strings.Contains(content, "base intent") || !strings.Contains(content, "task intent") {
+			t.Errorf("%s lost an intent: %q", repo.name, content)
+		}
+	}
+}
+
+// A sibling whose pull request merged while the first integration ran is
+// not integrated: its queued conflict is dropped, and nothing escalates.
+func TestAQueuedConflictOnAMergedSiblingIsSkipped(t *testing.T) {
+	w := newWorld(t)
+	wi := w.twoConflictingPullRequests()
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.until("the first integration Run", func() bool { return w.count(integrations, wi) == 1 })
+	sibling := w.web
+	if w.count(integrations+` AND pr_feedback::text LIKE '%in web.%'`, wi) == 1 {
+		sibling = w.gh
+	}
+	sibling.Merge(1)
+	w.sync()
+	w.until("back waiting with nothing queued", func() bool {
+		w.sync()
+		if r := w.escalationReason(wi); r != "" {
+			t.Fatalf("escalated: %s", r)
+		}
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND state='merged'`, wi) == 1 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+				AND COALESCE(jsonb_array_length(state->'pendingConflicts'), 0) = 0`, wi) == 1
+	})
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(integrations, wi); n != 1 {
+		t.Fatalf("integration Runs %d, want only the open pull request's", n)
+	}
+	if n := len(w.gh.Pulls()) + len(w.web.Pulls()); n != 2 {
+		t.Fatalf("pull requests %d: a merged repository got another", n)
+	}
+}
+
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true

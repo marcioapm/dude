@@ -49,14 +49,19 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if repo.Access != "write" || st.Heads[repo.Name] == "" {
 			continue
 		}
-		var open bool
+		// Only a repository about to get a pull request (OpenPullRequests'
+		// rule): one open already, or one merged or closed at this head,
+		// covers it, and merging the base in would only open an empty one.
+		var covered bool
 		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pull_requests WHERE task_id=$1 AND repository_id=$2 AND head_branch=$3 AND state IN ('open','draft'))`, st.TaskID, repo.ID, st.Branch).Scan(&open)
+			return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pull_requests WHERE task_id=$1 AND repository_id=$2
+				AND head_branch=$3 AND (state IN ('open','draft') OR head_sha=$4))`,
+				st.TaskID, repo.ID, st.Branch, st.Heads[repo.Name]).Scan(&covered)
 		})
 		if err != nil {
 			return workflow.Result{}, false, err
 		}
-		if open {
+		if covered {
 			continue
 		}
 		slug := forge.SlugFromURL(repo.URL)
