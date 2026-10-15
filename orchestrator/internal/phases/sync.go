@@ -994,7 +994,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, sizes, sent, err := s.spec(ctx, r, nil, chosenImage{image, nested})
+	spec, sizes, sent, given, err := s.spec(ctx, r, nil, chosenImage{image, nested})
 	machine := sizes.Now
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
@@ -1063,6 +1063,9 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got, spec.Network,
 			spec.Labels["dude.effort"], lr.NestedContainers(spec))
 		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := s.recordGiven(ctx, tx, r, acceptedProjectSecrets(lr, given)); err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.lease.acquired", ledger.ActorSystem, map[string]any{"luxRunId": lr.ID})
@@ -1152,11 +1155,12 @@ const EvImagePreparing = "run.image_preparing"
 // organization has none), which submit records, and for a resume the size
 // runs.machine records, read in the same transaction. And the
 // task's images in the order the prompt numbers them, read in the same
-// transaction as its text: submit sends exactly these.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, error) {
+// transaction as its text: submit sends exactly these. And the project
+// secrets the spec declares (projectsecrets.go), with their values.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, []lux.Secret, error) {
 	if r.brainstorm() {
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
-		return spec, sizes, nil, err
+		return spec, sizes, nil, nil, err
 	}
 	var in specInput
 	var title, goal string
@@ -1172,6 +1176,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
+	var projectSecrets []lux.Secret
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -1248,6 +1253,21 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// The project's secrets this phase is given; a resume's, only the
+		// names it was submitted with (lux ignores a name added since).
+		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() {
+			var names []string
+			if stored != nil {
+				if err := tx.QueryRow(ctx, `SELECT project_secret_names FROM runs WHERE id = $1`, r.ID).Scan(&names); err != nil {
+					return err
+				}
+			}
+			if stored == nil || len(names) > 0 {
+				if projectSecrets, err = loadProjectSecrets(ctx, tx, r.ProjectID, recipient, names); err != nil {
+					return fmt.Errorf("load the project's secrets: %w", err)
+				}
+			}
+		}
 		// What people decided on this task, across its Runs.
 		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
 			WHERE task_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.TaskID)
@@ -1276,10 +1296,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, runSizes{}, nil, err
+		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, runSizes{}, nil, errNoModel(noTier)
+		return lux.Spec{}, runSizes{}, nil, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
 	if r.conductor() {
@@ -1310,7 +1330,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, runSizes{}, nil, err
+		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -1355,14 +1375,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, runSizes{}, nil, errForge{err}
+		return lux.Spec{}, runSizes{}, nil, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, firstRepo); err != nil {
-			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
+			return lux.Spec{}, runSizes{}, nil, nil, forgeFailure(err)
 		}
 		if in.Bot, err = botOf(ctx, gh); err != nil {
-			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
+			return lux.Spec{}, runSizes{}, nil, nil, forgeFailure(err)
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -1370,17 +1390,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, runSizes{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, runSizes{}, nil, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
 		if in.ToolsToken, err = s.toolsToken(ctx, r); err != nil {
-			return lux.Spec{}, runSizes{}, nil, err
+			return lux.Spec{}, runSizes{}, nil, nil, err
 		}
 	}
-	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
+	spec := buildSpec(s.Agent, in)
+	given := withProjectSecrets(&spec, projectSecrets)
+	return spec, runSizes{Now: in.Machine, Recorded: recorded}, taskImages, given, nil
 }
 
 // checkoutOf is where a task's Run checks repo out, and whether read only:
@@ -2225,7 +2247,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, sizes, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
+	spec, sizes, _, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, 0, err
 	}

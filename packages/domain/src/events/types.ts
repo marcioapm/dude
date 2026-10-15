@@ -309,6 +309,12 @@ export const EventTypes = {
    * starts. A start that fails says its stage in `run.failed`.
    */
   RunStage: "run.stage",
+  /**
+   * The project secrets an agent Run was given at submit, by the phase's
+   * recipient (`project_secrets.recipients`). Once per Run. Payload:
+   * `{ names }`, never a value. The conductor and brainstorm get none.
+   */
+  RunSecretsGiven: "run.secrets.given",
 
   // Run lifecycle
   RunCreated: "run.created",

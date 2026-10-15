@@ -12,10 +12,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// A project's preview secrets (project_secrets, migration 081) are lux
-// secrets of every preview Run, as: env, so its servers and their setup
-// scripts have them; no agent Run is given them (phases builds those
-// specs and never reads the table). A preview spec's only env secrets are
+// A project's secrets granted to previews (project_secrets, migrations 081
+// and 127) are lux secrets of every preview Run, as: env, so its servers
+// and their setup scripts have them; agent Runs get those granted to their
+// phase (phases/projectsecrets.go). A preview spec's only env secrets are
 // these: GIT_TOKEN and the registry login are declared without as.
 //
 // lux v0.1.11 requires a value at every resume for each secret the Run
