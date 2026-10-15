@@ -704,8 +704,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} />
-                      : isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span> : undefined}
+                    // Recovery never closes the adopted pull request, so its close is never read as Start over's.
+                    note={isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>
+                      : pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>

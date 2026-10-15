@@ -330,6 +330,40 @@ describe("the adopted pull request across attempts", () => {
     expect(panels(page)).toEqual(["pr_478"]);
   });
 
+  // Attempt 1's pull request, closed after the restart by the GitHub sync (system/forge), seen from attempt 1.
+  async function closedAfterRestart(source: TaskSource | null, pr: PullRequest) {
+    localStorage.setItem("dude.fixtures.run", "restarted");
+    const restartAt = RESTARTED_RUNS.find((r) => r.attempt === 2 && r.phase === "implement")!.createdAt;
+    const closedAt = new Date(Date.parse(restartAt) + 60_000).toISOString();
+    class Closed extends AdoptedClient {
+      override events() {
+        const events = [
+          { eventId: "restart", cursor: 1, eventType: "task.recovered", occurredAt: restartAt, runId: null,
+            taskId: TASK_ID, actor: { type: "system" }, payload: { action: "restart", attempt: 2 } },
+          { eventId: "closed", cursor: 2, eventType: "pull_request.closed", occurredAt: closedAt, runId: null,
+            taskId: TASK_ID, actor: { type: "system", id: "forge" }, payload: { number: pr.number, repo: pr.repositoryName } },
+        ] as unknown as PersistedEvent[];
+        return Promise.resolve({ events, nextCursor: 2 });
+      }
+    }
+    const page = await taskPage(new Closed({ source }, [pr], "a"));
+    await pick(page, 1);
+    return await until(() => page.querySelector<HTMLElement>(`[data-testid=pr-panel][data-pr=${pr.id}]`), "attempt 1's panel");
+  }
+
+  test("an adopted pull request closed on GitHub after a start over keeps its note: recovery never closes it", async () => {
+    const panel = await closedAfterRestart(PR_SOURCE, { ...ADOPTED, state: "closed", display: "closed" });
+    expect(text(panel.querySelector("[data-testid=pr-adopted-note]"))).toBe("Existing pull request: dude pushes to it and opened none");
+    expect(text(panel)).not.toContain("Closed by");
+    expect(text(panel)).not.toContain("started over");
+  });
+
+  test("new work's pull request closed after a start over is still said to be closed by it", async () => {
+    const panel = await closedAfterRestart(null, RESTARTED_PULL_REQUESTS[0]!);
+    expect(text(panel)).toMatch(/Closed by \S+ .* ago, when someone started over\./);
+    expect(panel.querySelectorAll("[data-testid=pr-adopted-note]").length).toBe(0);
+  });
+
   test("what happened on the adopted pull request is the attempt's under way then, not the one its branch might name", () => {
     // Two attempts; attempt 2 began after the first review of attempt 1.
     const named = { ...ADOPTED, headBranch: "dude/task_wc214/attempt-1" };
