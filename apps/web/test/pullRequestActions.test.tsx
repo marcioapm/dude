@@ -50,12 +50,14 @@ describe("resolving conflicts", () => {
   };
 
   test("a clean pull request offers no resolve, and a conflicting one no Update branch", () => {
-    expect(render(pr({ behindBy: 2 }))).not.toContain("pr-resolve-conflicts");
-    const h = renderToStaticMarkup(
-      <PullRequestActions client={{} as ApiClient} pr={conflicting} defaultMethod="squash" onChanged={() => {}}>
+    const base = (p: PullRequest) => renderToStaticMarkup(
+      <PullRequestActions client={{} as ApiClient} pr={p} defaultMethod="squash" onChanged={() => {}}>
         {({ facts }) => <div>{facts.base}</div>}
       </PullRequestActions>,
     );
+    expect(base(pr({ behindBy: 0 }))).not.toContain("pr-resolve-conflicts");
+    expect(base(pr({ behindBy: 2 }))).not.toContain("pr-resolve-conflicts");
+    const h = base(conflicting);
     expect(h).toContain('data-testid="pr-resolve-conflicts"');
     expect(h).not.toContain("pr-update-branch");
   });
@@ -94,7 +96,7 @@ describe("resolving conflicts", () => {
     const { container, unmount } = await panel(client, () => {});
     await click(container.querySelector('[data-testid="pr-resolve-conflicts"]')!);
     await settle();
-    expect(container.querySelector('[data-testid="pr-problem"]')?.textContent).toContain("already working on the task");
+    expect(container.querySelector('[data-testid="pr-problem"]')?.textContent ?? "no problem shown").toContain("already working on the task");
     await unmount();
   });
 });
