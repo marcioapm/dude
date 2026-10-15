@@ -6,8 +6,8 @@ SNOWFLAKE_PASSWORD is given to Previews and the Tester (the default): the
 tester's Run and a preview get it, the implementer and the conductor do
 not. The tester printing it shows [REDACTED:SNOWFLAKE_PASSWORD] in its
 session, as stored and as the web app shows it. A value rotated while an
-implementer that was given it is paused is still redacted in what it says
-after its resume. An implementer committing a value is refused before
+implementer that was given it waits on a question is still redacted in
+what it says after. An implementer committing a value is refused before
 anything is pushed, its owner told the secret's name, never the value.
 
 The scripted models: `fake/print-secrets` prints its env secrets in a bash
@@ -142,8 +142,13 @@ def test_the_testers_session_shows_the_marker_and_its_secrets_chip_never_the_val
     assert value not in page.content()
 
 
-def test_a_value_rotated_while_an_agent_is_paused_is_still_redacted_after_its_resume(
+def test_a_value_rotated_while_an_agent_waits_is_still_redacted(
         client: ApiClient, forge_project: dict, env):
+    """The implementer prints the value it was given, then waits on a
+    question; the value is rotated meanwhile. Its reply after the answer
+    quotes the value it holds: redacted from the Run's copy though the
+    project has another value now. (A resume supplying the new value and
+    replacing the copy is TestAResumeSuppliesCurrentValuesAndReplacesTheCopy.)"""
     old, new = _value(), _value()
     pid = forge_project["id"]
     added = client.post(f"/v1/projects/{pid}/secrets", {"name": NAME, "value": old, "recipients": ["implementer"]})
@@ -156,12 +161,12 @@ def test_a_value_rotated_while_an_agent_is_paused_is_still_redacted_after_its_re
                           timeout=90, message="the implementer never asked")
     run_id = question["runId"]
 
-    # Rotated while it waits on the answer: what it printed before is redacted
-    # with the value it was given; the answer resumes it with the new one.
+    # Rotated while it waits on the answer: what it says after is redacted
+    # with the value it was given.
     assert client.put(f"/v1/projects/{pid}/secrets/{NAME}", {"value": new}).status_code == 200
     assert client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"}).status_code == 200
     wait_until(lambda: any("Connected with these" in repr(e["payload"]) for e in _events_of(client, run_id, "agent.message")),
-               timeout=120, message="the implementer never answered after its resume")
+               timeout=120, message="the implementer never answered")
     text = _events_text(client, run_id)
     assert old not in text and new not in text
     assert MARK in text
