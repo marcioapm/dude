@@ -154,6 +154,20 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   its next turn.
 - **Reviewers report findings** as YAML in their reply; `delivery/findings.go`
   parses it. Only review and test Runs may report.
+- **The tester is on by default and gates the pull request**
+  (`delivery/verification.go`). It ends its reply with one YAML document
+  per acceptance criterion (`ParseAcceptance`); dude records each in
+  `acceptance_verdicts` with the heads the test Run checked out. A `pass`
+  whose evidence names no file that Run published is `unverified`; a
+  criterion it left out is `blocked`. A failed criterion or a blocking
+  finding of the tester's goes back to the fixer, then review, simplify
+  and test again, at most `MaxTestFixRounds` (2) times, then
+  `test_failed_criteria`; a blocked or unverified one, or a `Test
+  environment:` finding, escalates `test_blocked` with no fix. `accept`
+  and `waive` on those two need a note and may be taken by the owner or an
+  organization admin; they are recorded on the verdict. The tester's
+  findings are judged by the next test, never by a reviewer. A verdict
+  whose heads the task has moved past is shown stale.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.
@@ -384,7 +398,7 @@ These were settled deliberately. Change them on purpose, not by accident.
   in both; migrations are `.sql` files run by `bun run migrate`.
 - **Phases are Runs**, not agent subagents. The reviewer executes but never
   publishes. Tests belong to the implementer; the *tester* is a browser QA
-  agent (not built yet).
+  agent, on for every project unless its policy says `test: false`.
 - **GitHub**: a PAT first, the GitHub App later behind the same client.
   **The factory never auto-merges** — it stops at an open PR.
 - **Artifacts** will be S3-compatible (lux stores them; not wired up yet).
@@ -471,7 +485,10 @@ requested by a tier like any other model; the suites' `ApiClient.on_models`
 puts roles on such tiers)
 plays every phase deterministically: the implementer commits, the reviewer
 raises one blocking finding unless the fixer's file is in its tree, the fixer
-and simplifier commit. `fake/hang` never finishes its turn, for steering and
+and simplifier commit, and the tester passes every criterion with a published
+video (`fakeagent.Tester`; `fake/test-fail`, `fake/test-fail-once`,
+`fake/test-blocked`, `fake/test-unverified` and `fake/test-silent` play the
+gate's other outcomes). `fake/hang` never finishes its turn, for steering and
 pausing. The fake lux plays it directly; a real lux runs it as a lux-fake
 script.
 

@@ -103,7 +103,7 @@ var tools = []tool{
 		"the person answered Open or Draft to that question, at the task's current head.", conductors, decide),
 	define("dismiss_finding", "Leave an open review finding as it is, with the reason — shown with the finding, as a "+
 		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
-	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, resume, done, wait or "+
+	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, waive, resume, done, wait or "+
 		"stop, as it offers), with a note: only after the task's owner answered your question about this escalation in "+
 		"their own words, handing it to you. A choice they pick decides it without you; otherwise the person decides on "+
 		"the banner. Allowed once per escalation.", conductors, decideEscalation),
