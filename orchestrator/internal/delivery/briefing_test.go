@@ -12,6 +12,54 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
+func TestTaskHeadsExcludesOnlyTheRunsGeneratedCandidateBranch(t *testing.T) {
+	for _, branch := range []string{
+		"feature/greeting-candidate",
+		delivery.BranchFor("wi_head", 2),
+		delivery.CandidateBranch("wi_head", 1),
+		delivery.CandidateBranch("wi_other", 2),
+		"dude/wi_head/custom-candidate",
+	} {
+		t.Run(branch, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			org := dbtest.Org(t, owner)
+			ctx := context.Background()
+			exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix)
+				VALUES ('prj_head', $1, 'P', 'p', 'HEAD')`, org)
+			exec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url)
+				VALUES ('repo_head', $1, 'prj_head', 'app', 'git://x/app.git')`, org)
+			exec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+				VALUES ('wi_head', $1, 'prj_head', 1, 'Head', 'Task head')`, org)
+			exec(t, owner, `INSERT INTO task_repositories (task_id, repository_id, organization_id)
+				VALUES ('wi_head', 'repo_head', $1)`, org)
+			exec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, branch, heads, ended_at)
+				VALUES ('run_head', $1, 'prj_head', 'wi_head', 2, 'completed', 'implement', $2,
+				  '{"app":{"sha":"published"}}', now() - interval '1 minute'),
+				('run_candidate', $1, 'prj_head', 'wi_head', 2, 'completed', 'fix', $3,
+				  '{"app":{"sha":"unchecked"}}', now())`, org, branch, delivery.CandidateBranch("wi_head", 2))
+			exec(t, owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number,
+				url, head_branch, base_branch, head_sha, title)
+				VALUES ('pr_head', $1, 'prj_head', 'wi_head', 'repo_head', 1, 'https://x/pull/1', $2, 'main', 'published', 'Head')`, org, branch)
+			if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+				heads, err := delivery.TaskHeads(ctx, tx, "wi_head")
+				if err != nil {
+					return err
+				}
+				if len(heads) != 1 || heads[0] != (delivery.RepoHead{Repo: "app", SHA: "published", Branch: branch}) {
+					t.Errorf("TaskHeads = %+v, want published on %s", heads, branch)
+				}
+				note, err := delivery.Briefing(ctx, tx, "wi_head", "run_conductor", "Ana", "Where is the task?")
+				if err == nil && !strings.Contains(note, "- app: publish on "+branch) {
+					t.Errorf("briefing lacks the published branch %s:\n%s", branch, note)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func exec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	t.Helper()
 	if _, err := c.Exec(context.Background(), sql, args...); err != nil {

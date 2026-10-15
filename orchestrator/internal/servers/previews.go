@@ -307,7 +307,7 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 		ref := tr.DefaultBranch
 		var branch string
 		err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
-			AND branch NOT LIKE '%-candidate' ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
+			AND branch <> ('dude/' || task_id || '/attempt-' || attempt || '-candidate') ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
 		switch {
 		case err == nil:
 			ref = branch

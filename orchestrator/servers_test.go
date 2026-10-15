@@ -620,10 +620,20 @@ func TestAPreviewChecksOutTheBranchTheTaskPublished(t *testing.T) {
 // then deleted: the preview checks out the task branch the pull request
 // shows, never the candidate.
 func TestAPreviewNeverChecksOutACandidateBranch(t *testing.T) {
+	for _, branch := range []string{"", "feature/greeting-candidate", "dude/other-task/attempt-2-candidate"} {
+		t.Run(branch, func(t *testing.T) {
+			testPreviewExcludesGeneratedCandidate(t, branch)
+		})
+	}
+}
+
+func testPreviewExcludesGeneratedCandidate(t *testing.T, branch string) {
 	w := newWorld(t)
 	w.actor = w.person("Ana")
 	wi := w.task()
-	branch := delivery.BranchFor(wi, 1)
+	if branch == "" {
+		branch = delivery.BranchFor(wi, 1)
+	}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
 		w.org, wi, w.repoID)
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, branch, heads, created_at)
