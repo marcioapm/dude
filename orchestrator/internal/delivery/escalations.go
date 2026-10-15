@@ -268,8 +268,9 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
 // to the conductor's question about it picks one of its choices: the
 // action the choice names, the answer and the conductor's proposal its
-// note. A free answer, or one to an escalation no longer waiting, decides
-// nothing: it reaches the conductor, which may then decide_escalation.
+// note. A free answer, one to an escalation no longer waiting, or a choice
+// whose action needs the person's reason (NeedsReason) decides nothing: it
+// reaches the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
 	// The answer routes took the delivery and the task's row before the
 	// question (LockEscalationTx); taken again here, they are held already.
@@ -292,6 +293,11 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 		return nil
 	}
 	if !waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != key {
+		return nil
+	}
+	// A choice carries no reason of the person's: a waiver or acceptance
+	// picked so is a free answer, for decide_escalation once they say why.
+	if NeedsReason(d.State.Escalation.Reason, actions[i]) {
 		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],

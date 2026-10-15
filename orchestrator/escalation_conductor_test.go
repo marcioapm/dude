@@ -320,3 +320,35 @@ func TestAReplacementConductorDecidesOnlyOnItsOwnQuestion(t *testing.T) {
 		t.Errorf("decided on the earlier conductor's answer: %v", d)
 	}
 }
+
+// A waiver picked from the conductor's question carries no reason of the
+// person's: it decides nothing, and reaches the conductor as their answer,
+// for decide_escalation once they say why.
+func TestAWaiverPickedFromTheConductorsQuestionDecidesNothing(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", fakeagent.TestBlockedModel)
+	task := w.task()
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.until("blocked", func() bool { return w.escalationReason(task) == delivery.ReasonTestBlocked })
+	w.wokenWith(task, "Escalated to a person: test blocked")
+	w.must(task, "ask_person", `{"question":"The app would not start. Test again, or ship it unchecked?",
+		"choices":["Test again","Waive"],"actions":["retry","waive"]}`)
+	if status, out := w.answerAs(ana, task, "Waive"); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if d := w.decided(task); d != nil {
+		t.Fatalf("a waiver with no reason of the owner's decided the escalation: %v", d)
+	}
+	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision IS NOT NULL`, task); n != 0 {
+		t.Errorf("%d criteria waived with no reason", n)
+	}
+	w.must(task, "decide_escalation", `{"action":"waive","note":"Ana: checked by hand on staging."}`)
+	w.until("the waiver on the verdict", func() bool {
+		return w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND decision = 'waived'`, task) > 0
+	})
+}

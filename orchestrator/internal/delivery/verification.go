@@ -28,11 +28,13 @@ const MaxTestFixRounds = 2
 const EnvironmentPrefix = "Test environment:"
 
 // How long the gate waits for a finished test Run's published files to be
-// recorded before it judges with what is there.
+// recorded before it judges with what is there, and the bounds of its
+// back-off between looks: a tenth of the time since the Run ended.
 const (
-	artifactsWait     = 15 * time.Minute
-	artifactsRecheck  = 500 * time.Millisecond
-	evidenceFindingCt = "acceptance"
+	artifactsWait       = 15 * time.Minute
+	artifactsRecheckMin = 500 * time.Millisecond
+	artifactsRecheckMax = 30 * time.Second
+	evidenceFindingCt   = "acceptance"
 )
 
 // Escalation reasons of the gate, and the actions only they offer.
@@ -69,28 +71,43 @@ func RunReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	return b.String(), err
 }
 
-// artifactsPending says the test Run's published files may not all be
-// recorded yet: its exit's collection is still due, and it ended recently.
-func (s *Store) artifactsPending(ctx context.Context, org, runID string) (bool, error) {
-	var pending bool
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT artifacts_due_at IS NOT NULL AND COALESCE(ended_at, now()) > now() - make_interval(secs => $2)
-			FROM runs WHERE id = $1`, runID, artifactsWait.Seconds()).Scan(&pending)
-	})
-	if db.IsNotFound(err) {
-		return false, nil
+// artifactsRecheckTx is how long to wait before judging the test Run
+// again because its published files may not all be recorded yet: its
+// exit's collection is still due, and it ended under artifactsWait ago.
+// Zero when they are all there, or the wait is over.
+func artifactsRecheckTx(ctx context.Context, tx pgx.Tx, runID string) (time.Duration, error) {
+	var since *float64
+	err := tx.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM now() - COALESCE(ended_at, now()))::float8 FROM runs
+		WHERE id = $1 AND artifacts_due_at IS NOT NULL AND COALESCE(ended_at, now()) > now() - make_interval(secs => $2)`,
+		runID, artifactsWait.Seconds()).Scan(&since)
+	if db.IsNotFound(err) || since == nil {
+		return 0, nil
 	}
-	return pending, err
+	if err != nil {
+		return 0, err
+	}
+	return min(max(time.Duration(*since*float64(time.Second))/10, artifactsRecheckMin), artifactsRecheckMax), nil
+}
+
+// awaitsEvidence says a verdict could still change once more of the Run's
+// files are recorded: a pass is unverified for a name it cited that is not
+// recorded yet. Nothing else a later file could change.
+func awaitsEvidence(verdicts []CriterionVerdict, published map[string]bool) bool {
+	return slices.ContainsFunc(verdicts, func(v CriterionVerdict) bool {
+		return v.Status == VerdictUnverified && slices.ContainsFunc(v.Evidence, func(n string) bool { return !published[n] })
+	})
 }
 
 // RecordVerdict stores the test Run's verdict on each criterion, once:
 // the tester's report judged against the task's criteria and what the Run
 // published, at the heads it checked out. A criterion that fails with no
-// finding of the tester's saying why gets one, so the fixer is told. An
+// finding of this Run's saying why gets one, so the fixer is told. An
 // environment finding of an earlier test of the attempt is superseded:
-// this test is the one that tried to run it now.
-func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID string) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+// this test is the one that tried to run it now. When a pass cites a file
+// not recorded yet and the Run's files are still due, it records nothing
+// and says how long to wait before judging again.
+func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID string) (wait time.Duration, err error) {
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var done bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM acceptance_verdicts WHERE run_id = $1)`, runID).Scan(&done); err != nil || done {
 			return err
@@ -119,6 +136,13 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 			published[n] = true
 		}
 		verdicts := JudgeAcceptance(criteria, ParseAcceptance(reply), published)
+		if awaitsEvidence(verdicts, published) {
+			// What it published may still be on its way from lux: a pass
+			// is judged against every file, not the ones recorded so far.
+			if wait, err = artifactsRecheckTx(ctx, tx, runID); err != nil || wait > 0 {
+				return err
+			}
+		}
 		for _, v := range verdicts {
 			if _, err := tx.Exec(ctx, `INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text,
 					status, evidence, observed, problem, heads)
@@ -146,12 +170,12 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 				return err
 			}
 		}
-		// A finding of the tester's still open says why already: this one's,
-		// or an earlier one it judged still there.
+		// A blocking finding this test raised says why already. One an
+		// earlier test raised is about what that test saw, not this failure.
 		var said bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE task_id = $1 AND status = 'open'
-			AND severity::text = ANY($3) AND title NOT LIKE $4 || '%' AND `+thisAttempt+` AND NOT `+fromReview+`)`,
-			st.TaskID, st.Attempt, st.Policy.BlockingSeverities, EnvironmentPrefix).Scan(&said); err != nil || said {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE run_id = $1 AND status = 'open'
+			AND severity::text = ANY($2) AND title NOT LIKE $3 || '%')`,
+			runID, st.Policy.BlockingSeverities, EnvironmentPrefix).Scan(&said); err != nil || said {
 			return err
 		}
 		severity := "blocking"
@@ -162,17 +186,23 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 			if v.Status != VerdictFail {
 				continue
 			}
+			// One dude raised for this criterion at an earlier test, still
+			// open, is the same failure: the fixer is told once.
 			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category,
 					severity, title, description)
-				VALUES ($1, $2, $3, $4, $5, $6::finding_severity, $7, $8)`,
-				ids.New(ids.Finding), org, st.TaskID, runID, evidenceFindingCt, severity,
+				SELECT $3, $4, $1, $5, $6, $7::finding_severity, $8, $9
+				WHERE NOT EXISTS (SELECT 1 FROM review_findings WHERE task_id = $1 AND status = 'open'
+					AND title LIKE $10 AND `+thisAttempt+`)`,
+				st.TaskID, st.Attempt, ids.New(ids.Finding), org, runID, evidenceFindingCt, severity,
 				criterionFindingTitle(v.Criterion, v.Text),
-				"Reproduced: "+valueOr(v.Observed, "the tester reported it failing.")); err != nil {
+				"Reproduced: "+valueOr(v.Observed, "the tester reported it failing."),
+				criterionFindingTitle(v.Criterion, "")+"%"); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	return wait, err
 }
 
 // criterionFindingTitle is the title of the finding dude raises for a
@@ -187,7 +217,7 @@ func criterionFindingTitle(n int, text string) string {
 
 // TestFinding is an open finding of the tester's, as the gate weighs it.
 type TestFinding struct {
-	ID, Severity, Title string
+	ID, Severity, Title, RunID string
 }
 
 // Environment says the tester could not run the application: a blocked
@@ -197,6 +227,7 @@ func (f TestFinding) Environment() bool { return strings.HasPrefix(f.Title, Envi
 // gateInput is what the gate decides from: the test Run's verdict, and
 // the tester's open findings of this attempt.
 type gateInput struct {
+	RunID    string
 	Verdicts []StoredVerdict
 	Findings []TestFinding
 }
@@ -210,7 +241,7 @@ type StoredVerdict struct {
 }
 
 func (s *Store) gateInput(ctx context.Context, org string, st *State, runID string) (gateInput, error) {
-	var in gateInput
+	in := gateInput{RunID: runID}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT criterion, text, status, COALESCE(decision, '') FROM acceptance_verdicts
 			WHERE run_id = $1 ORDER BY criterion`, runID)
@@ -220,7 +251,7 @@ func (s *Store) gateInput(ctx context.Context, org string, st *State, runID stri
 		if in.Verdicts, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StoredVerdict]); err != nil {
 			return err
 		}
-		rows, err = tx.Query(ctx, `SELECT id, severity::text, title FROM review_findings
+		rows, err = tx.Query(ctx, `SELECT id, severity::text, title, run_id FROM review_findings
 			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND NOT `+fromReview+` ORDER BY created_at`,
 			st.TaskID, st.Attempt)
 		if err != nil {
@@ -244,9 +275,12 @@ type gate struct {
 // failure is a criterion that fails or a blocking finding of the tester's
 // that is not about its environment; failing outranks blocked, since a fix
 // is needed whatever else could not be checked. A person's decision on a
-// criterion settles it.
+// criterion settles it. An earlier test's finding is a failure only when
+// this test ran the application: one that could not has not judged it, so
+// it is still to be checked, not to be fixed.
 func judgeGate(p Policy, in gateInput) gate {
 	var failed, blocked gate
+	ran := !slices.ContainsFunc(in.Findings, func(f TestFinding) bool { return f.Environment() && f.RunID == in.RunID })
 	for _, v := range in.Verdicts {
 		if v.Decision != "" {
 			continue
@@ -262,8 +296,11 @@ func judgeGate(p Policy, in gateInput) gate {
 		switch {
 		case f.Environment():
 			blocked.Findings = append(blocked.Findings, f.ID)
-		case slices.Contains(p.BlockingSeverities, f.Severity):
+		case !slices.Contains(p.BlockingSeverities, f.Severity):
+		case ran || f.RunID == in.RunID:
 			failed.Findings = append(failed.Findings, f.ID)
+		default:
+			blocked.Findings = append(blocked.Findings, f.ID)
 		}
 	}
 	switch {
@@ -287,15 +324,10 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		return workflow.Result{}, err
 	}
 	runID := st.TestRunID
-	if pending, err := w.s.artifactsPending(ctx, sc.OrganizationID, runID); err != nil {
+	if wait, err := w.s.RecordVerdict(ctx, sc.OrganizationID, st, runID); err != nil {
 		return workflow.Result{}, err
-	} else if pending {
-		// What it published may still be on its way from lux: a pass is
-		// judged against every file, not the ones recorded so far.
-		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(artifactsRecheck)}, nil
-	}
-	if err := w.s.RecordVerdict(ctx, sc.OrganizationID, st, runID); err != nil {
-		return workflow.Result{}, err
+	} else if wait > 0 {
+		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {

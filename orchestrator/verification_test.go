@@ -190,7 +190,7 @@ func errMessage(body map[string]any) string {
 func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	w := newWorld(t)
 	wi := w.testing(fakeagent.TestBlockedModel)
-	_, admin, member := w.people(wi)
+	owner, admin, member := w.people(wi)
 	w.until("the gate to stop", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != delivery.ReasonTestBlocked {
 		t.Fatalf("escalated %q, want %s", r, delivery.ReasonTestBlocked)
@@ -201,7 +201,7 @@ func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	}
 
 	// Try again: the tester runs again on the same heads.
-	if code, body := w.decide(w.ownerOf(wi), wi, "retry", "Start it with make dev."); code != 200 {
+	if code, body := w.decide(owner, wi, "retry", "Start it with make dev."); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
 	}
 	w.until("a second test to stop", func() bool {
@@ -225,6 +225,18 @@ func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	}
 	if code, body := w.decide(member, wi, "retry", ""); code != 403 {
 		t.Fatalf("a member's retry, still the owner's: %d %v", code, body)
+	}
+	// An admin's say is the waiver alone.
+	for _, action := range []string{"retry", "stop"} {
+		if code, body := w.decide(admin, wi, action, "As admin."); code != 403 {
+			t.Fatalf("an admin's %s, still the owner's: %d %v", action, code, body)
+		}
+	}
+	// With its owner gone the task is nobody's, and a waiver still an
+	// admin's only.
+	mustExec(t, w.owner, `UPDATE people SET removed_at = now() WHERE id = (SELECT person_id FROM api_keys WHERE id = $1)`, owner)
+	if code, body := w.decide(member, wi, "waive", "Nobody owns it."); code != 403 {
+		t.Fatalf("a member's waiver on an ownerless task: %d %v", code, body)
 	}
 	if code, body := w.decide(admin, wi, "waive", "Checked by hand on staging."); code != 200 {
 		t.Fatalf("an admin's waiver: %d %v", code, body)
@@ -270,5 +282,32 @@ func TestATestWithNoVerdictIsBlocked(t *testing.T) {
 	}
 	if got := w.verdicts(wi); strings.Join(got, ",") != "blocked,blocked" {
 		t.Errorf("verdicts = %v, want every criterion blocked", got)
+	}
+}
+
+// A test that could not run the app has not judged what an earlier test
+// found: that finding, still open, is a check to make, not a fix to send.
+func TestABlockedRetestOfAnOpenFailureIsBlockedNotFixed(t *testing.T) {
+	w := newWorld(t)
+	wi := w.testing(fakeagent.TestFailModel)
+	// The first test failed and its fix round began: the next test cannot
+	// start the app.
+	w.until("the test's fix round", func() bool { return w.phaseRuns(wi, "fix") == 2 })
+	w.onModel("qa_browser", fakeagent.TestBlockedModel)
+	w.until("the gate to stop", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	if r := w.escalationReason(wi); r != delivery.ReasonTestBlocked {
+		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonTestBlocked, w.describeRuns())
+	}
+	if n := w.phaseRuns(wi, "test"); n != 2 {
+		t.Errorf("%d tests, want 2", n)
+	}
+	if n := w.phaseRuns(wi, "fix"); n != 2 {
+		t.Errorf("%d fixes, want the review's and the first test's: the blocked test sent none", n)
+	}
+	if got := w.verdicts(wi); strings.Join(got, ",") != "blocked,blocked" {
+		t.Errorf("verdicts = %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open' AND title = 'Criterion 1 is not met'`, wi); n != 1 {
+		t.Errorf("the first test's finding is not left open for a test that can check it")
 	}
 }

@@ -584,12 +584,8 @@ func attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 
 // ownerOnly uses the first active ordered member, independent of credentials.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) error {
-	var ownerID, ownerName *string
-	if err := tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
-		LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
-			WHERE tp.task_id = t.id AND p.removed_at IS NULL
-			ORDER BY tp.position, tp.person_id LIMIT 1) owner ON true
-		WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
+	ownerID, ownerName, err := taskOwner(ctx, tx, taskID)
+	if err != nil {
 		return err
 	}
 	if ownerID == nil || *ownerID == personID {
@@ -598,22 +594,33 @@ func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) er
 	return fail(http.StatusForbidden, "not_owner", "only %s can %s this — reassign the task to %s it", *ownerName, verb, verb)
 }
 
-// ownerOrAdmin is ownerOnly that an organization admin also passes: for
+// taskOwner is the task's first active ordered member; nil when it has none.
+func taskOwner(ctx context.Context, tx pgx.Tx, taskID string) (id, name *string, err error) {
+	err = tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
+		LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = t.id AND p.removed_at IS NULL
+			ORDER BY tp.position, tp.person_id LIMIT 1) owner ON true
+		WHERE t.id = $1`, taskID).Scan(&id, &name)
+	return id, name, err
+}
+
+// ownerOrAdmin passes the task's owner or an organization admin: for
 // waiving or accepting what a test could not show, which a person outside
-// the task may need to unblock. Admin-ness is the member's role as
+// the task may need to unblock. Unlike ownerOnly, a task with no active
+// owner is the admins' alone. Admin-ness is the member's role as
 // resolvePrincipal read it, the backend's isOrgAdmin source.
 func ownerOrAdmin(ctx context.Context, tx pgx.Tx, taskID string, p principal, verb string) error {
 	if p.Admin {
 		return nil
 	}
-	if err := ownerOnly(ctx, tx, taskID, p.Person, verb); err != nil {
-		var he *httpError
-		if errors.As(err, &he) && he.status == http.StatusForbidden {
-			return fail(http.StatusForbidden, "not_owner", "only the task's owner or an organisation admin can %s this", verb)
-		}
+	ownerID, _, err := taskOwner(ctx, tx, taskID)
+	if err != nil {
 		return err
 	}
-	return nil
+	if ownerID != nil && p.Person != "" && *ownerID == p.Person {
+		return nil
+	}
+	return fail(http.StatusForbidden, "not_owner", "only the task's owner or an organisation admin can %s this", verb)
 }
 
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ string, p principal, payload map[string]any) error {
