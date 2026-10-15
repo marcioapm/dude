@@ -1180,17 +1180,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// A resumed Run's repositories as lux holds them, in submit's order
 	// (forgeTokens).
 	var firstRepo []string
+	var reviewRange *delivery.ReviewRange
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
 				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.tier_override, ''),
-				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name
+				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name, r.review_range
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
 			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &tierOverride,
-				&orgEgress, &projectEgress, &egressMode, &orgName); err != nil {
+				&orgEgress, &projectEgress, &egressMode, &orgName, &reviewRange); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -1286,6 +1287,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
+	if reviewRange != nil {
+		in.ReviewOf = reviewRange.Of
+	}
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 	in.Harness = settings.HarnessName()
 	s.logIgnoredOptions(r, in)
@@ -1309,6 +1313,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination,
+	}
+	if reviewRange != nil {
+		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
 	}
 	// What the branch started from: the first repository's, which is where
 	// the task starts (a prompt names one base; several repositories each
@@ -1686,9 +1693,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 
 	heads := map[string]delivery.RunHead{}
+	branch := ""
 	if pushes {
 		var err error
-		if heads, err = s.publish(ctx, r); err != nil {
+		if heads, branch, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
 			// refusal (not a fast-forward, a bad push) will not.
 			if forge.Transient(err) {
@@ -1710,9 +1718,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	s.unfollow(r.ID)
 	raw, _ := json.Marshal(heads)
-	branch := ""
-	if len(heads) > 0 {
-		branch = delivery.BranchFor(r.TaskID, r.Attempt)
+	if len(heads) == 0 {
+		branch = ""
 	}
 	completed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -1738,19 +1745,22 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	return true, nil
 }
 
-// publish moves the task's branch in each repository this Run changed
-// to what it pushed, and works out what changed there. Returns runs.heads:
-// per repository changed, its new commit and changed paths.
+// publish moves the Run's branch in each repository this Run changed to
+// what it pushed, and works out what changed there. Returns runs.heads:
+// per repository changed, its new commit and changed paths; and the
+// branch moved: the task's, or the one the Run was created for
+// (runs.branch: an open pull request's candidate fix, which the pull
+// request shows only once it is reviewed and tested).
 //
 // A fast-forward, never a force: if someone else moved a branch the update
 // is refused and the phase fails loudly rather than overwriting their work.
 // Repositories that did not move are left alone — no branch, no PR — and a
 // read-only one is never pushed at all (lux reports it "skipped").
-func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, error) {
+func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, string, error) {
 	if r.talker() {
 		// Read-only: its spec names no push branch, and nothing it holds
 		// may move the task's branch.
-		return nil, fmt.Errorf("a %s does not publish", r.Role)
+		return nil, "", fmt.Errorf("a %s does not publish", r.Role)
 	}
 	var push struct {
 		Results []struct {
@@ -1758,34 +1768,43 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(r.PushResult, &push); err != nil {
-		return nil, fmt.Errorf("lux's push result is unreadable: %w", err)
+		return nil, "", fmt.Errorf("lux's push result is unreadable: %w", err)
 	}
 	var repos []delivery.Repository
+	branch := delivery.BranchFor(r.TaskID, r.Attempt)
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID)
-		return err
+		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
+			return err
+		}
+		var own string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(branch, '') FROM runs WHERE id = $1`, r.ID).Scan(&own); err != nil {
+			return err
+		}
+		if own != "" {
+			branch = own
+		}
+		return nil
 	}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	byName := repositoriesBySpecName(repos)
 
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub
-	branch := delivery.BranchFor(r.TaskID, r.Attempt)
 	for _, res := range push.Results {
 		repo, known := byName[res.Repo]
 		switch {
 		case res.Status == "skipped" || known && repo.Access == "read":
 			continue // cloned for reading; nothing to publish
 		case !known:
-			return nil, fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
+			return nil, "", fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
 		case res.Status != "pushed" && res.Status != "up-to-date":
 			guidance := ""
 			message := strings.ToLower(res.Error)
 			if strings.Contains(message, "refusing to allow a personal access token to create or update workflow") && strings.Contains(message, "scope") {
 				guidance = "; workflow-file pushes require Workflows: Read and write on a fine-grained PAT, or the workflow scope on a classic PAT; ordinary push preflight does not establish this permission"
 			}
-			return nil, fmt.Errorf("push %s %s: %s%s", repo.Name, res.Status, res.Error, guidance)
+			return nil, "", fmt.Errorf("push %s %s: %s%s", repo.Name, res.Status, res.Error, guidance)
 		}
 		if res.Commit == "" {
 			continue // nothing committed there
@@ -1794,7 +1813,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		// change is measured against.
 		base := r.BaseSHAs[res.Repo]
 		if base == "" {
-			return nil, fmt.Errorf("lux never reported where %s's checkout started", repo.Name)
+			return nil, "", fmt.Errorf("lux never reported where %s's checkout started", repo.Name)
 		}
 		if res.Commit == base {
 			continue // nothing committed there
@@ -1802,26 +1821,26 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if gh == nil {
 			var err error
 			if gh, err = s.Forges.For(ctx, r.Org); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if gh == nil {
-				return nil, fmt.Errorf("no forge credential to publish with")
+				return nil, "", fmt.Errorf("no forge credential to publish with")
 			}
 		}
 		slug := forge.SlugFromURL(repo.URL)
 		if slug == "" {
-			return nil, fmt.Errorf("no forge to publish %s to", repo.URL)
+			return nil, "", fmt.Errorf("no forge to publish %s to", repo.URL)
 		}
 		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
-			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
+			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
 		changed, err := gh.ChangedFiles(ctx, slug, base, res.Commit)
 		if err != nil {
-			return nil, fmt.Errorf("compare %s %s...%s: %w", repo.Name, short(base), short(res.Commit), err)
+			return nil, "", fmt.Errorf("compare %s %s...%s: %w", repo.Name, short(base), short(res.Commit), err)
 		}
-		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
+		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed), Base: base}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
@@ -1838,10 +1857,10 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
 				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
 		}); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return heads, nil
+	return heads, branch, nil
 }
 
 // reportFindings parses what a reviewer said and records it as findings.

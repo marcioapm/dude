@@ -423,7 +423,8 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 		t.Errorf("task = %s, want review (waiting on people)", s)
 	}
 
-	// The loop went round once: one blocking finding, one fix, then clean.
+	// The loop went round once: one blocking finding, one fix, then clean;
+	// then the simplifier's diff was reviewed on its own, clean.
 	phaseCounts := map[string]int{}
 	for _, r := range w.lux.Runs() {
 		var spec struct {
@@ -432,7 +433,7 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 		_ = json.Unmarshal(r.Spec, &spec)
 		phaseCounts[spec.Labels["dude.phase"]]++
 	}
-	if phaseCounts["implement"] != 1 || phaseCounts["review"] != 2 || phaseCounts["fix"] != 1 || phaseCounts["simplify"] != 1 {
+	if phaseCounts["implement"] != 1 || phaseCounts["review"] != 3 || phaseCounts["fix"] != 1 || phaseCounts["simplify"] != 1 {
 		t.Errorf("runs per phase = %v", phaseCounts)
 	}
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {

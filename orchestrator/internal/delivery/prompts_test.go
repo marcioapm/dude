@@ -193,6 +193,34 @@ func twoRepos() []PromptRepo {
 	return []PromptRepo{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/workspace/repos/web"}}
 }
 
+// A review limited to a range names it, per repository, in the fixed
+// framing whatever its instructions, says why, and never sends the
+// reviewer to the whole branch.
+func TestAReviewOfARangeIsToldItsRangeWhateverItsInstructions(t *testing.T) {
+	for of, why := range map[string]string{RangeSimplify: "behaviour-preservation check of the simplifier's diff",
+		RangePullRequestFix: "only the fix made for the open pull request's feedback"} {
+		in := PromptInput{Title: "Export invoices", Category: "correctness", Repositories: twoRepos(),
+			ReviewBase: map[string]string{"api": "aaa111", "web": "bbb222"}, ReviewOf: of}
+		for kind, got := range underEveryInstructions(PhaseReview, in) {
+			for _, want := range []string{"Review in `api`, `aaa111..HEAD`; in `web`, `bbb222..HEAD`:", why} {
+				if strings.Count(got, want) != 1 {
+					t.Errorf("%s/%s: the reviewer should be told %q once:\n%s", of, kind, want, got)
+				}
+			}
+			if strings.Contains(got, "`git merge-base`") {
+				t.Errorf("%s/%s: a review of a range is sent to the whole branch:\n%s", of, kind, got)
+			}
+		}
+	}
+	one := Prompt(PhaseReview, PromptInput{Category: "correctness", ReviewBase: map[string]string{"api": "aaa111"}, ReviewOf: RangeSimplify})
+	if !strings.Contains(one, "Review `aaa111..HEAD`:") {
+		t.Errorf("one repository's range names no repository:\n%s", one)
+	}
+	if whole := Prompt(PhaseReview, PromptInput{Category: "correctness"}); strings.Contains(whole, "..HEAD") {
+		t.Errorf("a review with no range is told one:\n%s", whole)
+	}
+}
+
 // The tester accounts for every criterion, changes nothing, knows what its
 // severities cause, and records its evidence, whatever its instructions say.
 func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {

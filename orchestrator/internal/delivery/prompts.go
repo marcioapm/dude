@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,6 +25,11 @@ type PromptInput struct {
 	PRFeedback []forge.ActionableFeedback
 	// Review phase: the severities that block, from the delivery's policy.
 	BlockingSeverities []string
+	// Review phase limited to a range (PhaseRun.ReviewRange): the commit
+	// per repository it starts after, and why (RangeSimplify,
+	// RangePullRequestFix). Empty reviews the whole branch.
+	ReviewBase map[string]string
+	ReviewOf   string
 	// Per-project, per-role notes, appended last so a project can tell its
 	// reviewer what this codebase considers a defect without that text
 	// reaching every other role.
@@ -206,10 +212,49 @@ var reviewFocus = map[string]string{
 // reviewContract is how every reviewer works and what its reply carries,
 // whatever its instructions say: findings a fixer can act on and a person
 // can trust, and an account of what the review did and did not cover.
-const reviewContract = "## How you review\n\n" +
-	"First establish what is under review: in each checkout, the base (where the branch leaves its default " +
+const reviewContract = "## How you review\n\n" + reviewWholeBranch + reviewRules
+
+// reviewWholeBranch is how a reviewer establishes its range when the
+// delivery gives it none: the whole branch.
+const reviewWholeBranch = "First establish what is under review: in each checkout, the base (where the branch leaves its default " +
 	"branch: `git merge-base`) and the head, then `git log` and `git diff` from the base. Read the changed code " +
-	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n" +
+	"and what it relies on — its callers, contracts, schemas and tests — before you judge a line.\n\n"
+
+// What a review limited to a range (ReviewRange) checks, by its Of.
+const (
+	RangeSimplify       = "simplify"
+	RangePullRequestFix = "pull_request_fix"
+)
+
+// rangeReason says why a review covers only its range, by ReviewRange.Of.
+var rangeReason = map[string]string{
+	RangeSimplify: "This review covers only what the simplifier changed after the branch was reviewed: a " +
+		"behaviour-preservation check of the simplifier's diff, and of any fix of it since. The simplifier was told to " +
+		"change no behaviour; a change in behaviour, a removed check, an altered error or edge case is a finding.",
+	RangePullRequestFix: "This review covers only the fix made for the open pull request's feedback (comments, a " +
+		"review, failing checks), and any fix of it since: the rest of the branch was reviewed before the pull " +
+		"request opened. Judge whether the fix is correct and changes nothing else.",
+}
+
+// reviewRange is how a reviewer establishes its range when the delivery
+// limits it to one: the commits named, per repository, to HEAD.
+func reviewRange(base map[string]string, of string) string {
+	var ranges []string
+	for _, repo := range slices.Sorted(maps.Keys(base)) {
+		r := fmt.Sprintf("`%s..HEAD`", base[repo])
+		if len(base) > 1 {
+			r = fmt.Sprintf("in `%s`, %s", repo, r)
+		}
+		ranges = append(ranges, r)
+	}
+	return fmt.Sprintf("Review %s: `git log` and `git diff` over that range are what is under review; a checkout not "+
+		"named here is not. %s Read the changed code and what it relies on — its callers, contracts, schemas and "+
+		"tests — before you judge a line. A problem in code outside the range is out of scope unless the range "+
+		"makes it reachable.\n\n", strings.Join(ranges, "; "), rangeReason[of])
+}
+
+// reviewRules is the rest of every reviewer's contract.
+const reviewRules = "" +
 	"Every finding says how it is known, as the first word of its description, on the same line as " +
 	"`description:`: `Reproduced:` (you ran something and saw it; say what), `Traced:` (a concrete sequence " +
 	"through named code, with file:line) or `Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, " +
@@ -681,7 +726,11 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
 		add(lead...)
-		add("The task under review:\n\n"+in.task(), reviewContract, findingFormat, reviewSummary)
+		contract := reviewContract
+		if len(in.ReviewBase) > 0 {
+			contract = "## How you review\n\n" + reviewRange(in.ReviewBase, in.ReviewOf) + reviewRules
+		}
+		add("The task under review:\n\n"+in.task(), contract, findingFormat, reviewSummary)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}

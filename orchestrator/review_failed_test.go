@@ -148,10 +148,15 @@ func TestARecoveredRoundCountsOnlyItsCurrentReviewers(t *testing.T) {
 			w := newWorld(t)
 			ana := w.person("Ana")
 			w.hangingReviews(taskCall)
-			// Every reviewer hangs, the replacement too: each ends as the case says.
+			// Every reviewer of the branch hangs, the replacement too: each
+			// ends as the case says. The review of the simplifier's diff
+			// after a clear round reviews as the scripted one does.
 			hang := w.lux.Decide
 			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+					if rangeReview(spec) != "" {
+						return fakelux.Behaviour{Reply: "Looks good."}
+					}
 					return fakelux.Behaviour{Hang: true, OpenCalls: [][3]string{taskCall}}
 				}
 				return hang(spec)
@@ -273,4 +278,12 @@ func TestAcceptingAFailedReviewGoesOnWithoutIt(t *testing.T) {
 		AND payload->>'reason' = 'review_failed' AND payload->>'action' = 'accept' AND actor_id = $2`, wi, ana); n != 1 {
 		t.Errorf("the acceptance is not recorded as Ana's")
 	}
+}
+
+// rangeReview says a lux spec is a review limited to a range (the
+// simplifier's diff, a pull request's fix), and which.
+func rangeReview(spec map[string]any) string {
+	labels, _ := spec["labels"].(map[string]any)
+	of, _ := labels["dude.review_range"].(string)
+	return of
 }

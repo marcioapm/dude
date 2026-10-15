@@ -93,6 +93,13 @@ type State struct {
 	// The tester's findings the next fix is sent, besides the reviewers'
 	// open ones: set by a failed test, cleared once the fix is in.
 	TestFindingIDs []string `json:"testFindingIds,omitempty"`
+	// Where each repository the simplifier changed stood before it: the
+	// review loop after it covers only from there (RangeSimplify). Set by
+	// awaitSimplify when it published, cleared at the test.
+	SimplifyBase map[string]string `json:"simplifyBase,omitempty"`
+	// An open pull request's fix being checked on its candidate branch
+	// before the pull request shows it (prFix to promoteCandidate).
+	Candidate *Candidate `json:"candidate,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -307,6 +314,29 @@ func BranchFor(taskID string, attempt int) string {
 	return fmt.Sprintf("dude/%s/attempt-%d", taskID, attempt)
 }
 
+// CandidateBranch is where a fix for an open pull request's feedback, and
+// every fix of it, is taken while it is reviewed and tested: the task
+// branch (the pull request's head) is fast-forwarded to it only once the
+// gate passes (promoteCandidate).
+func CandidateBranch(taskID string, attempt int) string {
+	return BranchFor(taskID, attempt) + "-candidate"
+}
+
+// Candidate is one round of pull request feedback being fixed on the
+// candidate branch.
+type Candidate struct {
+	// The round's PRFixKey: what keeps its Runs apart from another round's.
+	Round  int    `json:"round"`
+	Branch string `json:"branch"`
+	// The heads the fix started from: each pull request's head as GitHub
+	// had it, the rest where the delivery had them. The pull request
+	// branch is moved only from these.
+	From map[string]string `json:"from"`
+	// Where its review range starts per repository the fix changed: From,
+	// or where the fix's checkout started in a repository From lacks.
+	Base map[string]string `json:"base,omitempty"`
+}
+
 // Workflow builds the delivery workflow's definition.
 //
 //	implement → review ⟲ fix → simplify → [test] → PR → PR feedback ⟲ fix → done
@@ -394,8 +424,12 @@ func park(next string, st *State, pending []string) workflow.Result {
 
 // key makes phase-Run creation idempotent per workflow step and iteration —
 // and per retry, so a step a person sent back makes new Runs rather than
-// finding the ones that stopped.
+// finding the ones that stopped, and per pull request fix round, whose
+// review loop counts its iterations from zero again.
 func key(sc workflow.StepContext, st *State, parts ...any) string {
+	if st.Candidate != nil {
+		parts = append(parts, ":candidate:", st.Candidate.Round)
+	}
 	if st.Retries > 0 {
 		parts = append(parts, ":retry:", st.Retries)
 	}
@@ -404,8 +438,13 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 
 // phase creates a phase Run starting from where the work stands: each
 // repository at its head, or its default branch if nothing changed it yet.
+// While a pull request's fix is checked, what a Run publishes goes to the
+// candidate branch.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
 	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
+	if st.Candidate != nil && Publishes[phase] {
+		in.Branch = st.Candidate.Branch
+	}
 	if extra != nil {
 		extra(&in)
 	}
@@ -505,6 +544,12 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
+	reviewRange := st.reviewRange()
+	if reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0 {
+		// A check that the simplifier changed no behaviour: the policy's
+		// required reviewers, whatever paths it touched.
+		categories = st.Policy.RequiredReviewers
+	}
 	d := directed(st, PhaseReview)
 	if d != nil && len(d.Categories) > 0 {
 		categories = d.Categories
@@ -535,6 +580,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
+				p.ReviewRange = reviewRange
 				d.apply(p)
 			})
 		if err != nil {
@@ -548,6 +594,31 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	st.ReviewRunIDs = runIDs
 	return park("awaitReview", st, runIDs), nil
+}
+
+// reviewRange is the range the next review round covers: an open pull
+// request's fix being checked, or what the simplifier changed; nil for the
+// whole branch.
+func (st *State) reviewRange() *ReviewRange {
+	switch {
+	case st.Candidate != nil && len(st.Candidate.Base) > 0:
+		return &ReviewRange{Of: RangePullRequestFix, Base: st.Candidate.Base}
+	case len(st.SimplifyBase) > 0:
+		return &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase}
+	}
+	return nil
+}
+
+// afterReview is the step a review loop that has nothing left to fix goes
+// to: the simplifier, then the test. A loop over the simplifier's own diff
+// or an open pull request's fix goes to the test: the simplifier is not run
+// again after a fix of its diff — that fix was reviewed by the loop, and
+// the tester runs next — nor on a pull request's fix.
+func (st *State) afterReview() string {
+	if st.Policy.Simplify && st.Candidate == nil && len(st.SimplifyBase) == 0 {
+		return "simplify"
+	}
+	return "test"
 }
 
 // judgedBy assigns each category's attempted findings to a reviewer of the
@@ -638,10 +709,7 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
-		if st.Policy.Simplify {
-			return workflow.Result{Next: "simplify", State: st}, nil
-		}
-		return workflow.Result{Next: "test", State: st}, nil
+		return workflow.Result{Next: st.afterReview(), State: st}, nil
 	}
 	return w.escalate(ctx, sc, st, exit.Reason, exit)
 }
@@ -797,10 +865,39 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	st.PendingRunIDs = nil
 	// A failed or empty simplification is not a failure of the task: the
 	// code was simple enough already. Carry on with what we had.
-	if out.Succeeded && len(out.Heads) > 0 {
-		st.HeadRunID, st.Heads = runID, out.advance(st.Heads)
+	if !out.Succeeded || len(out.Heads) == 0 {
+		return workflow.Result{Next: "test", State: st}, nil
 	}
-	return workflow.Result{Next: "test", State: st}, nil
+	if st.conducted() {
+		// The conductor chose the simplifier and decides what follows; the
+		// person's Open at the pull request gate is at these heads.
+		st.HeadRunID, st.Heads = runID, out.advance(st.Heads)
+		return workflow.Result{Next: "test", State: st}, nil
+	}
+	// What it changed was never reviewed: a review round over its diff
+	// alone, from where each repository it changed stood before it, then
+	// the loop as usual (afterReview takes it to the test).
+	st.SimplifyBase = map[string]string{}
+	for repo := range out.Heads {
+		base := st.Heads[repo]
+		if b := out.Bases[repo]; b != "" {
+			base = b
+		}
+		if base != "" {
+			st.SimplifyBase[repo] = base
+		}
+	}
+	st.HeadRunID, st.Heads, st.ChangedPaths = runID, out.advance(st.Heads), out.ChangedPaths
+	if len(st.SimplifyBase) == 0 {
+		// No starting commit known (a Run from before it was kept): the
+		// range cannot be named, and a whole-branch round would end in
+		// another simplification.
+		return workflow.Result{Next: "test", State: st}, nil
+	}
+	// Mechanics, whoever decides: code nobody reviewed never reaches the
+	// test or the pull request. The round's findings are the conductor's
+	// to triage, as any round's are (awaitReview).
+	return workflow.Result{Next: "review", State: st}, nil
 }
 
 func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
@@ -808,6 +905,9 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	// The simplifier's diff was reviewed; a fix a failed test sends back
+	// is reviewed whole, then simplified again, as before it.
+	st.SimplifyBase = nil
 	d := directed(st, PhaseTest)
 	if !st.Policy.Test && (d == nil || d.Phase != PhaseTest) {
 		return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
@@ -1416,10 +1516,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st); err != nil {
 			return workflow.Result{}, err
 		}
-		if st.Policy.Simplify {
-			return workflow.Result{Next: "simplify", State: st}, nil
-		}
-		return workflow.Result{Next: "test", State: st}, nil
+		return workflow.Result{Next: st.afterReview(), State: st}, nil
 	}
 	if d.Action == "resume" {
 		// The Run that failed was taken back up with the decision (the API

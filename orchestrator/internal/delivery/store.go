@@ -117,6 +117,21 @@ type PhaseRun struct {
 	// A restart (RestartRunTx): what its agent is told of why, and the
 	// model tier it runs on in place of its role's, "" for the role's.
 	RestartNote, Tier string
+	// A review limited to a range of commits; nil reviews the whole branch.
+	ReviewRange *ReviewRange
+	// A publishing Run: the branch dude fast-forwards to what it pushed
+	// (runs.branch), "" for the task branch. A candidate for an open pull
+	// request's fix (CandidateBranch) is checked before the pull request
+	// shows it.
+	Branch string
+}
+
+// ReviewRange is the range a review covers: from Base, per repository,
+// to the head it checks out; Of says why (RangeSimplify,
+// RangePullRequestFix), which the reviewer is told.
+type ReviewRange struct {
+	Of   string            `json:"of"`
+	Base map[string]string `json:"base"`
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -157,17 +172,23 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 	}
 	feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
 	bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
+	var reviewRange []byte
+	if in.ReviewRange != nil && len(in.ReviewRange.Base) > 0 {
+		reviewRange, _ = json.Marshal(in.ReviewRange)
+	}
 	runID = ids.New(ids.Run)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
-		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override)
+		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
+		                  review_range, branch)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18)`,
+		        $15, $16, $17, $18, $19::jsonb, $20)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
-		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier)); err != nil {
+		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
+		reviewRange, db.Nullable(in.Branch)); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {
@@ -232,6 +253,9 @@ type Outcome struct {
 	// It published something for people (an artifact), which is work even
 	// when no repository changed.
 	Published bool
+	// The commit each repository's checkout started from, as lux reported
+	// it (runs.base_shas).
+	Bases map[string]string
 }
 
 // advance is where the work stands after this phase: the heads it moved,
@@ -382,6 +406,7 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 		if err != nil {
 			return err
 		}
+		o.Bases = readBases(heads)
 		o.Succeeded, o.Error = status == "completed", deref(errText)
 		o.Heads, o.ChangedPaths, err = ReadHeads(heads)
 		return err
@@ -389,10 +414,26 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 	return o, err
 }
 
-// RunHead is what a phase Run left in one repository it changed.
+// RunHead is what a phase Run left in one repository it changed, and the
+// commit its checkout started from there ("" in a Run from before it was
+// kept).
 type RunHead struct {
 	SHA          string   `json:"sha"`
 	ChangedPaths []string `json:"changedPaths"`
+	Base         string   `json:"base,omitempty"`
+}
+
+// readBases is runs.heads' starting commit per repository that has one.
+func readBases(raw []byte) map[string]string {
+	var heads map[string]RunHead
+	_ = json.Unmarshal(raw, &heads)
+	out := map[string]string{}
+	for name, h := range heads {
+		if h.Base != "" {
+			out[name] = h.Base
+		}
+	}
+	return out
 }
 
 // ReadHeads reads runs.heads: the commit per repository, and every changed

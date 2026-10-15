@@ -99,15 +99,16 @@ func TestAFailedCriterionGoesToTheFixerAndTheTesterJudgesItsFinding(t *testing.T
 	wi := w.testing(fakeagent.TestFailOnceModel)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
-	// review ⟲ fix, simplify, test (fails) → fix → review → simplify → test.
+	// review ⟲ fix, simplify, review of its diff, test (fails) → fix →
+	// review → simplify → review of its diff → test.
 	if n := w.phaseRuns(wi, "test"); n != 2 {
 		t.Errorf("%d tests, want 2", n)
 	}
 	if n := w.phaseRuns(wi, "fix"); n != 2 {
 		t.Errorf("%d fixes, want the review's and the test's", n)
 	}
-	if n := w.phaseRuns(wi, "review"); n != 3 {
-		t.Errorf("%d reviews, want the fix after the test reviewed too", n)
+	if n := w.phaseRuns(wi, "review"); n != 5 {
+		t.Errorf("%d reviews, want the fix after the test reviewed too, and each simplification's diff", n)
 	}
 	if n := w.phaseRuns(wi, "simplify"); n != 2 {
 		t.Errorf("%d simplifications, want one after each review loop", n)
