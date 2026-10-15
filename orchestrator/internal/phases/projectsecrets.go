@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -134,6 +135,42 @@ func (s *Syncer) retireForSecrets(ctx context.Context, r phaseRun, gone errSecre
 	}
 	s.Log.Info("a secret the paused Run was given is no longer its phase's; started a fresh Run", "run", r.ID, "secrets", []string(gone))
 	return true, nil
+}
+
+// copyBackstop is how long after its Run ended a copy is deleted whatever
+// its collection did (a collection given up on, an orchestrator stopped
+// between the two).
+const copyBackstop = time.Hour
+
+// ForgetSecretCopies deletes, in each organization in turn, the copies of
+// Runs that ended over copyBackstop ago. Per organization because the
+// sweeper role has no grant on run_project_secrets. Returns how many
+// copies it deleted.
+func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
+	var orgs []string
+	if err := s.DB.InSystem(ctx, "secret-copies", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id FROM organizations ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		orgs, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, org := range orgs {
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
+				WHERE r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')
+				  AND r.ended_at < now() - make_interval(secs => $1)`, copyBackstop.Seconds())
+			n += int(tag.RowsAffected())
+			return err
+		}); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // secretNames are the names of list, in its order.

@@ -264,6 +264,62 @@ func TestAResumeMissingARecordedSecretStartsAFreshRun(t *testing.T) {
 	}
 }
 
+// Once a finished Run's output is collected (its push published, its final
+// diff and artifacts recorded), its copy is deleted: nothing of the values
+// it was given stays in dude beyond the project's own.
+func TestACompletedRunsCopyIsDeletedOnceItsOutputIsCollected(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	task := w.task()
+	w.deliver(task)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task).Scan(&runID)
+	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+		t.Fatalf("the implementer was given %v", got)
+	}
+	w.until("the implementer's output collected", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND artifacts_due_at IS NULL`, runID) == 1
+	})
+	w.pump()
+	if got := w.runCopy(runID); len(got) != 0 {
+		t.Errorf("a collected Run keeps a copy of %v", slices.Sorted(maps.Keys(got)))
+	}
+	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+		t.Errorf("names after the copy is deleted = %v; the record stays", got)
+	}
+}
+
+// The backstop: a copy whose Run ended over an hour ago is deleted
+// whatever its collection did; a live Run's, and one that ended a moment
+// ago, are kept.
+func TestTheBackstopDeletesCopiesOfRunsEndedOverAnHourAgo(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	_, live, _ := w.liveImplementer()
+	task := w.task()
+	mk := func(id, status, ended string) {
+		mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, ended_at, artifacts_due_at)
+			VALUES ($1, $2, $3, $4, 1, 'implement', $5::run_status, now() - $6::interval, now())`, id, w.org, w.project, task, status, ended)
+		mustExec(t, w.owner, `INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ($1, $2, 'IMPL_TOKEN', $3)`,
+			id, w.org, implToken)
+	}
+	mk("run_old_"+w.org, "failed", "2 hours")
+	mk("run_new_"+w.org, "aborted", "5 minutes")
+	if _, err := w.syncer.ForgetSecretCopies(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.runCopy("run_old_" + w.org); len(got) != 0 {
+		t.Error("a Run ended two hours ago keeps its copy")
+	}
+	if got := w.runCopy("run_new_" + w.org); len(got) != 1 {
+		t.Error("a Run ended five minutes ago lost its copy before collection")
+	}
+	if got := w.runCopy(live); len(got) != 1 {
+		t.Error("a live Run lost its copy")
+	}
+}
+
 // A project secret ticked for every recipient never reaches the task's
 // conductor: not in its spec, its record, its copy or its events.
 func TestTheConductorNeverReceivesAProjectSecret(t *testing.T) {
