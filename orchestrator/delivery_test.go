@@ -131,10 +131,11 @@ func newWorld(t *testing.T) *world {
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
 	// One required reviewer, so a delivery's Runs are few enough to count;
-	// the factory's default requires several (scriptedPolicy).
+	// the factory's default requires several (scriptedPolicy). No tester,
+	// which the factory runs by default: tests of the gate turn it on.
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image, delivery_policy)
-		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"]}')`, w.project, w.org)
-	for _, role := range []string{"implementer", "reviewer", "simplifier"} {
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false}')`, w.project, w.org)
+	for _, role := range []string{"implementer", "reviewer", "simplifier", "qa_browser"} {
 		w.onModel(role, "fake/scripted")
 	}
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -288,10 +289,11 @@ func (w *world) deliver(taskID string) string {
 }
 
 // scriptedPolicy is the policy the world's project resolves to: the
-// factory's, with correctness its only required reviewer.
+// factory's, with correctness its only required reviewer and no tester.
 func scriptedPolicy() delivery.Policy {
 	p := delivery.DefaultPolicy()
 	p.RequiredReviewers = []string{"correctness"}
+	p.Test = false // the world's project pins it off; the gate's tests turn it on
 	return p
 }
 

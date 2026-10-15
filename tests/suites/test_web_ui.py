@@ -1597,7 +1597,7 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
 def test_a_project_can_have_its_changes_tested_in_a_browser(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    """The tester phase is a project's choice, off by default."""
+    """The tester phase is a project's choice (forge_project turns it off)."""
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/project/{forge_project['id']}/settings")
     page.locator("[data-settings-nav='delivery']").click()

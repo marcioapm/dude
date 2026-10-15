@@ -794,7 +794,13 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	if str("dude.phase") == "test" {
 		// Its criteria from the label the spec carries for it, and how
 		// many fixes are in the tree it checked out.
-		criteria, _ := strconv.Atoi(str("dude.criteria"))
+		criteria, err := strconv.Atoi(str("dude.criteria"))
+		if err != nil {
+			// A real model's tester: its prompt lists them.
+			workload, _ := spec["workload"].(map[string]any)
+			prompt, _ := workload["prompt"].(string)
+			criteria = fakeagent.Criteria(prompt)
+		}
 		fixes := 0
 		for _, r := range specRepos(spec) {
 			out, _ := exec.Command("git", "-C", s.repoPath(r.URL), "rev-list", "--count", r.Ref, "--", fakeagent.FixedFile).Output()

@@ -76,13 +76,15 @@ func DefaultPolicy() Policy {
 		MaxReviewIterations:   5,
 		MaxAttemptsPerFinding: 2,
 		Simplify:              true,
-		Test:                  false,
-		MaxPRFixIterations:    3,
-		ParkAfterMinutes:      10,
-		IdleNudgeMinutes:      0, // off
-		ConductorWarmMinutes:  5,
-		ConductorEditLines:    60,
-		ConductorEditFiles:    3,
+		// On for every project: a delivery reaches a pull request with
+		// every criterion shown working, or a person's waiver.
+		Test:                 true,
+		MaxPRFixIterations:   3,
+		ParkAfterMinutes:     10,
+		IdleNudgeMinutes:     0, // off
+		ConductorWarmMinutes: 5,
+		ConductorEditLines:   60,
+		ConductorEditFiles:   3,
 	}
 }
 
