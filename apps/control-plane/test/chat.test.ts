@@ -239,10 +239,15 @@ test("a first delivery started on a later attempt's branch is that attempt's, as
   expect(t.deciders).toEqual([{ attempt: 3, decider: "conductor" }]);
 });
 
-test("an adopted branch ending in /attempt-N names no attempt: a first delivery on it is attempt 1", async () => {
-  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_adopt', ${ORG}, ${PROJECT}, 22, 'Adopted', 'running')`;
-  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
-    ('wfr_adopt', ${ORG}, 'task.delivery', 'delivery:wi_adopt', 'waiting', 'awaitFix', '{"decider":"conductor","branch":"feature/attempt-3"}', 'wi_adopt')`;
-  const t = (await (await call("GET", "/v1/tasks/wi_adopt")).json()) as { deciders: unknown };
-  expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }]);
-});
+for (const [n, id, branch] of [
+  [22, "wi_adopt", "feature/attempt-3"],
+  [23, "wi_adopt_other", "dude/wi_other/attempt-3"],
+] as const) {
+  test(`an adopted branch names no attempt, even another task's generated one (${branch}): a first delivery on it is attempt 1`, async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES (${id}, ${ORG}, ${PROJECT}, ${n}, 'Adopted', 'running')`;
+    await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+      (${"wfr_" + id}, ${ORG}, 'task.delivery', ${"delivery:" + id}, 'waiting', 'awaitFix', jsonb_build_object('decider', 'conductor', 'branch', ${branch}::text), ${id})`;
+    const t = (await (await call("GET", `/v1/tasks/${id}`)).json()) as { deciders: unknown };
+    expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }]);
+  });
+}
