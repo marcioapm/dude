@@ -40,6 +40,8 @@ let router: Router;
 let ana: { key: string; personId: string };
 let bo: { key: string; personId: string };
 let cy: { key: string; personId: string };
+let orchestrator: ReturnType<typeof Bun.serve>;
+const forwarded: Array<{ path: string; body: unknown; person: string | null }> = [];
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -99,11 +101,17 @@ beforeAll(async () => {
       object_key, original_content_type, original_width, original_height, original_bytes, original_key) VALUES
     ('att_ana', ${ORG}, 'wi_fb', ${ana.personId}, 'a.png', 'image/png', 1, 1, 1, 'x', 'k1', 'image/png', 1, 1, 1, 'k2'),
     ('att_bo', ${ORG}, 'wi_fb', ${bo.personId}, 'b.png', 'image/png', 1, 1, 1, 'x', 'k3', 'image/png', 1, 1, 1, 'k4')`;
-  useConfig(Config.load({ env: { ...process.env } }));
+  orchestrator = Bun.serve({ port: 0, async fetch(request) {
+    forwarded.push({ path: new URL(request.url).pathname, body: await request.json().catch(() => null),
+      person: request.headers.get("x-dude-person") });
+    return Response.json({ batchId: "fbt_x", itemIds: [], routedTo: "workflow" }, { status: 201 });
+  } });
+  useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
   router = buildRouter("");
 });
 
 afterAll(async () => {
+  orchestrator?.stop(true);
   useConfig(null);
   await closePool(app);
   await owner?.end();
@@ -241,6 +249,27 @@ describe("what is refused", () => {
     expect((await draft(bo.key, "wi_fb2", { body: "51st", anchor: { kind: "general" } })).status).toBe(409);
     // Ana's own count is hers alone.
     expect((await draft(ana.key, "wi_fb2", { body: "mine", anchor: { kind: "general" } })).status).toBe(201);
+  });
+});
+
+describe("what changes agents' work goes to the orchestrator", () => {
+  test("submit, reply, resolve and reopen are validated here and forwarded with the person", async () => {
+    forwarded.length = 0;
+    expect((await call(ana.key, "POST", "/v1/tasks/wi_fb/feedback/submit", { draftIds: ["fbi_1", "fbi_2"], submissionKey: "k-1" })).status).toBe(201);
+    expect(forwarded).toEqual([{ path: "/internal/tasks/wi_fb/feedback/submit", person: ana.personId,
+      body: { draftIds: ["fbi_1", "fbi_2"], submissionKey: "k-1" } }]);
+    for (const bad of [{ draftIds: [], submissionKey: "k" }, { draftIds: ["a", "a"], submissionKey: "k" }, { draftIds: "fbi_1", submissionKey: "k" },
+      { draftIds: [1], submissionKey: "k" }, { draftIds: ["a"] }, { draftIds: ["a"], submissionKey: " " }, null]) {
+      expect((await call(ana.key, "POST", "/v1/tasks/wi_fb/feedback/submit", bad)).status).toBe(400);
+    }
+    expect((await call(ana.key, "POST", "/v1/feedback/fbi_1/reply", {})).status).toBe(400);
+    expect(forwarded.length).toBe(1);
+    expect((await call(bo.key, "POST", "/v1/feedback/fbi_1/reply", { body: "no" })).status).toBe(201);
+    expect((await call(bo.key, "POST", "/v1/feedback/fbi_1/resolve", {})).status).toBe(201);
+    expect((await call(bo.key, "POST", "/v1/feedback/fbi_1/reopen", { body: "again" })).status).toBe(201);
+    expect(forwarded.slice(1).map((f) => [f.path, f.person])).toEqual([
+      ["/internal/feedback/fbi_1/reply", bo.personId], ["/internal/feedback/fbi_1/resolve", bo.personId],
+      ["/internal/feedback/fbi_1/reopen", bo.personId]]);
   });
 });
 

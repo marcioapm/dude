@@ -22,6 +22,9 @@ type PromptInput struct {
 	// Review phase: the earlier findings in its category, to judge.
 	Findings   []Finding
 	PRFeedback []forge.ActionableFeedback
+	// Implement and fix: people's feedback items given to the Run, in
+	// their own words, each to resolve or reply to.
+	Feedback []FeedbackItem
 	// Review phase: the severities that block, from the delivery's policy.
 	BlockingSeverities []string
 	// Per-project, per-role notes, appended last so a project can tell its
@@ -692,6 +695,9 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(implementContract, commitNote)
 		add(in.task())
+		if len(in.Feedback) > 0 {
+			add(FeedbackText(in.Feedback, in.CLI))
+		}
 		add(in.ask()...)
 
 	case PhaseReview:
@@ -775,6 +781,9 @@ func Prompt(phase string, in PromptInput) string {
 			if in.Tools {
 				add(fixerGitHubNote)
 			}
+		}
+		if len(in.Feedback) > 0 {
+			add(FeedbackText(in.Feedback, in.CLI))
 		}
 		add(tail...)
 		add(fixContract)

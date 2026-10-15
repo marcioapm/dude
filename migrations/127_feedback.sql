@@ -95,6 +95,16 @@ CREATE INDEX feedback_replies_item_idx ON feedback_replies (item_id, created_at)
 -- phase is given the same ones.
 ALTER TABLE runs ADD COLUMN feedback_item_ids text[] NOT NULL DEFAULT '{}';
 
+-- A task's current attempt: its latest delivery's (a start over names it
+-- before its first Run exists), else its highest agent Run's, else 1. The
+-- one definition both processes read feedback's attempt by.
+CREATE FUNCTION task_attempt(p_task text) RETURNS integer LANGUAGE sql STABLE AS $$
+  SELECT GREATEST(
+    COALESCE((SELECT max(attempt) FROM runs WHERE task_id = p_task AND kind = 'agent'), 1),
+    COALESCE((SELECT (w.state->>'attempt')::int FROM workflow_runs w
+              WHERE w.task_id = p_task AND w.workflow_type = 'task.delivery' ORDER BY w.created_at DESC LIMIT 1), 0))
+$$;
+
 -- feedback: a person submitted feedback while the conductor decides.
 ALTER TABLE conductor_wakes DROP CONSTRAINT conductor_wakes_kind_check;
 ALTER TABLE conductor_wakes ADD CONSTRAINT conductor_wakes_kind_check

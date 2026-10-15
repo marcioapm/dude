@@ -289,7 +289,16 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		named = open
 	}
 	if len(named) == 0 {
-		return nil, refusef("no open finding to fix")
+		// A fix for the people's feedback alone: every open item goes with it.
+		var people int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM feedback_items f WHERE f.task_id = $1 AND f.attempt = `+attemptOr+`
+			AND f.status IN ('open', 'delivered')`, st.TaskID, st.Attempt).Scan(&people); err != nil {
+			return nil, err
+		}
+		if people > 0 {
+			return nil, nil
+		}
+		return nil, refusef("no open finding or feedback item to fix")
 	}
 	limit := st.Policy.MaxAttemptsPerFinding + st.ExtraFixAttempts
 	// The policy's checkpoint: a blocking finding still open after its last
@@ -388,6 +397,12 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 	case "open_pull_request":
 		if err := untestedRefusal(ctx, tx, st); err != nil {
 			return nil, err
+		}
+		if n, err := BlockingFeedbackTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
+			return nil, err
+		} else if n > 0 {
+			return nil, refusef("%d feedback items from people are not handled yet (feedback): start a fix for them "+
+				"(start_phase fix) before the pull request", n)
 		}
 		draft, err := GateAnswer(ctx, tx, st)
 		if err != nil {

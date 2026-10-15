@@ -173,18 +173,24 @@ func ReviewersFor(p Policy, changedPaths []string) []string {
 	return out
 }
 
-// FindingState is what the loop reads about a finding.
+// FindingState is what the loop reads about a finding, or about a
+// person's feedback item (Human): open or given to an agent, it blocks
+// whatever the policy's severities say.
 type FindingState struct {
 	ID          string
 	Severity    string
 	Status      string
 	FixAttempts int
+	Human       bool
 }
 
 // IsBlocking: only open findings block. A resolved one is fixed, a
 // superseded one describes code that no longer exists, and an accepted one
 // is a person's decision to ship anyway.
 func IsBlocking(p Policy, f FindingState) bool {
+	if f.Human {
+		return f.Status == "open" || f.Status == "delivered"
+	}
 	return f.Status == "open" && slices.Contains(p.BlockingSeverities, f.Severity)
 }
 
@@ -193,10 +199,12 @@ func IsBlocking(p Policy, f FindingState) bool {
 // Three exits, named separately because they mean different things to a
 // person: "clear" needs no attention, "stuck" means the fixer is stuck on
 // something specific, and "exhausted" means the whole loop ran out of budget.
+// A stuck person's item is named in FeedbackIDs, never among the findings.
 type LoopExit struct {
-	Reason     string   `json:"reason"`
-	FindingIDs []string `json:"findingIds,omitempty"`
-	Iterations int      `json:"iterations,omitempty"`
+	Reason      string   `json:"reason"`
+	FindingIDs  []string `json:"findingIds,omitempty"`
+	FeedbackIDs []string `json:"feedbackIds,omitempty"`
+	Iterations  int      `json:"iterations,omitempty"`
 }
 
 func Exit(p Policy, findings []FindingState, iteration int) *LoopExit {
@@ -211,14 +219,18 @@ func Exit(p Policy, findings []FindingState, iteration int) *LoopExit {
 	}
 	// A finding the fixer keeps failing is escalated on its own, before the
 	// loop's budget is spent on it.
-	var stuck []string
+	var stuck, stuckFeedback []string
 	for _, f := range blocking {
 		if f.FixAttempts >= p.MaxAttemptsPerFinding {
-			stuck = append(stuck, f.ID)
+			if f.Human {
+				stuckFeedback = append(stuckFeedback, f.ID)
+			} else {
+				stuck = append(stuck, f.ID)
+			}
 		}
 	}
-	if len(stuck) > 0 {
-		return &LoopExit{Reason: "stuck", FindingIDs: stuck}
+	if len(stuck)+len(stuckFeedback) > 0 {
+		return &LoopExit{Reason: "stuck", FindingIDs: stuck, FeedbackIDs: stuckFeedback}
 	}
 	if iteration >= p.MaxReviewIterations {
 		return &LoopExit{Reason: "exhausted", Iterations: iteration}

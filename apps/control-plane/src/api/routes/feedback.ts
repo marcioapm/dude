@@ -11,19 +11,20 @@
  */
 
 import {
-  FEEDBACK_LIMITS, feedbackDraftSchema, newId, type FeedbackAnchor, type FeedbackAnchorInput, type FeedbackCodeAnchor,
-  type FeedbackExcerptLine, type RunDiffFile,
+  FEEDBACK_LIMITS, feedbackDraftSchema, feedbackReopenSchema, feedbackReplySchema, feedbackResolveSchema, feedbackSubmitSchema,
+  newId, type FeedbackAnchor, type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackExcerptLine, type RunDiffFile,
 } from "@dude/domain";
 import type { ZodType } from "zod";
 import { type OrgScope, withOrg } from "../../db/client.ts";
 import { HttpError, badRequest, conflict, forbidden, intParam, json, noContent, notFound, readCapped } from "../http.ts";
+import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** A draft's body is at most 16,000 characters; a preview anchor adds 20 KB or so. */
 const MAX_BODY = 128 * 1024;
 
-// The current attempt: the highest of the task's agent Runs', 1 before any.
-const CURRENT_ATTEMPT = `COALESCE((SELECT max(attempt) FROM runs WHERE task_id = t.id AND kind = 'agent'), 1)`;
+// The current attempt (task_attempt, migration 127).
+const CURRENT_ATTEMPT = `task_attempt(t.id)`;
 
 const ITEM_SELECT = `
   f.id, f.task_id AS "taskId", f.attempt, f.batch_id AS "batchId",
@@ -239,9 +240,22 @@ async function deleteDraft(ctx: RequestContext): Promise<Response> {
   return noContent();
 }
 
+/** Forwarded with the body validated here, so the orchestrator is sent only a well-formed request. */
+function forward<T>(schema: ZodType<T>, path: (ctx: RequestContext) => string) {
+  return async (ctx: RequestContext): Promise<Response> => {
+    author(ctx);
+    const input = await body(ctx, schema);
+    return orchestrator(ctx.principal.organizationId, "POST", path(ctx), JSON.stringify(input), ctx.principal);
+  };
+}
+
 export function registerFeedbackRoutes(router: Router): void {
   router.get("/v1/tasks/:id/feedback", list);
   router.post("/v1/tasks/:id/feedback/drafts", createDraft);
   router.patch("/v1/feedback/:id", updateDraft);
   router.delete("/v1/feedback/:id", deleteDraft);
+  router.post("/v1/tasks/:id/feedback/submit", forward(feedbackSubmitSchema, (ctx) => `/internal/tasks/${ctx.params.id}/feedback/submit`));
+  router.post("/v1/feedback/:id/reply", forward(feedbackReplySchema, (ctx) => `/internal/feedback/${ctx.params.id}/reply`));
+  router.post("/v1/feedback/:id/resolve", forward(feedbackResolveSchema, (ctx) => `/internal/feedback/${ctx.params.id}/resolve`));
+  router.post("/v1/feedback/:id/reopen", forward(feedbackReopenSchema, (ctx) => `/internal/feedback/${ctx.params.id}/reopen`));
 }

@@ -274,6 +274,15 @@ func (e *Escalation) findingIDs() []string {
 	return d.FindingIDs
 }
 
+// feedbackIDs are the people's feedback items a stuck review is about.
+func (e *Escalation) feedbackIDs() []string {
+	var d struct {
+		FeedbackIDs []string `json:"feedbackIds"`
+	}
+	e.decode(&d)
+	return d.FeedbackIDs
+}
+
 // detail reads a number the escalation's detail carries, as JSON left it.
 func (e *Escalation) detail(key string) (float64, bool) {
 	var m map[string]any
@@ -316,6 +325,9 @@ type HumanDecision struct {
 	AnsweredBy string `json:"answeredBy,omitempty"`
 	// Taken by the conductor (decide_escalation) on that answer: its Run.
 	Conductor string `json:"conductor,omitempty"`
+	// The person who decided, when one did: an acceptance resolves the
+	// feedback items it names as theirs.
+	Person string `json:"person,omitempty"`
 }
 
 // BranchFor is the task's branch — the one its pull requests are opened
@@ -360,6 +372,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"testVerdict":       w.testVerdict,
 			"openPullRequest":   w.openPullRequest,
 			"awaitPullRequest":  w.awaitPullRequest,
+			"awaitRead":         w.awaitRead,
 			"prFix":             w.prFix,
 			"awaitPRFix":        w.awaitPRFix,
 			"decide":            w.decide,
@@ -478,7 +491,12 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 	if d != nil {
 		k = conductorKey(sc, st, d, ":implement")
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseImplement, k, d.apply)
+	// Feedback submitted before any work: the implementer is given it.
+	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseImplement, k, func(p *PhaseRun) { p.FeedbackItemIDs = feedback; d.apply(p) })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -673,7 +691,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 		return w.escalate(ctx, sc, st, "review_failed", detail)
 	}
 	st.ReviewRunIDs = nil
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	findings, err := w.loopFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -697,6 +715,17 @@ func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
 	return Exit(policy, findings, st.Iteration)
+}
+
+// loopFindings is what the review loop weighs: the reviewers' findings and
+// the people's feedback still to be handled.
+func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
+	findings, err := w.s.Findings(ctx, org, st)
+	if err != nil {
+		return nil, err
+	}
+	feedback, err := w.s.FeedbackStates(ctx, org, st)
+	return append(findings, feedback...), err
 }
 
 // afterLoop goes where the review loop's exit says.
@@ -724,7 +753,7 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	findings, err := w.loopFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -735,8 +764,12 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 // by severity, and the round. Counts only, never a finding's text.
 func findingsLine(st *State, findings []FindingState) string {
 	bySeverity := map[string]int{}
-	open := 0
+	open, people := 0, 0
 	for _, f := range findings {
+		if f.Human {
+			people++
+			continue
+		}
 		if f.Status == "open" {
 			open++
 			bySeverity[f.Severity]++
@@ -751,6 +784,9 @@ func findingsLine(st *State, findings []FindingState) string {
 	line := fmt.Sprintf("Review round %d of %d done: %d open findings", st.Iteration, st.Policy.MaxReviewIterations, open)
 	if len(parts) > 0 {
 		line += " (" + strings.Join(parts, ", ") + ")"
+	}
+	if people > 0 {
+		line += fmt.Sprintf(", and %d people's feedback items to handle (feedback)", people)
 	}
 	return line + "."
 }
@@ -798,9 +834,19 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = slices.DeleteFunc(slices.Clone(d.FindingIDs), func(id string) bool { return !slices.Contains(open, id) })
 		}
 	}
+	// The people's feedback still to be handled goes with every fix, the
+	// conductor's included, whatever findings it named: its words are
+	// dude's to give, and no decision leaves an item out.
+	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	// Counted once per fix step, however often the step is replayed: with
 	// the Run's creation, which a replay finds by its key.
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs, p.CountAttempts = open, true; d.apply(p) })
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
+		p.FindingIDs, p.FeedbackItemIDs, p.CountAttempts = open, feedback, true
+		d.apply(p)
+	})
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -981,6 +1027,16 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		if res, diverted, err := w.reviewUntested(ctx, sc, st); diverted || err != nil {
 			return res, err
 		}
+		// Nor past a person's feedback in dude still to be handled, read
+		// now, as the step that opens it runs: it goes to a fixer first.
+		open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if len(open) > 0 {
+			return w.next(ctx, sc, st, PointReviewed, "fix",
+				fmt.Sprintf("%d feedback items from people are open (feedback): they go to a fixer before any pull request.", len(open)))
+		}
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
 	// policy chose to open waits for the person's answer like any other, and
@@ -1019,8 +1075,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	st.PullRequestIDs = prIDs
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
-		// published. A person reads it and says when it is done.
-		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
+		// published. A person reads it and says when it is done, or gives
+		// it feedback, which takes the delivery up again (awaitRead).
+		return awaitRead(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
 	}
 	// Waiting on people now: the agents are done until someone asks.
 	reason := "pull request open"
@@ -1112,6 +1169,19 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	}
 	waitAgain := waitForPR(st)
 	if len(actionable) == 0 {
+		// A person's feedback in dude: a fix, as pull request feedback is,
+		// unless what it signalled is handled already.
+		if humanFeedback(sc) {
+			open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if len(open) > 0 {
+				st.PRFeedback = nil
+				return w.next(ctx, sc, st, PointPRFeedback, "prFix",
+					fmt.Sprintf("%d feedback items from people are open: read them with feedback.", len(open)))
+			}
+		}
 		if readiness {
 			states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 			if err != nil {
@@ -1223,9 +1293,17 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
-	// Several comments arriving together cost one fix Run, not one each.
+	// Several comments arriving together cost one fix Run, not one each;
+	// the people's feedback in dude goes with it, each item a fix attempt.
 	d := directed(st, PhaseFix)
-	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback; d.apply(p) })
+	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
+		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = st.PRFeedback, feedback, true
+		d.apply(p)
+	})
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -1552,6 +1630,18 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st); err != nil {
 			return workflow.Result{}, err
 		}
+		// The people's feedback it was stuck on is resolved by that person.
+		if ids := e.feedbackIDs(); len(ids) > 0 {
+			person := d.Person
+			if person == "" {
+				person = d.AnsweredBy
+			}
+			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				return AcceptFeedbackTx(ctx, tx, sc.OrganizationID, st.TaskID, person, ids)
+			}); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 		if st.Policy.Simplify {
 			return workflow.Result{Next: "simplify", State: st}, nil
 		}
@@ -1641,7 +1731,40 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 }
 
 // waitForPR waits on the task's pull requests: what the forge says of
-// them, or a person's decision.
+// them, a person's decision, or a person's feedback in dude.
 func waitForPR(st *State) workflow.Result {
-	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
+	return workflow.Result{Next: "awaitPullRequest", State: st,
+		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}}
+}
+
+// awaitRead waits on a person reading work that opened no pull request:
+// their feedback takes it up again; marking it done ends it.
+func awaitRead(st *State) workflow.Result {
+	return workflow.Result{Next: "awaitRead", State: st, AwaitSignals: []string{SignalHumanFeedback}}
+}
+
+// awaitRead (the step): feedback on work ready to read goes to a fixer,
+// with a fresh loop budget as a person's retry has; a signal whose items
+// are handled already waits again.
+func (w *steps) awaitRead(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil || len(open) == 0 {
+		return awaitRead(st), err
+	}
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person gave feedback on it"); err != nil {
+		return workflow.Result{}, err
+	}
+	st.Retries++
+	st.Iteration, st.PendingRunIDs = 0, nil
+	return w.next(ctx, sc, st, PointReviewed, "fix",
+		fmt.Sprintf("%d feedback items from people on the work ready to read: read them with feedback.", len(open)))
+}
+
+// humanFeedback says whether the signals carry a person's feedback.
+func humanFeedback(sc workflow.StepContext) bool {
+	return slices.ContainsFunc(sc.Signals, func(s workflow.Signal) bool { return s.Name == SignalHumanFeedback })
 }

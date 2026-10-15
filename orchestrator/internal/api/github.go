@@ -311,6 +311,17 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		if pr.HeadSHA != "" && now.HeadSHA != pr.HeadSHA {
 			return fail(http.StatusConflict, "not_ready", "the pull request changed since it was last read: look again")
 		}
+		// A person's feedback in dude still to be handled holds the merge,
+		// read last before GitHub is asked.
+		if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+			n, err := delivery.BlockingFeedbackTx(r.Context(), tx, pr.TaskID, 0)
+			if err == nil && n > 0 {
+				return fail(http.StatusConflict, "feedback_open", "not ready to merge: %d feedback items from people are not handled yet", n)
+			}
+			return err
+		}); err != nil {
+			return err
+		}
 		sha, err := gh.Merge(r.Context(), slug, pr.Number, method, now.HeadSHA)
 		if err != nil {
 			return forgeRefusal(err, "GitHub would not merge it")

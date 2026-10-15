@@ -1166,6 +1166,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
+	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
@@ -1261,6 +1262,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// order: those a fix addresses (a fix for pull request feedback has
 		// none, and must not take on findings a person chose to leave), or
 		// those a re-review judges — which it answers by position.
+		// A person's feedback it was given (runs.feedback_item_ids), in
+		// their words as they read now: a restart has the same items.
+		if peopleFeedback, err = delivery.RunFeedbackTx(ctx, tx, r.ID); err != nil {
+			return err
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
@@ -1314,7 +1320,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
-		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
+		Findings: findings, PRFeedback: feedback, Feedback: peopleFeedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
@@ -1741,6 +1747,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		branch = tb.Branch
 	}
+	held, err := s.resolutionsHeld(ctx, r, heads)
+	if err != nil {
+		return true, err
+	}
 	completed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
@@ -1751,6 +1761,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		completed = true
+		// Feedback it resolved holds only for a commit it published.
+		if err := delivery.SettleResolutionsTx(ctx, tx, r.Org, r.ID, held); err != nil {
+			return err
+		}
 		if err := s.failUnread(ctx, tx, r, UnreadRunFinished); err != nil {
 			return err
 		}
@@ -1772,6 +1786,69 @@ func (s *Syncer) taskBranch(ctx context.Context, r phaseRun) (tb delivery.TaskBr
 		return err
 	})
 	return tb, err
+}
+
+// resolutionsHeld weighs the feedback r resolved with a commit against
+// what it published (delivery.ResolutionHolds), through GitHub's compare,
+// before the Run is recorded completed: item → whether its commit holds.
+func (s *Syncer) resolutionsHeld(ctx context.Context, r phaseRun, heads map[string]delivery.RunHead) (map[string]bool, error) {
+	var pending []delivery.PendingResolution
+	var repos []delivery.Repository
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		if pending, err = delivery.PendingResolutionsTx(ctx, tx, r.ID); err != nil || len(pending) == 0 {
+			return err
+		}
+		repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID)
+		return err
+	}); err != nil || len(pending) == 0 {
+		return nil, err
+	}
+	slugs := map[string]string{}
+	for _, repo := range repos {
+		slugs[repo.Name] = forge.SlugFromURL(repo.URL)
+	}
+	var gh *forge.GitHub
+	if s.Forges != nil {
+		var err error
+		if gh, err = s.Forges.For(ctx, r.Org); err != nil {
+			return nil, err
+		}
+	}
+	var cmp delivery.Comparer
+	if gh != nil {
+		cmp = func(ctx context.Context, repo, base, head string) (int, int, error) {
+			c, err := gh.Compare(ctx, slugs[repo], base, head)
+			var fe *forge.Error
+			if errors.As(err, &fe) && fe.NotFound() {
+				// A commit GitHub does not have was never published.
+				return 0, 1, nil
+			}
+			return c.AheadBy, c.BehindBy, err
+		}
+	}
+	held := map[string]bool{}
+	for _, p := range pending {
+		ok, err := delivery.ResolutionHolds(ctx, cmp, p.Repo, lookupBase(r.BaseSHAs, repos, p.Repo), heads[p.Repo].SHA, p.Commit)
+		if err != nil {
+			return nil, err
+		}
+		held[p.ID] = ok
+	}
+	return held, nil
+}
+
+// lookupBase is where repository name's checkout started, as lux reported
+// it under the repository's spec name.
+func lookupBase(bases map[string]string, repos []delivery.Repository, name string) string {
+	if b := bases[name]; b != "" {
+		return b
+	}
+	for spec, repo := range repositoriesBySpecName(repos) {
+		if repo.Name == name {
+			return bases[spec]
+		}
+	}
+	return ""
 }
 
 // publish moves the task's branch in each repository this Run changed
@@ -2668,6 +2745,9 @@ func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, 
 		return err
 	}
 	if err := delivery.RequeueWakesTx(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := delivery.FeedbackUnheardTx(ctx, tx, id); err != nil {
 		return err
 	}
 	return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3
