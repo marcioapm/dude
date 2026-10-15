@@ -138,19 +138,9 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		if out.BaseBranch == "" {
 			out.BaseBranch = defaultBranch
 		}
-		if out.BaseBranch == out.HeadBranch {
-			return out, sourceRefusal("same_branch", "the branch and its base are the same branch")
-		}
-		for _, b := range []string{out.HeadBranch, out.BaseBranch} {
-			info, err := gh.Branch(ctx, slug, b)
-			if err != nil {
-				return out, unreachableOr(err)
-			}
-			if info == nil {
-				return out, sourceRefusal("branch_not_found", "%s has no branch %s", slug, b)
-			}
-		}
 	}
+	// What the branch is comes first: the default branch is its own default
+	// base, and is refused for being the default branch.
 	if out.HeadBranch == defaultBranch {
 		return out, sourceRefusal("default_branch", "%s is %s's default branch: dude never works on it directly", out.HeadBranch, slug)
 	}
@@ -167,6 +157,18 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 	}
 	if info.Protected {
 		return out, sourceRefusal("protected", "GitHub protects %s: dude only fast-forwards branches nobody protects", out.HeadBranch)
+	}
+	if in.Kind == SourceBranch {
+		if out.BaseBranch == out.HeadBranch {
+			return out, sourceRefusal("same_branch", "the branch and its base are the same branch")
+		}
+		base, err := gh.Branch(ctx, slug, out.BaseBranch)
+		if err != nil {
+			return out, unreachableOr(err)
+		}
+		if base == nil {
+			return out, sourceRefusal("branch_not_found", "%s has no branch %s", slug, out.BaseBranch)
+		}
 	}
 	var taken string
 	err = d.InOrg(ctx, org, func(tx pgx.Tx) error {

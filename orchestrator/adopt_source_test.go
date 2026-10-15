@@ -91,6 +91,12 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 		{"no such pull request", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "99"}, 422, "pr_not_found"},
 		{"protected head", map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "5"}, 422, "protected"},
 		{"default branch", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "main", "base": "feature/open"}, 422, "default_branch"},
+		// Its own base by default, or named so: what it is, not that the two are one.
+		{"default branch, no base", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "main"}, 422, "default_branch"},
+		{"default branch, itself as base", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "main", "base": "main"}, 422, "default_branch"},
+		{"release branch, itself as base", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "release/1.2", "base": "release/1.2"}, 422, "release_branch"},
+		{"protected branch, itself as base", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "feature/locked", "base": "feature/locked"}, 422, "protected"},
+		{"same branch", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "feature/open", "base": "feature/open"}, 422, "same_branch"},
 		{"release branch", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "release/1.2"}, 422, "release_branch"},
 		{"no such branch", map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "nope"}, 422, "branch_not_found"},
 	}
