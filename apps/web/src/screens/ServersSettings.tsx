@@ -1,8 +1,9 @@
 /**
  * Project settings → Servers: the project's server definitions (a table,
  * with a dialog to add or edit one), and how its branch previews run —
- * the image (from the library), the egress allowlist, the secrets they
- * get, the idle timeout, who may open one.
+ * the image (from the library), the egress allowlist, how many secrets
+ * they get, the idle timeout, who may open one — and the project's
+ * secrets, given to previews and agent roles (ProjectSecrets.tsx).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,7 +15,7 @@ import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { canRunContainers, ImageField, imageWords, type ImageChoices } from "../images.tsx";
-import { PreviewSecretsRow } from "./PreviewSecrets.tsx";
+import { ProjectSecretsSection } from "./ProjectSecrets.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 const WAKE_TIMEOUTS = Array.from({ length: PREVIEW_WAKE_TIMEOUT_MAX_MINUTES }, (_, i) =>
@@ -154,8 +155,15 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
           <HostChips hosts={previews.egress} validate={egressProblem} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>
-        <PreviewSecretsRow client={client} projectId={project.id} projectName={project.name} secrets={secrets} recipes={recipes}
-          canEdit={canEdit} onChanged={() => void load()} />
+        <SettingRow label="Secrets" help="Project secrets given to previews reach their servers and setup scripts." data-testid="preview-secrets">
+          <span className="previewSecretsCount">
+            {secrets.filter((s) => s.recipients.includes("previews")).length} reach previews{" "}
+            <a href="#secrets" onClick={(e) => {
+              e.preventDefault();
+              document.getElementById("secrets")?.scrollIntoView({ block: "start" });
+            }}>Manage</a>
+          </span>
+        </SettingRow>
         <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it."
           source={previews.idleTimeoutMinutes !== PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES
             ? <SettingSource source="project" from={orgName} inherited={`${PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes`} onReset={canEdit ? () => savePreviews({ idleTimeoutMinutes: PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES }, "Idle timeout reset") : undefined} />
@@ -178,6 +186,9 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
           <span className="previewAccess"><Icon name="human" size={14} />Visitors sign in the way they sign in to lux. Nothing is public.</span>
         </SettingRow>
       </SettingsSection>
+
+      <ProjectSecretsSection client={client} projectId={project.id} secrets={secrets} recipes={recipes}
+        canEdit={canEdit} onChanged={() => void load()} />
 
       {editing ? (
         <ServerRecipeDialog

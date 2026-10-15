@@ -83,6 +83,7 @@ import type {
   SearchOutcome,
   AttachmentInfo,
   PreviewSecret,
+  SecretRecipient,
   NoteRecord,
   EpicNotes,
   EpicPeers,
@@ -1596,13 +1597,17 @@ export class ApiClient {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/preview-settings`, settings);
   }
 
-  /** The project's preview secrets: names and hints, never a value. */
+  /** The project's secrets: names, recipients and hints, never a value. */
   projectSecrets(projectId: string): Promise<{ secrets: PreviewSecret[] }> {
     return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
   }
 
-  addProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
-    return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, { name, value });
+  addProjectSecret(projectId: string, name: string, value: string, recipients?: readonly SecretRecipient[]): Promise<PreviewSecret> {
+    return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, recipients ? { name, value, recipients } : { name, value });
+  }
+
+  changeProjectSecretRecipients(projectId: string, name: string, recipients: readonly SecretRecipient[]): Promise<PreviewSecret> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}/recipients`, { recipients });
   }
 
   replaceProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {

@@ -400,7 +400,8 @@ nothing when none do); a recipe newly marked to start in previews gets a
 server; one removed, or no longer started in previews, has its server
 deleted, and a preview left with none ends. A preview running when the
 recipe is saved keeps what it started with until it next sleeps and wakes.
-Preview secrets are not part of a recipe: a new value reaches previews when
+Preview secrets (project secrets given to Previews, see Project secrets)
+are not part of a recipe: a new value reaches previews when
 they next wake, as before. On a lux without `preview.domain`, previews start
 at once and keep the servers they were declared with; a recipe change
 reaches the next preview.
@@ -434,6 +435,64 @@ until they end: a Run with its servers in its spec, at
 `<server>-<run>.<domain>`, parked by dude after the project's idle limit
 and woken by a person starting a server. Nothing is migrated: stop and
 start an old preview to move it to the new path.
+
+## Project secrets
+
+A project's secrets (Project settings → Servers → Secrets) are environment
+variables a project's previews and agents need and its repository must not
+hold: a test database's password, a seed script's API key. Each names who
+gets it: **Previews** (a preview's servers and setup scripts), **Tester**,
+**Implementer**, **Fixer**, **Simplifier**, **Reviewer**; a new one starts
+with Previews and Tester, and one saved before agents could get secrets is
+Previews only. The **conductor and a session's brainstorm never get one**,
+whatever is ticked: they read text anyone can write, such as pull request
+comments. Values are stored as `forge_credentials` are (plain text under
+row-level security, never answered to a client: the API shows the last 4
+characters).
+
+**Delivery.** A Run of a ticked phase gets the secret as a lux env secret,
+as dude's own LLM key is. The Run records the names it was given
+(`runs.project_secret_names`, the header's "N secrets" chip and one
+`run.secrets.given` event, names only) and keeps a copy of the exact values
+(`run_project_secrets`) while its output may still need redacting. A change
+reaches Runs that start after it; a running one keeps what it has. A
+resume gives a Run the current value of every name it was given (never one
+added since) and replaces its copy; a name since removed, or no longer
+given to its phase, cannot be supplied and lux would refuse the resume, so
+dude retires that Run and starts a fresh one of the phase in its slot
+(`run.restarted` by dude), which is no failure. The copy is deleted when the
+Run has ended and its output (pushed work, final diff, files it published)
+is collected, and in any case an hour after it ended.
+
+**Redaction.** dude replaces each value a Run was given — raw, base64
+(standard, unpadded, URL), URL-escaped, hex and JSON-escaped — with
+`[REDACTED:NAME]` wherever it stores or shows the Run's text: its tool calls
+and their output, messages, thoughts, plans and failure reasons in the
+ledger; what it passes to dude's tools (questions, notes, pull request
+replies, findings, tasks); its diff; and its text files as dude serves them
+(a changed file is served without lux's checksum, at its redacted length;
+at most 32 MiB is read to redact). A value rotated during the Run is still
+caught. Values shorter than 6 characters are not redacted (the dialog warns).
+lux's shim redacts the Run's output stream too; dude redacts again at its
+own boundary.
+
+What is **not** redacted: binary files an agent publishes (images, videos,
+archives) are served as stored; a value an agent transforms some other
+way (reversed, split across lines, compressed, encrypted); anything the
+agent sends straight to a host it may reach. Redaction is defence in
+depth, not a guarantee. Give agents **dedicated, least-privilege
+credentials** (a read-only test user, a sandbox key), and pair a secret
+with the project's network allowlist (Agent network: for example
+`*.snowflakecomputing.com`) so an agent can use it only where it should.
+
+**No secret in a push.** Before dude asks lux to push a Run's work to its
+branch on GitHub, it reads the checkout (commits and uncommitted changes
+against where it started) and looks for every form of every value the Run
+was given. One found refuses the push: the Run fails, kept for a resume,
+with `run.push.refused` and a reason naming the secret and the file, never
+the value; its task escalates to its owner, and nothing retries it. Take
+the value out of the files and their commits, then resume the agent or
+retry the step. Binary files' contents are not checked.
 
 ## Postgres
 

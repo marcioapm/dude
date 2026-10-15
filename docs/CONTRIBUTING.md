@@ -146,6 +146,13 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   [`design/model-tiers.md`](design/model-tiers.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
+- **Project secrets reach the phases each names** (`phases/projectsecrets.go`),
+  never the conductor or brainstorm. One redactor (`internal/redact`) runs
+  where agent text enters dude: `ledger.Append`, dude's tool calls,
+  `run_diffs`, served text artifacts; and the work is scanned before lux
+  pushes it (`phases/pushscan.go`). A Run's values come from
+  `run_secret_values` (migration 129). Operator view:
+  [operations](operations.md#project-secrets).
 - **A turn is done when the agent goes busy then idle**, as lux's shim
   reports it in the output stream, in order with the agent's messages.
   The exception is a turn that ends with something open for a person: a

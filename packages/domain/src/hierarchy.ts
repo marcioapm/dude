@@ -631,6 +631,12 @@ export const runSchema = z.object({
    */
   canRunContainers: z.boolean().nullable().default(null),
   /**
+   * The names of the project secrets it was given (run.secrets.given),
+   * never values. Empty for a conductor, a brainstorm, a preview and a Run
+   * given none.
+   */
+  projectSecretNames: z.array(z.string()).default([]),
+  /**
    * While it waits for its image (its dude layer, or its first version): the
    * job, and where it is; builderOfflineSince when the builder has not been
    * heard from for 2 minutes, from its last heartbeat (or, never seen, from

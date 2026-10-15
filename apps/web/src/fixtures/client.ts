@@ -14,8 +14,8 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
-import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
-import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, EPIC_NOTES_MAX, egressAllows, egressProblem, secretHint, secretNameProblem } from "@dude/domain";
+import type { AddServer, AgentEgressMode, PersistedEvent, PreviewSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
+import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
@@ -616,12 +616,21 @@ export class FixtureClient extends ApiClient {
   override projectSecrets(): Promise<{ secrets: PreviewSecret[] }> {
     return Promise.resolve({ secrets: [...this.#secrets] });
   }
-  override async addProjectSecret(_projectId: string, name: string, value: string): Promise<PreviewSecret> {
+  override async addProjectSecret(_projectId: string, name: string, value: string, recipients?: readonly SecretRecipient[]): Promise<PreviewSecret> {
     await wait(120);
     const problem = secretNameProblem(name, { secrets: this.#secrets.map((s) => s.name), recipes: this.#recipes });
     if (problem) throw new ApiError(problem.kind === "conflict" ? 409 : 400, problem.kind, problem.message);
-    const saved: PreviewSecret = { name, recipients: ["previews", "tester"], hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    const saved: PreviewSecret = { name, recipients: recipients ? [...recipients] : [...DEFAULT_SECRET_RECIPIENTS], hint: secretHint(value), updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
     this.#secrets = [...this.#secrets, saved].sort((a, b) => a.name.localeCompare(b.name));
+    return saved;
+  }
+  override async changeProjectSecretRecipients(_projectId: string, name: string, recipients: readonly SecretRecipient[]): Promise<PreviewSecret> {
+    await wait(120);
+    const at = this.#secrets.findIndex((s) => s.name === name);
+    if (at < 0) throw new ApiError(404, "not_found", `no secret ${name}`);
+    if (recipients.length === 0) throw new ApiError(400, "invalid_request", SECRET_RECIPIENTS_REQUIRED);
+    const saved: PreviewSecret = { ...this.#secrets[at]!, recipients: [...recipients], updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
+    this.#secrets[at] = saved;
     return saved;
   }
   override async replaceProjectSecret(_projectId: string, name: string, value: string): Promise<PreviewSecret> {

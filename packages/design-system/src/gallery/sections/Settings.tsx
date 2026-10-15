@@ -24,6 +24,7 @@ import { Select } from "../../primitives/Select.tsx";
 import { Table, TBody, Td, Th, THead, Tr } from "../../primitives/Table.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
 import { FitBar, MachineChip, MachineRaises, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
+import { GivenTo, GivenToFieldset, SecretsChip } from "../../components/Secrets.tsx";
 import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
 import { HostPresets, NetworkRefusedNote, RefusedHosts, type HostPreset } from "../../components/Network.tsx";
@@ -163,6 +164,48 @@ function MachinesDemo() {
       <Label>MachineChip, with its tooltip</Label>
       <MachineChip name="XL" spec="16 CPUs · 48 GiB · 200 GiB"
         tooltip={<MachineTip name="XL">From Checkout’s settings for the Implementer. Set when the session started or last resumed. It asked for 48 GiB and got 45.6.</MachineTip>} />
+    </Col>
+  );
+}
+
+const SECRET_RECIPIENTS = [
+  { id: "previews", label: "Previews", description: "Servers and setup scripts of branch previews" },
+  { id: "tester", label: "Tester", description: "Runs tests, including against real services" },
+  { id: "implementer", label: "Implementer", description: "Implements the task" },
+  { id: "fixer", label: "Fixer", description: "Fixes findings and PR feedback" },
+  { id: "simplifier", label: "Simplifier", description: "Simplifies the changes" },
+  { id: "reviewer", label: "Reviewer", description: "Reviews the changes" },
+];
+
+function SecretsDemo() {
+  const [given, setGiven] = useState<string[]>(["previews", "tester"]);
+  return (
+    <Col>
+      <Label>A Secrets table: name, Given to, value&apos;s hint</Label>
+      <Table density="compact" aria-label="Secrets">
+        <THead><Tr><Th width="40%">Name</Th><Th>Given to</Th><Th hideWhenNarrow>Value</Th></Tr></THead>
+        <TBody>
+          <Tr><Td mono>SNOWFLAKE_PASSWORD</Td><Td><GivenTo given={["Previews", "Tester"]} /></Td><Td mono muted hideWhenNarrow>…7Q2a</Td></Tr>
+          <Tr><Td mono>STRIPE_TEST_KEY</Td><Td><GivenTo given={["Previews"]} /></Td><Td mono muted hideWhenNarrow>…91aF</Td></Tr>
+          <Tr><Td mono>ALL_ROLES_KEY</Td><Td><GivenTo given={SECRET_RECIPIENTS.map((r) => r.label)} /></Td><Td mono muted hideWhenNarrow>…k3y9</Td></Tr>
+          <Tr><Td mono>SUSPENDED_KEY</Td><Td><GivenTo given={[]} /></Td><Td mono muted hideWhenNarrow>…zz01</Td></Tr>
+        </TBody>
+      </Table>
+      <Label>GivenToFieldset (untick every box for its error)</Label>
+      <GivenToFieldset options={SECRET_RECIPIENTS} value={given} onChange={setGiven}
+        hint="Agent sessions and previews that start after you save get it."
+        error={given.length === 0 ? "Give it to at least one, or don't add it yet" : undefined} />
+      <SettingsNote icon="info">Conductor and brainstorm never get secrets: they read text anyone can write, such as PR comments.</SettingsNote>
+      <Label>SecretsChip: three, one, a long name; none shows nothing</Label>
+      <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <MachineChip name="Large" spec="4 CPUs · 16 GiB" />
+        <SecretsChip names={["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD"]} />
+        <SecretsChip names={["STRIPE_TEST_KEY"]} />
+        <SecretsChip names={["A_VERY_LONG_SECRET_NAME_THAT_A_PROJECT_REALLY_DID_CHOOSE_FOR_ITS_KEY"]} />
+        <SecretsChip names={[]} />
+      </span>
+      <Label>What redaction leaves in tool output</Label>
+      <code className="ds-mono">SNOWFLAKE_PASSWORD=[REDACTED:SNOWFLAKE_PASSWORD]</code>
     </Col>
   );
 }
@@ -340,6 +383,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-machines" title="NumberInput / Select meta / FitBar / ProportionBar / MachineChip" note="A machine size in the pieces that show it. NumberInput moves in steps (− value + and ↑ ↓), keeps what is typed, and names the step when it is off. A Select option's meta is muted on its line and follows the label into the trigger; description is a line under it; footer sits under the list. FitBar is how much of one host a size takes, words only when nobody knows the host. ProportionBar splits a host's memory, the part nobody gets hatched. MachineChip is the session header's machine, its origin in a tooltip.">
         <Panes mode={mode}>
           <MachinesDemo />
+        </Panes>
+      </Block>
+      <Block id="s-secrets" title="Project secrets: GivenTo / GivenToFieldset / SecretsChip" note="A project secret reaches only who it is given to. GivenTo is a secret's recipients in a table cell, neutral badges, Nobody in muted words. GivenToFieldset is the dialogs' choice of recipients, each with its line; with none ticked it says why in place of its hint. SecretsChip is an agent session's secrets beside its MachineChip: a count, and in its tip the names only, never a value or hint. A session given none, a conductor or a brainstorm, shows no chip.">
+        <Panes mode={mode}>
+          <SecretsDemo />
         </Panes>
       </Block>
       <Block id="s-tiers" title="TierLine / FlowSteps / NameChips / TierChip" note="A model tier in the pieces that show it. TierLine is a tier in a table or picker: its mark, name and what it is for. FlowSteps explains how something works once, in steps side by side. NameChips are suggestions under a field that takes any name. TierChip is the session header's model: the tier and the model it requested, what dude asked for and no more.">

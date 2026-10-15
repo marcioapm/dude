@@ -21,6 +21,32 @@ export const secretRecipientsSchema = z.array(z.enum(SECRET_RECIPIENTS)).min(1, 
   .refine((names) => new Set(names).size === names.length, "Choose each recipient only once.");
 export const changeSecretRecipientsSchema = z.object({ recipients: secretRecipientsSchema }).strict();
 
+/** Each recipient as the settings name it, with what it does. */
+export const SECRET_RECIPIENT_OPTIONS: readonly { id: SecretRecipient; label: string; description: string }[] = [
+  { id: "previews", label: "Previews", description: "Servers and setup scripts of branch previews" },
+  { id: "tester", label: "Tester", description: "Runs tests, including against real services" },
+  { id: "implementer", label: "Implementer", description: "Implements the task" },
+  { id: "fixer", label: "Fixer", description: "Fixes findings and PR feedback" },
+  { id: "simplifier", label: "Simplifier", description: "Simplifies the changes" },
+  { id: "reviewer", label: "Reviewer", description: "Reviews the changes" },
+];
+
+/** A recipient's label. */
+export function secretRecipientLabel(id: SecretRecipient): string {
+  return SECRET_RECIPIENT_OPTIONS.find((o) => o.id === id)?.label ?? id;
+}
+
+/** dude redacts values at least this many bytes long (orchestrator/internal/redact). */
+export const SECRET_REDACT_MIN_BYTES = 6;
+
+/** Said in the dialogs while a value is too short to be redacted. */
+export const SHORT_SECRET_WARNING = `Values shorter than ${SECRET_REDACT_MIN_BYTES} characters are not redacted from agent output: they match too much ordinary text.`;
+
+/** Whether dude would leave value unredacted for its length. */
+export function secretTooShortToRedact(value: string): boolean {
+  return value !== "" && new TextEncoder().encode(value).length < SECRET_REDACT_MIN_BYTES;
+}
+
 /** A value's most UTF-8 bytes: well under lux's 8 MiB request and Linux's 128 KiB per variable. */
 export const SECRET_VALUE_MAX_BYTES = 32 * 1024;
 

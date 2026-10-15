@@ -911,8 +911,13 @@ body {
   color: var(--ds-color-text-muted);
 }
 /* Project settings → Servers → Secrets: the note a step below Add secret. */
-.previewSecretsNote {
+.projectSecretsNote {
   margin-top: var(--ds-space-12);
+}
+/* Branch previews: how many secrets reach them, and where they are managed. */
+.previewSecretsCount {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
 }
 /* Settings → Network: the small headings between a row's chip lists. */
 .networkLabel {

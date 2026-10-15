@@ -49,6 +49,25 @@ describe("the session's bar", () => {
   });
 });
 
+describe("the session's project secrets", () => {
+  const chip = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=run-secrets]");
+
+  test("the header names how many it was given, after the machine; the tip lists names and no value", async () => {
+    const page = await session({ client: new RunClient({ projectSecretNames: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_PASSWORD"] }) });
+    const shown = await until(() => chip(page), "the secrets chip");
+    expect(shown.textContent).toBe("2 secrets");
+    const machine = machineChip(page)!;
+    expect(machine.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await tipOf(shown)).toBe("SNOWFLAKE_ACCOUNTSNOWFLAKE_PASSWORDGiven by project settings; values are never shown");
+  });
+
+  test("a Run given none has no chip", async () => {
+    const page = await session({ client: new RunClient({ projectSecretNames: [] }) });
+    await until(() => machineChip(page), "the machine chip");
+    expect(page.querySelectorAll("[data-testid=run-secrets]").length).toBe(0);
+  });
+});
+
 describe("the session's machine", () => {
   test("the header names the size the Run recorded, with its spec", async () => {
     const page = await session({ client: new RunClient({}) });
