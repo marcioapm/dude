@@ -149,6 +149,22 @@ def test_a_source_dude_must_not_touch_is_refused_with_why(
     assert resp.status_code == 422 and resp.json()["error"]["code"] == "pr_fork", resp.text
 
 
+def test_the_branch_pickers_list_the_repositorys_branches(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """The dialog's branch and base pickers: what was typed, matched against GitHub's branch list."""
+    fake_github.push_branch("stack/base")
+    fake_github.push_branch("stack/top", base="stack/base")
+    fake_github.push_branch("feature/greet")
+    path = f"/v1/projects/{forge_project['id']}/sources/repositories/{_repo_id(forge_project)}/branches"
+    resp = client.get(path, params={"q": "stack"})
+    assert resp.status_code == 200, resp.text
+    assert sorted(resp.json()["branches"]) == ["stack/base", "stack/top"] and resp.json()["more"] is False, resp.text
+    resp = client.get(path, params={"q": ""})
+    assert resp.status_code == 200, resp.text
+    assert {"main", "stack/base", "stack/top", "feature/greet"} <= set(resp.json()["branches"]), resp.text
+
+
 def test_a_started_tasks_source_is_fixed(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):
     fake_github.open_pull("feature/one")
     task = client.create_task(forge_project["id"], "Adopt one", goal="Take over the first pull request.",

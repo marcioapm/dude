@@ -790,6 +790,14 @@ class FakeGitHub:
                     return self._send(200, {"total_count": len(runs), "workflow_runs": runs})
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
+                if path == f"{prefix}/branches":
+                    # As GitHub lists them: by name, a page at a time, and an empty page past the last.
+                    from urllib.parse import parse_qs
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    per_page, page = min(int(q.get("per_page", 30)), 100), max(int(q.get("page", 1)), 1)
+                    names = sorted(self.github.branches())[(page - 1) * per_page:page * per_page]
+                    return self._send(200, [{"name": n, "commit": {"sha": self.github.branch_sha(n)},
+                                             "protected": n in self.github.protected} for n in names])
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
                     diff = self._git("diff", "--numstat", m[1], m[2])
                     if diff.returncode:
