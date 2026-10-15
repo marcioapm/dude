@@ -9,6 +9,7 @@ import { StatusBadge } from "./StatusBadge.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
 import type { CostOrigin } from "@dude/domain";
 import { Cost } from "./Cost.tsx";
+import { SearchSelectorAnchor } from "./SearchSelector.tsx";
 import styles from "./ChatTranscript.module.css";
 
 export interface ChatTranscriptSession {
@@ -264,6 +265,7 @@ export function ChatTranscript({
 }
 
 export interface SessionHeaderProps {
+  readonly titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
   readonly session: ChatTranscriptSession;
   readonly actions?: ReactNode;
 }
@@ -272,14 +274,17 @@ export interface SessionHeaderProps {
  * Whose agent this is and what it is doing: the transcript's own header,
  * and — above a session's Conversation / Changes tabs — the header both share.
  */
-export function SessionHeader({ session, actions }: SessionHeaderProps) {
+export function SessionHeader({ session, actions, titleSelector }: SessionHeaderProps) {
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
   // Raw ids help whoever debugs, not whoever reads: they live in a tooltip.
   const ids = [session.taskId ? `task ${session.taskId}` : null, `session ${session.id}`].filter(Boolean).join(" · ");
+  const header = useRef<HTMLElement>(null);
   return (
-    <header className={styles["header"]} data-status={session.status}>
+    // A title selector's popup opens below this whole header, leaving the subtitle visible.
+    <SearchSelectorAnchor.Provider value={titleSelector ? header : null}>
+    <header ref={header} className={styles["header"]} data-status={session.status}>
       {session.owner ? (
         <PersonAvatar person={session.owner} size={40} agent={session.role} live={session.status === "running"} />
       ) : (
@@ -292,7 +297,7 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
               {session.taskKey}
             </code>
           ) : null}
-          <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
+          <span className={styles["headerText"]}>{titleSelector ? titleSelector(session.title ?? ROLE_LABEL[session.role]) : session.title ?? ROLE_LABEL[session.role]}</span>
           <StatusBadge status={session.status} label={session.statusLabel} size="sm" />
           {session.statusNote ? <span className={styles["headerStatusNote"]}>{session.statusNote}</span> : null}
         </div>
@@ -337,5 +342,6 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
       </div>
       {actions !== undefined ? <div className={styles["headerActions"]}>{actions}</div> : null}
     </header>
+    </SearchSelectorAnchor.Provider>
   );
 }

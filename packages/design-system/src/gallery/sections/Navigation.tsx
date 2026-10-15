@@ -2,6 +2,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { NavTree } from "../../components/NavTree.tsx";
 import { SidebarLink, SidebarProfile, Sidebar } from "../../components/Sidebar.tsx";
+import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
+import { PersonAvatar } from "../../components/PersonAvatar.tsx";
+import { Button } from "../../primitives/Button.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { IconButton } from "../../primitives/Button.tsx";
 import type { RowMenuItem } from "../../primitives/RowMenu.tsx";
@@ -69,6 +72,25 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       >
         <Panes mode={mode}>
           <SidebarDemo />
+        </Panes>
+      </Block>
+
+      <Block id="nav-waiting-list" title="WaitingList" note="Waiting's tab list: yours carry the attention tint and a primary action; others' are plain with Take over.">
+        <Panes mode={mode} surface>
+          <WaitingList aria-label="Waiting rows">
+            <WaitingRow mine face={<PersonAvatar person={people["marcio"]!} size={32} agent="implementer" />} ask="Which wallet should checkout use?"
+              where="WC-205 · Checkout" age="12m" action={<Button size="sm" variant="primary">Answer</Button>} onOpen={() => {}} />
+            <WaitingRow face={<PersonAvatar person={people["ana"]!} size={32} />} ask="Confirm the plan" where="API-10 · Ana's task"
+              age="2h" action={<Button size="sm" variant="quiet">Take over</Button>} onOpen={() => {}} />
+          </WaitingList>
+        </Panes>
+      </Block>
+
+      <Block id="nav-sidebar-others" title="Sidebar — Waiting on others selected" note="waitingSelected='others' marks the On others link and keeps it visible while that tab is open.">
+        <Panes mode={mode}>
+          <div style={{ display: "flex", height: 360, overflow: "hidden" }}>
+            <Sidebar projects={navProjects} you="u_marcio" title="On others" width={304} waitingSelected="others" onWaitingSelect={() => {}} />
+          </div>
         </Panes>
       </Block>
 

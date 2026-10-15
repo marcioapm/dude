@@ -8,6 +8,9 @@
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  PageWithRail,
+  PageRail,
+  PageRailBlock,
   AgentAvatar,
   Duration,
   PersonAvatar,
@@ -16,6 +19,7 @@ import {
   ServerList,
   ServerRow,
   ServerStateDot,
+  ServerStateMark,
   ServersMoved,
   ServersPanel,
   ServersRecipesPreview,
@@ -113,7 +117,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   if (!run) {
     const auto = data.recipes.filter((r) => r.autostartInPreviews).map((r) => r.name);
     return (
-      <ServersPanel data-testid="servers-panel" data-run="none">
+      <div className="taskPane"><ServersPanel data-testid="servers-panel" data-run="none">
         <EmptyState
           icon="globe"
           title="Nothing is serving this task"
@@ -131,7 +135,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {data.recipes.length > 0 ? <ServersRecipesPreview recipes={data.recipes} note="Defined in project settings → Servers." /> : null}
-      </ServersPanel>
+      </ServersPanel></div>
     );
   }
 
@@ -164,40 +168,11 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
 
   return (
     <>
+      <PageWithRail children={<div className="taskPane">
       <ServersPanel
         data-testid="servers-panel"
         data-run={run.kind}
-        note={wakeable
-          ? <>A preview run has no agent. Its URLs stay the same: opening one wakes it on the branch’s latest commit, and it goes back to sleep after {run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request.</>
-          : isPreview
-          ? <>A preview run has no agent. It is parked after {run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request; starting a server wakes it.</>
-          : <>Servers stop when the run pauses, ends or moves host; they do not restart on their own. Output streams into the run log as <span className="ds-mono">server:&lt;name&gt;</span>.</>}
       >
-        <ServersRunLine
-          avatar={isPreview || !owner
-            ? <AgentAvatar role="system" size="lg" live={isPreview && live} />
-            : <PersonAvatar person={owner} size={32} agent="implementer" live={live} title="" />}
-          title={run.label}
-          status={runMark(run)}
-          detail={detail}
-          actions={
-            <>
-              {/* An agent's terminal is its session's (the rail); a preview has no session to hold it. */}
-              {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
-              {live ? (
-                <>
-                  <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
-                  <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
-                </>
-              ) : null}
-              {/* Stopping a preview ends its run; Stop all leaves the run live. */}
-              {isPreview && taskId ? (
-                <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
-              ) : null}
-              <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live || wakeable} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
-            </>
-          }
-        />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {wakeable && run.error ? <Callout tone="attention" data-testid="preview-error">{run.error}</Callout> : null}
         {data.preview && taskId ? (
@@ -253,6 +228,31 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           <EmptyState compact icon="globe" title="No servers on this run" description={isPreview ? "The preview starts none; add one." : "Add one of the project’s, or a port and command just for this run."} />
         ) : null}
       </ServersPanel>
+      </div>} rail={<PageRail aria-label="Serving run and server actions">
+        <PageRailBlock label="Run"><ServersRunLine
+          avatar={isPreview || !owner ? <AgentAvatar role="system" size="lg" live={isPreview && live} /> : <PersonAvatar person={owner} size={32} agent="implementer" live={live} title="" />}
+          title={run.label} status={runMark(run)} detail={detail} />
+          <div className="railActions">
+            {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
+            {live ? <>
+              <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
+              <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
+            </> : null}
+            {isPreview && taskId ? <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button> : null}
+          </div>
+        </PageRailBlock>
+        <PageRailBlock label="Setups">
+          {data.servers.map((s) => {
+            const w = describeServer(s, now, run);
+            return <p key={s.name}>{s.name} · <ServerStateMark state={w.state} label={w.label} size="sm" /></p>;
+          })}
+          <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live || wakeable} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
+        </PageRailBlock>
+        <PageRailBlock label="How servers behave"><span className="muted">{wakeable
+          ? `A preview has no agent. Opening its stable URLs wakes it on the branch's latest commit; it sleeps after ${run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request.`
+          : isPreview ? `A preview has no agent. It parks after ${run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes idle; starting a server wakes it.`
+          : "Servers stop when the run pauses, ends or moves host; they do not restart on their own. Output streams into the run log as server:<name>."}</span></PageRailBlock>
+      </PageRail>} />
 
       {adding ? (
         <AddServerDialog

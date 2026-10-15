@@ -93,6 +93,10 @@
   gap: var(--ds-space-12);
   max-width: 820px;
 }
+.relationsWide {
+  max-width: none;
+  width: 100%;
+}
 .relationsHead {
   display: flex;
   align-items: center;
