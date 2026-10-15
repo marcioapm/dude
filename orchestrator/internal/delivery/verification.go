@@ -610,36 +610,60 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 	}
 }
 
+// The hidden lines around the verification section dude writes into a pull
+// request body it opened: what lies between them is dude's, nothing else is.
+const (
+	verificationStart = "<!-- dude:verification -->"
+	verificationEnd   = "<!-- /dude:verification -->"
+)
+
+func markedVerification(section string) string {
+	return verificationStart + "\n" + section + "\n" + verificationEnd
+}
+
+// replaceVerification puts section between dude's markers in body, keeping
+// every other byte. Marker lines inside a fenced code block are text. With
+// no marked section it appends one: a `## Verification` without markers is a
+// person's, or one dude wrote before it marked its sections, and either way
+// is left as it is.
 func replaceVerification(body, section string) string {
-	start, end, offset := -1, len(body), 0
+	nl := "\n"
+	if strings.Contains(body, "\r\n") {
+		nl = "\r\n"
+	}
+	marked := strings.ReplaceAll(markedVerification(section), "\n", nl)
+	start, fence, offset := -1, "", 0
 	for line := range strings.SplitAfterSeq(body, "\n") {
-		heading := strings.TrimSpace(line)
-		if start >= 0 && strings.HasPrefix(heading, "## ") {
-			end = offset
-			break
-		}
-		if heading == "## Verification" {
-			start = offset
+		content := strings.TrimRight(line, "\r\n")
+		var code bool
+		fence, code = fenceAfter(fence, content)
+		switch strings.TrimSpace(content) {
+		case verificationStart:
+			if !code {
+				start = offset
+			}
+		case verificationEnd:
+			if !code && start >= 0 {
+				return body[:start] + marked + body[offset+len(content):]
+			}
 		}
 		offset += len(line)
 	}
-	if start < 0 {
-		separator := "\n\n"
-		if body == "" {
-			separator = ""
-		} else if strings.HasSuffix(body, "\n\n") {
-			separator = ""
-		} else if strings.HasSuffix(body, "\n") {
-			separator = "\n"
+	if fence != "" {
+		// A fence the person left open would swallow the section.
+		if !strings.HasSuffix(body, nl) {
+			body += nl
 		}
-		return body + separator + section
+		body += fence
 	}
-	// Keep the spacing before the following human-owned heading unchanged.
-	contentEnd := end
-	for contentEnd > start && (body[contentEnd-1] == '\n' || body[contentEnd-1] == '\r') {
-		contentEnd--
+	separator := nl + nl
+	switch {
+	case body == "" || strings.HasSuffix(body, nl+nl):
+		separator = ""
+	case strings.HasSuffix(body, nl):
+		separator = nl
 	}
-	return body[:start] + section + body[contentEnd:]
+	return body + separator + marked
 }
 
 // verificationSection is the pull request's account of the test: each

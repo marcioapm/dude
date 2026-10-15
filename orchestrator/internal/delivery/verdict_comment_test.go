@@ -134,14 +134,14 @@ func TestOpenedPRVerdictRefreshPreservesHumanContent(t *testing.T) {
 	pr := f.gh.Pull(f.number)
 	f.gh.Set(func(s *fakegithub.Server) {
 		pr.Title = "A person's title"
-		pr.Body = before + "## Verification\nOld verdict." + after
+		pr.Body = before + markedVerification("## Verification\nOld verdict.") + after
 	})
 	res, err := f.verdictStep(st)
 	if err != nil || res.Next != "fix" {
 		t.Fatalf("first verdict: next %q, %v", res.Next, err)
 	}
-	first := verificationSection(&prVerification{Heads: st.Heads,
-		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, "")
+	first := markedVerification(verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
 	if got := f.gh.Pull(f.number).Body; got != before+first+after {
 		t.Fatalf("first verdict body:\n%s\nwant:\n%s", got, before+first+after)
 	}
@@ -162,8 +162,8 @@ func TestOpenedPRVerdictRefreshPreservesHumanContent(t *testing.T) {
 	if _, err := f.verdictStep(st); err != nil {
 		t.Fatal(err)
 	}
-	second := verificationSection(&prVerification{Heads: st.Heads,
-		Criteria: []prCriterion{{Text: "it greets", Status: VerdictNotApplicable}}}, st.Heads, "")
+	second := markedVerification(verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictNotApplicable}}}, st.Heads, ""))
 	pr = f.gh.Pull(f.number)
 	if pr.Body != before+second+after || pr.Title != "A person's title" || len(pr.Comments) != 0 {
 		t.Fatalf("re-test PR: %+v; want preserved human content and updated verdict:\n%s", pr, before+second+after)
@@ -178,10 +178,32 @@ func TestOpenedPRVerdictAppendsMissingSection(t *testing.T) {
 	if _, err := f.verdictStep(st); err != nil {
 		t.Fatal(err)
 	}
-	section := verificationSection(&prVerification{Heads: st.Heads,
-		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, "")
+	section := markedVerification(verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
 	if got := f.gh.Pull(f.number).Body; got != "Human text.\n\n"+section {
 		t.Fatalf("appended body %q", got)
+	}
+}
+
+// A body from before dude marked its section, with a person's fenced
+// example too: two verdicts leave both as they were and exactly one
+// marked section, current.
+func TestOpenedPRVerdictKeepsALegacyAndAFencedSectionAndMarksItsOwnOnce(t *testing.T) {
+	f := newVerdictFixture(t)
+	st := f.openedState()
+	human := "## Verification\nChecked by hand on staging.\n\n```md\n" + verificationStart + "\n## Verification\n" +
+		verificationEnd + "\n```\n"
+	pr := f.gh.Pull(f.number)
+	f.gh.Set(func(s *fakegithub.Server) { pr.Body = human })
+	for range 2 {
+		if _, err := f.verdictStep(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	section := markedVerification(verificationSection(&prVerification{Heads: st.Heads,
+		Criteria: []prCriterion{{Text: "it greets", Status: VerdictFail}}}, st.Heads, ""))
+	if got := f.gh.Pull(f.number).Body; got != human+"\n"+section {
+		t.Fatalf("body after two verdicts:\n%q\nwant:\n%q", got, human+"\n"+section)
 	}
 }
 

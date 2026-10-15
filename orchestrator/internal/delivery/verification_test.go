@@ -31,6 +31,56 @@ func TestTheVerificationSectionSaysWhatWasTestedAndWhenItIsStale(t *testing.T) {
 	}
 }
 
+// wantMarked is dude's section as a body carries it, between its markers.
+func wantMarked(section, nl string) string {
+	return strings.ReplaceAll("<!-- dude:verification -->\n"+section+"\n<!-- /dude:verification -->", "\n", nl)
+}
+
+// Only the section between dude's markers, outside any fence, is dude's:
+// everything else in the body is a person's and comes back byte for byte.
+func TestTheBodyRefreshTouchesOnlyDudesMarkedSection(t *testing.T) {
+	section := "## Verification\nTested at `def5678`.\n\n- **pass** — it greets"
+	old := wantMarked("## Verification\nTested at `abc1234`.\n\n- **fail** — it greets", "\n")
+	fencedExample := "Example:\n\n```md\n<!-- dude:verification -->\n## Verification\nexample text\n<!-- /dude:verification -->\n```\n"
+	tildeExample := "~~~~\n<!-- dude:verification -->\n~~~\n<!-- /dude:verification -->\n~~~~\n"
+	cases := []struct{ name, body, want string }{
+		{"a legacy unmarked section stays, dude's is added",
+			"Intro.\n\n## Verification\nOld verdict.\n\n## Notes\nA note.\n",
+			"Intro.\n\n## Verification\nOld verdict.\n\n## Notes\nA note.\n\n" + wantMarked(section, "\n")},
+		{"a person's own section beside dude's",
+			"## Verification\nMy own manual check.\n\n" + old + "\n\n## Notes\nA note.\n",
+			"## Verification\nMy own manual check.\n\n" + wantMarked(section, "\n") + "\n\n## Notes\nA note.\n"},
+		{"a fenced example holding the heading and both markers",
+			fencedExample,
+			fencedExample + "\n" + wantMarked(section, "\n")},
+		{"a fenced example before dude's section",
+			fencedExample + "\n" + old + "\n\nAfter.\n",
+			fencedExample + "\n" + wantMarked(section, "\n") + "\n\nAfter.\n"},
+		{"a tilde fence a shorter run does not close",
+			tildeExample + "\n" + old,
+			tildeExample + "\n" + wantMarked(section, "\n")},
+		{"a CRLF body",
+			"Intro.\r\n\r\n" + wantMarked("## Verification\r\nOld.", "\r\n") + "\r\n\r\n## Notes\r\nA note.\r\n",
+			"Intro.\r\n\r\n" + wantMarked(section, "\r\n") + "\r\n\r\n## Notes\r\nA note.\r\n"},
+		{"a CRLF fence with the markers in it",
+			"```\r\n<!-- dude:verification -->\r\n<!-- /dude:verification -->\r\n```\r\n",
+			"```\r\n<!-- dude:verification -->\r\n<!-- /dude:verification -->\r\n```\r\n\r\n" + wantMarked(section, "\r\n")},
+		{"a start marker left without its end is a person's text",
+			"<!-- dude:verification -->\nHalf.\n\n" + old,
+			"<!-- dude:verification -->\nHalf.\n\n" + wantMarked(section, "\n")},
+		{"an empty body", "", wantMarked(section, "\n")},
+	}
+	for _, c := range cases {
+		got := replaceVerification(c.body, section)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+		if again := replaceVerification(got, section); again != got {
+			t.Errorf("%s: a second refresh changed the body:\n%q", c.name, again)
+		}
+	}
+}
+
 func TestTheGateFailsBeforeItBlocksAndHonoursAPersonsDecision(t *testing.T) {
 	p := DefaultPolicy()
 	cases := []struct {

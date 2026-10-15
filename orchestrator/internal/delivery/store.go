@@ -986,7 +986,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 	if v := verificationSection(verified, st.Heads, link); v != "" {
 		// Before the factory's sign-off line.
 		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
-		body = body[:i] + v + "\n\n" + body[i:]
+		body = body[:i] + markedVerification(v) + "\n\n" + body[i:]
 	}
 	return title, body, err
 }
