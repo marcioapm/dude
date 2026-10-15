@@ -75,7 +75,7 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
       'text', COALESCE(e.payload->>'text', ''), 'owner', NOT COALESCE((e.payload->>'conducted')::boolean, false),
       'left', runs.stall_left_at IS NOT NULL)
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
-  replaced_by AS "replacedBy",
+  replaced_by AS "replacedBy", finding_ids AS "findingIds", review_range->>'of' AS "reviewOf",
   -- Where its start is (run.stage, the ledger's; no column holds it), while
   -- it is live and lux has not reported it running. Its twin over runs r is
   -- the orchestrator's phases.StartStageJSON (stage.go): change both.

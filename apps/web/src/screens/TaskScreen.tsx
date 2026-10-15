@@ -731,7 +731,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   {r.startedAt ? <> · <Duration since={r.startedAt} until={r.endedAt} live={r.status === "running"} tone="muted" /></> : null}
                 </Button>
               ) }))} />
-              <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix").length) }]} />
+              {/* The reviewers' fixes: a fix the tester or a pull request's feedback sent is not one. */}
+              <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix" && fixFor(r, phases, findings, prEvents) === "review").length) }]} />
               <p className="muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
             <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
@@ -960,23 +961,47 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
 
 /**
  * What woke a step, when the record says: a fix for the review's findings,
- * for a pull request's feedback (and whose), a re-review of a fix. Only
- * what can be read from the runs, findings and events; nothing guessed.
- * Exported for its unit test: the step row is its only caller.
+ * for the test's, for a pull request's feedback (and whose); a review of
+ * the simplifier's diff or of a pull request's fix; a re-review of a fix;
+ * a test of a pull request's fix. Only what can be read from the runs,
+ * findings and events; nothing guessed. Exported for its unit test: the
+ * step row is its only caller.
  */
 export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
-    if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
-      return prFeedbackReason(prEvents, run.createdAt);
-    }
-    return "for the review";
+    const fix = fixFor(run, phases, findings, prEvents);
+    return fix === "pull_request" ? prFeedbackReason(prEvents, run.createdAt) : fix === "test" ? "for the test" : "for the review";
   }
+  if (run.phase === "review" && run.reviewOf) return REVIEW_OF[run.reviewOf];
+  if (run.phase === "test" && prOpenedBefore(run, prEvents)) return "of the pull request's fix";
   if (run.phase === "review" && earlier.some((r) => r.phase === "fix")) {
     const found = findings.filter((f) => f.runId === run.id).length;
     return found === 0 ? "no findings" : undefined;
   }
   return undefined;
+}
+
+/** What a review limited to a range checks, as its step says it. */
+const REVIEW_OF: Readonly<Record<NonNullable<Run["reviewOf"]>, string>> = {
+  simplify: "of the simplifier's diff",
+  pull_request_fix: "of the pull request's fix",
+};
+
+const prOpenedBefore = (run: Run, prEvents: readonly PersistedEvent[]) =>
+  prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt));
+
+/**
+ * Whose findings a fix Run was sent: the tester's (any of them is), the
+ * reviewers', or none after a pull request opened — its feedback.
+ */
+export function fixFor(run: Run, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): "review" | "test" | "pull_request" {
+  const tests = new Set(phases.filter((r) => r.phase === "test").map((r) => r.id));
+  // A Run read from an older backend lists none.
+  const ids = run.findingIds ?? [];
+  if (findings.some((f) => ids.includes(f.id) && f.runId && tests.has(f.runId))) return "test";
+  if (ids.length === 0 && prOpenedBefore(run, prEvents)) return "pull_request";
+  return "review";
 }
 
 /** Which pull request feedback, at or before `at`, a fix answered. */
@@ -1000,7 +1025,7 @@ function PhaseStep({ run, findings, plan, why, onOpen }: {
   const note = run.status === "failed" && run.error
     ? <span title={run.error}>{shortError(run.error, 80)}</span>
     : run.phase === "review" && run.status === "completed"
-      ? findings.length === 0 ? "no findings" : `${blocking.length} blocking${findings.length > blocking.length ? `, ${findings.length - blocking.length} more` : ""}`
+      ? `${run.reviewOf && why ? `${why} · ` : ""}${findings.length === 0 ? "no findings" : `${blocking.length} blocking${findings.length > blocking.length ? `, ${findings.length - blocking.length} more` : ""}`}`
       : why;
   return (
     <StepRow

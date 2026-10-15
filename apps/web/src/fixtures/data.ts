@@ -60,7 +60,7 @@ export function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; rol
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
     machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" },
     image: null, preparingImage: null, canRunContainers: null,
-    createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null, stalled: null, replacedBy: null, startStage: null,
+    createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null, stalled: null, replacedBy: null, startStage: null, findingIds: [], reviewOf: null,
     ...patch,
   };
 }
