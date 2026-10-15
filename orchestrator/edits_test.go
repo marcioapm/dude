@@ -654,6 +654,31 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.current()
 		settled(t, e, "nothing to publish")
 	})
+	t.Run("a large clean base import is not the conductor's edit", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.gh.Branch("base-import", "main", "Base import")
+		e.git("fetch", "-q", "origin")
+		e.git("switch", "-q", "--detach", "origin/base-import")
+		e.commit(map[string]string{"BASE.md": strings.Repeat("base\n", 200)})
+		e.git("push", "-q", "origin", "HEAD:refs/heads/main", "--force")
+		e.git("switch", "-q", e.branch)
+		e.git("merge", "-q", "--no-edit", "origin/main")
+		if status, why := e.published(e.publish()); status != delivery.PublishPublished {
+			t.Fatalf("publish %s: %s", status, why)
+		}
+	})
+	t.Run("a clean base import does not hide a large conductor edit", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.commit(map[string]string{"MINE.md": strings.Repeat("mine\n", 61)})
+		e.gh.AdvanceBase("main", "Base moved")
+		e.git("fetch", "-q", "origin")
+		e.git("merge", "-q", "--no-edit", "origin/main")
+		settled(t, e, "this is 61 lines in 1 files")
+	})
 }
 
 // The gate refuses a head that is the conductor's commit until a review

@@ -206,10 +206,15 @@ func RefuseUnmovedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) err
 
 // PublishHead is what a publish took to one repository's task branch.
 type PublishHead struct {
-	SHA          string   `json:"sha"`
-	Base         string   `json:"base"`
-	ChangedPaths []string `json:"changedPaths"`
-	Lines        int      `json:"lines"`
+	SHA                  string   `json:"sha"`
+	Base                 string   `json:"base"`
+	ChangedPaths         []string `json:"changedPaths"`
+	Lines                int      `json:"lines"`
+	AccountingBase       string   `json:"accountingBase,omitempty"`
+	AccountingHead       string   `json:"accountingHead,omitempty"`
+	AccountingVerified   bool     `json:"accountingVerified,omitempty"`
+	IntegrationMerge     string   `json:"integrationMerge,omitempty"`
+	CleanIntegrationOnly bool     `json:"cleanIntegrationOnly,omitempty"`
 }
 
 // PublishTarget is where a publish is measured from and goes to: the
@@ -345,15 +350,20 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarg
 // From (what the comparison measured, a branch name where the task had no
 // head) to Head, and how that went (MoveStatus).
 type Move struct {
-	RepoID       string   `json:"repoId"`
-	Slug         string   `json:"slug"`
-	From         string   `json:"from"`
-	Base         string   `json:"base"`
-	Head         string   `json:"head"`
-	ChangedPaths []string `json:"changedPaths"`
-	Lines        int      `json:"lines"`
-	Status       string   `json:"status"`
-	Error        string   `json:"error,omitempty"`
+	RepoID               string   `json:"repoId"`
+	Slug                 string   `json:"slug"`
+	From                 string   `json:"from"`
+	Base                 string   `json:"base"`
+	Head                 string   `json:"head"`
+	ChangedPaths         []string `json:"changedPaths"`
+	Lines                int      `json:"lines"`
+	AccountingBase       string   `json:"accountingBase,omitempty"`
+	AccountingHead       string   `json:"accountingHead,omitempty"`
+	AccountingVerified   bool     `json:"accountingVerified,omitempty"`
+	IntegrationMerge     string   `json:"integrationMerge,omitempty"`
+	CleanIntegrationOnly bool     `json:"cleanIntegrationOnly,omitempty"`
+	Status               string   `json:"status"`
+	Error                string   `json:"error,omitempty"`
 	// When its fast-forward was first sent (AttemptMoveTx): from then on
 	// the branch may have moved whatever the forge answered.
 	AttemptedAt *time.Time `json:"attemptedAt,omitempty"`
@@ -608,11 +618,11 @@ func UntestedConductorHeadTx(ctx context.Context, tx pgx.Tx, taskID string, head
 	}
 	raw, _ := json.Marshal(heads)
 	var untested bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM conductor_publishes p, jsonb_each_text($2::jsonb) h(repo, sha)
-		WHERE p.task_id = $1 AND p.status = 'published' AND p.heads->h.repo->>'sha' = h.sha
-		  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1 AND k.phase IN ('review', 'test')
-		    AND k.status = 'completed' AND k.base_refs->>h.repo = h.sha))`, taskID, raw).Scan(&untested)
+	err := tx.QueryRow(ctx, `		SELECT EXISTS (
+			SELECT 1 FROM conductor_publishes p, jsonb_each_text($2::jsonb) h(repo, sha)
+			WHERE p.task_id = $1 AND p.status = 'published' AND p.heads->h.repo->>'sha' = h.sha
+			  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1 AND k.phase IN ('review', 'test')
+			    AND k.status = 'completed' AND k.base_refs->>h.repo = h.sha))`, taskID, raw).Scan(&untested)
 	return untested, err
 }
 

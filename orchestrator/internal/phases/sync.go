@@ -1852,16 +1852,26 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if slug == "" {
 			return nil, fmt.Errorf("no forge to publish %s to", repo.URL)
 		}
+		baseBranch := tb.Bases[repo.Name]
+		if baseBranch == "" {
+			baseBranch = repo.DefaultBranch
+		}
+		baseHead, err := gh.BranchSHA(ctx, slug, baseBranch)
+		if err != nil {
+			return nil, err
+		}
+		paths, lines, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, baseHead, repo.Name)
+		if accountErr != nil {
+			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
+		}
 		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
 			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
-		changed, err := gh.ChangedFiles(ctx, slug, base, res.Commit)
-		if err != nil {
-			return nil, fmt.Errorf("compare %s %s...%s: %w", repo.Name, short(base), short(res.Commit), err)
-		}
-		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
+		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(paths), Lines: lines,
+			AccountingBase: base, AccountingHead: res.Commit, AccountingVerified: true}
+		changed := paths
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first

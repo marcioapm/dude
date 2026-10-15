@@ -420,10 +420,30 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		if cmp.AheadBy == 0 {
 			continue
 		}
-		lines += cmp.Lines()
-		files += len(cmp.Files)
+		baseBranch := target.Adopted[repo.Name]
+		if baseBranch == "" {
+			baseBranch = repo.DefaultBranch
+		}
+		baseHead, err := gh.BranchSHA(ctx, slug, baseBranch)
+		if err != nil {
+			return errPublishTransient{err}
+		}
+		start, err := gh.BranchSHA(ctx, slug, from)
+		if err != nil {
+			return errPublishTransient{err}
+		}
+		if start == "" {
+			start = from
+		}
+		paths, measured, err := publicationAccounting(ctx, s.Lux, p.LuxRunID, start, res.Commit, baseHead, repo.Name)
+		if err != nil {
+			return s.refusePublish(ctx, p, fmt.Sprintf("dude could not verify which changes in %s are yours: %v", repo.Name, err))
+		}
+		lines += measured
+		files += len(paths)
 		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
-			ChangedPaths: db.NonNil(cmp.Paths()), Lines: cmp.Lines(), Status: delivery.MovePending}
+			ChangedPaths: db.NonNil(paths), Lines: measured, Status: delivery.MovePending,
+			AccountingBase: start, AccountingHead: res.Commit, AccountingVerified: true}
 	}
 	if len(moves) == 0 {
 		return s.refusePublish(ctx, p, delivery.RefusedNothing)
@@ -626,7 +646,8 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 	for name, m := range p.Moves {
 		switch m.Status {
 		case delivery.MoveMoved:
-			heads[name] = delivery.PublishHead{SHA: m.Head, Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
+			heads[name] = delivery.PublishHead{SHA: m.Head, Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines,
+				AccountingBase: m.AccountingBase, AccountingHead: m.AccountingHead, AccountingVerified: m.AccountingVerified}
 		case delivery.MoveRefused:
 			refused[name] = m.Error
 		case delivery.MoveStalled:

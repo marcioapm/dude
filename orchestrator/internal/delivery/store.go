@@ -397,8 +397,12 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 
 // RunHead is what a phase Run left in one repository it changed.
 type RunHead struct {
-	SHA          string   `json:"sha"`
-	ChangedPaths []string `json:"changedPaths"`
+	SHA                string   `json:"sha"`
+	ChangedPaths       []string `json:"changedPaths"`
+	Lines              int      `json:"lines,omitempty"`
+	AccountingBase     string   `json:"accountingBase,omitempty"`
+	AccountingHead     string   `json:"accountingHead,omitempty"`
+	AccountingVerified bool     `json:"accountingVerified,omitempty"`
 }
 
 // ReadHeads reads runs.heads: the commit per repository, and every changed
