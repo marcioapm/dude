@@ -174,6 +174,10 @@ const Questions = `{"questions":[{"header":"Layout","question":"Does it overflow
 // PeerAnswer.
 const PeerModel = "fake/peer"
 
+// DoneModel's implementer finds the goal met already: it commits nothing
+// and says so, as one continuing work that is finished should.
+const DoneModel = "fake/done"
+
 // PeerQuestion and PeerAnswer are what PeerModel's implementers say.
 const (
 	PeerQuestion = "Which body does your route take?"
@@ -567,6 +571,9 @@ func For(phase, model, runID string, fixed bool) Step {
 	}
 	switch phase {
 	case "implement":
+		if model == DoneModel {
+			return Step{Reply: "The goal is met already: nothing to add."}
+		}
 		// In every repository it may change: work across two is two commits.
 		step := Step{Commit: map[string]string{"*:FACTORY.md": "Written by run " + runID},
 			Message: "Add FACTORY.md for " + runID, Reply: "Implemented it.",
