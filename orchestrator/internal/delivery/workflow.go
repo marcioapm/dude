@@ -360,6 +360,9 @@ type Candidate struct {
 	// Where its review range starts per repository the fix changed: From,
 	// or where the fix's checkout started in a repository From lacks.
 	Base map[string]string `json:"base,omitempty"`
+	// The heads at which a person accepted a review round whose reviewers
+	// failed: promotion takes them as reviewed (unreviewedHeads).
+	Accepted map[string]string `json:"accepted,omitempty"`
 }
 
 // Workflow builds the delivery workflow's definition.
@@ -912,6 +915,17 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	}
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
+	}
+	// A repository the fix changed first joins the range under review, from
+	// where it stood before the fix: the range's next review names it.
+	if r := st.reviewRange(); r != nil {
+		for repo := range out.Heads {
+			if _, ok := r.Base[repo]; !ok {
+				if base := cmp.Or(st.Heads[repo], out.Bases[repo]); base != "" {
+					r.Base[repo] = base
+				}
+			}
+		}
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
 	// The tester's findings were sent; the next test judges them.
@@ -1529,32 +1543,40 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	moved := map[string]string{}
+	// Every branch read before any moves: one someone pushed to refuses
+	// the promotion with nothing moved. One at the candidate's head was
+	// moved by an earlier run of this step.
+	var repos []string
+	at, moved := map[string]string{}, map[string]string{}
 	for _, repo := range slices.Sorted(maps.Keys(st.Heads)) {
-		to, from := st.Heads[repo], c.From[repo]
-		if to == from || slugs[repo] == "" {
+		if st.Heads[repo] == c.From[repo] || slugs[repo] == "" {
 			continue
 		}
-		at, err := gh.BranchSHA(ctx, slugs[repo], st.Branch)
-		if err != nil {
+		if at[repo], err = gh.BranchSHA(ctx, slugs[repo], st.Branch); err != nil {
 			return workflow.Result{}, err
 		}
-		switch at {
-		case to:
-			// Moved already: this step ran before.
-		case from:
-			err := gh.FastForward(ctx, slugs[repo], st.Branch, to)
-			var fe *forge.Error
-			if errors.As(err, &fe) && fe.Status == 422 {
-				// Someone pushed between the read and the move.
-				at, _ = gh.BranchSHA(ctx, slugs[repo], st.Branch)
-				return w.candidateRefused(ctx, sc, st, repo, at)
-			}
-			if err != nil {
-				return workflow.Result{}, err
-			}
-		default:
-			return w.candidateRefused(ctx, sc, st, repo, at)
+		if at[repo] == st.Heads[repo] {
+			moved[repo] = at[repo]
+		} else {
+			repos = append(repos, repo)
+		}
+	}
+	for _, repo := range repos {
+		if at[repo] != c.From[repo] {
+			return w.candidateRefused(ctx, sc, st, repo, at[repo], moved)
+		}
+	}
+	for _, repo := range repos {
+		to := st.Heads[repo]
+		err := gh.FastForward(ctx, slugs[repo], st.Branch, to)
+		var fe *forge.Error
+		if errors.As(err, &fe) && fe.Status == 422 {
+			// Someone pushed between the read and the move.
+			found, _ := gh.BranchSHA(ctx, slugs[repo], st.Branch)
+			return w.candidateRefused(ctx, sc, st, repo, found, moved)
+		}
+		if err != nil {
+			return workflow.Result{}, err
 		}
 		moved[repo] = to
 	}
@@ -1569,9 +1591,12 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 }
 
 // candidateRefused stops for a person: the pull request's branch in repo
-// is at found, not where the fix started. Nothing moved there; the
-// delivery goes on from what the branch holds.
-func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string) (workflow.Result, error) {
+// is at found, not where the fix started, and is not moved. moved are the
+// branches a forge race let move before it (by repository, to the
+// candidate's head): recorded, their reviewers asked again and their
+// descriptions brought up to them. The delivery goes on from what each
+// branch holds.
+func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string, moved map[string]string) (workflow.Result, error) {
 	c := st.Candidate
 	detail := map[string]any{"repo": repo, "expected": c.From[repo], "found": found, "candidate": st.Heads[repo],
 		"branch": c.Branch}
@@ -1580,11 +1605,27 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	} else if n > 0 {
 		detail["number"] = n
 	}
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
+		return workflow.Result{}, err
+	}
 	// What the pull request shows is what the delivery stands on now; a
 	// retry fixes the same feedback again from there.
 	st.Heads = maps.Clone(c.From)
+	maps.Copy(st.Heads, moved)
 	if found != "" {
 		st.Heads[repo] = found
+	}
+	if len(moved) > 0 {
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, moved); err != nil {
+			return workflow.Result{}, err
+		}
+		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	st.Candidate = nil
 	return w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
@@ -1842,6 +1883,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			// The round goes on without the reviewers that failed: its
 			// findings are what the others reported.
 			st.ReviewRunIDs = nil
+			if st.checkingCandidate() {
+				st.Candidate.Accepted = maps.Clone(st.Heads)
+			}
 			return workflow.Result{Next: "awaitReview", State: st}, nil
 		}
 		// The findings it was stuck on ship as they are: a person's call.

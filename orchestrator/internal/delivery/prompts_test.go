@@ -216,6 +216,12 @@ func TestAReviewOfARangeIsToldItsRangeWhateverItsInstructions(t *testing.T) {
 	if !strings.Contains(one, "Review `aaa111..HEAD`:") {
 		t.Errorf("one repository's range names no repository:\n%s", one)
 	}
+	// One range among two checkouts: which checkout it is in is named.
+	oneOfTwo := Prompt(PhaseReview, PromptInput{Category: "correctness", Repositories: twoRepos(),
+		ReviewBase: map[string]string{"web": "bbb222"}, ReviewOf: RangePullRequestFix})
+	if !strings.Contains(oneOfTwo, "Review in `web`, `bbb222..HEAD`:") {
+		t.Errorf("one range of two checkouts names no repository:\n%s", oneOfTwo)
+	}
 	if whole := Prompt(PhaseReview, PromptInput{Category: "correctness"}); strings.Contains(whole, "..HEAD") {
 		t.Errorf("a review with no range is told one:\n%s", whole)
 	}

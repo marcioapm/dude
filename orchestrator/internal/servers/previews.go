@@ -302,11 +302,12 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 	var repos []previewRef
 	for _, tr := range taskRepos {
 		// The task's branch in a repository its work reached; its
-		// default branch where nothing was published yet.
+		// default branch where nothing was published yet. Never a
+		// candidate: unchecked, and deleted once the task branch takes it.
 		ref := tr.DefaultBranch
 		var branch string
 		err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
-			ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
+			AND branch NOT LIKE '%-candidate' ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
 		switch {
 		case err == nil:
 			ref = branch

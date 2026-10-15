@@ -248,12 +248,13 @@ var rangeReason = map[string]string{
 }
 
 // reviewRange is how a reviewer establishes its range when the delivery
-// limits it to one: the commits named, per repository, to HEAD.
-func reviewRange(base map[string]string, of string) string {
+// limits it to one: the commits named, per repository, to HEAD. With more
+// than one checkout each range names its repository.
+func reviewRange(base map[string]string, of string, checkouts int) string {
 	var ranges []string
 	for _, repo := range slices.Sorted(maps.Keys(base)) {
 		r := fmt.Sprintf("`%s..HEAD`", base[repo])
-		if len(base) > 1 {
+		if len(base) > 1 || checkouts > 1 {
 			r = fmt.Sprintf("in `%s`, %s", repo, r)
 		}
 		ranges = append(ranges, r)
@@ -748,7 +749,7 @@ func Prompt(phase string, in PromptInput) string {
 		add(lead...)
 		contract := reviewContract
 		if len(in.ReviewBase) > 0 {
-			contract = "## How you review\n\n" + reviewRange(in.ReviewBase, in.ReviewOf) + reviewRules
+			contract = "## How you review\n\n" + reviewRange(in.ReviewBase, in.ReviewOf, len(in.Repositories)) + reviewRules
 		}
 		add("The task under review:\n\n"+in.task(), contract, findingFormat, reviewSummary)
 		if note := severityNote(in.BlockingSeverities); note != "" {

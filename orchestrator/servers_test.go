@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -612,5 +613,30 @@ func TestAPreviewChecksOutTheBranchTheTaskPublished(t *testing.T) {
 	// No autostart recipes: nothing to wait for once it runs.
 	if len(spec.Workload.Servers) != 0 || !strings.HasPrefix(spec.Name, "preview ") || len(spec.Network.Egress) != 0 || spec.Network.Unrestricted {
 		t.Errorf("spec = %+v", spec)
+	}
+}
+
+// A pull request's fix published to its candidate branch, which promotion
+// then deleted: the preview checks out the task branch the pull request
+// shows, never the candidate.
+func TestAPreviewNeverChecksOutACandidateBranch(t *testing.T) {
+	w := newWorld(t)
+	w.actor = w.person("Ana")
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
+		w.org, wi, w.repoID)
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, branch, heads, created_at)
+		VALUES ('run_impl_'||$1, $1, $2, $3, 1, 'completed', 'implement', $4, '{"target":{"sha":"abc"}}', now() - interval '1 minute'),
+		       ('run_fix_'||$1, $1, $2, $3, 1, 'completed', 'fix', $5, '{"target":{"sha":"def"}}', now())`,
+		w.org, w.project, wi, branch, delivery.CandidateBranch(wi, 1))
+	if code, _ := w.do("POST", "/internal/tasks/"+wi+"/preview", nil); code != 201 {
+		t.Fatal(code)
+	}
+	w.until("the preview to be submitted", func() bool { return len(w.lux.Runs()) == 1 })
+	var spec lux.Spec
+	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
+	if ref := spec.Git.Repositories[0].Ref; ref != branch {
+		t.Errorf("the preview checks out %s, want the task branch %s", ref, branch)
 	}
 }

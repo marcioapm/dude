@@ -27,13 +27,16 @@ const EvPullRequestFixMoved = "pull_request.fix_moved"
 
 // rangeFindings are the open findings of this attempt raised by a review
 // of the range the delivery reviews now: what a fix of that loop is sent.
+// A range grows when a fix changes a repository it lacked (awaitFix), so
+// an earlier round's review matches by its anchors being a subset of r's.
 func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *ReviewRange) ([]string, error) {
 	raw, _ := json.Marshal(r)
 	var out []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id FROM review_findings
 			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+`
-			  AND run_id IN (SELECT id FROM runs WHERE task_id = $1 AND review_range = $3::jsonb)
+			  AND run_id IN (SELECT id FROM runs WHERE task_id = $1 AND review_range->>'of' = ($3::jsonb->>'of')
+			    AND ($3::jsonb->'base') @> (review_range->'base'))
 			ORDER BY created_at`, st.TaskID, st.Attempt, raw)
 		if err != nil {
 			return err
@@ -45,13 +48,13 @@ func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *Rev
 }
 
 // unreviewedHeads are the repositories where the candidate's head is a
-// commit no completed review Run checked out: what must not reach the
-// pull request.
+// commit no completed review Run checked out, nor a person accepted
+// unreviewed: what must not reach the pull request.
 func (s *Store) unreviewedHeads(ctx context.Context, org string, st *State, c *Candidate) ([]string, error) {
 	var out []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		for _, repo := range slices.Sorted(maps.Keys(st.Heads)) {
-			if st.Heads[repo] == c.From[repo] {
+			if st.Heads[repo] == c.From[repo] || st.Heads[repo] == c.Accepted[repo] {
 				continue
 			}
 			var reviewed bool
@@ -198,8 +201,7 @@ func (s *Store) RefreshPullRequestBodies(ctx context.Context, org string, st *St
 			return err
 		}
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE pull_requests SET body = $3, updated_at = now()
-				WHERE task_id = $1 AND number = $2 AND id = ANY($4)`, st.TaskID, p.Number, next, st.PullRequestIDs)
+			_, err := tx.Exec(ctx, `UPDATE pull_requests SET body = $2, updated_at = now() WHERE id = $1`, p.ID, next)
 			return err
 		}); err != nil {
 			return err
