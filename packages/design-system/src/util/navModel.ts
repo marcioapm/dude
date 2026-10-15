@@ -11,7 +11,7 @@
  * a new status is a compile error before it can be a blank row.
  */
 
-import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
+import { TERMINAL_TASK_STATUSES, notStarted, type AgentRole, type RunStatus, type SessionStatus, type TaskStatus } from "@dude/domain";
 import type { Person, PrChipPullRequest } from "./viewTypes.ts";
 import { toMs } from "./instant.ts";
 import {
@@ -123,11 +123,10 @@ export function waitingWords(task: NavTask): string {
   return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
 }
 
-const NOT_IN_PROGRESS: ReadonlySet<TaskStatus> = new Set(["received", "intake", "awaiting_confirmation", "queued", "done", "failed", "aborted"]);
-
 /** The driver a card or row shows: only while the task is in progress. */
 export function shownDriver(task: NavTask): NavTask["driver"] {
-  return task.driver && !NOT_IN_PROGRESS.has(task.status) ? task.driver : undefined;
+  if (notStarted(task.status) || TERMINAL_TASK_STATUSES.includes(task.status)) return undefined;
+  return task.driver;
 }
 
 export interface NavEpic {

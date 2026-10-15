@@ -88,7 +88,7 @@ export const DriverChip = forwardRef<HTMLButtonElement, DriverChipProps>(functio
   if (!switchable) {
     // A span still forwards the tooltip's trigger props and ref.
     return (
-      <span ref={ref as unknown as Ref<HTMLSpanElement>} {...(rest as HTMLAttributes<HTMLSpanElement>)} className={cx(styles["chip"], styles["readOnly"], className)}
+      <span ref={ref as unknown as Ref<HTMLSpanElement>} {...(rest as HTMLAttributes<HTMLSpanElement>)} className={cx(styles["chip"], className)}
         tabIndex={0} role="img" data-testid="driver" data-driver={mode} data-switchable="false"
         aria-label={`${w.who}: ${w.long}${readOnlyReason ? `. ${readOnlyReason}` : ""}`}>
         {body}
@@ -106,12 +106,13 @@ export const DriverChip = forwardRef<HTMLButtonElement, DriverChipProps>(functio
 /** An ended task, or an earlier attempt: who decided last, muted, nothing to switch. */
 export function DriverEnded({ decider, note, className }: { readonly decider: "policy" | "conductor"; readonly note?: ReactNode; readonly className?: string | undefined }) {
   const conductor = decider === "conductor";
+  const mode = driverMode(decider, false);
   const words = conductor ? "Decided by the conductor" : "Decided by Deliver";
   return (
     <Tooltip content={note ?? (conductor ? "The conductor took the last decisions." : "Deliver's rules took the last decisions.")}>
       <span className={cx(styles["chip"], styles["ended"], className)} tabIndex={0} role="img" aria-label={words}
-        data-testid="driver" data-driver={conductor ? "conductor" : "deliver"} data-ended="">
-        <DriverIcons mode={conductor ? "conductor" : "deliver"} />
+        data-testid="driver" data-driver={mode} data-ended="">
+        <DriverIcons mode={mode} />
         <span>{words}</span>
       </span>
     </Tooltip>

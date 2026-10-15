@@ -103,6 +103,9 @@ const click = async (el: HTMLElement) => {
   await settle();
 };
 const selected = (p: HTMLElement) => p.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
+const headerDriver = (p: HTMLElement) => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]");
+const openSwitch = (chip: HTMLElement) =>
+  act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
 
 describe("starting a task", () => {
   const toTab = async (p: HTMLElement, name: string) => {
@@ -191,7 +194,7 @@ describe("a conducted task's Chat", () => {
 
   const decidesIn = (p: HTMLElement, decider: string) =>
     until(() => p.querySelector(`[data-testid=decider-line][data-decider=${decider}]`) &&
-      p.querySelector(`[data-testid=task-header] [data-testid=driver][data-driver=${decider === "policy" ? "deliver-chat" : "conductor"}]`) ? true : null,
+      headerDriver(p)?.getAttribute("data-driver") === (decider === "policy" ? "deliver-chat" : "conductor") ? true : null,
     `the header and Chat both on ${decider}`);
 
   test("who decides, what it waits on, and Let Deliver finish it: the header and Chat agree after", async () => {
@@ -214,7 +217,7 @@ describe("a conducted task's Chat", () => {
     expect(document.body.textContent).toContain("Deliver will open the pull request now.");
     expect(client.deciders).toEqual(["policy"]);
     // Refused: nothing changed on the page.
-    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("conductor");
+    expect(headerDriver(p)?.getAttribute("data-driver")).toBe("conductor");
     await click(open);
     expect(client.deciders).toEqual(["policy", "policy+open"]);
     await decidesIn(p, "policy");
@@ -230,7 +233,7 @@ describe("a conducted task's Chat", () => {
     await until(() => document.querySelectorAll("[data-testid=hand-back-open]").length === 0 ? true : null, "the confirmation closed");
     expect(client.deciders).toEqual(["policy"]);
     expect(p.querySelector("[data-testid=decider-line]")?.getAttribute("data-decider")).toBe("conductor");
-    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("conductor");
+    expect(headerDriver(p)?.getAttribute("data-driver")).toBe("conductor");
   });
 
   // Handed back while the conductor entered the gate, and its conductor
@@ -270,9 +273,9 @@ describe("a conducted task's Chat", () => {
   test("the header's switch and Chat's are one: switching from the header moves Chat too", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null }, events());
     const p = await page(client);
-    const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "the chip");
+    const chip = await until(() => headerDriver(p), "the chip");
     expect(chip.getAttribute("data-switchable")).toBe("true");
-    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await openSwitch(chip);
     const deliver = await until(() => document.querySelector<HTMLElement>("[role=menuitemradio][data-testid=rowmenu-policy]"), "Let Deliver finish it");
     expect(deliver.textContent).toContain("Let Deliver finish it");
     await click(deliver);
@@ -291,7 +294,7 @@ describe("a conducted task's Chat", () => {
     expect(problem.textContent).toBe("Could not change who decides: task has no delivery in progress");
     expect(client.deciders).toEqual(["conductor"]);
     expect(p.querySelector("[data-testid=decider-line]")?.getAttribute("data-decider")).toBe("policy");
-    expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("deliver-chat");
+    expect(headerDriver(p)?.getAttribute("data-driver")).toBe("deliver-chat");
   });
 
   // An unassigned task is anyone's to switch, as its owner's is.
@@ -301,7 +304,7 @@ describe("a conducted task's Chat", () => {
         ...(unassigned ? { owner: null } : {}),
         runs: [run({ id: "run_only_phase", status: "running" })], awaitingDecision: null });
       const p = await page(client);
-      const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "Deliver");
+      const chip = await until(() => headerDriver(p), "Deliver");
       expect(chip.getAttribute("data-driver")).toBe("deliver");
       expect(chip.getAttribute("data-switchable")).toBe("true");
       const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Chat"))!;
@@ -309,7 +312,7 @@ describe("a conducted task's Chat", () => {
       await settle();
       const give = await until(() => p.querySelector<HTMLButtonElement>("[data-testid=decider-line] [data-testid=give-to-conductor]"), "Chat's switch");
       expect(give.textContent).toBe("Give decisions to the conductor");
-      await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+      await openSwitch(chip);
       await click(await until(() => document.querySelector<HTMLElement>("[role=menuitemradio][data-testid=rowmenu-conductor]"), "Give decisions to the conductor"));
       await until(() => chip.getAttribute("data-driver") === "conductor" ? true : null, "the conductor decides");
       expect(client.deciders).toEqual(["conductor"]);
@@ -322,7 +325,7 @@ describe("a conducted task's Chat", () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null,
       owner: { id: "u_ana", name: "Ana Ribeiro" } as TaskDetail["owner"] }, events());
     const p = await page(client);
-    const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "the chip");
+    const chip = await until(() => headerDriver(p), "the chip");
     expect(chip.getAttribute("data-switchable")).toBe("false");
     expect(chip.getAttribute("aria-label")).toContain("Only the owner can change who decides. Ana owns this task.");
     await until(() => p.querySelector("[data-testid=decider-line]"), "who decides");
@@ -502,10 +505,9 @@ describe("a conducted task with two attempts", () => {
   });
 
   test("an earlier attempt's header says who decided it last, read-only, never the current attempt's conductor", async () => {
-    const header = (p: HTMLElement) => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]");
     // Attempt 1 was Deliver's; the current one's conductor is live and decides.
     const known = await showing(1, "findings", [], undefined, 1, [{ attempt: 1, decider: "policy" }, { attempt: 2, decider: "conductor" }]);
-    const chip = await until(() => header(known.p), "attempt 1's driver");
+    const chip = await until(() => headerDriver(known.p), "attempt 1's driver");
     expect(chip.textContent).toBe("Decided by Deliver");
     expect(chip.hasAttribute("data-ended")).toBe(true);
     expect(known.p.querySelectorAll("[data-testid=task-header] button[data-testid=driver]").length).toBe(0);

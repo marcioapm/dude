@@ -47,10 +47,9 @@ export interface ChatSectionProps {
   onSent: () => void;
   /** Open a Run's session: a Run the conductor started, from its line. */
   onOpenRun: (runId: string) => void;
-  /** An earlier attempt is shown: only to read, so who decides is said without the way to hand it back. */
-  setAside?: boolean | undefined;
   onBack: () => void;
   driverControl: DriverControl;
+  /** The reader may switch who decides: the owner's (or anyone's, unassigned) current attempt, never an earlier one. */
   canSwitchDriver: boolean;
 }
 
@@ -84,7 +83,7 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, setAside = false, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
@@ -199,14 +198,17 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
         </Button>
         {gateHeld ? <Button variant="quiet" size="sm" disabled={driverControl.busy} onClick={() => void driverControl.change("policy")} data-testid="let-deliver-finish">Let Deliver finish it</Button> : null}
       </>} />;
-  }, [task.decider, task.handedBack, gateHeld, inProgress, waiting, driverControl.busy, driverControl.change, setAside, canSwitchDriver]);
-  const to = inProgress ? task.decider === "conductor" ? <>To <b>Conductor</b></>
-    : task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</>
-    : <>To <b>Conductor</b> · sending gives it the decisions</>
-    : firstMessage(task, inProgress).readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>;
+  }, [task.decider, task.handedBack, gateHeld, inProgress, waiting, driverControl.busy, driverControl.change, canSwitchDriver]);
+  // What the first message does: plans a task not started, takes over a delivery Deliver runs, or only asks.
+  const first = firstMessage(task, inProgress);
+  const to = useMemo(() => {
+    if (!inProgress) return first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>;
+    if (task.decider === "conductor") return <>To <b>Conductor</b></>;
+    return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
+  }, [inProgress, first.readOnly, task.decider, task.handedBack]);
   const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld,
     to, briefedBefore: briefedAgain }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, briefedAgain, inProgress, task.decider, task.handedBack]); // eslint-disable-line react-hooks/exhaustive-deps -- to follows the mode
+    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, to, briefedAgain]);
 
   if (conductorId) {
     return (
@@ -217,8 +219,6 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     );
   }
 
-  // What the first message does: plans a task not started, takes over a delivery Deliver runs, or only asks.
-  const first = firstMessage(task, inProgress);
   const you = people.you ? people.names.get(people.you) : undefined;
   return (
     <div className="taskChat" data-testid="task-chat">

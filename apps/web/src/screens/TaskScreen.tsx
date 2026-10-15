@@ -489,6 +489,24 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const visibleFindings = filterFindings(mine.findings, findingStatuses, findingSeverities);
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = currentPhases.find((r) => r.status === "running");
+  // Who drives it, after the status: an earlier attempt's own last decider when known, an
+  // ended task's muted, an in-progress task's switch; nothing before it starts.
+  let driver: ReactNode = null;
+  if (earlier) {
+    const decided = item.deciders?.find((d) => d.attempt === shown);
+    if (decided) driver = <DriverEnded decider={decided.decider} note={`Last known decider of attempt ${shown}. This attempt is read-only.`} />;
+  } else if (["done", "failed", "aborted"].includes(item.status)) {
+    driver = <DriverEnded decider={item.decider} />;
+  } else if (!NOT_STARTED_STATUSES.includes(item.status)) {
+    const ownerName = owner ? firstName(owner.name) : undefined;
+    const waitingOn = item.decider === "conductor" ? "it" : yours ? "you" : ownerName ?? "the owner";
+    driver = <DriverSwitch
+      mode={driverMode(item.decider, conductors.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status)))}
+      handedBack={item.handedBack} canSwitch={yours} ownerName={ownerName}
+      busy={driverControl.busy} running={working ? runDoer(working) : undefined}
+      waiting={item.awaitingDecision ? { point: item.awaitingDecision.point, on: waitingOn } : undefined}
+      onSwitch={(to) => void driverControl.change(to)} />;
+  }
   // The aside says what serves the task when something does, or could: a
   // project with no servers defined has nothing to say there. Servers are
   // the current attempt's: an earlier one has none to show.
@@ -553,15 +571,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
-            {earlier ? (item.deciders?.find((d) => d.attempt === shown) ?
-              <DriverEnded decider={item.deciders.find((d) => d.attempt === shown)!.decider} note={`Last known decider of attempt ${shown}. This attempt is read-only.`} /> : null)
-              : ["done", "failed", "aborted"].includes(item.status) ? <DriverEnded decider={item.decider} />
-              : !NOT_STARTED_STATUSES.includes(item.status) ? <DriverSwitch
-                mode={driverMode(item.decider, conductors.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status)))}
-                handedBack={item.handedBack} canSwitch={yours} ownerName={owner ? firstName(owner.name) : undefined}
-                busy={driverControl.busy} running={working ? runDoer(working) : undefined}
-                waiting={item.awaitingDecision ? { point: item.awaitingDecision.point, on: item.decider === "conductor" ? "it" : yours ? "you" : owner ? firstName(owner.name) : "the owner" } : undefined}
-                onSwitch={(to) => void driverControl.change(to)} /> : null}
+            {driver}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -642,7 +652,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
-            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} setAside={earlier} onBack={onBack}
+            events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack}
             driverControl={driverControl} canSwitchDriver={yours && !earlier} />
         </TabPanel>
 
@@ -723,7 +733,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <PageRail aria-label="Pull requests, machines and servers">
                 <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
-
                   // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
                   ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
                     <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} />
