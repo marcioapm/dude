@@ -273,7 +273,7 @@ export interface TaskFields {
   source?: TaskSourceInput | null;
 }
 
-export type { TaskRepository, TaskSource, TaskSourceInput } from "@dude/domain";
+export type { TaskRepository, TaskSource, TaskSourceInput, TaskSourceMode } from "@dude/domain";
 
 /** A project repository as the source picker offers it: writable says dude may push to it; reason says why not. */
 export interface SourceRepository {

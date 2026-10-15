@@ -575,6 +575,56 @@ describe("where a task starts from", () => {
     expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12" } });
   });
 
+  const modeChosen = () => document.querySelector("[data-testid=task-source-mode] [aria-checked=true]")?.textContent ?? null;
+  const chooseMode = (label: string) => act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>("[data-testid=task-source-mode] [role=radio]")]
+      .find((b) => b.textContent?.startsWith(label))!.click();
+  });
+
+  test("what dude does first defaults to what the source says, and the person's choice is created with it", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the greeting");
+    await d.goal("Finish the Portuguese greeting already open.");
+    expect(document.querySelector("[data-testid=task-source-mode]")).toBeNull();
+    await pick("Existing PR");
+    await set(document.querySelector("[data-testid=task-source-pr]")!, HTMLInputElement.prototype, "#12");
+    await until(() => modeChosen(), "the choice");
+    // The lookup said ready for review: Review it as is.
+    expect(modeChosen()).toBe("Review it as isStraight to review: nothing is implemented first.");
+    await chooseMode("Continue the work");
+    expect(modeChosen()).toBe("Continue the workAn implementer builds on it first, then review.");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toMatchObject({ source: { kind: "pr", pullRequest: "#12", mode: "continue" } });
+  });
+
+  test("a default left as it is is not sent: the backend's default for the source holds", async () => {
+    const client = new Sources("a");
+    const d = await open(undefined, client);
+    await d.title("Take over the stack");
+    await d.goal("Finish the stacked branch on top of the base one.");
+    await pick("Existing branch");
+    await pickBranch("task-source-branch", "top", "stack/top");
+    await until(() => modeChosen()?.startsWith("Continue the work"), "a branch continues");
+    await act(async () => d.save().click());
+    await until(() => client.created.length > 0, "the create");
+    expect(client.created[0]).toHaveProperty("source");
+    expect((client.created[0] as { source: object }).source).not.toHaveProperty("mode");
+  });
+
+  test("once started, the saved choice is shown and cannot change", async () => {
+    const client = new Sources("a");
+    await open({ id: "task_adopted", fixed: "all", title: "Adopted", goal: "Finish the Portuguese greeting already open.",
+      acceptanceCriteria: [], epicId: null, repositories: [{ id: "repo_wc", access: "write" }],
+      savedSource: { kind: "pr", repositoryId: "repo_wc", repository: "web-console", number: 12, title: "Greet", headBranch: "feature/greet",
+        baseBranch: "main", mode: "continue" } }, client);
+    expect(modeChosen()?.startsWith("Continue the work")).toBe(true);
+    await chooseMode("Review it as is");
+    expect(modeChosen()?.startsWith("Continue the work")).toBe(true);
+    expect(document.querySelector<HTMLFieldSetElement>("[data-testid=task-source]")!.disabled).toBe(true);
+  });
+
   test("a refused pull request says why on its field, and Create stays off", async () => {
     const client = new Sources("a");
     const d = await open(undefined, client);
