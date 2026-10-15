@@ -447,6 +447,29 @@ func TestAStackedBranchIsReviewedForItsOwnChangesOnly(t *testing.T) {
 	}
 }
 
+// The tester's pass is no Open or Draft: under Deliver, a tested branch
+// still waits for the person's before any pull request is opened.
+func TestATestedAdoptedBranchWaitsForThePersonsOpenOrDraft(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true}' WHERE id = $1`, w.project)
+	w.gh.Branch("feature/tested", "main", "Tested")
+
+	wi := w.adopting("branch", 0, "feature/tested", "main")
+	w.until("the gate after the test", func() bool {
+		return w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1`, wi) > 0 &&
+			(w.taskStatus(wi) == "awaiting_input" || len(w.gh.Pulls()) > 0)
+	})
+	for range 3 {
+		w.pump()
+	}
+	if len(w.gh.Pulls()) != 0 {
+		t.Fatalf("a passed test opened a person's branch without their Open or Draft: %d pull requests", len(w.gh.Pulls()))
+	}
+	if s := w.taskStatus(wi); s != "awaiting_input" {
+		t.Fatalf("task %s, want awaiting_input for Open or Draft", s)
+	}
+}
+
 // A branch is taken over: reviewed and fixed on itself, then the person's
 // Open opens its pull request into the base they chose — a stacked branch,
 // not main.

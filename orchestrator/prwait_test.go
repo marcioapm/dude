@@ -89,6 +89,31 @@ func TestAPhaseStartedAtThePullRequestWaitStartsFromAPersonsPush(t *testing.T) {
 	})
 }
 
+// A test the conductor starts while the pull request waits, once it
+// passes, waits on that pull request again: the verification gate's pass
+// asks no Open or Draft of a pull request already open.
+func TestATestStartedAtThePullRequestWaitWaitsOnItAgainOncePassed(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+
+	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.until("the test's verdict, then a wait or a decision", func() bool {
+		return w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1`, task) > 0 &&
+			(w.waitingOnPR(task) || w.decisionAt(task) != "")
+	})
+	if point := w.decisionAt(task); point != "" {
+		t.Fatalf("parked on the conductor's %q decision, want waiting on the open pull request again", point)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
+	}
+}
+
 // Refused while a phase that publishes is at work (one writer), and past
 // the pull request's fix bound.
 func TestStartingAPhaseWhileThePullRequestWaitsHasTheSameBounds(t *testing.T) {
