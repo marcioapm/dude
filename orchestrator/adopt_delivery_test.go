@@ -20,19 +20,112 @@ import (
 // what the backend checked) and starts its delivery through the API.
 func (w *world) adopting(kind string, number int, head, base string) string {
 	w.t.Helper()
+	wi := w.adopted(kind, number, head, base, delivery.ModeReview)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		w.t.Fatalf("deliver: %d %v", status, body)
+	}
+	return wi
+}
+
+// adopted makes a task that starts from source in mode, not started.
+func (w *world) adopted(kind string, number int, head, base, mode string) string {
+	w.t.Helper()
 	wi := w.task()
 	var n any
 	if kind == "pr" {
 		n = number
 	}
-	mustExec(w.t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch)
-		VALUES ($1, $2, $3, $4, $5, 'Taken over', $6, $7)`, wi, w.org, w.repoID, kind, n, head, base)
+	mustExec(w.t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch, mode)
+		VALUES ($1, $2, $3, $4, $5, 'Taken over', $6, $7, $8)`, wi, w.org, w.repoID, kind, n, head, base, mode)
 	mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access) VALUES ($1, $2, $3, 'write')`,
 		w.org, wi, w.repoID)
-	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
-		w.t.Fatalf("deliver: %d %v", status, body)
-	}
 	return wi
+}
+
+// A draft pull request to continue is taken over as one to review is
+// (recorded, its feedback read), then an implementer told it carries
+// someone's work on builds on its head before the review loop; the
+// implementer's commit lands on the same branch, over the person's.
+func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
+	start := w.gh.SHA("feature/half")
+	w.gh.Comment(n, "jerv", "Still needs the farewell.")
+	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	w.until("waiting on the pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
+	})
+	got := w.phasesRun(wi)
+	if len(got) < 2 || got[0] != "implement" || got[1] != "review" {
+		t.Fatalf("phases %v, want implement then review", got)
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND adopted AND number = $2`, wi, n); n != 1 {
+		t.Fatalf("adopted pull request recorded %d times", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events e WHERE e.task_id = $1 AND e.event_type = 'pull_request.commented'
+		AND e.occurred_at <= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'implement')`, wi); n != 1 {
+		t.Fatalf("existing feedback recorded before the implementer: %d", n)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Fatalf("%d pull requests, want the one taken over", len(w.gh.Pulls()))
+	}
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", start, "refs/heads/feature/half").CombinedOutput(); err != nil {
+		t.Fatalf("the person's commit %s is not under feature/half's head: %v %s", start, err, out)
+	}
+	if w.gh.SHA("feature/half") == start {
+		t.Fatal("nothing was pushed onto the adopted branch")
+	}
+}
+
+// The implementer on work to continue is told whose work it is and that
+// committing nothing is how it says the goal is met; one on work to review
+// is never started, and one on new work is told neither.
+func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testing.T) {
+	w := newWorld(t)
+	// A model of its own: the scripted agent's prompt is its script.
+	w.onModel("implementer", "llm-impl")
+	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
+	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	fresh := w.task()
+	w.deliver(fresh)
+	promptOf := func(task string) string {
+		var impl string
+		w.until("the implementer submitted", func() bool {
+			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task).Scan(&impl)
+			return impl != "" && w.promptOf(impl) != ""
+		})
+		return w.promptOf(impl)
+	}
+	want := "This is someone's work in progress on pull request #1 (`feature/half` in target), based on `main`"
+	if p := promptOf(wi); !strings.Contains(p, want) || !strings.Contains(p, "If the goal is already met, commit nothing and say so") {
+		t.Fatalf("implementer prompt does not say it continues someone's work:\n%s", p)
+	}
+	if p := promptOf(fresh); strings.Contains(p, "Work in progress") {
+		t.Fatalf("new work's implementer told it continues someone's:\n%s", p)
+	}
+}
+
+// Under the conductor, work to continue waits for its call at the start,
+// which may be the implementer or a review of the work as it is.
+func TestTheConductorStartsWorkToContinueWithAReviewIfItChooses(t *testing.T) {
+	w := conducting(t)
+	w.gh.Branch("feature/half", "main", "Half done")
+	wi := w.adopted("branch", 0, "feature/half", "main", delivery.ModeContinue)
+	w.talk(wi)
+	if got := w.phasesRun(wi); len(got) != 0 {
+		t.Fatalf("phases before the conductor's call: %v", got)
+	}
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review", func() bool { return w.phaseRuns(wi, "review") == 1 })
+	if w.phaseRuns(wi, "implement") != 0 {
+		t.Fatal("an implementer ran though the conductor chose review")
+	}
 }
 
 func TestAnAdoptedSourceChangedBeforeExecutionCannotRun(t *testing.T) {

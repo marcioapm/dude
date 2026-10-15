@@ -61,6 +61,9 @@ type Pending struct {
 	// The step the policy would take: where "next" goes, and where the
 	// workflow goes if decisions return to the policy.
 	Policy string `json:"policy"`
+	// A delivery that took over existing work, before any of its Runs: the
+	// work is there to review at its start, and to carry on after it.
+	Adopted bool `json:"adopted,omitempty"`
 	// Taken by the conductor (decide, start_phase), set as it is taken so
 	// a second is refused before the workflow acts on the first.
 	Taken *Taken `json:"taken,omitempty"`
@@ -99,9 +102,16 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 func (d *Pending) Phases() []string {
 	switch d.Point {
 	case PointStart:
+		if d.Adopted {
+			return []string{PhaseImplement, PhaseReview}
+		}
 		return []string{PhaseImplement}
 	case PointPRFeedback:
 		return []string{PhaseFix}
+	case PointImplemented:
+		if d.Adopted {
+			return []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest}
+		}
 	}
 	return []string{PhaseReview, PhaseFix, PhaseSimplify, PhaseTest}
 }
@@ -199,7 +209,8 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 // in Chat is the conductor's turn already.
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
-	st.Decision = &Pending{Point: point, Policy: policy}
+	st.Decision = &Pending{Point: point, Policy: policy,
+		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
 	if point == PointBeforePR {
 		st.GateRequired = true
 	}
