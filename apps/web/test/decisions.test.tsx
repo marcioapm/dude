@@ -294,19 +294,29 @@ describe("a conducted task's Chat", () => {
     expect(p.querySelector("[data-testid=task-header] [data-testid=driver]")?.getAttribute("data-driver")).toBe("deliver-chat");
   });
 
-  test("an explicit switch works before any conductor exists, without the app creating an agent", async () => {
-    const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: false,
-      runs: [run({ id: "run_only_phase", status: "running" })], awaitingDecision: null });
-    const p = await page(client);
-    const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "Deliver");
-    expect(chip.getAttribute("data-driver")).toBe("deliver");
-    await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
-    await click(await until(() => document.querySelector<HTMLElement>("[role=menuitemradio][data-testid=rowmenu-conductor]"), "Give decisions to the conductor"));
-    await until(() => chip.getAttribute("data-driver") === "conductor" ? true : null, "the conductor decides");
-    expect(client.deciders).toEqual(["conductor"]);
-    expect(client.talked).toBe(0);
-    expect((await client.getTask(TASK_ID)).runs.map((r) => r.id)).toEqual(["run_only_phase"]);
-  });
+  // An unassigned task is anyone's to switch, as its owner's is.
+  for (const unassigned of [false, true]) {
+    test(`an explicit switch works before any conductor exists, without the app creating an agent; unassigned=${unassigned}`, async () => {
+      const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: false,
+        ...(unassigned ? { owner: null } : {}),
+        runs: [run({ id: "run_only_phase", status: "running" })], awaitingDecision: null });
+      const p = await page(client);
+      const chip = await until(() => p.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "Deliver");
+      expect(chip.getAttribute("data-driver")).toBe("deliver");
+      expect(chip.getAttribute("data-switchable")).toBe("true");
+      const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Chat"))!;
+      await act(async () => void tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+      await settle();
+      const give = await until(() => p.querySelector<HTMLButtonElement>("[data-testid=decider-line] [data-testid=give-to-conductor]"), "Chat's switch");
+      expect(give.textContent).toBe("Give decisions to the conductor");
+      await act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+      await click(await until(() => document.querySelector<HTMLElement>("[role=menuitemradio][data-testid=rowmenu-conductor]"), "Give decisions to the conductor"));
+      await until(() => chip.getAttribute("data-driver") === "conductor" ? true : null, "the conductor decides");
+      expect(client.deciders).toEqual(["conductor"]);
+      expect(client.talked).toBe(0);
+      expect((await client.getTask(TASK_ID)).runs.map((r) => r.id)).toEqual(["run_only_phase"]);
+    });
+  }
 
   test("someone else's task: the same chip, no switch, and Chat offers no switch either", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null,

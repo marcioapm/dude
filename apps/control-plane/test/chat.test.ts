@@ -225,6 +225,8 @@ test("a task carries each attempt's own last decider, the first delivery's as at
   const t = (await (await call("GET", "/v1/tasks/wi_att")).json()) as { decider: string; deciders: unknown };
   expect(t.decider).toBe("policy");
   expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }, { attempt: 2, decider: "policy" }]);
+  // The board reads the latest delivery's decider too, not the first's.
+  expect(await navTask("wi_att")).toMatchObject({ decider: "policy", conductorLive: false });
   const none = (await (await call("GET", "/v1/tasks/wi_none")).json()) as { deciders: unknown };
   expect(none.deciders).toEqual([]);
 });

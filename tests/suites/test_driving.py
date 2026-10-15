@@ -121,6 +121,12 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     _, bo = provision_person(client, env, "Bo", f"bo-{org['id']}@acme.dev")
     # A browser of his own: the owner's key stays the owner's.
     page = page.context.new_page()
+    # The console_errors fixture's listeners, on his page too.
+    def record(text: str) -> None:
+        if "fonts" not in text and "rsms.me" not in text:
+            console_errors.append(text)
+    page.on("console", lambda m: record(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e: record(str(e)))
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, bo.api_key, at=f"#/task/{task['id']}")
     chip = page.get_by_test_id("task-header").get_by_test_id("driver")
