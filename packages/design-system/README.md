@@ -888,9 +888,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and branch, reviewed again from the start." (or "The same branch, …"),
   its Branch line is *kept* — "`feature/greet`, and pull request #12 on it,
   which stays open." — and its Workspace is a clean checkout of that branch
-  as GitHub has it. Nothing promises a new `dude/…` branch, a checkout of
-  the default branch, or a closed pull request. The adopted pull request
-  is every attempt's: an earlier attempt shows it too, only to read.
+  as GitHub has it. Nothing promises a new `dude/…` branch or a checkout of
+  the default branch, and for an adopted pull request nothing promises it
+  closed. An adopted branch differs on one point: a pull request dude
+  opened from it is closed on Start over, and its Branch line says so —
+  "`stack/top`, into `stack/base`. A pull request dude opened from it is
+  closed." The adopted pull request is every attempt's: an earlier attempt
+  shows it too, only to read, and its note stays even if someone closed it
+  on GitHub.
 - **Adopted work that changed on GitHub** is an ordinary escalation with
   its own words: "**Adopted work changed on GitHub.**" and the
   orchestrator's reason in full (what changed, "Put it back on GitHub and
