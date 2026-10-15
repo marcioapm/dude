@@ -66,7 +66,7 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		BlockingSeverities: []string{"blocking", "high"},
-		RequiredReviewers:  []string{"correctness"},
+		RequiredReviewers:  []string{"correctness", "tests", "performance"},
 		ConditionalReviewers: []ReviewerRule{
 			{Category: "security", WhenPathsMatch: []string{"**/auth/**", "**/payments/**", "**/*credential*"}},
 			{Category: "database", WhenPathsMatch: []string{"**/migrations/**", "**/*.sql"}},
@@ -137,7 +137,7 @@ var Publishes = map[string]bool{
 	PhaseSimplify:  true,
 }
 
-var reviewerOrder = []string{"correctness", "security", "database", "api", "frontend", "performance"}
+var reviewerOrder = []string{"correctness", "tests", "security", "database", "api", "frontend", "performance"}
 
 // ReviewersFor picks the reviewers a diff warrants, in a stable order so a
 // task's fan-out is reproducible.

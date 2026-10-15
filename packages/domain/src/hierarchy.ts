@@ -147,12 +147,13 @@ export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low"
  * The reviewer flavours the factory has prompts for. A project names the
  * ones every delivery runs; others join when a change touches their paths.
  */
-export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api", "frontend", "performance"] as const;
+export const REVIEWER_CATEGORIES = ["correctness", "tests", "security", "database", "api", "frontend", "performance"] as const;
 export type ReviewerCategory = (typeof REVIEWER_CATEGORIES)[number];
 
 /** A reviewer flavour as a person reads it. */
 export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   correctness: "Correctness",
+  tests: "Tests",
   security: "Security",
   database: "Database",
   api: "API",
