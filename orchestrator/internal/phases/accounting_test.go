@@ -30,6 +30,8 @@ type accountingRun struct {
 	origin string
 	work   string
 	start  string
+	// The base lux reported fetching (syncBase), "" before any.
+	base string
 }
 
 func newAccountingRun(t *testing.T) *accountingRun {
@@ -98,15 +100,17 @@ func (a *accountingRun) advanceBase(files map[string]string) string {
 	return git(a.t, other, "rev-parse", "HEAD")
 }
 
-// syncBase is lux's fetch for sync_base: origin's main at lux/main.
+// syncBase is lux's fetch for sync_base: origin's main at lux/main, and
+// the commit lux reports fetching, which is what accounting is given.
 func (a *accountingRun) syncBase() {
 	a.t.Helper()
 	git(a.t, a.work, "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/lux/main")
+	a.base = git(a.t, a.work, "rev-parse", "refs/remotes/lux/main")
 }
 
 func (a *accountingRun) account() accounting {
 	a.t.Helper()
-	acc, err := publicationAccounting(context.Background(), a.client, a.luxID, a.start, a.head(), "refs/remotes/lux/main", "target")
+	acc, err := publicationAccounting(context.Background(), a.client, a.luxID, a.start, a.head(), a.base, "target")
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -315,7 +319,7 @@ func TestAccountingOfALargeCodemodFitsInExec(t *testing.T) {
 	}
 	git(t, a.work, "reset", "-q", "--hard", "main")
 	res, err := a.client.Exec(context.Background(), a.luxID, []string{"sh", "-c", accountingScript, "account",
-		"/workspace/repos/target", a.start, a.head(), "refs/remotes/lux/main"})
+		"/workspace/repos/target", a.start, a.head(), a.base})
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("exec: %v %d %s", err, res.ExitCode, res.Stderr)
 	}

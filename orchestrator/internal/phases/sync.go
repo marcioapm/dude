@@ -1856,10 +1856,13 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if baseBranch == "" {
 			baseBranch = repo.DefaultBranch
 		}
-		// The base as the checkout holds it (sync_base's lux/<base>), never
-		// GitHub's now: only what the checkout proves came from the base is
-		// left out.
-		acc, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, "refs/remotes/lux/"+baseBranch, repo.Name)
+		// Only a base lux fetched, and GitHub's base branch contains, is
+		// left out; never what the checkout's refs say.
+		trusted, _, err := s.trustedBase(ctx, gh, r.Org, r.ID, slug, res.Repo, baseBranch)
+		if err != nil {
+			return nil, err
+		}
+		acc, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, trusted, repo.Name)
 		if accountErr != nil {
 			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
 		}

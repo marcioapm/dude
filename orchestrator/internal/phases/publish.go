@@ -435,7 +435,11 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 				return s.refusePublish(ctx, p, fmt.Sprintf("%s has no branch %s to measure your commits from", repo.Name, from))
 			}
 		}
-		acc, err := publicationAccounting(ctx, s.Lux, p.LuxRunID, start, res.Commit, "refs/remotes/lux/"+baseBranch, repo.Name)
+		trusted, _, err := s.trustedBase(ctx, gh, p.Org, p.RunID, slug, res.Repo, baseBranch)
+		if err != nil {
+			return errPublishTransient{err}
+		}
+		acc, err := publicationAccounting(ctx, s.Lux, p.LuxRunID, start, res.Commit, trusted, repo.Name)
 		if accountingTransient(err) {
 			return errPublishTransient{err}
 		}

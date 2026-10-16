@@ -17,12 +17,12 @@ import (
 var accountingTimeout = 60 * time.Second
 
 // accountingScript prints what start..head changed that is the task's own,
-// as NUL-separated records. base is the base as the checkout holds it
-// (refs/remotes/lux/<base>, set by sync_base); without it nothing is
-// excluded. Commits reachable from base are not walked, so a fast-forward
-// onto the base counts nothing. Each run of ordinary first-parent commits is
-// one net diff; a two-parent merge whose second parent is in base counts
-// only its resolution (--remerge-diff).
+// as NUL-separated records. base is a commit dude trusts as the base (the
+// git.sync lux reported, checked against GitHub: trustedBase), never a ref
+// the checkout names; "" excludes nothing. Commits reachable from base are
+// not walked, so a fast-forward onto the base counts nothing. Each run of
+// ordinary first-parent commits is one net diff; a two-parent merge whose
+// second parent is in base counts only its resolution (--remerge-diff).
 //
 // The checkout is the agent's, so nothing in it is trusted but its objects:
 // the diffs run in a scratch bare repository that borrows them
@@ -32,9 +32,8 @@ var accountingTimeout = 60 * time.Second
 // flags say the same again for a git that reads more than this.
 const accountingScript = `set -eu
 export GIT_NO_REPLACE_OBJECTS=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1
-repo=$1 start=$2 head=$3 base=$4
+repo=$1 start=$2 head=$3 b=$4
 gd=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
-b=$(git -C "$repo" rev-parse -q --verify "$base^{commit}" || true)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 git init -q --bare "$tmp/r"
@@ -44,6 +43,7 @@ g() { git --git-dir="$tmp/r" -c diff.external= -c core.attributesFile=/dev/null 
 d() { g "$@" --no-ext-diff --no-textconv --text -M --raw --numstat -z; }
 g cat-file -e "$start^{commit}"
 g cat-file -e "$head^{commit}"
+if [ -n "$b" ]; then g cat-file -e "$b^{commit}"; fi
 g merge-base --is-ancestor "$start" "$head"
 printf 'DUDE_ACCOUNTING\t%s\t%s\t%s\0' "$start" "$head" "$b"
 commits=$(g rev-list --first-parent --reverse --parents "$start..$head" ${b:+--not "$b"})
@@ -93,16 +93,16 @@ func accountingTransient(err error) bool {
 }
 
 // publicationAccounting reads the task's own change from the Run's
-// checkout. baseRef is the base as the checkout holds it. Anything short of
-// complete, readable evidence is an error; one that may pass is an
+// checkout. base is a commit trustedBase vouched for, "" for none. Anything
+// short of complete, readable evidence is an error; one that may pass is an
 // errAccountingTransient.
-func publicationAccounting(ctx context.Context, l lux.Client, runID, start, head, baseRef, repo string) (accounting, error) {
+func publicationAccounting(ctx context.Context, l lux.Client, runID, start, head, base, repo string) (accounting, error) {
 	if start == "" || head == "" {
 		return accounting{}, fmt.Errorf("publication accounting needs exact start and head")
 	}
 	ctx, cancel := context.WithTimeout(ctx, accountingTimeout)
 	defer cancel()
-	res, err := l.Exec(ctx, runID, []string{"sh", "-c", accountingScript, "account", "/workspace/repos/" + lux.SpecName(repo), start, head, baseRef})
+	res, err := l.Exec(ctx, runID, []string{"sh", "-c", accountingScript, "account", "/workspace/repos/" + lux.SpecName(repo), start, head, base})
 	if err != nil {
 		le, isLux := lux.AsError(err)
 		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || isLux && (le.Retryable() || le.Code == "not_running") {

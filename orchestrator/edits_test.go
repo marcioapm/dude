@@ -654,9 +654,43 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.current()
 		settled(t, e, "nothing to publish")
 	})
-	// The base is what sync_base fetched into the checkout as lux/main:
-	// only that is evidence of what came from the base.
-	syncBase := func(e *editing) { e.git("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/lux/main") }
+	// The base is what lux reported fetching (sync_base's git.sync), never
+	// a ref the checkout holds: only that is evidence of what came from it.
+	syncBase := func(e *editing) {
+		t.Helper()
+		refs := []lux.SyncRef{{Repo: "target", Ref: "main", Mode: lux.SyncFetch}}
+		if err := e.syncer.SyncBase(context.Background(), e.org, e.cond, e.luxRunOf(e.cond), "base-"+e.cond, refs); err != nil {
+			t.Fatal(err)
+		}
+		want := e.gh.SHA("main")
+		e.until("lux's fetch of main recorded", func() bool {
+			return e.count(`SELECT count(*) FROM runs WHERE id = $1 AND synced_bases->'target'->>'main' = $2`, e.cond, want) == 1
+		})
+	}
+	t.Run("a base ref the checkout forged hides nothing", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.commit(map[string]string{"MINE.md": strings.Repeat("mine\n", 61)})
+		e.git("update-ref", "refs/remotes/lux/main", "HEAD")
+		settled(t, e, "this is 61 lines in 1 files")
+	})
+	t.Run("a merge of a forged base commit hides nothing", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.gh.AdvanceBase("main", "Base moved")
+		syncBase(e)
+		mine := e.commit(map[string]string{"MINE.md": strings.Repeat("mine\n", 61)})
+		// A "base" that holds the agent's commit, merged in as if it were main.
+		e.git("switch", "-q", "--detach", "lux/main")
+		e.git("merge", "-q", "--no-edit", mine)
+		e.git("update-ref", "refs/remotes/lux/main", "HEAD")
+		e.git("switch", "-q", e.branch)
+		e.git("reset", "-q", "--hard", mine+"~1")
+		e.git("merge", "-q", "--no-edit", "--no-ff", "lux/main")
+		settled(t, e, "past the conductor's limit of 60 lines")
+	})
 	t.Run("a large clean base import is not the conductor's edit", func(t *testing.T) {
 		e := newEditing(t)
 		e.wokenWith(e.task, "after implement")
