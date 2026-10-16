@@ -143,6 +143,7 @@ def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     owner_dsn: str,
 ):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings", {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
     task = client.create_task(forge_project["id"], "Greet, gated")
     assert client.post(f"/v1/tasks/{task['id']}/talk").status_code == 201
