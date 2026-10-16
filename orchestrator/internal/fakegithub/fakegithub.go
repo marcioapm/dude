@@ -1075,8 +1075,8 @@ func page[T any](r *http.Request, all []T) []T {
 }
 
 // compareFileCap is the most files GitHub's compare lists
-// (forge.CompareFileCap).
-var compareFileCap = 300
+// (forge.CompareFileCap; forge's tests import this package).
+const compareFileCap = 300
 
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	base, head, ok := strings.Cut(r.PathValue("spec"), "...")

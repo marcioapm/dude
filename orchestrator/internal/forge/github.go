@@ -1230,24 +1230,6 @@ const CompareFileCap = 300
 // Truncated says the comparison may list fewer files than changed.
 func (c Comparison) Truncated() bool { return len(c.Files) >= CompareFileCap }
 
-// Lines is the comparison's changed lines: additions and deletions.
-func (c Comparison) Lines() int {
-	n := 0
-	for _, f := range c.Files {
-		n += f.Additions + f.Deletions
-	}
-	return n
-}
-
-// Paths are the comparison's changed files.
-func (c Comparison) Paths() []string {
-	out := make([]string, 0, len(c.Files))
-	for _, f := range c.Files {
-		out = append(out, f.Filename)
-	}
-	return out
-}
-
 // Compare compares head with base, two commits.
 func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparison, error) {
 	var cmp Comparison

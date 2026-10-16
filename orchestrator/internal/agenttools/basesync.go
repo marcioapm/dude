@@ -44,13 +44,11 @@ type SyncBaseFunc func(ctx context.Context, org, runID, luxRunID, requestID stri
 type syncBaseIn struct{}
 
 // baseAsk is what the call's transaction found: whose lux Run, where its
-// events stood, and each repository's base.
+// events stood, and each repository's base (Refs).
 type baseAsk struct {
 	LuxRunID string
 	After    int64
 	Refs     []lux.SyncRef
-	// Base by lux's name for the repository.
-	Bases map[string]string
 	// The repository's name as the task knows it, by lux's.
 	Names map[string]string
 }
@@ -100,7 +98,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 	if err != nil {
 		return ask, err
 	}
-	ask.Bases, ask.Names = map[string]string{}, map[string]string{}
+	ask.Names = map[string]string{}
 	for _, r := range repos {
 		name := lux.SpecName(r.Name)
 		if r.Access != "write" || !slices.Contains(held, name) {
@@ -111,7 +109,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 			base = b
 		}
 		ask.Refs = append(ask.Refs, lux.SyncRef{Repo: name, Ref: base, Mode: lux.SyncFetch})
-		ask.Bases[name], ask.Names[name] = base, r.Name
+		ask.Names[name] = r.Name
 	}
 	if len(ask.Refs) == 0 {
 		return ask, refuse("this Run holds no repository it may change: there is no base to bring in")
