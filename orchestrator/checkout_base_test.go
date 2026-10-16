@@ -19,19 +19,25 @@ import (
 
 const noBase = "lux never reported where the checkout started"
 
-// holdCheckouts holds every lux Run's stream before its git.checkout until
-// the returned release is called (also at cleanup). A held stream sends
-// nothing after it, so the turn's end is read first.
-func (w *world) holdCheckouts() (release func()) {
-	held := make(chan struct{})
-	release = sync.OnceFunc(func() { close(held) })
-	w.lux.BeforeEvent(func(_ string, _ int64, typ string) {
-		if typ == "git.checkout" {
-			<-held
+// holdCheckoutsWhere holds a lux Run's stream before each git.checkout
+// that held reports, until the returned release is called (also at
+// cleanup). A held stream sends nothing after it, so the turn's end is
+// read first.
+func (w *world) holdCheckoutsWhere(held func(runID string, eventID int64) bool) (release func()) {
+	released := make(chan struct{})
+	release = sync.OnceFunc(func() { close(released) })
+	w.lux.BeforeEvent(func(runID string, eventID int64, typ string) {
+		if typ == "git.checkout" && held(runID, eventID) {
+			<-released
 		}
 	})
 	w.t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
 	return release
+}
+
+// holdCheckouts holds every lux Run's stream before its git.checkout.
+func (w *world) holdCheckouts() (release func()) {
+	return w.holdCheckoutsWhere(func(string, int64) bool { return true })
 }
 
 // untilTurnReadUnbased delivers task and waits until dude has read its
@@ -170,29 +176,18 @@ func assertRefusedForNoBase(t *testing.T, w *world, runID string) {
 }
 
 // holdLaterCheckouts holds every lux Run's stream before any git.checkout
-// but the Run's first, until the returned release is called (also at
-// cleanup): one checkout's base is recorded, the next is not.
+// but the Run's first: one checkout's base is recorded, the next is not.
 func (w *world) holdLaterCheckouts() (release func()) {
-	held := make(chan struct{})
-	release = sync.OnceFunc(func() { close(held) })
 	var mu sync.Mutex
 	first := map[string]int64{}
-	w.lux.BeforeEvent(func(runID string, eventID int64, typ string) {
-		if typ != "git.checkout" {
-			return
-		}
+	return w.holdCheckoutsWhere(func(runID string, eventID int64) bool {
 		mu.Lock()
+		defer mu.Unlock()
 		if _, ok := first[runID]; !ok {
 			first[runID] = eventID
 		}
-		later := first[runID] != eventID
-		mu.Unlock()
-		if later {
-			<-held
-		}
+		return first[runID] != eventID
 	})
-	w.t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
-	return release
 }
 
 // (d) Two repositories to push, and only one's base arrives: the Run
