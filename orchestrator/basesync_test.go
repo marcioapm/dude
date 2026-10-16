@@ -7,21 +7,15 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -41,15 +35,78 @@ func (w *world) toolsWithSync() string {
 	return tools.URL
 }
 
-func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.task()
-	w.deliver(wi)
-	w.until("implemented", func() bool {
+// Counts of a task's integration Runs (fix Runs given an integration
+// brief), its escalations asked of people, and its integrations' closing
+// lines.
+const (
+	integrationRuns      = `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	escalations          = `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`
+	integrationCompleted = `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-completed'`
+)
+
+// tell sets the organisation's whenBehind to tell.
+func (w *world) tell() {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+}
+
+// conflictWithMovedBase moves main on GitHub and has pull request #1
+// conflict with it.
+func (w *world) conflictWithMovedBase() {
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+}
+
+// mergesCleanly has GitHub read pull request #1 as merging, its
+// mergeability worked out.
+func (w *world) mergesCleanly() {
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+}
+
+// syncRounds reads the pull requests and runs the workflow, n times.
+func (w *world) syncRounds(n int) {
+	for range n {
+		w.sync()
+		w.pump()
+	}
+}
+
+// untilImplemented waits for the task's implementer to complete.
+func (w *world) untilImplemented(wi string) {
+	w.t.Helper()
+	w.until("the implementer finished", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
 	})
-	w.gh.AdvanceBase("main", "Base moved")
+}
+
+// prOf is the task's pull request's id.
+func (w *world) prOf(wi string) string {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&id); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
+// escalationOf is the delivery's escalation, raw and decoded.
+func (w *world) escalationOf(wi string) ([]byte, delivery.Escalation) {
+	w.t.Helper()
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
+		w.t.Fatal(err)
+	}
+	var e delivery.Escalation
+	if err := json.Unmarshal(raw, &e); err != nil {
+		w.t.Fatal(err)
+	}
+	return raw, e
+}
+
+// mergeBaseConflictsAndItsIntegrationFails has GitHub refuse every merge of
+// the base before the pull request (409) and the integration Run crash;
+// every other Run finds nothing.
+func (w *world) mergeBaseConflictsAndItsIntegrationFails() {
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
 			if strings.HasSuffix(r.URL.Path, "/merges") {
@@ -65,6 +122,29 @@ func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
 		}
 		return fakelux.Behaviour{Reply: "No findings."}
 	}
+}
+
+// implementerAtWork delivers a task whose implementer never finishes, and
+// waits until lux runs it.
+func (w *world) implementerAtWork() string {
+	w.t.Helper()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
+	})
+	return wi
+}
+
+func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.task()
+	w.deliver(wi)
+	w.untilImplemented(wi)
+	w.gh.AdvanceBase("main", "Base moved")
+	w.mergeBaseConflictsAndItsIntegrationFails()
 	w.until("failed integration", func() bool { return w.escalationReason(wi) == "pull_request_conflict" })
 	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
 	w.lux.Decide = nil
@@ -74,26 +154,24 @@ func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
 	merged := gitOut(t, w.gh.Repo, "-c", "user.name=Ana", "-c", "user.email=ana@example.com",
 		"commit-tree", tree, "-p", branch, "-p", "main", "-m", "Merge main")
 	gitOut(t, w.gh.Repo, "update-ref", "refs/heads/"+branch, merged)
-	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
 		t.Fatal(code, body)
 	}
 	w.until("PR after human wait", func() bool { return len(w.gh.Pulls()) == 1 })
 	if head := w.gh.SHA(branch); head != merged {
 		t.Fatalf("the pull request's branch is at %s, want the person's merge %s", head, merged)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d after the person's wait", n)
 	}
 }
 
 func TestBeforePRTellDoesNotMergeBase(t *testing.T) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+	w.tell()
 	wi := w.task()
 	w.deliver(wi)
-	w.until("implemented", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
+	w.untilImplemented(wi)
 	base := w.gh.AdvanceBase("main", "Other work")
 	w.until("PR", func() bool { return len(w.gh.Pulls()) == 1 })
 	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", w.gh.Pull(1).Head+".."+base); got != "1" {
@@ -104,29 +182,14 @@ func TestBeforePRTellDoesNotMergeBase(t *testing.T) {
 func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
-	seed := t.TempDir()
-	gitOut(t, seed, "clone", "-q", w.gh.Repo, "work")
-	work := filepath.Join(seed, "work")
-	if err := os.WriteFile(filepath.Join(work, "FACTORY.md"), []byte("original\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	gitOut(t, work, "add", ".")
-	gitOut(t, work, "-c", "user.name=Acme", "-c", "user.email=a@example.com", "commit", "-qm", "Seed")
-	gitOut(t, work, "push", "-q", "origin", "main")
+	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "original\n", "Seed")
 	wi := w.task()
 	p := scriptedPolicy()
 	p.Test = true
 	w.names(wi, w.repoID)
 	w.start(wi, p)
-	w.until("implementer finished", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
-	if err := os.WriteFile(filepath.Join(work, "FACTORY.md"), []byte("base intent\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	gitOut(t, work, "add", ".")
-	gitOut(t, work, "-c", "user.name=Acme", "-c", "user.email=a@example.com", "commit", "-qm", "Base change")
-	gitOut(t, work, "push", "-q", "origin", "main")
+	w.untilImplemented(wi)
+	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "base intent\n", "Base change")
 	w.until("integrated PR", func() bool {
 		if r := w.escalationReason(wi); r != "" {
 			var s string
@@ -156,9 +219,7 @@ func TestBeforePRMergesMovedBaseAndAdoptsHead(t *testing.T) {
 	policy := scriptedPolicy()
 	policy.Test = true
 	w.start(wi, policy)
-	w.until("implementer finished", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
+	w.untilImplemented(wi)
 	base := w.gh.AdvanceBase("main", "Other work")
 	w.until("pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	branch := w.gh.Pull(1).Head
@@ -189,19 +250,15 @@ func TestIntegrationWaitsForAnExistingWriter(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
-	w.gh.AdvanceBase("main", "Moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	for range 5 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 0 {
+	w.conflictWithMovedBase()
+	w.syncRounds(5)
+	if n := w.count(integrationRuns, wi); n != 0 {
 		t.Fatalf("integration raced writer: %d", n)
 	}
 	mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
 	w.until("integration after writer", func() bool {
 		w.sync()
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 1
+		return w.count(integrationRuns, wi) == 1
 	})
 }
 
@@ -215,7 +272,7 @@ func TestIntegrationRejectsAStaleConflictAndKeepsFeedback(t *testing.T) {
 	w.until("stale signal consumed", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id=(SELECT id FROM workflow_runs WHERE task_id=$1) AND consumed_at IS NULL`, wi) == 0
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 0 {
+	if n := w.count(integrationRuns, wi); n != 0 {
 		t.Fatalf("stale conflict ran %d integrations", n)
 	}
 	if w.escalationReason(wi) != "" {
@@ -227,14 +284,10 @@ func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
 	wi := w.reviewing()
-	w.gh.AdvanceBase("main", "Moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	w.until("integration exhausted", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	for range 5 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
+	w.syncRounds(5)
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration runs %d", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND pr_feedback::text LIKE '%remerge-diff%'`, wi); n != 1 {
@@ -258,9 +311,7 @@ func TestBaseMovedNoticeReachesOtherConductorsOnce(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE tasks SET status='done' WHERE id=$1`, done)
 	w.gh.Merge(1)
 	w.until("merge recorded", func() bool {
-		var id string
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, merging).Scan(&id)
-		if err := w.prs.Sync(context.Background(), w.org, id); err != nil {
+		if err := w.prs.Sync(context.Background(), w.org, w.prOf(merging)); err != nil {
 			t.Fatal(err)
 		}
 		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND state='merged'`, merging) == 1
@@ -286,8 +337,7 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	before := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi)
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	w.gh.Comment(1, "alice", "Please preserve this feedback too.")
 	w.until("integration fixer", func() bool {
 		w.sync()
@@ -318,20 +368,12 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 			w.toolsWithSync()
 			wi := w.reviewing()
 			if tell {
-				mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+				w.tell()
 			}
 			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
-			w.gh.AdvanceBase("main", "Base moved")
-			w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+			w.conflictWithMovedBase()
 			w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-			var raw []byte
-			if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
-				t.Fatal(err)
-			}
-			var e delivery.Escalation
-			if err := json.Unmarshal(raw, &e); err != nil {
-				t.Fatal(err)
-			}
+			_, e := w.escalationOf(wi)
 			want := "retry wait stop"
 			if tell {
 				want = "wait stop"
@@ -339,21 +381,18 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 			if strings.Join(e.Actions(), " ") != want {
 				t.Fatalf("actions %v, want %s", e.Actions(), want)
 			}
-			attempts := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi)
+			attempts := w.count(integrationRuns, wi)
 			if tell && attempts != 0 || !tell && attempts != 1 {
 				t.Fatalf("attempts %d", attempts)
 			}
-			for range 3 {
-				w.sync()
-				w.pump()
-			}
+			w.syncRounds(3)
 			if !tell {
-				if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "retry"}); code != 200 {
+				if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
 					t.Fatal(code, body)
 				}
 				w.until("one explicit retry", func() bool {
 					w.sync()
-					return w.escalationReason(wi) == "pull_request_conflict" && w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 2
+					return w.escalationReason(wi) == "pull_request_conflict" && w.count(integrationRuns, wi) == 2
 				})
 			}
 		})
@@ -366,24 +405,21 @@ func TestResolveConflictsIsAPersonsExplicitIntegration(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
 	wi := w.reviewing()
-	mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
-	var prID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
+	w.tell()
+	prID := w.prOf(wi)
 	me := w.person("owner")
 	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
 		t.Fatalf("resolve on a clean pull request: %d %v", code, body)
 	}
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	if n := w.count(integrations, wi); n != 0 {
+	if n := w.count(integrationRuns, wi); n != 0 {
 		t.Fatalf("tell integrated by itself: %d", n)
 	}
 	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
 		t.Fatalf("resolve: %d %v", code, body)
 	}
-	w.until("integration started", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	w.until("integration started", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action'
 		AND payload->>'action'='integration-started' AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
 		t.Fatalf("integration-started events %d", n)
@@ -410,21 +446,19 @@ func TestAnIntegrationReplayedAfterARestartKeepsItsRun(t *testing.T) {
 		})
 	})
 	wi := w.reviewing()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	armed.Store(true)
 	w.until("the integration Run", func() bool {
 		w.sync()
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step <> 'awaitPullRequest' AND step <> 'prFix'`, wi) == 1 &&
-			w.count(integrations, wi) >= 1
+			w.count(integrationRuns, wi) >= 1
 	})
 	var lost bool
 	once.Do(func() { lost = true })
 	if lost {
 		t.Fatal("the step never reached its commit after creating the Run")
 	}
-	if n := w.count(integrations, wi); n != 1 {
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs after a replay: %d", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-started'`, wi); n != 1 {
@@ -437,7 +471,7 @@ func TestAnIntegrationReplayedAfterARestartKeepsItsRun(t *testing.T) {
 	})
 	w.gh.AdvanceBase("main", "Base moved again")
 	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	w.until("a second pair's Run", func() bool { w.sync(); return w.count(integrations, wi) == 2 })
+	w.until("a second pair's Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
 	if r := w.escalationReason(wi); r != "" {
 		t.Fatalf("a new pair escalated: %s", r)
 	}
@@ -475,13 +509,12 @@ func (w *world) twoConflictingPullRequests() string {
 func TestTwoConflictingPullRequestsAreIntegratedInTurn(t *testing.T) {
 	w := newWorld(t)
 	wi := w.twoConflictingPullRequests()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
 	w.until("both integrated and waiting", func() bool {
 		w.sync()
 		if r := w.escalationReason(wi); r != "" {
 			t.Fatalf("escalated: %s", r)
 		}
-		return w.count(integrations, wi) == 2 &&
+		return w.count(integrationRuns, wi) == 2 &&
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
 				AND COALESCE(jsonb_array_length(state->'pendingConflicts'), 0) = 0`, wi) == 1
 	})
@@ -489,7 +522,7 @@ func TestTwoConflictingPullRequestsAreIntegratedInTurn(t *testing.T) {
 		name string
 		gh   *fakegithub.Server
 	}{{"target", w.gh}, {"web", w.web}} {
-		if n := w.count(integrations+` AND pr_feedback::text LIKE '%in `+repo.name+`.%'`, wi); n != 1 {
+		if n := w.count(integrationRuns+` AND pr_feedback::text LIKE '%in `+repo.name+`.%'`, wi); n != 1 {
 			t.Errorf("%s integration Runs %d", repo.name, n)
 		}
 		branch := repo.gh.Pull(1).Head
@@ -508,10 +541,9 @@ func TestTwoConflictingPullRequestsAreIntegratedInTurn(t *testing.T) {
 func TestAQueuedConflictOnAMergedSiblingIsSkipped(t *testing.T) {
 	w := newWorld(t)
 	wi := w.twoConflictingPullRequests()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.until("the first integration Run", func() bool { return w.count(integrations, wi) == 1 })
+	w.until("the first integration Run", func() bool { return w.count(integrationRuns, wi) == 1 })
 	sibling := w.web
-	if w.count(integrations+` AND pr_feedback::text LIKE '%in web.%'`, wi) == 1 {
+	if w.count(integrationRuns+` AND pr_feedback::text LIKE '%in web.%'`, wi) == 1 {
 		sibling = w.gh
 	}
 	sibling.Merge(1)
@@ -525,11 +557,8 @@ func TestAQueuedConflictOnAMergedSiblingIsSkipped(t *testing.T) {
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
 				AND COALESCE(jsonb_array_length(state->'pendingConflicts'), 0) = 0`, wi) == 1
 	})
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(integrations, wi); n != 1 {
+	w.syncRounds(3)
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d, want only the open pull request's", n)
 	}
 	if n := len(w.gh.Pulls()) + len(w.web.Pulls()); n != 2 {
@@ -554,8 +583,7 @@ func TestAConductorPublishWaitsForALiveIntegration(t *testing.T) {
 		}
 		return scripted(spec)
 	}
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	integrating := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'
 		AND status IN ('pending','scheduled','starting','running')`
 	w.until("a live integration Run", func() bool { w.sync(); return w.count(integrating, task) == 1 })
@@ -576,9 +604,7 @@ func TestALostCleanMergeIsAdoptedAndTestedAgain(t *testing.T) {
 	policy := scriptedPolicy()
 	policy.Test = true
 	w.start(wi, policy)
-	w.until("implementer finished", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
+	w.untilImplemented(wi)
 	branch := delivery.BranchFor(wi, 1)
 	var merges atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -628,10 +654,8 @@ func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T
 	w := newWorld(t)
 	w.toolsWithSync()
 	wi := w.reviewing()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	w.conflictWithMovedBase()
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
 	w.until("validation waiting on GitHub", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest' AND state->'integration' IS NOT NULL`, wi) == 1
@@ -644,18 +668,11 @@ func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T
 	}
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
 	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	var raw []byte
-	if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var e delivery.Escalation
-	if err := json.Unmarshal(raw, &e); err != nil {
-		t.Fatal(err)
-	}
+	raw, e := w.escalationOf(wi)
 	if strings.Join(e.Actions(), " ") != "retry wait stop" || !strings.Contains(string(raw), `"cause": "still_conflicting"`) {
 		t.Fatalf("escalation %s, actions %v", raw, e.Actions())
 	}
-	if n := w.count(integrations, wi); n != 1 {
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-refused'`, wi); n != 1 {
@@ -670,12 +687,7 @@ func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 		SyncBase: w.syncer.SyncBase, SyncBaseWait: time.Millisecond}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the implementer working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
+	w.implementerAtWork()
 	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "sync_base", `{}`)
 	if status != 200 || !strings.Contains(body, `"status":"asked"`) || !strings.Contains(body, "HEAD..lux/main") {
 		t.Fatalf("pending fetch: %d %s", status, body)
@@ -698,12 +710,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 	w := newWorld(t)
 	tools := w.toolsWithSync()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the implementer working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
+	w.implementerAtWork()
 	run := w.lux.Runs()[0]
 	work, err := w.lux.Checkout(run.ID, "target")
 	if err != nil {
@@ -751,12 +758,7 @@ func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 func TestSyncBaseIsTheWritersOnly(t *testing.T) {
 	w := newWorld(t)
 	tools := w.toolsWithSync()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the implementer working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
+	wi := w.implementerAtWork()
 	spec := string(w.lux.Runs()[0].Spec)
 	for _, role := range []string{"reviewer", "qa_browser", "investigator"} {
 		mustExec(t, w.owner, `UPDATE runs SET role = $2::agent_role WHERE task_id = $1`, wi, role)
@@ -778,12 +780,7 @@ func TestSyncBaseOnALuxWithoutSyncModesIsRefused(t *testing.T) {
 	w := newWorld(t)
 	w.lux.NoSyncModes = true
 	tools := w.toolsWithSync()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the implementer working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi) == 1
-	})
+	w.implementerAtWork()
 	run := w.lux.Runs()[0]
 	status, body := w.callTool(tools, string(run.Spec), "sync_base", `{}`)
 	if status != 422 || !strings.Contains(body, "this lux has no sync modes") {
@@ -893,11 +890,9 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"prIteration": 3, "prFixesByRepo": {"target": 99}, "prFixKey": 3}'::jsonb
 		WHERE task_id = $1`, wi)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.conflictWithMovedBase()
 	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	if n := w.count(integrations, wi); n != 1 {
+	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d: the spent budget stopped it", n)
 	}
 	budget := `SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND (state->>'prIteration')::int = 3
@@ -905,365 +900,15 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 	if w.count(budget, wi) != 1 {
 		t.Fatal("the integration was charged to the person's fix budget")
 	}
-	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "retry"}); code != 200 {
+	if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
 		t.Fatal(code, body)
 	}
 	w.until("the retried integration", func() bool {
 		w.sync()
-		return w.count(integrations, wi) == 2 && w.escalationReason(wi) == "pull_request_conflict"
+		return w.count(integrationRuns, wi) == 2 && w.escalationReason(wi) == "pull_request_conflict"
 	})
 	if w.count(budget, wi) != 1 {
 		t.Fatal("the retry changed the person's fix budget")
-	}
-}
-
-// handedOver is an integration whose merge published while GitHub had not
-// worked out mergeability, past the step's reads: left to the pull request
-// syncer. Under tell it is a person's Resolve conflicts.
-func (w *world) handedOver(tell bool) string {
-	return w.handedOverWith(tell, func() {})
-}
-
-// handedOverWith is handedOver, calling arm just before the step's last
-// read of GitHub.
-func (w *world) handedOverWith(tell bool, arm func()) string {
-	w.t.Helper()
-	w.toolsWithSync()
-	wi := w.reviewing()
-	if tell {
-		mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
-	}
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	if tell {
-		w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-		var prID string
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
-		if code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
-			w.t.Fatalf("resolve: %d %v", code, body)
-		}
-	}
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
-	asked := w.count(escalations, wi)
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
-	w.until("validation reading GitHub", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
-			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
-	})
-	arm()
-	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
-	w.until("left to the syncer", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
-			AND state->'integration' IS NULL`, wi) == 1
-	})
-	if n := w.count(escalations, wi); n != asked {
-		w.t.Fatalf("escalated while GitHub had not said: %d escalations, %d before", n, asked)
-	}
-	return wi
-}
-
-// escalations counts a task's escalations asked of people.
-const escalations = `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`
-
-// A conflict the syncer reads after the hand-over is dude's attempt still
-// conflicting, under either setting: the escalation names it, with retry.
-func TestAHandedOverIntegrationStillConflictingNamesDudesAttempt(t *testing.T) {
-	for _, tell := range []bool{false, true} {
-		t.Run(map[bool]string{false: "update", true: "tell"}[tell], func(t *testing.T) {
-			w := newWorld(t)
-			wi := w.handedOver(tell)
-			w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
-			before := w.count(escalations, wi)
-			w.until("the escalation", func() bool { w.sync(); return w.count(escalations, wi) == before+1 })
-			var raw []byte
-			if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
-				t.Fatal(err)
-			}
-			var e delivery.Escalation
-			if err := json.Unmarshal(raw, &e); err != nil {
-				t.Fatal(err)
-			}
-			var d struct {
-				Cause       string `json:"cause"`
-				RunID       string `json:"runId"`
-				Integration bool   `json:"integration"`
-			}
-			var detail struct {
-				Detail json.RawMessage `json:"detail"`
-			}
-			_ = json.Unmarshal(raw, &detail)
-			_ = json.Unmarshal(detail.Detail, &d)
-			run := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id=$2 AND pr_feedback::text LIKE '%Base integration%'`, wi, d.RunID)
-			if strings.Join(e.Actions(), " ") != "retry wait stop" || d.Cause != "still_conflicting" || !d.Integration || run != 1 {
-				t.Fatalf("escalation %s, actions %v", raw, e.Actions())
-			}
-		})
-	}
-}
-
-// GitHub's first reading after the hand-over says the pull request merges:
-// the integration's activity gets its closing line.
-func TestAHandedOverIntegrationThatMergesIsCompleted(t *testing.T) {
-	w := newWorld(t)
-	wi := w.handedOver(false)
-	completed := `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-completed'`
-	if n := w.count(completed, wi); n != 0 {
-		t.Fatalf("%d completions before GitHub said", n)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
-	w.until("the closing line", func() bool { w.sync(); return w.count(completed, wi) == 1 })
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(completed+` AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
-		t.Fatalf("completions %d", n)
-	}
-	if r := w.escalationReason(wi); r != "" {
-		t.Fatalf("escalated: %s", r)
-	}
-}
-
-const integrationCompleted = `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-completed'`
-
-// The syncer reads the pull request merging in the window between the
-// step forgetting GitHub's reading and its hand-over being recorded: it
-// finds nothing handed over then, and every reading after is clean on
-// clean. The workflow's next pass writes the closing line.
-func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
-	w := newWorld(t)
-	var once sync.Once
-	armed := w.gated(func(step, next string) {
-		if step == "openPullRequest" && next == "awaitPullRequest" {
-			once.Do(func() {
-				w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
-				w.sync()
-			})
-		}
-	})
-	wi := w.handedOverWith(false, func() { armed.Store(true) })
-	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(integrationCompleted, wi); n != 1 {
-		t.Fatalf("completions %d", n)
-	}
-}
-
-// HandOverMergedTx runs while the step that records the hand-over is still
-// committing: it waits on the step's row lock on the delivery, then sees the
-// hand-over and writes the closing line.
-func TestAHandOverBeingCommittedIsSeenUnderTheDeliveryLock(t *testing.T) {
-	w := newWorld(t)
-	wi := w.handedOver(false)
-	var key string
-	var handedOver []byte
-	if err := w.owner.QueryRow(context.Background(), `SELECT k, state->'handedOver' FROM workflow_runs,
-		jsonb_object_keys(state->'handedOver') k WHERE task_id = $1`, wi).Scan(&key, &handedOver); err != nil {
-		t.Fatal(err)
-	}
-	repo, rest, _ := strings.Cut(key, ":")
-	head, _, _ := strings.Cut(rest, ":")
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'handedOver' WHERE task_id = $1`, wi)
-
-	ctx := context.Background()
-	step, err := w.owner.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer step.Rollback(ctx)
-	if _, err := step.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{handedOver}', $2) WHERE task_id = $1`,
-		wi, handedOver); err != nil {
-		t.Fatal(err)
-	}
-	read := make(chan error, 1)
-	go func() {
-		read <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-			return delivery.HandOverMergedTx(ctx, tx, w.org, wi, repo, head)
-		})
-	}()
-	select {
-	case err := <-read:
-		t.Fatalf("HandOverMergedTx read the delivery while its step was committing (err %v)", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	if err := step.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-read; err != nil {
-		t.Fatal(err)
-	}
-	if n := w.count(integrationCompleted, wi); n != 1 {
-		t.Fatalf("completions %d, want 1", n)
-	}
-}
-
-// A conductor publish recording holds the delivery's row (LockRecordingTx)
-// and then updates the pull request; the syncer's first clean reading after
-// a hand-over updates the pull request and then reads the delivery locked.
-// Interleaved, neither waits on the other in a cycle: no 40P01, and the
-// closing line is written once.
-func TestTheSyncerHandOverDoesNotDeadlockAPublishRecording(t *testing.T) {
-	w := newWorld(t)
-	wi := w.handedOver(false)
-	ctx := context.Background()
-	var prID string
-	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
-		t.Fatal(err)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
-	// The syncer's hand-over read, queued behind the publish's row lock.
-	waiting := `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`
-
-	var publishPID int
-	publishHasW := make(chan struct{})
-	syncerWaits := make(chan struct{})
-	syncerErr, publishErr := make(chan error, 1), make(chan error, 1)
-	go func() {
-		publishErr <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&publishPID); err != nil {
-				return err
-			}
-			// edits.go stepHolds FOR UPDATE on the same workflow_runs row.
-			if _, err := delivery.LoadDelivery(ctx, tx, wi); err != nil {
-				return err
-			}
-			close(publishHasW)
-			<-syncerWaits
-			// publish.go recordPublish shape.
-			_, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = 'abc', updated_at = now()
-				WHERE task_id = $1 AND state IN ('open', 'draft')`, wi)
-			return err
-		})
-	}()
-	<-publishHasW
-	go func() { syncerErr <- w.prs.Sync(ctx, w.org, prID) }()
-	deadline := time.Now().Add(20 * time.Second)
-	for w.count(waiting, publishPID) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the syncer never waited on the delivery's row")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	close(syncerWaits)
-	for name, ch := range map[string]chan error{"syncer": syncerErr, "publish": publishErr} {
-		select {
-		case err := <-ch:
-			var pe *pgconn.PgError
-			if errors.As(err, &pe) {
-				t.Errorf("%s: PGERR %s %s", name, pe.Code, pe.Message)
-			} else if err != nil {
-				t.Errorf("%s: %v", name, err)
-			}
-		case <-time.After(20 * time.Second):
-			t.Fatalf("%s hung", name)
-		}
-	}
-	if n := w.count(integrationCompleted, wi); n != 1 {
-		t.Fatalf("completions %d, want the syncer's 1", n)
-	}
-}
-
-// A person pushes a new head after the hand-over, and that head merges:
-// dude's integration is not what made it merge, so no closing line.
-func TestAHandedOverIntegrationOvertakenByAPersonIsNotCompleted(t *testing.T) {
-	w := newWorld(t)
-	wi := w.handedOver(false)
-	w.commitFileIn(w.gh.Repo, delivery.BranchFor(wi, 1), "THEIRS.md", "theirs\n", "A person's fix")
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
-	w.until("the new head read as merging", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND head_sha=$2 AND mergeable_state='clean'`,
-			wi, w.gh.SHA(delivery.BranchFor(wi, 1))) == 1
-	})
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(integrationCompleted, wi); n != 0 {
-		t.Fatalf("%d completions for a head dude did not integrate", n)
-	}
-}
-
-// Under tell, a person's Resolve conflicts integrated once. The base moves
-// into a conflict again: that is a person's to resolve, escalated, and no
-// integration starts by itself.
-func TestUnderTellAnIntegrationOnceAskedIsNotRepeatedUnasked(t *testing.T) {
-	w := newWorld(t)
-	wi := w.handedOver(true)
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
-	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
-	before := w.count(escalations, wi)
-	w.gh.AdvanceBase("main", "Base moved again")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	w.until("the conflict escalation", func() bool {
-		w.sync()
-		return w.count(escalations, wi) == before+1 && w.escalationReason(wi) == "pull_request_conflict"
-	})
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
-		t.Fatalf("%d integration Runs, want the one asked for", n)
-	}
-}
-
-// While GitHub has not worked out whether the integrated pull request
-// merges, the step reads GET /pulls/{n} and nothing else, backing off
-// (1 s, 2 s, 4 s…). Past its bound it waits on the pull request syncer: a
-// conflict that syncer reads then escalates the attempted pair.
-func TestUnknownMergeabilityIsReadCheaplyWithBackOffThenLeftToTheSyncer(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.reviewing()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
-	var other atomic.Int32
-	var counting atomic.Bool
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.MergeableUnknown[1] = true
-		s.Intercept = func(r *http.Request) int {
-			if counting.Load() && !(r.Method == "GET" && r.URL.Path == "/repos/acme/target/pulls/1") {
-				other.Add(1)
-			}
-			return 0
-		}
-	})
-	polls := func(n int) string {
-		return fmt.Sprintf(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
-			AND (state->'integration'->>'polls')::int = %d`, n)
-	}
-	w.until("the first read", func() bool { return w.count(polls(1), wi) == 1 })
-	counting.Store(true)
-	w.until("the second read", func() bool { return w.count(polls(2), wi) == 1 })
-	if n := w.count(polls(2)+` AND wake_at > now() + interval '1500 milliseconds'`, wi); n != 1 {
-		t.Fatal("the second wait did not double")
-	}
-	counting.Store(false)
-	if n := other.Load(); n != 0 {
-		t.Fatalf("%d GitHub requests besides GET /pulls/1 while mergeability was unknown", n)
-	}
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
-	w.until("waiting on the pull request", func() bool {
-		// The push's webhook: the syncer reads mergeability as unknown.
-		w.sync()
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
-			AND state->'integration' IS NULL`, wi) == 1
-	})
-	if r := w.escalationReason(wi); r != "" {
-		t.Fatalf("escalated while GitHub had not said: %s", r)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
-	w.until("the attempted pair's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	if n := w.count(integrations, wi); n != 1 {
-		t.Fatalf("integration Runs %d", n)
 	}
 }
 
@@ -1296,8 +941,7 @@ func TestStartingAnIntegrationReadsThePullRequestOnce(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	w.sync()
 	var reads, other atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -1313,7 +957,7 @@ func TestStartingAnIntegrationReadsThePullRequestOnce(t *testing.T) {
 		}
 	})
 	w.until("the integration Run", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 1
+		return w.count(integrationRuns, wi) == 1
 	})
 	// One read to decide (prepareIntegration), one for where the fix starts
 	// (prFix's fromPullRequestHeads, as every PR fix does).
@@ -1334,9 +978,7 @@ func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
 		cond := w.talk(other)
 		merged := func() {
 			w.gh.Merge(1)
-			var id string
-			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, merging).Scan(&id)
-			if err := w.prs.Sync(context.Background(), w.org, id); err != nil {
+			if err := w.prs.Sync(context.Background(), w.org, w.prOf(merging)); err != nil {
 				t.Fatal(err)
 			}
 			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND key LIKE 'base-moved:%'`, other); n != 1 {

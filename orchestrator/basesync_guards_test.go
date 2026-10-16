@@ -21,8 +21,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-const integrationRuns = `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-
 // integrationPaths is what the task's integration Run published as its
 // changed paths in target, once it has.
 func (w *world) integrationPaths(wi string) string {
@@ -79,33 +77,23 @@ func TestAPersonsWaitOnAFailedIntegrationNeverLoopsOnItsPair(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.conflictWithMovedBase()
 	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
 	before := w.count(escalations, wi)
-	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
 		t.Fatal(code, body)
 	}
-	w.until("waiting on the pull request", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'`, wi) == 1
-	})
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
 	// GitHub's reading of the same heads is news again (dude read it as
 	// unknown in between, as after a push), still conflicting.
 	mustExec(t, w.owner, `UPDATE pull_requests SET mergeable_state='unknown', updated_at=now() WHERE task_id=$1`, wi)
 	w.until("the pair's escalation", func() bool { w.sync(); return w.count(escalations, wi) == before+1 })
-	if raw := w.escalationJSON(wi); !strings.Contains(raw, `"cause": "pair_attempted"`) {
+	if raw, _ := w.escalationOf(wi); !strings.Contains(string(raw), `"cause": "pair_attempted"`) {
 		t.Fatalf("escalation %s", raw)
 	}
 	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d", n)
 	}
-}
-
-func (w *world) escalationJSON(wi string) string {
-	w.t.Helper()
-	var raw string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'escalation', 'null')::text FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw)
-	return raw
 }
 
 // Before the pull request: GitHub's merge conflicts, the integration Run
@@ -116,32 +104,16 @@ func TestBeforePRAPersonsWaitNeverLoopsOnItsPair(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.task()
 	w.deliver(wi)
-	w.until("implemented", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
+	w.untilImplemented(wi)
 	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.Intercept = func(r *http.Request) int {
-			if strings.HasSuffix(r.URL.Path, "/merges") {
-				return 409
-			}
-			return 0
-		}
-	})
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		if labels["dude.integration"] == "true" {
-			return fakelux.Behaviour{Crash: true}
-		}
-		return fakelux.Behaviour{Reply: "No findings."}
-	}
+	w.mergeBaseConflictsAndItsIntegrationFails()
 	w.until("failed integration", func() bool { return w.escalationReason(wi) == "pull_request_conflict" })
 	before := w.count(escalations, wi)
-	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
 		t.Fatal(code, body)
 	}
 	w.until("the pair's escalation", func() bool { return w.count(escalations, wi) == before+1 })
-	if raw := w.escalationJSON(wi); !strings.Contains(raw, `"cause": "pair_attempted"`) {
+	if raw, _ := w.escalationOf(wi); !strings.Contains(string(raw), `"cause": "pair_attempted"`) {
 		t.Fatalf("escalation %s", raw)
 	}
 	if n := w.count(integrationRuns, wi); n != 1 {
@@ -159,9 +131,7 @@ func TestBeforePRNoMergeWhileAWriterIsAtWork(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.task()
 	w.deliver(wi)
-	w.until("implemented", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='implement' AND status='completed'`, wi) == 1
-	})
+	w.untilImplemented(wi)
 	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role)
 		VALUES('run_writer_beforepr',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
 	var merges atomic.Int32
@@ -214,11 +184,9 @@ func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
 		w := newWorld(t)
 		w.toolsWithSync()
 		wi := w.reviewing()
-		mustExec(t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+		w.tell()
 		mustExec(t, w.owner, `UPDATE pull_requests SET mergeable_state='conflicting' WHERE task_id=$1`, wi)
-		var prID string
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
-		return w, wi, prID
+		return w, wi, w.prOf(wi)
 	}
 	resolve := func(w *world, actor, prID string) (int, string) {
 		code, body := w.callAs(actor, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
@@ -280,12 +248,9 @@ func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
 		w.toolsWithSync()
 		wi := w.reviewing()
 		w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
-		w.gh.AdvanceBase("main", "Base moved")
-		w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+		w.conflictWithMovedBase()
 		w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-		var prID string
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
-		if code, msg := resolve(w, w.person("owner"), prID); code != 200 {
+		if code, msg := resolve(w, w.person("owner"), w.prOf(wi)); code != 200 {
 			t.Fatalf("resolve: %d %s", code, msg)
 		}
 		w.until("a second integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
@@ -312,8 +277,7 @@ func TestBaseMovedNoticeFiltersAndDedupes(t *testing.T) {
 		mustExec(t, w.owner, `INSERT INTO runs(id, organization_id, project_id, task_id, attempt, status, role, kind)
 			VALUES($1,$2,$3,$4,1,'paused','conductor','agent')`, "run_c_"+id, w.org, w.project, id)
 	}
-	var prID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, merging).Scan(&prID)
+	prID := w.prOf(merging)
 	w.gh.Merge(1)
 	w.until("merge recorded", func() bool {
 		if err := w.prs.Sync(context.Background(), w.org, prID); err != nil {

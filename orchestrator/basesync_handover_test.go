@@ -6,12 +6,18 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -77,10 +83,7 @@ func TestAHandOverClosedByTheWorkflowAndASyncerAtOnceIsWrittenOnce(t *testing.T)
 	w := newWorld(t)
 	wi := w.handedOver(false)
 	ctx := context.Background()
-	var prID string
-	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
-		t.Fatal(err)
-	}
+	prID := w.prOf(wi)
 	finished := make(chan struct{})
 	w.interleaveHandOvers(t, finished)
 	read := make(chan struct{})
@@ -90,7 +93,7 @@ func TestAHandOverClosedByTheWorkflowAndASyncerAtOnceIsWrittenOnce(t *testing.T)
 		once.Do(func() { close(read) })
 		return handingOver(ctx)
 	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	w.mergesCleanly()
 	done := make(chan error, 1)
 	go func() { err := w.prs.Sync(ctx, w.org, prID); close(finished); done <- err }()
 	select {
@@ -128,10 +131,7 @@ func TestAHandOverWhoseTransactionFailsIsCompletedByTheNextSync(t *testing.T) {
 	w := newWorld(t)
 	wi := w.handedOver(false)
 	ctx := context.Background()
-	var prID string
-	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
-		t.Fatal(err)
-	}
+	prID := w.prOf(wi)
 	injected := errors.New("hand-over transaction failed")
 	failed := false
 	w.prs.HandingOver = func(context.Context) error {
@@ -141,14 +141,11 @@ func TestAHandOverWhoseTransactionFailsIsCompletedByTheNextSync(t *testing.T) {
 		failed = true
 		return injected
 	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	w.mergesCleanly()
 	if err := w.prs.Sync(ctx, w.org, prID); !errors.Is(err, injected) {
 		t.Fatalf("first sync: %v, want the injected failure", err)
 	}
-	for range 5 {
-		w.sync()
-		w.pump()
-	}
+	w.syncRounds(5)
 	if n := w.count(integrationCompleted, wi); n != 1 {
 		t.Errorf("completions %d, want 1", n)
 	}
@@ -187,7 +184,7 @@ func TestAHandOverRecordedBetweenTheSyncersTransactionsIsCompleted(t *testing.T)
 		if err := holder.QueryRow(ctx, `SELECT pg_backend_pid() FROM pull_requests WHERE id = $1 FOR UPDATE`, prID).Scan(&pid); err != nil {
 			t.Fatal(err)
 		}
-		w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+		w.mergesCleanly()
 		done := make(chan error, 1)
 		go func() { done <- w.prs.Sync(ctx, w.org, prID) }()
 		deadline := time.Now().Add(20 * time.Second)
@@ -216,10 +213,7 @@ func TestAHandOverRecordedBetweenTheSyncersTransactionsIsCompleted(t *testing.T)
 		if n := w.count(`SELECT count(*) FROM pull_requests WHERE id = $1 AND mergeable_state = 'clean'`, prID); n != 1 {
 			t.Fatalf("the syncer did not record clean")
 		}
-		for range 5 {
-			w.sync()
-			w.pump()
-		}
+		w.syncRounds(5)
 		if c := w.count(integrationCompleted, wi); c != 1 {
 			t.Errorf("completions %d, want 1", c)
 		}
@@ -227,12 +221,9 @@ func TestAHandOverRecordedBetweenTheSyncersTransactionsIsCompleted(t *testing.T)
 	t.Run("clean on record without the line", func(t *testing.T) {
 		w := newWorld(t)
 		wi := w.handedOver(false)
-		w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+		w.mergesCleanly()
 		mustExec(t, w.owner, `UPDATE pull_requests SET mergeable_state = 'clean', updated_at = now() WHERE task_id = $1`, wi)
-		for range 6 {
-			w.sync()
-			w.pump()
-		}
+		w.syncRounds(6)
 		if c := w.count(integrationCompleted, wi); c != 1 {
 			t.Errorf("completions %d, want 1", c)
 		}
@@ -257,7 +248,7 @@ func TestAHandOverPassWhileASyncerWaitsToRecordCleanIsCompleted(t *testing.T) {
 			return
 		}
 		once.Do(func() {
-			w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+			w.mergesCleanly()
 			// Its own connection: the holder is used from another goroutine.
 			conn, err := pgx.ConnectConfig(ctx, w.owner.Config())
 			if err != nil {
@@ -303,10 +294,8 @@ func TestAHandOverPassWhileASyncerWaitsToRecordCleanIsCompleted(t *testing.T) {
 	})
 	w.toolsWithSync()
 	wi = w.reviewing()
-	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
-	w.gh.AdvanceBase("main", "Base moved")
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	w.conflictWithMovedBase()
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
 	w.until("validation reading GitHub", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
@@ -335,10 +324,7 @@ func TestAHandOverPassWhileASyncerWaitsToRecordCleanIsCompleted(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND mergeable_state='clean'`, wi); n != 1 {
 		t.Fatalf("the held syncer did not record clean")
 	}
-	for range 6 {
-		w.sync()
-		w.pump()
-	}
+	w.syncRounds(6)
 	if n := w.count(integrationCompleted, wi); n != 1 {
 		t.Errorf("completions %d, want 1", n)
 	}
@@ -366,10 +352,7 @@ func TestARefusedHandOverIsNotCompletedByALaterCleanReading(t *testing.T) {
 		t.Fatalf("refusals %d, want 1", n)
 	}
 	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
-	for range 4 {
-		w.sync()
-		w.pump()
-	}
+	w.syncRounds(4)
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND mergeable_state='clean'`, wi); n != 1 {
 		t.Fatalf("the syncer did not record clean")
 	}
@@ -397,16 +380,14 @@ func TestACleanSyncWithNoHandOverToCloseDoesNotLockTheDelivery(t *testing.T) {
 			var wi string
 			if closed {
 				wi = w.handedOver(false)
-				w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+				w.mergesCleanly()
 				w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
 			} else {
 				w.toolsWithSync()
 				wi = w.reviewing()
 			}
-			for range 2 {
-				w.sync()
-				w.pump()
-			}
+			w.syncRounds(2)
+
 			ctx := context.Background()
 			var prID string
 			if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1 AND mergeable_state = 'clean'`, wi).
@@ -454,5 +435,319 @@ func (w *world) syncTakesNoDeliveryLock(t *testing.T, wi, prID string) {
 			t.Fatal("the sync neither returned nor waited")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// handedOver is an integration whose merge published while GitHub had not
+// worked out mergeability, past the step's reads: left to the pull request
+// syncer. Under tell it is a person's Resolve conflicts.
+func (w *world) handedOver(tell bool) string {
+	return w.handedOverWith(tell, func() {})
+}
+
+// handedOverWith is handedOver, calling arm just before the step's last
+// read of GitHub.
+func (w *world) handedOverWith(tell bool, arm func()) string {
+	w.t.Helper()
+	w.toolsWithSync()
+	wi := w.reviewing()
+	if tell {
+		w.tell()
+	}
+	w.conflictWithMovedBase()
+	if tell {
+		w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+		if code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+w.prOf(wi)+"/resolve-conflicts", map[string]any{}); code != 200 {
+			w.t.Fatalf("resolve: %d %v", code, body)
+		}
+	}
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	asked := w.count(escalations, wi)
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.until("validation reading GitHub", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
+			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
+	})
+	arm()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
+	w.until("left to the syncer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+			AND state->'integration' IS NULL`, wi) == 1
+	})
+	if n := w.count(escalations, wi); n != asked {
+		w.t.Fatalf("escalated while GitHub had not said: %d escalations, %d before", n, asked)
+	}
+	return wi
+}
+
+// A conflict the syncer reads after the hand-over is dude's attempt still
+// conflicting, under either setting: the escalation names it, with retry.
+func TestAHandedOverIntegrationStillConflictingNamesDudesAttempt(t *testing.T) {
+	for _, tell := range []bool{false, true} {
+		t.Run(map[bool]string{false: "update", true: "tell"}[tell], func(t *testing.T) {
+			w := newWorld(t)
+			wi := w.handedOver(tell)
+			w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+			before := w.count(escalations, wi)
+			w.until("the escalation", func() bool { w.sync(); return w.count(escalations, wi) == before+1 })
+			raw, e := w.escalationOf(wi)
+			var d struct {
+				Cause       string `json:"cause"`
+				RunID       string `json:"runId"`
+				Integration bool   `json:"integration"`
+			}
+			var detail struct {
+				Detail json.RawMessage `json:"detail"`
+			}
+			_ = json.Unmarshal(raw, &detail)
+			_ = json.Unmarshal(detail.Detail, &d)
+			run := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id=$2 AND pr_feedback::text LIKE '%Base integration%'`, wi, d.RunID)
+			if strings.Join(e.Actions(), " ") != "retry wait stop" || d.Cause != "still_conflicting" || !d.Integration || run != 1 {
+				t.Fatalf("escalation %s, actions %v", raw, e.Actions())
+			}
+		})
+	}
+}
+
+// GitHub's first reading after the hand-over says the pull request merges:
+// the integration's activity gets its closing line.
+func TestAHandedOverIntegrationThatMergesIsCompleted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	if n := w.count(integrationCompleted, wi); n != 0 {
+		t.Fatalf("%d completions before GitHub said", n)
+	}
+	w.mergesCleanly()
+	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
+	w.syncRounds(3)
+	if n := w.count(integrationCompleted+` AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
+		t.Fatalf("completions %d", n)
+	}
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatalf("escalated: %s", r)
+	}
+}
+
+// The syncer reads the pull request merging in the window between the
+// step forgetting GitHub's reading and its hand-over being recorded: it
+// finds nothing handed over then, and every reading after is clean on
+// clean. The workflow's next pass writes the closing line.
+func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
+	w := newWorld(t)
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step == "openPullRequest" && next == "awaitPullRequest" {
+			once.Do(func() {
+				w.mergesCleanly()
+				w.sync()
+			})
+		}
+	})
+	wi := w.handedOverWith(false, func() { armed.Store(true) })
+	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
+	w.syncRounds(3)
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d", n)
+	}
+}
+
+// HandOverMergedTx runs while the step that records the hand-over is still
+// committing: it waits on the step's row lock on the delivery, then sees the
+// hand-over and writes the closing line.
+func TestAHandOverBeingCommittedIsSeenUnderTheDeliveryLock(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	var key string
+	var handedOver []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT k, state->'handedOver' FROM workflow_runs,
+		jsonb_object_keys(state->'handedOver') k WHERE task_id = $1`, wi).Scan(&key, &handedOver); err != nil {
+		t.Fatal(err)
+	}
+	repo, rest, _ := strings.Cut(key, ":")
+	head, _, _ := strings.Cut(rest, ":")
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'handedOver' WHERE task_id = $1`, wi)
+
+	ctx := context.Background()
+	step, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer step.Rollback(ctx)
+	if _, err := step.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{handedOver}', $2) WHERE task_id = $1`,
+		wi, handedOver); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() {
+		read <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			return delivery.HandOverMergedTx(ctx, tx, w.org, wi, repo, head)
+		})
+	}()
+	select {
+	case err := <-read:
+		t.Fatalf("HandOverMergedTx read the delivery while its step was committing (err %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := step.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d, want 1", n)
+	}
+}
+
+// A conductor publish recording holds the delivery's row (LockRecordingTx)
+// and then updates the pull request; the syncer's first clean reading after
+// a hand-over updates the pull request and then reads the delivery locked.
+// Interleaved, neither waits on the other in a cycle: no 40P01, and the
+// closing line is written once.
+func TestTheSyncerHandOverDoesNotDeadlockAPublishRecording(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	ctx := context.Background()
+	prID := w.prOf(wi)
+	w.mergesCleanly()
+
+	var publishPID int
+	publishHasW := make(chan struct{})
+	syncerWaits := make(chan struct{})
+	syncerErr, publishErr := make(chan error, 1), make(chan error, 1)
+	go func() {
+		publishErr <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&publishPID); err != nil {
+				return err
+			}
+			// edits.go stepHolds FOR UPDATE on the same workflow_runs row.
+			if _, err := delivery.LoadDelivery(ctx, tx, wi); err != nil {
+				return err
+			}
+			close(publishHasW)
+			<-syncerWaits
+			// publish.go recordPublish shape.
+			_, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = 'abc', updated_at = now()
+				WHERE task_id = $1 AND state IN ('open', 'draft')`, wi)
+			return err
+		})
+	}()
+	<-publishHasW
+	go func() { syncerErr <- w.prs.Sync(ctx, w.org, prID) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for w.count(blockedBy, publishPID) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the syncer never waited on the delivery's row")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(syncerWaits)
+	for name, ch := range map[string]chan error{"syncer": syncerErr, "publish": publishErr} {
+		select {
+		case err := <-ch:
+			var pe *pgconn.PgError
+			if errors.As(err, &pe) {
+				t.Errorf("%s: PGERR %s %s", name, pe.Code, pe.Message)
+			} else if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s hung", name)
+		}
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d, want the syncer's 1", n)
+	}
+}
+
+// A person pushes a new head after the hand-over, and that head merges:
+// dude's integration is not what made it merge, so no closing line.
+func TestAHandedOverIntegrationOvertakenByAPersonIsNotCompleted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	w.commitFileIn(w.gh.Repo, delivery.BranchFor(wi, 1), "THEIRS.md", "theirs\n", "A person's fix")
+	w.mergesCleanly()
+	w.until("the new head read as merging", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND head_sha=$2 AND mergeable_state='clean'`,
+			wi, w.gh.SHA(delivery.BranchFor(wi, 1))) == 1
+	})
+	w.syncRounds(3)
+	if n := w.count(integrationCompleted, wi); n != 0 {
+		t.Fatalf("%d completions for a head dude did not integrate", n)
+	}
+}
+
+// Under tell, a person's Resolve conflicts integrated once. The base moves
+// into a conflict again: that is a person's to resolve, escalated, and no
+// integration starts by itself.
+func TestUnderTellAnIntegrationOnceAskedIsNotRepeatedUnasked(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(true)
+	w.mergesCleanly()
+	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
+	before := w.count(escalations, wi)
+	w.gh.AdvanceBase("main", "Base moved again")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("the conflict escalation", func() bool {
+		w.sync()
+		return w.count(escalations, wi) == before+1 && w.escalationReason(wi) == "pull_request_conflict"
+	})
+	w.syncRounds(3)
+	if n := w.count(integrationRuns, wi); n != 1 {
+		t.Fatalf("%d integration Runs, want the one asked for", n)
+	}
+}
+
+// While GitHub has not worked out whether the integrated pull request
+// merges, the step reads GET /pulls/{n} and nothing else, backing off
+// (1 s, 2 s, 4 s…). Past its bound it waits on the pull request syncer: a
+// conflict that syncer reads then escalates the attempted pair.
+func TestUnknownMergeabilityIsReadCheaplyWithBackOffThenLeftToTheSyncer(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.conflictWithMovedBase()
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	var other atomic.Int32
+	var counting atomic.Bool
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.MergeableUnknown[1] = true
+		s.Intercept = func(r *http.Request) int {
+			if counting.Load() && !(r.Method == "GET" && r.URL.Path == "/repos/acme/target/pulls/1") {
+				other.Add(1)
+			}
+			return 0
+		}
+	})
+	polls := func(n int) string {
+		return fmt.Sprintf(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
+			AND (state->'integration'->>'polls')::int = %d`, n)
+	}
+	w.until("the first read", func() bool { return w.count(polls(1), wi) == 1 })
+	counting.Store(true)
+	w.until("the second read", func() bool { return w.count(polls(2), wi) == 1 })
+	if n := w.count(polls(2)+` AND wake_at > now() + interval '1500 milliseconds'`, wi); n != 1 {
+		t.Fatal("the second wait did not double")
+	}
+	counting.Store(false)
+	if n := other.Load(); n != 0 {
+		t.Fatalf("%d GitHub requests besides GET /pulls/1 while mergeability was unknown", n)
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
+	w.until("waiting on the pull request", func() bool {
+		// The push's webhook: the syncer reads mergeability as unknown.
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+			AND state->'integration' IS NULL`, wi) == 1
+	})
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatalf("escalated while GitHub had not said: %s", r)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+	w.until("the attempted pair's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	if n := w.count(integrationRuns, wi); n != 1 {
+		t.Fatalf("integration Runs %d", n)
 	}
 }
