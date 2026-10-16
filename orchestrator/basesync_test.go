@@ -821,3 +821,37 @@ func TestAConductorPublishWaitsOutALuxOutage(t *testing.T) {
 		t.Fatal("the accounting never met the outage")
 	}
 }
+
+// Three comment fixes in this review round spend the person's PR-fix
+// budget; a conflict after them still gets its integration Run, which
+// spends none of it, and a retry of its escalation starts one more.
+func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"prIteration": 3, "prFixesByRepo": {"target": 99}, "prFixKey": 3}'::jsonb
+		WHERE task_id = $1`, wi)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	if n := w.count(integrations, wi); n != 1 {
+		t.Fatalf("integration Runs %d: the spent budget stopped it", n)
+	}
+	budget := `SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND (state->>'prIteration')::int = 3
+		AND (state->'prFixesByRepo'->>'target')::int = 99`
+	if w.count(budget, wi) != 1 {
+		t.Fatal("the integration was charged to the person's fix budget")
+	}
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "retry"}); code != 200 {
+		t.Fatal(code, body)
+	}
+	w.until("the retried integration", func() bool {
+		w.sync()
+		return w.count(integrations, wi) == 2 && w.escalationReason(wi) == "pull_request_conflict"
+	})
+	if w.count(budget, wi) != 1 {
+		t.Fatal("the retry changed the person's fix budget")
+	}
+}

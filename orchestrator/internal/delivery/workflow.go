@@ -1311,42 +1311,13 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if gh != nil {
 		total = gh.Settings.FixRoundsPerPR
 	}
-	st.PRIteration++
-	// A workflow from before rounds counted its fixes in PRIteration only.
-	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
-	var spent []string // pull requests past the organization's budget
-	repos := feedbackRepos(st.PRFeedback)
-	if len(repos) == 0 {
-		// A fix the conductor started while the pull requests waited, on
-		// no feedback: it counts against each still open.
-		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-		if err != nil {
-			return workflow.Result{}, err
-		}
-		for _, p := range states {
-			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
-				repos = append(repos, p.Repo)
-			}
-		}
-	}
-	if st.Integration != nil && !slices.Contains(repos, st.Integration.Repo) {
-		repos = append(repos, st.Integration.Repo)
-	}
-	for _, repo := range repos {
-		if st.PRFixes == nil {
-			st.PRFixes = map[string]int{}
-		}
-		st.PRFixes[repo]++
-		if total > 0 && st.PRFixes[repo] > total {
-			spent = append(spent, repo)
-		}
-	}
-	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
-		if st.Integration != nil {
-			return w.integrationFailure(ctx, sc, st, "integration fix budget exhausted")
-		}
-		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
-			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
+	if st.Integration != nil {
+		// Bringing the base in is dude's upkeep, not a fix the pull
+		// request's people asked for: it spends none of their budget, and
+		// is bounded by one Run per head/base pair instead.
+		st.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
+	} else if exhausted, err := w.chargePRFix(ctx, sc, st, total); err != nil || exhausted != nil {
+		return *exhausted, err
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
@@ -1394,6 +1365,44 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
+}
+
+// chargePRFix counts a fix against this round's budget and each pull
+// request's it addresses; the escalation when either is spent, else nil.
+func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (*workflow.Result, error) {
+	st.PRIteration++
+	// A workflow from before rounds counted its fixes in PRIteration only.
+	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
+	var spent []string // pull requests past the organization's budget
+	repos := feedbackRepos(st.PRFeedback)
+	if len(repos) == 0 {
+		// A fix the conductor started while the pull requests waited, on
+		// no feedback: it counts against each still open.
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return &workflow.Result{}, err
+		}
+		for _, p := range states {
+			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
+				repos = append(repos, p.Repo)
+			}
+		}
+	}
+	for _, repo := range repos {
+		if st.PRFixes == nil {
+			st.PRFixes = map[string]int{}
+		}
+		st.PRFixes[repo]++
+		if total > 0 && st.PRFixes[repo] > total {
+			spent = append(spent, repo)
+		}
+	}
+	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
+		res, err := w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
+			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
+		return &res, err
+	}
+	return nil, nil
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.
@@ -1779,12 +1788,13 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 			st.RetestDue = true
 		}
 	case "prFix":
+		if st.Integration != nil {
+			// One more integration Run: it spent no fix budget to give back.
+			break
+		}
 		// The same fix again, not the next: what the stopped one counted
 		// is given back. A budget spent is a new one.
 		st.PRIteration--
-		if st.Integration != nil && !slices.Contains(feedbackRepos(st.PRFeedback), st.Integration.Repo) && st.PRFixes[st.Integration.Repo] > 0 {
-			st.PRFixes[st.Integration.Repo]--
-		}
 		for _, repo := range feedbackRepos(st.PRFeedback) {
 			if st.PRFixes[repo] > 0 {
 				st.PRFixes[repo]--
