@@ -3153,8 +3153,9 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 			send("end", map[string]any{"cursor": "", "state": run.State, "afterEvent": afterEvent})
 			return
 		}
-		// A client that left while a BeforeEvent hook ran unlocked was
-		// broadcast to before this Wait: without this check it never returns.
+		// s.mu is released around the BeforeEvent hook, so done may have
+		// closed, and its Broadcast been missed, since the check at the top
+		// of the loop; Wait would then never return.
 		select {
 		case <-done:
 			return
