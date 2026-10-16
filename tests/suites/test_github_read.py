@@ -65,7 +65,7 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     assert title.startswith("⟦external ") and "Greet in Portuguese" in title and title.endswith("⟧"), found
     assert "greet.py" in found, found
     thread = next(line for line in answer.splitlines() if line.startswith("Open thread by "))
-    assert thread.startswith("Open thread by ana on ⟦external ") and "greet.py" in thread, thread
+    assert thread.startswith("Open thread by ⟦external ") and "⟧ana⟦/external " in thread and "greet.py" in thread, thread
 
     events = client.events(sessionId=session, limit=1000)
     reads = [e["payload"] for e in events if e["eventType"] == "github.read"]

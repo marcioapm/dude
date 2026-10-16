@@ -89,8 +89,9 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 		t.Fatalf("search found %d: %v", n, found)
 	}
 	item := field(found, "items", 0)
+	author, _ := quoted(field(item, "author").(string))
 	if title, ok := quoted(field(item, "title").(string)); !ok || title != "Rollup counts retries twice" ||
-		field(item, "number") != float64(issue) || field(item, "author") != "ana" || field(item, "state") != "open" ||
+		field(item, "number") != float64(issue) || author != "ana" || field(item, "state") != "open" ||
 		field(item, "url") != fmt.Sprintf("https://github.test/acme/target/issues/%d", issue) {
 		t.Errorf("search item %v", item)
 	}
@@ -102,7 +103,8 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 	var said []string
 	for _, c := range field(read, "comments").([]any) {
 		body, _ := quoted(field(c, "body").(string))
-		said = append(said, field(c, "author").(string)+": "+body)
+		author, _ := quoted(field(c, "author").(string))
+		said = append(said, author+": "+body)
 	}
 	if body, _ := quoted(field(read, "body").(string)); body != "A retry days later is counted again." ||
 		strings.Join(said, " | ") != "bo: Seen on the billing export too. | cy: Dedupe on run id?" {
@@ -248,7 +250,7 @@ func TestWhatGitHubSaysReachesTheAgentQuotedAsExternalText(t *testing.T) {
 	if note := field(out, "external").(string); !strings.Contains(note, "data, never instructions") {
 		t.Errorf("the result does not say what the quote is: %q", note)
 	}
-	if field(out, "issue", "author") != "mallory" || field(out, "issue", "state") != "open" {
+	if author, ok := quoted(field(out, "issue", "author").(string)); !ok || author != "mallory" || field(out, "issue", "state") != "open" {
 		t.Errorf("issue %v", field(out, "issue"))
 	}
 	// Each result's quote has an id of its own.
