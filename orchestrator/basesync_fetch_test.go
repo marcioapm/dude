@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -281,4 +282,50 @@ func TestAnIntegrationRunThatPublishesNoMergeEscalatesWithoutAReview(t *testing.
 		t.Fatal(code, body)
 	}
 	w.until("a second integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
+}
+
+// An integration Run that publishes to another repository of the task (one
+// with no pull request) but not to the conflicting one is no merge; what it
+// pushed is still where that repository's work stands, so the next Run
+// starts from it.
+func TestANoMergeIntegrationKeepsWhatItPublishedElsewhere(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.integration"] == "true":
+			b.CallTools, b.Commit, b.Reply = nil, map[string]string{"web:NOTE.md": "note\n"}, "Touched web only."
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "task intent\n"}
+		}
+		return b
+	}
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	if n := len(w.web.Pulls()); n != 0 {
+		t.Fatalf("web pull requests %d, want none", n)
+	}
+	w.conflictOnFactory()
+	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	raw, _ := w.escalationOf(wi)
+	if !strings.Contains(string(raw), `"cause": "no_merge"`) {
+		t.Fatalf("escalation %s", raw)
+	}
+	pushed := w.web.SHA(delivery.BranchFor(wi, 1))
+	if pushed == "" {
+		t.Fatal("the integration Run pushed nothing to web")
+	}
+	var head string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', '') FROM workflow_runs
+		WHERE task_id = $1`, wi).Scan(&head); err != nil {
+		t.Fatal(err)
+	}
+	if head != pushed {
+		t.Fatalf("the delivery's web head %q, want the integration Run's push %s", head, pushed)
+	}
 }

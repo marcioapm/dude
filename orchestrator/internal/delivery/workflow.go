@@ -1614,9 +1614,10 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	if st.Integration != nil {
 		// Nothing published to the conflicting repository is no merge: its
-		// review and test would judge the head that conflicts.
+		// review and test would judge the head that conflicts. A push to
+		// another repository is still where that one's work stands.
 		if _, merged := out.Heads[st.Integration.Repo]; !merged {
-			st.PendingRunIDs = nil
+			st.PendingRunIDs, st.Heads = nil, out.advance(st.Heads)
 			return w.integrationFailure(ctx, sc, st, causeNoMerge, reasonNoMerge)
 		}
 		st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
