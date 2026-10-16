@@ -413,3 +413,46 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 		})
 	}
 }
+
+// The ref lux fetched the base into is the agent's to move: one it points
+// at its own commits after merging the trusted base, a secret committed
+// and deleted again among them, leaves those commits scanned. Only the
+// commit lux reported is left out.
+func TestASecretBehindAMovedFetchRefIsStillRefused(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.scriptedImplementer()
+	task := w.task()
+	w.deliver(task)
+	runID, luxID := w.basedImplementer(task)
+	work, err := w.lux.Checkout(luxID, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		return gitOut(t, work, append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+	}
+	w.commitFileIn(w.gh.Repo, "main", "base.txt", "base\n", "Base moved")
+	w.fetchBase(runID)
+	git("merge", "-q", "--no-edit", "lux/main")
+	if err := os.WriteFile(filepath.Join(work, "config.toml"), []byte("password = "+implToken+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "config.toml")
+	git("commit", "-q", "-m", "Configure")
+	git("rm", "-q", "config.toml")
+	git("commit", "-q", "-m", "Read the password from the environment")
+	git("update-ref", "refs/remotes/lux/main", "HEAD")
+	w.lux.EndTurn(luxID)
+	w.until("the implementer failed or pushed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
+	})
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
+		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
+	}
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&reason)
+	if !strings.Contains(reason, "IMPL_TOKEN in config.toml") {
+		t.Fatalf("reason %q, want IMPL_TOKEN in config.toml", reason)
+	}
+}
