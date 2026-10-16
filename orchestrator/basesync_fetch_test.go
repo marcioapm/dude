@@ -338,11 +338,17 @@ func TestANoMergeIntegrationKeepsWhatItPublishedElsewhere(t *testing.T) {
 		t.Fatal("the integration Run pushed nothing to web")
 	}
 	var head string
-	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', '') FROM workflow_runs
-		WHERE task_id = $1`, wi).Scan(&head); err != nil {
+	var paths []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', ''),
+		ARRAY(SELECT jsonb_array_elements_text(COALESCE(state->'changedPaths', '[]'))) FROM workflow_runs
+		WHERE task_id = $1`, wi).Scan(&head, &paths); err != nil {
 		t.Fatal(err)
 	}
 	if head != pushed {
 		t.Fatalf("the delivery's web head %q, want the integration Run's push %s", head, pushed)
+	}
+	// Who reviews later sees the paths it changed there.
+	if !slices.Contains(paths, "web/NOTE.md") {
+		t.Fatalf("the delivery's changed paths %v, want web/NOTE.md among them", paths)
 	}
 }
