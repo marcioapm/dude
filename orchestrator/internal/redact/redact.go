@@ -4,9 +4,9 @@
 // The forms are those lux's shim Redactor matches (fakelux/redact.go
 // mirrors it): the raw value, base64 standard (padded and not) and URL,
 // query and path escaping, lower-case hex, and the value as a JSON string
-// body with and without HTML escapes. Overlapping or adjacent matches merge
-// into one marker. A value shorter than MinLength is left alone: such
-// values match too much ordinary text.
+// body with and without HTML escapes, once or twice over. Overlapping or
+// adjacent matches merge into one marker. A value shorter than MinLength
+// is left alone: such values match too much ordinary text.
 //
 // Redaction is defence in depth, not a guarantee: an agent that encodes a
 // value some other way (reversed, split, compressed) is not caught.
@@ -94,8 +94,16 @@ func FromList(list []Secret) *Redactor {
 		add(url.QueryEscape(v), name)
 		add(url.PathEscape(v), name)
 		add(hex.EncodeToString([]byte(v)), name)
-		add(jsonBody(v, true), name)
-		add(jsonBody(v, false), name)
+		// JSON string bodies, and those again inside JSON text in a JSON
+		// string (a tool call's command carrying JSON): each with and
+		// without HTML escapes. Deeper nesting is not matched.
+		for _, h1 := range []bool{true, false} {
+			once := jsonBody(v, h1)
+			add(once, name)
+			for _, h2 := range []bool{true, false} {
+				add(jsonBody(once, h2), name)
+			}
+		}
 	}
 	// Longest first: at one position the longer form wins.
 	sort.SliceStable(r.pats, func(i, j int) bool { return len(r.pats[i].from) > len(r.pats[j].from) })

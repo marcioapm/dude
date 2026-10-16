@@ -468,7 +468,8 @@ Run has ended and its output (pushed work, final diff, files it published)
 is collected, and in any case an hour after it ended.
 
 **Redaction.** dude replaces each value a Run was given — raw, base64
-(standard, unpadded, URL), URL-escaped, hex and JSON-escaped — with
+(standard, unpadded, URL), URL-escaped, hex and JSON-escaped (also twice,
+as JSON inside a JSON string) — with
 `[REDACTED:NAME]` wherever it stores or shows the Run's text: its tool calls
 and their output, messages, thoughts, plans and failure reasons in the
 ledger; what it passes to dude's tools (questions, notes, pull request

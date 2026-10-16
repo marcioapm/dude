@@ -74,6 +74,29 @@ func TestOneNameMayCarryItsGivenAndRotatedValues(t *testing.T) {
 	}
 }
 
+// A JSON document whose string holds JSON text carrying the value (a tool
+// call whose input is a command with JSON in it) has the value escaped
+// twice in its encoding: still redacted, and still JSON.
+func TestAValueInJSONTextInsideAJSONStringIsRedacted(t *testing.T) {
+	const special = `sf-test-not-a-real/+&"<x`
+	r := redact.New(map[string]string{"SNOWFLAKE_PASSWORD": special})
+	inner, _ := json.Marshal(map[string]string{"content": "PASSWORD=" + special})
+	outer, _ := json.Marshal(map[string]any{"rawInput": map[string]string{"cmd": "write " + string(inner)}})
+	out := r.JSON(outer)
+	var v struct {
+		RawInput struct{ Cmd string } `json:"rawInput"`
+	}
+	if err := json.Unmarshal(out, &v); err != nil {
+		t.Fatalf("not JSON after redaction: %v: %s", err, out)
+	}
+	if strings.Contains(v.RawInput.Cmd, "not-a-real") || !strings.Contains(v.RawInput.Cmd, "[REDACTED:SNOWFLAKE_PASSWORD]") {
+		t.Errorf("cmd = %q", v.RawInput.Cmd)
+	}
+	if name, ok := r.Contains(string(outer)); !ok || name != "SNOWFLAKE_PASSWORD" {
+		t.Errorf("Contains on the encoded document = %q %v", name, ok)
+	}
+}
+
 func TestContainsNamesTheSecretFound(t *testing.T) {
 	r := redact.New(map[string]string{"SNOWFLAKE_PASSWORD": pw, "OTHER": "other-test-value"})
 	if name, ok := r.Contains("+FOO=" + base64.StdEncoding.EncodeToString([]byte(pw))); !ok || name != "SNOWFLAKE_PASSWORD" {
