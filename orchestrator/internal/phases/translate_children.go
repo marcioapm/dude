@@ -254,6 +254,7 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 		delete(t.openCalls, id)
 		delete(t.waitsOn, id)
 		payload["tool"] = name
+		withholdGitHubRead(name, payload)
 		if isEdit(name) {
 			s.pokeDiff(t.run.ID)
 		}
@@ -270,6 +271,7 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	}
 	delete(c.Calls, id)
 	payload["tool"] = name
+	withholdGitHubRead(name, payload)
 	if isEdit(name) {
 		s.pokeDiff(t.run.ID)
 	}

@@ -81,7 +81,7 @@ func (t *translator) opencodeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, ty
 			}
 			payload := map[string]any{"tool": e.Tool, "callId": e.CallID, "status": st, "title": e.Title}
 			if out != "" {
-				payload["output"] = storedToolOutput(e.Tool, out)
+				payload["output"] = capOutput(out)
 			}
 			if e.Truncated {
 				payload["truncated"] = true

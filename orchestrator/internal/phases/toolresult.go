@@ -73,12 +73,27 @@ func contentText(v any) string {
 
 // capOutput keeps output whole up to the limit, and otherwise its first and
 // last halves with how much was left out between them.
-func storedToolOutput(name, text string) map[string]any {
-	switch name {
+// withholdGitHubRead replaces a GitHub read's result in a completion's
+// payload with its size, as the tool server records it: the model has the
+// text, the ledger does not. name is the tool as the harness reported it,
+// bare (Claude Code, Codex) or server_tool (OpenCode over ACP).
+func withholdGitHubRead(name string, payload map[string]any) {
+	switch strings.TrimPrefix(name, "dude_") {
 	case "github_search", "github_issue", "github_pull_request":
-		return map[string]any{"bytes": len(text), "withheld": true}
+	default:
+		return
 	}
-	return capOutput(text)
+	size := 0
+	for _, k := range []string{"output", "stdout", "stderr"} {
+		if out, ok := payload[k].(map[string]any); ok {
+			head, _ := out["head"].(string)
+			tail, _ := out["tail"].(string)
+			omitted, _ := out["omittedBytes"].(int)
+			size += len(head) + len(tail) + omitted
+		}
+		delete(payload, k)
+	}
+	payload["output"] = map[string]any{"bytes": size, "withheld": true}
 }
 
 func capOutput(s string) map[string]any {

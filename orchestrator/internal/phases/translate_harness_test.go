@@ -352,7 +352,7 @@ func TestEachCodexTurnSumsItsOwnRequests(t *testing.T) {
 // the shapes are the recorded ones, trimmed.
 func TestGitHubReadCompletionsWithholdBodies(t *testing.T) {
 	for _, tool := range []string{"github_search", "github_issue", "github_pull_request"} {
-		for _, harness := range []string{"claude", "codex", "opencode"} {
+		for _, harness := range []string{"claude", "codex", "opencode", "opencode-acp"} {
 			t.Run(harness+"/"+tool, func(t *testing.T) {
 				w := newHarnessWorld(t)
 				const body = "private-github-body-canary"
@@ -364,6 +364,12 @@ func TestGitHubReadCompletionsWithholdBodies(t *testing.T) {
 					w.feed(map[string]any{"type": "codex.item/completed", "data": map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "read1", "server": "dude", "tool": tool, "status": "completed", "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": body}}}}}})
 				case "opencode":
 					w.feed(map[string]any{"type": "opencode.session", "data": map[string]any{"id": "child1", "parentID": "parent1"}}, map[string]any{"type": "opencode.part", "data": map[string]any{"sessionID": "child1", "tool": tool, "callID": "read1", "status": "completed", "output": body}})
+				case "opencode-acp":
+					// OpenCode names an MCP tool server_tool; its completion names no tool.
+					w.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "read1", "title": "dude_" + tool, "kind": "other", "status": "in_progress", "rawInput": map[string]any{}}},
+						map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "read1", "status": "completed",
+							"content":   []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": body}}},
+							"rawOutput": map[string]any{"output": body}}})
 				}
 				events := w.events()
 				encoded, _ := json.Marshal(events)
