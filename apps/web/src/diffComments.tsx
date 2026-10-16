@@ -6,7 +6,7 @@
  * (`FeedbackProvider`), and it renders through LiveDiff's `commenting`.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommentEditor, FeedbackCard, type DiffRange, type DiffSide, type LiveDiffCommenting } from "@dude/design-system/components";
 import { Icon } from "@dude/design-system";
 import { FEEDBACK_LIMITS, relocateCodeAnchor, type FeedbackCodeAnchor, type FeedbackItem, type RunDiff } from "@dude/domain";
@@ -31,13 +31,37 @@ export function placeItems(items: ReadonlyArray<FeedbackItem>, runId: string, di
 
 const lineWords = (r: DiffRange) => (r.startLine === r.endLine ? `line ${r.startLine}` : `lines ${r.startLine}–${r.endLine}`);
 
-/** LiveDiff's `commenting` for one Run's diff, with the editor's state. */
-export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: RunDiff | null): LiveDiffCommenting | undefined {
-  const [selection, setSelection] = useState<DiffRange | null>(null);
-  const [editing, setEditing] = useState(false);
+/** The editor under a picked range, with its own text: a keystroke re-renders it alone, not the diff. */
+function InlineCommentEditor({ fb, runId, checksum, range, onDone }: {
+  fb: FeedbackOnDiff; runId: string; checksum: string; range: DiffRange; onDone: () => void;
+}) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const save = async () => {
+    if (!text.trim()) return;
+    setSaving(true);
+    setProblem(null);
+    try {
+      await fb.createDraft({ kind: "code", runId, path: range.path, side: range.side, startLine: range.startLine, endLine: range.endLine,
+        diffChecksum: checksum }, text.trim());
+      onDone();
+    } catch (err) {
+      setProblem(errorText(err));
+      setSaving(false);
+    }
+  };
+  return (
+    <CommentEditor where={<>Comment on <b>{lineWords(range)}</b>{range.side === "old" ? " (removed)" : ""}</>} value={text} onChange={setText}
+      onSave={() => void save()} onCancel={onDone} saving={saving} problem={problem} maxLength={FEEDBACK_LIMITS.body}
+      full={fb.full ? FEEDBACK_FULL : undefined} placeholder="What should change on these lines…" />
+  );
+}
+
+/** LiveDiff's `commenting` for one Run's diff: the same object, and the same callbacks, until what they draw changes. */
+export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: RunDiff | null): LiveDiffCommenting | undefined {
+  const [selection, setSelection] = useState<DiffRange | null>(null);
+  const [editing, setEditing] = useState(false);
   const placed = useMemo(() => (fb && diff ? placeItems(fb.items, runId, diff) : []), [fb, runId, diff]);
   const byLine = useMemo(() => {
     const m = new Map<string, FeedbackItem[]>();
@@ -59,77 +83,54 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
     return m;
   }, [placed]);
 
-  if (!fb || !diff) return undefined;
-  const run = fb.runs.get(runId);
-  const canStart = fb.closed === null && commentableRun(run, fb.current);
-
-  const save = async () => {
-    if (!selection || !text.trim()) return;
-    setSaving(true);
-    setProblem(null);
-    try {
-      await fb.createDraft({ kind: "code", runId, path: selection.path, side: selection.side, startLine: selection.startLine, endLine: selection.endLine,
-        diffChecksum: diff.checksum }, text.trim());
-      setText("");
-      setEditing(false);
-      setSelection(null);
-    } catch (err) {
-      setProblem(errorText(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const cancel = () => {
+  // Where the editor is: unset while a drag is under way, so a drag step leaves renderAfterLine as it is.
+  const editorAt = editing ? selection : null;
+  const onSelectionChange = useCallback((range: DiffRange | null, done: boolean) => {
+    setSelection(range);
+    setEditing(done && range !== null);
+  }, []);
+  const closeEditor = useCallback(() => {
     setEditing(false);
     setSelection(null);
-    setProblem(null);
-  };
-  const card = (item: FeedbackItem, placement?: "outdated" | "unchanged") => (
+  }, []);
+  const card = useCallback((item: FeedbackItem, placement?: "outdated" | "unchanged") => fb && diff ? (
     <div key={item.id} data-fb-item={item.id}>
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
         onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
         onSaveDraft={(b) => fb.saveDraft(item, b, { runId, diff })} onDelete={() => fb.deleteDraft(item.id)} />
     </div>
-  );
+  ) : null, [fb, diff, runId]);
+  const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
+    const here = byLine.get(`${path}\u0000${side}\u0000${line}`);
+    const editor = fb && diff && editorAt && editorAt.path === path && editorAt.side === side && editorAt.endLine === line;
+    if (!here && !editor) return null;
+    return (
+      <>
+        {here?.map((i) => card(i))}
+        {editor ? <InlineCommentEditor fb={fb} runId={runId} checksum={diff.checksum} range={editorAt} onDone={closeEditor} /> : null}
+      </>
+    );
+  }, [byLine, card, fb, diff, runId, editorAt, closeEditor]);
+  const renderFileHead = useCallback((path: string) => {
+    const off = heads.get(path);
+    if (!off) return null;
+    return (
+      <>
+        <p className="diffHeadNote"><Icon name="file-diff" size={12} /> Not on lines this diff shows</p>
+        {off.map((o) => card(o.item, o.head))}
+      </>
+    );
+  }, [heads, card]);
+  const fileMark = useCallback((path: string) => {
+    const n = counts.get(path);
+    return n ? <span className="diffComments" aria-label={`${n} ${n === 1 ? "comment" : "comments"}`}><Icon name="comments" size={12} />{n}</span> : null;
+  }, [counts]);
+  const run = fb?.runs.get(runId);
+  const canStart = fb !== null && fb.closed === null && commentableRun(run, fb.current);
 
-  return {
-    canStart, maxLines: FEEDBACK_LIMITS.lines, selection,
-    onSelectionChange: (range, done) => {
-      setSelection(range);
-      setEditing(done && range !== null);
-      setProblem(null);
-    },
-    renderAfterLine: (path, side, line) => {
-      const here = byLine.get(`${path}\u0000${side}\u0000${line}`);
-      const editor = editing && selection && selection.path === path && selection.side === side && selection.endLine === line;
-      if (!here && !editor) return null;
-      return (
-        <>
-          {here?.map((i) => card(i))}
-          {editor ? (
-            <CommentEditor where={<>Comment on <b>{lineWords(selection)}</b>{side === "old" ? " (removed)" : ""}</>} value={text} onChange={setText}
-              onSave={() => void save()} onCancel={cancel} saving={saving} problem={problem} maxLength={FEEDBACK_LIMITS.body}
-              full={fb.full ? FEEDBACK_FULL : undefined} placeholder="What should change on these lines…" />
-          ) : null}
-        </>
-      );
-    },
-    renderFileHead: (path) => {
-      const off = heads.get(path);
-      if (!off) return null;
-      return (
-        <>
-          <p className="diffHeadNote"><Icon name="file-diff" size={12} /> Not on lines this diff shows</p>
-          {off.map((o) => card(o.item, o.head))}
-        </>
-      );
-    },
-    fileMark: (path) => {
-      const n = counts.get(path);
-      return n ? <span className="diffComments" aria-label={`${n} ${n === 1 ? "comment" : "comments"}`}><Icon name="comments" size={12} />{n}</span> : null;
-    },
-  };
+  return useMemo(() => (fb && diff ? { canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLine, renderFileHead, fileMark } : undefined),
+    [fb, diff, canStart, selection, onSelectionChange, renderAfterLine, renderFileHead, fileMark]);
 }
 
 /** Bring an item into view once its card is drawn: a jump from the tray or the Feedback tab, once per jump. */

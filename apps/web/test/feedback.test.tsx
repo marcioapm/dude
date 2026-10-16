@@ -392,6 +392,103 @@ describe("placing items on a diff", () => {
   });
 });
 
+describe("what a keystroke, a reload and an event redraw", () => {
+  /** A file whose every line's text, read, counts as that line rendering. */
+  function countedFile(path: string, count: () => void) {
+    const lines = [{ kind: "+" as const, old: null, new: 1, text: "one()" }, { kind: "+" as const, old: null, new: 2, text: "two()" }].map((l) => {
+      const c = { ...l };
+      Object.defineProperty(c, "text", { get: () => { count(); return l.text; }, enumerable: true });
+      return c;
+    });
+    return { path, status: "A" as const, additions: 2, deletions: 0, hunks: [{ header: "@@ -0,0 +1,2 @@", lines }] };
+  }
+  const appFile = { path: "src/app.ts", status: "M" as const, additions: 2, deletions: 0, hunks: [{ header: "@@ -1,2 +1,4 @@", lines: [
+    { kind: " " as const, old: 1, new: 1, text: "const a = 1;" },
+    { kind: "+" as const, old: null, new: 2, text: "const b = 3;" },
+    { kind: "+" as const, old: null, new: 3, text: "const c = 4;" },
+    { kind: " " as const, old: 2, new: 4, text: "export { a };" },
+  ] }] };
+  const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
+    refresh: async () => people, seen: () => false } as unknown as People;
+
+  test("typing in the inline editor redraws no row of another hunk", async () => {
+    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
+    const { FeedbackProvider } = await import("../src/feedback.tsx");
+    let reads = 0;
+    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [appFile, countedFile("src/other.ts", () => reads++)] };
+    const client = { runDiff: async () => diff } as unknown as ApiClient;
+    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
+    const ok = async () => true;
+    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
+      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
+    const { container, unmount } = await mount(
+      <TooltipProvider><FeedbackProvider value={fb}>
+        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
+          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
+      </FeedbackProvider></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=diffs]"), "the diff");
+    await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+    await act(async () => void window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })));
+    const editor = await until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=fb-editor] textarea"), "the editor");
+    const before = reads;
+    for (const text of ["a", "ab", "abc"]) await typeInto(editor, text);
+    expect(container.querySelector<HTMLTextAreaElement>("[data-testid=fb-editor] textarea")!.value).toBe("abc");
+    expect(reads).toBe(before);
+  });
+
+  /** The task page on its open session's Changes, its diff's rows counted; and the feedback reads counted. */
+  async function sessionChanges() {
+    let reads = 0;
+    let feedbackReads = 0;
+    let taskReads = 0;
+    const client = new FeedbackClient();
+    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [countedFile("src/other.ts", () => reads++)] };
+    (client as unknown as { runDiff: () => Promise<unknown> }).runDiff = async () => diff;
+    const feedback = client.feedback.bind(client);
+    client.feedback = (...a: Parameters<typeof feedback>) => { feedbackReads++; return feedback(...a); };
+    const getTask = client.getTask.bind(client);
+    client.getTask = (id: string) => { taskReads++; return getTask(id); };
+    const { RUN_ID } = await import("../src/fixtures/data.ts");
+    const { container, unmount } = await mount(
+      <ToastProvider><TooltipProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} runId={RUN_ID} tab="sessions" onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></TooltipProvider></ToastProvider>);
+    mounted.push(unmount);
+    const changes = await until(() => [...container.querySelectorAll<HTMLElement>("[data-testid=session-view] button, [data-testid=session-view] [role=radio]")]
+      .find((b) => b.textContent?.startsWith("Changes")), "the Changes switch");
+    await click(changes);
+    await until(() => container.querySelector("[data-testid=diffs] [data-cline]"), "the diff");
+    await settle(400);
+    return { container, reads: () => reads, feedbackReads: () => feedbackReads, taskReads: () => taskReads };
+  }
+
+  test("a task reload with the same Runs does not redraw the open session's diff", async () => {
+    const { emitForTest } = await import("./dom.ts");
+    const page = await sessionChanges();
+    const rows = page.reads();
+    const tasks = page.taskReads();
+    await emitForTest("agent.plan.updated", { steps: [] });
+    await settle(400);
+    expect(page.taskReads()).toBeGreaterThan(tasks);
+    expect(page.reads()).toBe(rows);
+  });
+
+  test("feedback is read again on a feedback event, not on any other", async () => {
+    const { emitForTest } = await import("./dom.ts");
+    const page = await sessionChanges();
+    const before = page.feedbackReads();
+    const tasks = page.taskReads();
+    await emitForTest("agent.plan.updated", { steps: [] });
+    await settle(400);
+    expect(page.taskReads()).toBeGreaterThan(tasks);
+    expect(page.feedbackReads()).toBe(before);
+    await emitForTest("feedback.submitted", { itemIds: ["x"], routedTo: "workflow" });
+    await settle(400);
+    expect(page.feedbackReads()).toBeGreaterThan(before);
+  });
+});
+
 describe("commenting in a Run's Changes", () => {
   test("a draft edited from another Run's Changes keeps its own Run's lines and checksum", async () => {
     const { useTaskFeedbackPage } = await import("../src/screens/FeedbackSection.tsx");

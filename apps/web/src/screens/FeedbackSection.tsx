@@ -55,7 +55,9 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
   const [editing, setEditing] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [focus, setFocus] = useState<FeedbackOnDiff["focus"]>(null);
-  const runs = useMemo(() => runsOf(task), [task]);
+  // Kept across reloads that leave every Run's id and status as they were: a new map redraws the open session's diff.
+  const runsKey = task?.runs.map((r) => `${r.id}:${r.status}`).join(",") ?? "";
+  const runs = useMemo(() => runsOf(task), [runsKey]); // eslint-disable-line react-hooks/exhaustive-deps -- `runsKey` stands for the runs
   const drafts = useMemo(() => list.feedback.filter((i) => i.status === "draft"), [list]);
   const after = useCallback(async <T,>(p: Promise<T>): Promise<T> => {
     const out = await p;
@@ -183,6 +185,37 @@ export function EarlierFeedbackTab({ client, task, fb, shown, current, version, 
   return <FeedbackTab task={task} fb={fb} items={list.feedback} loaded={loaded} problem={problem} earlier shown={shown} current={current} onCurrent={onCurrent} />;
 }
 
+/** General feedback written at the tab's top, with its own text: a keystroke re-renders it alone, not the tab's cards. */
+function GeneralComposer({ createDraft, full }: { createDraft: FeedbackOnDiff["createDraft"]; full: boolean }) {
+  const [general, setGeneral] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const save = async () => {
+    if (general === null || !general.trim()) return;
+    setSaving(true);
+    setProblem(null);
+    try {
+      await createDraft({ kind: "general" }, general.trim());
+      setGeneral(null);
+    } catch (err) {
+      setProblem(errorText(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return general === null ? (
+    <button type="button" className="feedbackGeneral" onClick={() => setGeneral("")} disabled={full} data-testid="general-open">
+      <Icon name="message" size={16} />
+      <span>{full ? FEEDBACK_FULL : "Write general feedback on the task…"}</span>
+      {full ? null : <span className="muted">a private draft, submitted with your line comments</span>}
+    </button>
+  ) : (
+    <CommentEditor where={<><Icon name="message" size={14} /> <b>General</b> <span className="muted">· the task as a whole</span></>}
+      value={general} onChange={setGeneral} onSave={() => void save()} onCancel={() => { setGeneral(null); setProblem(null); }}
+      saving={saving} problem={problem} maxLength={FEEDBACK_LIMITS.body} placeholder="What should change, for the task as a whole…" />
+  );
+}
+
 export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, earlier, shown, current, onCurrent, onStopped }: {
   task: TaskDetail;
   fb: TaskFeedbackController;
@@ -199,9 +232,6 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   onStopped?: (() => void) | undefined;
 }) {
   const [filter, setFilter] = useState<"needs" | "all">("needs");
-  const [general, setGeneral] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
   const d = fb.onDiff;
   const drafts = earlier ? [] : items.filter((i) => i.status === "draft");
   const submitted = items.filter((i) => i.status !== "draft");
@@ -221,20 +251,6 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
       editing={i.status === "draft" ? fb.editing === i.id : undefined}
       onEditingChange={(on) => fb.setEditing(on ? i.id : null)} />
   );
-
-  const saveGeneral = async () => {
-    if (general === null || !general.trim()) return;
-    setSaving(true);
-    setProblem(null);
-    try {
-      await d.createDraft({ kind: "general" }, general.trim());
-      setGeneral(null);
-    } catch (err) {
-      setProblem(errorText(err));
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <PageWithRail rail={
@@ -284,17 +300,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
                 </span>
               </Callout>
             ) : null}
-            {general === null ? (
-              <button type="button" className="feedbackGeneral" onClick={() => setGeneral("")} disabled={d.full} data-testid="general-open">
-                <Icon name="message" size={16} />
-                <span>{d.full ? FEEDBACK_FULL : "Write general feedback on the task…"}</span>
-                {d.full ? null : <span className="muted">a private draft, submitted with your line comments</span>}
-              </button>
-            ) : (
-              <CommentEditor where={<><Icon name="message" size={14} /> <b>General</b> <span className="muted">· the task as a whole</span></>}
-                value={general} onChange={setGeneral} onSave={() => void saveGeneral()} onCancel={() => { setGeneral(null); setProblem(null); }}
-                saving={saving} problem={problem} maxLength={FEEDBACK_LIMITS.body} placeholder="What should change, for the task as a whole…" />
-            )}
+            <GeneralComposer createDraft={d.createDraft} full={d.full} />
           </>
         )}
 

@@ -143,6 +143,11 @@ function changesRun(payload: unknown): boolean {
 
 /** Both ways to start a task look alike: no project or button prefers one. */
 const START_VARIANT = "secondary" as const;
+/** What changes the task's feedback, or where a batch submitted now would go. */
+const FEEDBACK_EVENTS: ReadonlySet<string> = new Set([
+  EventTypes.FeedbackSubmitted, EventTypes.FeedbackDelivered, EventTypes.FeedbackReplied, EventTypes.FeedbackResolved,
+  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
+]);
 
 /** Under the pull request the task took over: dude works on it and opened none of its own. */
 export const ADOPTED_PR_NOTE = "Existing pull request: dude pushes to it and opened none";
@@ -215,6 +220,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const sessionTask = useMemo(() => ({ owner: item?.owner ?? null }), [ownerId]); // eslint-disable-line react-hooks/exhaustive-deps -- `ownerId` stands for the owner
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
+  const [feedbackVersion, setFeedbackVersion] = useState(0);
   // The organization's merge method, read once for every pull request here.
   const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
   useEffect(() => {
@@ -225,9 +231,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // put back what a newer one replaced.
   const loads = useRef(0);
   const applied = useRef(0);
-  const load = useCallback(async () => {
+  // `byStream`: a re-read for the event stream, which re-reads feedback itself on the events that change it;
+  // any other is the page's own action (start, mark done, a PR merged…), after which feedback is read too.
+  const load = useCallback(async (byStream = false) => {
     const seq = ++loads.current;
     setVersion((v) => v + 1);
+    if (!byStream) setFeedbackVersion((v) => v + 1);
     // The ledger is for who did what and the plans; the page stands without
     // it. Only what is new since the last read is fetched, beside the rest.
     const since = ledger.current.at(-1)?.cursor ?? 0;
@@ -262,7 +271,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   }, [client, taskId]);
 
   useEffect(() => {
-    void load();
+    void load(true);
   }, [load]);
   const reload = useCallback(() => void load(), [load]);
   const driverControl = useDriverSwitch(client, taskId, reload);
@@ -277,7 +286,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
   const [relationsVersion, setRelationsVersion] = useState(0);
-  const stream = useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => {
+  // Feedback is re-read on its own events and on a Run starting or ending (which moves where a batch goes), not on every reload.
+  const stream = useReloadOnEvents({ client, taskId }, () => void load(true), undefined, (e) => {
+    if (FEEDBACK_EVENTS.has(e.eventType)) setFeedbackVersion((v) => v + 1);
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return !changesRun(e.payload);
@@ -291,7 +302,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   });
   const wasStream = useRef(stream);
   useEffect(() => {
-    if (cameBack(wasStream.current, stream)) setServersVersion((v) => v + 1);
+    if (cameBack(wasStream.current, stream)) {
+      setServersVersion((v) => v + 1);
+      setFeedbackVersion((v) => v + 1);
+    }
     wasStream.current = stream;
   }, [stream]);
   const servers = useServers(client, { taskId }, serversVersion);
@@ -347,8 +361,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const earlier = shown !== current;
 
   // The current attempt's feedback: the tab, the tray, the header's chip and the open session's Changes share it.
-  const feedback = useTaskFeedbackPage({ client, taskId, task: item, current, version, people,
+  const feedback = useTaskFeedbackPage({ client, taskId, task: item, current, version: feedbackVersion, people,
     onShowInDiff: onOpenRun, onShowOnTab: () => latest.current.pickTab("feedback") });
+  // An earlier attempt's open session: only to read. One value per attempt shown, not one per frame.
+  const sessionFeedback = useMemo(() => (earlier
+    ? { ...feedback.onDiff, closed: `Attempt ${shown} was set aside: its diff is only to read.`, readOnly: true }
+    : feedback.onDiff), [feedback.onDiff, shown, earlier]);
   // A URL naming the current attempt, or one the task never had, says the task alone.
   useEffect(() => {
     if (item && urlAttempt !== undefined && !runId && (urlAttempt === current || !attempts.includes(urlAttempt))) {
@@ -823,7 +841,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {sessions.length > 0 ? (
             <div className="taskSessions">
               {openRun ? (
-                <FeedbackProvider value={earlier ? { ...feedback.onDiff, closed: `Attempt ${shown} was set aside: its diff is only to read.`, readOnly: true } : feedback.onDiff}>
+                <FeedbackProvider value={sessionFeedback}>
                   <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
                     stopped={openStopped} titleSelector={sessionSelector} />
                 </FeedbackProvider>
@@ -838,7 +856,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
         <TabPanel value="feedback" className="railPanel">
           {earlier ? (
-            <EarlierFeedbackTab client={client} task={item} fb={feedback} shown={shown} current={current} version={version} onCurrent={() => pickAttempt(current)} />
+            <EarlierFeedbackTab client={client} task={item} fb={feedback} shown={shown} current={current} version={feedbackVersion} onCurrent={() => pickAttempt(current)} />
           ) : (
             <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
               onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined} />

@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { plural } from "../util/format.ts";
@@ -322,7 +322,9 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     onMouseLeave: () => setHover(null),
   } : {};
   // The "+" by key: Enter or Space picks its line; with Shift, stretches the range picked to it.
-  const pickByKey = (e: React.MouseEvent<HTMLButtonElement>) => {
+  // One function for the diff's life (it reads the latest `commenting`), so it never re-renders a hunk.
+  const pickByKey = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const commenting = latestCommenting.current;
     if (!commenting || e.detail !== 0) return;
     const at = pointOf(e.currentTarget);
     if (!at) return;
@@ -334,28 +336,8 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     const range = (from && stretchRange(from, pointOf(e.currentTarget, from.side) ?? at, commenting.maxLines))
       ?? { path: at.path, side: at.side, startLine: at.line, endLine: at.line };
     commenting.onSelectionChange(range, true);
-  };
+  }, []);
   const selection = commenting?.selection ?? null;
-  /** A line's place, for the handlers above, and its "+" when lines can be picked. */
-  const lineAttrs = (path: string, side: DiffSide, n: number | null, hunk: number, old?: number | null) =>
-    commenting && n !== null ? { "data-cpath": path, "data-cside": side, "data-cline": n, "data-chunk": hunk, ...(old != null ? { "data-cold": old } : {}) } : {};
-  const numberAttrs = (n: number | null) => (canStart && n !== null ? { "data-cstart": "" } : {});
-  const plus = (side: DiffSide, n: number | null) => canStart && n !== null ? (
-    <button type="button" className={styles["plus"]} data-cstart="" data-testid="gutter-add" onClick={pickByKey}
-      aria-label={`Comment on line ${n}${side === "old" ? " (removed)" : ""}`}>
-      <Icon name="plus" size={12} />
-    </button>
-  ) : null;
-  const hint = (path: string, side: DiffSide, n: number | null) => dragging && selection && selection.path === path && selection.side === side && selection.endLine === n ? (
-    <div className={styles["dragHint"]} data-testid="drag-hint">
-      {plural(selection.endLine - selection.startLine + 1, "line")} · let go to comment
-      <span className={styles["muted"]}> · at most {commenting!.maxLines}, one side</span>
-    </div>
-  ) : null;
-  const after = (path: string, side: DiffSide, n: number | null) => {
-    const node = n !== null ? commenting?.renderAfterLine?.(path, side, n) : null;
-    return node ? <div className={styles["after"]} data-testid="after-line" data-side={side} data-line={n ?? undefined}>{node}</div> : null;
-  };
   const tools = (
     <>
         {files.length > 0 ? (
@@ -457,76 +439,10 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                 {commenting?.renderFileHead ? <FileHead node={commenting.renderFileHead(f.path)} /> : null}
                 {f.binary ? <div className={styles["empty"]}>Binary file not shown.</div> : null}
                 {f.hunks.map((h, hi) => (
-                  <div key={hi}>
-                    <div className={styles["hunk"]}>{h.header}</div>
-                    {view === "unified"
-                      ? (() => {
-                          const covered = coveredRows(h.lines, f.path, selection);
-                          return h.lines.map((l, li) => {
-                            const isFresh = fresh.lines.has(lineKey(f.path, l));
-                            const side = sideOfLine(l);
-                            const n = numberOn(l, side);
-                            const picked = covered !== null && li >= covered[0] && li <= covered[1];
-                            // A context line ends a range on either side: what goes under it is asked for both.
-                            const below = commenting ? (
-                              <>
-                                {hint(f.path, side, n)}
-                                {after(f.path, side, n)}
-                                {l.kind === " " ? hint(f.path, "old", l.old) : null}
-                                {l.kind === " " ? after(f.path, "old", l.old) : null}
-                              </>
-                            ) : null;
-                            return (
-                              <Fragment key={li}>
-                                <div
-                                  className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"], picked && styles["picked"])}
-                                  data-fresh={isFresh ? "" : undefined}
-                                  data-picked={picked || undefined}
-                                  {...lineAttrs(f.path, side, n, hi, l.kind === " " ? l.old : null)}
-                                >
-                                  <span className={styles["n"]} {...numberAttrs(n)}>{l.old ?? ""}</span>
-                                  <span className={styles["n"]} {...numberAttrs(n)}>{l.new ?? ""}</span>
-                                  <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
-                                  <span className={styles["text"]}>{l.text || " "}</span>
-                                  {plus(side, n)}
-                                </div>
-                                {below}
-                              </Fragment>
-                            );
-                          });
-                        })()
-                      : split!.get(f.path)![hi]!.map((row, ri) => {
-                          // Context sits on both sides and is never fresh: one side is enough to ask.
-                          const changed = row.left?.kind === " " ? null : (row.left ?? row.right);
-                          const isFresh = changed !== null && (fresh.lines.has(lineKey(f.path, changed)) ||
-                            (row.right !== null && row.right !== changed && fresh.lines.has(lineKey(f.path, row.right))));
-                          const below = (line: LiveDiffLine | null, s: DiffSide) => {
-                            if (!commenting || !line) return null;
-                            const n = numberOn(line, s);
-                            const parts = [hint(f.path, s, n), after(f.path, s, n)];
-                            return parts.some(Boolean) ? <>{parts[0]}{parts[1]}</> : null;
-                          };
-                          const left = below(row.left, "old");
-                          const right = below(row.right, "new");
-                          const side = (line: LiveDiffLine | null, s: DiffSide) => (
-                            <SplitSide line={line} side={s} picked={line !== null && inRange(selection, f.path, s, numberOn(line, s))}
-                              attrs={line ? lineAttrs(f.path, s, numberOn(line, s), hi) : {}} numberAttrs={line ? numberAttrs(numberOn(line, s)) : {}}
-                              plus={line ? plus(s, numberOn(line, s)) : null} />
-                          );
-                          return (
-                            <Fragment key={ri}>
-                              <div className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
-                                data-testid="split-row">
-                                {side(row.left, "old")}
-                                {side(row.right, "new")}
-                              </div>
-                              {left || right ? (
-                                <div className={styles["splitAfter"]}><div>{left}</div><div>{right}</div></div>
-                              ) : null}
-                            </Fragment>
-                          );
-                        })}
-                  </div>
+                  <Hunk key={hi} path={f.path} hunk={h} index={hi} view={view} rows={split?.get(f.path)?.[hi] ?? null} fresh={fresh.lines}
+                    commentable={Boolean(commenting)} canStart={canStart} maxLines={commenting?.maxLines ?? 0}
+                    selection={touches(h, f.path, selection) ? selection : null} dragging={dragging && touches(h, f.path, selection)}
+                    renderAfterLine={commenting?.renderAfterLine} onPlus={pickByKey} />
                 ))}
                 {f.truncated ? <div className={styles["empty"]}>Longer than shown: the rest of this file is left out.</div> : null}
               </section>
@@ -537,6 +453,124 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     </div>
   );
 }
+
+/** Whether range `r` is on lines of hunk `h` of `path`: the one hunk a picked range can be in. */
+const touches = (h: LiveDiffHunk, path: string, r: DiffRange | null) =>
+  r !== null && r.path === path && h.lines.some((l) => (r.side === "old" ? l.kind !== "+" : l.kind !== "-") && inRange(r, path, r.side, numberOn(l, r.side)));
+
+interface HunkProps {
+  readonly path: string;
+  readonly hunk: LiveDiffHunk;
+  readonly index: number;
+  readonly view: LiveDiffView;
+  /** Split: the hunk's rows side by side. */
+  readonly rows: ReadonlyArray<SplitRow> | null;
+  readonly fresh: ReadonlySet<string>;
+  readonly commentable: boolean;
+  readonly canStart: boolean;
+  readonly maxLines: number;
+  /** The range picked, only when it is in this hunk: a drag elsewhere leaves this hunk as it is. */
+  readonly selection: DiffRange | null;
+  readonly dragging: boolean;
+  readonly renderAfterLine: LiveDiffCommenting["renderAfterLine"];
+  readonly onPlus: (e: React.MouseEvent<HTMLButtonElement>) => void;
+}
+
+/** One hunk's lines, re-rendered only when what it shows changes. */
+const Hunk = memo(function Hunk({ path, hunk: h, index: hi, view, rows, fresh, commentable, canStart, maxLines, selection, dragging, renderAfterLine, onPlus }: HunkProps) {
+  /** A line's place, for the diff's handlers, and its "+" when lines can be picked. */
+  const lineAttrs = (side: DiffSide, n: number | null, old?: number | null) =>
+    commentable && n !== null ? { "data-cpath": path, "data-cside": side, "data-cline": n, "data-chunk": hi, ...(old != null ? { "data-cold": old } : {}) } : {};
+  const numberAttrs = (n: number | null) => (canStart && n !== null ? { "data-cstart": "" } : {});
+  const plus = (side: DiffSide, n: number | null) => canStart && n !== null ? (
+    <button type="button" className={styles["plus"]} data-cstart="" data-testid="gutter-add" onClick={onPlus}
+      aria-label={`Comment on line ${n}${side === "old" ? " (removed)" : ""}`}>
+      <Icon name="plus" size={12} />
+    </button>
+  ) : null;
+  const hint = (side: DiffSide, n: number | null) => dragging && selection && selection.side === side && selection.endLine === n ? (
+    <div className={styles["dragHint"]} data-testid="drag-hint">
+      {plural(selection.endLine - selection.startLine + 1, "line")} · let go to comment
+      <span className={styles["muted"]}> · at most {maxLines}, one side</span>
+    </div>
+  ) : null;
+  const after = (side: DiffSide, n: number | null) => {
+    const node = n !== null ? renderAfterLine?.(path, side, n) : null;
+    return node ? <div className={styles["after"]} data-testid="after-line" data-side={side} data-line={n ?? undefined}>{node}</div> : null;
+  };
+  return (
+    <div>
+      <div className={styles["hunk"]}>{h.header}</div>
+      {view === "unified" || !rows
+        ? (() => {
+            const covered = coveredRows(h.lines, path, selection);
+            return h.lines.map((l, li) => {
+              const isFresh = fresh.has(lineKey(path, l));
+              const side = sideOfLine(l);
+              const n = numberOn(l, side);
+              const picked = covered !== null && li >= covered[0] && li <= covered[1];
+              // A context line ends a range on either side: what goes under it is asked for both.
+              const below = commentable ? (
+                <>
+                  {hint(side, n)}
+                  {after(side, n)}
+                  {l.kind === " " ? hint("old", l.old) : null}
+                  {l.kind === " " ? after("old", l.old) : null}
+                </>
+              ) : null;
+              return (
+                <Fragment key={li}>
+                  <div
+                    className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"], picked && styles["picked"])}
+                    data-fresh={isFresh ? "" : undefined}
+                    data-picked={picked || undefined}
+                    {...lineAttrs(side, n, l.kind === " " ? l.old : null)}
+                  >
+                    <span className={styles["n"]} {...numberAttrs(n)}>{l.old ?? ""}</span>
+                    <span className={styles["n"]} {...numberAttrs(n)}>{l.new ?? ""}</span>
+                    <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
+                    <span className={styles["text"]}>{l.text || " "}</span>
+                    {plus(side, n)}
+                  </div>
+                  {below}
+                </Fragment>
+              );
+            });
+          })()
+        : rows.map((row, ri) => {
+            // Context sits on both sides and is never fresh: one side is enough to ask.
+            const changed = row.left?.kind === " " ? null : (row.left ?? row.right);
+            const isFresh = changed !== null && (fresh.has(lineKey(path, changed)) ||
+              (row.right !== null && row.right !== changed && fresh.has(lineKey(path, row.right))));
+            const below = (line: LiveDiffLine | null, s: DiffSide) => {
+              if (!commentable || !line) return null;
+              const n = numberOn(line, s);
+              const parts = [hint(s, n), after(s, n)];
+              return parts.some(Boolean) ? <>{parts[0]}{parts[1]}</> : null;
+            };
+            const left = below(row.left, "old");
+            const right = below(row.right, "new");
+            const side = (line: LiveDiffLine | null, s: DiffSide) => (
+              <SplitSide line={line} side={s} picked={line !== null && inRange(selection, path, s, numberOn(line, s))}
+                attrs={line ? lineAttrs(s, numberOn(line, s)) : {}} numberAttrs={line ? numberAttrs(numberOn(line, s)) : {}}
+                plus={line ? plus(s, numberOn(line, s)) : null} />
+            );
+            return (
+              <Fragment key={ri}>
+                <div className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
+                  data-testid="split-row">
+                  {side(row.left, "old")}
+                  {side(row.right, "new")}
+                </div>
+                {left || right ? (
+                  <div className={styles["splitAfter"]}><div>{left}</div><div>{right}</div></div>
+                ) : null}
+              </Fragment>
+            );
+          })}
+    </div>
+  );
+});
 
 /** One side of a split row: its number, sign and text, or an empty stretch where that side has no line. */
 function SplitSide({ line, side, picked, attrs, numberAttrs, plus }: {

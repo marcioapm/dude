@@ -130,9 +130,37 @@ describe("LiveDiff commenting", () => {
     expect(log.at(-1)).toEqual([{ path: "src/app.ts", side: "old", startLine: 2, endLine: 3 }, true]);
   });
 
+  test("a drag step re-renders only the hunk the range is in", async () => {
+    // Every read of a line's text in the second hunk is that hunk rendering.
+    let reads = 0;
+    const counted = (l: (typeof FILE.hunks)[number]["lines"][number]) => {
+      const c = { ...l };
+      Object.defineProperty(c, "text", { get: () => { reads++; return l.text; }, enumerable: true });
+      return c;
+    };
+    const files = [{ ...FILE, hunks: [FILE.hunks[0]!, { ...FILE.hunks[1]!, lines: FILE.hunks[1]!.lines.map(counted) }] }];
+    function Drag() {
+      const [selection, setSelection] = useState<DiffRange | null>(null);
+      return <LiveDiff base="0fff44b" files={files} commenting={{ canStart: true, maxLines: 200, selection, onSelectionChange: (r) => setSelection(r) }} />;
+    }
+    const el = await mount(<Drag />);
+    await fire(plusFor(el, "Comment on line 1"), mouse("mousedown"));
+    const before = reads;
+    await fire(rowOf(el, "new", 2), mouse("mouseover"));
+    await fire(rowOf(el, "new", 3), mouse("mouseover"));
+    expect(el.querySelectorAll("[data-picked]").length).toBe(4); // new 1–3, and the removed line between
+    expect(reads).toBe(before);
+    await fire(window, mouse("mouseup"));
+  });
+
   test("a range is capped at maxLines, counted from where the press started", async () => {
     const log: Array<[DiffRange | null, boolean]> = [];
     const el = await mount(<Commentable log={log} max={2} />);
+    // One past the cap: three lines asked, two taken.
+    await fire(plusFor(el, "Comment on line 1"), mouse("mousedown"));
+    await fire(rowOf(el, "new", 3), mouse("mouseover"));
+    await fire(window, mouse("mouseup"));
+    expect(log.at(-1)).toEqual([{ path: "src/app.ts", side: "new", startLine: 1, endLine: 2 }, true]);
     await fire(plusFor(el, "Comment on line 1"), mouse("mousedown"));
     await fire(rowOf(el, "new", 4), mouse("mouseover"));
     await fire(window, mouse("mouseup"));
