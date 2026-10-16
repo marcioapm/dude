@@ -20,6 +20,7 @@ import type { ApiClient, FeedbackSubmitted, Run, TaskDetail } from "./api/client
 import type { People } from "./people.tsx";
 
 export const EMPTY_FEEDBACK: FeedbackList = { feedback: [], blocking: 0 };
+const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
 
 /**
  * The attempt's feedback, read on mount, when `version` changes (the task
@@ -88,7 +89,8 @@ export function feedbackDestination(task: Pick<TaskDetail, "decider" | "status" 
     return { who: "the conductor", line: "They go to the conductor.",
       detail: "It decides what to do with them, with you, in Chat. Each stays open until an agent resolves or answers it." };
   }
-  const working = task.runs.filter((r) => r.attempt === current && (r.phase === "implement" || r.phase === "fix") && r.status === "running")
+  // Live as the orchestrator's workingRunSQL counts it (liveRun): a paused or starting one hears it when it goes on.
+  const working = task.runs.filter((r) => r.attempt === current && (r.phase === "implement" || r.phase === "fix") && LIVE_RUN.has(r.status))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   if (working) {
     const doer = runDoer(working);

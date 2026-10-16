@@ -524,7 +524,7 @@ export function SubmitFeedbackDialog({ drafts, destination, holds, onConfirm, on
   if (preview > 0) parts.push(<span key="p">{preview} on a preview</span>);
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()} size="md" title={`Submit ${plural(n, "feedback item")}`}
-      footerStart={problem ? <span role="alert" data-testid="fb-submit-problem">{problem}</span> : <KeyHint keys={["mod", "Enter"]}>submit</KeyHint>}
+      footerStart={problem ? <span role="alert" data-testid="fb-submit-problem">{problem}</span> : <span className={styles["keys"]}><KeyHint keys={["mod", "Enter"]}>submit</KeyHint></span>}
       footer={<>
         <Button variant="quiet" onClick={onCancel}>Keep as drafts</Button>
         <Button variant="primary" onClick={onConfirm} disabled={busy} data-testid="fb-confirm">{busy ? "Submitting…" : `Submit ${n}`}</Button>

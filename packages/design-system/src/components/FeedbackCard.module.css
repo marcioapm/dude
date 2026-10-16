@@ -389,3 +389,9 @@
   font-weight: var(--ds-weight-semibold);
   color: var(--ds-color-text-strong);
 }
+/* A phone rarely has the keys: the hint gives the buttons the room. */
+@media (max-width: 640px) {
+  .keys {
+    display: none;
+  }
+}
