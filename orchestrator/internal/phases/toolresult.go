@@ -1,8 +1,11 @@
 package phases
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // What the ledger keeps of a tool's output: enough to see what happened,
@@ -71,32 +74,53 @@ func contentText(v any) string {
 	return b.String()
 }
 
-// capOutput keeps output whole up to the limit, and otherwise its first and
-// last halves with how much was left out between them.
 // withholdGitHubRead replaces a GitHub read's result in a completion's
 // payload with its size, as the tool server records it: the model has the
-// text, the ledger does not. name is the tool as the harness reported it,
-// bare (Claude Code, Codex) or server_tool (OpenCode over ACP).
-func withholdGitHubRead(name string, payload map[string]any) {
-	switch strings.TrimPrefix(name, "dude_") {
-	case "github_search", "github_issue", "github_pull_request":
-	default:
-		return
-	}
+// text, the ledger does not. A read is known by any name the call had —
+// bare (Claude Code, Codex), server_tool (OpenCode over ACP), announced
+// while pending — or, whatever it was called, by its output carrying a
+// read's note (capOutput withheld it).
+func withholdGitHubRead(names []string, payload map[string]any) {
+	withhold := slices.ContainsFunc(names, func(name string) bool {
+		switch strings.TrimPrefix(name, "dude_") {
+		case "github_search", "github_issue", "github_pull_request":
+			return true
+		}
+		return false
+	})
 	size := 0
 	for _, k := range []string{"output", "stdout", "stderr"} {
-		if out, ok := payload[k].(map[string]any); ok {
-			head, _ := out["head"].(string)
-			tail, _ := out["tail"].(string)
-			omitted, _ := out["omittedBytes"].(int)
-			size += len(head) + len(tail) + omitted
+		out, ok := payload[k].(map[string]any)
+		if !ok {
+			continue
 		}
+		if out["withheld"] == true {
+			withhold = true
+			n, _ := out["bytes"].(int)
+			size += n
+			continue
+		}
+		head, _ := out["head"].(string)
+		tail, _ := out["tail"].(string)
+		omitted, _ := out["omittedBytes"].(int)
+		size += len(head) + len(tail) + omitted
+	}
+	if !withhold {
+		return
+	}
+	for _, k := range []string{"output", "stdout", "stderr"} {
 		delete(payload, k)
 	}
 	payload["output"] = map[string]any{"bytes": size, "withheld": true}
 }
 
+// capOutput keeps output whole up to the limit, and otherwise its first and
+// last halves with how much was left out between them. A GitHub read's
+// result is withheld whole: its note may sit in the part a cut leaves out.
 func capOutput(s string) map[string]any {
+	if delivery.CarriesGitHubRead(s) {
+		return map[string]any{"bytes": len(s), "withheld": true}
+	}
 	if len(s) <= outputLimit {
 		return map[string]any{"head": s}
 	}
