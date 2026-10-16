@@ -169,9 +169,16 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
 
     # A person comments on the forge; the page shows a fixer answering.
     phases_before = page.get_by_test_id("phase").count()
+    head_branch = fake_github.pulls[pr_number].head
+    head_before = fake_github.branch_sha(head_branch)
     fake_github.comment(pr_number, "Please also handle an empty name.")
     expect(page.get_by_test_id("phase")).to_have_count(phases_before + 1, timeout=90_000)
     expect(page.get_by_test_id("phase").last).to_contain_text("Completed", timeout=120_000)
+    # The fix is checked on its candidate (review, simplify, test) before
+    # the pull request shows it; merged earlier, it would rightly get a
+    # follow-up pull request of its own.
+    wait_until(lambda: fake_github.branch_sha(head_branch) != head_before, timeout=240,
+               message="the checked fix never reached the pull request")
 
     # Merging on the forge finishes the task.
     fake_github.merge(pr_number)
