@@ -57,6 +57,18 @@ describe("what woke a step", () => {
     const kinds = phases.filter((r) => r.phase === "fix").map((r) => fixFor(r, phases, findings, prEvents));
     expect(kinds).toEqual(["review", "test", "pull_request", "review"]);
   });
+
+  test("a pull request's fix's simplification and the review of its diff say they are of that fix", () => {
+    const prSimplify = run("r_prsimp", "simplify", 16);
+    const prSimplifyReview = run("r_prsrev", "review", 17, { reviewOf: "simplify" });
+    const all = [...phases, prSimplify, prSimplifyReview];
+    const whyIn = (r: Run) => whyItRan(r, all.indexOf(r), all, findings, prEvents);
+    expect(whyIn(prSimplify)).toBe("of the pull request's fix");
+    expect(whyIn(prSimplifyReview)).toBe("of the simplifier's diff on the pull request's fix");
+    // Before any pull request's fix, the simplifier is new work's.
+    expect(whyItRan(run("r_simp", "simplify", 4), 4, phases, findings, prEvents)).toBeUndefined();
+    expect(why(simplifyReview)).toBe("of the simplifier's diff");
+  });
 });
 
 const eventAt = (eventType: string, occurredAt: string, payload: Record<string, unknown> = {}): PersistedEvent => ({

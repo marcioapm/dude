@@ -1017,7 +1017,7 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * What woke a step, when the record says: a fix for the review's findings,
  * for the test's, for a pull request's feedback (and whose); a review of
  * the simplifier's diff or of a pull request's fix; a re-review of a fix;
- * a test of a pull request's fix. Only what can be read from the runs,
+ * a simplification or a test of a pull request's fix. Only what can be read from the runs,
  * findings and events; nothing guessed. Exported for its unit test: the
  * step row is its only caller.
  */
@@ -1031,13 +1031,15 @@ export function whyItRan(run: Run, index: number, phases: readonly Run[], findin
       case "review": return "for the review";
     }
   }
+  // A pull request's fix is reviewed, simplified, its simplification
+  // reviewed and tested on its candidate. An adopted pull request is
+  // recorded as opened before its first test: only a feedback fix before a
+  // step makes it one of that fix.
+  const ofPullRequestFix = () => earlier.some((r) => r.attempt === run.attempt &&
+    (r.reviewOf === "pull_request_fix" || (r.phase === "fix" && fixFor(r, phases, findings, prEvents) === "pull_request")));
+  if (run.phase === "review" && run.reviewOf === "simplify" && ofPullRequestFix()) return "of the simplifier's diff on the pull request's fix";
   if (run.phase === "review" && run.reviewOf) return REVIEW_OF[run.reviewOf];
-  if (run.phase === "test" && earlier.some((r) => r.attempt === run.attempt &&
-    (r.reviewOf === "pull_request_fix" || (r.phase === "fix" && fixFor(r, phases, findings, prEvents) === "pull_request")))) {
-    // An adopted pull request is recorded as opened before its first test:
-    // only a feedback fix before the test makes it one of that fix.
-    return "of the pull request's fix";
-  }
+  if ((run.phase === "test" || run.phase === "simplify") && ofPullRequestFix()) return "of the pull request's fix";
   if (run.phase === "review" && earlier.some((r) => r.phase === "fix")) {
     const found = findings.filter((f) => f.runId === run.id).length;
     return found === 0 ? "no findings" : undefined;

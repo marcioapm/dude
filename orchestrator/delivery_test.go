@@ -3336,15 +3336,19 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
+	head := w.gh.Pull(1).Head
+	before := w.gh.SHA(head)
 	w.gh.Comment(1, "alice", "Please also fix the typo in the README.")
 	w.until("a fixer", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "running"
 	})
 	w.gh.SetChecks("none")
+	// On the pull request: its candidate's own reviews set the task to
+	// review too, before the simplifier and the move.
 	w.until("the fix in review", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.taskStatus(wi) == "review"
+		return w.gh.SHA(head) != before && w.taskStatus(wi) == "review"
 	})
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)

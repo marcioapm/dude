@@ -424,16 +424,20 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if head == jervsHead || len(w.gh.Pulls()) != 1 {
 		t.Fatalf("fix head %s (was %s), %d pull requests", head, jervsHead, len(w.gh.Pulls()))
 	}
-	if out := w.gh.Log("feature/greet"); !strings.HasPrefix(out[0], "Address review findings") {
+	if out := w.gh.Log("feature/greet"); !strings.HasPrefix(out[0], "Simplify") || !strings.HasPrefix(out[1], "Address review findings") {
 		t.Fatalf("feature/greet after the PR fix: %v", out)
 	}
 	// Checked on a candidate under dude/, beside no branch of the person's,
-	// reviewed over its own range, then promoted onto the adopted branch.
-	var fixBranch, fixHead string
+	// reviewed over its own range, simplified there, then promoted onto the
+	// adopted branch.
+	var fixBranch, fixHead, simplifyBranch, simplified string
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
 		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&fixBranch, &fixHead)
-	if fixBranch != delivery.CandidateBranch(wi, 1) || fixHead != head {
-		t.Fatalf("the fix published to %q at %s; feature/greet is at %s", fixBranch, fixHead, head)
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
+		WHERE task_id = $1 AND phase = 'simplify' ORDER BY created_at DESC LIMIT 1`, wi).Scan(&simplifyBranch, &simplified)
+	if fixBranch != delivery.CandidateBranch(wi, 1) || simplifyBranch != fixBranch || simplified != head || fixHead == head {
+		t.Fatalf("the fix published to %q at %s, the simplifier to %q at %s; feature/greet is at %s",
+			fixBranch, fixHead, simplifyBranch, simplified, head)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
 		AND review_range->'base'->>'target' = $3`, wi, delivery.RangePullRequestFix, jervsHead); n == 0 {

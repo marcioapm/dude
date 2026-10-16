@@ -1,6 +1,7 @@
 // An open pull request's fix, checked before the pull request shows it:
 // the fix and every fix of it go to the candidate branch (CandidateBranch),
-// are reviewed over their own range and tested on every criterion, and only
+// are reviewed over their own range, simplified there with the
+// simplifier's diff reviewed alone, and tested on every criterion, and only
 // then is the pull request's branch fast-forwarded to it
 // (steps.promoteCandidate).
 

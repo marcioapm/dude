@@ -697,26 +697,26 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	return park("awaitReview", st, runIDs), nil
 }
 
-// reviewRange is the range the next review round covers: an open pull
-// request's fix being checked, or what the simplifier changed; nil for the
-// whole branch.
+// reviewRange is the range the next review round covers: what the
+// simplifier changed, also on a pull request's fix being checked; else
+// that fix; nil for the whole branch.
 func (st *State) reviewRange() *ReviewRange {
 	switch {
-	case st.Candidate != nil && len(st.Candidate.Base) > 0:
-		return &ReviewRange{Of: RangePullRequestFix, Base: st.Candidate.Base}
 	case len(st.SimplifyBase) > 0:
 		return &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase}
+	case st.Candidate != nil && len(st.Candidate.Base) > 0:
+		return &ReviewRange{Of: RangePullRequestFix, Base: st.Candidate.Base}
 	}
 	return nil
 }
 
 // afterReview is the step a review loop that has nothing left to fix goes
-// to: the simplifier, then the test. A loop over the simplifier's own diff
-// or an open pull request's fix goes to the test: the simplifier is not run
-// again after a fix of its diff — that fix was reviewed by the loop, and
-// the tester runs next — nor on a pull request's fix.
+// to: the simplifier, then the test — for new work and for an open pull
+// request's fix on its candidate alike. A loop over the simplifier's own
+// diff goes to the test: the simplifier is not run again after a fix of
+// its diff; that fix was reviewed by the loop, and the tester runs next.
 func (st *State) afterReview() string {
-	if st.Policy.Simplify && st.Candidate == nil && len(st.SimplifyBase) == 0 {
+	if st.Policy.Simplify && len(st.SimplifyBase) == 0 {
 		return "simplify"
 	}
 	return "test"
@@ -883,12 +883,21 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = append(open, f.ID)
 		}
 	}
-	if r := st.reviewRange(); r != nil && r.Of == RangePullRequestFix {
-		// A pull request's fix fixes what its own reviews raised, never the
-		// findings a person let the pull request open with.
-		ours, err := w.s.rangeFindings(ctx, sc.OrganizationID, st, r)
-		if err != nil {
-			return workflow.Result{}, err
+	if st.checkingCandidate() {
+		// A pull request's fix fixes what its own reviews raised — of the
+		// fix, and of its simplifier's diff — never the findings a person
+		// let the pull request open with.
+		ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
+		if len(st.SimplifyBase) > 0 {
+			ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
+		}
+		var ours []string
+		for _, r := range ranges {
+			ids, err := w.s.rangeFindings(ctx, sc.OrganizationID, st, r)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			ours = append(ours, ids...)
 		}
 		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
 	}
@@ -940,14 +949,13 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	// A repository the fix changed first joins the range under review, from
-	// where it stood before the fix: the range's next review names it.
+	// where it stood before the fix: the range's next review names it. On a
+	// candidate it joins the fix's range too, which a failed test's fix is
+	// reviewed over once the simplifier's is done.
 	if r := st.reviewRange(); r != nil {
-		for repo := range out.Heads {
-			if _, ok := r.Base[repo]; !ok {
-				if base := cmp.Or(st.Heads[repo], out.Bases[repo]); base != "" {
-					r.Base[repo] = base
-				}
-			}
+		widenRange(r.Base, out, st.Heads)
+		if st.checkingCandidate() {
+			widenRange(st.Candidate.Base, out, st.Heads)
 		}
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
@@ -957,6 +965,18 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return workflow.Result{Next: "review", State: st}, nil
 	}
 	return w.next(ctx, sc, st, PointFixed, "review", out.line(runID, "fix"))
+}
+
+// widenRange adds to base each repository out changed that it lacks, from
+// where that repository stood before the Run.
+func widenRange(base map[string]string, out Outcome, heads map[string]string) {
+	for repo := range out.Heads {
+		if _, ok := base[repo]; !ok {
+			if b := cmp.Or(heads[repo], out.Bases[repo]); b != "" {
+				base[repo] = b
+			}
+		}
+	}
 }
 
 // simplify runs once blocking findings are clear (plan §11.4). It may
@@ -1002,12 +1022,16 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	}
 	// What it changed was never reviewed: a review round over its diff
 	// alone, from where each repository it changed stood before it, then
-	// the loop as usual (afterReview takes it to the test).
+	// the loop as usual (afterReview takes it to the test). On a pull
+	// request's fix it ran on the candidate, which its heads advance.
 	st.SimplifyBase = map[string]string{}
 	for repo := range out.Heads {
 		if base := cmp.Or(out.Bases[repo], st.Heads[repo]); base != "" {
 			st.SimplifyBase[repo] = base
 		}
+	}
+	if st.checkingCandidate() {
+		widenRange(st.Candidate.Base, out, st.Heads)
 	}
 	st.HeadRunID, st.Heads, st.ChangedPaths = runID, out.advance(st.Heads), out.ChangedPaths
 	if len(st.SimplifyBase) == 0 {
@@ -1028,7 +1052,8 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 		return workflow.Result{}, err
 	}
 	// The simplifier's diff was reviewed; a fix a failed test sends back
-	// is reviewed whole, then simplified again, as before it.
+	// is reviewed whole (a pull request's fix: over the fix's range), then
+	// simplified again, as before it.
 	st.SimplifyBase = nil
 	d := directed(st, PhaseTest)
 	if !st.Policy.Test && !st.RetestDue && (d == nil || d.Phase != PhaseTest) {
@@ -1366,8 +1391,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
 	}
-	// A new round's candidate: its Runs are keyed apart from the last's.
-	st.Candidate = nil
+	// A new round's candidate: its Runs are keyed apart from the last's,
+	// and its first review is of the fix, never of an earlier simplifier.
+	st.Candidate, st.SimplifyBase = nil, nil
 	k := key(sc, st, ":prfix:", st.PRFixKey)
 	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
 	if err != nil {

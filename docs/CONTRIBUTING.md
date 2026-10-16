@@ -112,7 +112,7 @@ is not the current one.
 `prompts.go` what each agent is told.
 
 ```
-implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix on the candidate → review ⟲ fix → test → move the PR branch) → done
+implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix on the candidate → review ⟲ fix → simplify → [review of its diff ⟲ fix] → test → move the PR branch) → done
 ```
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
@@ -181,7 +181,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   Run, and every fix of it, publishes to the candidate branch
   (`dude/<task>/attempt-N-candidate`, `runs.branch`), not the task branch.
   The fix's range is reviewed (`{of: "pull_request_fix"}`), the review loop
-  runs with its bounds, the tester checks every criterion, and only once the
+  runs with its bounds, the simplifier runs on the candidate (when the
+  policy's `simplify` is on) and its diff alone is reviewed (`{of:
+  "simplify"}`, from the candidate's head before it), as for new work; a
+  fix of either review stays on the candidate. A failed test's fix is
+  reviewed over the fix's range, then simplified again. The tester checks
+  every criterion, and only once the
   gate passes or a person settles it does `promoteCandidate` fast-forward
   each pull request's branch to the candidate (`gh.FastForwardExisting`,
   never forced) and refresh, for every open pull request of the task, the

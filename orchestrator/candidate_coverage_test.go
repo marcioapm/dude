@@ -111,7 +111,9 @@ func TestCandidatePromotionRequiresRepositoryReviewCoverage(t *testing.T) {
 			})
 			want := beforeReviews
 			if tc.wantReview {
-				want++
+				// The required review, then the review of the simplifier's
+				// diff that a clear review of the candidate goes through.
+				want += 2
 			}
 			if n := w.phaseRuns(w.wi, "review"); n != want {
 				t.Errorf("%d reviews, want %d", n, want)

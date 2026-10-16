@@ -271,6 +271,14 @@ func (w *prFixWorld) refreshedBeforeTheMove() int {
 		AND event_type = 'pull_request.fix_moved'), 9223372036854775807)`, w.wi, w.before)
 }
 
+// lastPrompt is the prompt of the last of specs, "" for none.
+func lastPrompt(specs []lux.Spec) string {
+	if len(specs) == 0 {
+		return ""
+	}
+	return specs[len(specs)-1].Workload.Prompt
+}
+
 func (w *prFixWorld) candidate() string { return w.gh.SHA(delivery.CandidateBranch(w.wi, 1)) }
 
 // state reads the delivery's state field as JSON text.
@@ -297,20 +305,38 @@ func TestAPullRequestFixIsReviewedAndTestedBeforeThePullRequestShowsIt(t *testin
 	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
 		t.Errorf("the pull request showed the fix before its review and test: %v", shown)
 	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review and the test", w.phases)
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test"}) {
+		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", w.phases)
 	}
 	head := w.gh.SHA(w.branch)
-	// The fix's Run published to the candidate branch, which the pull
-	// request's branch was moved to, by fast-forward from where it was.
+	// The fix's Run published to the candidate branch, then the simplifier
+	// on it, from the fix; the pull request's branch was moved to the
+	// simplified head, by fast-forward from where it was.
 	var fixBranch, fixHead string
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
 		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, w.wi).Scan(&fixBranch, &fixHead)
-	if fixBranch != delivery.CandidateBranch(w.wi, 1) || fixHead != head {
+	var simplifyBranch, simplifyFrom, simplified string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), base_refs->>'target', heads->'target'->>'sha' FROM runs
+		WHERE task_id = $1 AND phase = 'simplify' ORDER BY created_at DESC LIMIT 1`, w.wi).Scan(&simplifyBranch, &simplifyFrom, &simplified)
+	if fixBranch != delivery.CandidateBranch(w.wi, 1) || fixHead == "" || fixHead == head {
 		t.Errorf("the fix published to %q at %s; the pull request is at %s", fixBranch, fixHead, head)
 	}
-	if log := w.gh.Log(w.branch); !strings.HasPrefix(log[0], "Address review findings") {
+	if simplifyBranch != delivery.CandidateBranch(w.wi, 1) || simplifyFrom != fixHead || simplified != head {
+		t.Errorf("the simplifier published to %q from %s at %s; the fix is at %s, the pull request at %s",
+			simplifyBranch, simplifyFrom, simplified, fixHead, head)
+	}
+	if log := w.gh.Log(w.branch); !strings.HasPrefix(log[0], "Simplify") || !strings.HasPrefix(log[1], "Address review findings") {
 		t.Errorf("branch history = %v", log)
+	}
+	// The simplifier's diff alone, from the candidate's head before it.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+		AND branch IS NULL AND review_range->>'of' = $2 AND review_range->'base' = jsonb_build_object('target', $3::text)
+		AND base_refs->>'target' = $4`, w.wi, delivery.RangeSimplify, fixHead, simplified); n != 1 {
+		t.Errorf("%d reviews of the candidate's simplification over %s..%s\n%s", n, fixHead, simplified, w.describeRuns())
+	}
+	if last := lastPrompt(w.rangeSpecs(delivery.RangeSimplify)); !strings.Contains(last, "Review `"+fixHead+"..HEAD`:") ||
+		!strings.Contains(last, "behaviour-preservation check of the simplifier's diff") {
+		t.Errorf("the review of the candidate's simplification is not told its range from %s:\n%s", fixHead, last)
 	}
 	specs := w.rangeSpecs(delivery.RangePullRequestFix)
 	if len(specs) != 1 || !strings.Contains(specs[0].Workload.Prompt, "Review `"+w.before+"..HEAD`:") ||
@@ -352,6 +378,57 @@ func TestAPullRequestFixIsReviewedAndTestedBeforeThePullRequestShowsIt(t *testin
 	}
 }
 
+// The review of the simplifier's diff on a pull request's fix raises a
+// finding: its fix goes to the candidate too, is reviewed over the
+// simplifier's range, and the simplifier does not run again; the pull
+// request moves only after the test, to the fix of the simplification.
+func TestAFindingOnTheSimplificationOfAPullRequestFixIsFixedOnTheCandidate(t *testing.T) {
+	w := newPRFixWorld(t)
+	var atTest string
+	w.onTest = func() { atTest = w.gh.SHA(w.branch) }
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		switch {
+		case phase == "review" && n == 2:
+			b.Reply = simplifierFinding
+		case phase == "review" && n == 3:
+			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
+		}
+	}
+	before := len(w.rangeSpecs(delivery.RangeSimplify))
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+	if shown := w.shownBeforeTheGate(); len(shown) > 0 || atTest != w.before {
+		t.Errorf("the pull request showed the fix before its test: %v (at the test: %s)", shown, atTest)
+	}
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "fix", "review", "test"}) {
+		t.Errorf("after the comment: %v", w.phases)
+	}
+	candidate := delivery.CandidateBranch(w.wi, 1)
+	var fixBranch, fixHead, title, status string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(r.branch, ''), r.heads->'target'->>'sha', f.title, f.status::text
+		FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
+		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title LIKE 'The simplification drops%'`, w.wi).Scan(&fixBranch, &fixHead, &title, &status)
+	if fixBranch != candidate || status != "resolved" {
+		t.Errorf("the simplification's finding (%q, %s) was fixed on %q, want the candidate", title, status, fixBranch)
+	}
+	if head := w.gh.SHA(w.branch); head != fixHead {
+		t.Errorf("the pull request is at %s, the fix of the simplification at %s", head, fixHead)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('fix', 'simplify') AND branch IS DISTINCT FROM $2
+		AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback <> '[]'::jsonb)`, w.wi, candidate); n != 0 {
+		t.Errorf("%d of the round's publishing Runs off the candidate branch", n)
+	}
+	if n := len(w.rangeSpecs(delivery.RangeSimplify)) - before; n != 2 {
+		t.Errorf("%d reviews over the candidate's simplifier's range, want its round and its fix's", n)
+	}
+	if n := w.refreshedBeforeTheMove(); n != 0 {
+		t.Errorf("%d description refreshes about the candidate before the pull request held it", n)
+	}
+}
+
 // The candidate's test fails: back to the fixer, still on the candidate,
 // reviewed and tested again; it passes, and only then the pull request
 // moves. The round counts once against both pull request budgets, whatever
@@ -381,7 +458,7 @@ func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *te
 	if shown := w.shownBeforeTheGate(); len(shown) > 0 || atFailure != w.before {
 		t.Errorf("a candidate that failed its test reached the pull request: %v (at the test: %s)", shown, atFailure)
 	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "test", "fix", "review", "test"}) {
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test", "fix", "review", "simplify", "review", "test"}) {
 		t.Errorf("after the comment: %v", w.phases)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND branch = $2`,
@@ -576,7 +653,7 @@ func TestARepositoryATestFixOfACandidateChangesFirstIsReviewedBeforeItsPullReque
 		w.sync()
 		return w.gh.SHA(w.branch) != w.before && w.web.SHA(w.branch) != w.webBefore && w.taskStatus(w.wi) == "review"
 	})
-	if !slices.Equal(w.phases, []string{"fix", "review", "test", "fix", "review", "test"}) {
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test", "fix", "review", "simplify", "review", "test"}) {
 		t.Errorf("after the comment: %v", w.phases)
 	}
 	for i, sha := range w.seenWeb {
@@ -721,8 +798,9 @@ func TestAnAcceptedFailedReviewOfACandidateIsHonouredAtPromotion(t *testing.T) {
 		w.sync()
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
-	if after := w.phases[decided:]; !slices.Equal(after, []string{"test"}) {
-		t.Errorf("after the person accepted: %v, want the test alone", after)
+	// The simplifier's diff is new, and reviewed; what the person accepted is not reviewed again.
+	if after := w.phases[decided:]; !slices.Equal(after, []string{"simplify", "review", "test"}) {
+		t.Errorf("after the person accepted: %v, want the simplifier, its diff's review and the test", after)
 	}
 }
 
@@ -754,7 +832,7 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 		w.sync()
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
-	if !slices.Equal(w.phases, []string{"fix", "review", "fix", "review", "fix", "review", "test"}) {
+	if !slices.Equal(w.phases, []string{"fix", "review", "fix", "review", "fix", "review", "simplify", "review", "test"}) {
 		t.Errorf("after the comment: %v", w.phases)
 	}
 	if n := w.count(`SELECT count(*) FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
@@ -819,8 +897,8 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 			t.Errorf("web's branch was at %s as %s started", sha, w.phases[i])
 		}
 	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review and the test", w.phases)
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test"}) {
+		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", w.phases)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
 		AND review_range->>'of' = $2 AND base_refs->>'web' = $3`, w.wi, delivery.RangePullRequestFix, head); n != 1 {
