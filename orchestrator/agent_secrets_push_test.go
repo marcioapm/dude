@@ -118,7 +118,8 @@ func TestTheScriptedSecretCommitterIsRefused(t *testing.T) {
 }
 
 // scriptedImplementer makes the scripted implementer do calls in its
-// checkout (fakeagent.Local*) in place of its scripted commit.
+// checkout (fakeagent.Local*) in place of its scripted commit, then hang
+// in its turn (finishOnceBased ends it).
 func (w *world) scriptedImplementer(calls ...[2]string) {
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -126,9 +127,25 @@ func (w *world) scriptedImplementer(calls ...[2]string) {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
 			b.Commit = nil
 			b.CallTools = calls
+			b.Hang = true
 		}
 		return b
 	}
+}
+
+// finishOnceBased ends the task's implementer's turn once dude has
+// recorded where its checkout started: lux reports that after the agent's
+// own records, and a turn ending first is refused for the missing base
+// rather than for what the test put in its history.
+func (w *world) finishOnceBased(task string) {
+	w.t.Helper()
+	var luxID string
+	w.until("the implementer's base recorded", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND base_shas <> '{}'::jsonb AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&luxID)
+		return luxID != ""
+	})
+	w.lux.EndTurn(luxID)
 }
 
 func jsonArg(key, value string) string {
@@ -180,6 +197,7 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 			w.scriptedImplementer(c.calls...)
 			task := w.task()
 			w.deliver(task)
+			w.finishOnceBased(task)
 			var runID string
 			// The per-Run branch lux pushes to; the attempt's branch dude
 			// makes itself, from the base.
@@ -240,6 +258,7 @@ func TestACleanMultiCommitHistoryIsPushed(t *testing.T) {
 	)
 	task := w.task()
 	w.deliver(task)
+	w.finishOnceBased(task)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.push.refused'`, task); n != 0 {
 		t.Errorf("%d push refusals of clean work", n)
