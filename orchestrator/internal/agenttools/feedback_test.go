@@ -255,7 +255,7 @@ func TestAResendOfAFailedFeedbackSteerDeliversItsItems(t *testing.T) {
 	f.run(t, "run_fix", "implementer", "running")
 	f.run(t, "run_other", "implementer", "running")
 	var res map[string]any
-	if status := f.postAs(t, conductor, "steer", `{"run":"run_fix","text":"Start with these.","feedbackIds":["fbi_open"]}`, &res); status != 200 {
+	if status := f.postAs(t, conductor, "steer", `{"run":"run_fix","text":"Start with these.","feedbackIds":["fbi_open","fbi_two"]}`, &res); status != 200 {
 		t.Fatalf("steer with feedback: %d %v", status, res)
 	}
 	ctx := context.Background()
@@ -303,12 +303,20 @@ func TestAResendOfAFailedFeedbackSteerDeliversItsItems(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A person answers the second item before the Retry: it is settled, so
+	// the resend must not take it.
+	mustExec(t, f.owner, `UPDATE feedback_items SET status = 'replied' WHERE id = 'fbi_two'`)
 	again := steer(delivery.SteerInput{RunID: "run_fix", Text: said, Supersedes: first})
 	var directive, deliveredRun *string
 	_ = f.owner.QueryRow(ctx, `SELECT directive_id, delivered_run_id FROM feedback_items WHERE id = 'fbi_open'`).
 		Scan(&directive, &deliveredRun)
 	if directive == nil || *directive != again.ID || deliveredRun == nil || *deliveredRun != "run_fix" {
 		t.Fatalf("the item after the Retry: directive %v, run %v; want %s on run_fix", directive, deliveredRun, again.ID)
+	}
+	var settledDirective *string
+	_ = f.owner.QueryRow(ctx, `SELECT directive_id FROM feedback_items WHERE id = 'fbi_two'`).Scan(&settledDirective)
+	if settledDirective != nil {
+		t.Errorf("a replied item was given to the Retry: directive %s", *settledDirective)
 	}
 	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
 		return delivery.FeedbackHeardTx(ctx, tx, f.org, again.ID)
