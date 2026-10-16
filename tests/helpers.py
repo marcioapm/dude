@@ -8,6 +8,7 @@ organizations, which is an operator action rather than an API one).
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import time
@@ -373,3 +374,35 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
     return wait_until(check, timeout=timeout, message=message or f"task {task_id} never escalated")
 
+
+
+def finish_simplifier_review(client: ApiClient, owner_dsn: str, task_id: str, reason: str = "fine as it is") -> list[str]:
+    """The conductor past the review of the simplifier's diff, which the
+    delivery runs whoever decides: once that round completed over the
+    simplifier's range at the delivery's heads and parked on after_review,
+    its own findings are dismissed with a reason, then next. Returns the
+    round's review Run ids."""
+
+    def reviewed():
+        point = (client.get(f"/v1/tasks/{task_id}").json()["awaitingDecision"] or {}).get("point")
+        runs = query(owner_dsn, """SELECT r.id FROM runs r JOIN workflow_runs wf ON wf.task_id = r.task_id
+            WHERE r.task_id = %s AND r.phase = 'review' AND r.status = 'completed'
+            AND r.review_range->>'of' = 'simplify' AND r.review_range->'base' <> '{}'::jsonb
+            AND r.base_refs = wf.state->'heads'""", (task_id,))
+        return point == "after_review" and [r["id"] for r in runs]
+
+    runs = wait_until(reviewed, timeout=120, message="the review of the simplifier's diff never came back to the conductor")
+    findings = query(owner_dsn, "SELECT id, run_id FROM review_findings WHERE task_id = %s AND status = 'open'", (task_id,))
+    # Only this round's findings are triaged here; any other open finding is the test's to settle.
+    assert all(f["run_id"] in runs for f in findings), (runs, findings)
+
+    def say(*lines: str) -> None:
+        resp = client.post(f"/v1/tasks/{task_id}/chat", {"text": "\n".join(lines)})
+        assert resp.status_code in (200, 201), resp.text
+
+    for f in findings:
+        say("Fine as it is.", f"tool: dismiss_finding {json.dumps({'id': f['id'], 'reason': reason})}")
+    wait_until(lambda: not query(owner_dsn, "SELECT id FROM review_findings WHERE task_id = %s AND status = 'open'", (task_id,)),
+               timeout=60, message="the simplifier review's findings were never dismissed")
+    say("On.", f"tool: decide {json.dumps({'action': 'next'})}")
+    return runs
