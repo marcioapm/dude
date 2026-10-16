@@ -373,14 +373,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				return err
 			}
 		}
-		// GitHub's first word on a head dude integrated and left to this
-		// syncer: it merges, so the integration is complete.
-		if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
-			(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
-			if err := delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA); err != nil {
-				return err
-			}
-		}
 		// The delivery the pull request is from: a task started over has a
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
@@ -406,6 +398,19 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	})
 	if err != nil {
 		return err
+	}
+	// GitHub's first word on a head dude integrated and left to this
+	// syncer: it merges, so the integration is complete. Its own
+	// transaction, after the pull request row is released: the hand-over
+	// read locks workflow_runs, which a publish recording holds while it
+	// updates pull_requests. A failure here is closeHandedOver's to finish.
+	if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
+		(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			return delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA)
+		}); err != nil {
+			return err
+		}
 	}
 
 	var permitted []forge.Feedback

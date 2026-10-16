@@ -7,6 +7,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -1094,6 +1096,72 @@ func TestTheSyncerWaitsForAHandOverBeingCommitted(t *testing.T) {
 	}
 	if err := <-read; err != nil {
 		t.Fatal(err)
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d, want the syncer's 1", n)
+	}
+}
+
+// A conductor publish recording holds the delivery's row (LockRecordingTx)
+// and then updates the pull request; the syncer's first clean reading after
+// a hand-over updates the pull request and then reads the delivery locked.
+// Interleaved, neither waits on the other in a cycle: no 40P01, and the
+// closing line is written once.
+func TestTheSyncerHandOverDoesNotDeadlockAPublishRecording(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	ctx := context.Background()
+	var prID string
+	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
+		t.Fatal(err)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	// The syncer's hand-over read, queued behind the publish's row lock.
+	waiting := `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`
+
+	var publishPID int
+	publishHasW := make(chan struct{})
+	syncerWaits := make(chan struct{})
+	syncerErr, publishErr := make(chan error, 1), make(chan error, 1)
+	go func() {
+		publishErr <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&publishPID); err != nil {
+				return err
+			}
+			// edits.go stepHolds FOR UPDATE on the same workflow_runs row.
+			if _, err := delivery.LoadDelivery(ctx, tx, wi); err != nil {
+				return err
+			}
+			close(publishHasW)
+			<-syncerWaits
+			// publish.go recordPublish shape.
+			_, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = 'abc', updated_at = now()
+				WHERE task_id = $1 AND state IN ('open', 'draft')`, wi)
+			return err
+		})
+	}()
+	<-publishHasW
+	go func() { syncerErr <- w.prs.Sync(ctx, w.org, prID) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for w.count(waiting, publishPID) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the syncer never waited on the delivery's row")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(syncerWaits)
+	for name, ch := range map[string]chan error{"syncer": syncerErr, "publish": publishErr} {
+		select {
+		case err := <-ch:
+			var pe *pgconn.PgError
+			if errors.As(err, &pe) {
+				t.Errorf("%s: PGERR %s %s", name, pe.Code, pe.Message)
+			} else if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s hung", name)
+		}
 	}
 	if n := w.count(integrationCompleted, wi); n != 1 {
 		t.Fatalf("completions %d, want the syncer's 1", n)
