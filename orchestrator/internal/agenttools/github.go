@@ -112,6 +112,18 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 	return slugs, nil
 }
 
+// A session's and a task's GitHub reads in the last hour. Each predicate
+// matches its partial index (migrations 133, 134) with literals, as a
+// parameter would not prove the index's WHERE.
+const (
+	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1
+		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
+		AND occurred_at > now() - interval '1 hour'`
+	githubReadsByTask = `SELECT count(*) FROM events WHERE task_id = $1
+		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
+		AND occurred_at > now() - interval '1 hour'`
+)
+
 // checkGitHubRead holds a read to the repositories the caller may read and
 // to the session's hourly reads, before anything reaches GitHub.
 func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) (githubRead, error) {
@@ -140,17 +152,10 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 	}
 	read.Slug = slugs[i]
 	// The session's (or, for a conductor with none, the task's) Runs share
-	// one budget, counted one caller at a time. Each predicate matches its
-	// partial index (migrations 133, 134) with literals, as a parameter
-	// would not prove the index's WHERE.
-	key, count := "task:"+c.TaskID, `SELECT count(*) FROM events WHERE task_id = $1
-		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
-		AND occurred_at > now() - interval '1 hour'`
-	scope := c.TaskID
+	// one budget, counted one caller at a time.
+	key, count, scope := "task:"+c.TaskID, githubReadsByTask, c.TaskID
 	if c.SessionID != "" {
-		key, scope, count = "session:"+c.SessionID, c.SessionID, `SELECT count(*) FROM events WHERE session_id = $1
-		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
-		AND occurred_at > now() - interval '1 hour'`
+		key, count, scope = "session:"+c.SessionID, githubReadsBySession, c.SessionID
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
 		return read, err
