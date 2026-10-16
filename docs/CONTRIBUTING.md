@@ -183,8 +183,11 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   The fix's range is reviewed (`{of: "pull_request_fix"}`), the review loop
   runs with its bounds, the tester checks every criterion, and only once the
   gate passes or a person settles it does `promoteCandidate` fast-forward
-  each pull request's branch to the candidate (`gh.FastForward`, never
-  forced) and refresh the description's Review and Verification sections.
+  each pull request's branch to the candidate (`gh.FastForwardExisting`,
+  never forced) and refresh, for the pull requests it moved, the
+  description's marked Review and Verification sections (`refreshBodies`,
+  the verdict refresh's machinery), or the verdict comment of an adopted
+  one. A candidate's verdict never reaches a pull request before that.
   A branch someone pushed to meanwhile is not moved: `pull_request_moved`
   asks a person (retry from their commit, or wait). Reviews are asked again
   after the move. The round counts once against `MaxPRFixIterations` and

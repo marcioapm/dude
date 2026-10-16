@@ -1660,9 +1660,7 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, moved); err != nil {
 			return workflow.Result{}, forgeWait(err)
 		}
-		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, forgeWait(err)
-		}
+		w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(moved)))
 	}
 	st.Candidate = nil
 	return w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
@@ -1675,7 +1673,11 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
 	st.Candidate, st.PRFeedback = nil, nil
-	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+	if len(heads) > 0 {
+		// The adopted pull request's verdict comment: the candidate's,
+		// promoted, or the last one, stale past a fix pushed unchecked.
+		w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+	}
 	// Who reviewed an open pull request's older head is asked to look at
 	// the fix. Before opening any new pull request, so that nothing that
 	// opening parks on leaves the open ones unasked; a replay of this step
@@ -1703,9 +1705,7 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 	if promoted {
 		// What they say about review and test is about the commit they
 		// show now.
-		if err := w.s.RefreshPullRequestBodies(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, forgeWait(err)
-		}
+		w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(heads)))
 	}
 	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {

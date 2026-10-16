@@ -991,45 +991,44 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 // pullRequestText is a task's pull request title and body, rendered
 // from what the ledger recorded.
 func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
-	taskID := st.TaskID
-	var title, goal string
+	var title, goal, review, verification string
 	var criteria []string
-	var findings []struct{ Category, Severity, Status, Title string }
-	var reviewers int
-	var verified *prVerification
-	var link string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, taskID).
+		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, st.TaskID).
 			Scan(&title, &goal, &raw); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(raw, &criteria)
-		rows, err := tx.Query(ctx, `SELECT category || COALESCE(' · ' || topic, ''), severity::text, `+shownStatus+`, title FROM review_findings
-			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, taskID, st.Attempt)
-		if err != nil {
+		var err error
+		if review, err = reviewText(ctx, tx, st); err != nil {
 			return err
 		}
-		if findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, Severity, Status, Title string }]); err != nil {
-			return err
-		}
-		if verified, err = latestVerification(ctx, tx, st); err != nil {
-			return err
-		}
-		if link, err = taskLink(ctx, tx, taskID); err != nil {
-			return err
-		}
-		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
-			WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
-			taskID, st.Attempt).Scan(&reviewers)
+		verification, _, err = verificationText(ctx, tx, st)
+		return err
 	})
-	body := prBody(goal, criteria, findings, reviewers)
-	if v := verificationSection(verified, st.Heads, link); v != "" {
-		// Before the factory's sign-off line.
-		i := strings.LastIndex(body, signOff)
-		body = body[:i] + markedVerification(v) + "\n\n" + body[i:]
+	return title, prBody(goal, criteria, review, verification), err
+}
+
+// reviewText is the pull request's Review section for the attempt's
+// findings, "" when there are none.
+func reviewText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
+	rows, err := tx.Query(ctx, `SELECT category || COALESCE(' · ' || topic, ''), severity::text, `+shownStatus+`, title FROM review_findings
+		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
+	if err != nil {
+		return "", err
 	}
-	return title, body, err
+	findings, err := pgx.CollectRows(rows, pgx.RowToStructByPos[prFinding])
+	if err != nil || len(findings) == 0 {
+		return "", err
+	}
+	var reviewers int
+	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
+		WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
+		st.TaskID, st.Attempt).Scan(&reviewers); err != nil {
+		return "", err
+	}
+	return reviewSection(findings, reviewers), nil
 }
 
 // taskLink is the task's page in dude, where its evidence is: on the
@@ -1152,27 +1151,43 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	return id, err
 }
 
-func prBody(goal string, criteria []string, findings []struct{ Category, Severity, Status, Title string }, reviewers int) string {
+type prFinding struct{ Category, Severity, Status, Title string }
+
+// prBody is a pull request's description: the goal and criteria, then
+// dude's Review and Verification sections, each between its markers so a
+// refresh replaces only it (refreshBodies), then the sign-off.
+func prBody(goal string, criteria []string, review, verification string) string {
 	// An attachment: URL means nothing on the forge; the image is named instead.
 	sections := []string{strings.TrimSpace(ImagesAsText(goal))}
 	if len(criteria) > 0 {
 		sections = append(sections, "## Acceptance criteria\n"+bullets(CriteriaImagesAsText(criteria)))
 	}
-	if len(findings) > 0 {
-		addressed := 0
-		var lines []string
-		for _, f := range findings {
-			if f.Status != "open" {
-				addressed++
-			}
-			lines = append(lines, fmt.Sprintf("- `%s` **%s** — %s _(%s)_", f.Severity, f.Category, f.Title, f.Status))
-		}
-		sections = append(sections, fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
-			len(findings), reviewers, addressed, strings.Join(lines, "\n")))
+	if review != "" {
+		sections = append(sections, markedReview(review))
+	}
+	if verification != "" {
+		sections = append(sections, markedVerification(verification))
 	}
 	sections = append(sections, signOff)
 	return joinNonEmpty(sections, "\n\n")
 }
+
+func reviewSection(findings []prFinding, reviewers int) string {
+	addressed := 0
+	var lines []string
+	for _, f := range findings {
+		if f.Status != "open" {
+			addressed++
+		}
+		lines = append(lines, fmt.Sprintf("- `%s` **%s** — %s _(%s)_", f.Severity, f.Category, f.Title, f.Status))
+	}
+	return fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
+		len(findings), reviewers, addressed, strings.Join(lines, "\n"))
+}
+
+// signOff is the line every pull request dude opens ends with, before any
+// note naming its siblings.
+const signOff = "---\n\nOpened by the dude factory."
 
 // PullRequestState is a task's pull request as last synced from the forge,
 // with what finds it on GitHub.

@@ -262,6 +262,15 @@ func (w *prFixWorld) shownBeforeTheGate() []string {
 	return out
 }
 
+// refreshedBeforeTheMove counts the description refreshes about heads past
+// before (the candidate's) recorded before the pull request took the fix:
+// a candidate's verdict in the description of a pull request without it.
+func (w *prFixWorld) refreshedBeforeTheMove() int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.verification_updated'
+		AND payload->>'head' <> $2 AND cursor < COALESCE((SELECT min(cursor) FROM events WHERE task_id = $1
+		AND event_type = 'pull_request.fix_moved'), 9223372036854775807)`, w.wi, w.before)
+}
+
 func (w *prFixWorld) candidate() string { return w.gh.SHA(delivery.CandidateBranch(w.wi, 1)) }
 
 // state reads the delivery's state field as JSON text.
@@ -332,8 +341,14 @@ func TestAPullRequestFixIsReviewedAndTestedBeforeThePullRequestShowsIt(t *testin
 	if strings.Contains(body, "Stale") || strings.Contains(body, w.before[:7]) {
 		t.Errorf("the description is about the commit before the fix:\n%s", body)
 	}
+	if strings.Count(body, "<!-- dude:review -->") != 1 || strings.Count(body, "<!-- dude:verification -->") != 1 {
+		t.Errorf("want one marked Review and one marked Verification:\n%s", body)
+	}
 	if w.candidate() != "" {
 		t.Errorf("the candidate branch is left at %s", w.candidate())
+	}
+	if n := w.refreshedBeforeTheMove(); n != 0 {
+		t.Errorf("%d description refreshes about the candidate before the pull request held it", n)
 	}
 }
 
@@ -347,6 +362,17 @@ func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *te
 	setPolicy(w.world, w.wi, `{"maxPrFixIterations":1}`)
 	var atFailure string
 	w.onTest = func() { atFailure = w.gh.SHA(w.branch) }
+	// The test's fix starts once the failed verdict was judged: the pull
+	// request then still shows what it showed before the candidate.
+	bodyBefore := w.gh.Pull(1).Body
+	var bodyAtFailure string
+	var commentsAtFailure []fakegithub.Comment
+	w.play = func(phase string, n int, _ *fakelux.Behaviour) {
+		if phase == "fix" && n == 2 {
+			p := w.gh.Pull(1)
+			bodyAtFailure, commentsAtFailure = p.Body, slices.Clone(p.Comments)
+		}
+	}
 	w.comment("Please rename the greeting.")
 	w.until("the fix on the pull request", func() bool {
 		w.sync()
@@ -365,6 +391,21 @@ func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *te
 	if got := w.verdicts(w.wi); strings.Join(got, ",") != "pass,pass" {
 		t.Errorf("the verdict at the pull request's head: %v", got)
 	}
+	if n := w.refreshedBeforeTheMove(); n != 0 {
+		t.Errorf("%d description refreshes about a candidate before the pull request held it", n)
+	}
+	if bodyAtFailure != bodyBefore {
+		t.Errorf("after the candidate's failed test the description changed:\n%s\nwas:\n%s", bodyAtFailure, bodyBefore)
+	}
+	for _, c := range commentsAtFailure {
+		if strings.Contains(c.Body, "Tested at") || strings.Contains(c.Body, "**fail**") {
+			t.Errorf("a comment carries the candidate's verdict before the pull request held it: %+v", c)
+		}
+	}
+	head := w.gh.SHA(w.branch)
+	if body := w.gh.Pull(1).Body; !strings.Contains(body, "Tested at `"+head[:7]+"`.") || strings.Contains(body, "**fail**") {
+		t.Errorf("after the move the description is not about the candidate's passing test at %s:\n%s", head[:7], body)
+	}
 	if p, f := w.state("prIteration"), w.state("prFixesByRepo"); p != "1" || f != `{"target": 1}` {
 		t.Errorf("the round counted prIteration=%s prFixes=%s, want once", p, f)
 	}
@@ -382,10 +423,16 @@ func TestAPushWhileAFixIsCheckedIsNeverOverwritten(t *testing.T) {
 	w := newPRFixWorld(t)
 	var theirs string
 	w.onTest = func() { theirs = w.gh.CommitOnTop(w.branch, "A person's own fix") }
+	bodyBefore := w.gh.Pull(1).Body
 	w.comment("Please rename the greeting.")
 	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonPullRequestMoved, w.describeRuns())
+	}
+	// The candidate passed its test but was never moved: its verdict is not
+	// the pull request's.
+	if body := w.gh.Pull(1).Body; body != bodyBefore {
+		t.Errorf("the description of a pull request the candidate never reached changed:\n%s\nwas:\n%s", body, bodyBefore)
 	}
 	if at := w.gh.SHA(w.branch); at != theirs || theirs == "" {
 		t.Errorf("the pull request is at %s, the person's commit %s", at, theirs)
@@ -708,6 +755,20 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
 		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title = 'The rename misses the farewell'`, w.wi); n != 2 {
 		t.Errorf("the finding was sent to %d fixes, want both after it was raised", n)
+	}
+	// Each promoted pull request's Review names the candidate's finding,
+	// fixed, once; the stored description is GitHub's.
+	for _, s := range []*fakegithub.Server{w.gh, w.web} {
+		body := s.Pull(1).Body
+		if !strings.Contains(body, "The rename misses the farewell _(resolved)_") || strings.Count(body, "<!-- dude:review -->") != 1 {
+			t.Errorf("%s's Review does not name the candidate's finding, fixed, once:\n%s", s.Slug, body)
+		}
+		var stored string
+		_ = w.owner.QueryRow(context.Background(), `SELECT pr.body FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.task_id = $1 AND r.name = $2`, w.wi, strings.TrimPrefix(s.Slug, "acme/")).Scan(&stored)
+		if stored != body {
+			t.Errorf("%s's stored description is not GitHub's:\n%s", s.Slug, stored)
+		}
 	}
 }
 

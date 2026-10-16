@@ -9,10 +9,8 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -206,103 +204,4 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 		}
 		return nil
 	})
-}
-
-// RefreshPullRequestBodies brings each open pull request's Review and
-// Verification sections up to the commit it shows now, keeping the rest of
-// its description as it is on GitHub (a person may have edited it).
-func (s *Store) RefreshPullRequestBodies(ctx context.Context, org string, st *State, gh *forge.GitHub) error {
-	if gh == nil {
-		return nil
-	}
-	_, fresh, err := s.pullRequestText(ctx, org, st)
-	if err != nil {
-		return err
-	}
-	states, err := s.PullRequestStates(ctx, org, st.PullRequestIDs)
-	if err != nil {
-		return err
-	}
-	for _, p := range states {
-		if p.Slug == "" || p.State == forge.StateMerged || p.State == forge.StateClosed {
-			continue
-		}
-		body, err := gh.Body(ctx, p.Slug, p.Number)
-		if err != nil {
-			return err
-		}
-		next := body
-		for _, heading := range []string{"## Review", "## Verification"} {
-			next = withSection(next, heading, section(fresh, heading))
-		}
-		if next == body {
-			continue
-		}
-		if err := gh.SetBody(ctx, p.Slug, p.Number, next); err != nil {
-			return err
-		}
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE pull_requests SET body = $2, updated_at = now() WHERE id = $1`, p.ID, next)
-			return err
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// signOff is the line every pull request dude opens ends with, before any
-// note naming its siblings.
-const signOff = "---\n\nOpened by the dude factory."
-
-// sectionBounds is where the section under heading starts and ends in
-// body: from its heading to the next heading or the sign-off. ok is false
-// when body has none.
-func sectionBounds(body, heading string) (start, end int, ok bool) {
-	switch {
-	case strings.HasPrefix(body, heading+"\n"):
-		start = 0
-	default:
-		i := strings.Index(body, "\n\n"+heading+"\n")
-		if i < 0 {
-			return 0, 0, false
-		}
-		start = i + 2
-	}
-	end = len(body)
-	rest := body[start+len(heading):]
-	for _, stop := range []string{"\n\n## ", "\n\n" + signOff} {
-		if j := strings.Index(rest, stop); j >= 0 && start+len(heading)+j < end {
-			end = start + len(heading) + j
-		}
-	}
-	return start, end, true
-}
-
-// section is body's section under heading, "" when it has none.
-func section(body, heading string) string {
-	start, end, ok := sectionBounds(body, heading)
-	if !ok {
-		return ""
-	}
-	return body[start:end]
-}
-
-// withSection is body with its section under heading replaced by fresh: a
-// section it lacks goes before the sign-off (or last), and an empty fresh
-// takes one it has away.
-func withSection(body, heading, fresh string) string {
-	start, end, ok := sectionBounds(body, heading)
-	switch {
-	case ok && fresh == "":
-		return strings.TrimSuffix(body[:start], "\n\n") + body[end:]
-	case ok:
-		return body[:start] + fresh + body[end:]
-	case fresh == "":
-		return body
-	}
-	if i := strings.Index(body, signOff); i >= 0 {
-		return body[:i] + fresh + "\n\n" + body[i:]
-	}
-	return fmt.Sprintf("%s\n\n%s", strings.TrimRight(body, "\n"), fresh)
 }

@@ -63,8 +63,9 @@ func (w *world) verdictEvents(wi string) []map[string]any {
 // A person's pull request dude took over gets the test's verdict as one
 // comment of dude's, never an edit of the person's description: the
 // section a pull request dude opens carries, under a header, ending in the
-// marker. A re-test after its fix edits that comment, and so does a new
-// head dude pushes, which makes the verdict stale.
+// marker. A re-test after its fix edits that comment, and so does a fix of
+// feedback, tested on its candidate: once the pull request holds it, never
+// before.
 func TestAnAdoptedPullRequestGetsTheVerdictAsOneCommentKeptUpToDate(t *testing.T) {
 	w := newWorld(t)
 	wi, n := w.testingAdopted("fake/test-fail-once")
@@ -95,15 +96,32 @@ func TestAnAdoptedPullRequestGetsTheVerdictAsOneCommentKeptUpToDate(t *testing.T
 		t.Fatalf("verdict events %v, want posted then edited, comment %d at %s", events, c.ID, head)
 	}
 
-	// A fix of feedback moves the head past what was tested: the same
-	// comment says so.
+	// A fix of feedback is tested before the pull request takes it: the
+	// same comment says what the pull request now holds was tested.
 	fixed := w.prFixPushed(wi)
-	w.until("the verdict marked stale", func() bool {
+	w.until("the verdict at the fixed head", func() bool {
 		got := w.verdictComments(wi, n)
-		return len(got) == 1 && strings.Contains(got[0].Body, "**Stale:**")
+		return len(got) == 1 && strings.Contains(got[0].Body, "Tested at `"+fixed[:7]+"`.")
 	})
-	if got := w.verdictComments(wi, n); got[0].ID != c.ID || !strings.Contains(got[0].Body, "Tested at `"+head[:7]+"`.") {
-		t.Errorf("after the fix to %s: %+v, want comment %d still saying what was tested", fixed[:7], got[0], c.ID)
+	if got := w.verdictComments(wi, n); got[0].ID != c.ID || strings.Contains(got[0].Body, "Stale") {
+		t.Errorf("after the fix to %s: %+v, want comment %d, current", fixed[:7], got[0], c.ID)
+	}
+	w.verdictOnlyAfterTheMove(wi, len(events))
+}
+
+// verdictOnlyAfterTheMove: every verdict comment the task recorded past its
+// first seen ones came after the pull request took the fix, so no
+// candidate's verdict reached the pull request before the commits it is about.
+func (w *world) verdictOnlyAfterTheMove(wi string, seen int) {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM (SELECT cursor FROM events WHERE task_id = $1
+		AND event_type = 'pull_request.verdict_commented' ORDER BY cursor OFFSET $2) v
+		WHERE v.cursor < (SELECT min(cursor) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved')`,
+		wi, seen); n != 0 {
+		w.t.Errorf("%d verdict comments recorded before the pull request took the fix", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, wi); n != 1 {
+		w.t.Errorf("%d moves of the fix recorded, want 1", n)
 	}
 }
 
@@ -116,13 +134,15 @@ func TestADeletedVerdictCommentIsPostedAgain(t *testing.T) {
 	if len(first) != 1 {
 		t.Fatalf("verdict comments %+v, want one", first)
 	}
+	seen := len(w.verdictEvents(wi))
 	w.gh.DeleteComment(n, first[0].ID)
-	w.prFixPushed(wi)
+	fixed := w.prFixPushed(wi)
 	w.until("a new verdict comment", func() bool { return len(w.verdictComments(wi, n)) == 1 })
 	again := w.verdictComments(wi, n)[0]
-	if again.ID == first[0].ID || !strings.Contains(again.Body, "**Stale:**") {
-		t.Fatalf("after deleting %d: %+v", first[0].ID, again)
+	if again.ID == first[0].ID || !strings.Contains(again.Body, "Tested at `"+fixed[:7]+"`.") || strings.Contains(again.Body, "Stale") {
+		t.Fatalf("after deleting %d: %+v, want a new comment, current at %s", first[0].ID, again, fixed[:7])
 	}
+	w.verdictOnlyAfterTheMove(wi, seen)
 	events := w.verdictEvents(wi)
 	if last := events[len(events)-1]; last["commentId"] != float64(again.ID) || last["edited"] != false {
 		t.Fatalf("last verdict event %v, want the new comment %d posted", last, again.ID)

@@ -139,7 +139,7 @@ func TestASavedPromptsGoalNamesImagesToo(t *testing.T) {
 }
 
 func TestAPullRequestNamesTheImages(t *testing.T) {
-	body := prBody("See ![shot.png](attachment:att_s).", []string{"Matches ![mock](attachment:att_m)"}, nil, 0)
+	body := prBody("See ![shot.png](attachment:att_s).", []string{"Matches ![mock](attachment:att_m)"}, "", "")
 	if !strings.Contains(body, "See [Image: shot.png].") || !strings.Contains(body, "Matches [Image: mock]") || strings.Contains(body, "attachment:") {
 		t.Errorf("pull request body:\n%s", body)
 	}

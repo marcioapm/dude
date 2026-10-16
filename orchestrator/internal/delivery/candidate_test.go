@@ -1,9 +1,6 @@
 package delivery
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 // A pull request's fix is checked on a branch of its own beside the task
 // branch, which a run's own branch name can never be.
@@ -24,31 +21,30 @@ func TestTheCandidateBranchIsBesideTheTaskBranch(t *testing.T) {
 	}
 }
 
-// Refreshing a pull request's description replaces its Review and
-// Verification sections and keeps everything else, a person's edits
-// included; a section the fresh text lacks goes before the sign-off.
+// Refreshing a pull request's description after a promotion replaces
+// dude's marked Review and Verification sections and keeps everything
+// else, a person's edits and an unmarked heading of theirs included; a
+// marked section the body lacks is appended.
 func TestAPullRequestsSectionsAreReplacedAndTheRestKept(t *testing.T) {
-	body := "Say hello\n\nA person's note.\n\n## Review\nold review\n\n## Verification\nTested at `aaa`.\n\n" + signOff +
-		"\n\nOne of 2 pull requests."
-	fresh := "Say hello\n\n## Review\nnew review\n\n## Verification\nTested at `bbb`.\n\n" + signOff
-	got := body
-	for _, h := range []string{"## Review", "## Verification"} {
-		got = withSection(got, h, section(fresh, h))
-	}
-	want := "Say hello\n\nA person's note.\n\n## Review\nnew review\n\n## Verification\nTested at `bbb`.\n\n" + signOff +
-		"\n\nOne of 2 pull requests."
+	body := "Say hello\n\nA person's note.\n\n## Review\nTheir own review notes.\n\n" + markedReview("## Review\nold review") +
+		"\n\n" + markedVerification("## Verification\nTested at `aaa`.") + "\n\n" + signOff + "\n\nOne of 2 pull requests."
+	got := replaceVerification(replaceReview(body, "## Review\nnew review"), "## Verification\nTested at `bbb`.")
+	want := "Say hello\n\nA person's note.\n\n## Review\nTheir own review notes.\n\n" + markedReview("## Review\nnew review") +
+		"\n\n" + markedVerification("## Verification\nTested at `bbb`.") + "\n\n" + signOff + "\n\nOne of 2 pull requests."
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
-	// A description that had no Verification gets one before the sign-off.
+	// A description that had no marked Review gets one, after the rest.
 	plain := "Say hello\n\n" + signOff
-	if got := withSection(plain, "## Verification", "## Verification\nTested."); got != "Say hello\n\n## Verification\nTested.\n\n"+signOff {
+	if got := replaceReview(plain, "## Review\n1 finding."); got != plain+"\n\n"+markedReview("## Review\n1 finding.") {
 		t.Errorf("added: %q", got)
 	}
-	if got := withSection(plain, "## Verification", ""); got != plain {
-		t.Errorf("nothing to add changed it: %q", got)
+	// The body dude opens with carries both sections marked, before the sign-off.
+	opened := prBody("Say hello", nil, "## Review\nr", "## Verification\nv")
+	if want := "Say hello\n\n" + markedReview("## Review\nr") + "\n\n" + markedVerification("## Verification\nv") + "\n\n" + signOff; opened != want {
+		t.Errorf("opened:\n%q\nwant:\n%q", opened, want)
 	}
-	if s := section(body, "## Nothing"); s != "" || !strings.HasPrefix(section(body, "## Review"), "## Review\nold") {
-		t.Errorf("section read wrong: %q", s)
+	if again := replaceVerification(replaceReview(opened, "## Review\nr"), "## Verification\nv"); again != opened {
+		t.Errorf("a refresh with the same sections changed it:\n%q", again)
 	}
 }

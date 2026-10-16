@@ -342,8 +342,12 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
-	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
-	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
+	if st.Candidate == nil {
+		// A candidate's verdict is on commits no pull request holds yet:
+		// its pull requests show it once promoted (candidateMoved).
+		w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+		w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
+	}
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {
 		return workflow.Result{}, err
@@ -454,7 +458,7 @@ const verdictCommentTimeout = 30 * time.Second
 //
 // Two short transactions around the GitHub calls, none open across them:
 // what to post, then its record. No lock: the callers are steps of the
-// task's one delivery (testVerdict, awaitPRFix), which never run at once,
+// task's one delivery (testVerdict, candidateMoved), which never run at once,
 // and an adopted pull request is one live task's.
 func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
 	if !st.adoptedPR() {
@@ -556,6 +560,20 @@ func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug
 // of each open pull request dude opened, at most refreshWorkers at once.
 // Database reads and ledger writes finish in separate transactions around GitHub.
 func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, forges Forges) {
+	s.refreshBodies(ctx, org, st, forges, nil, false)
+}
+
+// refreshPromoted brings the Review and Verification sections of the pull
+// requests in repos, those a promotion moved, up to the commit they show.
+func (s *Store) refreshPromoted(ctx context.Context, org string, st *State, forges Forges, repos []string) {
+	if len(repos) > 0 {
+		s.refreshBodies(ctx, org, st, forges, repos, true)
+	}
+}
+
+// refreshBodies is RefreshVerification over the pull requests in repos
+// (nil: every one), with dude's Review section too when review is set.
+func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges Forges, repos []string, review bool) {
 	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {
 		return
 	}
@@ -564,12 +582,13 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 		Number        int
 	}
 	var prs []target
-	var section string
+	var verification, reviewed string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.number
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND NOT pr.adopted AND pr.state IN ('open', 'draft')`,
-			st.PullRequestIDs, st.TaskID)
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND NOT pr.adopted AND pr.state IN ('open', 'draft')
+			  AND ($3::text[] IS NULL OR r.name = ANY($3))`,
+			st.PullRequestIDs, st.TaskID, repos)
 		if err != nil {
 			return err
 		}
@@ -577,15 +596,27 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 		if err != nil || len(prs) == 0 {
 			return err
 		}
-		section, _, err = verificationText(ctx, tx, st)
+		if verification, _, err = verificationText(ctx, tx, st); err != nil || !review {
+			return err
+		}
+		reviewed, err = reviewText(ctx, tx, st)
 		return err
 	})
 	if err != nil {
 		slog.Warn("reading pull request verification failed", "task", st.TaskID, "error", err)
 		return
 	}
-	if section == "" {
+	if verification == "" && reviewed == "" {
 		return
+	}
+	merge := func(body string) string {
+		if reviewed != "" {
+			body = replaceReview(body, reviewed)
+		}
+		if verification != "" {
+			body = replaceVerification(body, verification)
+		}
+		return body
 	}
 	// One budget for every pull request together, so a task over many
 	// repositories ends within it; the ledger writes keep the step's ctx and
@@ -607,9 +638,10 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 		go func() {
 			defer wg.Done()
 			for pr := range jobs {
+				var body string
 				updateErr := ghErr
 				if updateErr == nil {
-					updateErr = refreshBody(budget, gh, forge.SlugFromURL(pr.URL), pr.Number, section)
+					body, updateErr = refreshBody(budget, gh, forge.SlugFromURL(pr.URL), pr.Number, merge)
 				}
 				payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
 				if updateErr != nil {
@@ -617,6 +649,13 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 					payload["error"] = updateErr.Error()
 				}
 				if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					if updateErr == nil {
+						// The description as GitHub has it now, a person's edits included.
+						if _, err := tx.Exec(ctx, `UPDATE pull_requests SET body = $2, updated_at = now() WHERE id = $1`,
+							pr.ID, body); err != nil {
+							return err
+						}
+					}
 					return emitTx(ctx, tx, org, st, "pull_request.verification_updated", payload)
 				}); err != nil {
 					slog.Warn("recording pull request verification update failed", "pr", pr.ID, "error", err)
@@ -641,43 +680,48 @@ const refreshAttempts = 3
 
 var errBodyChanged = errors.New("body changed during update")
 
-// refreshBody writes section into the pull request's current body. GitHub
-// has no conditional update for an issue body, so the body is read again
-// just before the PATCH and, if a person changed it since, merged again
-// from theirs. A person's edit landing between that last read and the PATCH
-// itself, about one round-trip, is still overwritten.
-func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, section string) error {
+// refreshBody writes merge's sections into the pull request's current body,
+// and returns the body it leaves. GitHub has no conditional update for an
+// issue body, so the body is read again just before the PATCH and, if a
+// person changed it since, merged again from theirs. A person's edit
+// landing between that last read and the PATCH itself, about one
+// round-trip, is still overwritten.
+func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, merge func(string) string) (string, error) {
 	body, err := gh.PullRequestBody(ctx, slug, number)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for range refreshAttempts {
-		merged := replaceVerification(body, section)
+		merged := merge(body)
 		if merged == body {
-			return nil
+			return body, nil
 		}
 		fresh, err := gh.PullRequestBody(ctx, slug, number)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if fresh == body {
-			return gh.EditPullRequest(ctx, slug, number, merged)
+			return merged, gh.EditPullRequest(ctx, slug, number, merged)
 		}
 		body = fresh
 	}
-	return errBodyChanged
+	return "", errBodyChanged
 }
 
-// The hidden lines around the verification section dude writes into a pull
-// request body it opened: what lies between them is dude's, nothing else is.
+// The hidden lines around each section dude writes into a pull request
+// body it opened: what lies between them is dude's, nothing else is.
 const (
 	verificationStart = "<!-- dude:verification -->"
 	verificationEnd   = "<!-- /dude:verification -->"
+	reviewStart       = "<!-- dude:review -->"
+	reviewEnd         = "<!-- /dude:review -->"
 )
 
 func markedVerification(section string) string {
 	return verificationStart + "\n" + section + "\n" + verificationEnd
 }
+
+func markedReview(section string) string { return reviewStart + "\n" + section + "\n" + reviewEnd }
 
 func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string, error) {
 	v, err := latestVerification(ctx, tx, st)
@@ -691,18 +735,30 @@ func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string
 	return verificationSection(v, st.Heads, link), link, nil
 }
 
-// replaceVerification puts section between dude's markers in body, keeping
-// every other byte. A marker counts only as a whole line at column 0 and
-// outside a fenced code block; any other is text. With
-// no marked section it appends one: a `## Verification` without markers is a
-// person's, or one dude wrote before it marked its sections, and either way
-// is left as it is.
+// replaceVerification puts section between dude's verification markers in
+// body (replaceMarked).
 func replaceVerification(body, section string) string {
+	return replaceMarked(body, verificationStart, verificationEnd, markedVerification(section))
+}
+
+// replaceReview puts section between dude's review markers in body
+// (replaceMarked).
+func replaceReview(body, section string) string {
+	return replaceMarked(body, reviewStart, reviewEnd, markedReview(section))
+}
+
+// replaceMarked puts marked, a section between the start and end markers,
+// in place of the one body has, keeping every other byte. A marker counts
+// only as a whole line at column 0 and outside a fenced code block; any
+// other is text. With no marked section it appends one: a heading without
+// markers is a person's, or one dude wrote before it marked its sections,
+// and either way is left as it is.
+func replaceMarked(body, startMark, endMark, marked string) string {
 	nl := "\n"
 	if strings.Contains(body, "\r\n") {
 		nl = "\r\n"
 	}
-	marked := strings.ReplaceAll(markedVerification(section), "\n", nl)
+	marked = strings.ReplaceAll(marked, "\n", nl)
 	start, fence, offset := -1, "", 0
 	for line := range strings.SplitAfterSeq(body, "\n") {
 		content := strings.TrimRight(line, "\r\n")
@@ -711,11 +767,11 @@ func replaceVerification(body, section string) string {
 		// An indented marker is a person's, e.g. in a list item's fenced
 		// example, whose fence fenceAfter does not see.
 		switch content {
-		case verificationStart:
+		case startMark:
 			if !code {
 				start = offset
 			}
-		case verificationEnd:
+		case endMark:
 			if !code && start >= 0 {
 				return body[:start] + marked + body[offset+len(content):]
 			}
