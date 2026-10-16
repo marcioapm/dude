@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -166,5 +167,121 @@ func TestTheRecipeSyncPutsTheCurrentOverlayOnAServer(t *testing.T) {
 				t.Errorf("lux holds inject %q", sv.Inject)
 			}
 		})
+	}
+}
+
+// serverFacts is what a task's servers read (the web's) says of one
+// server about commenting, as JSON had it.
+func (w *world) serverFacts(task, name string) (commenting map[string]any, needsRestart any) {
+	w.t.Helper()
+	code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+	if code != 200 {
+		w.t.Fatalf("servers = %d %v", code, out)
+	}
+	sv := serverNamed(out, name)
+	if sv == nil {
+		w.t.Fatalf("no server %s in %v", name, out)
+	}
+	commenting, _ = sv["commenting"].(map[string]any)
+	return commenting, sv["needsRestart"]
+}
+
+// The servers read says, per wakeable preview server, whether commenting
+// is available (and if not, what is missing), and whether a running
+// server serves its pages without the overlay wanted now.
+func TestTheServersReadSaysWhetherCommentingIsAvailable(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		serverInject bool
+		publicURL    string
+		want         map[string]any
+	}{
+		{"public_url unset", true, "", map[string]any{"available": false, "reason": "public_url"}},
+		{"neither", false, "", map[string]any{"available": false, "reason": "public_url"}},
+		{"lux without serverInject", false, dudeOrigin, map[string]any{"available": false, "reason": "lux"}},
+		{"both", true, dudeOrigin, map[string]any{"available": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.commenting(tc.serverInject, tc.publicURL)
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			task, _ := w.declare()
+			commenting, needsRestart := w.serverFacts(task, "web")
+			if !reflect.DeepEqual(commenting, tc.want) || needsRestart != false {
+				t.Errorf("commenting %v needsRestart %v; want %v false", commenting, needsRestart, tc.want)
+			}
+		})
+	}
+}
+
+// A running server made without the overlay, or with another origin's,
+// needs a restart; one with the current one, or one asleep, does not. The
+// restart people already have puts it on, and nothing else does.
+func TestARunningServerWithoutTheCurrentOverlayNeedsARestart(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		before string // the origin the running server was made with; "" none
+		want   bool
+	}{
+		{"made without", "", true},
+		{"made with another origin", "https://old.example.test", true},
+		{"made with the current one", dudeOrigin, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.luxsWakeTimeout()
+			w.commenting(true, tc.before)
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			task, runID := w.declare()
+			web := w.serverID(runID, "web")
+			w.running(runID, "web")
+			w.until("web ready", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+			w.commenting(true, dudeOrigin)
+
+			commenting, needsRestart := w.serverFacts(task, "web")
+			if commenting["available"] != true || needsRestart != tc.want {
+				t.Fatalf("commenting %v needsRestart %v; want available, %v", commenting, needsRestart, tc.want)
+			}
+			// Reading changes nothing in lux, and a sweep restarts nothing.
+			marks := len(w.lux.TenantBodies())
+			for range 3 {
+				w.pump()
+			}
+			if _, sent := w.injectsSent(marks); len(sent) != 0 {
+				t.Fatalf("lux was sent %d changes no one asked for", len(sent))
+			}
+			if !tc.want {
+				return
+			}
+			if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/restart", nil); code != 200 {
+				t.Fatalf("restart = %d %v", code, out)
+			}
+			if sv, _ := w.lux.TenantServer(web); sv.Inject != overlayTag {
+				t.Errorf("after the restart lux holds inject %q", sv.Inject)
+			}
+			if _, needsRestart := w.serverFacts(task, "web"); needsRestart != false {
+				t.Errorf("after the restart needsRestart %v", needsRestart)
+			}
+		})
+	}
+}
+
+// An asleep server without the current overlay is not flagged: its next
+// wake syncs it before lux starts it.
+func TestAnAsleepServerNeverNeedsARestart(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.luxsWakeTimeout()
+	w.commenting(true, "")
+	runID, _ := w.asleepPreview()
+	w.commenting(true, dudeOrigin)
+	var task string
+	if err := w.owner.QueryRow(t.Context(), `SELECT task_id FROM runs WHERE id = $1`, runID).Scan(&task); err != nil {
+		t.Fatal(err)
+	}
+	if commenting, needsRestart := w.serverFacts(task, "web"); commenting["available"] != true || needsRestart != false {
+		t.Errorf("asleep: commenting %v needsRestart %v", commenting, needsRestart)
 	}
 }

@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"errors"
 	"html"
 	"net/url"
@@ -85,4 +86,43 @@ func (s *Service) injectPatch(cur lux.TenantServer) *string {
 		return nil
 	}
 	return &want
+}
+
+// needsRestart: a preview server whose Run is up serves its pages without
+// the overlay snippet wanted now (want, "" when commenting is off): made
+// before commenting, or for another origin. One asleep is not: its next
+// wake syncs it before lux starts it (updateServer).
+func needsRestart(ts lux.TenantServer, want string) bool {
+	if want == "" || ts.Inject == want {
+		return false
+	}
+	switch ts.RunState {
+	case "submitted", "scheduled", "starting", "resuming", "running":
+		return true
+	}
+	return false
+}
+
+// syncInject puts the overlay snippet wanted now on one of a wakeable
+// preview's servers, before a person's start or restart of it: the
+// restart that needsRestart asks for. lux applies it to the next request.
+func (s *Service) syncInject(ctx context.Context, r runRow, name string) error {
+	if s.inject() == "" {
+		return nil
+	}
+	list, err := s.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
+	if err != nil {
+		return luxError(err)
+	}
+	for _, ts := range list {
+		if ts.Name != name {
+			continue
+		}
+		if inject := s.injectPatch(ts); inject != nil {
+			if _, err := s.Lux.PatchServer(ctx, ts.ID, lux.PatchServer{Inject: inject}); err != nil && !lux.IsNotFound(err) {
+				return luxError(err)
+			}
+		}
+	}
+	return nil
 }

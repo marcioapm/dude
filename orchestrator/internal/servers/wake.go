@@ -1281,12 +1281,14 @@ func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *
 	}
 	out.Servers = []lux.Server{}
 	waking := r.WakeWanted
+	commenting, want := s.commenting(), s.inject()
 	for _, ts := range list {
 		var m map[string]any
 		if json.Unmarshal(ts.Raw, &m) != nil {
 			continue
 		}
 		m["serverState"], m["state"], m["fromSpec"] = ts.State, ts.Process, true
+		m["commenting"], m["needsRestart"] = commenting, needsRestart(ts, want)
 		raw, _ := json.Marshal(m)
 		var sv lux.Server
 		if json.Unmarshal(raw, &sv) == nil {

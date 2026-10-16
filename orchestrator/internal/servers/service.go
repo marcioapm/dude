@@ -604,11 +604,19 @@ func (s *Service) Add(ctx context.Context, org, runID string, in AddInput) (lux.
 }
 
 // Action starts, stops or restarts one of a Run's servers. Starting one on
-// a parked preview wakes it: the server starts once it runs.
+// a parked preview wakes it: the server starts once it runs. On a wakeable
+// preview a start or restart first gives the server the overlay snippet
+// wanted now (syncInject): it is how a server made without it
+// (needsRestart) gets it.
 func (s *Service) Action(ctx context.Context, org, runID, name, action string) (lux.Server, error) {
 	r, err := s.writable(ctx, org, runID)
 	if woke, err := s.wakeOnStart(ctx, org, runID, action, err); woke || err != nil {
 		return lux.Server{Name: name}, err
+	}
+	if r.Wakeable && action != "stop" {
+		if err := s.syncInject(ctx, r, name); err != nil {
+			return lux.Server{Name: name}, err
+		}
 	}
 	if r.parked() {
 		if action == "stop" {
