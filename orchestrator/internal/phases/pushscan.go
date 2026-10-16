@@ -49,8 +49,8 @@ func (h *hits) add(secret, where string) {
 }
 
 // scanPatch adds the secrets red finds in patch's added lines, each named
-// by its file through where.
-func (h *hits) scanPatch(red *redact.Redactor, patch string, where func(file string) string) {
+// by its file after prefix.
+func (h *hits) scanPatch(red *redact.Redactor, patch, prefix string) {
 	file := ""
 	for _, line := range strings.Split(patch, "\n") {
 		switch {
@@ -69,26 +69,27 @@ func (h *hits) scanPatch(red *redact.Redactor, patch string, where func(file str
 			continue
 		}
 		if name, ok := red.Contains(line[1:]); ok {
-			h.add(name, where(file))
+			h.add(name, prefix+file)
 		}
 	}
 }
 
-// scanWork finds the secrets red holds in the added lines of diffScript's
-// output, once per secret and file, in the order found. A file is named as
-// the live diff names it: with its repository when there are several.
-func scanWork(red *redact.Redactor, text string) []SecretInWork {
-	var found hits
+// repoPrefix is what a file of repo is named after, as the live diff names
+// it: its repository when there are several.
+func repoPrefix(repo string, sections int) string {
+	if sections > 1 {
+		return repo + "/"
+	}
+	return ""
+}
+
+// scanWork adds the secrets red holds in the added lines of diffScript's
+// output, once per secret and file, in the order found.
+func (h *hits) scanWork(red *redact.Redactor, text string) {
 	sections := splitDiff(text)
 	for _, sec := range sections {
-		found.scanPatch(red, sec.Text, func(file string) string {
-			if len(sections) > 1 {
-				return sec.Repo + "/" + file
-			}
-			return file
-		})
+		h.scanPatch(red, sec.Text, repoPrefix(sec.Repo, len(sections)))
 	}
-	return found
 }
 
 // historyScript prints, per repository given as diffScript's are, every
@@ -156,22 +157,31 @@ func historyCommand(bases map[string]string) []string {
 	return cmd
 }
 
-// scanHistory finds the secrets red holds in historyScript's output: in a
+// splitHistory splits historyScript's output into its repositories'
+// sections, as splitDiff does diffScript's.
+func splitHistory(text string) []diffSection {
+	var out []diffSection
+	for _, part := range strings.Split("\n"+text, "\n# dude-history ")[1:] {
+		head, body, _ := strings.Cut(part, "\n")
+		repo, base, _ := strings.Cut(head, " ")
+		out = append(out, diffSection{Repo: repo, Base: base, Text: body})
+	}
+	return out
+}
+
+// scanHistory adds the secrets red holds in historyScript's output: in a
 // commit's message, author or committer, named by its short sha, and in
 // the lines it adds, named by file as scanWork names them.
-func scanHistory(red *redact.Redactor, text string) []SecretInWork {
-	var found hits
-	sections := strings.Split("\n"+text, "\n# dude-history ")[1:]
-	for _, part := range sections {
-		head, body, _ := strings.Cut(part, "\n")
-		repo, _, _ := strings.Cut(head, " ")
+func (h *hits) scanHistory(red *redact.Redactor, text string) {
+	sections := splitHistory(text)
+	for _, sec := range sections {
 		in := func(where string) string {
 			if len(sections) > 1 {
-				return where + " in " + repo
+				return where + " in " + sec.Repo
 			}
 			return where
 		}
-		for _, commit := range strings.Split(body, "\x00commit ")[1:] {
+		for _, commit := range strings.Split(sec.Text, "\x00commit ")[1:] {
 			meta, patch, _ := strings.Cut(commit, "\x00")
 			lines := strings.SplitN(meta, "\n", 6)
 			for len(lines) < 6 {
@@ -179,33 +189,25 @@ func scanHistory(red *redact.Redactor, text string) []SecretInWork {
 			}
 			short := lines[0][:min(len(lines[0]), 7)]
 			if name, ok := red.Contains(lines[1] + " <" + lines[2] + ">"); ok {
-				found.add(name, in("commit author of "+short))
+				h.add(name, in("commit author of "+short))
 			}
 			if name, ok := red.Contains(lines[3] + " <" + lines[4] + ">"); ok {
-				found.add(name, in("commit committer of "+short))
+				h.add(name, in("commit committer of "+short))
 			}
 			if name, ok := red.Contains(lines[5]); ok {
-				found.add(name, in("commit message of "+short))
+				h.add(name, in("commit message of "+short))
 			}
-			found.scanPatch(red, patch, func(file string) string {
-				if len(sections) > 1 {
-					return repo + "/" + file
-				}
-				return file
-			})
+			h.scanPatch(red, patch, repoPrefix(sec.Repo, len(sections)))
 		}
 	}
-	return found
 }
 
 // missingHistory are the repositories of bases historyScript's output has
 // no section for, in name order.
 func missingHistory(text string, bases map[string]string) []string {
 	seen := map[string]bool{}
-	for _, part := range strings.Split("\n"+text, "\n# dude-history ")[1:] {
-		head, _, _ := strings.Cut(part, "\n")
-		repo, _, _ := strings.Cut(head, " ")
-		seen[repo] = true
+	for _, sec := range splitHistory(text) {
+		seen[sec.Repo] = true
 	}
 	var missing []string
 	for _, name := range slices.Sorted(maps.Keys(bases)) {
@@ -250,9 +252,8 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 		return nil, errUnchecked{"no history was read for " + strings.Join(missing, ", ")}
 	}
 	var found hits
-	for _, h := range slices.Concat(scanWork(red, work), scanHistory(red, history)) {
-		found.add(h.Secret, h.File)
-	}
+	found.scanWork(red, work)
+	found.scanHistory(red, history)
 	branch := r.PushBranch
 	if branch == "" {
 		branch = runBranch(r)
