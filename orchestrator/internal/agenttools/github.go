@@ -251,6 +251,8 @@ func githubRefusal(read githubRead, err error) error {
 	}
 	var e *forge.Error
 	switch {
+	case forge.Moved(err):
+		return refuse("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
 	case forge.RateLimited(err):
 		return refuse("GitHub is rate limiting dude (%v): read %s later", err, what)
 	case errors.As(err, &e) && e.NotFound():

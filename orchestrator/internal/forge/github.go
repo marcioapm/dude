@@ -184,6 +184,23 @@ type Error struct {
 	// How long GitHub asked to be left alone (Retry-After, or the primary
 	// limit's reset), capped at MaxRetryAfter; 0 when it did not say.
 	RetryAfter time.Duration
+	// Refusal is dude's own reason for refusing an agent's read (one of the
+	// Refusal* kinds), "" when GitHub's answer is the refusal.
+	Refusal string
+}
+
+// Why dude refused an agent's read on its own account. Message then holds
+// dude's words only, never what GitHub sent.
+const (
+	RefusalMoved    = "moved"    // a permanent redirect of /repos/{slug}…
+	RefusalRedirect = "redirect" // any other redirect
+)
+
+// Moved says GitHub answered an agent's read of a repository with a
+// permanent redirect: renamed or transferred.
+func Moved(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Refusal == RefusalMoved
 }
 
 // MaxRetryAfter bounds a wait GitHub asks for, so a garbled header cannot

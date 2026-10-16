@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -116,6 +117,57 @@ func TestAgentReadRefusesRepositoryRedirect(t *testing.T) {
 	result, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
 	if err == nil || forbiddenCalls != 0 || strings.Contains(result.Title+result.Body, "private-outside-canary") {
 		t.Fatalf("redirect: err=%v forbidden calls=%d result=%+v", err, forbiddenCalls, result)
+	}
+}
+
+// A redirect's body is another location's answer: an agent's read refuses
+// it in dude's words, whatever the body says, and a repository's permanent
+// redirect says the repository moved.
+func TestAgentReadRedirectBodiesNeverReachTheRefusal(t *testing.T) {
+	const canary = "private-redirect-body-canary"
+	for _, tc := range []struct {
+		name, path string
+		status     int
+		read       func(gh *GitHub) error
+		refusal    string
+	}{
+		{"canonical lookup 301", "/repos/acme/old", http.StatusMovedPermanently, func(gh *GitHub) error {
+			_, _, err := gh.SearchIssues(context.Background(), "acme/old", "", "issue", "", 30)
+			return err
+		}, RefusalMoved},
+		{"issue 308", "/repos/acme/old/issues/1", http.StatusPermanentRedirect, func(gh *GitHub) error {
+			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
+			return err
+		}, RefusalMoved},
+		{"issue 302", "/repos/acme/old/issues/1", http.StatusFound, func(gh *GitHub) error {
+			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
+			return err
+		}, RefusalRedirect},
+		{"issue 303", "/repos/acme/old/issues/1", http.StatusSeeOther, func(gh *GitHub) error {
+			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
+			return err
+		}, RefusalRedirect},
+		{"issue 307", "/repos/acme/old/issues/1", http.StatusTemporaryRedirect, func(gh *GitHub) error {
+			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
+			return err
+		}, RefusalRedirect},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					t.Errorf("unexpected request %s", r.URL.Path)
+				}
+				w.Header().Set("Location", "/repositories/42/"+canary)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(`{"message":"` + canary + `","url":"/repositories/42"}`))
+			}))
+			defer srv.Close()
+			err := tc.read(NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}))
+			var e *Error
+			if !errors.As(err, &e) || e.Refusal != tc.refusal || e.Status != tc.status || strings.Contains(err.Error(), canary) {
+				t.Fatalf("err=%v (%#v), want refusal %q without the body", err, e, tc.refusal)
+			}
+		})
 	}
 }
 

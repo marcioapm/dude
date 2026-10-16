@@ -400,6 +400,11 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	const agentResponseMax = 4 << 20
 	if isAgentRead(ctx) {
 		response = io.LimitReader(res.Body, agentResponseMax+1)
+		// A redirect's body is another location's answer: drained unread.
+		if res.StatusCode >= 300 && res.StatusCode < 400 {
+			_, _ = io.Copy(io.Discard, response)
+			return g.redirectRefusal(method, target, res.StatusCode)
+		}
 	}
 	data, err := io.ReadAll(response)
 	if isAgentRead(ctx) && len(data) > agentResponseMax {
@@ -424,4 +429,15 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+// redirectRefusal is an agent read's refusal of a redirect, in dude's
+// words: a permanent one of a repository's path says it moved.
+func (g *GitHub) redirectRefusal(method, target string, status int) error {
+	path, _, _ := strings.Cut(strings.TrimPrefix(target, g.cred.APIBaseURL), "?")
+	if (status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect) && strings.HasPrefix(path, "/repos/") {
+		return &Error{Status: status, Refusal: RefusalMoved, Message: "GitHub says the repository has moved (renamed or transferred)"}
+	}
+	return &Error{Status: status, Refusal: RefusalRedirect,
+		Message: fmt.Sprintf("GitHub answered %s %s with a redirect, which an agent's read does not follow", method, path)}
 }
