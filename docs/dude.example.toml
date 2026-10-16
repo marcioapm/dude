@@ -169,10 +169,12 @@ subject = "mailto:dude@localhost"                        # DUDE_VAPID_SUBJECT
 # How people sign in to the backend: "api_key", or "cloudflare_access". API
 # keys keep working either way, for scripts and anyone who signs in with one.
 provider = "api_key"                                     # DUDE_AUTH_PROVIDER
-# cloudflare_access only, and then required unless noted:
-# The origin people open dude at; changes signed in by Access must come from
-# it (the Origin header).
+# The https origin people open dude at. Required with cloudflare_access, where
+# changes signed in by Access must come from it (the Origin header). With any
+# provider it also turns on commenting on previews (lux v0.1.32 or later):
+# both processes read it.
 # public_url = "https://dude.example.com"                # DUDE_AUTH_PUBLIC_URL
+# cloudflare_access only, and then required unless noted:
 # Operators who may create organisations and invite their first admins.
 # Optional, but required on a fresh Access deployment with no organisations.
 # super_admins = ["operator@example.com"]                  # DUDE_AUTH_SUPER_ADMINS
