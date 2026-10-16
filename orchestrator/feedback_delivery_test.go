@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // feedback drafts an item as person (an api key's person) on the task's
@@ -143,5 +145,26 @@ func TestFeedbackOnWorkReadyToReadStartsAFixerAndBoundsIt(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, wi); n != 1 {
 		t.Errorf("the reader's wait was not finished")
+	}
+}
+
+func TestFeedbackAFixThatChangesNothingIsFollowedByAnother(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Commit = nil
+		}
+		return b
+	}
+	if code, body := w.feedback(ana, wi, "fbi_pr", "Log the retry count at info, not debug."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("pr_loop_exhausted", func() bool { w.sync(); return w.escalationReason(wi) == "pr_loop_exhausted" })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_pr' = ANY(feedback_item_ids)`, wi); n != scriptedPolicy().MaxPRFixIterations {
+		t.Errorf("%d fixers given the item, want %d", n, scriptedPolicy().MaxPRFixIterations)
 	}
 }

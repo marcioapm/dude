@@ -21,9 +21,9 @@ import (
 )
 
 // agentResolve is a fixer resolving a person's item through the agent
-// tools server, as its publish moves the task branch: the commit is
-// pick(the branch before, the Run's new head); also, further items it
-// resolves with the same commit. compare, when set, sees each GitHub
+// tools server, as its publish moves the candidate branch: the commit is
+// pick(the commit target's checkout started from, the Run's new head);
+// also, further items it resolves with the same commit. compare, when set, sees each GitHub
 // compare request (its path) and may fail it with a status.
 type agentResolve struct {
 	mu       sync.Mutex
@@ -71,15 +71,14 @@ func (w *world) resolveAsItPublishes(task, item string, pick func(base, head str
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			var in struct{ SHA string }
 			_ = json.Unmarshal(body, &in)
-			branch := r.URL.Path[strings.Index(r.URL.Path, "/git/refs/heads/")+len("/git/refs/heads/"):]
 			token, hash := agenttools.NewToken()
 			mustExec(w.t, w.owner, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, fixer, hash)
-			// A pull request's fix publishes to a candidate branch that does
-			// not exist before its first push: where it started is its base.
-			before := w.gh.SHA(branch)
-			if before == "" {
-				_ = w.owner.QueryRow(ctx, `SELECT v FROM runs, jsonb_each_text(base_refs) AS b(k, v) WHERE id = $1 LIMIT 1`,
-					fixer).Scan(&before)
+			// The candidate branch does not exist before the fix's first
+			// push: where the fixer started is its base_refs, by repository.
+			var before string
+			if err := w.owner.QueryRow(ctx, `SELECT COALESCE(base_refs->>'target', '') FROM runs WHERE id = $1`, fixer).Scan(&before); err != nil {
+				w.t.Errorf("the fixer's base: %v", err)
+				return 0
 			}
 			ar.fixer, ar.commit = fixer, pick(before, in.SHA)
 			for _, id := range append([]string{item}, ar.also...) {

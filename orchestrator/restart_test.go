@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -163,5 +165,44 @@ func TestTheOwnersRestartGoesOnFromTheBanner(t *testing.T) {
 	}
 	if status, _ := w.callAs(ana, "/internal/runs/"+runs[0]+"/restart", map[string]any{}); status != 409 {
 		t.Errorf("restarting a Run that ended: %d", status)
+	}
+}
+
+func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T) {
+	w := newWorld(t)
+	w.grant("FIX_KEY", "fix-test-not-a-real-key-1", "fixer")
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	w.assignOwner(wi, ana)
+	scripted := w.lux.Decide
+	var fixes atomic.Int32
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" && fixes.Add(1) == 1 {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return scripted(spec)
+	}
+	head := w.gh.Pull(1).Head
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	var fix string
+	w.until("a candidate fix running", func() bool {
+		w.sync()
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'
+			AND branch IS NOT NULL`, wi).Scan(&fix)
+		return fix != ""
+	})
+	if got := projectSecretsOf(submitted(t, w.luxRunFor(fix))); got["FIX_KEY"] != "fix-test-not-a-real-key-1" {
+		t.Errorf("the candidate fix declares %v", got)
+	}
+	if status, body := w.callAs(ana, "/internal/runs/"+fix+"/restart", map[string]any{"note": "again"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	var fresh string
+	_ = w.owner.QueryRow(context.Background(), `SELECT replaced_by FROM runs WHERE id = $1`, fix).Scan(&fresh)
+	w.until("the restarted fix completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fresh) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'git.commit_created' AND payload->>'branch' = $2`, fresh, head); n != 0 {
+		t.Errorf("the restarted fix published to the pull request's branch %s before its review and test", head)
 	}
 }
