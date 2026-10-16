@@ -37,19 +37,36 @@ type Anchor = Pick<FeedbackCodeAnchor, "runId" | "repo" | "path" | "side" | "sta
 const onSide = (l: Pick<RunDiffLine, "kind">, side: CodeSide) => (side === "old" ? l.kind !== "+" : l.kind !== "-");
 const numberOn = (l: Pick<RunDiffLine, "old" | "new">, side: CodeSide) => (side === "old" ? l.old : l.new);
 
+// lux's rule for a repository's name (lux.NameRe); any other name is checked out rewritten.
+const LUX_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const HASH_SUFFIX = /^[0-9a-f]{8}$/;
+
+/**
+ * Whether `segment` is `repo` as lux.SpecName / lux_name (migration 093)
+ * rewrites a name lux refuses: lowercased, other characters as '-',
+ * leading '-' and '_' dropped, cut to 23, then '-' and 8 hex digits of
+ * SHA-256 (not recomputed here: the hash is matched by form).
+ */
+function isHashedCheckout(segment: string, repo: string): boolean {
+  if (LUX_NAME.test(repo)) return false;
+  let mapped = "";
+  for (const c of repo) mapped += /^[A-Z]$/.test(c) ? c.toLowerCase() : /^[a-z0-9_-]$/.test(c) ? c : "-";
+  const base = mapped.replace(/^[-_]+/, "").slice(0, 23);
+  const suffix = base === "" ? segment : segment.startsWith(`${base}-`) ? segment.slice(base.length + 1) : null;
+  return suffix !== null && HASH_SUFFIX.test(suffix);
+}
+
 /**
  * The diff's file an anchor names. With one repository the diff names a
- * file by its path; with several, `<checkout name>/<path>`, where the
- * checkout name is the repository's own when it is a simple lowercase name
- * (lux_name, migration 093). A hashed checkout name is matched only when
- * exactly one repository's file has that path.
+ * file by its path; with several, `<checkout name>/<path>`: the
+ * repository's own name when lux takes it, else its hashed rewrite.
  */
 export function anchorFile(anchor: Pick<FeedbackCodeAnchor, "repo" | "path">, files: ReadonlyArray<RunDiffFile>): RunDiffFile | undefined {
   const exact = files.find((f) => f.path === anchor.path) ?? files.find((f) => f.path === `${anchor.repo}/${anchor.path}`);
   if (exact) return exact;
   const under = files.filter((f) => {
     const slash = f.path.indexOf("/");
-    return slash > 0 && f.path.slice(slash + 1) === anchor.path;
+    return slash > 0 && f.path.slice(slash + 1) === anchor.path && isHashedCheckout(f.path.slice(0, slash), anchor.repo);
   });
   return under.length === 1 ? under[0] : undefined;
 }

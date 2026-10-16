@@ -384,6 +384,43 @@ describe("placing items on a diff", () => {
 });
 
 describe("commenting in a Run's Changes", () => {
+  test("a draft edited from another Run's Changes keeps its own Run's lines and checksum", async () => {
+    const { useTaskFeedbackPage } = await import("../src/screens/FeedbackSection.tsx");
+    const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
+      refresh: async () => people, seen: () => false } as unknown as People;
+    const diffWith = (checksum: string, at: number) => ({ base: "b", checksum, final: false, updatedAt: "", files: [{ path: "src/app.ts", status: "M" as const,
+      additions: 1, deletions: 0, hunks: [{ header: "@@", lines: [{ kind: "+" as const, old: null, new: at, text: "x()" }] }] }] });
+    // run_impl's diff has x() at line 2 (as written, checksum impl_c1); run_fix's has it at line 7.
+    const implDiff = diffWith("impl_c1", 2);
+    const fixDiff = diffWith("fix_c9", 7);
+    const patched: unknown[] = [];
+    class Recording extends FeedbackClient {
+      override async updateFeedbackDraft(_id: string, input: FeedbackDraftInput) {
+        patched.push(input.anchor);
+        return this.feedbackItems[0]!;
+      }
+    }
+    const client = new Recording();
+    // The fixtures have no diffs: run_impl's is read from here.
+    (client as unknown as { runDiff: (runId: string) => Promise<unknown> }).runDiff = async (runId) => {
+      if (runId !== "run_impl") throw new ApiError(404, "not_found", "no diff");
+      return implDiff;
+    };
+    const draft = item({ id: "d_impl", status: "draft", author: { id: ME.id, name: ME.name }, submittedAt: null, batchId: null, anchor: {
+      kind: "code", runId: "run_impl", repo: "web", path: "src/app.ts", side: "new", startLine: 2, endLine: 2, baseSha: "b", headSha: null,
+      diffChecksum: "impl_c1", excerpt: [{ kind: "+", old: null, new: 2, text: "x()" }] } });
+    client.feedbackItems.push(draft);
+    let fb: ReturnType<typeof useTaskFeedbackPage> | null = null;
+    function Probe() {
+      fb = useTaskFeedbackPage({ client, taskId: TASK_ID, task: null, current: 1, version: 0, people, onShowInDiff: () => {}, onShowOnTab: () => {} });
+      return null;
+    }
+    const { unmount } = await mount(<Probe />);
+    mounted.push(unmount);
+    await act(async () => { await fb!.onDiff.saveDraft(draft, "Edited", { runId: "run_fix", diff: fixDiff }); });
+    expect(patched).toEqual([{ kind: "code", runId: "run_impl", path: "src/app.ts", side: "new", startLine: 2, endLine: 2, diffChecksum: "impl_c1" }]);
+  });
+
   test("a range picked in the gutter becomes a draft on those lines with the diff's checksum; items are drawn shifted or at the file's head", async () => {
     const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
     const { FeedbackProvider } = await import("../src/feedback.tsx");

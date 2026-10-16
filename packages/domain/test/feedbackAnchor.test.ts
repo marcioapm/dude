@@ -205,4 +205,24 @@ describe("relocateCodeAnchor", () => {
     expect(relocateCodeAnchor(a, later([moved]))).toEqual({ kind: "lines", path: "web/src/app.ts", side: "new", startLine: 3, endLine: 4 });
     expect(relocateCodeAnchor(a, { runId: "run_a", checksum: "c1", files: [prefixed] }).kind).toBe("lines");
   });
+
+  test("a repository checked out under a hashed lux name is found under that name", () => {
+    // lux_name('Web') = 'web-29751047' (migration 093).
+    const a = anchorOn(WRITTEN, "new", 11, 12, { repo: "Web", path: "src/app.ts" });
+    const hashed = file("web-29751047/src/app.ts", WRITTEN.hunks);
+    expect(relocateCodeAnchor(a, later([hashed]))).toEqual({ kind: "lines", path: "web-29751047/src/app.ts", side: "new", startLine: 11, endLine: 12 });
+  });
+
+  test("with one repository, a file of the same name in a subdirectory is another file", () => {
+    const readme = file("README.md", [hunk(12, 12, "+Run it with make.")]);
+    const a = anchorOn(readme, "new", 12, 12, { repo: "web" });
+    const docs = file("docs/README.md", [hunk(12, 12, "+Run it with make.")]);
+    expect(relocateCodeAnchor(a, later([docs]))).toEqual({ kind: "absent" });
+  });
+
+  test("with two plainly named repositories, the same path in the other one is another file", () => {
+    const a = anchorOn(WRITTEN, "new", 11, 12, { repo: "web", path: "src/app.ts" });
+    const api = file("api/src/app.ts", WRITTEN.hunks);
+    expect(relocateCodeAnchor(a, later([api]))).toEqual({ kind: "absent" });
+  });
 });

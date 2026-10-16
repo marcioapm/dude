@@ -174,6 +174,11 @@ export const runsOf = (task: Pick<TaskDetail, "runs"> | null): ReadonlyMap<strin
 export const commentableRun = (run: Run | undefined, current: number): boolean =>
   run !== undefined && run.kind !== "preview" && !isConductor(run) && run.attempt === current;
 
+export interface ViewedRunDiff {
+  readonly runId: string;
+  readonly diff: Pick<RunDiff, "checksum" | "files">;
+}
+
 export const FEEDBACK_FULL = `You have ${FEEDBACK_LIMITS.drafts} drafts on this task, the most kept. Submit or delete some to write more.`;
 
 /**
@@ -193,7 +198,8 @@ export interface FeedbackOnDiff {
   readonly runs: ReadonlyMap<string, Run>;
   readonly people: People;
   readonly createDraft: (anchor: FeedbackAnchorInput, body: string) => Promise<unknown>;
-  readonly saveDraft: (item: FeedbackItem, body: string, diff: Pick<RunDiff, "checksum" | "files"> | null) => Promise<unknown>;
+  /** `viewed`: the Run's Changes the edit was made on, if any (not necessarily the draft's own Run). */
+  readonly saveDraft: (item: FeedbackItem, body: string, viewed: ViewedRunDiff | null) => Promise<unknown>;
   readonly deleteDraft: (id: string) => Promise<unknown>;
   readonly reply: (id: string, body: string) => Promise<unknown>;
   readonly resolve: (id: string) => Promise<unknown>;

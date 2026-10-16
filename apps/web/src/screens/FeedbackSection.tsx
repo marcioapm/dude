@@ -17,13 +17,13 @@ import {
 } from "@dude/design-system/components";
 import { Button, Callout, KeyValueList, Tooltip, useToast } from "@dude/design-system/primitives";
 import { Icon, plural } from "@dude/design-system";
-import { FEEDBACK_LIMITS, type FeedbackAnchorInput, type FeedbackItem, type RunDiff } from "@dude/domain";
+import { FEEDBACK_LIMITS, type FeedbackAnchorInput, type FeedbackItem } from "@dude/domain";
 import type { ApiClient, PullRequest, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
 import {
   FEEDBACK_FULL, Submitter, cardItem, draftAnchorInput, feedbackDestination, runsOf, submitRefusal, threadOf, useTaskFeedback,
-  type FeedbackOnDiff,
+  type FeedbackOnDiff, type ViewedRunDiff,
 } from "../feedback.tsx";
 
 export interface TaskFeedbackController {
@@ -69,10 +69,12 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
     taskId, items: list.feedback, current, closed, readOnly: status === "done", full: drafts.length >= FEEDBACK_LIMITS.drafts,
     runs, people, focus,
     createDraft: (anchor: FeedbackAnchorInput, body: string) => after(client.createFeedbackDraft(taskId, { body, anchor })),
-    saveDraft: async (item: FeedbackItem, body: string, diff: Pick<RunDiff, "checksum" | "files"> | null) => {
-      // A code draft keeps its lines where they are now: its Run's diff, read when the caller has none.
+    saveDraft: async (item: FeedbackItem, body: string, viewed: ViewedRunDiff | null) => {
+      // A code draft keeps its lines where they are now in its own Run's diff: the one on screen
+      // only when it is that Run's, else read; another Run's numbers and checksum are not its own.
       const anchor: FeedbackAnchorInput = item.anchor.kind === "code"
-        ? draftAnchorInput(item.anchor, diff ?? await client.runDiff(item.anchor.runId).catch(() => null))
+        ? draftAnchorInput(item.anchor, viewed && viewed.runId === item.anchor.runId
+          ? viewed.diff : await client.runDiff(item.anchor.runId).catch(() => null))
         : item.anchor;
       return after(client.updateFeedbackDraft(item.id, { body, anchor }));
     },

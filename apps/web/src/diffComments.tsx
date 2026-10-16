@@ -89,7 +89,7 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
         onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
-        onSaveDraft={(b) => fb.saveDraft(item, b, diff)} onDelete={() => fb.deleteDraft(item.id)} />
+        onSaveDraft={(b) => fb.saveDraft(item, b, { runId, diff })} onDelete={() => fb.deleteDraft(item.id)} />
     </div>
   );
 
