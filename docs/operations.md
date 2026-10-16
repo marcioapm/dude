@@ -507,6 +507,12 @@ the value out of the files and their commits, then resume the agent or
 retry the step. History over 7 MiB is not read and not pushed. Binary
 files' contents are not checked.
 
+Every pushing Run needs lux's word on where each checkout started (its
+`git.checkout` event), which can arrive after the agent's turn has ended.
+dude waits for it up to 2 minutes from the turn's end, pushing nothing
+meanwhile; if it has not come by then, or lux reports the Run over first,
+the Run fails kept with "lux never reported where the checkout started".
+
 ## Postgres
 
 Postgres 17 with the pgvector extension is what the tests run against

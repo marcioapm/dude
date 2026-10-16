@@ -3153,6 +3153,13 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 			send("end", map[string]any{"cursor": "", "state": run.State, "afterEvent": afterEvent})
 			return
 		}
+		// A client that left while a BeforeEvent hook ran unlocked was
+		// broadcast to before this Wait: without this check it never returns.
+		select {
+		case <-done:
+			return
+		default:
+		}
 		run.cond.Wait()
 	}
 }

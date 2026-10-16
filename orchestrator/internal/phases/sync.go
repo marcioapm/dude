@@ -83,6 +83,9 @@ type Syncer struct {
 	// For tests: how long a conductor's input waits for its checkout's
 	// sync to be reported; zero is checkoutSyncWait.
 	CheckoutSyncWait time.Duration
+	// For tests: how long a finished turn waits for lux's git.checkout;
+	// zero is baseWait.
+	BaseWait time.Duration
 	// For tests: the budget of a sweep's stall reports for asking lux;
 	// zero is stallLuxBudget.
 	StallLuxBudget time.Duration
@@ -1730,6 +1733,22 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
 	if pushes && r.PushResult == nil {
+		if r.PushRequestID == "" {
+			// lux's git.checkout, which says where each checkout started,
+			// trails the agent's records like any lifecycle event: a turn
+			// read before it waits for it, and nothing is pushed without it.
+			bases, missing, over, err := s.checkoutBases(ctx, r)
+			if err != nil {
+				return true, err
+			}
+			if missing {
+				if over || lux.Terminal(r.LuxState) {
+					return true, s.failKept(ctx, r, errNoBase.Error())
+				}
+				return false, nil
+			}
+			r.BaseSHAs = bases
+		}
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
 		// the agent's own records by up to a second, so the state recorded
@@ -1841,6 +1860,31 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+// baseWait is how long after its turn ended a Run waits for lux to say
+// where a checkout it pushes started. lux flushes lifecycle events on a
+// timer and they trail the agent's records by about a second; two minutes
+// covers a lux restart or a stalled event stream, and is short enough that
+// a lux that lost the event fails the Run while its container is still
+// worth resuming.
+const baseWait = 2 * time.Minute
+
+// checkoutBases reads r's recorded bases afresh: the follower may have
+// recorded git.checkout since the sweep read the Run. missing: a
+// repository the Run pushes has no base yet; over: its turn ended longer
+// than the base wait ago.
+func (s *Syncer) checkoutBases(ctx context.Context, r phaseRun) (bases map[string]string, missing, over bool, err error) {
+	wait := s.BaseWait
+	if wait == 0 {
+		wait = baseWait
+	}
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT base_shas, EXISTS (SELECT 1 FROM unnest(lux_pushes) p WHERE NOT base_shas ? p),
+				COALESCE(turn_done_at <= now() - make_interval(secs => $2), false)
+			FROM runs WHERE id = $1`, r.ID, wait.Seconds()).Scan(&bases, &missing, &over)
+	})
+	return bases, missing, over, err
 }
 
 // taskBranch is the task branch of r's attempt, as its delivery keeps it.
