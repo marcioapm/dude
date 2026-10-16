@@ -20,6 +20,8 @@ import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDiff } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { useFeedbackFocus, useFeedbackOnDiff } from "../feedback.tsx";
+import { useDiffComments, useScrollToItem } from "../diffComments.tsx";
 
 const EDIT_TOOLS = /^(edit|write|patch|multiedit|apply_patch)$/i;
 
@@ -86,6 +88,11 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
     };
   }, [events, role]);
 
+  // On a task's page: the attempt's feedback on these lines, and comments written here.
+  const feedback = useFeedbackOnDiff();
+  const commenting = useDiffComments(feedback, runId, diff);
+  useScrollToItem(useFeedbackFocus(), runId, commenting);
+
   if (problem) return <div className="runChanges"><Callout tone="danger">{problem}</Callout></div>;
   if (!diff) return null;
   return (
@@ -100,6 +107,7 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
         onSelectedChange={onSelectedChange}
         onOpenFile={setViewing}
         toolbarIn={toolbarIn}
+        commenting={commenting}
         lastChange={live && lastChange ? lastChange : undefined}
         emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
       />

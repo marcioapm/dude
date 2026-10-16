@@ -17,6 +17,9 @@ import type { QuestionAnswer as SentAnswer } from "@dude/design-system/component
 import type {
   AgentMachine,
   AgentRole,
+  FeedbackDraftInput,
+  FeedbackItem,
+  FeedbackList,
   FileResult,
   SessionDetail,
   SessionModel,
@@ -359,6 +362,28 @@ export interface RunDetail extends Run {
 }
 
 export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";
+export type { FeedbackDraftInput, FeedbackItem, FeedbackList } from "@dude/domain";
+
+/** Where a submitted batch went (`POST /v1/tasks/:id/feedback/submit`): the orchestrator's answer. */
+export interface FeedbackSubmitted {
+  batchId: string;
+  itemIds: string[];
+  routedTo: "conductor" | "steer" | "workflow";
+  runId?: string;
+  /** Why nobody works on it yet, when nobody does. */
+  waiting?: string;
+  /** This key was taken before: this is that batch. */
+  repeated?: boolean;
+}
+
+/** A reply, resolve or reopen taken; a reopen says where the item went again. */
+export interface FeedbackActed {
+  itemId: string;
+  action: "reply" | "resolve" | "reopen";
+  routedTo?: string;
+  runId?: string;
+  waiting?: string;
+}
 export type { AutoStartHow, RelationSide, TaskRelations, TaskRelationView } from "@dude/domain";
 
 /** A start of a blocked task anyway: a person's, with the note recorded on it. */
@@ -727,6 +752,41 @@ export class ApiClient {
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
+  }
+
+  /** The attempt's submitted feedback and your own drafts on it; the current attempt unless named. */
+  feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/feedback${qs({ attempt })}`);
+  }
+
+  createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/feedback/drafts`, draft);
+  }
+
+  /** A draft written again: its words and where it points, the whole of it. */
+  updateFeedbackDraft(id: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    return this.#request("PATCH", `/v1/feedback/${encodeURIComponent(id)}`, draft);
+  }
+
+  deleteFeedbackDraft(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/feedback/${encodeURIComponent(id)}`);
+  }
+
+  /** Drafts as one batch; the same key again is the same batch, so a retry never submits twice. */
+  submitFeedback(taskId: string, draftIds: ReadonlyArray<string>, submissionKey: string): Promise<FeedbackSubmitted> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/feedback/submit`, { draftIds, submissionKey });
+  }
+
+  replyFeedback(id: string, body: string): Promise<FeedbackActed> {
+    return this.#request("POST", `/v1/feedback/${encodeURIComponent(id)}/reply`, { body });
+  }
+
+  resolveFeedback(id: string, note?: string): Promise<FeedbackActed> {
+    return this.#request("POST", `/v1/feedback/${encodeURIComponent(id)}/resolve`, note ? { note } : {});
+  }
+
+  reopenFeedback(id: string, body?: string): Promise<FeedbackActed> {
+    return this.#request("POST", `/v1/feedback/${encodeURIComponent(id)}/reopen`, body ? { body } : {});
   }
 
   /** Each test's verdict per acceptance criterion, the latest first. */

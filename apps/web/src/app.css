@@ -1451,3 +1451,105 @@ body {
     padding: var(--ds-space-16);
   }
 }
+
+/* -- People's feedback ---------------------------------------------- */
+/* What holds the merge, beside the status: a way to the Feedback tab, never amber (it is not needs-you). */
+.mergeHold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.mergeHold b {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.mergeHold:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.mergeHold:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.feedbackPane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+  max-width: 1000px;
+}
+.feedbackGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.feedbackGroupHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6) var(--ds-space-8);
+  margin: 0;
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.feedbackGroupHead .muted {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-regular);
+}
+.feedbackLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+}
+/* General feedback's way in: a quiet line that opens the same editor a line comment uses. */
+.feedbackGeneral {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  text-align: left;
+}
+.feedbackGeneral:hover:not(:disabled) {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.feedbackGeneral:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.feedbackHighlight {
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+.mergeHeld {
+  display: block;
+}
+.diffHeadNote {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.diffComments {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
