@@ -21,6 +21,7 @@ import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/prim
 import type { NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
 import { BoardPage, NO_FILTERS, type BoardFilters } from "./BoardPage.tsx";
 import { ArchiveEpicDialog, TaskDialogBug } from "./Dialogs.tsx";
+import { BriefPage, ProposalKindsPage } from "./Classification.tsx";
 import { ActivityLines, TaskPage, type Overlay, type TaskView } from "./TaskPage.tsx";
 import { TasksList, type View } from "./TasksList.tsx";
 import { ROLE, YOU, keyOf, world } from "./data.ts";
@@ -38,6 +39,12 @@ export const SCREENS = {
   "archive-epic-refused": "1 · Archive an epic: refused",
   "archived-view": "1 · Archived",
   "activity-lifecycle": "1 · Activity, every new line",
+  "task-dialog-bug": "2 · New task, kind Bug",
+  "bug-task": "2 · A bug, its cause confirmed",
+  "introduced-by-proposed": "2 · A bug, its cause proposed",
+  "board-kinds": "2 · Board: kinds and priorities",
+  "proposal-card-kinds": "2 · Proposal with kinds",
+  "brief-bug": "2 · What a kind tells the agents",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
@@ -66,6 +73,10 @@ function placeOf(s: Screen): Place {
     case "archive-epic-refused": return board({ overlay: "archive-epic" });
     case "archived-view": return { view: "list", list: "archived" };
     case "activity-lifecycle": return { view: "activity" };
+    case "task-dialog-bug": return board({ overlay: "task-dialog" });
+    case "bug-task": return page("CP-61");
+    case "introduced-by-proposed": return page("CP-60");
+    case "board-kinds": return board({ chips: false });
     default: return { view: "other", screen: s };
   }
 }
@@ -105,6 +116,12 @@ function Mock() {
   } else if (place.view === "activity") {
     selected = { kind: "task", id: "t_CP-62" };
     main = <div className="screen taskScreen"><div className="taskPane"><h1 className="taskTitle" style={{ marginBottom: 16 }}>Activity: every new line</h1><ActivityLines k="CP-62" /></div></div>;
+  } else if (place.screen === "proposal-card-kinds") {
+    selected = null;
+    main = <ProposalKindsPage />;
+  } else if (place.screen === "brief-bug") {
+    selected = null;
+    main = <BriefPage />;
   } else {
     selected = null;
   }
