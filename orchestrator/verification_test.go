@@ -10,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // testing starts a delivery with the tester on, played by model, on a
@@ -77,6 +78,9 @@ func TestATestThatPassesEveryCriterionWithEvidenceOpensThePullRequest(t *testing
 		FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id AND r.phase = 'test'
 		WHERE v.task_id = $1 AND v.criterion = 1`, wi).Scan(&heads, &evidence)
 	pr := w.gh.Pull(1)
+	if len(pr.Comments) != 0 {
+		t.Fatalf("a PR dude opened got verdict comments: %+v", pr.Comments)
+	}
 	if head := w.branchHead(wi); heads == "" || heads != head {
 		t.Errorf("tested at %q, the pull request is at %q", heads, head)
 	}
@@ -91,6 +95,28 @@ func TestATestThatPassesEveryCriterionWithEvidenceOpensThePullRequest(t *testing
 	}
 	if strings.Contains(pr.Body, "Stale") {
 		t.Errorf("a verdict at the pull request's head is not stale:\n%s", pr.Body)
+	}
+	section := "<!-- dude:verification -->\n## Verification\nTested at `" + heads[:7] + "`.\n\n" +
+		"- **pass** — it greets\n- **pass** — it says goodbye\n\n" +
+		"The evidence (video, screenshots, `acceptance.md`) is on the task in dude.\n<!-- /dude:verification -->\n\n"
+	if !strings.Contains(pr.Body, section) {
+		t.Fatalf("the pull request opened without the marked section %q:\n%s", section, pr.Body)
+	}
+	opened := pr.Body
+	// A refresh recognises the section it opened with: still exactly one.
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
+	updated := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.verification_updated'
+		AND NOT payload ? 'error'`
+	before := w.count(updated, wi)
+	st := &delivery.State{TaskID: wi, ProjectID: w.project, Attempt: 1, PullRequestIDs: []string{prID},
+		Heads: map[string]string{"target": heads}}
+	(&delivery.Store{DB: w.app}).RefreshVerification(context.Background(), w.org, st, forge.Resolver{DB: w.app})
+	if body := w.gh.Pull(1).Body; body != opened || strings.Count(body, "<!-- dude:verification -->") != 1 {
+		t.Errorf("after a refresh the body is:\n%s\nwant it as opened:\n%s", body, opened)
+	}
+	if n := w.count(updated, wi); n != before+1 {
+		t.Errorf("%d successful refreshes recorded, want 1", n-before)
 	}
 }
 
