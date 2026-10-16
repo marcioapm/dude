@@ -396,7 +396,15 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	}
 	defer res.Body.Close()
 	noteRate(target, authorization, res.Header)
-	data, err := io.ReadAll(res.Body)
+	var response io.Reader = res.Body
+	const agentResponseMax = 4 << 20
+	if isAgentRead(ctx) {
+		response = io.LimitReader(res.Body, agentResponseMax+1)
+	}
+	data, err := io.ReadAll(response)
+	if isAgentRead(ctx) && len(data) > agentResponseMax {
+		return &Error{Status: http.StatusRequestEntityTooLarge, Message: "GitHub response exceeds the agent read limit (4 MiB)"}
+	}
 	if err != nil {
 		return &Unreachable{err}
 	}

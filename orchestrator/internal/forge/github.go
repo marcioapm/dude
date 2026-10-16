@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1689,7 +1690,7 @@ func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int
 // every review with its text, the threads nobody resolved, the checks on
 // its head and the files it changes (at most maxFiles), each file's diff
 // with it.
-func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int) (PullRequestRead, error) {
+func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int, requested ...string) (PullRequestRead, error) {
 	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
 		return PullRequestRead{}, err
@@ -1737,9 +1738,21 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 			out.Checks = []Check{}
 		}
 	}
-	files, err := pagesUpTo[ghFile](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/files", slug, number), (maxFiles+99)/100)
-	if err != nil {
-		return PullRequestRead{}, err
+	var files []ghFile
+	for page := 1; page <= (maxFiles+99)/100; page++ {
+		var batch []ghFile
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", slug, number, page), nil, &batch); err != nil {
+			return PullRequestRead{}, err
+		}
+		for i := range batch {
+			if !slices.Contains(requested, batch[i].Filename) {
+				batch[i].Patch = ""
+			}
+		}
+		files = append(files, batch...)
+		if len(batch) < 100 {
+			break
+		}
 	}
 	for _, f := range files[:min(len(files), maxFiles)] {
 		out.Files = append(out.Files, FileRead{Path: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch})

@@ -73,7 +73,7 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 	target.Set(func(s *fakegithub.Server) { s.ResolvedThreads = map[string]bool{s.ThreadID(resolved): true} })
 	target.SetChecks("run:failure")
 
-	p, err := gh.PullRequestRead(ctx, "acme/target", 1, 100)
+	p, err := gh.PullRequestRead(ctx, "acme/target", 1, 100, "rollup.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +88,10 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 	}
 	if len(p.Checks) != 1 || p.Checks[0].Name != "e2e" || p.Checks[0].Conclusion != "failure" {
 		t.Errorf("checks %+v", p.Checks)
+	}
+	pWithoutPatch, err := gh.PullRequestRead(ctx, "acme/target", 1, 100)
+	if err != nil || len(pWithoutPatch.Files) != 1 || pWithoutPatch.Files[0].Patch != "" {
+		t.Fatalf("unrequested patches retained: %+v err=%v", pWithoutPatch.Files, err)
 	}
 	if len(p.Files) != 1 || p.Files[0].Path != "rollup.go" || p.Files[0].Additions != 3 || !strings.Contains(p.Files[0].Patch, "+func Count()") {
 		t.Errorf("files %+v", p.Files)
@@ -235,6 +239,18 @@ func TestAgentReviewsFetchOnlyBoundedHistory(t *testing.T) {
 	p, err := gh.PullRequestRead(context.Background(), "acme/allowed", 1, 300)
 	if err != nil || pages > 2 || len(p.Reviews) != 50 || !p.ReviewsCut {
 		t.Fatalf("reviews=%d pages=%d err=%v", len(p.Reviews), pages, err)
+	}
+}
+
+func TestAgentReadRefusesOversizeBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"body":"` + strings.Repeat("x", 5<<20) + `"}`))
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	result, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") || result.Body != "" {
+		t.Fatalf("oversize body: err=%v bytes=%d", err, len(result.Body))
 	}
 }
 

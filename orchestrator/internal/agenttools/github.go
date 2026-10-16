@@ -228,7 +228,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		}
 		out = w.issue(issue)
 	case "github_pull_request":
-		pr, err := gh.PullRequestRead(ctx, read.Slug, read.Number, filesMax)
+		pr, err := gh.PullRequestRead(ctx, read.Slug, read.Number, filesMax, read.Files...)
 		if err != nil {
 			return nil, githubRefusal(read, err)
 		}
