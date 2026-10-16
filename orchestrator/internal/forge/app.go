@@ -374,13 +374,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if isAgentRead(ctx) {
-		resource := "core"
-		if strings.Contains(target, "/graphql") {
-			resource = "graphql"
-		} else if strings.Contains(target, "/search/") {
-			resource = "search"
-		}
-		if err := reserveAgentRequest(target, authorization, resource); err != nil {
+		if err := reserveAgentRequest(target, authorization, g.rateResource(target)); err != nil {
 			return err
 		}
 	}
@@ -430,6 +424,18 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+// rateResource is the rate limit GitHub counts a request to target on, by
+// its exact endpoint: a repository named graphql or search is core's.
+func (g *GitHub) rateResource(target string) string {
+	switch {
+	case target == g.graphqlURL():
+		return "graphql"
+	case strings.HasPrefix(target, g.cred.APIBaseURL+"/search/"):
+		return "search"
+	}
+	return "core"
 }
 
 // redirectRefusal is an agent read's refusal of a redirect, in dude's

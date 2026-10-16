@@ -171,6 +171,64 @@ func TestAgentReadRedirectBodiesNeverReachTheRefusal(t *testing.T) {
 	}
 }
 
+// A repository whose name looks like another resource's path is still
+// read on the core limit: its second request is refused once core is down
+// to delivery's share.
+func TestAgentReadOfLookalikeRepositoriesIsGatedOnCore(t *testing.T) {
+	for _, slug := range []string{"graphql/graphql-spec", "acme/search", "acme/graphql-x"} {
+		t.Run(slug, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.Header().Set("X-RateLimit-Remaining", "19")
+				w.Header().Set("X-RateLimit-Limit", "100")
+				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+				w.Header().Set("X-RateLimit-Resource", "core")
+				if strings.HasSuffix(r.URL.Path, "/comments") {
+					_, _ = w.Write([]byte(`[]`))
+				} else {
+					_, _ = w.Write([]byte(`{"number":1,"comments":100}`))
+				}
+			}))
+			defer srv.Close()
+			gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+			_, err := gh.Issue(context.Background(), slug, 1, 50)
+			if !RateLimited(err) || calls != 1 {
+				t.Fatalf("err=%v calls=%d, want the comments request refused on core", err, calls)
+			}
+		})
+	}
+}
+
+// The search endpoint is gated on the search limit, apart from core's.
+func TestAgentSearchIsGatedOnTheSearchLimit(t *testing.T) {
+	searches := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+		w.Header().Set("X-RateLimit-Limit", "100")
+		w.Header().Set("X-RateLimit-Reset", reset)
+		if r.URL.Path == "/search/issues" {
+			searches++
+			w.Header().Set("X-RateLimit-Resource", "search")
+			w.Header().Set("X-RateLimit-Remaining", "19")
+			_, _ = w.Write([]byte(`{"total_count":0,"items":[]}`))
+			return
+		}
+		w.Header().Set("X-RateLimit-Resource", "core")
+		w.Header().Set("X-RateLimit-Remaining", "90")
+		_, _ = w.Write([]byte(`{"full_name":"acme/search"}`))
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	if _, _, err := gh.SearchIssues(context.Background(), "acme/search", "", "issue", "", 30); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := gh.SearchIssues(context.Background(), "acme/search", "", "issue", "", 30)
+	if !RateLimited(err) || searches != 1 {
+		t.Fatalf("err=%v searches=%d, want the second search refused on the search limit", err, searches)
+	}
+}
+
 func TestAgentReadRechecksReserveBetweenRequests(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
