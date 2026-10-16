@@ -164,7 +164,7 @@ def test_the_testers_session_shows_the_marker_and_its_secrets_chip_never_the_val
     _, tester = _deliver_printing_tester(client, forge_project, value)
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{tester['id']}")
-    expect(page.get_by_test_id("run-secrets")).to_have_text("1 secret")
+    expect(page.get_by_role("button", name=f"Project secrets: 1 secret, {NAME}", exact=True)).to_have_text("1 secret")
     expect(page.get_by_text(MARK).first).to_be_visible()
     shown = page.inner_text("body")
     for leak in _leaks(value):

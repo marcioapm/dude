@@ -8,7 +8,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import { GivenTo, GivenToFieldset, SecretsChip, SECRETS_TIP_SOURCE } from "../src/components/Secrets.tsx";
-import { allByRole } from "./queries.ts";
+import { accessibleName, allByRole, byRole } from "./queries.ts";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -31,9 +31,8 @@ async function mount(node: React.ReactNode) {
 describe("SecretsChip", () => {
   test("names the count, and its tip lists the names and where they came from", async () => {
     const el = await mount(<SecretsChip names={["SNOWFLAKE_PASSWORD", "SNOWFLAKE_USER", "SNOWFLAKE_ACCOUNT"]} />);
-    const chip = el.querySelector("button")!;
+    const chip = byRole<HTMLButtonElement>(el, "button", "Project secrets: 3 secrets, SNOWFLAKE_PASSWORD, SNOWFLAKE_USER, SNOWFLAKE_ACCOUNT");
     expect(chip.textContent).toBe("3 secrets");
-    expect(chip.getAttribute("aria-label")).toBe("Project secrets: 3 secrets, SNOWFLAKE_PASSWORD, SNOWFLAKE_USER, SNOWFLAKE_ACCOUNT");
     await act(async () => void chip.focus());
     const tip = await (async () => {
       for (let i = 0; i < 50; i++) {
@@ -49,7 +48,8 @@ describe("SecretsChip", () => {
 
   test("one is singular, none is nothing", async () => {
     const el = await mount(<><SecretsChip names={["ONE_KEY"]} /><SecretsChip names={[]} /></>);
-    expect([...el.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["1 secret"]);
+    expect(allByRole(el, "button").map(accessibleName)).toEqual(["Project secrets: 1 secret, ONE_KEY"]);
+    expect(byRole(el, "button", "Project secrets: 1 secret, ONE_KEY").textContent).toBe("1 secret");
   });
 });
 

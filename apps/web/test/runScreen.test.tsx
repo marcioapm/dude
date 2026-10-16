@@ -11,6 +11,7 @@ import { RUN_ID } from "../src/fixtures/data.ts";
 import { PreparingImage, RunScreen } from "../src/screens/RunScreen.tsx";
 import type { RunDetail } from "../src/api/client.ts";
 import { BUILDER_GIVE_UP_MINUTES } from "@dude/domain";
+import { accessibleName, allByRole } from "../../../packages/design-system/test/queries.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -50,11 +51,13 @@ describe("the session's bar", () => {
 });
 
 describe("the session's project secrets", () => {
-  const chip = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=run-secrets]");
+  const NAME = "Project secrets: 2 secrets, SNOWFLAKE_ACCOUNT, SNOWFLAKE_PASSWORD";
+  /** Buttons whose accessible name starts as the secrets chip's does. */
+  const secretsChips = (page: HTMLElement) => allByRole(page, "button").filter((b) => accessibleName(b).startsWith("Project secrets"));
 
   test("the header names how many it was given, after the machine; the tip lists names and no value", async () => {
     const page = await session({ client: new RunClient({ projectSecretNames: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_PASSWORD"] }) });
-    const shown = await until(() => chip(page), "the secrets chip");
+    const shown = await until(() => allByRole<HTMLButtonElement>(page, "button", NAME)[0], "the secrets chip");
     expect(shown.textContent).toBe("2 secrets");
     const machine = machineChip(page)!;
     expect(machine.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -64,7 +67,7 @@ describe("the session's project secrets", () => {
   test("a Run given none has no chip", async () => {
     const page = await session({ client: new RunClient({ projectSecretNames: [] }) });
     await until(() => machineChip(page), "the machine chip");
-    expect(page.querySelectorAll("[data-testid=run-secrets]").length).toBe(0);
+    expect(secretsChips(page).length).toBe(0);
   });
 });
 
