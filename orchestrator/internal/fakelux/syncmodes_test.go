@@ -202,6 +202,29 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 			t.Errorf("git.sync %v", ev)
 		}
 	})
+	t.Run("a fast-forward git refuses: failed, naming no commit", func(t *testing.T) {
+		// An untracked file in the checkout that the target's commit adds:
+		// clean as lux reads it, and git will not overwrite it.
+		_, c, runID, repo, work := syncRepo(t, false)
+		gitIn(t, repo, "checkout", "-q", "work")
+		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("theirs\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitIn(t, repo, "add", "new.txt")
+		gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "C")
+		gitIn(t, repo, "checkout", "-q", "main")
+		if err := os.WriteFile(filepath.Join(work, "new.txt"), []byte("mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := gitIn(t, work, "rev-parse", "HEAD")
+		if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: "work", Mode: lux.SyncFastForward}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		ev := lastSync(t, c, runID)
+		if _, named := ev["to"]; ev["status"] != "failed" || named || gitIn(t, work, "rev-parse", "HEAD") != before {
+			t.Errorf("git.sync %v", ev)
+		}
+	})
 }
 
 // A lux from before sync modes refuses a safe mode with a 409, on a sync

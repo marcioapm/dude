@@ -480,6 +480,51 @@ What the design commits to:
   found later. With several blockers, stacking is offered only when they
   share one branch; otherwise the base is `main`.
 
+#### Keeping a task current with its base (built)
+
+Stacking is still unbuilt: no start takes a blocker's branch as its base.
+A dependant gets its blocker's work by integration once the blocker merges
+into the base they share.
+
+The rebase above is not what was built: every move of a task branch is a
+fast-forward, so a task takes its base in by **merging**, never rebasing or
+forcing (`orchestrator/internal/delivery/integration.go`).
+
+- **The tool.** Writers (implementer, fixer, simplifier, conductor) call
+  `sync_base`: lux fetches the task's base — the repository's default, or
+  the base of the branch the task continues (`State.Bases`) — into the
+  checkout as `lux/<base>`, and the agent runs `git merge lux/<base>`. When
+  a pull request merges, other conductors on the same base are told once
+  (`base_moved`, a `chat.notice` and a `checkout` wake): one running hears
+  it at once; one parked hears it with its next note, and is not resumed
+  for it.
+- **Automatic, with `whenBehind` `update`.** Before a pull request opens,
+  the workflow asks GitHub to merge the moved base into the branch (a
+  `merge-base` line on the activity) and tests the new head again. A
+  conflict, there or on an open pull request, starts an **integration
+  Run**: a fixer told to merge and resolve keeping both sides' intent, then
+  an internal review that reads `git show --remerge-diff` of the merge,
+  then the policy's test. The conductor never runs tests.
+- **Bounds.** One integration Run per head/base pair
+  (`State.IntegrationPairs`); a pair tried already, a failed Run, or a pull
+  request still conflicting after it escalates `pull_request_conflict`
+  with `integration: true`, offering retry or wait. Retry is one more
+  attempt; nothing loops by itself. An integration Run spends none of the
+  pull request's fix budget. Every publish, a phase Run's and a conductor's,
+  counts only the task's own changes from GitHub's compares alone
+  (`phases/trustedbase.go`): the base left out is the commit lux reported
+  fetching, once GitHub's base and the push both contain it; without it,
+  or with a compare refused or cut short, every change counts.
+- **Explicit, with `whenBehind` `tell`.** Nothing integrates by itself; the
+  pull request card's **Resolve conflicts** (owner only) signals the
+  workflow waiting on that pull request, or decides its conflict
+  escalation. The request starts no phase itself, and is refused while
+  dude is busy with the task.
+- **Not yet shown against real lux.** `sync_base` and the integration
+  Run's merge are exercised against the fake lux; real lux's `fetch` sync
+  mode and its `git.sync` reports are taken from its contract, not tested
+  end to end here.
+
 ## The board
 
 Screens: *board*, *board-menu*, *board-blocked*, *board-hover*,

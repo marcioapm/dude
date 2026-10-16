@@ -1,5 +1,6 @@
 {
   "suites/test_accounts_access.py": 7.0,
+  "suites/test_base_sync.py": 43.9,
   "suites/test_bun_floor.py": 0.0,
   "suites/test_chat.py": 26.3,
   "suites/test_chat_images.py": 62.9,

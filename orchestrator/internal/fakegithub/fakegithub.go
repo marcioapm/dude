@@ -400,6 +400,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, map[string]any{"default_branch": "main"})
 	})
+	mux.HandleFunc("POST "+prefix+"/merges", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Base, Head string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		from := s.SHA(in.Base)
+		if from == "" {
+			fail(w, 404, "Base not found")
+			return
+		}
+		if _, err := s.git("merge-base", "--is-ancestor", in.Head, from); err == nil {
+			w.WriteHeader(204)
+			return
+		}
+		tree, err := s.git("merge-tree", "--write-tree", from, in.Head)
+		if err != nil {
+			fail(w, 409, "Merge conflict")
+			return
+		}
+		sha, err := s.gitAs("Acme", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
+		if err == nil {
+			_, err = s.git("update-ref", "refs/heads/"+in.Base, sha, from)
+		}
+		if err != nil {
+			fail(w, 409, "Branch moved")
+			return
+		}
+		write(w, 201, map[string]string{"sha": sha})
+	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
 		owner, _, _ := strings.Cut(s.Slug, "/")
@@ -706,6 +736,9 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	}
 	var mergeable any = true
 	state := "clean"
+	if _, err := s.git("merge-tree", "--write-tree", p.Head, p.Base); err != nil {
+		mergeable, state = false, "dirty"
+	}
 	if s.Conflicting[p.Number] {
 		mergeable, state = false, "dirty"
 	}
@@ -1101,27 +1134,75 @@ func page[T any](r *http.Request, all []T) []T {
 	return all[start:min(start+size, len(all))]
 }
 
+// compareFileCap is the most files GitHub's compare lists
+// (forge.CompareFileCap; forge's tests import this package).
+const compareFileCap = 300
+
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	base, head, ok := strings.Cut(r.PathValue("spec"), "...")
 	if !ok {
 		fail(w, 404, "Not Found")
 		return
 	}
-	out, err := s.git("diff", "--numstat", base, head)
+	// As GitHub's: from the merge base (three dots), renames and copies
+	// found, at most forge.CompareFileCap files, each with its status and
+	// blob sha (the old one for a file removed), and a patch only where
+	// lines changed and git can show them: none for a binary file, nor for
+	// one whose content did not change.
+	spec := base + "..." + head
+	out, err := s.git("diff", "-z", "-M", "-C", "--numstat", spec)
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
+	raw, _ := s.git("diff", "-z", "-M", "-C", "--raw", "--no-abbrev", spec)
+	status, sha := map[string]string{}, map[string]string{}
+	for rt := strings.Split(raw, "\x00"); len(rt) > 1; {
+		// ":<mode> <mode> <old sha> <new sha> <status>", then its paths.
+		f := strings.Fields(rt[0])
+		if len(f) != 5 {
+			break
+		}
+		n := 2
+		if f[4][0] == 'R' || f[4][0] == 'C' {
+			n = 3
+		}
+		if len(rt) < n {
+			break
+		}
+		path := rt[n-1]
+		status[path] = map[byte]string{'A': "added", 'D': "removed", 'M': "modified", 'R': "renamed", 'C': "copied", 'T': "changed"}[f[4][0]]
+		sha[path] = f[3]
+		if f[4][0] == 'D' {
+			sha[path] = f[2]
+		}
+		rt = rt[n:]
+	}
 	files := []any{}
-	for _, line := range strings.Split(out, "\n") {
-		// "<added>\t<deleted>\t<path>"; "-" for a binary file's counts.
-		parts := strings.SplitN(line, "\t", 3)
+	for tokens := strings.Split(out, "\x00"); len(tokens) > 0 && tokens[0] != ""; {
+		// "<added>\t<deleted>\t<path>", or an empty path and a rename's two
+		// paths next; "-" for a binary file's counts.
+		parts := strings.SplitN(tokens[0], "\t", 3)
 		if len(parts) != 3 {
-			continue
+			break
+		}
+		path, prev := parts[2], ""
+		tokens = tokens[1:]
+		if path == "" && len(tokens) >= 2 {
+			prev, path, tokens = tokens[0], tokens[1], tokens[2:]
 		}
 		added, _ := strconv.Atoi(parts[0])
 		deleted, _ := strconv.Atoi(parts[1])
-		files = append(files, map[string]any{"filename": parts[2], "additions": added, "deletions": deleted})
+		f := map[string]any{"filename": path, "status": status[path], "sha": sha[path], "additions": added, "deletions": deleted}
+		if prev != "" {
+			f["previous_filename"] = prev
+		}
+		if added+deleted > 0 {
+			f["patch"] = fmt.Sprintf("@@ -1,%d +1,%d @@", deleted, added)
+		}
+		if len(files) < compareFileCap {
+			files = append(files, f)
+		}
 	}
 	// Commits on base that head lacks: how far behind head is; and the
 	// reverse.

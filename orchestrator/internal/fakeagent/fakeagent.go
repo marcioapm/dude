@@ -517,20 +517,78 @@ const CallsLabel = "dude.calls"
 // message (ConductorCalls) but done in the container rather than called
 // on dude: write {"path","content"} writes a file in its first
 // repository, commit {"message"} commits everything there, git
-// {"args"} runs git there (the fake lux only), and artifact
+// {"args"} runs git there (the fake lux only), integrate {"args","repo"}
+// runs a merge in repo's checkout and resolves its conflicts keeping both
+// sides (the fake lux only), and artifact
 // {"path","content","description"} publishes a file for people with
 // lux-shim publish.
 const (
-	LocalWrite    = "write"
-	LocalCommit   = "commit"
-	LocalGit      = "git"
-	LocalArtifact = "artifact"
+	LocalWrite     = "write"
+	LocalCommit    = "commit"
+	LocalGit       = "git"
+	LocalArtifact  = "artifact"
+	LocalIntegrate = "integrate"
 )
 
 // Local says whether a call is the scripted conductor's own work in its
 // container rather than one of dude's tools.
 func Local(name string) bool {
-	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact || name == LocalIntegrate
+}
+
+// IntegrationCalls are the scripted integration fixer's calls for an
+// integration brief: sync_base on dude, then the merge of lux/<base> in
+// the checkout. nil when the prompt names no integration.
+func IntegrationCalls(prompt string) [][2]string {
+	base, repo, ok := integrationTarget(prompt)
+	if !ok {
+		return nil
+	}
+	args, _ := json.Marshal(map[string]any{"args": []string{"merge", "--no-edit", "lux/" + base}, "repo": repo})
+	return [][2]string{{"sync_base", "{}"}, {LocalIntegrate, string(args)}}
+}
+
+// integrationTarget is the base and repository an integration brief names.
+func integrationTarget(prompt string) (base, repo string, ok bool) {
+	_, rest, ok := strings.Cut(prompt, "Base integration: this branch conflicts with `")
+	if !ok {
+		return "", "", false
+	}
+	base, after, _ := strings.Cut(rest, "`")
+	repo, _, _ = strings.Cut(strings.TrimPrefix(after, " in "), ".")
+	return base, repo, base != "" && repo != ""
+}
+
+// IntegrationReply is what the scripted integration fixer says when done.
+const IntegrationReply = "Merged the base and resolved its conflicts, keeping both sides."
+
+// integrationResolve is the fake lux's integrateWorkspace in sh: merge the
+// fetched base; on a conflict, keep both sides of every conflicted file by
+// dropping git's marker lines, then commit with git's own merge message.
+const integrationResolve = `git merge --no-edit %[1]s || { ` +
+	`git diff --name-only --diff-filter=U -z | ` +
+	`xargs -0 -r sed -i -e '/^<<<<<<< /d' -e '/^=======$/d' -e '/^>>>>>>> /d' && ` +
+	`git add -A && git commit --no-edit -q; }`
+
+// IntegrationScript is IntegrationCalls as a lux-fake script, for a real
+// lux: sync_base through the dude service, then the merge and its
+// resolution in the repository's checkout at dir. "" when the prompt names
+// no integration.
+func IntegrationScript(prompt, dir string) string {
+	base, _, ok := integrationTarget(prompt)
+	if !ok {
+		return ""
+	}
+	return "http dude POST /tools/sync_base {}\n" +
+		"cd " + dir + "\n" +
+		"sh " + fmt.Sprintf(integrationResolve, "lux/"+base) + "\n" +
+		"echo " + IntegrationReply
+}
+
+// IntegrationRepo is the repository an integration brief names, "" for none.
+func IntegrationRepo(prompt string) string {
+	_, repo, _ := integrationTarget(prompt)
+	return repo
 }
 
 // ConductorCalls are the tool calls an input asks the scripted conductor

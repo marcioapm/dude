@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/redact"
@@ -19,9 +21,10 @@ import (
 // GitHub, and GitHub has it from then on, so a Run given project secrets
 // has everything a push sends read before dude asks lux to push, and
 // scanned for every form of every value the Run was given (redact):
-//   - every commit lux would send (base..HEAD, merges against each
-//     parent): its message, author and committer, and each line it adds,
-//     so a value committed and deleted again is still found (historyScript);
+//   - every commit lux would send (base..HEAD, less what the Run's trusted
+//     base already has: that is on GitHub): its message, author and
+//     committer, and each line it adds, a merge's being its resolution, so
+//     a value committed and deleted again is still found (historyScript);
 //   - the uncommitted work, as the live diff reads it (diffScript);
 //   - the name of the branch lux pushes to.
 //
@@ -92,12 +95,17 @@ func (h *hits) scanWork(red *redact.Redactor, text string) {
 	}
 }
 
-// historyScript prints, per repository given as diffScript's are, every
-// commit from where the checkout started to HEAD: what lux pushes. Each
-// section starts "# dude-history <name> <base>"; each commit
-// "\x00commit <sha>", then its author's and committer's name and email a
-// line each, its whole message, "\x00", and its patch (a merge's against
-// each parent). Read-only POSIX sh.
+// historyScript prints, per repository given as diffScript's are followed
+// by its trusted base ("" for none), every commit from where the checkout
+// started to HEAD that the trusted base does not contain: what lux pushes
+// that GitHub lacks. Each section starts "# dude-history <name> <base>";
+// each commit "\x00commit <sha>", then its author's and committer's name
+// and email a line each, its whole message, "\x00", and its patch. A
+// two-parent merge's patch is its remerge-diff (what the resolution
+// changed from git's own merge of its parents); a git without remerge-diff
+// (before 2.36) and an octopus merge, which remerge-diff skips, print one
+// against each parent instead. A trusted base the checkout lacks excludes
+// nothing. Read-only POSIX sh.
 //
 // The log is piped through head, so at most historyLimit+1 bytes are ever
 // held; past that, head closes the pipe and git dies of SIGPIPE (141). POSIX
@@ -116,17 +124,26 @@ base_of() {
 }
 st=$(mktemp) || exit 3
 {
-  while [ $# -ge 3 ]; do
-    name=$1 dir=$2 ref=$3; shift 3
+  while [ $# -ge 4 ]; do
+    name=$1 dir=$2 ref=$3 trusted=$4; shift 4
     if [ ! -d "$dir" ]; then
       echo "$name: no checkout at $dir" >&2; echo fail >> "$st"; continue
     fi
     if ! base=$(base_of "$dir" "$ref"); then
       echo "$name: no commit $ref" >&2; echo fail >> "$st"; continue
     fi
+    not=
+    if [ -n "$trusted" ] && git -C "$dir" rev-parse -q --verify "$trusted^{commit}" > /dev/null 2>&1; then
+      not=$trusted
+    fi
+    merges=--diff-merges=remerge
+    if ! git -C "$dir" log -n 0 --diff-merges=remerge HEAD -- > /dev/null 2>&1 ||
+      [ -n "$(git -C "$dir" rev-list -n 1 --min-parents=3 "$base..HEAD" ${not:+--not "$not"} -- 2>/dev/null)" ]; then
+      merges=-m
+    fi
     echo "# dude-history $name $base"
-    git -C "$dir" -c core.quotePath=off log -p -m --no-color --no-ext-diff --no-textconv \
-      --format='%x00commit %H%n%an%n%ae%n%cn%n%ce%n%B%x00' "$base..HEAD" --
+    git -C "$dir" -c core.quotePath=off log -p $merges --no-color --no-ext-diff --no-textconv \
+      --format='%x00commit %H%n%an%n%ae%n%cn%n%ce%n%B%x00' "$base..HEAD" ${not:+--not "$not"} --
     case $? in
       0) ;;
       141) echo cut >> "$st" ;;
@@ -149,12 +166,47 @@ const (
 	historyLimitText = "7340033" // historyLimit+1
 )
 
-func historyCommand(bases map[string]string) []string {
+// historyCommand reads the history of each repository of bases (name → the
+// commit or branch its checkout started from), less its trusted base when
+// it has one (name → sha).
+func historyCommand(bases, trusted map[string]string) []string {
 	cmd := []string{"sh", "-c", historyScript, "dude-history"}
 	for _, name := range slices.Sorted(maps.Keys(bases)) {
-		cmd = append(cmd, name, RepoPath(name), bases[name])
+		cmd = append(cmd, name, RepoPath(name), bases[name], trusted[name])
 	}
 	return cmd
+}
+
+// trustedBases is, per repository the Run's checkout started in, the commit
+// of its base branch lux last reported fetching for the Run
+// (runs.synced_bases): GitHub had it, so what it contains is not the Run's
+// to send. A repository with none is absent.
+func trustedBases(ctx context.Context, tx pgx.Tx, r phaseRun) (map[string]string, error) {
+	var synced map[string]map[string]string
+	if err := tx.QueryRow(ctx, `SELECT synced_bases FROM runs WHERE id = $1`, r.ID).Scan(&synced); err != nil || len(synced) == 0 {
+		return nil, err
+	}
+	tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	byName := repositoriesBySpecName(repos)
+	out := map[string]string{}
+	for name := range r.BaseSHAs {
+		repo, ok := byName[name]
+		if !ok {
+			continue
+		}
+		branch := cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
+		if sha := synced[name][branch]; isSHA(sha) {
+			out[name] = sha
+		}
+	}
+	return out, nil
 }
 
 // splitHistory splits historyScript's output into its repositories'
@@ -222,8 +274,12 @@ func missingHistory(text string, bases map[string]string) []string {
 // secrets in it; nothing for a Run given none.
 func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork, error) {
 	var red *redact.Redactor
+	var trusted map[string]string
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		red, err = ledger.Redactor(ctx, tx, r.ID)
+		if red, err = ledger.Redactor(ctx, tx, r.ID); err != nil || red.Empty() {
+			return err
+		}
+		trusted, err = trustedBases(ctx, tx, r)
 		return err
 	}); err != nil || red.Empty() {
 		return nil, err
@@ -237,7 +293,7 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 	if err != nil {
 		return nil, err
 	}
-	history, err := s.execChecked(ctx, r, historyCommand(r.BaseSHAs), "the history")
+	history, err := s.execChecked(ctx, r, historyCommand(r.BaseSHAs, trusted), "the history")
 	exit := execExit{}
 	switch {
 	case errors.As(err, &exit) && exit.code == 4:
