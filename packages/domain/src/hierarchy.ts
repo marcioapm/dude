@@ -47,7 +47,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet", "fake/done"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet", "fake/done", "fake/print-secrets", "fake/commit-secrets"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -630,6 +630,12 @@ export const runSchema = z.object({
    * before dude recorded it.
    */
   canRunContainers: z.boolean().nullable().default(null),
+  /**
+   * The names of the project secrets it was given (run.secrets.given),
+   * never values. Empty for a conductor, a brainstorm, a preview and a Run
+   * given none.
+   */
+  projectSecretNames: z.array(z.string()).default([]),
   /**
    * While it waits for its image (its dude layer, or its first version): the
    * job, and where it is; builderOfflineSince when the builder has not been

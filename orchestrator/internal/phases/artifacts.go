@@ -222,8 +222,15 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		// Only if nothing marked it due again meanwhile — a resume and a
 		// second exit — so that exit is collected too.
 		if !waiting && finalErr == nil || r.Overdue {
-			_, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL
+			tag, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL
 				WHERE id = $1 AND artifacts_due_at = $2`, r.ID, r.DueAt)
+			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			// An ended Run's output is all in: the values it was given are
+			// no longer needed to redact or scan it.
+			_, err = tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
+				WHERE s.run_id = $1 AND r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')`, r.ID)
 			return err
 		}
 		return a.askAgainLater(ctx, tx, r)
@@ -277,8 +284,13 @@ type artifactRun struct{ Org, ProjectID, TaskID, ID string }
 // in one transaction keep lux's order in the listing, which numbers them by
 // created_at.
 func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artifact) error {
+	red, err := ledger.Redactor(ctx, tx, r.ID)
+	if err != nil {
+		return err
+	}
 	id := ids.New(ids.Artifact)
-	name := strings.TrimPrefix(art.Path, lux.PublishedPrefix)
+	name := red.String(strings.TrimPrefix(art.Path, lux.PublishedPrefix))
+	art.Description = red.String(art.Description)
 	ctype := art.ContentType
 	if ctype == "" {
 		ctype = "application/octet-stream"

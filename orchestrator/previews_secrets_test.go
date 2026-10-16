@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -75,6 +76,52 @@ const (
 // secret beside GIT_TOKEN, the names recorded, and its server's process
 // has them. Parked, then a value changes and one is added: the resume
 // sends the recorded names' current values only.
+func TestPreviewsReceiveOnlySecretsGrantedToPreviews(t *testing.T) {
+	w := newWorld(t)
+	w.previews.Minute = time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.secret("PREVIEW_KEY", "preview-test-not-a-real-key-123")
+	w.secret("TESTER_KEY", "tester-test-not-a-real-key-123")
+	mustExec(t, w.owner, `UPDATE project_secrets SET recipients = ARRAY['tester'] WHERE project_id = $1 AND name = 'TESTER_KEY'`, w.project)
+	task := w.task()
+	code, out := w.do("POST", "/internal/tasks/"+task+"/preview", nil)
+	if code != 201 {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("web ready", func() bool {
+		runs := w.luxRuns()
+		return len(runs) == 1 && w.lux.ServerStates(runs[0].ID)["web"] == "ready"
+	})
+	r := w.luxRuns()[0]
+	if got := envSecrets(submitted(t, r)); len(got) != 1 || got["PREVIEW_KEY"] != "preview-test-not-a-real-key-123" {
+		t.Errorf("preview received ungranted names: %v", slices.Sorted(maps.Keys(got)))
+	}
+	if names := w.recorded(runID); !slices.Equal(names, []string{"PREVIEW_KEY"}) {
+		t.Errorf("recorded names = %v", names)
+	}
+	if env := w.lux.ServerEnv(r.ID, "web"); env["TESTER_KEY"] != "" {
+		t.Error("tester-only secret reached the preview process")
+	}
+	mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 day' WHERE id = $1`, runID)
+	w.previews.Minute = time.Millisecond
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	w.previews.Minute = time.Hour
+	mustExec(t, w.owner, `UPDATE project_secrets SET recipients = ARRAY['tester'] WHERE project_id = $1 AND name = 'PREVIEW_KEY'`, w.project)
+	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code >= 300 {
+		t.Fatalf("wake = %d %v", code, body)
+	}
+	w.until("replacement ready without secrets", func() bool {
+		runs := w.luxRuns()
+		return len(runs) == 2 && runs[1].ID != r.ID && w.lux.ServerStates(runs[1].ID)["web"] == "ready"
+	})
+	if names := w.recorded(runID); len(names) != 0 {
+		t.Errorf("replacement names = %v", names)
+	}
+}
+
 func TestAPreviewRunGetsTheProjectsSecretsAndAResumeTheirCurrentValues(t *testing.T) {
 	w := newWorld(t)
 	w.previews.Minute = time.Hour // parked only when the test says

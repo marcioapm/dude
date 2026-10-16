@@ -2513,3 +2513,45 @@ an ordinary completed step, and review follows on the unchanged head.
   headers and page regions sit. Non-rail pages need not adopt it.
 - Drag-and-drop on the board. The workflow owns every lane transition; see
   the Board rules.
+
+## Project secrets
+
+`src/components/Secrets.tsx`: `GivenTo`, `GivenToFieldset`, `SecretsChip`.
+Gallery: Settings → *Project secrets* (`#s-secrets`), in both themes and
+densities.
+
+- **Project secrets have their own SettingsSection.** Its title is
+  "Secrets" and its note says who gets values, as environment variables.
+  The compact `Table` keeps Name in mono, Given to as neutral `Badge`s
+  (`GivenTo`), Value as a muted mono hint, and a `RowMenu`: Change value…,
+  Change who gets it…, a separator, then Remove in danger behind a danger
+  `Dialog`. Nobody is muted words, never an empty cell. Value is
+  `hideWhenNarrow`; a phone keeps the name and recipients. A member who
+  cannot edit sees names and recipients, a note saying who can change
+  them, and no menu or Add. Branch previews keeps one row: how many reach
+  previews, and a Manage link to the section.
+- **Who gets a secret is separate from its value.** Add asks for Name,
+  Value, then the "Given to" `GivenToFieldset`: one `Checkbox` per
+  recipient (Previews, Tester, Implementer, Fixer, Simplifier, Reviewer)
+  with its one-line description; Previews and Tester start checked. Change
+  who gets it asks only for the fieldset, seeded with the current
+  recipients; Change value asks only for the value. Saving needs at least
+  one recipient: with none, the fieldset's hint becomes "Give it to at
+  least one, or don't add it yet" and the save is disabled. A
+  `SettingsNote` says the conductor and brainstorm never get secrets
+  (they read text anyone can write), another recommends pairing a secret
+  with the network allowlist; the hint says sessions and previews that
+  start after saving get it. A value shorter than dude redacts says so in
+  its hint; it is not refused.
+- **The secrets an agent session got are a `SecretsChip`** beside
+  `MachineChip` in its header: the `lock` glyph and "N secrets" on the
+  raised shade, at the chip height. Its tooltip lists the names only and
+  says "Given by project settings; values are never shown". It opens on
+  focus and hover and stays open on a press; it acts on nothing. Names
+  come from what the session recorded when it started, never today's
+  settings. A session given none — a conductor, a brainstorm — shows no
+  chip. Its accessible name is "Project secrets: N secrets, " and the
+  names.
+- **Redaction shows as `[REDACTED:NAME]`** in the transcript, tool output
+  and diffs, as dude stored it; nothing styles it. The redaction note says
+  it is defence in depth, not a guarantee.

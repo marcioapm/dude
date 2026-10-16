@@ -430,8 +430,13 @@
 }
 .topEnd {
   display: inline-flex;
+  align-items: center;
   margin-left: auto;
   flex-shrink: 0;
+}
+/* Who drives it, before its age: read-only, never a switch. */
+.driver {
+  margin-right: var(--ds-space-6);
 }
 .age {
   font-size: var(--ds-text-xs);

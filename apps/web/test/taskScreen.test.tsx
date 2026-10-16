@@ -247,13 +247,16 @@ describe("task rail filtering", () => {
   });
 
   for (const decider of ["policy", "conductor"] as const) {
-    test(`the Overview rail says who decides for a ${decider} task`, async () => {
+    test(`the header, not the Overview rail, says who decides for a ${decider} task`, async () => {
       const client = new FixtureClient("d");
       const getTask = client.getTask.bind(client);
       client.getTask = async (id) => ({ ...(await getTask(id)), decider });
       const page = await taskPage(client);
-      const term = await until(() => [...page.querySelectorAll("dt")].find((dt) => dt.textContent === "Decides"), "Decides");
-      expect(term.nextElementSibling?.textContent).toBe(decider === "conductor" ? "Conductor" : "Deliver");
+      const chip = await until(() => page.querySelector<HTMLElement>("[data-testid=task-header] [data-testid=driver]"), "the driver chip");
+      expect(chip.getAttribute("data-driver")).toBe(decider === "conductor" ? "conductor" : "deliver");
+      // Right after the status.
+      expect(chip.previousElementSibling?.getAttribute("data-testid")).toBe("header-status");
+      expect([...page.querySelectorAll("dt")].filter((dt) => dt.textContent === "Decides").length).toBe(0);
     });
   }
 
@@ -452,6 +455,26 @@ describe("Activity's started lines", () => {
 
   test("a Run the page has not read yet is named from its event", () => {
     expect(said([created("r_later", { phase: "simplify", role: "simplifier" })], [])).toEqual(["The simplifier started"]);
+  });
+
+  test("who changed who decides, by name, in the words of why; Talk it through's start is not said again", () => {
+    const changed = (why: string, from: string | null, to: string, actor: PersistedEvent["actor"]): PersistedEvent =>
+      ({ ...created(null, {}), eventType: "task.decider_changed", actor, payload: { from, to, why } }) as PersistedEvent;
+    const ana = { type: "human", id: "u_ana", name: "Ana" } as PersistedEvent["actor"];
+    const events = [
+      changed("talk it through", null, "conductor", ana),
+      changed("a person wrote in Chat", "policy", "conductor", ana),
+      changed("a person let Deliver finish it", "conductor", "policy", ana),
+      changed("a person gave the decisions to the conductor", "policy", "conductor", ana),
+    ];
+    expect(said(events, [])).toEqual([
+      "Ana gave the decisions to the conductor",
+      "Ana let Deliver finish it",
+      "Ana wrote in Chat, which gave the decisions to the conductor",
+    ]);
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    const quotes = activityLines(events, people, [], [], 1).map((l) => l.quote);
+    expect(quotes).toEqual(["Deliver → Conductor", "Conductor → Deliver", "Deliver → Conductor"]);
   });
 
   test("the API reviewer keeps its capitals, in its own line and in the round's; other categories stay lower case", () => {

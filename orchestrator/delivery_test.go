@@ -109,6 +109,7 @@ func newWorld(t *testing.T) *world {
 	mux.Handle("/acme/web.git/", w.web.Handler())
 	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
+	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if app := w.ghApp.Load(); app != nil && fakegithub.AppPath(r.URL.Path) {
@@ -553,8 +554,9 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	wi := w.task()
 	w.deliver(wi)
-	w.until("the delivery to end", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, wi) == 1
+	// It waits on a person reading it: their feedback, or their done.
+	w.until("the delivery to wait on its reader", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step = 'awaitRead'`, wi) == 1
 	})
 	if s := w.taskStatus(wi); s != "review" {
 		var why string

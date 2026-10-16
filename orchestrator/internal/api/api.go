@@ -34,6 +34,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -129,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	s.networkRoutes(mux)
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
+	s.feedbackRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -1077,14 +1079,25 @@ func errBody(code, message string) map[string]any {
 // them. The artifact is looked up in the caller's organization, so an id
 // from another one is simply not found; a brainstorm session Run's only for
 // an accepted member of its session, as the person the backend names.
+//
+// A text artifact of a Run given project secrets is read whole and served
+// redacted (ledger.Redactor); when that changes its bytes, its length is
+// the redacted one's and X-Content-SHA256 is left out, as lux's no longer
+// describes what is served. Binary artifacts are not scanned.
 func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org string) error {
-	var key, name, ctype, sum string
+	var key, name, ctype, sum, runID string
 	var size int64
+	var red *redact.Redactor
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT a.storage_key, a.name, a.content_type, a.size_bytes, a.sha256 FROM artifacts a
+		if err := tx.QueryRow(r.Context(), `SELECT a.storage_key, a.name, a.content_type, a.size_bytes, a.sha256, a.run_id FROM artifacts a
 			LEFT JOIN runs ar ON ar.id = a.run_id
 			WHERE a.id = $1 AND (ar.session_id IS NULL OR session_role(ar.session_id, $2) IS NOT NULL)`,
-			r.PathValue("id"), principalOf(r).Person).Scan(&key, &name, &ctype, &size, &sum)
+			r.PathValue("id"), principalOf(r).Person).Scan(&key, &name, &ctype, &size, &sum, &runID); err != nil {
+			return err
+		}
+		var err error
+		red, err = ledger.Redactor(r.Context(), tx, runID)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -1103,6 +1116,28 @@ func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org str
 		return err
 	}
 	defer body.Close()
+	if !red.Empty() && redact.TextType(ctype) {
+		if size > redact.MaxText {
+			return fail(http.StatusUnprocessableEntity, "too_large_to_redact",
+				"%s is text over %d MiB from an agent given project secrets: dude serves it only redacted, and redacts at most that much",
+				name, redact.MaxText>>20)
+		}
+		raw, err := io.ReadAll(io.LimitReader(body, redact.MaxText+1))
+		if err != nil {
+			return err
+		}
+		if out := red.String(string(raw)); out != string(raw) {
+			raw, sum = []byte(out), ""
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+		if sum != "" {
+			w.Header().Set("X-Content-SHA256", sum)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return nil
+	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("X-Content-SHA256", sum)
@@ -1120,13 +1155,17 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// The delivery's row before the task's (delivery.LockEscalationTx):
 		// marking it done locks the delivery again (SetTaskStatusTx).
-		if _, err := delivery.LoadDelivery(r.Context(), tx, id); err != nil {
+		d, err := delivery.LoadDelivery(r.Context(), tx, id)
+		if err != nil {
 			return err
 		}
 		var projectID, status string
 		var open bool
+		// A delivery waiting only on a person reading its work (awaitRead)
+		// is what marking it done finishes, not something still open.
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
-				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting'))
+				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting')
+				        AND NOT (d.status = 'waiting' AND d.step = 'awaitRead'))
 			FROM tasks w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "task %s not found", id)
@@ -1136,9 +1175,20 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if status != "review" || open {
 			return fail(http.StatusConflict, "conflict", "task %s is %s; only finished work waiting to be read can be marked done", id, status)
 		}
+		if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, id, 0); err != nil {
+			return err
+		} else if n > 0 {
+			return fail(http.StatusConflict, "feedback_open", "%d feedback items from people are not handled yet", n)
+		}
+		if d != nil && d.Step == "awaitRead" && d.Live() {
+			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET status = 'completed', awaiting_signals = '[]'::jsonb,
+				wake_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = $1`, d.WorkflowID); err != nil {
+				return err
+			}
+		}
 		// Who marked it done goes with the move: a task it blocks is told
 		// it still blocks, and by whom it was marked done.
-		_, err := delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
+		_, err = delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
 			"review", "done", "marked done by "+actor(r))
 		return err
 	})

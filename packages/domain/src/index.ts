@@ -20,3 +20,4 @@ export * from "./questions.ts";
 export * from "./coordination.ts";
 export * from "./startStages.ts";
 export * from "./relations.ts";
+export * from "./feedback.ts";

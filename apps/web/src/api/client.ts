@@ -8,6 +8,7 @@
  */
 
 import type { NavProject, NavTask } from "@dude/design-system";
+import { driverMode } from "@dude/design-system/components";
 import { escalationWords } from "../escalation.ts";
 import { isActive } from "../activity.ts";
 // One question's answer as the form sends it: the choices picked, by index, and the person's own words.
@@ -81,7 +82,8 @@ import type {
   MemoryInput,
   SearchOutcome,
   AttachmentInfo,
-  PreviewSecret,
+  ProjectSecret,
+  SecretRecipient,
   NoteRecord,
   EpicNotes,
   EpicPeers,
@@ -286,6 +288,7 @@ export interface SourceRepository {
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
   runs: Run[];
+  deciders?: Array<{ attempt: number; decider: Decider }>;
   escalation: Escalation | null;
   /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
   agentMachines: AgentMachine[];
@@ -304,12 +307,16 @@ export interface ChatSent {
 
 /**
  * The navigation tree gives each task's escalation, when delivery stopped
- * for a person; the design system's NavTask shows it as what the task waits
- * for, in words.
+ * for a person, and who decides it with whether its conductor is live; the
+ * design system's NavTask shows them as what the task waits for, in words,
+ * and as its driver.
  */
 function withWaitingFor(projects: NavProject[]): NavProject[] {
-  const task = (t: NavTask & { escalation?: Escalation | null }): NavTask =>
-    t.escalation ? { ...t, waitingFor: escalationWords(t.escalation).short } : t;
+  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
+    const { decider, conductorLive, ...rest } = t;
+    const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
+    return t.escalation ? { ...driven, waitingFor: escalationWords(t.escalation).short } : driven;
+  };
   return projects.map((p) => ({
     ...p,
     ...(p.epics ? { epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map(task) })) } : {}),
@@ -1595,16 +1602,20 @@ export class ApiClient {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/preview-settings`, settings);
   }
 
-  /** The project's preview secrets: names and hints, never a value. */
-  projectSecrets(projectId: string): Promise<{ secrets: PreviewSecret[] }> {
+  /** The project's secrets: names, recipients and hints, never a value. */
+  projectSecrets(projectId: string): Promise<{ secrets: ProjectSecret[] }> {
     return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
   }
 
-  addProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
-    return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, { name, value });
+  addProjectSecret(projectId: string, name: string, value: string, recipients?: readonly SecretRecipient[]): Promise<ProjectSecret> {
+    return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, recipients ? { name, value, recipients } : { name, value });
   }
 
-  replaceProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
+  changeProjectSecretRecipients(projectId: string, name: string, recipients: readonly SecretRecipient[]): Promise<ProjectSecret> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}/recipients`, { recipients });
+  }
+
+  replaceProjectSecret(projectId: string, name: string, value: string): Promise<ProjectSecret> {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`, { value });
   }
 

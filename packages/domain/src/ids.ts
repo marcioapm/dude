@@ -43,6 +43,9 @@ export const ID_PREFIXES = {
   peerMessage: "pm",
   peerWait: "pw",
   epicNote: "epn",
+  feedbackBatch: "fbt",
+  feedbackItem: "fbi",
+  feedbackReply: "fbr",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

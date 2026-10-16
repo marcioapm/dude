@@ -206,6 +206,8 @@ func run(log *slog.Logger) error {
 		// 30 s: a backlog still drains back to back, as the loop repeats while
 		// it retires, and a lux outage costs at most 8 calls per 30 s.
 		{"lux-retire", 30 * time.Second, syncer.RetireCompleted},
+		// The backstop for per-Run secret copies a collection left behind.
+		{"secret-copies", 5 * time.Minute, syncer.ForgetSecretCopies},
 		{"phase-notifier", time.Second, func(ctx context.Context) (int, error) {
 			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status, key string) error {
 				return runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished,

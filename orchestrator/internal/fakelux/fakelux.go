@@ -13,11 +13,14 @@
 package fakelux
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -808,6 +811,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 			fixes = max(fixes, n)
 		}
 		step = fakeagent.Tester(str("dude.model"), criteria, fixes)
+		step.PrintEnv = str("dude.model") == fakeagent.PrintSecretsModel
 	}
 	if str("dude.integration") == "true" {
 		step.Commit = nil
@@ -841,6 +845,27 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	if step.LongCommand {
 		tools = []string{"bash"}
 	}
+	var toolOutput map[string]string
+	if step.PrintEnv || step.CommitEnv != "" {
+		// What its process's environment holds of the Run's env secrets,
+		// as the spec it was submitted with gives them.
+		lines := envSecretLines(spec)
+		if step.PrintEnv {
+			lines += envSecretEncodings(spec)
+			tools = append(tools, "bash")
+			toolOutput = map[string]string{"bash": lines}
+			if step.Ask != "" {
+				step.Reply = "Connected with these:\n" + lines + step.Reply
+			}
+		}
+		if step.CommitEnv != "" {
+			// In its checkout, then committed there, as an agent does: what
+			// lux pushes is the checkout's HEAD.
+			args, _ := json.Marshal(map[string]string{"path": step.CommitEnv, "content": lines})
+			step.Tools = append(step.Tools, [2]string{fakeagent.LocalWrite, string(args)},
+				[2]string{fakeagent.LocalCommit, `{"message":"Add the connection settings"}`})
+		}
+	}
 	var open [][3]string
 	if str("dude.model") == fakeagent.StallModel && str("dude.phase") == fakeagent.Brainstorm {
 		step.Hang = true
@@ -872,8 +897,49 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
-		Publish: published, Descriptions: descriptions, Tools: tools, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
+		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
+}
+
+// envSecretsOf are a submitted spec's env secrets, name and value, in the
+// spec's order.
+func envSecretsOf(spec map[string]any) [][2]string {
+	list, _ := spec["secrets"].([]any)
+	var out [][2]string
+	for _, raw := range list {
+		s, _ := raw.(map[string]any)
+		name, _ := s["name"].(string)
+		value, _ := s["value"].(string)
+		if as, _ := s["as"].(string); as == "env" && name != "" {
+			out = append(out, [2]string{name, value})
+		}
+	}
+	return out
+}
+
+// envSecretLines are a submitted spec's env secrets as NAME=value lines,
+// in the spec's order.
+func envSecretLines(spec map[string]any) string {
+	var b strings.Builder
+	for _, s := range envSecretsOf(spec) {
+		b.WriteString(s[0] + "=" + s[1] + "\n")
+	}
+	return b.String()
+}
+
+// envSecretEncodings is each env secret again as an agent's tools might
+// print it: NAME_B64, NAME_HEX, NAME_URL (query-escaped) and NAME_JSON (a
+// JSON string body, as json.Marshal escapes it), one line each.
+func envSecretEncodings(spec map[string]any) string {
+	var b strings.Builder
+	for _, s := range envSecretsOf(spec) {
+		name, value := s[0], s[1]
+		quoted, _ := json.Marshal(value)
+		fmt.Fprintf(&b, "%s_B64=%s\n%s_HEX=%s\n%s_URL=%s\n%s_JSON=%s\n",
+			name, base64.StdEncoding.EncodeToString([]byte(value)), name, hex.EncodeToString([]byte(value)),
+			name, url.QueryEscape(value), name, quoted[1:len(quoted)-1])
+	}
+	return b.String()
 }
 
 // Runs returns every Run submitted, in order.

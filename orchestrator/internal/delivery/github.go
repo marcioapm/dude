@@ -53,6 +53,14 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 		var moved bool
 		var err error
 		if ready {
+			// People's feedback still to be handled keeps it out of ready.
+			blocking, err := BlockingFeedbackTx(ctx, tx, st.TaskID, st.Attempt)
+			if err != nil {
+				return err
+			}
+			ready = blocking == 0
+		}
+		if ready {
 			if moved, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "review", "ready_to_merge",
 				"approved, checks passing"); err == nil && moved {
 				err = emitTx(ctx, tx, org, st, EvReadyToMerge, map[string]any{"pullRequests": open})

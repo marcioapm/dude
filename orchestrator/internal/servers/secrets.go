@@ -12,10 +12,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// A project's preview secrets (project_secrets, migration 081) are lux
-// secrets of every preview Run, as: env, so its servers and their setup
-// scripts have them; no agent Run is given them (phases builds those
-// specs and never reads the table). A preview spec's only env secrets are
+// A project's secrets granted to previews (project_secrets, migrations 081
+// and 128) are lux secrets of every preview Run, as: env, so its servers
+// and their setup scripts have them; agent Runs get those granted to their
+// phase (phases/projectsecrets.go). A preview spec's only env secrets are
 // these: GIT_TOKEN and the registry login are declared without as.
 //
 // lux v0.1.11 requires a value at every resume for each secret the Run
@@ -30,7 +30,7 @@ const previewSecretAs = "env"
 
 // loadSecrets are the project's secrets, by name, as a preview's spec declares them.
 func loadSecrets(ctx context.Context, tx pgx.Tx, projectID string) ([]lux.Secret, error) {
-	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 ORDER BY name`, projectID)
+	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND 'previews' = ANY(recipients) ORDER BY name`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (p *Previews) resumeSecrets(ctx context.Context, r previewRun) (secrets []l
 			return nil
 		}
 		// Only the declared names' values: one added since is not sent.
-		rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2)`,
+		rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2) AND 'previews' = ANY(recipients)`,
 			r.ProjectID, recorded)
 		if err != nil {
 			return err

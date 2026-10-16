@@ -41,6 +41,10 @@ type SteerInput struct {
 	AttachmentIDs                  []string
 	Actor                          Writer
 	Conductor                      string
+	// People's feedback items whose words (FeedbackWords) follow Text in
+	// the directive; the ledger's run.steered names the ids, not the words.
+	FeedbackIDs   []string
+	FeedbackWords string
 }
 
 // Steered is a steer queued: its directive and event payload.
@@ -54,6 +58,10 @@ type Steered struct {
 // images, and its run.steered event — as the phase syncer then delivers
 // it. Refused with a SteerError. Locks the Run.
 func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, error) {
+	said := in.Text
+	if in.FeedbackWords != "" {
+		in.Text = strings.TrimSpace(strings.TrimSpace(in.Text) + "\n\n" + in.FeedbackWords)
+	}
 	if len(in.Text) > SteerTextMax {
 		return Steered{}, steerErr("bad_request", "a steer is at most %d KiB of text", SteerTextMax>>10)
 	}
@@ -82,6 +90,23 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	default:
 		return Steered{}, steerErr("conflict", "run %s is %s and can no longer be steered", in.RunID, status)
 	}
+	if in.Supersedes != "" && in.FeedbackWords == "" {
+		// run.steered of a steer carrying feedback has only the steerer's
+		// words, which Retry and Interrupt now send back: the repeat is the
+		// directive's full text, the people's words included.
+		var full string
+		var feedbackIDs []string
+		err := tx.QueryRow(ctx, `SELECT d.text, ARRAY(SELECT jsonb_array_elements_text(e.payload->'feedbackItemIds'))
+			FROM directives d JOIN events e ON e.run_id = d.run_id AND e.event_type = $3 AND e.payload->>'directiveId' = d.id
+			WHERE d.id = $1 AND d.run_id = $2 AND e.payload ? 'feedbackItemIds' AND e.payload->>'text' = $4
+			LIMIT 1`, in.Supersedes, in.RunID, EvRunSteered, said).Scan(&full, &feedbackIDs)
+		switch {
+		case err == nil:
+			in.Text, in.FeedbackIDs = full, feedbackIDs
+		case !db.IsNotFound(err):
+			return Steered{}, err
+		}
+	}
 	if in.Supersedes != "" {
 		if err := checkRepeat(ctx, tx, in.RunID, in.Supersedes, in.Text, len(in.AttachmentIDs) > 0); err != nil {
 			return Steered{}, err
@@ -93,8 +118,20 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	if err != nil {
 		return Steered{}, err
 	}
-	payload := map[string]any{"directiveId": id, "text": in.Text, "scope": in.Scope, "supersedes": db.Nullable(in.Supersedes),
+	payload := map[string]any{"directiveId": id, "text": said, "scope": in.Scope, "supersedes": db.Nullable(in.Supersedes),
 		"interrupt": in.Interrupt}
+	if len(in.FeedbackIDs) > 0 {
+		payload["feedbackItemIds"] = in.FeedbackIDs
+	}
+	if len(in.FeedbackIDs) > 0 && in.FeedbackWords == "" {
+		// A resend of a feedback steer: the items its first send released
+		// unread (FeedbackUnheardTx) are this directive's to deliver.
+		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET directive_id = $2, delivered_run_id = $3, updated_at = now()
+			WHERE id = ANY($1) AND task_id = $4 AND status = 'open' AND directive_id IS NULL`,
+			in.FeedbackIDs, id, in.RunID, taskID); err != nil {
+			return Steered{}, err
+		}
+	}
 	if in.Conductor != "" {
 		if _, err := tx.Exec(ctx, `UPDATE directives SET conductor_run_id = $2 WHERE id = $1`, id, in.Conductor); err != nil {
 			return Steered{}, err

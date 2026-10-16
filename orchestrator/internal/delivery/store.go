@@ -47,6 +47,8 @@ const (
 	EvPullRequestAction = "pull_request.action"
 	// Mergeability or distance from the base changed.
 	EvPullRequestMergeable = "pull_request.mergeable_changed"
+	// Verdict comment post/edit, or its failure, on an adopted pull request.
+	EvPullRequestVerdictCommented = "pull_request.verdict_commented"
 	// dude pushed a fix to an open pull request and asked again for a
 	// review from whoever had reviewed an older head (rerequestReviews).
 	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
@@ -71,6 +73,9 @@ type Store struct {
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
+	// Bound on the GitHub calls of one verdict comment; zero means
+	// verdictCommentTimeout.
+	CommentTimeout time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -108,6 +113,9 @@ type PhaseRun struct {
 	Category    string
 	FindingIDs  []string
 	PRFeedback  []forge.ActionableFeedback
+	// A person's feedback items it is given (implement, fix): in its
+	// prompt in their words, and delivered to it as it is created.
+	FeedbackItemIDs []string
 	// Review: the severities the delivery's policy blocks on, which the
 	// reviewer is told.
 	BlockingSeverities []string
@@ -170,18 +178,25 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
-		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override)
+		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override, feedback_item_ids)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18)`,
+		        $15, $16, $17, $18, $19)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
-		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier)); err != nil {
+		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
+		db.NonNil(in.FeedbackItemIDs)); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {
 		if _, err := tx.Exec(ctx, `UPDATE review_findings SET fix_attempts = fix_attempts + 1, updated_at = now()
 			WHERE id = ANY($1)`, in.FindingIDs); err != nil {
+			return "", err
+		}
+	}
+	if len(in.FeedbackItemIDs) > 0 {
+		if err := giveFeedbackTx(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID},
+			attempt, in.FeedbackItemIDs, in.CountAttempts); err != nil {
 			return "", err
 		}
 	}
@@ -197,6 +212,9 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 	}
 	if len(in.FindingIDs) > 0 {
 		payload["findingIds"] = in.FindingIDs
+	}
+	if len(in.FeedbackItemIDs) > 0 {
+		payload["feedbackItemIds"] = in.FeedbackItemIDs
 	}
 	if len(in.PRFeedback) > 0 {
 		payload["prFeedbackCount"] = len(in.PRFeedback)
@@ -984,7 +1002,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 	if v := verificationSection(verified, st.Heads, link); v != "" {
 		// Before the factory's sign-off line.
 		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
-		body = body[:i] + v + "\n\n" + body[i:]
+		body = body[:i] + markedVerification(v) + "\n\n" + body[i:]
 	}
 	return title, body, err
 }

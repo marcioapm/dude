@@ -35,6 +35,9 @@ type Restart struct {
 	Actor             Writer
 	// The conductor's Run, for its restart_run; "" for a person.
 	Conductor string
+	// dude's own: a paused Run that cannot be resumed (a project secret it
+	// was given is no longer its phase's). Payload by "dude".
+	ByDude bool
 }
 
 // RestartRunTx aborts a live phase Run the task's delivery waits on and
@@ -50,14 +53,15 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	}
 	var runTask, phase, category, status, role string
 	var attempt int
-	var findingIDs, blocking []string
+	var findingIDs, blocking, feedbackIDs []string
 	var feedback json.RawMessage
 	var conductorRun, conductorNote string
 	err = tx.QueryRow(ctx, `SELECT COALESCE(task_id, ''), COALESCE(phase::text, ''), COALESCE(category, ''), status::text,
 			COALESCE(role::text, ''), attempt, finding_ids, blocking_severities, pr_feedback,
-			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, '')
+			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, ''), feedback_item_ids
 		FROM runs WHERE id = $1 FOR UPDATE`, in.RunID).
-		Scan(&runTask, &phase, &category, &status, &role, &attempt, &findingIDs, &blocking, &feedback, &conductorRun, &conductorNote)
+		Scan(&runTask, &phase, &category, &status, &role, &attempt, &findingIDs, &blocking, &feedback, &conductorRun, &conductorNote,
+			&feedbackIDs)
 	switch {
 	case db.IsNotFound(err) || err == nil && runTask != taskID:
 		return "", refusef("%s is not a Run of this task: only this task's Runs are restarted here", in.RunID)
@@ -96,8 +100,9 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	newID, err := createPhaseRunTx(ctx, tx, org, PhaseRun{
 		TaskID: taskID, Phase: phase, BaseRefs: d.State.Heads, ParentRunID: d.State.HeadRunID, Attempt: attempt,
 		Category: category, FindingIDs: findingIDs, BlockingSeverities: blocking, PRFeedback: prFeedback,
-		ConductorRunID: conductorRun, ConductorNote: conductorNote,
-		RestartNote: restartLine(in.Conductor != "", note), Tier: tierID,
+		FeedbackItemIDs: feedbackIDs,
+		ConductorRunID:  conductorRun, ConductorNote: conductorNote,
+		RestartNote: restartLine(in, note), Tier: tierID,
 	})
 	if err != nil {
 		return "", err
@@ -130,6 +135,9 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	if in.Conductor != "" {
 		payload["by"] = "conductor"
 	}
+	if in.ByDude {
+		payload["by"] = "dude"
+	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvRunRestarted, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		RunID: in.RunID, ActorType: in.Actor.ActorType, ActorID: in.Actor.ActorID, Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: payload})
@@ -137,9 +145,12 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 }
 
 // restartLine is what a restarted Run's agent is told of why.
-func restartLine(byConductor bool, note string) string {
+func restartLine(in Restart, note string) string {
 	who := "a person"
-	if byConductor {
+	switch {
+	case in.ByDude:
+		who = "dude"
+	case in.Conductor != "":
 		who = "the conductor"
 	}
 	if note == "" {
@@ -196,6 +207,16 @@ func FailUnreadTx(ctx context.Context, tx pgx.Tx, r RunRef, at time.Time, why st
 		if err := SteerSettledTx(ctx, tx, r.Org, id, false, why); err != nil {
 			return err
 		}
+		if err := FeedbackUnheardTx(ctx, tx, id); err != nil {
+			return err
+		}
 	}
-	return nil
+	// What the Run was given and did not settle goes to the next fixer; a
+	// Run that did not complete published nothing, so what it resolved with
+	// a commit is open again.
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = $1`, r.RunID).Scan(&status); err != nil {
+		return err
+	}
+	return FeedbackRunEndedTx(ctx, tx, r.RunID, status == "completed")
 }
