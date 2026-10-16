@@ -471,11 +471,11 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	return pr
 }
 
-// fit encodes a result within resultCap: past it, the longest texts are
-// shortened, then the longest lists' tail dropped, until it fits, and
-// "cut" says so.
+// fit encodes a result within resultCap. Past it, one pass in key order
+// gives each text what the budget has left and ends lists once it runs
+// out, then the tree is encoded once more, and "cut" says so.
 func (w wrapper) fit(v any) (json.RawMessage, error) {
-	out, err := json.Marshal(v)
+	out, err := marshalResult(v)
 	if err != nil || len(out) <= resultCap {
 		return out, err
 	}
@@ -483,63 +483,67 @@ func (w wrapper) fit(v any) (json.RawMessage, error) {
 	if err := json.Unmarshal(out, &m); err != nil {
 		return nil, err
 	}
-	m["cut"] = fmt.Sprintf("%s: the result is at most %d bytes; the longest texts are shortened and the longest lists end early", cutMark, resultCap)
-	for range 10_000 {
-		out, err = json.Marshal(m)
-		if err != nil || len(out) <= resultCap {
-			return out, err
-		}
-		if !w.shorten(m, len(out)-resultCap) {
-			break
-		}
-	}
-	return out, err
-}
-
-// shorten takes about over bytes off the tree: from its longest text when
-// one is longer than a kilobyte (keeping the wrap's end), else the last
-// item of its longest list. false when nothing is left to take.
-func (w wrapper) shorten(tree map[string]any, over int) bool {
-	var text, list *slot
-	var visit func(v any, s slot)
-	visit = func(v any, s slot) {
-		switch t := v.(type) {
+	// Room for the cut note, separators and numbers the pass undercounts.
+	remaining := resultCap - 4096
+	var budget func(any) any
+	budget = func(v any) any {
+		switch x := v.(type) {
 		case string:
-			if text == nil || len(t) > len(text.get().(string)) {
-				text = &s
+			if n := jsonLen(x); n > remaining-256 {
+				x = w.recut(x, max(0, remaining-512))
+				if n = jsonLen(x); n > remaining-256 {
+					x = w.recut(x, max(0, (remaining-512)*(remaining-512)/n))
+				}
 			}
+			remaining -= jsonLen(x)
+			return x
 		case []any:
-			if len(t) > 0 && (list == nil || len(t) > len(list.get().([]any))) {
-				list = &s
+			out := make([]any, 0, len(x))
+			for _, item := range x {
+				if remaining < 2048 {
+					break
+				}
+				out = append(out, budget(item))
 			}
-			for i := range t {
-				visit(t[i], slot{get: func() any { return t[i] }, set: func(x any) { t[i] = x }})
-			}
+			return out
 		case map[string]any:
-			for k := range t {
-				visit(t[k], slot{get: func() any { return t[k] }, set: func(x any) { t[k] = x }})
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
 			}
+			slices.Sort(keys)
+			for _, k := range keys {
+				remaining -= jsonLen(k) + 2
+				x[k] = budget(x[k])
+			}
+			return x
+		default:
+			remaining -= 24
+			return v
 		}
 	}
-	visit(tree, slot{})
-	if text != nil {
-		if s := text.get().(string); len(s) > 1024 {
-			text.set(w.recut(s, max(256, len(s)-max(over, 512))))
-			return true
-		}
-	}
-	if list != nil {
-		l := list.get().([]any)
-		list.set(l[:len(l)-1])
-		return true
-	}
-	return false
+	budget(m)
+	m["cut"] = cutMark + ": text and list tails omitted to fit the result budget"
+	return marshalResult(m)
 }
 
-// slot is a place in a decoded JSON tree: a map's key or a list's index.
-type slot struct {
-	get func() any
-	set func(any)
+var marshalResult = json.Marshal
+
+// jsonLen is s's length as a JSON string, quotes included, as encoding/json
+// writes it (HTML characters and U+2028/U+2029 escaped).
+func jsonLen(s string) int {
+	n := 2
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t':
+			n += 2
+		case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || r == utf8.RuneError:
+			n += 6
+		default:
+			n += utf8.RuneLen(r)
+		}
+	}
+	return n
 }
 
 // recut shortens a text written by text (or a plain one) to about n bytes,

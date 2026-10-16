@@ -1,6 +1,7 @@
 package agenttools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -38,6 +39,51 @@ func TestGitHubAuthorsAreExternalText(t *testing.T) {
 	out := w.pullRequest(forge.PullRequestRead{Reviews: []forge.ReviewRead{{Author: "cy"}}}, nil)
 	if got := out["reviews"].([]ghReviewOut)[0].Author; !strings.Contains(got, "⟦external authors⟧cy⟦/external authors⟧") {
 		t.Fatalf("review author unwrapped: %q", got)
+	}
+}
+
+func threadShape() forge.PullRequestRead {
+	p := forge.PullRequestRead{}
+	for range 250 {
+		t := forge.ThreadRead{Path: "thread.go"}
+		for range 20 {
+			t.Comments = append(t.Comments, forge.IssueComment{Author: "ana", Body: strings.Repeat("界", 2700)})
+		}
+		p.Threads = append(p.Threads, t)
+	}
+	return p
+}
+
+func TestFitBatchesLargeThreadShape(t *testing.T) {
+	w := wrapper{id: "budget"}
+	calls := 0
+	marshal := marshalResult
+	marshalResult = func(v any) ([]byte, error) { calls++; return marshal(v) }
+	t.Cleanup(func() { marshalResult = marshal })
+	out, err := w.fit(w.pullRequest(threadShape(), nil))
+	if err != nil || len(out) > resultCap || calls > 2 || !json.Valid(out) || !strings.Contains(string(out), cutMark) {
+		t.Fatalf("fit bytes=%d marshals=%d err=%v", len(out), calls, err)
+	}
+	var result map[string]any
+	_ = json.Unmarshal(out, &result)
+	threads, _ := result["unresolvedThreads"].([]any)
+	if len(threads) == 0 {
+		t.Fatal("budget kept no thread")
+	}
+	body := threads[0].(map[string]any)["comments"].([]any)[0].(map[string]any)["body"].(string)
+	if !strings.HasPrefix(body, "⟦external budget⟧") || !strings.Contains(body, "⟦/external budget⟧") {
+		t.Fatalf("external quote not whole: %.80q", body)
+	}
+}
+
+func BenchmarkFitThreadShape(b *testing.B) {
+	w := wrapper{id: "budget"}
+	p := threadShape()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := w.fit(w.pullRequest(p, nil)); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
