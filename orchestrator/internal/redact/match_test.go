@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// naiveString is the per-pattern redaction the matcher replaced: every
-// match of every pattern by strings.Index, sorted by start then pattern,
-// touching or overlapping ones merged under the first's name.
+// naiveString is the matcher's oracle, one pattern at a time: every match
+// of every pattern by strings.Index, sorted by start then pattern, touching
+// or overlapping ones merged under the first's name.
 func naiveString(r *Redactor, s string) string {
 	var spans []span
 	for i, p := range r.pats {
@@ -61,7 +61,7 @@ func naiveContains(r *Redactor, s string) (string, bool) {
 
 // Over random texts built from overlapping, nested and touching values on
 // a small alphabet, the one-pass matcher redacts exactly as matching each
-// pattern on its own did. Each round's secrets include one value that is
+// pattern on its own does. Each round's secrets include one value that is
 // a prefix of another, and values cut from another's encoded forms; its
 // texts are made of every form FromList builds, with values spliced into
 // encoded forms, their own included. The alphabet has characters URL and
