@@ -42,6 +42,16 @@ func (a *accountingRun) mergeBase(resolved map[string]string) {
 	}
 }
 
+// moveOnBase renames a file on origin's main, as another task's merge would.
+func (a *accountingRun) moveOnBase(from, to string) {
+	a.t.Helper()
+	other := filepath.Join(a.t.TempDir(), "other")
+	git(a.t, a.t.TempDir(), "clone", "-q", a.origin, other)
+	git(a.t, other, "mv", from, to)
+	git(a.t, other, "commit", "-qm", "base move")
+	git(a.t, other, "push", "-q", "origin", "main")
+}
+
 func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 	t.Run("a clean sync_base merge counts only the task's own work", func(t *testing.T) {
 		a := newAccountingRun(t)
@@ -113,6 +123,40 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a rename into a path the base added counts the task's edit and the old name's deletion", func(t *testing.T) {
+		// The new name n.txt is the base's, the old name a.txt not: n.txt
+		// counts only what T...head shows on it (mine's 5), and a.txt its
+		// 500 deleted, not start...head's rename with 5 added.
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"a.txt": lines(500, "a")})
+		git(t, a.work, "mv", "a.txt", "n.txt")
+		mine := lines(500, "a") + lines(5, "mine")
+		a.commit(map[string]string{"n.txt": mine}, "rename and grow")
+		a.advanceBase(map[string]string{"n.txt": lines(500, "a")})
+		a.syncBase()
+		a.mergeBase(map[string]string{"n.txt": mine})
+		acc := a.published()
+		samePaths(t, acc, "a.txt", "n.txt")
+		if acc.Lines != 505 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want a.txt's 500 and n.txt's 5", acc.Lines, acc.Full)
+		}
+	})
+	t.Run("the old name of a file the base renamed is the base's", func(t *testing.T) {
+		// The base renames big.txt to moved.txt; the task rewrites
+		// moved.txt, so start...head lists big.txt removed and moved.txt
+		// added. Only T...head's moved.txt is the task's.
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"big.txt": lines(600, "big")})
+		a.moveOnBase("big.txt", "moved.txt")
+		a.syncBase()
+		a.mergeBase(nil)
+		a.commit(map[string]string{"moved.txt": lines(600, "new")}, "rewrite")
+		acc := a.published()
+		samePaths(t, acc, "moved.txt")
+		if acc.Lines != 1200 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want moved.txt's 1200 on top of the base", acc.Lines, acc.Full)
+		}
+	})
 	t.Run("a deletion off the base's paths counts its lines", func(t *testing.T) {
 		a := newAccountingRun(t)
 		a.seed(map[string]string{"old.txt": lines(400, "x")})
