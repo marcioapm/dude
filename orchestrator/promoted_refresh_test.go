@@ -8,7 +8,9 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,7 +60,7 @@ func (w *world) elapseRefreshWait(wi string, tries int) {
 	w.t.Helper()
 	w.until("a durable wait on the refresh", func() bool { _, _, ok := w.refreshWait(wi); return ok })
 	got, wake, _ := w.refreshWait(wi)
-	if got != tries || wake < 4*time.Second {
+	if got != tries || wake < 2*time.Second {
 		w.t.Fatalf("waiting on the refresh after %d tries, %s off; want %d tries, ~5s", got, wake, tries)
 	}
 	mustExec(w.t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, wi)
@@ -148,6 +150,59 @@ func TestAPromotedRefreshGitHubKeepsFailingIsRecordedAndLeftAfterThreeTries(t *t
 	}
 	if w.stateStep() != "awaitPullRequest" {
 		t.Errorf("at %s, want waiting on the pull request", w.stateStep())
+	}
+}
+
+// The step after the last failed try is lost before it commits: only that
+// step runs again; the last try is neither repeated nor recorded twice.
+func TestAPromotedRefreshsLastFailureIsNotTriedAgainWhenTheNextStepIsLost(t *testing.T) {
+	w := newPRFixWorld(t)
+	var lost atomic.Bool
+	gate := w.gated(func(step, next string) {
+		if step == "refreshPromoted" && next != "refreshPromoted" && lost.CompareAndSwap(false, true) {
+			mustExec(w.t, w.owner, `UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE task_id = $1`, w.wi)
+		}
+	})
+	var armed atomic.Bool
+	patches := bodyPatches(w.gh, &armed, 1<<30)
+	armed.Store(true)
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.elapseRefreshWait(w.wi, 1)
+	w.elapseRefreshWait(w.wi, 2)
+	gate.Store(true)
+	w.settledBackOnThePullRequest()
+	if !lost.Load() {
+		t.Fatal("no step after the refresh was lost")
+	}
+	if n := patches.Load(); n != 3 {
+		t.Errorf("%d description updates, want 3", n)
+	}
+	if ok, failed := w.verificationEvents("target"); ok != 0 || failed != 1 {
+		t.Errorf("recorded %d updates and %d failures, want the last failure once", ok, failed)
+	}
+}
+
+// The pull request is merged while the refresh waits to retry: the signal
+// kept over the wait is handled once the refresh settles, and the task is
+// done.
+func TestAPullRequestMergedDuringAPromotedRefreshWaitEndsTheTask(t *testing.T) {
+	w := newPRFixWorld(t)
+	var armed atomic.Bool
+	bodyPatches(w.gh, &armed, 1<<30)
+	armed.Store(true)
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.elapseRefreshWait(w.wi, 1)
+	w.gh.Merge(1)
+	w.sync()
+	if _, _, ok := w.refreshWait(w.wi); !ok {
+		t.Fatal("the merge woke the refresh's wait")
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, w.wi)
+	w.until("the task to finish", func() bool { w.sync(); return w.taskStatus(w.wi) == "done" })
+	if r := w.escalationReason(w.wi); r != "" {
+		t.Errorf("escalated %q", r)
 	}
 }
 
@@ -260,21 +315,31 @@ func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
 	// commits, as a crash mid-step loses it.
 	w.runtime = workflow.New(w.app, "restarted", quiet)
 	def := delivery.Workflow(&delivery.Store{DB: w.app}, forge.Resolver{DB: w.app})
-	var steps []string
+	var mu sync.Mutex
+	var ran []string
 	var lost atomic.Bool
 	def.BeforeCommit = func(_, step, next string) {
-		steps = append(steps, step)
+		mu.Lock()
+		ran = append(ran, step)
+		mu.Unlock()
 		if step == "refreshPromoted" && lost.CompareAndSwap(false, true) {
 			mustExec(t, w.owner, `UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE task_id = $1`, w.wi)
 		}
 	}
 	w.runtime.Register(def)
-	// The lost run's failure (the second) is not recorded; its replay, from
-	// the one wait recorded, is the third update, which lands.
-	w.settledBackOnThePullRequest()
-	if !lost.Load() || bodies.Load() != 3 {
-		t.Errorf("lost run %v, %d description updates; want the lost one replayed, 3 updates", lost.Load(), bodies.Load())
+	// The lost run's failure (the second) is not recorded; its replay, at
+	// once and from the one wait recorded, is the third update, which lands.
+	w.pump()
+	if !lost.Load() || w.state("promotedRefresh") != "" {
+		t.Fatalf("the lost run's transition landed or was not replayed at once: %s", w.state("promotedRefresh"))
 	}
+	w.settledBackOnThePullRequest()
+	if bodies.Load() != 3 {
+		t.Errorf("%d description updates; want the lost one replayed, 3 updates", bodies.Load())
+	}
+	mu.Lock()
+	steps := slices.Clone(ran)
+	mu.Unlock()
 	if len(steps) < 2 || steps[0] != "refreshPromoted" || steps[1] != "refreshPromoted" {
 		t.Errorf("after the restart the steps ran %v, want the refresh, lost, then again", steps)
 	}

@@ -187,8 +187,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   never forced) and refresh, for every open pull request of the task, the
   description's marked Review and Verification sections (`refreshBodies`,
   the verdict refresh's machinery), or the verdict comment of an adopted
-  one; a pull request whose refresh GitHub failed is tried again, at most
-  twice. When a push race lets only some branches move, only those are
+  one; a pull request whose refresh GitHub failed is tried again, twice
+  more, and the last failure is recorded. Each try is counted when its
+  step commits, so a crash or lost lease during a try's GitHub calls
+  replays that try uncounted, and a replayed last try can record its
+  failure again: the tries are at least once each, not at most three.
+  When a push race lets only some branches move, only those are
   refreshed. A candidate's verdict never reaches a pull request before that.
   A branch someone pushed to meanwhile is not moved: `pull_request_moved`
   asks a person (retry from their commit, or wait). Reviews are asked again

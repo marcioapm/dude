@@ -458,8 +458,8 @@ const verdictCommentTimeout = 30 * time.Second
 //
 // Two short transactions around the GitHub calls, none open across them:
 // what to post, then its record. No lock: the callers are steps of the
-// task's one delivery (testVerdict, candidateMoved), which never run at once,
-// and an adopted pull request is one live task's.
+// task's one delivery (testVerdict, candidateMoved, refreshPromoted), which
+// never run at once, and an adopted pull request is one live task's.
 func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
 	_ = s.commentVerdict(ctx, org, st, forges, true)
 }

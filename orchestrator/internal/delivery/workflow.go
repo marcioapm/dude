@@ -115,8 +115,8 @@ type State struct {
 	// An open pull request's fix being checked on its candidate branch
 	// before the pull request shows it (prFix to promoteCandidate).
 	Candidate *Candidate `json:"candidate,omitempty"`
-	// The refresh of the pull requests a promotion moved, while it is
-	// retried (refreshPromoted).
+	// The after-promotion refresh of the task's open pull requests, while
+	// it is retried (refreshPromoted).
 	PromotedRefresh *PromotedRefresh `json:"promotedRefresh,omitempty"`
 	// A failed test sent a fix round: the next clear review goes to a
 	// test, even at the pull request wait or with the policy's tester off.
@@ -1768,7 +1768,8 @@ func (w *steps) promotedRefreshRepos(ctx context.Context, sc workflow.StepContex
 // still names. Those that failed are tried again after GitHub's
 // Retry-After, at least forgeWaitMin, up to promotedRefreshRetries times;
 // the last failure is recorded and the delivery goes on as candidateMoved
-// does.
+// does. The settled refresh is committed before pullRequestEnded runs, so
+// that step failing never replays an attempt already counted.
 func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
@@ -1783,6 +1784,7 @@ func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (w
 			return workflow.Result{Next: "refreshPromoted", State: st, SleepUntil: time.Now().Add(max(after, forgeWaitMin))}, nil
 		}
 		st.PromotedRefresh = nil
+		return workflow.Result{Next: "refreshPromoted", State: st}, nil
 	}
 	res, _, err := w.pullRequestEnded(ctx, sc, st)
 	return res, err
