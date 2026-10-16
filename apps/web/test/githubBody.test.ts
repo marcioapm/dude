@@ -89,6 +89,9 @@ Included review availability.
     expect(githubBody("Use a<b when c>d.")).toEqual([markdown("Use a<b when c>d.")]);
     expect(githubBody("List<String> and <custom-tag x=1>kept</custom-tag>")).toEqual([markdown("List<String> and <custom-tag x=1>kept</custom-tag>")]);
     expect(githubBody("<https://example.com/?a=1&amp;b=2>")).toEqual([markdown("<https://example.com/?a=1&amp;b=2>")]);
+    // Past the length cap a `<` is text, so its entities decode.
+    const overlong = `<https://example.com/${"a".repeat(2048)}&amp;>`;
+    expect(githubBody(overlong)).toEqual([markdown(overlong.replace("&amp;", "&"))]);
     expect(githubBody('<b title="a\n>x')).toEqual([markdown('<b title="a\n>x')]);
     expect(githubBody('<a "unterminated\n<b>bold</b>')).toEqual([markdown('<a "unterminated\n**bold**')]);
   });
@@ -107,13 +110,23 @@ Included review availability.
 
   test("adversarial bodies parse in linear time", () => {
     let ticks = "";
-    for (let n = 1; ticks.length < 180_000; n++) ticks += "x" + "`".repeat(n);
-    const bodies = ['<a "'.repeat(10_000), "<details>".repeat(5_000), "<details>".repeat(5_000) + "</details>".repeat(5_000), ticks, "\uE000".repeat(60_000)];
+    for (let n = 1; ticks.length < 400_000; n++) ticks += "x" + "`".repeat(n);
+    // Each is about 400k characters: the parser reads one in tens of milliseconds, a quadratic scan takes many seconds.
+    const bodies = [
+      '<a "'.repeat(100_000),
+      "<details>".repeat(45_000),
+      "<details>".repeat(22_000) + "</details>".repeat(22_000),
+      ticks,
+      "\uE000".repeat(400_000),
+      "<x:".repeat(133_334),
+      // Fence lines at mismatched quote depths and indents: pairs that close in their own container, and one unclosed opener.
+      "> ```\n```\n> > ```\n".repeat(22_000),
+      "~~~~\n" + "> ~~~~\n      ~~~~\n```\n".repeat(20_000),
+    ];
     for (const body of bodies) {
       const start = performance.now();
       expect(() => githubBody(body)).not.toThrow();
-      // Each takes a few milliseconds; a quadratic scan takes hundreds.
-      expect(performance.now() - start).toBeLessThan(200);
+      expect(performance.now() - start).toBeLessThan(1500);
     }
     expect(githubBody("\uE000`a`\uE000")).toEqual([markdown("\uE000`a`\uE000")]);
   });
@@ -134,6 +147,8 @@ Included review availability.
     expect(githubBody('<details><summary><b>A &amp; B</b></summary>&lt;literal&gt;</details>')).toEqual([
       { kind: "details", summary: "A & B", children: [markdown("<literal>")] },
     ]);
+    // A browser decodes entities inside an HTML <code>, so GitHub shows this as `<b>`.
+    expect(githubBody("<code>&lt;b&gt;</code>")).toEqual([markdown("` <b> `")]);
   });
 
   test("collapses blank removal gaps but leaves jervasion Markdown unchanged", () => {

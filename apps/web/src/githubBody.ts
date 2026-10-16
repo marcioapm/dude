@@ -19,6 +19,7 @@ const TAGS = new Set(("details summary picture source img a strong b em i code b
 const BOOLEAN_ATTRIBUTES = new Set(["open", "hidden", "disabled", "checked", "nowrap", "reversed"]);
 // A tag GitHub writes is far shorter; a `<` that scans further is text.
 const MAX_TAG = 2048;
+const MAX_AUTOLINK = 2048;
 // As the design system's Markdown bounds quotes and lists: deeper disclosures are flattened into their parent.
 const MAX_DEPTH = 32;
 
@@ -101,21 +102,22 @@ function fenceEnd(src: string, i: number): number {
 
 // `<scheme:…>` or `<user@host>`: the end past `>`, or -1.
 function autolinkEnd(src: string, i: number): number {
+  const limit = Math.min(src.length, i + MAX_AUTOLINK);
   let j = i + 1;
   if (isLetter(src.charCodeAt(j))) {
-    while (j - i <= 32 && SCHEME.test(src[j] ?? "")) j++;
-    if (src[j] === ":" && j - i >= 3) {
+    while (j < limit && j - i <= 32 && SCHEME.test(src[j] ?? "")) j++;
+    if (j < limit && src[j] === ":" && j - i >= 3) {
       j++;
-      for (let c = src.charCodeAt(j); j < src.length && c > 32 && c !== 60 && c !== 62; c = src.charCodeAt(++j));
-      if (src[j] === ">") return j + 1;
+      while (j < limit && src.charCodeAt(j) > 32 && src.charCodeAt(j) !== 60 && src.charCodeAt(j) !== 62) j++;
+      if (j < limit && src[j] === ">") return j + 1;
     }
   }
   j = i + 1;
-  while (j < src.length && EMAIL.test(src[j]!)) j++;
-  if (j === i + 1 || src[j] !== "@") return -1;
+  while (j < limit && src.charCodeAt(j) > 32 && EMAIL.test(src[j]!)) j++;
+  if (j >= limit || j === i + 1 || src[j] !== "@") return -1;
   const host = ++j;
-  while (j < src.length && HOST.test(src[j]!)) j++;
-  return j > host && src[j] === ">" ? j + 1 : -1;
+  while (j < limit && HOST.test(src[j]!)) j++;
+  return j < limit && j > host && src[j] === ">" ? j + 1 : -1;
 }
 
 // A recognised tag at `i` with HTML-shaped attributes, read forward once and at most MAX_TAG long.
@@ -192,6 +194,7 @@ function tokenize(src: string): Token[] {
   const special = /[<`\\\n]/g;
   for (let i = 0; i < src.length;) {
     if (i === 0 || src.charCodeAt(i - 1) === 10) {
+      // fenceEnd only walks lines that end up in the literal it returns (an unclosed fence takes the rest), so no line is walked twice.
       const end = fenceEnd(src, i);
       if (end >= 0) { literal(src.slice(i, end)); i = end; continue; }
     }
