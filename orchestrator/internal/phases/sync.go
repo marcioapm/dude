@@ -1751,6 +1751,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	if forge.Transient(err) {
 		return true, s.retryLater(ctx, r, err)
 	}
+	// Any other refusal (a credential GitHub no longer takes) is publish's.
+	if forge.Refused(err) {
+		return true, s.fail(ctx, r, err.Error())
+	}
 	if err != nil {
 		return true, err
 	}
@@ -1828,9 +1832,10 @@ func (s *Syncer) resolutionsHeld(ctx context.Context, r phaseRun, heads map[stri
 				return a.ahead, a.behind, nil
 			}
 			c, err := gh.Compare(ctx, slugs[repo], base, head)
-			if forge.Refused(err) {
+			var fe *forge.Error
+			if errors.As(err, &fe) && (fe.Status == 404 || fe.Status == 422) {
 				// GitHub not having the commit (404), or refusing to
-				// compare it, is a commit never published there.
+				// compare it (422), is a commit never published there.
 				return 0, 1, nil
 			}
 			if err != nil {

@@ -197,3 +197,36 @@ func TestFeedbackACompareFailureWhileSettlingAResolutionBacksOff(t *testing.T) {
 		t.Error("the fixer did not complete")
 	}
 }
+
+// GitHub refusing the resolution's compare for a reason other than the
+// commit (401: a credential it no longer takes) fails the Run, as publish's
+// own refusal does: the item is never settled as a commit not published.
+func TestFeedbackACompareRefusedForTheCredentialFailsTheRun(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	var ar *agentResolve
+	// Abbreviated, so publish's own compare of the full head is answered.
+	ar = w.resolveAsItPublishes(wi, "fbi_res", func(_, head string) string { return head[:12] }, func(path string) int {
+		_, commit, _ := ar.state()
+		if commit != "" && strings.HasSuffix(path, "..."+commit) {
+			return http.StatusUnauthorized
+		}
+		return 0
+	})
+	if code, body := w.feedback(ana, wi, "fbi_res", "Log the retry count at info, not debug."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("the fixer failed", func() bool {
+		fixer, _, _ := ar.state()
+		return fixer != "" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, fixer) == 1
+	})
+	fixer, _, answer := ar.state()
+	if !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve: %s", answer)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'feedback.reopened'
+		AND payload->>'why' = 'not_published'`, fixer); n != 0 {
+		t.Errorf("a 401 on compare settled the item as not published %d times", n)
+	}
+}
