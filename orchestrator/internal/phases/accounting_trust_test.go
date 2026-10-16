@@ -22,7 +22,8 @@ func conflictMerged(t *testing.T) *accountingRun {
 	a.commit(map[string]string{"mine.go": "package mine\n", "shared.txt": "task\n"}, "task work")
 	a.advanceBase(map[string]string{"base.go": lines(300, "base"), "shared.txt": "base\n"})
 	a.syncBase()
-	if _, err := exec.Command("git", "-C", a.work, "merge", "-q", "--no-edit", "lux/main").CombinedOutput(); err == nil {
+	if _, err := exec.Command("git", "-C", a.work, "-c", "user.name=Acme", "-c", "user.email=a@example.com",
+		"merge", "-q", "--no-edit", "lux/main").CombinedOutput(); err == nil {
 		t.Fatal("the fixture's merge did not conflict")
 	}
 	write(t, filepath.Join(a.work, "shared.txt"), "task\nbase\n")
