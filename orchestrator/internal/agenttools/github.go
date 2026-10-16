@@ -111,7 +111,7 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 }
 
 // checkGitHubRead holds a read to the repositories the caller may read and
-// to the Run's hourly reads, before anything reaches GitHub.
+// to the session's hourly reads, before anything reaches GitHub.
 func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) (githubRead, error) {
 	gh, err := githubOf(c)
 	if err != nil {
@@ -137,18 +137,22 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, refuse("%s is not a repository you may read: only %s, %s", want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
-	// One count at a time per Run, so two calls at the limit cannot both pass.
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, c.RunID); err != nil {
+	key := "task:" + c.TaskID
+	if c.SessionID != "" {
+		key = "session:" + c.SessionID
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
 		return read, err
 	}
 	var reads int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
-		AND payload->>'tool' = ANY($3) AND occurred_at > now() - interval '1 hour'`,
-		c.RunID, AttemptEventType, githubReadToolNames).Scan(&reads); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+		WHERE (($1 <> '' AND r.session_id = $1) OR ($1 = '' AND r.task_id = $2 AND r.role = 'conductor'))
+		AND e.event_type = $3 AND e.payload->>'tool' = ANY($4) AND e.occurred_at > now() - interval '1 hour'`,
+		c.SessionID, c.TaskID, AttemptEventType, githubReadToolNames).Scan(&reads); err != nil {
 		return read, err
 	}
 	if reads >= githubReadsPerHour {
-		return read, refuse("at most %d GitHub reads an hour; this run has made them: wait, or work with what you read", githubReadsPerHour)
+		return read, refuse("at most %d GitHub reads an hour; this session has made them: wait, or work with what you read", githubReadsPerHour)
 	}
 	return read, nil
 }

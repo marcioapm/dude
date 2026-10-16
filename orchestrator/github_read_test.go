@@ -321,6 +321,11 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	}
 	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '2 minutes' WHERE run_id = $1
 		AND event_type IN ('agent.tool.dude', 'agent.tool.attempted') AND occurred_at > now() - interval '1 minute'`, conductor)
+	// The attempts belong to an earlier Run of the same task.
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role)
+		SELECT 'run_previous_reader', organization_id, project_id, task_id, attempt, 'completed', role FROM runs WHERE id = $1`, conductor)
+	mustExec(t, w.owner, `UPDATE runs SET created_at = now() - interval '1 day' WHERE id = 'run_previous_reader'`)
+	mustExec(t, w.owner, `UPDATE events SET run_id = 'run_previous_reader' WHERE run_id = $1 AND event_type = 'agent.tool.attempted'`, conductor)
 	before := w.requests()
 	w.refused(task, "github_search", `{"repo":"acme/target","kind":"issue"}`, "at most 60 GitHub reads an hour")
 	if w.requests() != before {
@@ -330,7 +335,7 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	w.must(task, "pull_requests", `{}`)
 	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '61 minutes' WHERE run_id = $1
 		AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_issue'
-		AND id IN (SELECT id FROM events WHERE run_id = $1 AND event_type = 'agent.tool.attempted' ORDER BY cursor LIMIT 1)`, conductor)
+		AND id IN (SELECT id FROM events WHERE run_id = $1 AND event_type = 'agent.tool.attempted' ORDER BY cursor LIMIT 1)`, "run_previous_reader")
 	w.must(task, "github_issue", args)
 }
 
