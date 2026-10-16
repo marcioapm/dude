@@ -69,12 +69,8 @@ function author(ctx: RequestContext): string {
 interface TaskRow { id: string; status: string; attempt: number }
 
 async function taskOf(scope: OrgScope, taskId: string, lock = false): Promise<TaskRow> {
-  const rows = (lock
-    ? await scope.sql`SELECT t.id, t.status::text AS status, ${scope.sql.unsafe(CURRENT_ATTEMPT)} AS attempt
-        FROM tasks t WHERE t.id = ${taskId} FOR NO KEY UPDATE`
-    : await scope.sql`SELECT t.id, t.status::text AS status, ${scope.sql.unsafe(CURRENT_ATTEMPT)} AS attempt
-        FROM tasks t WHERE t.id = ${taskId}`) as TaskRow[];
-  const task = rows[0];
+  const [task] = (await scope.sql`SELECT t.id, t.status::text AS status, ${scope.sql.unsafe(CURRENT_ATTEMPT)} AS attempt
+    FROM tasks t WHERE t.id = ${taskId} ${scope.sql.unsafe(lock ? "FOR NO KEY UPDATE" : "")}`) as TaskRow[];
   if (!task) throw notFound(`task ${taskId} not found`);
   return task;
 }

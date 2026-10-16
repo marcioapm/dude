@@ -74,6 +74,8 @@ func feedbackErr(kind, format string, a ...any) error {
 	return FeedbackError{kind, fmt.Sprintf(format, a...)}
 }
 
+var errNotAPerson = FeedbackError{"forbidden", "feedback is a person's: sign in as one"}
+
 // FeedbackAnchor is where an item points, as the backend built it.
 type FeedbackAnchor struct {
 	Kind      string `json:"kind"`
@@ -189,8 +191,7 @@ func FeedbackItemsTx(ctx context.Context, tx pgx.Tx, taskID string, itemIDs []st
 // OpenFeedbackTx is the attempt's items still to be handled — open, or
 // given to an agent that has not settled them — oldest first.
 func OpenFeedbackTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]FeedbackItem, error) {
-	rows, err := tx.Query(ctx, `SELECT `+itemColumns+` FROM feedback_items f
-		WHERE f.task_id = $1 AND f.attempt = `+attemptOr+` AND f.status IN ('open', 'delivered')
+	rows, err := tx.Query(ctx, `SELECT `+itemColumns+` FROM feedback_items f WHERE `+openItems+`
 		ORDER BY f.submitted_at, f.id`, taskID, attempt)
 	if err != nil {
 		return nil, err
@@ -200,6 +201,10 @@ func OpenFeedbackTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) 
 
 // attemptOr (SQL, $1 the task, $2 an attempt or 0): $2, or the task's current.
 const attemptOr = `COALESCE(NULLIF($2::int, 0), task_attempt($1))`
+
+// openItems (SQL, over feedback_items f, $1 the task, $2 an attempt or 0):
+// the attempt's items still to be handled — open, or given to an agent.
+const openItems = `f.task_id = $1 AND f.attempt = ` + attemptOr + ` AND f.status IN ('open', 'delivered')`
 
 // BlockingFeedbackTx counts the attempt's items that hold the pull
 // request and the merge (feedbackBlocking).
@@ -307,7 +312,7 @@ type Submitted struct {
 // task's Chat lock, its delivery, the task, then the Run told.
 func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission) (Submitted, error) {
 	if in.Person == "" {
-		return Submitted{}, feedbackErr("forbidden", "feedback is a person's: sign in as one")
+		return Submitted{}, errNotAPerson
 	}
 	if strings.TrimSpace(in.Key) == "" || len(in.DraftIDs) == 0 {
 		return Submitted{}, feedbackErr("bad_request", "draftIds and a submissionKey are required")
@@ -343,7 +348,7 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 	if err != nil {
 		return Submitted{}, err
 	}
-	if len(mine) != len(slices.Compact(slices.Sorted(slices.Values(in.DraftIDs)))) || len(mine) != len(in.DraftIDs) {
+	if len(mine) != len(in.DraftIDs) {
 		// Which ones is not said: another person's draft is not told to exist.
 		return Submitted{}, feedbackErr("bad_request", "%d of the %d drafts are not your drafts on this task's current attempt: nothing was submitted",
 			len(in.DraftIDs)-len(mine), len(in.DraftIDs))
@@ -381,12 +386,10 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 // under a key already taken, refused.
 func repeatedSubmit(ctx context.Context, tx pgx.Tx, in Submission) (Submitted, bool, error) {
 	var out Submitted
-	var runID *string
-	var routed *string
-	err := tx.QueryRow(ctx, `SELECT b.id, COALESCE(b.routed_to, ''), b.routed_run_id,
+	err := tx.QueryRow(ctx, `SELECT b.id, COALESCE(b.routed_to, ''), COALESCE(b.routed_run_id, ''),
 			COALESCE((SELECT array_agg(f.id ORDER BY f.created_at, f.id) FROM feedback_items f WHERE f.batch_id = b.id), '{}')
 		FROM feedback_batches b WHERE b.task_id = $1 AND b.author_person_id = $2 AND b.submission_key = $3`,
-		in.TaskID, in.Person, in.Key).Scan(&out.BatchID, &routed, &runID, &out.ItemIDs)
+		in.TaskID, in.Person, in.Key).Scan(&out.BatchID, &out.RoutedTo, &out.RunID, &out.ItemIDs)
 	if db.IsNotFound(err) {
 		return out, false, nil
 	}
@@ -396,10 +399,7 @@ func repeatedSubmit(ctx context.Context, tx pgx.Tx, in Submission) (Submitted, b
 	if !slices.Equal(slices.Sorted(slices.Values(out.ItemIDs)), slices.Sorted(slices.Values(in.DraftIDs))) {
 		return Submitted{}, true, feedbackErr("conflict", "submission key %q was used for another batch: use a new key for new drafts", in.Key)
 	}
-	out.RoutedTo, out.Repeated = *routed, true
-	if runID != nil {
-		out.RunID = *runID
-	}
+	out.Repeated = true
 	return out, true, nil
 }
 
@@ -429,6 +429,9 @@ const workingRunSQL = `SELECT r.id FROM runs r WHERE r.task_id = $1 AND r.kind =
 // a working implementer or fixer, or the delivery's own next step.
 func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *Delivery, status string, attempt int,
 	itemIDs []string, key string, w Writer, out *Submitted) error {
+	signal := func() error {
+		return workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanFeedback, map[string]any{"itemIds": itemIDs}, key)
+	}
 	if d != nil && d.Live() && d.State.conducted() {
 		out.RoutedTo = RoutedConductor
 		line := fmt.Sprintf("%d feedback items from a person (%s): read their words with `dude feedback %s`; they stay "+
@@ -439,7 +442,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 		// Waiting on its pull requests or its reader, the delivery parks at
 		// the conductor's decision on them, as pull request feedback does;
 		// any other step reads the items again when it waits there.
-		return workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanFeedback, map[string]any{"itemIds": itemIDs}, key)
+		return signal()
 	}
 	var runID string
 	err := tx.QueryRow(ctx, workingRunSQL, ref.TaskID, attempt).Scan(&runID)
@@ -454,7 +457,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 		// Left unhandled by that Run, the items are open again when it
 		// ends: a wait on the pull requests after it reads them then.
 		if d != nil && d.Live() {
-			return workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanFeedback, map[string]any{"itemIds": itemIDs}, key)
+			return signal()
 		}
 		return nil
 	}
@@ -468,7 +471,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 		if status == "review" && len(d.State.PullRequestIDs) == 0 {
 			// Work that ended ready to read before it waited on a person
 			// reading it: its delivery takes the feedback up again.
-			return reviveForFeedbackTx(ctx, tx, ref, d, out)
+			return reviveForFeedbackTx(ctx, tx, ref, d)
 		}
 		out.Waiting = "the delivery has ended"
 		return feedbackErr("conflict", "this task's delivery has ended: start it over to give it feedback. Your drafts are kept.")
@@ -476,7 +479,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	// Every live delivery is signalled: only the waits on the pull
 	// requests or the reader take it, each reading the items again, so one
 	// submitted while the pull request is being opened is heard once it waits.
-	if err := workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanFeedback, map[string]any{"itemIds": itemIDs}, key); err != nil {
+	if err := signal(); err != nil {
 		return err
 	}
 	switch d.Step {
@@ -541,7 +544,7 @@ func startForFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, 
 // reviveForFeedbackTx takes up the delivery of work that ended ready to
 // read with no pull request, from before it waited on its reader: back at
 // its fix step, as a person's retry would, with a fresh loop budget.
-func reviveForFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, out *Submitted) error {
+func reviveForFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) error {
 	st := d.State
 	st.Iteration, st.PendingRunIDs, st.Retries = 0, nil, st.Retries+1
 	next, err := json.Marshal(st)
@@ -553,7 +556,6 @@ func reviveForFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery
 		WHERE id = $1`, d.WorkflowID, next); err != nil {
 		return err
 	}
-	out.Waiting = ""
 	_, err = SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "review", "running", "a person gave feedback on it")
 	return err
 }
@@ -586,8 +588,8 @@ func giveFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, attempt int, ite
 func (s *Store) OpenFeedbackIDs(ctx context.Context, org string, st *State) ([]string, error) {
 	var out []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM feedback_items f WHERE f.task_id = $1 AND f.attempt = `+attemptOr+`
-			AND f.status IN ('open', 'delivered') ORDER BY f.submitted_at, f.id`, st.TaskID, st.Attempt)
+		rows, err := tx.Query(ctx, `SELECT id FROM feedback_items f WHERE `+openItems+` ORDER BY f.submitted_at, f.id`,
+			st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -602,8 +604,8 @@ func (s *Store) OpenFeedbackIDs(ctx context.Context, org string, st *State) ([]s
 func (s *Store) FeedbackStates(ctx context.Context, org string, st *State) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, fix_attempts FROM feedback_items f WHERE f.task_id = $1 AND f.attempt = `+attemptOr+`
-			AND f.status IN ('open', 'delivered') ORDER BY f.submitted_at, f.id`, st.TaskID, st.Attempt)
+		rows, err := tx.Query(ctx, `SELECT id, fix_attempts FROM feedback_items f WHERE `+openItems+` ORDER BY f.submitted_at, f.id`,
+			st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
@@ -616,14 +618,18 @@ func (s *Store) FeedbackStates(ctx context.Context, org string, st *State) ([]Fi
 	return out, err
 }
 
+// resolvedByPerson (SQL SET list, the person's column set after it): an
+// item a person resolved, verified at once and with no commit.
+const resolvedByPerson = `status = 'resolved', resolved_at = now(), resolved_verified_at = now(), resolved_commit = NULL,
+	resolved_by_run_id = NULL, updated_at = now()`
+
 // AcceptFeedbackTx is a person deciding the task ships with the items a
 // stuck escalation named: resolved by that person, each.
 func AcceptFeedbackTx(ctx context.Context, tx pgx.Tx, org, taskID, person string, itemIDs []string) error {
 	if len(itemIDs) == 0 {
 		return nil
 	}
-	rows, err := tx.Query(ctx, `UPDATE feedback_items SET status = 'resolved', resolved_by_person_id = NULLIF($3, ''),
-			resolved_at = now(), resolved_verified_at = now(), resolved_commit = NULL, resolved_by_run_id = NULL, updated_at = now()
+	rows, err := tx.Query(ctx, `UPDATE feedback_items SET `+resolvedByPerson+`, resolved_by_person_id = NULLIF($3, '')
 		WHERE task_id = $1 AND id = ANY($2) AND status IN ('open', 'delivered') RETURNING id`, taskID, itemIDs, person)
 	if err != nil {
 		return err
@@ -632,13 +638,13 @@ func AcceptFeedbackTx(ctx context.Context, tx pgx.Tx, org, taskID, person string
 	if err != nil {
 		return err
 	}
+	ref := RunRef{Org: org, TaskID: taskID}
 	for _, id := range accepted {
 		if person != "" {
 			if _, err := historyTx(ctx, tx, org, id, "resolve", person, "", "accepted at the escalation", ""); err != nil {
 				return err
 			}
 		}
-		ref := RunRef{Org: org, TaskID: taskID}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackResolved, ledger.ActorSystem,
 			map[string]any{"itemId": id, "by": "person", "accepted": true})); err != nil {
 			return err
@@ -698,9 +704,13 @@ func FeedbackRunEndedTx(ctx context.Context, tx pgx.Tx, runID string, published 
 	return reopenUnpublishedTx(ctx, tx, runID)
 }
 
+// reopenAgentResolution (SQL SET list): an agent's commit resolution, or
+// what an agent was given, put back to open for the next fixer.
+const reopenAgentResolution = `status = 'open', resolved_commit = NULL, resolved_repo = NULL,
+	resolved_by_run_id = NULL, resolved_at = NULL, delivered_run_id = NULL, directive_id = NULL, updated_at = now()`
+
 func reopenUnpublishedTx(ctx context.Context, tx pgx.Tx, runID string) error {
-	rows, err := tx.Query(ctx, `UPDATE feedback_items SET status = 'open', resolved_commit = NULL, resolved_repo = NULL,
-			resolved_by_run_id = NULL, resolved_at = NULL, delivered_run_id = NULL, directive_id = NULL, updated_at = now()
+	rows, err := tx.Query(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+`
 		WHERE resolved_by_run_id = $1 AND status = 'resolved' AND resolved_verified_at IS NULL
 		RETURNING id, organization_id, task_id`, runID)
 	if err != nil {
@@ -712,8 +722,7 @@ func reopenUnpublishedTx(ctx context.Context, tx pgx.Tx, runID string) error {
 		return err
 	}
 	for _, r := range got {
-		if _, err := tx.Exec(ctx, `INSERT INTO feedback_replies (id, organization_id, item_id, kind, run_id, body)
-			VALUES ($1, $2, $3, 'reopen', $4, 'its commit was never published')`, ids.New(ids.FeedbackReply), r.Org, r.ID, runID); err != nil {
+		if _, err := historyTx(ctx, tx, r.Org, r.ID, "reopen", "", runID, "its commit was never published", ""); err != nil {
 			return err
 		}
 		ref := RunRef{Org: r.Org, TaskID: r.TaskID, RunID: runID}
@@ -816,7 +825,7 @@ func PersonResolveTx(ctx context.Context, tx pgx.Tx, in PersonAction) error {
 
 func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string) error {
 	if in.Person == "" {
-		return feedbackErr("forbidden", "feedback is a person's: sign in as one")
+		return errNotAPerson
 	}
 	body := strings.TrimSpace(in.Body)
 	if kind == "reply" && body == "" {
@@ -845,8 +854,7 @@ func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string
 				resolved_by_person_id = $2, updated_at = now() WHERE id = $1`, in.ItemID, in.Person); err != nil {
 				return err
 			}
-		} else if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'resolved', resolved_by_person_id = $2,
-				resolved_at = now(), resolved_verified_at = now(), resolved_commit = NULL, resolved_by_run_id = NULL, updated_at = now()
+		} else if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+resolvedByPerson+`, resolved_by_person_id = $2
 			WHERE id = $1`, in.ItemID, in.Person); err != nil {
 			return err
 		}
@@ -866,7 +874,7 @@ func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string
 // settled: open again, routed as a new submission is.
 func PersonReopenTx(ctx context.Context, tx pgx.Tx, rt Starter, in PersonAction) (Submitted, error) {
 	if in.Person == "" {
-		return Submitted{}, feedbackErr("forbidden", "feedback is a person's: sign in as one")
+		return Submitted{}, errNotAPerson
 	}
 	it, err := lockItem(ctx, tx, in.ItemID)
 	if err != nil {
@@ -878,15 +886,13 @@ func PersonReopenTx(ctx context.Context, tx pgx.Tx, rt Starter, in PersonAction)
 	if err := refuseEnded(it.TaskStatus); err != nil {
 		return Submitted{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'open', resolved_commit = NULL, resolved_repo = NULL,
-			resolved_by_run_id = NULL, resolved_by_person_id = NULL, resolved_at = NULL, resolved_verified_at = NULL,
-			delivered_run_id = NULL, directive_id = NULL, updated_at = now()
+	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+`, resolved_by_person_id = NULL,
+			resolved_verified_at = NULL
 		WHERE id = $1`, in.ItemID); err != nil {
 		return Submitted{}, err
 	}
-	replyID := ids.New(ids.FeedbackReply)
-	if _, err := tx.Exec(ctx, `INSERT INTO feedback_replies (id, organization_id, item_id, kind, person_id, body)
-		VALUES ($1, $2, $3, 'reopen', $4, $5)`, replyID, in.Org, in.ItemID, in.Person, strings.TrimSpace(in.Body)); err != nil {
+	replyID, err := historyTx(ctx, tx, in.Org, in.ItemID, "reopen", in.Person, "", strings.TrimSpace(in.Body), "")
+	if err != nil {
 		return Submitted{}, err
 	}
 	ref := RunRef{Org: in.Org, ProjectID: it.ProjectID, TaskID: it.TaskID}
@@ -1096,9 +1102,7 @@ func SettleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held
 			}
 			continue
 		}
-		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'open', resolved_commit = NULL, resolved_repo = NULL,
-				resolved_by_run_id = NULL, resolved_at = NULL, delivered_run_id = NULL, directive_id = NULL, updated_at = now()
-			WHERE id = $1`, p.ID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+` WHERE id = $1`, p.ID); err != nil {
 			return err
 		}
 		if _, err := historyTx(ctx, tx, org, p.ID, "reopen", "", runID, "its commit is not in what was published", ""); err != nil {

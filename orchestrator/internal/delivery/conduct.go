@@ -291,8 +291,8 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	if len(named) == 0 {
 		// A fix for the people's feedback alone: every open item goes with it.
 		var people int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM feedback_items f WHERE f.task_id = $1 AND f.attempt = `+attemptOr+`
-			AND f.status IN ('open', 'delivered')`, st.TaskID, st.Attempt).Scan(&people); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM feedback_items f WHERE `+openItems, st.TaskID, st.Attempt).
+			Scan(&people); err != nil {
 			return nil, err
 		}
 		if people > 0 {
