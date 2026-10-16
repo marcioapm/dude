@@ -81,6 +81,12 @@ func parentsOf(parents []string) string {
 // between the judgement and the merge is judged again from the merge's
 // first parent, and an error says so when that is not only base merges.
 //
+// Bound: the judgement and the re-judgement inspect at most
+// maxBaseMerges merges each, 2 × maxBaseMerges in all. Each inspected
+// merge costs up to four GitHub reads (provenance, two compares, base
+// containment), so a fallback makes about 48 reads at most, and one write
+// (POST /merges) besides the fast-forward.
+//
 // A head that is already a pure merge of commit is adopted only when
 // attempted: the caller durably recorded, in beforeMerge, sending that
 // merge itself. Otherwise someone else made it, and it is refused like any

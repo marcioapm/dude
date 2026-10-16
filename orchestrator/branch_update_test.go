@@ -511,14 +511,15 @@ func TestAFixAlreadyInABaseMergeUnderItRecordsThatMerge(t *testing.T) {
 }
 
 // With whenBehind tell, a pull request that falls behind with nothing
-// asked of it is told about, not updated: the falling behind is recorded
-// for the task's people, and the delivery waits on them.
-func TestABehindPullRequestIsToldAboutWhenTheOrganizationAsksToBeTold(t *testing.T) {
+// asked of it is not updated: the falling behind is recorded in the
+// task's feed, and the delivery waits on its people. No push notification
+// is sent for it.
+func TestABehindPullRequestIsRecordedInTheTasksFeedWhenTheOrganizationAsksToBeTold(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"whenBehind":"tell"}' WHERE organization_id = $1`, w.org)
 	wi := w.reviewing()
 	w.gh.AdvanceBase("main", "Someone else's work")
-	w.until("falling behind told", func() bool {
+	w.until("falling behind recorded in the task's feed", func() bool {
 		w.sync()
 		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.mergeable_changed'
 			AND payload->>'to' = 'behind' AND (payload->>'behindBy')::int = 1`, wi) == 1
