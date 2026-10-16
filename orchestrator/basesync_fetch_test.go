@@ -77,7 +77,8 @@ func syncBaseLine(t *testing.T, body string) agenttools.BaseSync {
 // Every report comes after its own call's bound, as on a slow but healthy
 // lux. A later call counts the fetch an earlier call asked for once lux
 // has reported it, and of several such reports the newest: the base as
-// lux last fetched it, not as it first did.
+// lux last fetched it, not as it first did. Each such answer names the
+// base that earlier fetch landed and gives no counts.
 func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true
@@ -98,18 +99,18 @@ func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
 		}
 		return syncBaseLine(t, body)
 	}
-	w.gh.AdvanceBase("main", "Someone else's work")
+	first := w.gh.AdvanceBase("main", "Someone else's work")
 	if got := call(); got.Status != "asked" {
 		t.Fatalf("first call, nothing reported: %+v", got)
 	}
 	w.lux.ReleaseSyncs()
-	w.gh.AdvanceBase("main", "More of someone else's work")
-	if got := call(); got.Status != "fetched" || got.Behind != 1 {
-		t.Fatalf("second call, the first call's fetch reported: %+v, want fetched 1 behind", got)
+	second := w.gh.AdvanceBase("main", "More of someone else's work")
+	if got := call(); got.Status != "fetched" || got.Behind != nil || !strings.Contains(got.Next, "landed "+first) {
+		t.Fatalf("second call, the first call's fetch reported: %+v, want fetched, landed %s", got, first)
 	}
 	w.lux.ReleaseSyncs()
-	if got := call(); got.Status != "fetched" || got.Behind != 2 {
-		t.Fatalf("third call, both earlier fetches reported: %+v, want the newer, fetched 2 behind", got)
+	if got := call(); got.Status != "fetched" || got.Behind != nil || !strings.Contains(got.Next, "landed "+second) {
+		t.Fatalf("third call, both earlier fetches reported: %+v, want the newer, landed %s", got, second)
 	}
 }
 

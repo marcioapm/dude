@@ -69,9 +69,10 @@ type BaseSync struct {
 	Ref string `json:"ref"`
 	// fetched, up-to-date, failed, or asked (lux has not reported yet).
 	Status string `json:"status"`
-	// Commits the base has that HEAD lacks, and the reverse.
-	Behind int    `json:"behind"`
-	Ahead  int    `json:"ahead"`
+	// Commits the base has that HEAD lacks, and the reverse; absent when the
+	// answer is an earlier call's report, as of that fetch.
+	Behind *int   `json:"behind,omitempty"`
+	Ahead  *int   `json:"ahead,omitempty"`
 	Error  string `json:"error,omitempty"`
 	// What to do next, in a line.
 	Next string `json:"next"`
@@ -135,7 +136,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 // fetchBase asks lux for the fetch, then reads its git.sync reports until
 // each repository has one or syncBaseWait passes. A repository whose own
 // report has not come is answered from the newest fetch lux reported
-// landing for an earlier call of this Run (landedEarlier).
+// landing for an earlier call of this Run (landedEarlier), saying so.
 func fetchBase(ctx context.Context, c Caller, ask baseAsk) (syncBaseOut, error) {
 	out := syncBaseOut{RequestID: baseRequestPrefix(c.RunID) + fmt.Sprint(time.Now().UnixNano())}
 	if c.env.syncBase == nil || c.env.lux == nil {
@@ -181,15 +182,17 @@ func fetchBase(ctx context.Context, c Caller, ask baseAsk) (syncBaseOut, error) 
 		case <-time.After(syncBaseEvery):
 		}
 	}
+	earlier := map[string]bool{}
 	if len(got) < len(ask.Refs) {
 		for repo, res := range landedEarlier(ctx, c, ask, out.RequestID) {
 			if _, ok := got[repo]; !ok {
-				got[repo] = res
+				got[repo], earlier[repo] = res, true
 			}
 		}
 	}
 	for _, ref := range ask.Refs {
-		out.Repositories = append(out.Repositories, baseLine(ask.Names[ref.Repo], ref.Ref, ask.Recorded[ref.Repo], got[ref.Repo]))
+		out.Repositories = append(out.Repositories,
+			baseLine(ask.Names[ref.Repo], ref.Ref, ask.Recorded[ref.Repo], got[ref.Repo], earlier[ref.Repo]))
 	}
 	return out, nil
 }
@@ -233,10 +236,13 @@ func landedEarlier(ctx context.Context, c Caller, ask baseAsk, own string) map[s
 
 // baseLine is one repository's answer from its git.sync, or from none.
 // recorded is the base head an integration of the repository recorded, ""
-// for any other writer.
-func baseLine(repo, base, recorded string, res lux.SyncResult) BaseSync {
-	b := BaseSync{Repo: repo, Base: base, Ref: "lux/" + base, Status: res.Status, Behind: res.Behind, Ahead: res.Ahead,
-		Error: res.Error}
+// for any other writer. earlier: res is an earlier call's report, whose
+// counts are as of that fetch and so are left out.
+func baseLine(repo, base, recorded string, res lux.SyncResult, earlier bool) BaseSync {
+	b := BaseSync{Repo: repo, Base: base, Ref: "lux/" + base, Status: res.Status, Error: res.Error}
+	if !earlier {
+		b.Behind, b.Ahead = &res.Behind, &res.Ahead
+	}
 	merge := fmt.Sprintf("`git merge-tree --write-tree HEAD lux/%s` shows whether it conflicts; then `git merge lux/%s`, "+
 		"resolve, run the affected tests, commit", base, base)
 	switch {
@@ -249,6 +255,9 @@ func baseLine(repo, base, recorded string, res lux.SyncResult) BaseSync {
 		b.Status = "asked"
 		b.Next = fmt.Sprintf("lux has not reported the fetch yet: in a moment, `git rev-list --count HEAD..lux/%s` says "+
 			"how far behind you are (an error: not fetched yet); then %s.", base, merge)
+	case earlier:
+		b.Next = fmt.Sprintf("lux has not reported this call's fetch; its last fetch, for an earlier call, landed %s on "+
+			"lux/%s: `git rev-list --count HEAD..lux/%s` says how far behind you are; then %s.", res.To, base, base, merge)
 	case res.Status == "failed":
 		b.Next = "lux could not fetch it; call sync_base again, or carry on without it."
 	case res.Behind == 0:

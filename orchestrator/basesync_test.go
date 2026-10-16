@@ -759,7 +759,7 @@ func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 	var out struct {
 		Repositories []struct {
 			Repo, Base, Ref, Status, Next string
-			Behind                        int
+			Behind                        *int
 		}
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
@@ -769,7 +769,7 @@ func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 		t.Fatalf("repositories: %s", body)
 	}
 	r := out.Repositories[0]
-	if r.Repo != "target" || r.Base != "main" || r.Ref != "lux/main" || r.Status != "fetched" || r.Behind != 1 ||
+	if r.Repo != "target" || r.Base != "main" || r.Ref != "lux/main" || r.Status != "fetched" || r.Behind == nil || *r.Behind != 1 ||
 		!strings.Contains(r.Next, "git merge lux/main") {
 		t.Errorf("answer: %+v", r)
 	}

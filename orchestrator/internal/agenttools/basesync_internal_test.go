@@ -76,6 +76,28 @@ func TestLandedEarlierCountsOnlyThisRunsLandedFetchOfTheBase(t *testing.T) {
 	}
 }
 
+// The call's own fetch is not reported, and an earlier call's landed: the
+// answer says the report is the earlier call's and carries no counts, as
+// they are as of that fetch.
+func TestSyncBaseSaysAnAnswerIsAnEarlierCallsReport(t *testing.T) {
+	l := &eventsLux{frames: []lux.Frame{syncReport(1, lux.SyncResult{Repo: "target", Ref: "main",
+		RequestID: "base-r1-1", Status: "fetched", To: "aaa111", Behind: 3, Ahead: 2})}}
+	c := Caller{RunID: "r1", env: env{lux: l, syncBaseWait: 50 * time.Millisecond,
+		syncBase: func(context.Context, string, string, string, string, []lux.SyncRef) error { return nil }}}
+	out, err := fetchBase(context.Background(), c, baseAsk{LuxRunID: "lr1", Refs: targetMain,
+		Names: map[string]string{"target": "target"}, Recorded: map[string]string{}})
+	if err != nil || len(out.Repositories) != 1 {
+		t.Fatalf("answered %+v (%v)", out, err)
+	}
+	want := BaseSync{Repo: "target", Base: "main", Ref: "lux/main", Status: "fetched",
+		Next: "lux has not reported this call's fetch; its last fetch, for an earlier call, landed aaa111 on lux/main: " +
+			"`git rev-list --count HEAD..lux/main` says how far behind you are; then `git merge-tree --write-tree HEAD " +
+			"lux/main` shows whether it conflicts; then `git merge lux/main`, resolve, run the affected tests, commit."}
+	if got := out.Repositories[0]; got != want {
+		t.Fatalf("answered\n%+v\nwant\n%+v", got, want)
+	}
+}
+
 // hangingLux has one page of events, frames; asked for the next, it
 // answers only once the caller gives up, as a lux that hangs.
 type hangingLux struct {
