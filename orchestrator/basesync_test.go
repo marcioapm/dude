@@ -1020,3 +1020,77 @@ func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
 		}
 	})
 }
+
+// The people's open feedback rides along with an integration: its fixer is
+// given the items but makes no fix attempt at them, they hold no merge of
+// the base, and once the integration is done they go to ordinary pull
+// request fixes, which have all of the pull request's budget.
+func TestAnIntegrationFixerIsGivenThePeoplesOpenFeedback(t *testing.T) {
+	for name, attempts := range map[string]int{"a new item": 0, "an item one fix left open": 1} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.toolsWithSync()
+			ana := w.person("Ana")
+			wi := w.reviewing()
+			// A writer at work keeps the conflict queued while the item is
+			// submitted, so both are there when the integration starts.
+			mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
+			w.conflictWithMovedBase()
+			w.syncRounds(3)
+			if code, body := w.feedback(ana, wi, "fbi_int", "Rename the flag."); code != 201 {
+				t.Fatalf("submit: %d %v", code, body)
+			}
+			mustExec(t, w.owner, `UPDATE feedback_items SET fix_attempts = $1 WHERE id = 'fbi_int'`, attempts)
+			budget := func() (iteration, fixes int) {
+				_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE((state->>'prIteration')::int, 0),
+					COALESCE((state->'prFixesByRepo'->>'target')::int, 0) FROM workflow_runs WHERE task_id = $1`, wi).Scan(&iteration, &fixes)
+				return iteration, fixes
+			}
+			iterationBefore, fixesBefore := budget()
+			mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
+
+			w.until("the integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) >= 1 })
+			if n := w.count(integrationRuns+` AND 'fbi_int' = ANY(feedback_item_ids)`, wi); n != 1 {
+				t.Fatalf("integration fixers given the item: %d, want 1", n)
+			}
+			// Given with the Run's creation, in its transaction.
+			if n := w.count(`SELECT fix_attempts FROM feedback_items WHERE id = 'fbi_int'`); n != attempts {
+				t.Fatalf("fix_attempts %d after the integration fixer, want %d: it was counted", n, attempts)
+			}
+			if it, fx := budget(); it != iterationBefore || fx != fixesBefore {
+				t.Fatalf("the integration spent the budget: prIteration %d→%d, prFixesByRepo %d→%d", iterationBefore, it, fixesBefore, fx)
+			}
+
+			// The scripted fixer merges the base and leaves the item open:
+			// the integration is reviewed, tested and completed, never stuck.
+			w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+			w.until("the delivery escalates", func() bool { w.sync(); return w.escalationReason(wi) != "" })
+			if r := w.escalationReason(wi); r != "pr_loop_exhausted" {
+				t.Fatalf("escalated %s, want the ordinary pull request fixes' pr_loop_exhausted", r)
+			}
+			if n := w.count(integrationCompleted, wi); n != 1 {
+				t.Fatalf("integration-completed lines %d, want 1", n)
+			}
+			// Fixes dude started, not the writer the item was first handed to.
+			ordinary := `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_int' = ANY(feedback_item_ids)
+				AND pr_feedback::text NOT LIKE '%Base integration%' AND id <> 'run_existing_writer'`
+			var completedAt time.Time
+			if err := w.owner.QueryRow(context.Background(), `SELECT occurred_at FROM events WHERE task_id = $1
+				AND event_type = 'pull_request.action' AND payload->>'action' = 'integration-completed'`, wi).Scan(&completedAt); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.count(ordinary+` AND created_at < $2`, wi, completedAt); n != 0 {
+				t.Errorf("%d ordinary fixes given the item before the integration completed", n)
+			}
+			// Each ordinary fix spends one of the pull request's budget, and
+			// the one past it is refused: the integration spent none.
+			bound := scriptedPolicy().MaxPRFixIterations
+			if n := w.count(ordinary, wi); n != bound {
+				t.Errorf("%d ordinary fixes given the item after the integration, want the budget's %d", n, bound)
+			}
+			if n := w.count(`SELECT fix_attempts FROM feedback_items WHERE id = 'fbi_int'`); n != attempts+bound {
+				t.Errorf("fix_attempts %d, want %d: one per ordinary fix", n, attempts+bound)
+			}
+		})
+	}
+}

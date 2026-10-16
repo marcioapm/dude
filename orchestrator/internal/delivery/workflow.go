@@ -744,11 +744,13 @@ func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings and
-// the people's feedback still to be handled.
+// the people's feedback still to be handled. An integration's loop weighs
+// the reviewers' alone: the people's items ride along in its fixer's
+// prompt and hold no merge of the base.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
 	findings, err := w.s.Findings(ctx, org, st)
-	if err != nil {
-		return nil, err
+	if err != nil || st.Integration != nil {
+		return findings, err
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
 	return append(findings, feedback...), err
@@ -1454,20 +1456,22 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.Integration.Published = false
 		st.Integration.Polls = 0
 	}
-	// Several comments arriving together cost one fix Run, not one each;
-	// the people's feedback in dude goes with it, each item a fix attempt,
-	// an integration's fixer included, as every fixer is given it.
+	// Pull request feedback: one fix Run per batch, however many comments
+	// arrived together.
 	d := directed(st, PhaseFix)
 	prFeedback := st.PRFeedback
 	if st.Integration != nil {
 		prFeedback = append(slices.Clone(prFeedback), forge.ActionableFeedback{Repo: st.Integration.Repo, Source: "integration", Body: st.Integration.brief()})
 	}
+	// The people's open items go with every fixer, the integration's too.
+	// An integration's is not a fix attempt at them: it is there for the
+	// base, and the items come back to an ordinary fix after it.
 	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
-		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = prFeedback, feedback, true
+		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = prFeedback, feedback, st.Integration == nil
 		d.apply(p)
 	})
 	if err != nil {
