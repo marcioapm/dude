@@ -115,6 +115,9 @@ type State struct {
 	// An open pull request's fix being checked on its candidate branch
 	// before the pull request shows it (prFix to promoteCandidate).
 	Candidate *Candidate `json:"candidate,omitempty"`
+	// The refresh of the pull requests a promotion moved, while it is
+	// retried (refreshPromoted).
+	PromotedRefresh *PromotedRefresh `json:"promotedRefresh,omitempty"`
 	// A failed test sent a fix round: the next clear review goes to a
 	// test, even at the pull request wait or with the policy's tester off.
 	// Cleared once that test's Run is created.
@@ -371,6 +374,19 @@ type Candidate struct {
 	Accepted map[string]string `json:"accepted,omitempty"`
 }
 
+// PromotedRefresh is the after-promotion refresh still to do: the
+// repositories whose pull request (or adopted verdict comment) is not
+// refreshed yet, and the attempts made.
+type PromotedRefresh struct {
+	Tries int      `json:"tries,omitempty"`
+	Repos []string `json:"repos"`
+}
+
+// promotedRefreshRetries bounds the attempts after the first at refreshing
+// a promotion's pull requests; past them the failure is recorded and the
+// delivery goes on.
+const promotedRefreshRetries = 2
+
 // Workflow builds the delivery workflow's definition.
 //
 //	implement → review ⟲ fix → simplify → [test] → PR → PR feedback ⟲ fix → done
@@ -409,6 +425,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"prFix":             w.prFix,
 			"awaitPRFix":        w.awaitPRFix,
 			"promoteCandidate":  w.promoteCandidate,
+			"refreshPromoted":   w.refreshPromoted,
 			"decide":            w.decide,
 			"recover":           w.recover,
 		},
@@ -1660,7 +1677,7 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, moved); err != nil {
 			return workflow.Result{}, forgeWait(err)
 		}
-		w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(moved)))
+		w.s.refreshBodies(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(moved)), true, true)
 	}
 	st.Candidate = nil
 	return w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
@@ -1673,9 +1690,9 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
 	st.Candidate, st.PRFeedback = nil, nil
-	if len(heads) > 0 {
-		// The adopted pull request's verdict comment: the candidate's,
-		// promoted, or the last one, stale past a fix pushed unchecked.
+	if len(heads) > 0 && !promoted {
+		// The adopted pull request's verdict comment, stale past a fix
+		// pushed unchecked. A promoted one's is refreshPromoted's.
 		w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	}
 	// Who reviewed an open pull request's older head is asked to look at
@@ -1702,18 +1719,45 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		return workflow.Result{}, err
 	}
 	st.PullRequestIDs = prIDs
-	if promoted {
-		// What they say about review and test is about the commit they
-		// show now.
-		w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(heads)))
-	}
 	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
 	}
+	if promoted {
+		// What they say about review and test is about the commit they
+		// show now: in a step of its own, so that retrying it never moves
+		// a branch or records the move again.
+		st.PromotedRefresh = &PromotedRefresh{Repos: slices.Sorted(maps.Keys(heads))}
+		return workflow.Result{Next: "refreshPromoted", State: st}, nil
+	}
 	// What happened to them while the fix ran was signalled to a step not
 	// listening for it: one may have been merged or closed, or be approved
 	// with green checks already. Weighed now rather than waited for.
+	res, _, err := w.pullRequestEnded(ctx, sc, st)
+	return res, err
+}
+
+// refreshPromoted refreshes, after a promotion, the pull requests (or the
+// adopted one's verdict comment) of the repositories st.PromotedRefresh
+// still names. Those that failed are tried again after GitHub's
+// Retry-After, at least forgeWaitMin, up to promotedRefreshRetries times;
+// the last failure is recorded and the delivery goes on as candidateMoved
+// does.
+func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if pr := st.PromotedRefresh; pr != nil {
+		pr.Tries++
+		last := pr.Tries > promotedRefreshRetries
+		failed, after := w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, pr.Repos, last)
+		if len(failed) > 0 && !last {
+			pr.Repos = failed
+			return workflow.Result{Next: "refreshPromoted", State: st, SleepUntil: time.Now().Add(max(after, forgeWaitMin))}, nil
+		}
+		st.PromotedRefresh = nil
+	}
 	res, _, err := w.pullRequestEnded(ctx, sc, st)
 	return res, err
 }

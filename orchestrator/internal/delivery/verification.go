@@ -461,8 +461,14 @@ const verdictCommentTimeout = 30 * time.Second
 // task's one delivery (testVerdict, candidateMoved), which never run at once,
 // and an adopted pull request is one live task's.
 func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
+	_ = s.commentVerdict(ctx, org, st, forges, true)
+}
+
+// commentVerdict is CommentVerdict returning GitHub's failure, recorded
+// only when recordFailure is set.
+func (s *Store) commentVerdict(ctx context.Context, org string, st *State, forges Forges, recordFailure bool) error {
 	if !st.adoptedPR() {
-		return
+		return nil
 	}
 	var prID, repo, repoURL, body string
 	var number int
@@ -499,13 +505,16 @@ func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forge
 		if err != nil {
 			slog.Warn("reading the adopted pull request's test verdict failed", "task", st.TaskID, "error", err)
 		}
-		return
+		return nil
 	}
 	payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
 	posted, edited, postErr := s.postVerdict(ctx, org, forges, forge.SlugFromURL(repoURL), number, st.TaskID, &commentID, body)
 	payload["edited"] = edited
 	if postErr != nil {
 		slog.Warn("posting the adopted pull request's test verdict failed", "pr", prID, "error", postErr)
+		if !recordFailure {
+			return postErr
+		}
 		payload["error"] = postErr.Error()
 		if commentID != 0 {
 			payload["commentId"] = commentID
@@ -518,6 +527,7 @@ func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forge
 	}); err != nil {
 		slog.Warn("recording the adopted pull request's test verdict comment failed", "task", st.TaskID, "error", err)
 	}
+	return postErr
 }
 
 // postVerdict is the GitHub side of CommentVerdict, within its time limit:
@@ -560,22 +570,40 @@ func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug
 // of each open pull request dude opened, at most refreshWorkers at once.
 // Database reads and ledger writes finish in separate transactions around GitHub.
 func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, forges Forges) {
-	s.refreshBodies(ctx, org, st, forges, nil, false)
+	s.refreshBodies(ctx, org, st, forges, nil, false, true)
 }
 
-// refreshPromoted brings the Review and Verification sections of the pull
-// requests in repos, those a promotion moved, up to the commit they show.
-func (s *Store) refreshPromoted(ctx context.Context, org string, st *State, forges Forges, repos []string) {
-	if len(repos) > 0 {
-		s.refreshBodies(ctx, org, st, forges, repos, true)
+// refreshPromoted brings what the pull requests in repos, those a promotion
+// moved, say about review and test up to the commit they show: the marked
+// sections of a body dude opened, or an adopted pull request's verdict
+// comment. It returns the repositories whose refresh failed, and the
+// longest Retry-After GitHub gave; a failure is recorded only when
+// recordFailure is set.
+func (s *Store) refreshPromoted(ctx context.Context, org string, st *State, forges Forges, repos []string,
+	recordFailure bool) (failed []string, after time.Duration) {
+	if len(repos) == 0 {
+		return nil, 0
 	}
+	if st.adoptedPR() {
+		// Edited in place (postVerdict), so trying it again never posts twice.
+		if err := s.commentVerdict(ctx, org, st, forges, recordFailure); err != nil {
+			return repos, forge.RetryAfter(err)
+		}
+		return nil, 0
+	}
+	return s.refreshBodies(ctx, org, st, forges, repos, true, recordFailure)
 }
 
 // refreshBodies is RefreshVerification over the pull requests in repos
-// (nil: every one), with dude's Review section too when review is set.
-func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges Forges, repos []string, review bool) {
+// (nil: every one), with dude's Review section too when review is set. It
+// returns the repositories whose pull request GitHub failed to update, and
+// the longest Retry-After among those failures; a failure is recorded only
+// when recordFailure is set. A database read that fails is logged and ends
+// the refresh, as it always did.
+func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges Forges, repos []string, review,
+	recordFailure bool) (failed []string, after time.Duration) {
 	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {
-		return
+		return nil, 0
 	}
 	type target struct {
 		ID, Repo, URL string
@@ -633,6 +661,7 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 	}
 	jobs := make(chan target)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 	for range min(refreshWorkers, len(prs)) {
 		wg.Add(1)
 		go func() {
@@ -646,6 +675,12 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 				payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
 				if updateErr != nil {
 					slog.Warn("updating pull request verification failed", "pr", pr.ID, "error", updateErr)
+					mu.Lock()
+					failed, after = append(failed, pr.Repo), max(after, forge.RetryAfter(updateErr))
+					mu.Unlock()
+					if !recordFailure {
+						continue
+					}
 					payload["error"] = updateErr.Error()
 				}
 				if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -668,6 +703,8 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 	}
 	close(jobs)
 	wg.Wait()
+	slices.Sort(failed)
+	return failed, after
 }
 
 // refreshWorkers bounds how many pull requests' bodies one refresh asks
