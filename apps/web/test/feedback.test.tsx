@@ -495,6 +495,38 @@ describe("what a keystroke, a reload and an event redraw", () => {
     expect(reads).toBe(before);
   });
 
+  test("one drag step in a hunk redraws no row of another hunk", async () => {
+    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
+    const { FeedbackProvider } = await import("../src/feedback.tsx");
+    let reads = 0;
+    const far = [{ kind: "+" as const, old: null, new: 51, text: "one()" }, { kind: "+" as const, old: null, new: 52, text: "two()" }].map((l) => {
+      const c = { ...l };
+      Object.defineProperty(c, "text", { get: () => { reads++; return l.text; }, enumerable: true });
+      return c;
+    });
+    // Hunk 0 is appFile's (lines 1–4); hunk 1 (lines 51–52) counts its row renders.
+    const twoHunks = { ...appFile, hunks: [...appFile.hunks, { header: "@@ -40,0 +51,2 @@", lines: far }] };
+    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [twoHunks] };
+    const client = { runDiff: async () => diff } as unknown as ApiClient;
+    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
+    const ok = async () => true;
+    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
+      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
+    const { container, unmount } = await mount(
+      <TooltipProvider><FeedbackProvider value={fb}>
+        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
+          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
+      </FeedbackProvider></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector('[data-cside=new][data-cline="51"]'), "the second hunk");
+    await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+    const before = reads;
+    await act(async () => void container.querySelector('[data-cside=new][data-cline="3"]')!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(container.querySelectorAll("[data-picked]").length).toBeGreaterThanOrEqual(2);
+    expect(reads).toBe(before);
+    await act(async () => void window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })));
+  });
+
   test("a press in the gutter keeps the comment being typed; Cancel clears it", async () => {
     const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
     const { FeedbackProvider } = await import("../src/feedback.tsx");
@@ -572,6 +604,27 @@ describe("what a keystroke, a reload and an event redraw", () => {
     await emitForTest("feedback.submitted", { itemIds: ["x"], routedTo: "workflow" });
     await settle(400);
     expect(page.feedbackReads()).toBeGreaterThan(before);
+  });
+
+  test("a burst of feedback events sends one feedback read; one event, exactly one", async () => {
+    const { emit } = await import("../src/fixtures/client.ts");
+    const { ORG, PROJECT, RUN_ID } = await import("../src/fixtures/data.ts");
+    const event = (eventType: string, payload: Record<string, unknown>) => act(async () => emit({ eventType, occurredAt: new Date().toISOString(),
+      organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, runId: RUN_ID, sessionId: null, workflowRunId: null,
+      actor: { type: "system", id: "dude" }, source: "control-plane", correlationId: null, causationId: null, payload }));
+    const page = await sessionChanges();
+    const before = page.feedbackReads();
+    for (let i = 0; i < 20; i++) {
+      await event("feedback.delivered", { itemIds: [`i${i}`] });
+      await settle(5);
+    }
+    await settle(400);
+    expect(page.feedbackReads() - before).toBeGreaterThanOrEqual(1);
+    expect(page.feedbackReads() - before).toBeLessThanOrEqual(2);
+    const burst = page.feedbackReads();
+    await event("feedback.submitted", { itemIds: ["x"], routedTo: "workflow" });
+    await settle(400);
+    expect(page.feedbackReads() - burst).toBe(1);
   });
 });
 

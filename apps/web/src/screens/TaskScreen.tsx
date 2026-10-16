@@ -231,12 +231,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // put back what a newer one replaced.
   const loads = useRef(0);
   const applied = useRef(0);
-  // `byStream`: a re-read for the event stream, which re-reads feedback itself on the events that change it;
+  // Set by a feedback event: the next stream re-read (throttled, so one per burst) re-reads feedback too.
+  const feedbackDirty = useRef(false);
+  // `byStream`: a re-read for the event stream, which re-reads feedback only after the events that change it;
   // any other is the page's own action (start, mark done, a PR merged…), after which feedback is read too.
   const load = useCallback(async (byStream = false) => {
     const seq = ++loads.current;
     setVersion((v) => v + 1);
-    if (!byStream) setFeedbackVersion((v) => v + 1);
+    if (!byStream || feedbackDirty.current) setFeedbackVersion((v) => v + 1);
+    feedbackDirty.current = false;
     // The ledger is for who did what and the plans; the page stands without
     // it. Only what is new since the last read is fetched, beside the rest.
     const since = ledger.current.at(-1)?.cursor ?? 0;
@@ -288,7 +291,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [relationsVersion, setRelationsVersion] = useState(0);
   // Feedback is re-read on its own events and on a Run starting or ending (which moves where a batch goes), not on every reload.
   const stream = useReloadOnEvents({ client, taskId }, () => void load(true), undefined, (e) => {
-    if (FEEDBACK_EVENTS.has(e.eventType)) setFeedbackVersion((v) => v + 1);
+    if (FEEDBACK_EVENTS.has(e.eventType)) feedbackDirty.current = true;
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return !changesRun(e.payload);

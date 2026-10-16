@@ -253,4 +253,9 @@ describe("relocateCodeAnchor", () => {
     const api = file("api/src/app.ts", WRITTEN.hunks);
     expect(relocateCodeAnchor(a, later([api]))).toEqual({ kind: "absent" });
   });
+
+  test("a repository checked out under a hashed name is not found under another repository's directory", () => {
+    const a = anchorOn(WRITTEN, "new", 11, 12, { repo: "Web", path: "src/app.ts" });
+    expect(relocateCodeAnchor(a, later([file("api/src/app.ts", WRITTEN.hunks)]))).toEqual({ kind: "absent" });
+  });
 });

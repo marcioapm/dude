@@ -45,7 +45,12 @@ const HASH_SUFFIX = /^[0-9a-f]{8}$/;
  * Whether `segment` is `repo` as lux.SpecName / lux_name (migration 093)
  * rewrites a name lux refuses: lowercased, other characters as '-',
  * leading '-' and '_' dropped, cut to 23, then '-' and 8 hex digits of
- * SHA-256 (not recomputed here: the hash is matched by form).
+ * SHA-256. The 8 hex digits are matched by form, not recomputed: no
+ * synchronous SHA-256 is available here. Migration 094 makes checkout
+ * names unique per project, so no two repositories share a directory; the
+ * only misread left is a project holding both `Web` (`web-29751047`) and a
+ * repository literally named `web-<other 8 hex>`, when only the latter
+ * changed the path.
  */
 function isHashedCheckout(segment: string, repo: string): boolean {
   if (LUX_NAME.test(repo)) return false;
