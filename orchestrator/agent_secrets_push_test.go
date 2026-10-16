@@ -168,8 +168,9 @@ func gitCall(args ...string) [2]string {
 }
 
 // Everything lux would send GitHub is checked, not only the net change: a
-// secret committed and deleted again, or in a commit's message or author,
-// still refuses the push, naming the secret and where, never the value.
+// secret committed and deleted again, in a commit's message, author or
+// committer, or added by a merge, still refuses the push, naming the
+// secret and where, never the value.
 func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 	b64 := base64.StdEncoding.EncodeToString([]byte(implToken))
 	for name, c := range map[string]struct {
@@ -190,6 +191,34 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 			writeCall("README.md", "configured"), gitCall("add", "-A"),
 			gitCall("-c", "user.email="+implToken+"@example.test", "commit", "-q", "-m", "Configure"),
 		}, "IMPL_TOKEN in commit author of "},
+		// The author is the clean one the checkout's git is configured with.
+		"in a commit's committer only": {[][2]string{
+			writeCall("README.md", "configured"), gitCall("add", "-A"),
+			gitCall("-c", "committer.email="+implToken+"@example.test", "commit", "-q", "-m", "Configure"),
+		}, "IMPL_TOKEN in commit committer of "},
+		// The merge's resolution adds the value, which neither parent has,
+		// and a later commit takes it out: only the merge's own diff (git
+		// log -m) shows it, not any single-parent commit or the net change.
+		"added by a merge": {[][2]string{
+			writeCall("config.txt", "mode = base"), commitCall("Base config"),
+			gitCall("checkout", "-q", "-b", "side"),
+			writeCall("config.txt", "mode = side"), commitCall("Side config"),
+			gitCall("checkout", "-q", "-"),
+			writeCall("config.txt", "mode = main"), commitCall("Main config"),
+			gitCall("merge", "-q", "--no-edit", "side"),
+			writeCall("config.txt", "password = "+implToken), gitCall("add", "-A"), gitCall("commit", "-q", "--no-edit"),
+			writeCall("config.txt", "mode = merged"), commitCall("Read the password from the environment"),
+		}, "IMPL_TOKEN in config.txt"},
+		// A branch merged in adds the value and takes it out again before
+		// the merge.
+		"added on a merged-in branch": {[][2]string{
+			gitCall("checkout", "-q", "-b", "side"),
+			writeCall("side.txt", "password = "+implToken), commitCall("Side config"),
+			writeCall("side.txt", "password from the environment"), commitCall("Side reads the environment"),
+			gitCall("checkout", "-q", "-"),
+			writeCall("main.txt", "main"), commitCall("Main"),
+			gitCall("merge", "-q", "--no-edit", "side"),
+		}, "IMPL_TOKEN in side.txt"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
