@@ -224,3 +224,50 @@ func TestATurnWithOneOfTwoBasesWaitsForTheOther(t *testing.T) {
 		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
 	}
 }
+
+// untilWithoutSweeps polls the database until sql counts one row, running
+// no sweep in between: only the fakes and dude's followers move meanwhile.
+func (w *world) untilWithoutSweeps(what, sql string, args ...any) {
+	w.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if w.count(sql, args...) == 1 {
+			return
+		}
+		time.Sleep(untilPoll)
+	}
+	w.t.Fatalf("timed out waiting for %s\nruns:\n%s", what, w.describeRuns())
+}
+
+// (e) The base arrives after the wait's deadline but before the sweep
+// that would have failed the Run: that sweep reads it, so the Run is
+// pushed and completed, not refused for a missing base.
+func TestABaseArrivingPastTheWaitBeforeTheNextSweepIsPushed(t *testing.T) {
+	w := newWorld(t)
+	release := w.holdCheckouts()
+	task := w.task()
+	runID, _ := w.untilTurnReadUnbased(task)
+	// Shortened only now: untilTurnReadUnbased sweeps, and one of its sweeps
+	// past a 1 s deadline would fail the Run before the base is released.
+	w.syncer.BaseWait = time.Second
+
+	w.untilWithoutSweeps("the base wait's deadline on the database clock", `SELECT count(*) FROM runs
+		WHERE id = $1 AND turn_done_at <= now() - interval '1 second' AND base_shas = '{}'::jsonb AND status = 'running'`, runID)
+	release()
+	w.untilWithoutSweeps("the base recorded", `SELECT count(*) FROM runs WHERE id = $1 AND base_shas ? 'target' AND status = 'running'`, runID)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND push_request_id IS NOT NULL`, runID); n != 1 {
+		t.Fatalf("the sweep after the base arrived did not ask lux to push\nruns:\n%s", w.describeRuns())
+	}
+	w.until("the implementer completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
+	})
+	var status, reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &reason)
+	if status != "completed" || strings.Contains(reason, noBase) {
+		t.Errorf("the Run is %s (%q), want completed", status, reason)
+	}
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
+		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
+	}
+}
