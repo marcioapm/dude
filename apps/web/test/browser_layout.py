@@ -78,6 +78,22 @@ class PageHoldsStill(unittest.TestCase):
         self.assertAlmostEqual(widths["relations"], widths["parent"], delta=1)
         self.assertAlmostEqual(widths["right"], widths["edge"], delta=1)
         self.assertLess(max(widths["tiles"]) - min(widths["tiles"]), 1)
+        # The Goal's and each criterion's Markdown span their box: no measure cap stops them short.
+        markdown = page.evaluate("""() => {
+          const content = (el) => { const s = getComputedStyle(el);
+            return el.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)
+              - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth); };
+          const goal = document.querySelector('section[aria-label=Goal]');
+          const items = [...document.querySelectorAll('ul[aria-label="Acceptance criteria"] > li')];
+          return { goal: [goal.querySelector('.taskGoal > *').getBoundingClientRect().width, content(goal)],
+            criteria: items.map(li => [li.firstElementChild.getBoundingClientRect().width, content(li)]) };
+        }""")
+        self.assertGreater(markdown["goal"][1], 820)
+        self.assertAlmostEqual(*markdown["goal"], delta=1)
+        self.assertEqual(len(markdown["criteria"]), 3)
+        for block, box in markdown["criteria"]:
+            self.assertGreater(box, 820)
+            self.assertAlmostEqual(block, box, delta=1)
         page.get_by_role("tab", name="Activity").click()
         page.get_by_test_id("activity-item").first.wait_for()
         timeline = page.get_by_test_id("activity")
