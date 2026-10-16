@@ -405,6 +405,18 @@ func TestAConductorsPublishOverABaseMergeIsMergedIn(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, e.task, m); n != 1 {
 		t.Error("the review did not start from the merge")
 	}
+	// The next writer's own commit is made on the merge.
+	e.dismissOpenFinding()
+	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	var next string
+	e.until("the simplify pushed", func() bool {
+		_ = e.owner.QueryRow(context.Background(), `SELECT COALESCE(push_result->'results'->0->>'commit', '') FROM runs
+			WHERE task_id = $1 AND phase = 'simplify' AND status IN ('completed', 'failed')`, e.task).Scan(&next)
+		return next != ""
+	})
+	if got := e.gh.Parents(next); len(got) == 0 || got[0] != m {
+		t.Errorf("the simplify's commit %.8s has parents %v, want the merge %.8s first", next, got, m)
+	}
 }
 
 // The task branch moves again between the conductor's publish judging a
