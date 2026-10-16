@@ -195,7 +195,7 @@ func pushWorkspace(work, bare, branch, base string) (string, error) {
 func (s *Server) localCall(run *Run, tool, args string) {
 	var in struct {
 		Path, Content, Message, Description, Repo, Text string
-		Args                                      []string
+		Args                                            []string
 	}
 	_ = json.Unmarshal([]byte(args), &in)
 	if tool == fakeagent.LocalSay {
