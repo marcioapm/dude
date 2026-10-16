@@ -289,8 +289,9 @@ func (w *prFixWorld) state(field string) string {
 }
 
 // A comment on the pull request: the fix goes to the candidate branch, is
-// reviewed over its own range, tested on every criterion, and only then
-// is the pull request's branch fast-forwarded to it; its reviewers are
+// reviewed over its own range, simplified there, the simplifier's diff
+// reviewed alone, tested on every criterion, and only then is the pull
+// request's branch fast-forwarded to it; its reviewers are
 // asked again, and its description's Verification is about the commit it
 // shows. The pull request's branch never held the fix before the gate.
 func TestAPullRequestFixIsReviewedAndTestedBeforeThePullRequestShowsIt(t *testing.T) {
@@ -426,6 +427,39 @@ func TestAFindingOnTheSimplificationOfAPullRequestFixIsFixedOnTheCandidate(t *te
 	}
 	if n := w.refreshedBeforeTheMove(); n != 0 {
 		t.Errorf("%d description refreshes about the candidate before the pull request held it", n)
+	}
+}
+
+// The pull request opened with a non-blocking finding still open: a fix
+// on its candidate is sent the findings of the candidate's own reviews,
+// here the simplifier's diff's, never that one.
+func TestAFindingThePullRequestOpenedWithIsNeverSentToItsCandidatesFix(t *testing.T) {
+	w := newPRFixWorld(t)
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
+		SELECT 'fnd_left_open', organization_id, task_id, id, 'correctness', 'low', 'The greeting could be shorter', 'Advisory.'
+		FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range IS NULL ORDER BY created_at LIMIT 1`, w.wi)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		switch {
+		case phase == "review" && n == 2:
+			b.Reply = simplifierFinding
+		case phase == "review" && n == 3:
+			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "fix", "review", "test"}) {
+		t.Errorf("after the comment: %v", w.phases)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fnd_left_open' = ANY(finding_ids)`, w.wi); n != 0 {
+		t.Errorf("the finding the pull request opened with was sent to %d of its candidate's fixes", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
+		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title LIKE 'The simplification drops%'`, w.wi); n != 1 {
+		t.Errorf("the simplifier's diff's finding was sent to %d fixes, want one", n)
 	}
 }
 
@@ -677,6 +711,70 @@ func TestARepositoryATestFixOfACandidateChangesFirstIsReviewedBeforeItsPullReque
 	}
 }
 
+// The simplifier of a candidate changes a repository the pull request's
+// fix did not, and the candidate's test fails: the whole fix's re-review
+// is told that repository's range, from where it stood before the
+// simplifier.
+func TestARepositoryTheSimplifierOfACandidateChangesFirstIsInTheFixsRange(t *testing.T) {
+	w := newPRFixWorldIn(t, true, fakeagent.TestFailModel)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "simplify" && n == 1 {
+			b.Commit = map[string]string{"web:SIMPLE.md": "simplified\n"}
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("both on the pull requests", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.web.SHA(w.branch) != w.webBefore && w.taskStatus(w.wi) == "review"
+	})
+	if n := w.rangesNaming(delivery.RangePullRequestFix, "web", w.webBefore); n != 1 {
+		t.Errorf("%d whole-fix reviews told web's range from %s, want the test fix's", n, w.webBefore)
+	}
+}
+
+// The fix of a candidate's simplifier's diff changes a repository neither
+// the pull request's fix nor the simplifier did, and the candidate's test
+// fails: the whole fix's re-review is told that repository's range too.
+func TestARepositoryAFixOfACandidatesSimplificationChangesFirstIsInTheFixsRange(t *testing.T) {
+	w := newPRFixWorldIn(t, true, fakeagent.TestFailModel)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		switch {
+		case phase == "review" && n == 2:
+			b.Reply = simplifierFinding
+		case phase == "review" && n == 3:
+			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
+		case phase == "fix" && n == 2:
+			b.Commit = map[string]string{"web:SIMPLE.md": "the fix of the simplification\n"}
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("both on the pull requests", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.web.SHA(w.branch) != w.webBefore && w.taskStatus(w.wi) == "review"
+	})
+	if n := w.rangesNaming(delivery.RangePullRequestFix, "web", w.webBefore); n != 1 {
+		t.Errorf("%d whole-fix reviews told web's range from %s, want the test fix's\n%s", n, w.webBefore, w.describeRuns())
+	}
+}
+
+// Simplify off: a pull request's fix is reviewed and tested on its
+// candidate with no simplifier, and the pull request moves after.
+func TestAPullRequestFixWithSimplifyOffIsReviewedAndTestedAlone(t *testing.T) {
+	w := newPRFixWorld(t)
+	setPolicy(w.world, w.wi, `{"simplify":false}`)
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
+		t.Errorf("the pull request showed the fix before its test: %v", shown)
+	}
+	if !slices.Equal(w.phases, []string{"fix", "review", "test"}) {
+		t.Errorf("after the comment: %v, want the fix, its review and the test", w.phases)
+	}
+}
+
 // A person pushes to one pull request while a fix of two is checked: no
 // branch is moved, the other's included, and a person is asked.
 func TestAPushToOnePullRequestMovesNeitherOfTwo(t *testing.T) {
@@ -770,8 +868,9 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 }
 
 // Every reviewer of a candidate's round fails and a person accepts the
-// round: the test runs, and the pull request takes the fix with no review
-// round past the person's decision.
+// round: the simplifier runs and its diff alone is reviewed, then the test,
+// and the pull request takes the fix with no review of the accepted fix's
+// range past the person's decision.
 func TestAnAcceptedFailedReviewOfACandidateIsHonouredAtPromotion(t *testing.T) {
 	w := newPRFixWorld(t)
 	owner, _, _ := w.people(w.wi)
@@ -801,6 +900,11 @@ func TestAnAcceptedFailedReviewOfACandidateIsHonouredAtPromotion(t *testing.T) {
 	// The simplifier's diff is new, and reviewed; what the person accepted is not reviewed again.
 	if after := w.phases[decided:]; !slices.Equal(after, []string{"simplify", "review", "test"}) {
 		t.Errorf("after the person accepted: %v, want the simplifier, its diff's review and the test", after)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+		AND review_range->>'of' = $2 AND created_at > (SELECT max(created_at) FROM runs WHERE task_id = $1 AND phase = 'simplify')`,
+		w.wi, delivery.RangePullRequestFix); n != 0 {
+		t.Errorf("%d reviews of the accepted fix's range after the person's decision", n)
 	}
 }
 

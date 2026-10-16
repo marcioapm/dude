@@ -20,14 +20,17 @@ import type { RequestContext, Router } from "../router.ts";
 async function listVerification(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.params.id!;
   const rows = await withOrg(ctx.principal.organizationId, async (scope) => (await scope.sql`
-    SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt",
-      (SELECT jsonb_build_object('heads', w.state->'heads', 'from', w.state->'candidate'->'from') FROM workflow_runs w
-        WHERE w.task_id = v.task_id AND COALESCE((w.state->>'attempt')::int, r.attempt) = r.attempt
-        ORDER BY w.created_at DESC LIMIT 1) AS "work",
+    SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt", wk.work AS "work",
       v.criterion, v.text, v.status, v.evidence, v.observed, v.problem, v.decision,
       CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object('id', p.id, 'name', p.name) END AS "decidedBy",
       v.decision_note AS "decisionNote"
-    FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id LEFT JOIN people p ON p.id = v.decided_by
+    FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id
+    -- Lateral rather than a scalar subquery: the planner memoizes it per (task, attempt).
+    LEFT JOIN LATERAL (
+      SELECT jsonb_build_object('heads', w.state->'heads', 'from', w.state->'candidate'->'from') AS work FROM workflow_runs w
+      WHERE w.task_id = v.task_id AND COALESCE((w.state->>'attempt')::int, r.attempt) = r.attempt
+      ORDER BY w.created_at DESC LIMIT 1) wk ON true
+    LEFT JOIN people p ON p.id = v.decided_by
     WHERE v.task_id = ${taskId}
     ORDER BY v.created_at DESC, v.run_id, v.criterion
     LIMIT 500`) as Array<Record<string, unknown>>);

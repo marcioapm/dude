@@ -887,6 +887,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		// A pull request's fix fixes what its own reviews raised — of the
 		// fix, and of its simplifier's diff — never the findings a person
 		// let the pull request open with.
+		// After a failed test SimplifyBase is empty: the narrow review's open findings are not sent.
 		ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
 		if len(st.SimplifyBase) > 0 {
 			ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
@@ -950,11 +951,11 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	}
 	// A repository the fix changed first joins the range under review, from
 	// where it stood before the fix: the range's next review names it. On a
-	// candidate it joins the fix's range too, which a failed test's fix is
-	// reviewed over once the simplifier's is done.
+	// candidate, while the simplifier's range is under review, it joins the
+	// fix's range too, which a failed test's fix is reviewed over.
 	if r := st.reviewRange(); r != nil {
 		widenRange(r.Base, out, st.Heads)
-		if st.checkingCandidate() {
+		if st.checkingCandidate() && r.Of == RangeSimplify {
 			widenRange(st.Candidate.Base, out, st.Heads)
 		}
 	}

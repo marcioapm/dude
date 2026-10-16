@@ -2,9 +2,10 @@
  * What the tester showed: the latest test's verdict on each acceptance
  * criterion, under the commits it tested and a stale mark once the branch
  * has moved past them — or, for a pull request's fix still being checked,
- * a mark that the pull request does not hold it yet. Each piece of evidence opens the file that test
- * published in the artifact viewer — that test's version of it, not a
- * later one of the same name. A waiver or acceptance says who and why.
+ * a mark that the pull request does not hold it yet. Each piece of
+ * evidence opens the file that test published in the artifact viewer —
+ * that test's version of it, not a later one of the same name. A waiver
+ * or acceptance says who and why.
  */
 
 import { useMemo, useState } from "react";

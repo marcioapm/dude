@@ -1017,9 +1017,9 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * What woke a step, when the record says: a fix for the review's findings,
  * for the test's, for a pull request's feedback (and whose); a review of
  * the simplifier's diff or of a pull request's fix; a re-review of a fix;
- * a simplification or a test of a pull request's fix. Only what can be read from the runs,
- * findings and events; nothing guessed. Exported for its unit test: the
- * step row is its only caller.
+ * a simplification or a test of a pull request's fix. Only what can be
+ * read from the runs, findings and events; nothing guessed. Exported for
+ * its unit test: the step row is its only caller.
  */
 export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[],
   created?: Record<string, unknown>): string | undefined {

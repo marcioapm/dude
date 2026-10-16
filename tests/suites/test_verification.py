@@ -146,21 +146,29 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
     fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
 
     # While the candidate is checked the pull request still holds `before`:
-    # its verdict there is never stale, whatever the candidate's heads.
+    # its verdict there is never stale, whatever the candidate's heads, and
+    # a verdict at the candidate's current head is the candidate's.
     while_checked: list[bool] = []
+    at_candidate: list[dict] = []
 
     def moved():
         if (sha := fake_github.branch_sha(pr["headBranch"])) != before:
             return sha
-        if fake_github.branch_sha(f"{pr['headBranch']}-candidate"):
+        if candidate := fake_github.branch_sha(f"{pr['headBranch']}-candidate"):
             verdicts = client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
             at_pr = next((v for v in verdicts if v["heads"].get("greeter") == before), None)
-            if at_pr is not None and fake_github.branch_sha(pr["headBranch"]) == before:
-                while_checked.append(at_pr["stale"])
+            at_head = next((v for v in verdicts if v["heads"].get("greeter") == candidate), None)
+            if fake_github.branch_sha(pr["headBranch"]) == before and \
+                    fake_github.branch_sha(f"{pr['headBranch']}-candidate") == candidate:
+                if at_pr is not None:
+                    while_checked.append(at_pr["stale"])
+                if at_head is not None and candidate != before:
+                    at_candidate.append(at_head)
         return None
 
     head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
     assert while_checked and not any(while_checked), while_checked
+    assert all(v["candidate"] is True for v in at_candidate), at_candidate
     runs = client.task_runs(task["id"])
     fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
     assert fix["branch"] == f"{pr['headBranch']}-candidate", fix
