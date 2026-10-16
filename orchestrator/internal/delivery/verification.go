@@ -501,10 +501,11 @@ func (s *Store) commentVerdict(ctx context.Context, org string, st *State, forge
 			WHERE event_type = $1 AND payload->>'pullRequestId' = $2 AND payload ? 'commentId'
 			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID)
 	})
-	if err != nil || body == "" {
-		if err != nil {
-			slog.Warn("reading the adopted pull request's test verdict failed", "task", st.TaskID, "error", err)
-		}
+	if err != nil {
+		slog.Warn("reading the adopted pull request's test verdict failed", "task", st.TaskID, "error", err)
+		return nil
+	}
+	if body == "" {
 		return nil
 	}
 	payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
@@ -600,7 +601,7 @@ func (s *Store) refreshPromoted(ctx context.Context, org string, st *State, forg
 // returns the repositories whose pull request GitHub failed to update, and
 // the longest Retry-After among those failures; a failure is recorded only
 // when recordFailure is set. A database read that fails is logged and ends
-// the refresh, as it always did.
+// the refresh with nothing reported failed.
 func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges Forges, repos []string, review,
 	recordFailure bool) (failed []string, after time.Duration) {
 	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {

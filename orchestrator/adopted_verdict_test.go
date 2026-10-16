@@ -120,7 +120,7 @@ func (w *world) verdictOnlyAfterTheMove(wi string, seen int) {
 		wi, seen); n != 0 {
 		w.t.Errorf("%d verdict comments recorded before the pull request took the fix", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, wi); n != 1 {
+	if n := w.moves(wi); n != 1 {
 		w.t.Errorf("%d moves of the fix recorded, want 1", n)
 	}
 }

@@ -73,8 +73,13 @@ func (w *prFixWorld) verificationEvents(repo string) (ok, failed int) {
 	return w.count(q, w.wi, repo, false), w.count(q, w.wi, repo, true)
 }
 
-func (w *prFixWorld) moves() int {
-	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi)
+func (w *prFixWorld) untilTheFixIsOnThePullRequest() {
+	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+}
+
+// moves counts the task's recorded moves of a fix onto its pull requests.
+func (w *world) moves(wi string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, wi)
 }
 
 // settledBackOnThePullRequest: the delivery is waiting on its pull
@@ -101,7 +106,7 @@ func TestAPromotedRefreshGitHubFailsTwiceIsTriedAgainAndLands(t *testing.T) {
 	patches := bodyPatches(w.gh, &armed, 2)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 	w.elapseRefreshWait(w.wi, 2)
 	w.settledBackOnThePullRequest()
@@ -116,7 +121,7 @@ func TestAPromotedRefreshGitHubFailsTwiceIsTriedAgainAndLands(t *testing.T) {
 	if ok, failed := w.verificationEvents("target"); ok != 1 || failed != 0 {
 		t.Errorf("recorded %d updates and %d failures, want the one that landed", ok, failed)
 	}
-	if n := w.moves(); n != 1 {
+	if n := w.moves(w.wi); n != 1 {
 		t.Errorf("%d moves recorded", n)
 	}
 }
@@ -130,7 +135,7 @@ func TestAPromotedRefreshGitHubKeepsFailingIsRecordedAndLeftAfterThreeTries(t *t
 	armed.Store(true)
 	before := w.gh.Pull(1).Body
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 	w.elapseRefreshWait(w.wi, 2)
 	w.settledBackOnThePullRequest()
@@ -167,7 +172,7 @@ func TestAPromotedRefreshsLastFailureIsNotTriedAgainWhenTheNextStepIsLost(t *tes
 	patches := bodyPatches(w.gh, &armed, 1<<30)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 	w.elapseRefreshWait(w.wi, 2)
 	gate.Store(true)
@@ -192,7 +197,7 @@ func TestAPullRequestMergedDuringAPromotedRefreshWaitEndsTheTask(t *testing.T) {
 	bodyPatches(w.gh, &armed, 1<<30)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 	w.gh.Merge(1)
 	w.sync()
@@ -307,7 +312,7 @@ func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
 	})
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 
 	// A restart: another orchestrator process, its own poller, from what
@@ -351,7 +356,7 @@ func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
 	if n := refPatches.Load(); n != 1 {
 		t.Errorf("the pull request's branch was moved %d times", n)
 	}
-	if n := w.moves(); n != 1 {
+	if n := w.moves(w.wi); n != 1 {
 		t.Errorf("%d moves recorded", n)
 	}
 	head := w.gh.SHA(w.branch)
