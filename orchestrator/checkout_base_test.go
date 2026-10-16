@@ -120,8 +120,8 @@ func TestATurnEndedBeforeItsBaseWaitsForIt(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT base_shas->>'target' FROM runs WHERE id = $1`, runID).Scan(&base)
 	history.mu.Lock()
 	defer history.mu.Unlock()
-	if len(history.bases) != 1 || base == "" || !slices.Equal(history.bases[0][:1], []string{"target"}) ||
-		history.bases[0][len(history.bases[0])-1] != base {
+	if len(history.bases) != 1 || base == "" ||
+		!slices.Equal(history.bases[0], []string{"target", "/workspace/repos/target", base, ""}) {
 		t.Errorf("history scans %v, want one of target from %q", history.bases, base)
 	}
 }
