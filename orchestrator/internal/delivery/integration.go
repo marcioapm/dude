@@ -269,7 +269,9 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 // repo's pull request merges, at head, after an integration left to it
 // (State.HandedOver): the integration's closing line, once.
 func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head string) error {
-	d, err := ReadDelivery(ctx, tx, taskID)
+	// Locked: a step recording the hand-over commits first, so its
+	// HandedOver is seen here, or closeHandedOver sees this reading.
+	d, err := LoadDelivery(ctx, tx, taskID)
 	if err != nil || d == nil {
 		return err
 	}

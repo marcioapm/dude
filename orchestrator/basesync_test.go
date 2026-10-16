@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -1047,6 +1049,54 @@ func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
 	}
 	if n := w.count(integrationCompleted, wi); n != 1 {
 		t.Fatalf("completions %d", n)
+	}
+}
+
+// The syncer reads the pull request merging while the step that records
+// the hand-over is still committing: its read waits for that commit and
+// sees the hand-over, so the syncer writes the closing line itself.
+func TestTheSyncerWaitsForAHandOverBeingCommitted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	var key string
+	var handedOver []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT k, state->'handedOver' FROM workflow_runs,
+		jsonb_object_keys(state->'handedOver') k WHERE task_id = $1`, wi).Scan(&key, &handedOver); err != nil {
+		t.Fatal(err)
+	}
+	repo, rest, _ := strings.Cut(key, ":")
+	head, _, _ := strings.Cut(rest, ":")
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'handedOver' WHERE task_id = $1`, wi)
+
+	ctx := context.Background()
+	step, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer step.Rollback(ctx)
+	if _, err := step.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{handedOver}', $2) WHERE task_id = $1`,
+		wi, handedOver); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() {
+		read <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			return delivery.HandOverMergedTx(ctx, tx, w.org, wi, repo, head)
+		})
+	}()
+	select {
+	case err := <-read:
+		t.Fatalf("the syncer read the delivery while its step was committing (err %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := step.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d, want the syncer's 1", n)
 	}
 }
 
