@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -80,13 +81,14 @@ func withProjectSecrets(spec *lux.Spec, project []lux.Secret) []lux.Secret {
 	return given
 }
 
-// acceptedProjectSecrets are the secrets among sent the Run lux holds
-// declares: a retried submit is answered with the first submit's Run.
-func acceptedProjectSecrets(lr lux.Run, sent []lux.Secret) []lux.Secret {
-	var out []lux.Secret
-	for _, s := range sent {
-		if slices.ContainsFunc(lr.Spec.Secrets, func(d lux.StoredSecret) bool { return d.Name == s.Name && !d.RunnerOnly }) {
-			out = append(out, s)
+// declaredNames are the names among recorded the Run lux holds declares in
+// its container: a retried submit is answered with whichever attempt's Run
+// lux made, which may declare names this attempt did not send.
+func declaredNames(lr lux.Run, recorded []string) []string {
+	var out []string
+	for _, n := range recorded {
+		if slices.ContainsFunc(lr.Spec.Secrets, func(d lux.StoredSecret) bool { return d.Name == n && !d.RunnerOnly }) {
+			out = append(out, n)
 		}
 	}
 	return out
@@ -185,22 +187,25 @@ func secretNames(list []lux.Secret) []string {
 // recordSubmitting records, committed before lux sees the spec, the names
 // and exact values a submit sends: lux may start the agent, and its output
 // reach dude, before Submit returns, and that output is redacted with these.
-// A value an earlier attempt of the same submit recorded is kept: lux
-// answers a retry with that attempt's Run when it got through, and a value
-// rotated since is still caught as the name's current one. A crash before
-// Submit leaves them on a pending Run, which the next attempt reuses; one
-// that ends unsubmitted loses them to ForgetSecretCopies.
+// Until lux answers, both only grow: an earlier attempt whose answer was
+// lost may have made the Run lux holds, with a name since unticked or a
+// value since rotated, so every name and value any attempt sent is kept.
+// A crash before Submit leaves them on a pending Run, which the next
+// attempt adds to; one that ends unsubmitted loses them to
+// ForgetSecretCopies.
 func (s *Syncer) recordSubmitting(ctx context.Context, r phaseRun, sent []lux.Secret) error {
 	if len(sent) == 0 {
 		return nil
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, secretNames(sent)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names =
+			ARRAY(SELECT DISTINCT n FROM unnest(project_secret_names || $2::text[]) n ORDER BY n) WHERE id = $1`,
+			r.ID, secretNames(sent)); err != nil {
 			return err
 		}
 		for _, sec := range sent {
 			if _, err := tx.Exec(ctx, `INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ($1, $2, $3, $4)
-				ON CONFLICT (run_id, name) DO NOTHING`, r.ID, r.Org, sec.Name, sec.Value); err != nil {
+				ON CONFLICT DO NOTHING`, r.ID, r.Org, sec.Name, sec.Value); err != nil {
 				return err
 			}
 		}
@@ -208,12 +213,9 @@ func (s *Syncer) recordSubmitting(ctx context.Context, r phaseRun, sent []lux.Se
 	})
 }
 
-// forgetSubmitting undoes recordSubmitting for a submit that failed for
-// good: the Run was given nothing.
-func (s *Syncer) forgetSubmitting(ctx context.Context, r phaseRun, sent []lux.Secret) error {
-	if len(sent) == 0 {
-		return nil
-	}
+// forgetSubmitting undoes every attempt's recordSubmitting for a submit
+// that failed for good: the Run was given nothing.
+func (s *Syncer) forgetSubmitting(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = '{}' WHERE id = $1`, r.ID); err != nil {
 			return err
@@ -223,23 +225,30 @@ func (s *Syncer) forgetSubmitting(ctx context.Context, r phaseRun, sent []lux.Se
 	})
 }
 
-// recordGiven records what lux accepted of sent: the names and copy are
-// trimmed to it (a retried submit is answered with the first submit's Run),
-// and the one event names it.
-func (s *Syncer) recordGiven(ctx context.Context, tx pgx.Tx, r phaseRun, sent, accepted []lux.Secret) error {
-	if len(sent) == 0 {
+// recordGiven records what the Run lux accepted holds: the names every
+// attempt recorded are trimmed to those lux's Run declares, with their
+// copies, and the one event names them. lux's answer names its secrets but
+// carries no value, so every value any attempt sent for a kept name stays:
+// which one the Run holds cannot be told, and redacting an unused one is
+// harmless.
+func (s *Syncer) recordGiven(ctx context.Context, tx pgx.Tx, r phaseRun, lr lux.Run) error {
+	var recorded []string
+	if err := tx.QueryRow(ctx, `SELECT project_secret_names FROM runs WHERE id = $1`, r.ID).Scan(&recorded); err != nil {
+		return err
+	}
+	if len(recorded) == 0 {
 		return nil
 	}
-	names := secretNames(accepted)
-	if len(accepted) < len(sent) {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, names); err != nil {
+	names := declaredNames(lr, recorded)
+	if len(names) < len(recorded) {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, db.NonNil(names)); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM run_project_secrets WHERE run_id = $1 AND name <> ALL($2)`, r.ID, names); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM run_project_secrets WHERE run_id = $1 AND name <> ALL($2)`, r.ID, db.NonNil(names)); err != nil {
 			return err
 		}
 	}
-	if len(accepted) == 0 {
+	if len(names) == 0 {
 		return nil
 	}
 	return s.event(ctx, tx, r, EvSecretsGiven, ledger.ActorSystem, map[string]any{"names": names})

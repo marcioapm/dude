@@ -1026,7 +1026,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	// A refusal fails the Run, which was given nothing. A submit that may
 	// yet be retried keeps the copy: lux may have started the Run anyway.
 	failGiven := func(reason string) error {
-		if ferr := s.forgetSubmitting(ctx, r, given); ferr != nil {
+		if ferr := s.forgetSubmitting(ctx, r); ferr != nil {
 			s.Log.Warn("forgetting a refused submit's secret copy failed; the backstop deletes it", "run", r.ID, "error", ferr)
 		}
 		return s.fail(ctx, r, reason)
@@ -1079,7 +1079,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		if err := s.recordGiven(ctx, tx, r, given, acceptedProjectSecrets(lr, given)); err != nil {
+		if err := s.recordGiven(ctx, tx, r, lr); err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.lease.acquired", ledger.ActorSystem, map[string]any{"luxRunId": lr.ID})

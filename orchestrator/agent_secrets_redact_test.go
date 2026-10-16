@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
@@ -255,6 +256,188 @@ func TestARunsCopyIsTrimmedToTheNamesLuxAccepted(t *testing.T) {
 	if evs := w.givenEvents(runID); len(evs) != 1 || strings.Contains(evs[0], "EVERYONE_KEY") {
 		t.Errorf("run.secrets.given = %v", evs)
 	}
+}
+
+// lostFirstSubmit is a lux whose first submit answers with a retryable
+// error, as one whose answer was lost: with create, lux made the Run
+// anyway, and the retry is answered with it; without, the retry makes it.
+// between runs before that first answer, after the first lux call,
+// so the retry builds its spec from what it changed; created runs once the
+// Run exists, before dude reads the answer.
+type lostFirstSubmit struct {
+	lux.Client
+	create   bool
+	between  func()
+	created  func()
+	attempts atomic.Int32
+}
+
+func (c *lostFirstSubmit) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	if c.attempts.Add(1) == 1 {
+		if c.create {
+			if _, err := c.Client.Submit(ctx, spec, key); err != nil {
+				return lux.Run{}, err
+			}
+			if c.created != nil {
+				c.created()
+			}
+		}
+		c.between()
+		return lux.Run{}, &lux.Error{Status: http.StatusServiceUnavailable, Code: "unavailable", Message: "the answer was lost"}
+	}
+	lr, err := c.Client.Submit(ctx, spec, key)
+	if err == nil && !c.create && c.created != nil {
+		c.created()
+	}
+	return lr, err
+}
+
+// printsItsSecrets is an implementer that hangs once it has printed, in a
+// tool's output, every project secret its lux Run holds.
+func printsItsSecrets(spec map[string]any) fakelux.Behaviour {
+	b := fakelux.Behaviour{Hang: true}
+	if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+		return b
+	}
+	raw, _ := json.Marshal(spec)
+	var s lux.Spec
+	_ = json.Unmarshal(raw, &s)
+	var out []string
+	for name, value := range projectSecretsOf(s) {
+		out = append(out, name+"="+value)
+	}
+	slices.Sort(out)
+	b.Tools = []string{"bash"}
+	b.ToolOutput = map[string]string{"bash": strings.Join(out, "\n")}
+	return b
+}
+
+// printedOnce delivers a task whose implementer prints its secrets through
+// lux, and returns its Run once that output is stored.
+func (w *world) printedOnce(c *lostFirstSubmit) (task, runID string) {
+	w.t.Helper()
+	w.syncer.Lux = c
+	w.lux.Decide = printsItsSecrets
+	task = w.task()
+	w.deliver(task)
+	w.until("the implementer's printed secrets stored", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT run_id FROM events WHERE task_id = $1 AND event_type = 'agent.tool.completed'`, task).Scan(&runID)
+		return runID != ""
+	})
+	if n := c.attempts.Load(); n < 2 {
+		w.t.Fatalf("%d submit attempts; the retry never happened", n)
+	}
+	return task, runID
+}
+
+// assertRedacted checks that no event of the Run holds value, raw or
+// encoded, and that its printed output shows name's marker.
+func (w *world) assertRedacted(runID, name, value string) {
+	w.t.Helper()
+	for _, l := range leaks(value) {
+		if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND payload::text LIKE '%' || $2 || '%'`, runID, l); n != 0 {
+			w.t.Errorf("%d events hold %s's value as %q", n, name, l)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.completed'
+		AND payload::text LIKE '%' || $2 || '%'`, runID, name+"=[REDACTED:"+name+"]"); n != 1 {
+		w.t.Errorf("%d tool outputs show %s's marker, want 1", n, name)
+	}
+}
+
+const (
+	implTokenB = "impl-test-not-a-real-token-BBB"
+	implTokenC = "impl-test-not-a-real-token-CCC"
+)
+
+// A submit whose answer was lost is retried with the Run's idempotency key.
+// Whatever changed in the project between the attempts, the value lux's Run
+// holds is redacted from its output.
+func TestARetriedSubmitRedactsTheValuesLuxHolds(t *testing.T) {
+	// (a) A name unticked between attempts, the first having made the Run:
+	// that Run still holds and prints it.
+	t.Run("unticked between attempts", func(t *testing.T) {
+		w := newWorld(t)
+		w.grant("IMPL_TOKEN", implToken, "implementer")
+		w.grant("EVERYONE_KEY", everyoneKey, "implementer")
+		_, runID := w.printedOnce(&lostFirstSubmit{Client: w.syncer.Lux, create: true, between: func() {
+			w.grant("EVERYONE_KEY", everyoneKey, "previews")
+		}})
+		w.assertRedacted(runID, "EVERYONE_KEY", everyoneKey)
+		w.assertRedacted(runID, "IMPL_TOKEN", implToken)
+		if got := w.givenNames(runID); !slices.Equal(got, []string{"EVERYONE_KEY", "IMPL_TOKEN"}) {
+			t.Errorf("names = %v, want both the Run holds", got)
+		}
+	})
+
+	// (a) The same, with another name ticked in its place: the retry sends
+	// a name lux's Run does not declare.
+	t.Run("unticked and another ticked between attempts", func(t *testing.T) {
+		w := newWorld(t)
+		w.grant("IMPL_TOKEN", implToken, "implementer")
+		w.grant("EVERYONE_KEY", everyoneKey, "implementer")
+		_, runID := w.printedOnce(&lostFirstSubmit{Client: w.syncer.Lux, create: true, between: func() {
+			w.grant("EVERYONE_KEY", everyoneKey, "previews")
+			w.grant("SNOWFLAKE_PASSWORD", snowflakePassword, "implementer")
+		}})
+		w.assertRedacted(runID, "EVERYONE_KEY", everyoneKey)
+		if got := w.givenNames(runID); !slices.Equal(got, []string{"EVERYONE_KEY", "IMPL_TOKEN"}) {
+			t.Errorf("names = %v, want the two lux's Run declares", got)
+		}
+		if evs := w.givenEvents(runID); len(evs) != 1 || !strings.Contains(evs[0], "EVERYONE_KEY") || strings.Contains(evs[0], "SNOWFLAKE_PASSWORD") {
+			t.Errorf("run.secrets.given = %v", evs)
+		}
+	})
+
+	// (b) Rotated A→B between attempts, the retry making the Run with B;
+	// rotated to C before its output arrives.
+	t.Run("rotated, the retry making the Run", func(t *testing.T) {
+		w := newWorld(t)
+		w.grant("IMPL_TOKEN", implToken, "implementer")
+		_, runID := w.printedOnce(&lostFirstSubmit{Client: w.syncer.Lux, create: false,
+			between: func() { w.grant("IMPL_TOKEN", implTokenB, "implementer") },
+			created: func() { w.grant("IMPL_TOKEN", implTokenC, "implementer") }})
+		if got := projectSecretsOf(submitted(t, w.luxRunFor(runID))); got["IMPL_TOKEN"] != implTokenB {
+			t.Fatal("lux's Run does not hold the retry's value")
+		}
+		w.assertRedacted(runID, "IMPL_TOKEN", implTokenB)
+	})
+
+	// (c) Rotated A→B between attempts, the first having made the Run with A.
+	// lux's answer names the Run's secrets, not their values, so the copy
+	// keeps both; a resume then replaces it with the one value it sends.
+	t.Run("rotated, the first attempt making the Run", func(t *testing.T) {
+		w := newWorld(t)
+		w.grant("IMPL_TOKEN", implToken, "implementer")
+		_, runID := w.printedOnce(&lostFirstSubmit{Client: w.syncer.Lux, create: true,
+			between: func() { w.grant("IMPL_TOKEN", implTokenB, "implementer") }})
+		if got := projectSecretsOf(submitted(t, w.luxRunFor(runID))); got["IMPL_TOKEN"] != implToken {
+			t.Fatal("lux's Run does not hold the first attempt's value")
+		}
+		w.assertRedacted(runID, "IMPL_TOKEN", implToken)
+		if got := w.runCopyValues(runID); !slices.Equal(got, []string{"IMPL_TOKEN=" + implToken, "IMPL_TOKEN=" + implTokenB}) {
+			t.Errorf("copy after the submit holds %d values, want both attempts'", len(got))
+		}
+		w.pausePhase(runID)
+		w.until("paused", func() bool { return w.personallyPaused(runID) })
+		w.grant("IMPL_TOKEN", implTokenC, "implementer")
+		w.resumePhase(runID)
+		if got := w.runCopyValues(runID); !slices.Equal(got, []string{"IMPL_TOKEN=" + implTokenC}) {
+			t.Errorf("copy after the resume holds %d values, want the one it sent", len(got))
+		}
+	})
+}
+
+// runCopyValues is every name=value of the Run's copy, sorted.
+func (w *world) runCopyValues(runID string) []string {
+	w.t.Helper()
+	var out []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(array_agg(name || '=' || value), '{}')
+		FROM run_project_secrets WHERE run_id = $1`, runID).Scan(&out); err != nil {
+		w.t.Fatal(err)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // refusesSubmit is a lux refusing every submit for good.

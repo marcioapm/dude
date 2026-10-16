@@ -456,8 +456,11 @@ as dude's own LLM key is. The Run records the names it was given
 `run.secrets.given` event, names only) and keeps a copy of the exact values
 (`run_project_secrets`) while its output may still need redacting. The
 names and copy are written before lux is asked to start the Run, so its
-first output is redacted with them, trimmed to what lux accepted, and
-dropped if lux refuses the submit. A change
+first output is redacted with them. A submit retried after a lost answer
+only adds to them (lux's Run may be any attempt's, with a name since
+unticked or a value since rotated); once lux answers, the names are trimmed
+to those its Run declares, each keeping every value an attempt sent. Both
+are dropped if lux refuses the submit. A change
 reaches Runs that start after it; a running one keeps what it has. A
 resume gives a Run the current value of every name it was given (never one
 added since) and replaces its copy; a name since removed, or no longer

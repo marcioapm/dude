@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -64,6 +65,47 @@ func TestRunSecretCopiesAreTenantScopedAndSurviveRotation(t *testing.T) {
 	mustExec(t, owner, `DELETE FROM runs WHERE id = 'run_copy'`)
 	if err := owner.QueryRow(ctx, `SELECT count(*)::text FROM run_project_secrets WHERE run_id = 'run_copy'`).Scan(&got); err != nil || got != "0" {
 		t.Fatalf("Run deletion retained copies: %v", err)
+	}
+}
+
+func TestARunsCopyHoldsSeveralValuesPerNameOnceEach(t *testing.T) {
+	database, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_multi', $1, 'Acme', 'acme', 'ACME')`, org)
+	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('tsk_multi', $1, 'prj_multi', 1, 'Test copies', 'Test fixture')`, org)
+	mustExec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt) VALUES ('run_multi', $1, 'prj_multi', 'tsk_multi', 1)`, org)
+	insert := func(value string) (int64, error) {
+		var n int64
+		err := database.InOrg(ctx, org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ('run_multi', $1, 'TOKEN', $2)
+				ON CONFLICT DO NOTHING`, org, value)
+			n = tag.RowsAffected()
+			return err
+		})
+		return n, err
+	}
+	// A backslash and a multi-byte character: the key's digest is of the
+	// value's own bytes, so these two differ and each repeats as itself.
+	const a, b = `tok-test-\101-é-AAAA`, `tok-test-A-é-AAAA`
+	for i, c := range []struct {
+		value string
+		rows  int64
+	}{{a, 1}, {b, 1}, {a, 0}, {b, 0}, {strings.Repeat("x", 32768), 1}} {
+		if n, err := insert(c.value); err != nil || n != c.rows {
+			t.Errorf("insert %d: %d rows, %v; want %d", i, n, err, c.rows)
+		}
+	}
+	if _, err := insert(strings.Repeat("x", 32769)); err == nil {
+		t.Error("accepted a value over 32 KiB")
+	}
+	var values []string
+	if err := owner.QueryRow(ctx, `SELECT array_agg(value) FROM run_project_secrets WHERE run_id = 'run_multi'
+		AND value_sha256 = sha256(convert_to(value, 'UTF8'))`).Scan(&values); err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 3 || !slices.Contains(values, a) || !slices.Contains(values, b) {
+		t.Errorf("copy holds %d values whose key is their UTF-8 digest, want 3", len(values))
 	}
 }
 
