@@ -73,20 +73,64 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 
 // Redactor is the redactor of a Run's text: its secret values, as
 // run_secret_values (migration 129) reads them in tx. Empty for a Run given
-// none, and in a transaction whose role may not read them.
+// none, and in a transaction whose role may not read them. Under a ctx
+// carrying Redactors, each Run's is read once and reused.
 func Redactor(ctx context.Context, tx pgx.Tx, runID string) (*redact.Redactor, error) {
 	if runID == "" {
 		return nil, nil
+	}
+	cache, _ := ctx.Value(redactorsKey{}).(*Redactors)
+	if r, ok := cache.lookup(runID); ok {
+		return r, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT name, value FROM run_secret_values($1)`, runID)
 	if err != nil {
 		return nil, err
 	}
 	values, err := pgx.CollectRows(rows, pgx.RowToStructByPos[redact.Secret])
-	if err != nil || len(values) == 0 {
+	if err != nil {
 		return nil, err
 	}
-	return redact.FromList(values), nil
+	var r *redact.Redactor
+	if len(values) > 0 {
+		r = redact.FromList(values)
+	}
+	cache.store(runID, r)
+	return r, nil
+}
+
+// Redactors holds Runs' redactors for the appends of one transaction (a
+// batch of a Run's output), so each is read once, not once per event. Only
+// for a transaction that changes no Run's secret names or copy: those it
+// reads are what they were at the first lookup.
+type Redactors struct{ byRun map[string]*redact.Redactor }
+
+type redactorsKey struct{}
+
+// WithRedactors is ctx whose Redactor calls go through c.
+func WithRedactors(ctx context.Context, c *Redactors) context.Context {
+	return context.WithValue(ctx, redactorsKey{}, c)
+}
+
+// None records that runID has no secrets: it is never looked up.
+func (c *Redactors) None(runID string) { c.store(runID, nil) }
+
+func (c *Redactors) lookup(runID string) (*redact.Redactor, bool) {
+	if c == nil {
+		return nil, false
+	}
+	r, ok := c.byRun[runID]
+	return r, ok
+}
+
+func (c *Redactors) store(runID string, r *redact.Redactor) {
+	if c == nil {
+		return
+	}
+	if c.byRun == nil {
+		c.byRun = map[string]*redact.Redactor{}
+	}
+	c.byRun[runID] = r
 }
 
 // redactRun redacts e's payload with its Run's values, through its JSON:

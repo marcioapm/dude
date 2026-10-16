@@ -106,6 +106,9 @@ type translator struct {
 	harnessState
 	// What this batch did to runs.children, written by save.
 	facts childFacts
+	// The Run records no project secret names: its text has nothing to
+	// redact. Fixed once its lux Run exists (recordGiven), so load reads it.
+	noSecrets bool
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
@@ -238,9 +241,11 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	var state []byte
 	u := &t.usage
 	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, open_tool_calls,
-		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state
+		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state,
+		cardinality(project_secret_names) = 0
 		FROM runs WHERE id = $1`, t.run.ID).
-		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite, &state); err != nil {
+		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite, &state,
+			&t.noSecrets); err != nil {
 		return err
 	}
 	if err := json.Unmarshal(state, &t.harnessState); err != nil {

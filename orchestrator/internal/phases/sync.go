@@ -1665,29 +1665,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 				break more
 			}
 		}
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			// The Run's row before any directive: the order abort and the
-			// Run's other ends take them in (FailUnreadTx), so a receipt in
-			// this batch and an abort wait for each other, never deadlock.
-			// save updates the row at the batch's end anyway.
-			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
-				return err
-			}
-			var cursor string
-			var afterEvent int64
-			for _, f := range batch {
-				if err := t.apply(ctx, tx, s, f); err != nil {
-					return err
-				}
-				switch f.Kind {
-				case "record":
-					cursor = f.Cursor
-				case "lux":
-					afterEvent = max(afterEvent, f.EventID)
-				}
-			}
-			return t.save(ctx, tx, cursor, afterEvent)
-		}); err != nil {
+		if err := s.applyBatch(ctx, t, batch); err != nil {
 			// What was read but not recorded is read again from the saved
 			// cursor by the next follower.
 			t.resumes = nil
@@ -1699,6 +1677,42 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		}
 	}
 	return <-read
+}
+
+// applyBatch records a batch of the Run's frames in one transaction, with
+// the cursor past them. Each Run's redactor is read once for the batch
+// (ledger.Redactors), and never for a Run given no secret: nothing in a
+// batch changes a Run's secret names or copy.
+func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Frame) error {
+	return s.DB.InOrg(ctx, t.run.Org, func(tx pgx.Tx) error {
+		// Per transaction: an attempt run again reads afresh.
+		redactors := &ledger.Redactors{}
+		if t.noSecrets {
+			redactors.None(t.run.ID)
+		}
+		ctx := ledger.WithRedactors(ctx, redactors)
+		// The Run's row before any directive: the order abort and the
+		// Run's other ends take them in (FailUnreadTx), so a receipt in
+		// this batch and an abort wait for each other, never deadlock.
+		// save updates the row at the batch's end anyway.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID); err != nil {
+			return err
+		}
+		var cursor string
+		var afterEvent int64
+		for _, f := range batch {
+			if err := t.apply(ctx, tx, s, f); err != nil {
+				return err
+			}
+			switch f.Kind {
+			case "record":
+				cursor = f.Cursor
+			case "lux":
+				afterEvent = max(afterEvent, f.EventID)
+			}
+		}
+		return t.save(ctx, tx, cursor, afterEvent)
+	})
 }
 
 // finish collects what a phase produced once its agent finished its turn.
