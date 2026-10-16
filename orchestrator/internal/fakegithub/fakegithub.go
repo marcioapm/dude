@@ -306,6 +306,12 @@ func (s *Server) MergeCommit(branch, sha string) string {
 	return s.mergeAs("GitHub", branch, sha, "Merge "+sha+" into "+branch, nil)
 }
 
+// MergeCommitResolved is MergeCommit with files of the merged tree
+// overridden by resolved: GitHub's merge commit carrying other content.
+func (s *Server) MergeCommitResolved(branch, sha string, resolved map[string]string) string {
+	return s.mergeAs("GitHub", branch, sha, "Merge "+sha+" into "+branch, resolved)
+}
+
 func (s *Server) mergeAs(name, branch, other, message string, resolved map[string]string) string {
 	head := s.SHA(branch)
 	out, err := s.git("merge-tree", "--write-tree", head, other)

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -256,6 +257,129 @@ func TestAFixIsRefusedOverABaseMergeNotMadeByGitHub(t *testing.T) {
 	}
 	if x := landed(); x == "" || w.gh.SHA(branch) != x {
 		t.Errorf("the task branch at %.8s, want the person's merge %.8s", w.gh.SHA(branch), x)
+	}
+}
+
+// The fix's merge over a base merge lands on GitHub and its answer is lost:
+// the retried finish finds the merge on the branch and adopts it as the
+// fix's, as the Run recorded attempting it, sending no second merge.
+func TestAFixsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.RetryAhead = time.Minute
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	hook, landed := landOnce(isMoveOf(branch), func(*http.Request) string {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		return w.gh.MergeInto(branch, "main", nil)
+	})
+	var merges atomic.Int64
+	w.onGitHub(hook, func(r *http.Request) int {
+		if isMergesCall(r) {
+			merges.Add(1)
+		}
+		return 0
+	})
+	w.gh.Set(func(s *fakegithub.Server) { s.LoseMergeResponses = 1 })
+	fix := w.prFixSettled(wi)
+	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
+		t.Fatalf("fix %s (%s), escalated %q", fix.status, fix.error, r)
+	}
+	x, m := landed(), w.gh.SHA(branch)
+	if got := w.gh.Parents(m); x == "" || !slices.Equal(got, []string{x, fix.commit}) {
+		t.Fatalf("the branch's head %.8s has parents %v, want GitHub's merge %.8s then the fix's %.8s", m, got, x, fix.commit)
+	}
+	if n := merges.Load(); n != 1 {
+		t.Errorf("%d merge requests, want 1", n)
+	}
+	if fix.head != m {
+		t.Errorf("the fix recorded head %.8s, want its merge %.8s", fix.head, m)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.merge_attempted'
+		AND payload->>'commit' = $2`, wi, fix.commit); n != 1 {
+		t.Errorf("%d merge attempts recorded for the fix's commit, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2
+		AND payload->'mergedBase'->>'commit' = $3 AND payload->'mergedBase'->>'into' = $4`, wi, m, fix.commit, x); n != 1 {
+		t.Errorf("%d commit events saying dude merged the fix in", n)
+	}
+}
+
+// Someone merges the fix's own commit (its per-Run branch is on GitHub)
+// onto the task branch over a base merge while the fix is at work. dude
+// never asked for that merge: it is not taken as the fix's, and the
+// fast-forward's refusal stands.
+func TestAPersonsMergeOfAFixsCommitIsNotAdopted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	hook, landed := landOnce(isMoveOf(branch), func(r *http.Request) string {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		w.gh.MergeInto(branch, "main", nil)
+		return w.gh.MergeCommit(branch, movedTo(r))
+	})
+	w.onGitHub(hook)
+	fix := w.prFixSettled(wi)
+	m := landed()
+	if got := w.gh.Parents(m); m == "" || len(got) != 2 || got[1] != fix.commit {
+		t.Fatalf("their merge %.8s has parents %v, want the fix's %.8s second", m, got, fix.commit)
+	}
+	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
+		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
+	}
+	if r := w.escalationReason(wi); r != "pr_fix_failed" {
+		t.Errorf("escalated %q, want pr_fix_failed", r)
+	}
+	if got := w.gh.SHA(branch); got != m {
+		t.Errorf("the task branch at %.8s, want their merge %.8s", got, m)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created'
+		AND (payload->>'headSha' = $2 OR payload ? 'mergedBase')`, wi, m); n != 0 {
+		t.Errorf("%d commit events taking their merge as dude's", n)
+	}
+}
+
+// The fix's merge lands carrying content other than the fix's change (as
+// a merge GitHub made and someone then replaced would), and its answer is
+// lost: the Run did attempt a merge, but this one is not exactly the
+// fix's, so the retry refuses it as not a fast-forward.
+func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.RetryAhead = time.Minute
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	under, x := landOnce(isMoveOf(branch), func(*http.Request) string {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		return w.gh.MergeInto(branch, "main", nil)
+	})
+	evil, landed := landOnce(isMergesCall, func(r *http.Request) string {
+		return w.gh.MergeCommitResolved(branch, mergeOf(r), map[string]string{"PERSON.md": "theirs\n"})
+	})
+	w.onGitHub(under, evil, func(r *http.Request) int {
+		if isMergesCall(r) && landed() != "" {
+			return http.StatusBadGateway
+		}
+		return 0
+	})
+	fix := w.prFixSettled(wi)
+	m := landed()
+	if got := w.gh.Parents(m); m == "" || !slices.Equal(got, []string{x(), fix.commit}) {
+		t.Fatalf("the merge %.8s has parents %v, want %.8s then the fix's %.8s", m, got, x(), fix.commit)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.merge_attempted'
+		AND payload->>'commit' = $2`, wi, fix.commit); n != 1 {
+		t.Fatalf("%d merge attempts recorded for the fix's commit, want 1", n)
+	}
+	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
+		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
+	}
+	if r := w.escalationReason(wi); r != "pr_fix_failed" {
+		t.Errorf("escalated %q, want pr_fix_failed", r)
+	}
+	if got := w.gh.SHA(branch); got != m {
+		t.Errorf("the task branch at %.8s, want the merge %.8s kept", got, m)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2`, wi, m); n != 0 {
+		t.Errorf("%d commit events taking the merge as the fix's", n)
 	}
 }
 
@@ -737,6 +861,18 @@ func movedTo(r *http.Request) string {
 	}
 	_ = json.Unmarshal(body, &in)
 	return in.SHA
+}
+
+// mergeOf is the commit a POST /merges request asks to merge in, its body
+// left for the fake to read.
+func mergeOf(r *http.Request) string {
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var in struct {
+		Head string `json:"head"`
+	}
+	_ = json.Unmarshal(body, &in)
+	return in.Head
 }
 
 // prFix is the task's first pull request fix as it settled.

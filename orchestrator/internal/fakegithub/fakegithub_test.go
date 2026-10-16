@@ -141,6 +141,10 @@ func TestMergesParentOrderContract(t *testing.T) {
 		t.Fatalf("topic = %s, response SHA = %s", got, merged.SHA)
 	}
 	contractParents(t, fake, merged.SHA, want)
+	// GitHub commits a /merges merge as web-flow, signed and verified.
+	if p, err := client.CommitProvenance(context.Background(), fake.Slug, merged.SHA); err != nil || p.Login != "web-flow" || !p.Verified {
+		t.Fatalf("merge provenance = %+v (%v), want web-flow, verified", p, err)
+	}
 	for path, want := range map[string]string{"topic.txt": "topic change", "base.txt": "base change"} {
 		if got := contractGit(t, fake.Repo, "show", merged.SHA+":"+path); got != want {
 			t.Fatalf("%s = %q, want %q", path, got, want)
