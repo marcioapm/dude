@@ -824,11 +824,14 @@ func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings and
-// the people's feedback still to be handled.
+// the people's feedback still to be handled. A candidate's loop weighs the
+// findings alone: its fixers are given the feedback, but what they leave
+// open is the pull request loop's after promotion (prFixLanded), bounded
+// by MaxPRFixIterations, never a stuck candidate round.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
 	findings, err := w.s.Findings(ctx, org, st)
-	if err != nil {
-		return nil, err
+	if err != nil || st.checkingCandidate() {
+		return findings, err
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
 	return append(findings, feedback...), err
@@ -1840,9 +1843,15 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		st.PromotedRefresh = &PromotedRefresh{Repos: repos}
 		return workflow.Result{Next: "refreshPromoted", State: st}, nil
 	}
-	// What happened to them while the fix ran was signalled to a step not
-	// listening for it: one may have been merged or closed, or be approved
-	// with green checks already. Weighed now rather than waited for.
+	return w.prFixLanded(ctx, sc, st)
+}
+
+// prFixLanded goes on from a pull request fix that reached the pull
+// requests, or changed nothing: what happened to them while the fix ran
+// was signalled to a step not listening for it (one may have been merged
+// or closed, or be approved with green checks already), weighed now
+// rather than waited for.
+func (w *steps) prFixLanded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
 	res, finished, err := w.pullRequestEnded(ctx, sc, st)
 	if err != nil || finished {
 		return res, err
@@ -1905,8 +1914,7 @@ func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (w
 		st.PromotedRefresh = nil
 		return workflow.Result{Next: "refreshPromoted", State: st}, nil
 	}
-	res, _, err := w.pullRequestEnded(ctx, sc, st)
-	return res, err
+	return w.prFixLanded(ctx, sc, st)
 }
 
 // pullRequestEnded: one of the task's pull requests was merged or

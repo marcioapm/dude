@@ -288,7 +288,11 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   the conductor's `open_pull_request`, readiness and dude's merge treat
   open and delivered items as blocking whatever the severities. Every
   implement, fix and pull request fix is given the open items
-  (`runs.feedback_item_ids`), each a fix attempt bounded as a finding's. An
+  (`runs.feedback_item_ids`), each a fix attempt bounded as a finding's.
+  A pull request fix checked on its candidate gives its fixers the open
+  items, but the candidate's review loop weighs its findings alone: what
+  its fixers leave open is taken up after promotion (or a fix that changed
+  nothing) by another `prFix`, within `MaxPRFixIterations`. An
   agent replies (`replied` holds nothing) or resolves with a commit, which
   holds until its Run publishes and GitHub's compare shows the commit in
   the published head and new since the Run's base. A merge on GitHub's own

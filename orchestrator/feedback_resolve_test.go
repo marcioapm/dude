@@ -72,7 +72,14 @@ func (w *world) resolveAsItPublishes(task, item string, pick func(base, head str
 			branch := r.URL.Path[strings.Index(r.URL.Path, "/git/refs/heads/")+len("/git/refs/heads/"):]
 			token, hash := agenttools.NewToken()
 			mustExec(w.t, w.owner, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, fixer, hash)
-			ar.fixer, ar.commit = fixer, pick(w.gh.SHA(branch), in.SHA)
+			// A pull request's fix publishes to a candidate branch that does
+			// not exist before its first push: where it started is its base.
+			before := w.gh.SHA(branch)
+			if before == "" {
+				_ = w.owner.QueryRow(ctx, `SELECT v FROM runs, jsonb_each_text(base_refs) AS b(k, v) WHERE id = $1 LIMIT 1`,
+					fixer).Scan(&before)
+			}
+			ar.fixer, ar.commit = fixer, pick(before, in.SHA)
 			for _, id := range append([]string{item}, ar.also...) {
 				req, _ := http.NewRequest("POST", tools.URL+"/tools/feedback_resolve",
 					strings.NewReader(fmt.Sprintf(`{"id":%q,"commit":%q}`, id, ar.commit)))
