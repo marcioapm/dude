@@ -2347,6 +2347,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Kept, so the task can be picked back up where it stopped.
 		e.Decided = nil
 		st.Stopped = e
+		// The candidate is kept, so a recovery may still promote the checked
+		// work; its resolutions are reopened now and stay open whatever it
+		// does, for the next pull request fix round (prFixLanded).
 		if st.Candidate != nil {
 			if err := w.s.abandonCandidate(ctx, sc.OrganizationID, st); err != nil {
 				return workflow.Result{}, err

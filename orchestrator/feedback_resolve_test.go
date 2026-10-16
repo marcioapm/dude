@@ -17,7 +17,9 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // agentResolve is a fixer resolving a person's item through the agent
@@ -470,5 +472,67 @@ func TestFeedbackAResolutionOnACandidateHoldsOncePromoted(t *testing.T) {
 	}
 	if code, body := w.mergeAs(ana, w.wi); strings.Contains(fmt.Sprint(body), "feedback_open") {
 		t.Errorf("merge after promotion: %d %v", code, body)
+	}
+}
+
+// A person stopping the delivery while a candidate's test waits on them
+// ends that round short of the pull request: what its fixer resolved is
+// open again, for the next pull request fix round.
+func TestFeedbackAResolutionOnACandidateStoppedAtItsTestIsReopened(t *testing.T) {
+	w := newPRFixWorld(t, fakeagent.TestBlockedModel)
+	ana := w.person("Ana")
+	w.assignOwner(w.wi, ana)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	w.armed.Store(true)
+	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("the candidate's test blocked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	if _, _, answer := ar.state(); !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve: %s", answer)
+	}
+	if status, verified := w.resolution("fbi_x"); status != "resolved" || verified {
+		t.Fatalf("before the stop: %s verified=%v", status, verified)
+	}
+	if code, body := w.decide(ana, w.wi, "stop", ""); code != 200 {
+		t.Fatalf("stop: %d %v", code, body)
+	}
+	w.until("the resolution reopened", func() bool { s, _ := w.resolution("fbi_x"); return s == "open" })
+}
+
+// A person aborting a candidate's tester ends that round short of the pull
+// request: what its fixer resolved is open again at once, in the abort's
+// own transaction.
+func TestFeedbackAResolutionOnACandidateAbortedAtItsTestIsReopened(t *testing.T) {
+	w := newPRFixWorld(t)
+	ana := w.person("Ana")
+	w.assignOwner(w.wi, ana)
+	w.play = func(phase string, _ int, b *fakelux.Behaviour) {
+		if phase == "test" {
+			b.Hang = true
+		}
+	}
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	w.armed.Store(true)
+	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	var tester string
+	w.until("the candidate's tester running", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'test'
+			AND status = 'running' ORDER BY created_at DESC LIMIT 1`, w.wi).Scan(&tester)
+		return tester != ""
+	})
+	if _, _, answer := ar.state(); !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve: %s", answer)
+	}
+	if status, verified := w.resolution("fbi_x"); status != "resolved" || verified {
+		t.Fatalf("before the abort: %s verified=%v", status, verified)
+	}
+	if code, body := w.call("/internal/runs/"+tester+"/abort", map[string]any{}); code != 200 {
+		t.Fatalf("abort: %d %v", code, body)
+	}
+	if status, verified := w.resolution("fbi_x"); status != "open" || verified {
+		t.Errorf("after the abort: %s verified=%v, want open", status, verified)
 	}
 }

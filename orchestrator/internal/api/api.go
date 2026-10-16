@@ -1017,7 +1017,9 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			}
 		}
 		// A pull request fix being checked on its candidate stops short of
-		// the pull request: what its fixers resolved is open again.
+		// the pull request: what its fixers resolved is open again. The
+		// candidate stays in the state, so a recovery may still promote it;
+		// the items stay open for the next pull request fix round.
 		if d, err := delivery.ReadDelivery(r.Context(), tx, ri.TaskID); err != nil {
 			return err
 		} else if d != nil && d.Live() && d.State.Candidate != nil {
