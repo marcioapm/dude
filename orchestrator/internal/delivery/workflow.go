@@ -41,7 +41,11 @@ type State struct {
 	Policy           Policy            `json:"policy"`
 	Integration      *Integration      `json:"integration,omitempty"`
 	IntegrationPairs map[string]string `json:"integrationPairs,omitempty"`
-	PendingConflicts []forge.Signal    `json:"pendingConflicts,omitempty"`
+	// Integrations whose merge published while GitHub had not said whether
+	// the pull request still conflicts, left to the pull request syncer's
+	// next reading, by pair.
+	HandedOver       map[string]Integration `json:"handedOver,omitempty"`
+	PendingConflicts []forge.Signal         `json:"pendingConflicts,omitempty"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
@@ -1034,6 +1038,13 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 					st.IntegrationPairs = map[string]string{}
 				}
 				st.IntegrationPairs[after.pair()] = st.Integration.RunID
+				if after.agentRun() {
+					if st.HandedOver == nil {
+						st.HandedOver = map[string]Integration{}
+					}
+					// Kept as it started, so its closing line names the same attempt.
+					st.HandedOver[after.pair()] = *st.Integration
+				}
 				settled = false
 			}
 		}
@@ -1228,7 +1239,8 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
 			if st.Integration != nil {
-				return w.integrationFailure(ctx, sc, st, causePairAttempted, reasonPairAttempted)
+				cause, problem := st.attemptCause(st.Integration)
+				return w.integrationFailure(ctx, sc, st, cause, problem)
 			}
 			gh, err := w.forges.For(ctx, sc.OrganizationID)
 			if err != nil {
@@ -1344,8 +1356,8 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		// request's people asked for: it spends none of their budget, and
 		// is bounded by one Run per head/base pair instead.
 		st.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
-	} else if exhausted, err := w.chargePRFix(ctx, sc, st, total); err != nil || exhausted != nil {
-		return *exhausted, err
+	} else if res, exhausted, err := w.chargePRFix(ctx, sc, st, total); err != nil || exhausted {
+		return res, err
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
@@ -1397,8 +1409,8 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 }
 
 // chargePRFix counts a fix against this round's budget and each pull
-// request's it addresses; the escalation when either is spent, else nil.
-func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (*workflow.Result, error) {
+// request's it addresses; the escalation, and true, when either is spent.
+func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (workflow.Result, bool, error) {
 	st.PRIteration++
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
@@ -1409,7 +1421,7 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 		// no feedback: it counts against each still open.
 		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 		if err != nil {
-			return &workflow.Result{}, err
+			return workflow.Result{}, false, err
 		}
 		for _, p := range states {
 			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
@@ -1429,9 +1441,9 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
 		res, err := w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
 			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
-		return &res, err
+		return res, true, err
 	}
-	return nil, nil
+	return workflow.Result{}, false, nil
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.

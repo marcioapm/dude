@@ -890,6 +890,108 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 	}
 }
 
+// handedOver is an integration whose merge published while GitHub had not
+// worked out mergeability, past the step's reads: left to the pull request
+// syncer. Under tell it is a person's Resolve conflicts.
+func (w *world) handedOver(tell bool) string {
+	w.t.Helper()
+	w.toolsWithSync()
+	wi := w.reviewing()
+	if tell {
+		mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings='{"whenBehind":"tell"}' WHERE organization_id=$1`, w.org)
+	}
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	if tell {
+		w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+		var prID string
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, wi).Scan(&prID)
+		if code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
+			w.t.Fatalf("resolve: %d %v", code, body)
+		}
+	}
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	asked := w.count(escalations, wi)
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.until("validation reading GitHub", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
+			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
+	})
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
+	w.until("left to the syncer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+			AND state->'integration' IS NULL`, wi) == 1
+	})
+	if n := w.count(escalations, wi); n != asked {
+		w.t.Fatalf("escalated while GitHub had not said: %d escalations, %d before", n, asked)
+	}
+	return wi
+}
+
+// escalations counts a task's escalations asked of people.
+const escalations = `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`
+
+// A conflict the syncer reads after the hand-over is dude's attempt still
+// conflicting, under either setting: the escalation names it, with retry.
+func TestAHandedOverIntegrationStillConflictingNamesDudesAttempt(t *testing.T) {
+	for _, tell := range []bool{false, true} {
+		t.Run(map[bool]string{false: "update", true: "tell"}[tell], func(t *testing.T) {
+			w := newWorld(t)
+			wi := w.handedOver(tell)
+			w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+			before := w.count(escalations, wi)
+			w.until("the escalation", func() bool { w.sync(); return w.count(escalations, wi) == before+1 })
+			var raw []byte
+			if err := w.owner.QueryRow(context.Background(), `SELECT state->'escalation' FROM workflow_runs WHERE task_id=$1`, wi).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var e delivery.Escalation
+			if err := json.Unmarshal(raw, &e); err != nil {
+				t.Fatal(err)
+			}
+			var d struct {
+				Cause       string `json:"cause"`
+				RunID       string `json:"runId"`
+				Integration bool   `json:"integration"`
+			}
+			var detail struct {
+				Detail json.RawMessage `json:"detail"`
+			}
+			_ = json.Unmarshal(raw, &detail)
+			_ = json.Unmarshal(detail.Detail, &d)
+			run := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id=$2 AND pr_feedback::text LIKE '%Base integration%'`, wi, d.RunID)
+			if strings.Join(e.Actions(), " ") != "retry wait stop" || d.Cause != "still_conflicting" || !d.Integration || run != 1 {
+				t.Fatalf("escalation %s, actions %v", raw, e.Actions())
+			}
+		})
+	}
+}
+
+// GitHub's first reading after the hand-over says the pull request merges:
+// the integration's activity gets its closing line.
+func TestAHandedOverIntegrationThatMergesIsCompleted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	completed := `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-completed'`
+	if n := w.count(completed, wi); n != 0 {
+		t.Fatalf("%d completions before GitHub said", n)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	w.until("the closing line", func() bool { w.sync(); return w.count(completed, wi) == 1 })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(completed+` AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
+		t.Fatalf("completions %d", n)
+	}
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatalf("escalated: %s", r)
+	}
+}
+
 // While GitHub has not worked out whether the integrated pull request
 // merges, the step reads GET /pulls/{n} and nothing else, backing off
 // (1 s, 2 s, 4 s…). Past its bound it waits on the pull request syncer: a

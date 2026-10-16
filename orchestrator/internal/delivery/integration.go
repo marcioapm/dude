@@ -163,6 +163,26 @@ const (
 
 func (i *Integration) pair() string { return i.Repo + ":" + i.Head + ":" + i.BaseHead }
 
+// attemptedIn says an integration of repo was attempted at some pair.
+func (st *State) attemptedIn(repo string) bool {
+	for p := range st.IntegrationPairs {
+		if strings.HasPrefix(p, repo+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// attemptCause is why an attempted pair escalates: one handed over to the
+// pull request syncer with GitHub undecided is dude's merge, still
+// conflicting; any other was attempted and not resolved.
+func (st *State) attemptCause(i *Integration) (string, string) {
+	if _, ok := st.HandedOver[i.pair()]; ok {
+		return causeStillConflicting, reasonStillConflicting
+	}
+	return causePairAttempted, reasonPairAttempted
+}
+
 // brief is the integration fixer's feedback item. Its "Base integration:"
 // lead is what marks the fix Run as an integration (phases.buildSpec).
 func (i *Integration) brief() string {
@@ -238,7 +258,34 @@ func (i *Integration) agentRun() bool { return i.RunID != "" && !strings.HasPref
 // the task's activity, once per action and attempt however often the step
 // is replayed.
 func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, st *State, action string, extra map[string]any) error {
-	i := st.Integration
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		// The workflow's step lease admits one runner of this step at a
+		// time, which is what makes this read-then-append write once.
+		return integrationEventTx(ctx, tx, sc.OrganizationID, st, st.Integration, action, extra)
+	})
+}
+
+// HandOverMergedTx is the pull request syncer's first reading that
+// repo's pull request merges, at head, after an integration left to it
+// (State.HandedOver): the integration's closing line, once.
+func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head string) error {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return err
+	}
+	for pair, i := range d.State.HandedOver {
+		if pair != repo+":"+head+":"+i.BaseHead {
+			continue
+		}
+		return integrationEventTx(ctx, tx, org, &d.State, &i, "integration-completed", map[string]any{"head": head})
+	}
+	return nil
+}
+
+// integrationEventTx is integrationEvent for integration i. The type and
+// correlation narrow its dedupe to the task's pull request actions
+// (events_correlation_idx).
+func integrationEventTx(ctx context.Context, tx pgx.Tx, org string, st *State, i *Integration, action string, extra map[string]any) error {
 	payload := map[string]any{"action": action, "repo": i.Repo, "base": i.Base, "attempt": i.pair() + ":" + i.RunID}
 	if i.Number > 0 {
 		payload["number"] = i.Number
@@ -247,23 +294,17 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 		payload["runId"] = i.RunID
 	}
 	maps.Copy(payload, extra)
-	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		// The workflow's step lease admits one runner of this step at a
-		// time, which is what makes this read-then-append write once. The
-		// type and correlation narrow it to the integration's own events
-		// (events_correlation_idx), not every event of the task.
-		var seen bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
-				AND event_type = 'pull_request.action' AND correlation_id = $1
-				AND payload->>'action' = $2 AND payload->>'attempt' = $3)`,
-			st.TaskID, action, payload["attempt"]).Scan(&seen); err != nil || seen {
-			return err
-		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID,
-			ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
-			Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: payload})
+	var seen bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+			AND event_type = 'pull_request.action' AND correlation_id = $1
+			AND payload->>'action' = $2 AND payload->>'attempt' = $3)`,
+		st.TaskID, action, payload["attempt"]).Scan(&seen); err != nil || seen {
 		return err
-	})
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: org,
+		ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+		Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: payload})
+	return err
 }
 
 func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext, st *State, stop *forge.Signal) (bool, error) {
@@ -271,7 +312,11 @@ func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext,
 	if err != nil || gh == nil {
 		return false, err
 	}
-	if gh.Settings.WhenBehind != "update" && !stop.Requested {
+	// Integrating is update's, or a person's request. A pair dude already
+	// attempted is looked up whatever the setting, so a hand-over the
+	// syncer finds still conflicting escalates as dude's attempt.
+	integrate := gh.Settings.WhenBehind == "update" || stop.Requested
+	if !integrate && !st.attemptedIn(stop.Repo) {
 		return false, nil
 	}
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
@@ -320,6 +365,9 @@ func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext,
 		if run := st.IntegrationPairs[i.pair()]; run != "" {
 			i.RunID = run
 			st.Integration = i
+			return false, nil
+		}
+		if !integrate {
 			return false, nil
 		}
 		st.Integration = i

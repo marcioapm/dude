@@ -373,6 +373,14 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				return err
 			}
 		}
+		// GitHub's first word on a head dude integrated and left to this
+		// syncer: it merges, so the integration is complete.
+		if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
+			(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
+			if err := delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA); err != nil {
+				return err
+			}
+		}
 		// The delivery the pull request is from: a task started over has a
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
