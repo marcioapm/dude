@@ -1369,6 +1369,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			st.Integration.Head = st.Heads[st.Integration.Repo]
 		}
 		st.Integration.Published = false
+		st.Integration.Polls = 0
 	}
 	// Several comments arriving together cost one fix Run, not one each.
 	d := directed(st, PhaseFix)
