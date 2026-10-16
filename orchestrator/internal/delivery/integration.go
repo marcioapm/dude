@@ -78,9 +78,13 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if e != nil {
 			return workflow.Result{}, false, e
 		}
+		// A head GitHub merged and adopted is tested again, clean or not.
+		serverMerged := func(from, sha string) *Integration {
+			return &Integration{Repo: repo.Name, Base: base, Head: from, BaseHead: bh, BeforePR: true, Published: true, RunID: "server-" + sha}
+		}
 		if head != st.Heads[repo.Name] {
 			st.Heads[repo.Name] = head
-			st.Integration = &Integration{Repo: repo.Name, Base: base, Head: head, BaseHead: bh, BeforePR: true, Published: true, RunID: "server-" + head}
+			st.Integration = serverMerged(head, head)
 			return workflow.Result{Next: "test", State: st}, true, nil
 		}
 		if cmp.BehindBy == 0 {
@@ -106,10 +110,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 			continue
 		}
 		st.Heads[repo.Name] = merged
-		// A changed head is tested again even when Git merged it without conflicts.
-		st.Integration = i
-		st.Integration.Published = true
-		st.Integration.RunID = "server-" + merged
+		st.Integration = serverMerged(head, merged)
 		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, e := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: map[string]any{"action": "merge-base", "repo": repo.Name, "base": base, "head": merged}})
 			return e
@@ -124,15 +125,21 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 
 // Integration keeps the attempted pair and continuation through review and test.
 type Integration struct {
-	Repo      string `json:"repo"`
-	Number    int    `json:"number"`
-	Base      string `json:"base"`
-	Head      string `json:"head"`
-	BaseHead  string `json:"baseHead"`
-	RunID     string `json:"runId,omitempty"`
+	Repo string `json:"repo"`
+	// The pull request; 0 before one is open (BeforePR).
+	Number   int    `json:"number"`
+	Base     string `json:"base"`
+	Head     string `json:"head"`
+	BaseHead string `json:"baseHead"`
+	// The integration Run, or "server-<sha>" for a merge GitHub made
+	// (agentRun tells them apart).
+	RunID string `json:"runId,omitempty"`
+	// The merge is on the task branch: what follows validates it.
 	Published bool   `json:"published,omitempty"`
 	MergeSHA  string `json:"mergeSha,omitempty"`
-	BeforePR  bool   `json:"beforePr,omitempty"`
+	// Before the pull request opened (syncBeforePR): a person's wait goes
+	// on to open it, not back to waiting on it.
+	BeforePR bool `json:"beforePr,omitempty"`
 	// Reads of the pull request after the integration published that
 	// found GitHub had not worked its mergeability out yet.
 	Polls int `json:"polls,omitempty"`
@@ -155,6 +162,9 @@ const (
 )
 
 func (i *Integration) pair() string { return i.Repo + ":" + i.Head + ":" + i.BaseHead }
+
+// brief is the integration fixer's feedback item. Its "Base integration:"
+// lead is what marks the fix Run as an integration (phases.buildSpec).
 func (i *Integration) brief() string {
 	return fmt.Sprintf("Base integration: this branch conflicts with `%s` in %s. Call sync_base, then `git merge lux/%s`. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Never rebase or force. The recorded base head is %s.", i.Base, i.Repo, i.Base, i.BaseHead)
 }
