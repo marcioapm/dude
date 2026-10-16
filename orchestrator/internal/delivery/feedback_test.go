@@ -314,6 +314,70 @@ func TestPeopleReplyResolveAndReopen(t *testing.T) {
 	}
 }
 
+// A person replying to an item an agent resolved with a commit not yet
+// published is refused: the item keeps holding the gate.
+func TestAReplyOnAPendingResolutionIsRefused(t *testing.T) {
+	w := newFeedbackWorld(t)
+	w.delivery(t, "awaitFix", "policy", `["phase.finished"]`)
+	ref := w.run(t, "run_fix", "ABS-1", "fix", "implementer", "running")
+	w.exec(t, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_'||$1, $1, $2, 'api', 'https://github.com/acme/api')`, w.org, w.project)
+	w.exec(t, `INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES ($1, 'repo_'||$2, $2, 'write')`, w.task, w.org)
+	w.draft(t, "fbi_1", w.ana, "one")
+	if _, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil {
+		t.Fatal(err)
+	}
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.AgentResolveTx(context.Background(), tx, ref, delivery.Resolution{ItemID: "fbi_1", Commit: "abcdef1234"})
+		return err
+	})
+	var fe delivery.FeedbackError
+	err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return delivery.PersonReplyTx(context.Background(), tx, delivery.PersonAction{Org: w.org, ItemID: "fbi_1", Person: w.bo,
+			Body: "is this really fixed?", Writer: delivery.Writer{ActorType: "person", ActorID: w.bo, Person: w.bo}})
+	})
+	if !errors.As(err, &fe) || fe.Kind != "conflict" || !strings.Contains(fe.Msg, "reopen") {
+		t.Errorf("a reply on a pending resolution: %v", err)
+	}
+	var blocking int
+	w.in(t, func(tx pgx.Tx) (err error) {
+		blocking, err = delivery.BlockingFeedbackTx(context.Background(), tx, w.task, 0)
+		return err
+	})
+	if blocking != 1 || w.status(t, "fbi_1") != "resolved" {
+		t.Errorf("after the refused reply: %d blocking, %s", blocking, w.status(t, "fbi_1"))
+	}
+}
+
+// A submit on a blocked task never delivered keeps the batch open and
+// says why nobody works on it; nothing starts.
+func TestASubmitOnABlockedTaskNeverDeliveredWaits(t *testing.T) {
+	w := newFeedbackWorld(t)
+	w.exec(t, `UPDATE tasks SET status = 'queued' WHERE id = $1`, w.task)
+	w.exec(t, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		VALUES ($1, $2, $3, 'blocks', $4)`, w.org, w.tasks["ABS-2"], w.task, w.ana)
+	w.draft(t, "fbi_1", w.ana, "one")
+	starter := &noStarter{}
+	var out delivery.Submitted
+	err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		out, err = delivery.SubmitFeedbackTx(context.Background(), tx, starter, delivery.Submission{
+			Org: w.org, TaskID: w.task, Person: w.ana, Key: "k", DraftIDs: []string{"fbi_1"},
+			Writer: delivery.Writer{ActorType: "person", ActorID: w.ana, Person: w.ana}})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("submit on a blocked task: %v", err)
+	}
+	if !strings.Contains(out.Waiting, "blocked") || out.RoutedTo != delivery.RoutedWorkflow {
+		t.Errorf("submitted %+v", out)
+	}
+	if s := w.status(t, "fbi_1"); s != "open" {
+		t.Errorf("the item is %s", s)
+	}
+	if n := w.count(t, `SELECT count(*) FROM workflow_runs WHERE task_id = $1`, w.task); starter.started != 0 || n != 0 {
+		t.Errorf("a blocked task started: %d starts, %d workflow runs", starter.started, n)
+	}
+}
+
 // Done refuses; failed and aborted say Recover; the drafts stay.
 func TestEndedTasksRefuseAndKeepTheDrafts(t *testing.T) {
 	for status, want := range map[string]string{"done": "follow-up", "failed": "Recover", "aborted": "Recover"} {

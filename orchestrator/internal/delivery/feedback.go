@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -530,9 +529,8 @@ func startForFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, 
 	}
 	if _, err := StartTx(ctx, sp, rt, StartInput{Org: ref.Org, TaskID: ref.TaskID, How: HowDeliver, Writer: w}); err != nil {
 		_ = sp.Rollback(ctx)
-		var blocked *BlockedError
-		if errors.As(err, &blocked) {
-			out.Waiting = "the task is blocked: its first implementer is given them once it starts"
+		if blocked, ok := AsBlocked(err); ok {
+			out.Waiting = blocked.Error() + " Its first implementer is given them once it starts."
 			return nil
 		}
 		return err
@@ -739,7 +737,9 @@ type PersonAction struct {
 type lockedItem struct {
 	TaskID, ProjectID, Status, TaskStatus string
 	Attempt, Current                      int
-	d                                     *Delivery
+	// Resolved by a commit not yet seen published.
+	Pending bool
+	d       *Delivery
 }
 
 // lockItem locks a submitted item for a change, after its task's Chat lock,
@@ -764,8 +764,9 @@ func lockItem(ctx context.Context, tx pgx.Tx, itemID string) (lockedItem, error)
 	if it.ProjectID, it.TaskStatus, err = lockTask(ctx, tx, it.TaskID); err != nil {
 		return it, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT status, attempt, task_attempt(task_id) FROM feedback_items WHERE id = $1 FOR UPDATE`, itemID).
-		Scan(&it.Status, &it.Attempt, &it.Current); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT status, attempt, task_attempt(task_id), status = 'resolved' AND resolved_verified_at IS NULL
+		FROM feedback_items WHERE id = $1 FOR UPDATE`, itemID).
+		Scan(&it.Status, &it.Attempt, &it.Current, &it.Pending); err != nil {
 		return it, err
 	}
 	if it.Attempt != it.Current {
@@ -828,6 +829,11 @@ func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string
 	ref := RunRef{Org: in.Org, ProjectID: it.ProjectID, TaskID: it.TaskID}
 	var ev string
 	if kind == "reply" {
+		if it.Pending {
+			// A reply would stop a resolution not yet verified from holding
+			// the gate, and its Run failing would no longer reopen it.
+			return feedbackErr("conflict", "feedback %s is resolved by a commit not yet published: reopen it to ask for more, or resolve it to confirm", in.ItemID)
+		}
 		ev = EvFeedbackReplied
 		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'replied', updated_at = now() WHERE id = $1`, in.ItemID); err != nil {
 			return err
