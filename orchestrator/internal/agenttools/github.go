@@ -452,7 +452,7 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		pr["moreReviews"] = fmt.Sprintf("%s: the first %d of %d reviews", cutMark, reviewsMax, len(p.Reviews))
 	}
 	if p.ThreadsUnknown {
-		pr["threadsUnknown"] = "GitHub would not list the review threads"
+		pr["threadsUnknown"] = cutMark + ": GitHub would not list all review threads"
 	}
 	if len(p.Files) >= filesMax {
 		pr["moreFiles"] = fmt.Sprintf("%s: the first %d changed files", cutMark, filesMax)

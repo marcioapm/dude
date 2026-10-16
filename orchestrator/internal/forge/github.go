@@ -1796,12 +1796,12 @@ func (g *GitHub) openThreads(ctx context.Context, slug string, number int) ([]Th
 			out = append(out, t)
 		}
 		if !threads.PageInfo.HasNextPage {
-			break
+			return out, false, nil
 		}
 		c := threads.PageInfo.EndCursor
 		after = &c
 	}
-	return out, false, nil
+	return out, true, nil
 }
 
 // The share of a token's hourly limit kept for delivery: once GitHub says

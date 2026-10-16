@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"encoding/json"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,23 @@ func TestAgentChecksStopAtPageCap(t *testing.T) {
 	_, checks, err := gh.checks(agentReadContext(context.Background()), "acme/allowed", "abc")
 	if err != nil || pages > 3 || len(checks) == 0 || checks[len(checks)-1].Diagnostic != "…cut: check runs incomplete" {
 		t.Fatalf("checks cap: pages=%d checks=%+v err=%v", pages, checks, err)
+	}
+}
+
+func TestCappedResolvedThreadsRemainUnknown(t *testing.T) {
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		nodes := []map[string]any{{"isResolved": pages <= 5, "path": "tail.go"}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{
+			"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": pages <= 5, "endCursor": strconv.Itoa(pages)},
+		}}}}})
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	threads, unknown, err := gh.openThreads(agentReadContext(context.Background()), "acme/allowed", 1)
+	if err != nil || pages != 5 || len(threads) != 0 || !unknown {
+		t.Fatalf("threads=%+v unknown=%v pages=%d err=%v", threads, unknown, pages, err)
 	}
 }
 
