@@ -329,7 +329,7 @@ type ghLineOut struct {
 }
 
 func (w wrapper) line(l forge.IssueLine) ghLineOut {
-	return ghLineOut{Number: l.Number, Title: w.text(l.Title, textCap), Author: l.Author, State: l.State,
+	return ghLineOut{Number: l.Number, Title: w.text(l.Title, textCap), Author: w.text(l.Author, 100), State: l.State,
 		Labels: w.labels(l.Labels), UpdatedAt: l.UpdatedAt, URL: l.URL}
 }
 
@@ -342,7 +342,7 @@ type ghCommentOut struct {
 func (w wrapper) comments(cs []forge.IssueComment) []ghCommentOut {
 	out := make([]ghCommentOut, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, ghCommentOut{Author: c.Author, CreatedAt: c.CreatedAt, Body: w.text(c.Body, textCap)})
+		out = append(out, ghCommentOut{Author: w.text(c.Author, 100), CreatedAt: c.CreatedAt, Body: w.text(c.Body, textCap)})
 	}
 	return out
 }
@@ -408,7 +408,7 @@ type ghFileOut struct {
 func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string]any {
 	reviews := []ghReviewOut{}
 	for _, r := range p.Reviews[:min(len(p.Reviews), reviewsMax)] {
-		reviews = append(reviews, ghReviewOut{Author: r.Author, State: r.State, SubmittedAt: r.SubmittedAt, Body: w.text(r.Body, textCap)})
+		reviews = append(reviews, ghReviewOut{Author: w.text(r.Author, 100), State: r.State, SubmittedAt: r.SubmittedAt, Body: w.text(r.Body, textCap)})
 	}
 	threads := []ghThreadOut{}
 	for _, t := range p.Threads {

@@ -27,6 +27,20 @@ func TestCappedFileListingDoesNotClaimTailUnchanged(t *testing.T) {
 	}
 }
 
+func TestGitHubAuthorsAreExternalText(t *testing.T) {
+	w := wrapper{id: "authors"}
+	if got := w.line(forge.IssueLine{Author: "ana"}).Author; !strings.Contains(got, "⟦external authors⟧ana⟦/external authors⟧") {
+		t.Fatalf("search author unwrapped: %q", got)
+	}
+	if got := w.comments([]forge.IssueComment{{Author: "bo"}})[0].Author; !strings.Contains(got, "⟦external authors⟧bo⟦/external authors⟧") {
+		t.Fatalf("comment author unwrapped: %q", got)
+	}
+	out := w.pullRequest(forge.PullRequestRead{Reviews: []forge.ReviewRead{{Author: "cy"}}}, nil)
+	if got := out["reviews"].([]ghReviewOut)[0].Author; !strings.Contains(got, "⟦external authors⟧cy⟦/external authors⟧") {
+		t.Fatalf("review author unwrapped: %q", got)
+	}
+}
+
 func TestCutBytesKeepsWholeUTF8Prefix(t *testing.T) {
 	for _, tc := range []struct {
 		text string
