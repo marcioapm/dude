@@ -1686,7 +1686,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Frame) error {
 	return s.DB.InOrg(ctx, t.run.Org, func(tx pgx.Tx) error {
 		// Per transaction: an attempt run again reads afresh.
-		redactors := &ledger.Redactors{}
+		redactors := ledger.Redactors{}
 		if t.noSecrets {
 			redactors.None(t.run.ID)
 		}
