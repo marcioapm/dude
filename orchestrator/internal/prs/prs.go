@@ -47,8 +47,8 @@ type Syncer struct {
 	// having none before that is believed: CI registering on a push takes
 	// a moment, and some CI reports late. Zero means DefaultCIGrace.
 	CIGrace time.Duration
-	// Test hook: called first in a hand-over's transaction; an error rolls
-	// it back.
+	// Test hook: called in a hand-over's transaction once one is found to
+	// close, before the delivery is locked; an error rolls it back.
 	HandingOver func(ctx context.Context) error
 }
 
@@ -252,16 +252,22 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
 	}
 
-	// GitHub's first word on a head dude integrated and left to this
-	// syncer: it merges, so the integration is complete. Committed before
-	// the reading below, so a reading of clean is never on record without
-	// its closing line: if that transaction then fails, mergeable_state is
-	// still unknown, the next sync comes back here, and the line is not
-	// written twice. Its own transaction: it locks workflow_runs, which a
-	// publish recording holds while it updates pull_requests.
-	if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
-		(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
+	// A reading that a pull request merges closes any integration handed
+	// over at its head and not yet closed, whatever was on record before:
+	// the step may record the hand-over after an earlier sync looked for it
+	// and read the pull request before that sync's reading committed, so no
+	// one reading is sure to be the one. Checked unlocked first, so a clean
+	// sync with nothing to close takes no workflow_runs lock. Committed
+	// before the reading below: if that fails, the next sync comes back
+	// here, and the line is not written twice. Its own transaction: it
+	// locks workflow_runs, which a publish recording holds while it updates
+	// pull_requests.
+	if isOpen(status.State) && (status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			pending, err := delivery.HandOverPending(ctx, tx, pr.TaskID, pr.RepoName, status.HeadSHA)
+			if err != nil || !pending {
+				return err
+			}
 			if s.HandingOver != nil {
 				if err := s.HandingOver(ctx); err != nil {
 					return err

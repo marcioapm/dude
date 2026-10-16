@@ -265,12 +265,34 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 	})
 }
 
-// HandOverMergedTx is the pull request syncer's first reading that
-// repo's pull request merges, at head, after an integration left to it
-// (State.HandedOver): the integration's closing line, once.
+// HandOverPending says, without locking the delivery, whether it holds an
+// integration handed over at repo's head whose closing line is not on
+// record: what HandOverMergedTx would write. A line once written stays, so
+// false is final for that head; true is rechecked under the lock.
+func HandOverPending(ctx context.Context, tx pgx.Tx, taskID, repo, head string) (bool, error) {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return false, err
+	}
+	for pair, i := range d.State.HandedOver {
+		if pair != repo+":"+head+":"+i.BaseHead {
+			continue
+		}
+		seen, err := integrationEventSeen(ctx, tx, taskID, "integration-completed", i.attempt())
+		return !seen, err
+	}
+	return false, nil
+}
+
+// HandOverMergedTx is a reading that repo's pull request merges, at head,
+// after an integration left to the pull request syncer (State.HandedOver):
+// the integration's closing line, once. Any such reading closes it, the
+// first or a later one: a step that records the hand-over after one sync
+// read the delivery may also read the pull request before that sync's
+// reading commits, and the next reading of it as merging is then the one
+// that closes it.
 func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head string) error {
-	// Locked: a step recording the hand-over commits first, so its
-	// HandedOver is seen here, or closeHandedOver sees this reading.
+	// Locked: serialised with closeHandedOver, so the line's dedupe holds.
 	d, err := LoadDelivery(ctx, tx, taskID)
 	if err != nil || d == nil {
 		return err
@@ -325,7 +347,7 @@ func (w *steps) closeHandedOver(ctx context.Context, sc workflow.StepContext, st
 // correlation narrow its dedupe to the task's pull request actions
 // (events_correlation_idx).
 func integrationEventTx(ctx context.Context, tx pgx.Tx, org string, st *State, i *Integration, action string, extra map[string]any) error {
-	payload := map[string]any{"action": action, "repo": i.Repo, "base": i.Base, "attempt": i.pair() + ":" + i.RunID}
+	payload := map[string]any{"action": action, "repo": i.Repo, "base": i.Base, "attempt": i.attempt()}
 	if i.Number > 0 {
 		payload["number"] = i.Number
 	}
@@ -333,17 +355,25 @@ func integrationEventTx(ctx context.Context, tx pgx.Tx, org string, st *State, i
 		payload["runId"] = i.RunID
 	}
 	maps.Copy(payload, extra)
-	var seen bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
-			AND event_type = 'pull_request.action' AND correlation_id = $1
-			AND payload->>'action' = $2 AND payload->>'attempt' = $3)`,
-		st.TaskID, action, payload["attempt"]).Scan(&seen); err != nil || seen {
+	if seen, err := integrationEventSeen(ctx, tx, st.TaskID, action, i.attempt()); err != nil || seen {
 		return err
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: org,
 		ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
 		Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: payload})
 	return err
+}
+
+// attempt names one integration attempt on its activity lines.
+func (i *Integration) attempt() string { return i.pair() + ":" + i.RunID }
+
+func integrationEventSeen(ctx context.Context, tx pgx.Tx, taskID, action, attempt string) (bool, error) {
+	var seen bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+			AND event_type = 'pull_request.action' AND correlation_id = $1
+			AND payload->>'action' = $2 AND payload->>'attempt' = $3)`,
+		taskID, action, attempt).Scan(&seen)
+	return seen, err
 }
 
 func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext, st *State, stop *forge.Signal) (bool, error) {
