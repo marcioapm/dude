@@ -199,6 +199,41 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   free answer of the owner lets the conductor decide this escalation once
   (`decide_escalation`), recorded as its decision on that answer. The banner
   closes an open question about it (`question.closed`).
+- **A task keeps up with its base by merging, never rebasing**
+  (`delivery/integration.go`). Writers (implementer, fixer, simplifier,
+  conductor) have `sync_base`: lux fetches the base into the checkout as
+  `lux/<base>` without moving it, and the agent merges it. Before a pull
+  request opens, with `whenBehind` `update`, the workflow asks GitHub to
+  merge the moved base into the task branch (`/merges`, `merge-base` on the
+  activity) and tests the new head again. A conflict, there or on an open
+  pull request, starts one integration Run per head/base pair
+  (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
+  resolve keeping both sides' intent, then an internal review that runs
+  `git show --remerge-diff` on the merge, then the policy's test; the
+  conductor never runs tests. A pair already tried, or a pull request
+  still conflicting afterwards, escalates `pull_request_conflict` with
+  `integration: true` (retry or wait). An integration Run spends none of
+  the pull request's fix budget. With `whenBehind` `tell` nothing
+  integrates by itself; the PR card's **Resolve conflicts**
+  (`resolve-conflicts`, `delivery.ResolveConflictsTx`, owner only; anyone
+  else reads whom it waits on, and while dude resolves it the card says
+  so) signals the waiting workflow or decides its conflict escalation, and
+  creates no phase itself. Every publish, a phase Run's and a conductor's,
+  is counted from GitHub's compares alone (`phases/trustedbase.go`);
+  nothing in the checkout is read. The base left out is the commit lux
+  reported fetching (`runs.synced_bases`), only if GitHub's base contains
+  it and the push contains it: a file whose new name the base changed
+  counts as `compare base...push` shows it, under its old name too as
+  that compare lists it (each path once), so a pure import counts nothing; any other
+  file counts as `compare start...push` shows it. No
+  such base, or a compare refused or cut short at 300 files, counts
+  `start...push` in full. A file GitHub shows no patch for is binary
+  unless it is empty. The activity's integration lines name no
+  resolved files, a decision: nothing records which ones conflicted.
+  When a pull request merges, other conductors on that base are told once
+  (`base_moved`); a parked one hears it with its next note. Design:
+  [`design/task-relations.md`](design/task-relations.md), keeping a task
+  current with its base.
 - A re-review judges every open finding **a fixer has already attempted**:
   each goes to the reviewer of its category (the flavour of the review Run
   that reported it; the reviewer's own word is its `topic`), or, when this

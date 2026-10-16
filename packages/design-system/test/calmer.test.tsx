@@ -196,6 +196,28 @@ describe("PullRequestPanel", () => {
     expect(text(h)).toContain("bo · review requested");
     expect(text(h)).toContain("3 commits behind main · no conflictsUpdate branch");
   });
+
+  const conflicting = { ...pr, mergeable: "conflicting", behindBy: 0, unresolvedThreads: 0 } as const;
+  const baseLine = (h: string) => { const at = h.indexOf('data-fact="base">') + 'data-fact="base">'.length; return text(h.slice(at, h.indexOf("</li>", at))); };
+  test("the base is named in mono, on every base line", () => {
+    for (const p of [conflicting, pr, { ...pr, mergeable: "clean", behindBy: 0 } as const]) {
+      const h = html(<PullRequestPanel pr={p} />);
+      expect(h).toContain('<span class="ds-mono">main</span>');
+    }
+  });
+  test("a conflict for its owner ends in the app's action", () => {
+    const h = html(<PullRequestPanel pr={conflicting} factActions={{ base: <button>Resolve conflicts</button> }} />);
+    expect(baseLine(h)).toBe("Conflicts with mainResolve conflicts");
+  });
+  test("while dude resolves it the line says so, and the action is not drawn", () => {
+    const h = html(<PullRequestPanel pr={conflicting} conflict={{ resolving: true }} factActions={{ base: <button>Resolve conflicts</button> }} />);
+    expect(baseLine(h)).toBe("Conflicts with main · dude is resolving it");
+  });
+  test("for anyone else it says whom it waits on", () => {
+    const h = html(<PullRequestPanel pr={conflicting} conflict={{ waitingFor: "Ana Ribeiro" }} />);
+    expect(baseLine(h)).toBe("Conflicts with mainWaiting for Ana Ribeiro");
+    expect((h.match(/data-testid="pr-conflict-waiting"/g) ?? []).length).toBe(1);
+  });
 });
 
 describe("Cost", () => {
@@ -320,5 +342,22 @@ describe("MarkdownDocument", () => {
     expect(lines[1]!.map(([k]) => k)).toEqual(["list-mark", "text", "code", "text", "var"]);
     expect(lines[3]).toEqual([["code", "code"]]);
     expect(lines[5]).toEqual([["quote", "> quoted **bold**"]]);
+  });
+});
+
+describe("PullRequestPanel conflict specimens", () => {
+  test("the gallery draws the three conflict states in both themes and both densities", async () => {
+    const { PaneDensityContext } = await import("../src/gallery/Frame.tsx");
+    const { SettingsGallerySection } = await import("../src/gallery/sections/Settings.tsx");
+    const { TooltipProvider } = await import("../src/primitives/Tooltip.tsx");
+    const h = html(<TooltipProvider><PaneDensityContext.Provider value="both"><SettingsGallerySection mode="both" /></PaneDensityContext.Provider></TooltipProvider>);
+    const block = h.slice(h.indexOf('id="s-pr-conflict"'), h.indexOf('id="s-machines"'));
+    const panes = [...block.matchAll(/data-theme="(dark|light)"[^>]*data-density="(comfortable|compact)"/g)].map((m) => `${m[1]}/${m[2]}`);
+    expect(panes.sort()).toEqual(["dark/comfortable", "dark/compact", "light/comfortable", "light/compact"]);
+    // Each pane draws each state's panel once (its labels name them too).
+    const drawn = block.slice(block.indexOf("data-theme="));
+    expect((drawn.match(/· <b>dude is resolving it<\/b>/g) ?? []).length).toBe(4);
+    expect((drawn.match(/data-testid="pr-conflict-waiting">Waiting for Ana Ribeiro/g) ?? []).length).toBe(4);
+    expect((drawn.match(/>Resolve conflicts</g) ?? []).length).toBe(4);
   });
 });
