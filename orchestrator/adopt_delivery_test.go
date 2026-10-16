@@ -537,9 +537,15 @@ func TestARetargetedAdoptedPullRequestOffersWaysOnThatWork(t *testing.T) {
 // repository, as a person's push does; its SHA.
 func (w *world) commitFile(branch, path, content, message string) string {
 	w.t.Helper()
+	return w.commitFileIn(w.gh.Repo, branch, path, content, message)
+}
+
+// commitFileIn is commitFile in another of the fake's bare repositories.
+func (w *world) commitFileIn(repo, branch, path, content, message string) string {
+	w.t.Helper()
 	index := filepath.Join(w.t.TempDir(), "index")
 	git := func(stdin string, args ...string) string {
-		cmd := exec.Command("git", append([]string{"-C", w.gh.Repo}, args...)...)
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 		cmd.Env = append(cmd.Environ(), "GIT_INDEX_FILE="+index, "GIT_AUTHOR_NAME=Alice", "GIT_AUTHOR_EMAIL=alice@example.com",
 			"GIT_COMMITTER_NAME=Alice", "GIT_COMMITTER_EMAIL=alice@example.com")
 		cmd.Stdin = strings.NewReader(stdin)

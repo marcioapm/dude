@@ -3,7 +3,7 @@
  * do on each repository, whether GitHub's webhooks reach
  * dude (and registering them, or the secret to do it by hand), and how dude
  * behaves on GitHub — how pull requests open and merge, who may wake a
- * fixer, what happens when main moves ahead, and the fix budget.
+ * fixer, what happens when a task's base moves ahead, and the fix budget.
  */
 
 import { useEffect, useState } from "react";
@@ -206,9 +206,10 @@ export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: b
             options={[{ value: "collaborators", label: "Collaborators with write access" },
               { value: "members", label: "Organisation members only" }, { value: "anyone", label: "Anyone who can comment" }]} />
         </SettingRow>
-        <SettingRow label="When main moves ahead">
-          <Select disabled={!admin} aria-label="When main moves ahead" value={draft.whenBehind} onValueChange={(v) => set("whenBehind", v)}
-            options={[{ value: "update", label: "Update the branch if it merges cleanly, else ask" },
+        <SettingRow label="When a task's base moves ahead"
+          help="The branch a task's pull request merges into: the repository's default, or the task's own base.">
+          <Select disabled={!admin} aria-label="When a task's base moves ahead" value={draft.whenBehind} onValueChange={(v) => set("whenBehind", v)}
+            options={[{ value: "update", label: "Keep it up to date: merge the base in, and resolve conflicts with an agent" },
               { value: "tell", label: "Only tell the task's people" }]} />
         </SettingRow>
         <SettingRow label="Fix rounds per pull request" help="Then the owner decides how it goes on. 0 for no limit.">

@@ -420,10 +420,42 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		if cmp.AheadBy == 0 {
 			continue
 		}
-		lines += cmp.Lines()
-		files += len(cmp.Files)
+		baseBranch := target.Adopted[repo.Name]
+		if baseBranch == "" {
+			baseBranch = repo.DefaultBranch
+		}
+		// The commit the comparison measured from: the task's head, or the
+		// branch named where the task has none yet.
+		start := target.Heads[repo.Name]
+		if start == "" {
+			if start, err = gh.BranchSHA(ctx, slug, from); err != nil {
+				return errPublishTransient{err}
+			}
+			if start == "" {
+				return s.refusePublish(ctx, p, fmt.Sprintf("%s has no branch %s to measure your commits from", repo.Name, from))
+			}
+		}
+		trusted, untrusted, err := s.trustedBase(ctx, gh, p.Org, p.RunID, slug, res.Repo, baseBranch)
+		if err != nil {
+			return errPublishTransient{err}
+		}
+		acc, err := accountPublish(ctx, gh, slug, baseBranch, start, res.Commit, trusted, untrusted, cmp)
+		if forge.Transient(err) {
+			return errPublishTransient{err}
+		}
+		if err != nil {
+			return s.refusePublish(ctx, p, fmt.Sprintf("dude could not verify which changes in %s are yours: %v", repo.Name, err))
+		}
+		if acc.Full != "" {
+			s.Log.Info("a conductor's publish is counted in full", "publish", p.ID, "repo", repo.Name, "why", acc.Full)
+		}
+		if acc.Binary {
+			return s.refusePublish(ctx, p, fmt.Sprintf(delivery.RefusedBinary, repo.Name))
+		}
+		lines += acc.Lines
+		files += len(acc.Paths)
 		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
-			ChangedPaths: db.NonNil(cmp.Paths()), Lines: cmp.Lines(), Status: delivery.MovePending}
+			ChangedPaths: db.NonNil(acc.Paths), Lines: acc.Lines, Status: delivery.MovePending}
 	}
 	if len(moves) == 0 {
 		return s.refusePublish(ctx, p, delivery.RefusedNothing)

@@ -38,6 +38,115 @@ describe("pull request actions", () => {
   });
 });
 
+describe("resolving conflicts", () => {
+  const conflicting = pr({ mergeable: "conflicting", behindBy: 2, display: "conflict" });
+  const panel = async (client: ApiClient, changed: () => void) => {
+    const { mount } = await import("./dom.ts");
+    return mount(
+      <PullRequestActions client={client} pr={conflicting} defaultMethod="squash" onChanged={changed}>
+        {({ facts, note }) => <div>{facts.base}{note}</div>}
+      </PullRequestActions>,
+    );
+  };
+
+  test("a clean pull request offers no resolve, and a conflicting one no Update branch", () => {
+    const base = (p: PullRequest) => renderToStaticMarkup(
+      <PullRequestActions client={{} as ApiClient} pr={p} defaultMethod="squash" onChanged={() => {}}>
+        {({ facts }) => <div>{facts.base}</div>}
+      </PullRequestActions>,
+    );
+    expect(base(pr({ behindBy: 0 }))).not.toContain("pr-resolve-conflicts");
+    expect(base(pr({ behindBy: 2 }))).not.toContain("pr-resolve-conflicts");
+    const h = base(conflicting);
+    expect(h).toContain('data-testid="pr-resolve-conflicts"');
+    expect(h).not.toContain("pr-update-branch");
+  });
+
+  test("asks the workflow once, disabled while asking, and reads the pull request back", async () => {
+    const { click, settle } = await import("./dom.ts");
+    let release!: () => void;
+    const asked: string[] = [];
+    let changed = 0;
+    const client = {
+      resolvePullRequestConflicts: (id: string) => {
+        asked.push(id);
+        return new Promise<void>((r) => { release = r; });
+      },
+    } as unknown as ApiClient;
+    const { container, unmount } = await panel(client, () => void changed++);
+    const button = () => container.querySelector<HTMLButtonElement>('[data-testid="pr-resolve-conflicts"]')!;
+    await click(button());
+    expect(button().disabled).toBe(true);
+    expect(button().textContent).toBe("Asking…");
+    release();
+    await settle();
+    expect(asked).toEqual(["pr_1"]);
+    expect(changed).toBe(1);
+    expect(button().disabled).toBe(false);
+    await unmount();
+  });
+
+  test("a refusal is shown in the server's words", async () => {
+    const { click, settle } = await import("./dom.ts");
+    const { ApiError } = await import("../src/api/client.ts");
+    const client = {
+      resolvePullRequestConflicts: () =>
+        Promise.reject(new ApiError(409, "conflict", "dude is already working on the task; try again once it waits on the pull request")),
+    } as unknown as ApiClient;
+    const { container, unmount } = await panel(client, () => {});
+    await click(container.querySelector('[data-testid="pr-resolve-conflicts"]')!);
+    await settle();
+    expect(container.querySelector('[data-testid="pr-problem"]')?.textContent ?? "no problem shown").toContain("already working on the task");
+    await unmount();
+  });
+});
+
+describe("a conflict on the panel", () => {
+  const conflicting = pr({ mergeable: "conflicting", behindBy: 2, display: "conflict" });
+  // As the task page puts the two together.
+  const shown = async (p: PullRequest, props: { resolving?: boolean; waitingFor?: string }) => {
+    const { mount } = await import("./dom.ts");
+    const { PullRequestPanel } = await import("@dude/design-system/components");
+    return mount(
+      <PullRequestActions client={{} as ApiClient} pr={p} defaultMethod="squash" onChanged={() => {}} {...props}>
+        {(a) => <PullRequestPanel pr={p} factActions={a.facts} conflict={a.conflict} />}
+      </PullRequestActions>,
+    );
+  };
+  const base = (c: HTMLElement) => c.querySelector('[data-fact="base"]')?.textContent ?? "no base line";
+
+  test("for the owner: the base by name in mono, and Resolve conflicts", async () => {
+    const { container, unmount } = await shown(conflicting, {});
+    expect(base(container)).toBe("Conflicts with mainResolve conflicts");
+    expect(container.querySelector('[data-fact="base"] .ds-mono')?.textContent).toBe("main");
+    expect(container.querySelectorAll('[data-testid="pr-resolve-conflicts"]').length).toBe(1);
+    await unmount();
+  });
+
+  test("while dude resolves it: says so, and offers nothing to press", async () => {
+    const { container, unmount } = await shown(conflicting, { resolving: true });
+    expect(base(container)).toBe("Conflicts with main · dude is resolving it");
+    expect(container.querySelectorAll('[data-testid="pr-resolve-conflicts"]').length).toBe(0);
+    expect(container.querySelectorAll('[data-testid="pr-conflict-waiting"]').length).toBe(0);
+    await unmount();
+  });
+
+  test("for anyone but the owner: whom it waits on, and no action", async () => {
+    const { container, unmount } = await shown(conflicting, { waitingFor: "Ana Ribeiro" });
+    expect(base(container)).toBe("Conflicts with mainWaiting for Ana Ribeiro");
+    expect(container.querySelector('[data-testid="pr-conflict-waiting"]')?.textContent).toBe("Waiting for Ana Ribeiro");
+    expect(container.querySelectorAll('[data-testid="pr-resolve-conflicts"]').length).toBe(0);
+    await unmount();
+  });
+
+  test("a pull request that does not conflict says neither", async () => {
+    const { container, unmount } = await shown(pr({ mergeable: "clean" }), { resolving: true, waitingFor: "Ana Ribeiro" });
+    expect(base(container)).toBe("Up to date with main");
+    expect(container.querySelectorAll('[data-testid="pr-conflict-waiting"], [data-testid="pr-resolve-conflicts"]').length).toBe(0);
+    await unmount();
+  });
+});
+
 describe("asking for a review", () => {
   test("picks from GitHub's suggestions and a search, and asks for them together", async () => {
     const { act, click, mount, settle, type } = await import("./dom.ts");

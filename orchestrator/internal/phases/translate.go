@@ -496,6 +496,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		_, err := tx.Exec(ctx, `UPDATE runs SET push_result = $2::jsonb WHERE id = $1`, t.run.ID, raw)
 		return err
 	case "git.sync":
+		if err := recordSyncedBase(ctx, tx, t.run.ID, f.EventData); err != nil {
+			return err
+		}
 		if t.run.conductor() {
 			return t.checkoutSynced(ctx, tx, f.EventData)
 		}

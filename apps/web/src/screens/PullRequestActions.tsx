@@ -1,7 +1,8 @@
 /**
  * What a person can do to a pull request from dude, as GitHub's own page
  * would let them: merge it (by the organization's method, or another),
- * update its branch, re-run its failed checks, ask someone to review. Each
+ * update its branch, re-run its failed checks, ask someone to review — and
+ * ask dude to resolve its conflicts with its base. Each
  * goes to GitHub through the orchestrator, which records who asked and
  * reads the pull request back.
  *
@@ -28,6 +29,8 @@ export interface PullRequestActionSlots {
   under: Partial<Record<FactKind, ReactNode>>;
   merge: ReactNode;
   note: ReactNode;
+  /** PullRequestPanel's `conflict`: dude resolving it, or whom it waits on. */
+  conflict: { resolving?: boolean; waitingFor?: string } | undefined;
 }
 
 /** "Ask", "Ask Ana", "Ask 2 people". */
@@ -39,12 +42,19 @@ function askLabel(picked: ReadonlyArray<ReviewerCandidate>): string {
   return `Ask ${one.kind === "team" ? name : firstName(name)}`;
 }
 
-export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedbackHolds = 0, onShowFeedback, children }: {
+export function PullRequestActions({ client, pr, defaultMethod, onChanged, resolving = false, waitingFor, feedbackHolds = 0, onShowFeedback, children }: {
   client: ApiClient;
   pr: PullRequest;
   /** The organization's merge method: what Merge does first. */
   defaultMethod: MergeMethod;
   onChanged: () => void;
+  /** dude is resolving its conflicts now (`resolvingConflicts`). */
+  resolving?: boolean;
+  /**
+   * The task's owner, by name, when the reader is not them: asking dude to
+   * resolve a conflict may decide the owner's escalation, so it is theirs.
+   */
+  waitingFor?: string | undefined;
   /**
    * People's feedback holding the merge, as the API counts it: dude's merge
    * refuses while any is (feedback_open), so Merge is off and says why.
@@ -75,7 +85,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedb
   };
 
   const open = pr.state === "open" || pr.state === "draft";
-  if (!open) return <>{children({ facts: {}, under: {}, merge: null, note: null })}</>;
+  if (!open) return <>{children({ facts: {}, under: {}, merge: null, note: null, conflict: undefined })}</>;
 
   const one = feedbackHolds === 1;
   const held = feedbackHolds > 0 ? `Can't merge: ${plural(feedbackHolds, "feedback item")} ${one ? "is" : "are"} not yet handled. Resolve or answer ${one ? "it" : "them"} first.` : null;
@@ -90,13 +100,30 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedb
       </Button>
     );
   }
-  // GitHub cannot update a branch that conflicts: that one is a person's to resolve.
+  // GitHub cannot update a branch that conflicts: an agent merges the base
+  // in and resolves it, then dude reviews and tests it. While that runs,
+  // and for anyone but the owner, the base's line says so in place of the
+  // action.
+  let conflict: PullRequestActionSlots["conflict"];
   if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
     facts.base = (
       <Button size="sm" disabled={busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
         data-testid="pr-update-branch">
         {busy === "update" ? "Updating…" : "Update branch"}
       </Button>
+    );
+  } else if (pr.mergeable === "conflicting" && resolving) {
+    conflict = { resolving: true };
+  } else if (pr.mergeable === "conflicting" && waitingFor) {
+    conflict = { waitingFor };
+  } else if (pr.mergeable === "conflicting") {
+    facts.base = (
+      <Tooltip content="An agent merges the base into the branch and resolves the conflicts; then dude reviews and tests it">
+        <Button size="sm" disabled={busy !== null} onClick={() => void act("resolve", () => client.resolvePullRequestConflicts(pr.id))}
+          data-testid="pr-resolve-conflicts">
+          {busy === "resolve" ? "Asking…" : "Resolve conflicts"}
+        </Button>
+      </Tooltip>
     );
   }
   if (pr.unresolvedThreads > 0) {
@@ -154,5 +181,5 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedb
   ) : null;
   const note = problem ? <span className="prProblem" role="alert" data-testid="pr-problem">{problem}</span>
     : blocked && blocked !== held ? <><span data-testid="pr-blocked">{blocked}</span>{heldNote}</> : heldNote;
-  return <>{children({ facts, under: { reviews: asker }, merge, note })}</>;
+  return <>{children({ facts, under: { reviews: asker }, merge, note, conflict })}</>;
 }

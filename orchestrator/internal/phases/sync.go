@@ -2005,16 +2005,32 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if slug == "" {
 			return nil, fmt.Errorf("no forge to publish %s to", repo.URL)
 		}
+		baseBranch := tb.Bases[repo.Name]
+		if baseBranch == "" {
+			baseBranch = repo.DefaultBranch
+		}
+		// Counted from GitHub's compares alone (accountPublish).
+		cmp, err := gh.Compare(ctx, slug, base, res.Commit)
+		if err != nil {
+			return nil, fmt.Errorf("comparing %s's push with where it started: %w", repo.Name, err)
+		}
+		trusted, untrusted, err := s.trustedBase(ctx, gh, r.Org, r.ID, slug, res.Repo, baseBranch)
+		if err != nil {
+			return nil, err
+		}
+		acc, err := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, trusted, untrusted, cmp)
+		if err != nil {
+			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, err)
+		}
+		if acc.Full != "" {
+			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
+		}
 		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
 			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
-		changed, err := gh.ChangedFiles(ctx, slug, base, res.Commit)
-		if err != nil {
-			return nil, fmt.Errorf("compare %s %s...%s: %w", repo.Name, short(base), short(res.Commit), err)
-		}
-		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
+		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(acc.Paths)}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
@@ -2036,7 +2052,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 				return err
 			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
+				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": acc.Paths})
 		}); err != nil {
 			return nil, err
 		}

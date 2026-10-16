@@ -67,6 +67,9 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
+	// Test hook: called in closeHandedOver's transaction after its writes,
+	// before it commits.
+	HandOverClosing func(ctx context.Context, tx pgx.Tx)
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error

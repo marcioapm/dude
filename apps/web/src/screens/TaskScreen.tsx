@@ -87,7 +87,8 @@ import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
-import { pullRequestActivity } from "../pullRequests.ts";
+import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
+import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
@@ -416,6 +417,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       return pr !== undefined && mine.has(pr);
     });
   }, [events, parts.prs, allPrs]);
+  // The pull requests dude is resolving conflicts on now, read from their own events.
+  const status = item?.status ?? "";
+  const resolving = useMemo(() => new Set(parts.prs.filter((pr) => resolvingConflicts(pr, prEvents, status)).map((pr) => pr.id)),
+    [parts.prs, prEvents, status]);
   // Each Run's run.created payload: what it was started for.
   const createdFor = useMemo(() => new Map(events.filter((e) => e.eventType === "run.created" && e.runId)
     .map((e) => [e.runId as string, e.payload])), [events]);
@@ -780,10 +785,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
+                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name}
                     feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        factActions={actions.facts} factUnder={actions.under}
+                        factActions={actions.facts} factUnder={actions.under} conflict={actions.conflict}
                         note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
                         diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
                         actions={
@@ -1460,7 +1466,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         const who = line.actorId ? face : line.who
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
-        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
+        const said = line.parts ? <MonoWords words={line.parts} /> : line.text;
+        const text = line.actorId ? <>{person} {said}</> : line.byDude ? <><b>{dude}</b> {said}</> : said;
         out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }
