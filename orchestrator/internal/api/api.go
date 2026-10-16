@@ -129,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	s.networkRoutes(mux)
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
+	s.feedbackRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -1120,13 +1121,17 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// The delivery's row before the task's (delivery.LockEscalationTx):
 		// marking it done locks the delivery again (SetTaskStatusTx).
-		if _, err := delivery.LoadDelivery(r.Context(), tx, id); err != nil {
+		d, err := delivery.LoadDelivery(r.Context(), tx, id)
+		if err != nil {
 			return err
 		}
 		var projectID, status string
 		var open bool
+		// A delivery waiting only on a person reading its work (awaitRead)
+		// is what marking it done finishes, not something still open.
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
-				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting'))
+				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting')
+				        AND NOT (d.status = 'waiting' AND d.step = 'awaitRead'))
 			FROM tasks w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "task %s not found", id)
@@ -1136,9 +1141,20 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if status != "review" || open {
 			return fail(http.StatusConflict, "conflict", "task %s is %s; only finished work waiting to be read can be marked done", id, status)
 		}
+		if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, id, 0); err != nil {
+			return err
+		} else if n > 0 {
+			return fail(http.StatusConflict, "feedback_open", "%d feedback items from people are not handled yet", n)
+		}
+		if d != nil && d.Step == "awaitRead" && d.Live() {
+			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET status = 'completed', awaiting_signals = '[]'::jsonb,
+				wake_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = $1`, d.WorkflowID); err != nil {
+				return err
+			}
+		}
 		// Who marked it done goes with the move: a task it blocks is told
 		// it still blocks, and by whom it was marked done.
-		_, err := delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
+		_, err = delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
 			"review", "done", "marked done by "+actor(r))
 		return err
 	})

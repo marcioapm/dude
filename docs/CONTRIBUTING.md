@@ -225,6 +225,27 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   across the whole GitHub sequence, and a `pull_request_rerequests` row
   written before GitHub is contacted and finished with its event (see
   `RerequestReviews` for what an interrupted holder can still repeat).
+- **People's feedback lives in dude** (migration 127, `delivery/feedback.go`,
+  `routes/feedback.ts`). A person drafts items privately — only their
+  author reads, changes or removes one, and drafting writes no event — then
+  submits several as a batch (a submission key makes a retry the same
+  batch). An item is general, on lines of a Run's stored diff (excerpt,
+  base and head read from `run_diffs`, never the client), or on a preview
+  page; it belongs to the task's current attempt. Who hears first is who
+  drives: the conductor when it decides (a `feedback` wake reason, ids
+  only); else the current attempt's implementer or fixer still in its turn,
+  as a non-interrupting directive dude renders with each item's words; else
+  the delivery: the pull request wait and the reader's wait
+  (`awaitRead`, where work with no pull request now waits until marked
+  done) take `human.feedback` to a fix, and the review loop, `openPullRequest`,
+  the conductor's `open_pull_request`, readiness and dude's merge treat
+  open and delivered items as blocking whatever the severities. Every
+  implement, fix and pull request fix is given the open items
+  (`runs.feedback_item_ids`), each a fix attempt bounded as a finding's. An
+  agent replies (`replied` holds nothing) or resolves with a commit, which
+  holds until its Run publishes and GitHub's compare shows the commit in
+  the published head and new since the Run's base. A merge on GitHub's own
+  page is not blocked.
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that

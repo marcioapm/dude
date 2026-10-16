@@ -819,6 +819,10 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err := delivery.WakesHeardTx(ctx, tx, id); err != nil {
 		return err
 	}
+	// A person's feedback it carried is the agent's now.
+	if err := delivery.FeedbackHeardTx(ctx, tx, t.run.Org, id); err != nil {
+		return err
+	}
 	// An "Interrupt now" sent as the interrupt alone (interrupt_only, see
 	// deliverDirectives) has no receipt of its own: it is delivered with
 	// the directive carrying its words, on the same precedence, with an

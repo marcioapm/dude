@@ -392,6 +392,12 @@ export const EventTypes = {
   // Review
   ReviewCompleted: "review.completed",
   FindingResolved: "review.finding_resolved",
+  FeedbackSubmitted: "feedback.submitted",
+  FeedbackDelivered: "feedback.delivered",
+  FeedbackReplied: "feedback.replied",
+  FeedbackResolved: "feedback.resolved",
+  FeedbackReopened: "feedback.reopened",
+  FeedbackOutdated: "feedback.outdated",
 
   // Pull requests — the factory's output, and the state it waits on.
   PullRequestOpened: "pull_request.opened",

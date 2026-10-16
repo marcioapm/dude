@@ -176,7 +176,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	// from here on, before the workflow has acted on this one. One that
 	// ended (from before decisions) is reopened to wait for it.
 	e.Decided = &HumanDecision{Action: in.Action, Note: note, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
-		Conductor: in.Conductor}
+		Conductor: in.Conductor, Person: in.Person}
 	next, _ := json.Marshal(st)
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'
 			THEN 'waiting'::workflow_run_status ELSE status END, step = 'decide',
