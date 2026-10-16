@@ -47,6 +47,9 @@ type Syncer struct {
 	// having none before that is believed: CI registering on a push takes
 	// a moment, and some CI reports late. Zero means DefaultCIGrace.
 	CIGrace time.Duration
+	// Test hook: called first in a hand-over's transaction; an error rolls
+	// it back.
+	HandingOver func(ctx context.Context) error
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -249,6 +252,27 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
 	}
 
+	// GitHub's first word on a head dude integrated and left to this
+	// syncer: it merges, so the integration is complete. Committed before
+	// the reading below, so a reading of clean is never on record without
+	// its closing line: if that transaction then fails, mergeable_state is
+	// still unknown, the next sync comes back here, and the line is not
+	// written twice. Its own transaction: it locks workflow_runs, which a
+	// publish recording holds while it updates pull_requests.
+	if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
+		(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			if s.HandingOver != nil {
+				if err := s.HandingOver(ctx); err != nil {
+					return err
+				}
+			}
+			return delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA)
+		}); err != nil {
+			return err
+		}
+	}
+
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
 		if n := len(listed); n > 0 {
@@ -398,19 +422,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	})
 	if err != nil {
 		return err
-	}
-	// GitHub's first word on a head dude integrated and left to this
-	// syncer: it merges, so the integration is complete. Its own
-	// transaction, after the pull request row is released: the hand-over
-	// read locks workflow_runs, which a publish recording holds while it
-	// updates pull_requests. A failure here is closeHandedOver's to finish.
-	if isOpen(status.State) && pr.Mergeable == forge.MergeUnknown &&
-		(status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			return delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA)
-		}); err != nil {
-			return err
-		}
 	}
 
 	var permitted []forge.Feedback
