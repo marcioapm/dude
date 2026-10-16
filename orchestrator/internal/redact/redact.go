@@ -178,35 +178,25 @@ func (r *Redactor) Contains(s string) (string, bool) {
 	return r.pats[best.pat].name, true
 }
 
-// Value is v, decoded JSON, with every string in it redacted, as a copy.
-// Keys are left alone; JSON catches them in its text pass.
-func (r *Redactor) Value(v any) any {
-	if r.Empty() {
-		return v
-	}
+// value is v, as encoding/json decodes into any, with every string in it
+// redacted, as a copy. Keys are left alone; JSON catches them in its text
+// pass.
+func (r *Redactor) value(v any) any {
 	switch x := v.(type) {
 	case string:
 		return r.String(x)
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			out[k] = r.Value(e)
+			out[k] = r.value(e)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = r.Value(e)
+			out[i] = r.value(e)
 		}
 		return out
-	case []string:
-		out := make([]string, len(x))
-		for i, e := range x {
-			out[i] = r.String(e)
-		}
-		return out
-	case json.RawMessage:
-		return r.JSON(x)
 	}
 	return v
 }
@@ -226,7 +216,7 @@ func (r *Redactor) JSON(raw json.RawMessage) json.RawMessage {
 	if err := dec.Decode(&v); err != nil {
 		return json.RawMessage(r.String(string(raw)))
 	}
-	out, err := json.Marshal(r.Value(v))
+	out, err := json.Marshal(r.value(v))
 	if err != nil {
 		return json.RawMessage(r.String(string(raw)))
 	}
