@@ -38,11 +38,22 @@ type agentResolve struct {
 
 func (w *world) resolveAsItPublishes(task, item string, pick func(base, head string) string, compare func(path string) int) *agentResolve {
 	w.t.Helper()
+	return w.resolveAsItPublishesIn(w.gh, "", task, item, pick, compare)
+}
+
+// resolveAsItPublishesIn is resolveAsItPublishes as the fixer publishes to
+// gh, naming repo with the resolution ("" for target, the task's only one).
+func (w *world) resolveAsItPublishesIn(gh *fakegithub.Server, repo, task, item string, pick func(base, head string) string, compare func(path string) int) *agentResolve {
+	w.t.Helper()
+	baseOf := repo
+	if baseOf == "" {
+		baseOf = "target"
+	}
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
 	w.t.Cleanup(tools.Close)
 	ar := &agentResolve{}
 	ctx := context.Background()
-	w.gh.Set(func(s *fakegithub.Server) {
+	gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
 			if r.Method == "GET" && strings.Contains(r.URL.Path, "/compare/") {
 				ar.mu.Lock()
@@ -78,14 +89,14 @@ func (w *world) resolveAsItPublishes(task, item string, pick func(base, head str
 			// The candidate branch does not exist before the fix's first
 			// push: where the fixer started is its base_refs, by repository.
 			var before string
-			if err := w.owner.QueryRow(ctx, `SELECT COALESCE(base_refs->>'target', '') FROM runs WHERE id = $1`, fixer).Scan(&before); err != nil {
+			if err := w.owner.QueryRow(ctx, `SELECT COALESCE(base_refs->>$2, '') FROM runs WHERE id = $1`, fixer, baseOf).Scan(&before); err != nil {
 				w.t.Errorf("the fixer's base: %v", err)
 				return 0
 			}
 			ar.fixer, ar.commit = fixer, pick(before, in.SHA)
 			for _, id := range append([]string{item}, ar.also...) {
 				req, _ := http.NewRequest("POST", tools.URL+"/tools/feedback_resolve",
-					strings.NewReader(fmt.Sprintf(`{"id":%q,"commit":%q}`, id, ar.commit)))
+					strings.NewReader(fmt.Sprintf(`{"id":%q,"commit":%q,"repo":%q}`, id, ar.commit, repo)))
 				req.Header.Set("Authorization", "Bearer "+token)
 				res, err := http.DefaultClient.Do(req)
 				if err != nil {

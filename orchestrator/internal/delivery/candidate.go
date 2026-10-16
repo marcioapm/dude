@@ -173,30 +173,34 @@ func (s *Store) pullRequestNumber(ctx context.Context, org string, st *State, re
 // yet to run on it, as after any push; and the move, once per pull
 // request and head.
 //
-// The candidate's Runs' resolutions are verified in the same transaction
-// in each repository moved to an open pull request (or to one not opened
-// yet): a commit that held at the candidate's head holds at the head the
-// branch was fast-forwarded to. With abandon, the round is over and the
-// rest are reopened for the next fixer.
+// In the same transaction it settles the candidate's Runs' resolutions:
+// verified in each moved repository whose pull request is still open, or
+// that has none recorded yet. A commit that held at the candidate's head
+// holds at the head the branch was fast-forwarded to. A moved repository
+// whose only pull request merged or closed during the check is not
+// verified, even though candidateMoved then opens a follow-up from the
+// moved branch: its items are reopened, and the follow-up's fixer checks
+// them again. With abandon, the round is over and the remaining
+// resolutions are reopened for the next fixer.
 func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, moved map[string]string, abandon bool) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var verify []string
+		var verify, ended []string
 		for _, repo := range slices.Sorted(maps.Keys(moved)) {
-			// A pull request merged or closed while the candidate was checked
-			// never took the candidate's commits.
-			var ended bool
+			var over bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 				WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('merged', 'closed'))
 				AND NOT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-				WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('open', 'draft'))`, st.PullRequestIDs, repo).Scan(&ended); err != nil {
+				WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('open', 'draft'))`, st.PullRequestIDs, repo).Scan(&over); err != nil {
 				return err
 			}
-			if !ended {
+			if over {
+				ended = append(ended, repo)
+			} else {
 				verify = append(verify, repo)
 			}
 		}
 		if st.Candidate != nil {
-			if err := candidateResolutionsTx(ctx, tx, org, st.TaskID, st.Attempt, st.Candidate.Branch, verify, abandon); err != nil {
+			if err := candidateResolutionsTx(ctx, tx, org, st.TaskID, st.Attempt, st.Candidate.Branch, verify, ended, abandon); err != nil {
 				return err
 			}
 		}
@@ -234,7 +238,7 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 // branch's Runs (task, attempt; 0 for the task's current) when its round
 // ends without reaching the pull request: the next fixer is given them.
 func AbandonCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string) error {
-	return candidateResolutionsTx(ctx, tx, org, taskID, attempt, branch, nil, true)
+	return candidateResolutionsTx(ctx, tx, org, taskID, attempt, branch, nil, nil, true)
 }
 
 // abandonCandidate is AbandonCandidateTx for the delivery's candidate
@@ -247,8 +251,10 @@ func (s *Store) abandonCandidate(ctx context.Context, org string, st *State) err
 
 // candidateResolutionsTx settles the pending resolutions made by the Runs
 // that published to branch: verified in a repository of verify; in any
-// other, reopened with reopen, else left pending.
-func candidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string, verify []string, reopen bool) error {
+// other, reopened with reopen, else left pending. One in a repository of
+// ended (its pull request merged or closed during the check) is reopened
+// as such, not as a commit that never reached a pull request.
+func candidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string, verify, ended []string, reopen bool) error {
 	rows, err := tx.Query(ctx, `SELECT f.id, f.resolved_by_run_id, COALESCE(f.resolved_commit, ''), COALESCE(f.resolved_repo, '')
 		FROM feedback_items f JOIN runs r ON r.id = f.resolved_by_run_id
 		WHERE r.task_id = $1 AND r.attempt = `+attemptOr+` AND r.branch = $3
@@ -277,14 +283,18 @@ func candidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, taskID string, 
 		if !reopen {
 			continue
 		}
+		why, body := ReopenNotPublished, "its commit never reached the pull request"
+		if slices.Contains(ended, p.Repo) {
+			why, body = ReopenPullRequestEnded, "its pull request ended while the fix was checked; a fixer checks it again on the follow-up pull request"
+		}
 		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+` WHERE id = $1`, p.ID); err != nil {
 			return err
 		}
-		if _, err := historyTx(ctx, tx, org, p.ID, "reopen", "", p.RunID, "its commit never reached the pull request", ""); err != nil {
+		if _, err := historyTx(ctx, tx, org, p.ID, "reopen", "", p.RunID, body, ""); err != nil {
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
-			map[string]any{"itemId": p.ID, "why": "not_published"})); err != nil {
+			map[string]any{"itemId": p.ID, "why": why})); err != nil {
 			return err
 		}
 	}

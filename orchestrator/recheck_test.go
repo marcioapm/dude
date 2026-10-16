@@ -956,13 +956,21 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 // One of two pull requests is merged while their fix is checked: the
 // merged pull request stays merged, and the checked work gets a follow-up
 // pull request rather than being discarded or merged without a person.
+// A person's item the fix resolved in that repository is not verified by
+// the promotion: it is reopened as its pull request having ended, and the
+// follow-up's fixer is given it.
 func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 	w := newPRFixWorldIn(t, true)
+	ana := w.person("Ana")
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
 		if phase == "fix" && n == 1 {
 			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
 		}
 	}
+	mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor)
+		SELECT 'fbi_web', $1, $2, task_attempt($2), person_id, 'Greet in the page too.', 'code', '{"kind":"code","repo":"web"}'
+		FROM api_keys WHERE id = $3`, w.org, w.wi, ana)
+	ar := w.resolveAsItPublishesIn(w.web, "web", w.wi, "fbi_web", func(_, head string) string { return head }, nil)
 	var mainAfterMerge string
 	var pullsAtTest int
 	w.onTest = func() {
@@ -971,11 +979,37 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 		mainAfterMerge = w.web.SHA("main")
 		pullsAtTest = len(w.web.Pulls())
 	}
+	w.armed.Store(true)
+	if code, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/feedback/submit",
+		map[string]any{"draftIds": []string{"fbi_web"}, "submissionKey": "k-web"}); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
 	w.comment("Please rename the greeting.")
 	w.until("the checked fix on target and a follow-up pull request in web", func() bool {
 		w.sync()
-		return w.gh.SHA(w.branch) != w.before && len(w.web.Pulls()) == 2 && w.taskStatus(w.wi) == "review"
+		return w.gh.SHA(w.branch) != w.before && len(w.web.Pulls()) == 2
 	})
+	fixer, commit, answer := ar.state()
+	if !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve with %s: %s", commit, answer)
+	}
+	if status, verified := w.resolution("fbi_web"); verified || status == "resolved" {
+		t.Errorf("resolved in web, whose pull request merged during the check: %s verified=%v", status, verified)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'feedback.reopened'
+		AND payload->>'itemId' = 'fbi_web' AND payload->>'why' = $2`, w.wi, delivery.ReopenPullRequestEnded); n != 1 {
+		t.Errorf("%d reopenings as the pull request having ended, want 1", n)
+	}
+	w.until("the follow-up's fixer given the item", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_web' = ANY(feedback_item_ids)
+			AND created_at > (SELECT created_at FROM runs WHERE id = $2)`, w.wi, fixer) > 0
+	})
+	// What follows is about the check of the first fix: the follow-up's
+	// fixer and its own check come after it.
+	w.mu <- struct{}{}
+	checked := min(len(w.phases), 5)
+	phases, seen, seenWeb := slices.Clone(w.phases[:checked]), slices.Clone(w.seen[:checked]), slices.Clone(w.seenWeb[:checked])
+	<-w.mu
 	if p := w.web.Pull(1); p.State != "closed" || p.MergedAt == nil {
 		t.Errorf("the original pull request is no longer merged: %+v", p)
 	}
@@ -987,16 +1021,21 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 	if at := w.web.SHA("main"); mainAfterMerge == "" || at != mainAfterMerge || at == head {
 		t.Errorf("main moved from %s to %s without a person merging the follow-up at %s", mainAfterMerge, at, head)
 	}
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 || pullsAtTest != 1 {
-		t.Errorf("unchecked work exposed: target heads %v, web pull requests at test %d", shown, pullsAtTest)
-	}
-	for i, sha := range w.seenWeb {
-		if sha != w.webBefore {
-			t.Errorf("web's branch was at %s as %s started", sha, w.phases[i])
+	for i, sha := range seen {
+		if sha != w.before {
+			t.Errorf("unchecked work exposed: target's branch was at %s as %s started", sha, phases[i])
 		}
 	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", w.phases)
+	if pullsAtTest != 1 {
+		t.Errorf("web pull requests at test %d, want 1", pullsAtTest)
+	}
+	for i, sha := range seenWeb {
+		if sha != w.webBefore {
+			t.Errorf("web's branch was at %s as %s started", sha, phases[i])
+		}
+	}
+	if !slices.Equal(phases, []string{"fix", "review", "simplify", "review", "test"}) {
+		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", phases)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
 		AND review_range->>'of' = $2 AND base_refs->>'web' = $3`, w.wi, delivery.RangePullRequestFix, head); n != 1 {

@@ -49,6 +49,17 @@ const (
 	EvFeedbackOutdated  = "feedback.outdated"
 )
 
+// Why dude reopened an agent's resolution (feedback.reopened's why).
+const (
+	// The Run ended (failed, aborted) without publishing.
+	ReopenUnpublished = "unpublished"
+	// The Run published, and the commit is not in it; or its candidate
+	// round ended before the pull request took it.
+	ReopenNotPublished = "not_published"
+	// Its candidate's pull request merged or closed while it was checked.
+	ReopenPullRequestEnded = "pull_request_ended"
+)
+
 // WakeFeedback is the conductor's reason for feedback (conductor_wakes).
 const WakeFeedback = "feedback"
 
@@ -727,7 +738,7 @@ func reopenUnpublishedTx(ctx context.Context, tx pgx.Tx, runID string) error {
 		}
 		ref := RunRef{Org: r.Org, TaskID: r.TaskID, RunID: runID}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
-			map[string]any{"itemId": r.ID, "why": "unpublished"})); err != nil {
+			map[string]any{"itemId": r.ID, "why": ReopenUnpublished})); err != nil {
 			return err
 		}
 	}
@@ -1124,7 +1135,7 @@ func settleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
-			map[string]any{"itemId": p.ID, "why": "not_published"})); err != nil {
+			map[string]any{"itemId": p.ID, "why": ReopenNotPublished})); err != nil {
 			return err
 		}
 	}

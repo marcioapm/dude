@@ -1311,6 +1311,7 @@ export function feedbackLine(e: PersistedEvent, doer: (runId: string | null) => 
       return { subject: true, text: <>resolved {items}{typeof p.commit === "string"
         ? <> in <code>{p.commit.slice(0, 7)}</code><span className="muted"> · counts once that commit is published</span></> : null}</> };
     case EventTypes.FeedbackReopened:
+      if (p.why === "pull_request_ended") return { subject: false, text: <>{items} opened again<span className="muted"> · its pull request ended while the fix was checked; a fixer checks it again on the follow-up pull request</span></> };
       if (typeof p.why === "string") return { subject: false, text: <>{items} opened again<span className="muted"> · the commit that resolved it was not published</span></> };
       return { subject: true, text: <>reopened {items}{routed}</> };
     default:
