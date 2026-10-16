@@ -1173,6 +1173,13 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	var actionable []forge.ActionableFeedback
 	ended, readiness := false, false
 	var stop *forge.Signal // a conflict, or CI stuck: a person's to see to
+	// A conflict another stop takes the place of waits its turn.
+	stopAt := func(next *forge.Signal) {
+		if stop != nil && stop.Kind == "conflict" {
+			st.PendingConflicts = append(st.PendingConflicts, *stop)
+		}
+		stop = next
+	}
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -1186,23 +1193,12 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			ended = true
 		case "readiness":
 			readiness = true
-		case "conflict":
-			if stop != nil && stop.Kind == "conflict" {
-				st.PendingConflicts = append(st.PendingConflicts, *stop)
-			}
-			stop = &s
-		case "ci_stuck":
-			if stop != nil && stop.Kind == "conflict" {
-				st.PendingConflicts = append(st.PendingConflicts, *stop)
-			}
-			stop = &s
+		case "conflict", "ci_stuck":
+			stopAt(&s)
 		default:
 			actionable = append(actionable, s.Feedback...)
 			if s.Conflict {
-				if stop != nil && stop.Kind == "conflict" {
-					st.PendingConflicts = append(st.PendingConflicts, *stop)
-				}
-				stop = &forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number}
+				stopAt(&forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number})
 			}
 		}
 	}
@@ -1383,12 +1379,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 	}
 	if st.Integration != nil && existing == "" {
-		if st.IntegrationPairs == nil {
-			st.IntegrationPairs = map[string]string{}
-		}
-		if st.Integration.Head != st.Heads[st.Integration.Repo] {
-			st.Integration.Head = st.Heads[st.Integration.Repo]
-		}
+		st.Integration.Head = st.Heads[st.Integration.Repo]
 		st.Integration.Published = false
 		st.Integration.Polls = 0
 	}

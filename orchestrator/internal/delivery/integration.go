@@ -194,7 +194,7 @@ func (i *Integration) brief() string {
 // base, whatever whenBehind says; one stopped at that pull request's
 // conflict escalation is decided so (retry for a failed integration, else
 // wait with the request queued). Anything else is a conflict: the handler
-// starts no phase itself. authorize checks who may decide an escalation.
+// starts no phase itself. in.Authorize checks who may decide an escalation.
 func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head string,
 	in EscalationDecision) error {
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
@@ -275,14 +275,23 @@ func HandOverPending(ctx context.Context, tx pgx.Tx, taskID, repo, head string) 
 	if err != nil || d == nil {
 		return false, err
 	}
-	for pair, i := range d.State.HandedOver {
-		if pair != repo+":"+head+":"+i.BaseHead {
-			continue
-		}
-		closed, err := integrationClosed(ctx, tx, taskID, pair, &i)
-		return !closed, err
+	pair, i, ok := handedOverAt(d.State.HandedOver, repo, head)
+	if !ok {
+		return false, nil
 	}
-	return false, nil
+	closed, err := integrationClosed(ctx, tx, taskID, pair, &i)
+	return !closed, err
+}
+
+// handedOverAt is the integration handed over whose merge is repo's head,
+// and its pair.
+func handedOverAt(handed map[string]Integration, repo, head string) (string, Integration, bool) {
+	for pair, i := range handed {
+		if pair == repo+":"+head+":"+i.BaseHead {
+			return pair, i, true
+		}
+	}
+	return "", Integration{}, false
 }
 
 // integrationClosed says whether i, handed over under pair, has its
@@ -313,16 +322,14 @@ func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head st
 }
 
 func handOverMergedTx(ctx context.Context, tx pgx.Tx, org string, st *State, repo, head string) error {
-	for pair, i := range st.HandedOver {
-		if pair != repo+":"+head+":"+i.BaseHead {
-			continue
-		}
-		if closed, err := integrationClosed(ctx, tx, st.TaskID, pair, &i); err != nil || closed {
-			return err
-		}
-		return integrationEventTx(ctx, tx, org, st, &i, "integration-completed", map[string]any{"head": head})
+	pair, i, ok := handedOverAt(st.HandedOver, repo, head)
+	if !ok {
+		return nil
 	}
-	return nil
+	if closed, err := integrationClosed(ctx, tx, st.TaskID, pair, &i); err != nil || closed {
+		return err
+	}
+	return integrationEventTx(ctx, tx, org, st, &i, "integration-completed", map[string]any{"head": head})
 }
 
 // closeHandedOver writes the closing line of each handed-over integration
