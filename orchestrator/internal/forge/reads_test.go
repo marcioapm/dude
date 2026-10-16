@@ -30,6 +30,7 @@ func readsWorld(t *testing.T) (target, other *fakegithub.Server, gh *GitHub) {
 	}
 	target, other = fakegithub.New(bare, "acme/target"), fakegithub.New(bare, "acme/other")
 	mux := http.NewServeMux()
+	mux.Handle("GET /repos/acme/target", target.Handler())
 	mux.Handle("/repos/acme/target/", target.Handler())
 	mux.Handle("/repos/acme/other/", other.Handler())
 	mux.Handle("GET /search/issues", fakegithub.Search(target, other))
@@ -184,6 +185,27 @@ func TestRateReadingsExpireOnWrite(t *testing.T) {
 	noteRate("https://expiry.test", "new-token", h)
 	if _, ok := rateReadings.Load(old); ok {
 		t.Fatal("expired old-token reading retained")
+	}
+}
+
+func TestSearchUsesCanonicalRepositoryName(t *testing.T) {
+	resolved := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/old":
+			resolved++
+			_, _ = w.Write([]byte(`{"full_name":"acme/new"}`))
+		case "/search/issues":
+			_, _ = w.Write([]byte(`{"total_count":2,"items":[{"number":1,"title":"renamed","repository_url":"https://api.github.com/repos/acme/new"},{"number":2,"repository_url":"https://api.github.com/repos/acme/forbidden"}]}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	items, _, err := gh.SearchIssues(context.Background(), "acme/old", "", "issue", "", 30)
+	if err != nil || resolved != 1 || len(items) != 1 || items[0].Title != "renamed" {
+		t.Fatalf("canonical search: resolved=%d items=%+v err=%v", resolved, items, err)
 	}
 }
 

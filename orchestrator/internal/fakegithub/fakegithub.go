@@ -423,7 +423,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"default_branch": "main"})
+		write(w, 200, map[string]any{"default_branch": "main", "full_name": s.Slug})
 	})
 	mux.HandleFunc("POST "+prefix+"/merges", func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Base, Head string }

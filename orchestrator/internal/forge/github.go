@@ -1621,7 +1621,17 @@ func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state stri
 	if err := g.readBudget(ctx, slug, "core", "search"); err != nil {
 		return nil, 0, err
 	}
-	q := "repo:" + slug + " is:" + kind
+	var repo struct {
+		FullName string `json:"full_name"`
+	}
+	if err := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); err != nil {
+		return nil, 0, err
+	}
+	if repo.FullName == "" {
+		return nil, 0, &Error{Status: http.StatusBadGateway, Message: "GitHub did not identify the repository"}
+	}
+	canonical := repo.FullName
+	q := "repo:" + canonical + " is:" + kind
 	if state == "open" || state == "closed" {
 		q += " is:" + state
 	}
@@ -1638,7 +1648,7 @@ func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state stri
 	}
 	lines := []IssueLine{}
 	for _, it := range out.Items {
-		if !strings.HasSuffix(strings.ToLower(it.RepositoryURL), "/repos/"+strings.ToLower(slug)) {
+		if !strings.HasSuffix(strings.ToLower(it.RepositoryURL), "/repos/"+strings.ToLower(canonical)) {
 			continue
 		}
 		if len(lines) < limit {
