@@ -523,15 +523,17 @@ export function SubmitFeedbackDialog({ drafts, destination, holds, onConfirm, on
   if (general > 0) parts.push(<span key="g">{general} general</span>);
   if (preview > 0) parts.push(<span key="p">{preview} on a preview</span>);
   return (
+    // On the dialog itself: focus opens on its Close button, outside the body.
     <Dialog open onOpenChange={(o) => !o && onCancel()} size="md" title={`Submit ${plural(n, "feedback item")}`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) { e.preventDefault(); onConfirm(); }
+      }}
       footerStart={problem ? <span role="alert" data-testid="fb-submit-problem">{problem}</span> : <span className={styles["keys"]}><KeyHint keys={["mod", "Enter"]}>submit</KeyHint></span>}
       footer={<>
         <Button variant="quiet" onClick={onCancel}>Keep as drafts</Button>
         <Button variant="primary" onClick={onConfirm} disabled={busy} data-testid="fb-confirm">{busy ? "Submitting…" : `Submit ${n}`}</Button>
       </>}>
-      <div className={styles["confirm"]} data-testid="fb-confirm-body" onKeyDown={(e) => {
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) { e.preventDefault(); onConfirm(); }
-      }}>
+      <div className={styles["confirm"]} data-testid="fb-confirm-body">
         <p>{parts.map((p, i) => <span key={i}>{i > 0 ? " · " : ""}{p}</span>)} — as one batch.</p>
         <section className={styles["confirmBlock"]} aria-label="Where they go">
           <h3 className="ds-label">Where they go</h3>

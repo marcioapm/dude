@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { FeedbackCodeAnchor } from "@dude/domain";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import { LiveDiff, type DiffRange, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
-import { CommentEditor, DraftsTray, FeedbackCard, type FeedbackCardItem } from "../src/components/FeedbackCard.tsx";
+import { CommentEditor, DraftsTray, FeedbackCard, SubmitFeedbackDialog, type FeedbackCardItem } from "../src/components/FeedbackCard.tsx";
 import { accessibleName, allByRole, byRole } from "./queries.ts";
 
 let root: Root | null = null;
@@ -255,6 +255,25 @@ describe("DraftsTray", () => {
       submitRefused="This task is done: feedback on it goes in a follow-up task." /></TooltipProvider>));
     expect(byRole<HTMLButtonElement>(host!, "button", "Submit 2").disabled).toBe(true);
     expect(allByRole(host!, "button", "Submit 2…").length).toBe(0);
+  });
+});
+
+describe("SubmitFeedbackDialog", () => {
+  test("⌘/Ctrl+Enter submits from where focus lands when it opens; not while busy", async () => {
+    const drafts = [{ id: "d1", anchor: { kind: "general" as const }, body: "x" }];
+    let confirmed = 0;
+    const dialog = (busy: boolean) => (
+      <SubmitFeedbackDialog drafts={drafts} destination={{ line: "They go to the conductor." }} holds="Nothing" busy={busy}
+        onConfirm={() => void confirmed++} onCancel={() => {}} />
+    );
+    await mount(dialog(false));
+    const focused = document.activeElement!;
+    expect(document.querySelector("[role=dialog]")!.contains(focused)).toBe(true);
+    await fire(focused, new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(confirmed).toBe(1);
+    await act(async () => root!.render(<TooltipProvider>{dialog(true)}</TooltipProvider>));
+    await fire(document.activeElement!, new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(confirmed).toBe(1);
   });
 });
 
