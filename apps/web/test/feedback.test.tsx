@@ -1,8 +1,8 @@
 /**
  * People's feedback in the web app: the client's routes, the drafts tray
  * and its batch submit (one key, the same on a retry), the merge hold, a
- * done, failed or aborted task, an earlier attempt, and a colleague who
- * never sees another person's draft. Mounted against the fixture client,
+ * done, failed or aborted task, an earlier attempt, and the page drawing
+ * exactly the list the API gives it. Mounted against the fixture client,
  * whose feedback answers as the API does.
  */
 
@@ -165,11 +165,8 @@ const button = (scope: ParentNode, name: string) =>
 describe("general feedback, the tray and the submit", () => {
   test("a draft written on the tab shows in the tray; Submit sends exactly the drafts with one key, and a retry the same key", async () => {
     const client = new FeedbackClient();
-    // Someone else's draft is the API's to keep from the reader: listed to its author alone.
-    client.feedbackItems.push(item({ id: "fbk_ana_draft", status: "draft", author: { id: ANA.id, name: ANA.name }, body: "Ana's private words", submittedAt: null }));
     client.failSubmits = 1;
     const page = await taskPage(client, "feedback");
-    expect(page.textContent).not.toContain("Ana's private words");
     expect(page.querySelectorAll("[data-testid=fb-tray]").length).toBe(0);
 
     await click(await until(() => page.querySelector("[data-testid=general-open]"), "the general line"));
@@ -194,10 +191,24 @@ describe("general feedback, the tray and the submit", () => {
     expect(client.submits[0]!.ids).toEqual(mine);
     expect(client.submits[1]).toEqual(client.submits[0]!);
     expect(client.submits[0]!.key.length).toBeGreaterThan(8);
-    // Submitted: on the tab as an item that needs handling, and Ana's draft never.
+    // Submitted: on the tab as an item that needs handling.
     const needs = await until(() => page.querySelector("[data-testid=feedback-needs]"), "needs handling");
     expect(needs.textContent).toContain("Add a test for the 2-minute cap");
-    expect(page.textContent).not.toContain("Ana's private words");
+  });
+
+  test("the UI shows exactly what the API lists: the drafts it lists are the reader's drafts, and nothing else is added", async () => {
+    // Who may see a draft is the API's rule (its own test); the page draws the list it is given, no more and no less.
+    const client = new FeedbackClient();
+    client.feedbackItems.push(item({ id: "mine", status: "draft", author: { id: ME.id, name: ME.name }, body: "My draft", submittedAt: null, batchId: null }),
+      item({ id: "open1", body: "An open item" }));
+    const listed = await client.feedback(TASK_ID);
+    const page = await taskPage(client, "feedback");
+    const drafts = await until(() => page.querySelector("[data-testid=feedback-drafts]"), "the drafts");
+    expect([...drafts.querySelectorAll("[data-testid=fb-draft]")].map((c) => c.getAttribute("data-id")))
+      .toEqual(listed.feedback.filter((i) => i.status === "draft").map((i) => i.id));
+    expect(drafts.textContent).toContain("My draft");
+    expect(page.querySelector("[data-testid=fb-tray]")!.getAttribute("data-count")).toBe("1");
+    expect(page.querySelector("[data-testid=feedback-needs]")!.textContent).toContain("An open item");
   });
 
   test("the tray lists the drafts, deletes one, and is gone with none", async () => {
@@ -262,20 +273,27 @@ describe("the merge hold", () => {
     expect(page.querySelectorAll("[data-testid=merge-hold]").length).toBe(0);
   });
 
-  test("Merge is off with the count while feedback holds it, and on once nothing does", () => {
+  test("Merge is off with the count while feedback holds it, and on once nothing does", async () => {
     const pr = { id: "pr_1", taskId: "t", runId: null, repositoryId: "r", repositoryName: "web", number: 41, url: "https://github.com/a/web/pull/41",
       headBranch: "h", baseBranch: "main", title: "T", state: "open", checks: [], checkState: "passing", review: "approved", reviews: [], mergeable: "clean",
       behindBy: 0, unresolvedThreads: 0, display: "ready", createdAt: "", updatedAt: "" } as unknown as PullRequest;
-    const render = (n: number) => renderToStaticMarkup(
-      <TooltipProvider><PullRequestActions client={{} as ApiClient} pr={pr} defaultMethod="squash" onChanged={() => {}} feedbackHolds={n}>
-        {({ merge, note }) => <div>{merge}{note}</div>}
-      </PullRequestActions></TooltipProvider>);
-    const held = render(2);
-    expect(held).toMatch(/<button[^>]*disabled=""[^>]*data-testid="pr-merge"/);
-    expect(held).toContain("2 feedback items hold the merge.");
-    const free = render(0);
-    expect(free).not.toMatch(/<button[^>]*disabled=""[^>]*data-testid="pr-merge"/);
-    expect(free).not.toContain("hold the merge");
+    const render = async (n: number) => {
+      const { container, unmount } = await mount(
+        <TooltipProvider><PullRequestActions client={{} as ApiClient} pr={pr} defaultMethod="squash" onChanged={() => {}} feedbackHolds={n}>
+          {({ merge, note }) => <div>{merge}{note}</div>}
+        </PullRequestActions></TooltipProvider>);
+      mounted.push(unmount);
+      return { merge: container.querySelector<HTMLButtonElement>("[data-testid=pr-merge]")!, text: container.textContent ?? "" };
+    };
+    const one = await render(1);
+    expect(one.merge.disabled).toBe(true);
+    expect(one.text).toContain("1 feedback item holds the merge.");
+    const two = await render(2);
+    expect(two.merge.disabled).toBe(true);
+    expect(two.text).toContain("2 feedback items hold the merge.");
+    const free = await render(0);
+    expect(free.merge.disabled).toBe(false);
+    expect(free.text).not.toContain("hold the merge");
   });
 });
 
@@ -330,6 +348,35 @@ describe("an earlier attempt", () => {
     // The current attempt's hold is not this attempt's.
     expect(container.querySelectorAll("[data-testid=merge-hold]").length).toBe(0);
   });
+
+  test("its Run's Changes are only to read: no \"+\", and no Reply or Resolve on the cards drawn there", async () => {
+    const client = new FeedbackClient();
+    const base = await client.getTask(TASK_ID);
+    const first = base.runs[0]!;
+    client.runs = [...base.runs, { ...first, id: "run_second", attempt: 2, createdAt: new Date().toISOString() }];
+    const diff = { base: "4be19c2", checksum: "c1", final: true, updatedAt: new Date().toISOString(), files: [{ path: "src/app.ts", status: "M" as const,
+      additions: 1, deletions: 0, hunks: [{ header: "@@ -1 +1,2 @@", lines: [{ kind: " " as const, old: 1, new: 1, text: "a()" }, { kind: "+" as const, old: null, new: 2, text: "x()" }] }] }] };
+    (client as unknown as { runDiff: () => Promise<unknown> }).runDiff = async () => diff;
+    // The current attempt's open item, on text this earlier Run's diff also has: drawn on its lines here.
+    const openNow = item({ id: "open_now", attempt: 2, body: "Rename x", anchor: { kind: "code", runId: "run_second", repo: "web", path: "src/app.ts",
+      side: "new", startLine: 2, endLine: 2, baseSha: "b", headSha: null, diffChecksum: "c9", excerpt: [{ kind: "+", old: null, new: 2, text: "x()" }] } });
+    // The fixture counts attempts by its own Runs: the current attempt's list is given here.
+    client.feedback = (_t: string, attempt?: number) => Promise.resolve(attempt === undefined ? { feedback: [openNow], blocking: 1 } : { feedback: [], blocking: 0 });
+    const { container, unmount } = await mount(
+      <ToastProvider><TooltipProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} runId={first.id} tab="sessions" onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></TooltipProvider></ToastProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector('[data-testid=task-screen][data-attempt="1"]'), "attempt 1");
+    const changes = await until(() => [...container.querySelectorAll<HTMLElement>("[data-testid=session-view] button, [data-testid=session-view] [role=radio]")]
+      .find((b) => b.textContent?.startsWith("Changes")), "the Changes switch");
+    await click(changes);
+    const card = await until(() => container.querySelector<HTMLElement>("[data-fb-item=open_now]"), "the item on its lines");
+    expect(container.querySelectorAll("[data-testid=gutter-add]").length).toBe(0);
+    expect(card.querySelectorAll("footer").length).toBe(0);
+    expect(button(card, "Reply")).toBeUndefined();
+    expect(button(card, "Resolve")).toBeUndefined();
+  });
 });
 
 describe("where a batch goes", () => {
@@ -344,6 +391,15 @@ describe("where a batch goes", () => {
     expect(feedbackDestination({ decider: "policy", status: "queued", runs: [] }, 1, 0).who).toBe("a new delivery");
     expect(feedbackDestination({ decider: "policy", status: "queued", runs: [] }, 1, 2).line).toBe("They wait for the task's blockers.");
   });
+
+  test("a paused or starting agent counts as at work; a conductor not yet started does not decide; the newest Run wins", () => {
+    expect(feedbackDestination({ decider: "policy", status: "running", runs: [run({ status: "paused" })] }, 1, 0).who).toBe("the fixer at work");
+    expect(feedbackDestination({ decider: "policy", status: "running", runs: [run({ status: "starting", phase: "implement" })] }, 1, 0).who).toBe("the implementer at work");
+    expect(feedbackDestination({ decider: "conductor", status: "queued", runs: [] }, 1, 0).who).toBe("a new delivery");
+    expect(feedbackDestination({ decider: "policy", status: "running", runs: [
+      run({ id: "old", phase: "implement", createdAt: "2026-10-01T00:00:00Z" }), run({ id: "new", phase: "fix", createdAt: "2026-10-02T00:00:00Z" })] }, 1, 0).who)
+      .toBe("the fixer at work");
+  });
 });
 
 describe("Activity", () => {
@@ -356,7 +412,7 @@ describe("Activity", () => {
   test("says who did what to how many items, never their words", () => {
     const fix = { id: "run_fix", attempt: 1, phase: "fix", role: "implementer", kind: "agent", status: "running", createdAt: "" } as unknown as Run;
     const lines = activityLines([
-      ev("feedback.submitted", { itemIds: ["a", "b"], routedTo: "steer" }, { type: "person", id: ANA.id }),
+      ev("feedback.submitted", { itemIds: ["a", "b"], routedTo: "steer", body: "SECRET" }, { type: "person", id: ANA.id }),
       ev("feedback.delivered", { itemIds: ["a", "b"] }, { type: "system", id: "dude" }, "run_fix"),
       ev("feedback.replied", { itemId: "a", by: "agent" }, { type: "agent", id: "run_fix" }, "run_fix"),
       ev("feedback.resolved", { itemId: "b", by: "agent", commit: "9c1e4a7d0e", pending: true }, { type: "agent", id: "run_fix" }, "run_fix"),
@@ -370,6 +426,8 @@ describe("Activity", () => {
       "2 feedback items were given to the fixer",
       "Ana Ribeiro submitted 2 feedback items · to the agent at work",
     ]);
+    // A payload's words never reach a line, whatever it carries.
+    expect(lines.map((l) => renderToStaticMarkup(<>{l.text}</>)).filter((w) => w.includes("SECRET"))).toEqual([]);
   });
 });
 

@@ -2512,6 +2512,9 @@ an ordinary completed step, and review follows on the unchanged head.
 Gallery: *People's feedback* (`#fb-diff`, `#fb-cards`, `#fb-editor`,
 `#fb-tray`).
 
+In the web app, commenting lives on the task page: a Run's Changes take
+comments when opened there, never on the standalone Run page.
+
 - **Commenting is props on `LiveDiff`, not a second diff.** `commenting`
   takes `canStart`, `maxLines`, the `selection` (the app's to keep) with
   `onSelectionChange(range, done)`, `renderAfterLine(path, side, line)`,

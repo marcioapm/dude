@@ -528,7 +528,7 @@ export function SubmitFeedbackDialog({ drafts, destination, holds, onConfirm, on
       onKeyDown={(e) => {
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) { e.preventDefault(); onConfirm(); }
       }}
-      footerStart={problem ? <span role="alert" data-testid="fb-submit-problem">{problem}</span> : <span className={styles["keys"]}><KeyHint keys={["mod", "Enter"]}>submit</KeyHint></span>}
+      footerStart={problem ? <span role="alert" data-testid="fb-submit-problem">{problem}</span> : <span className={styles["keys"]} data-testid="fb-confirm-keys"><KeyHint keys={["mod", "Enter"]}>submit</KeyHint></span>}
       footer={<>
         <Button variant="quiet" onClick={onCancel}>Keep as drafts</Button>
         <Button variant="primary" onClick={onConfirm} disabled={busy} data-testid="fb-confirm">{busy ? "Submitting…" : `Submit ${n}`}</Button>

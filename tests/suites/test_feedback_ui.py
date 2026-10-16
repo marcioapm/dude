@@ -97,6 +97,13 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     expect(editor).to_contain_text("Private draft until you submit")
     editor.get_by_role("textbox", name="Comment").fill("Say which pause it was: graceful or hard.")
     _shoot(page, "diff-editor", editor)
+    # On a phone the file list stacks above the diff, so the editor has the width to write in.
+    page.set_viewport_size({"width": 390, "height": 844})
+    field = editor.get_by_role("textbox", name="Comment")
+    field.scroll_into_view_if_needed()
+    width = (field.bounding_box() or {"width": 0})["width"]
+    assert width >= 250, f"the comment field is {width}px wide at 390"
+    page.set_viewport_size({"width": 1440, "height": 900})
     editor.get_by_role("textbox", name="Comment").press("Control+Enter")
 
     # A private draft: on its lines, and in the tray.
@@ -117,6 +124,12 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     dialog = page.get_by_role("dialog", name="Submit 1 feedback item")
     expect(dialog.get_by_test_id("fb-confirm-route")).to_contain_text("The implementer at work gets them at its next step.")
     _shoot(page, "submit-dialog", dialog)
+    # On a phone the confirmation still fits and its key hint gives the buttons the room.
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(dialog.get_by_test_id("fb-confirm")).to_be_in_viewport()
+    expect(dialog.get_by_test_id("fb-confirm-keys")).not_to_be_visible()
+    page.set_viewport_size({"width": 1440, "height": 900})
+    expect(dialog.get_by_test_id("fb-confirm-keys")).to_be_visible()
     dialog.get_by_test_id("fb-confirm").click()
     expect(page.get_by_test_id("fb-tray")).to_have_count(0)
     item = wait_until(lambda: next((i for i in _feedback(client, task["id"])["feedback"] if i["status"] != "draft"), None),

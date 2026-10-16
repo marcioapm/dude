@@ -213,6 +213,34 @@ describe("relocateCodeAnchor", () => {
     expect(relocateCodeAnchor(a, later([hashed]))).toEqual({ kind: "lines", path: "web-29751047/src/app.ts", side: "new", startLine: 11, endLine: 12 });
   });
 
+  test("anchored text is found only within one hunk, never across the unseen lines between two", () => {
+    const before = file("src/app.ts", [hunk(10, 10, `+x()
++y()`)]);
+    const a = anchorOn(before, "new", 10, 11);
+    // x() ends hunk 1 (new 10), y() starts hunk 2 (new 50).
+    const twoHunks = file("src/app.ts", [hunk(9, 9, ` w()
++x()`), hunk(48, 50, `+y()
+ z()`)]);
+    expect(relocateCodeAnchor(a, later([twoHunks]))).toEqual({ kind: "outdated", path: "src/app.ts", reason: "changed" });
+  });
+
+  test("on the old side, a hunk overlapping its old numbers with other text makes it outdated", () => {
+    const before = file("src/app.ts", [hunk(20, 20, `-gone()`)]);
+    const a = anchorOn(before, "old", 20, 20);
+    // Old 20 now holds other text; the new side's numbers (120) are elsewhere.
+    const f = file("src/app.ts", [hunk(20, 120, `-other()
++z()`)]);
+    expect(relocateCodeAnchor(a, later([f]))).toEqual({ kind: "outdated", path: "src/app.ts", reason: "changed" });
+  });
+
+  test("the same Run with a newer checksum relocates the item, not keeps its old numbers", () => {
+    const a = anchorOn(WRITTEN, "new", 11, 11); // "const b = 3;"
+    const shifted = file("src/app.ts", [hunk(1, 1, `+const b = 3;
+ tail();`)]);
+    expect(relocateCodeAnchor(a, { runId: "run_a", checksum: "c2", files: [shifted] }))
+      .toEqual({ kind: "lines", path: "src/app.ts", side: "new", startLine: 1, endLine: 1 });
+  });
+
   test("with one repository, a file of the same name in a subdirectory is another file", () => {
     const readme = file("README.md", [hunk(12, 12, "+Run it with make.")]);
     const a = anchorOn(readme, "new", 12, 12, { repo: "web" });
