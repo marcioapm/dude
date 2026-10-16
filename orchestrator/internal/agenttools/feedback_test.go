@@ -244,3 +244,80 @@ func TestInterruptNowOnAConductorsFeedbackSteerResendsThePersonsWords(t *testing
 		t.Error("the ledger carries the person's words")
 	}
 }
+
+// A Retry of a conductor's feedback steer that failed unread gives the
+// items to the resend, so its reading delivers them; a person's new words
+// superseding it are sent as written, and a steer of another Run naming it
+// is not given its words.
+func TestAResendOfAFailedFeedbackSteerDeliversItsItems(t *testing.T) {
+	f := feedbackFixture(t)
+	conductor := f.conductor(t)
+	f.run(t, "run_fix", "implementer", "running")
+	f.run(t, "run_other", "implementer", "running")
+	var res map[string]any
+	if status := f.postAs(t, conductor, "steer", `{"run":"run_fix","text":"Start with these.","feedbackIds":["fbi_open"]}`, &res); status != 200 {
+		t.Fatalf("steer with feedback: %d %v", status, res)
+	}
+	ctx := context.Background()
+	var first, said string
+	_ = f.owner.QueryRow(ctx, `SELECT payload->>'directiveId', payload->>'text' FROM events
+		WHERE run_id = 'run_fix' AND event_type = 'run.steered'`).Scan(&first, &said)
+	steer := func(in delivery.SteerInput) delivery.Steered {
+		t.Helper()
+		in.Actor = delivery.Writer{ActorType: ledger.ActorHuman, ActorID: "per_ana_" + f.org}
+		var out delivery.Steered
+		if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+			var err error
+			out, err = delivery.Steer(ctx, tx, f.org, in)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	textOf := func(id string) string {
+		var text string
+		_ = f.owner.QueryRow(ctx, `SELECT text FROM directives WHERE id = $1`, id).Scan(&text)
+		return text
+	}
+
+	// Another Run naming this steer is not given its people's words.
+	other := steer(delivery.SteerInput{RunID: "run_other", Text: said, Supersedes: first})
+	if got := textOf(other.ID); got != said {
+		t.Errorf("another Run's steer was given:\n%s", got)
+	}
+	// New words superseding it are sent as written, with no items.
+	fresh := steer(delivery.SteerInput{RunID: "run_fix", Text: "Something else entirely.", Supersedes: first})
+	if got := textOf(fresh.ID); got != "Something else entirely." {
+		t.Errorf("new words were sent as:\n%s", got)
+	}
+	var carried bool
+	_ = f.owner.QueryRow(ctx, `SELECT payload ? 'feedbackItemIds' FROM events WHERE payload->>'directiveId' = $1`, fresh.ID).Scan(&carried)
+	if carried {
+		t.Error("new words carry the feedback items")
+	}
+
+	// The first send fails unread; the person's Retry delivers the item.
+	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		return delivery.FeedbackUnheardTx(ctx, tx, first)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	again := steer(delivery.SteerInput{RunID: "run_fix", Text: said, Supersedes: first})
+	var directive, deliveredRun *string
+	_ = f.owner.QueryRow(ctx, `SELECT directive_id, delivered_run_id FROM feedback_items WHERE id = 'fbi_open'`).
+		Scan(&directive, &deliveredRun)
+	if directive == nil || *directive != again.ID || deliveredRun == nil || *deliveredRun != "run_fix" {
+		t.Fatalf("the item after the Retry: directive %v, run %v; want %s on run_fix", directive, deliveredRun, again.ID)
+	}
+	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		return delivery.FeedbackHeardTx(ctx, tx, f.org, again.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	_ = f.owner.QueryRow(ctx, `SELECT status FROM feedback_items WHERE id = 'fbi_open'`).Scan(&status)
+	if status != "delivered" {
+		t.Errorf("the item is %s once the Retry is read, want delivered", status)
+	}
+}

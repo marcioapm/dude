@@ -123,6 +123,15 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	if len(in.FeedbackIDs) > 0 {
 		payload["feedbackItemIds"] = in.FeedbackIDs
 	}
+	if len(in.FeedbackIDs) > 0 && in.FeedbackWords == "" {
+		// A resend of a feedback steer: the items its first send released
+		// unread (FeedbackUnheardTx) are this directive's to deliver.
+		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET directive_id = $2, delivered_run_id = $3, updated_at = now()
+			WHERE id = ANY($1) AND task_id = $4 AND status = 'open' AND directive_id IS NULL`,
+			in.FeedbackIDs, id, in.RunID, taskID); err != nil {
+			return Steered{}, err
+		}
+	}
 	if in.Conductor != "" {
 		if _, err := tx.Exec(ctx, `UPDATE directives SET conductor_run_id = $2 WHERE id = $1`, id, in.Conductor); err != nil {
 			return Steered{}, err
