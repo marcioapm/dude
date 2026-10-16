@@ -435,16 +435,19 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 				return s.refusePublish(ctx, p, fmt.Sprintf("%s has no branch %s to measure your commits from", repo.Name, from))
 			}
 		}
-		trusted, _, err := s.trustedBase(ctx, gh, p.Org, p.RunID, slug, res.Repo, baseBranch)
+		trusted, untrusted, err := s.trustedBase(ctx, gh, p.Org, p.RunID, slug, res.Repo, baseBranch)
 		if err != nil {
 			return errPublishTransient{err}
 		}
-		acc, err := publicationAccounting(ctx, s.Lux, p.LuxRunID, start, res.Commit, trusted, repo.Name)
-		if accountingTransient(err) {
+		acc, err := accountPublish(ctx, s.Lux, gh, p.LuxRunID, slug, repo.Name, baseBranch, start, res.Commit, trusted, untrusted, cmp)
+		if accountingTransient(err) || forge.Transient(err) {
 			return errPublishTransient{err}
 		}
 		if err != nil {
 			return s.refusePublish(ctx, p, fmt.Sprintf("dude could not verify which changes in %s are yours: %v", repo.Name, err))
+		}
+		if acc.Full != "" {
+			s.Log.Info("a conductor's publish is counted in full", "publish", p.ID, "repo", repo.Name, "why", acc.Full)
 		}
 		if acc.Binary {
 			return s.refusePublish(ctx, p, fmt.Sprintf(delivery.RefusedBinary, repo.Name))

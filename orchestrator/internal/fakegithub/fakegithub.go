@@ -1074,27 +1074,60 @@ func page[T any](r *http.Request, all []T) []T {
 	return all[start:min(start+size, len(all))]
 }
 
+// compareFileCap is the most files GitHub's compare lists
+// (forge.CompareFileCap).
+var compareFileCap = 300
+
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	base, head, ok := strings.Cut(r.PathValue("spec"), "...")
 	if !ok {
 		fail(w, 404, "Not Found")
 		return
 	}
-	out, err := s.git("diff", "--numstat", base, head)
+	// As GitHub's: from the merge base (three dots), renames found, at most
+	// forge.CompareFileCap files.
+	spec := base + "..." + head
+	out, err := s.git("diff", "-z", "-M", "--numstat", spec)
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
+	names, _ := s.git("diff", "-z", "-M", "--name-status", spec)
+	status := map[string]string{}
+	for nt := strings.Split(names, "\x00"); len(nt) > 1; {
+		st := nt[0]
+		n := 2
+		if st != "" && (st[0] == 'R' || st[0] == 'C') {
+			n = 3
+		}
+		if len(nt) < n {
+			break
+		}
+		status[nt[n-1]] = map[byte]string{'A': "added", 'D': "removed", 'M': "modified", 'R': "renamed", 'C': "copied", 'T': "changed"}[st[0]]
+		nt = nt[n:]
+	}
 	files := []any{}
-	for _, line := range strings.Split(out, "\n") {
-		// "<added>\t<deleted>\t<path>"; "-" for a binary file's counts.
-		parts := strings.SplitN(line, "\t", 3)
+	for tokens := strings.Split(out, "\x00"); len(tokens) > 0 && tokens[0] != ""; {
+		// "<added>\t<deleted>\t<path>", or an empty path and a rename's two
+		// paths next; "-" for a binary file's counts.
+		parts := strings.SplitN(tokens[0], "\t", 3)
 		if len(parts) != 3 {
-			continue
+			break
+		}
+		path, prev := parts[2], ""
+		tokens = tokens[1:]
+		if path == "" && len(tokens) >= 2 {
+			prev, path, tokens = tokens[0], tokens[1], tokens[2:]
 		}
 		added, _ := strconv.Atoi(parts[0])
 		deleted, _ := strconv.Atoi(parts[1])
-		files = append(files, map[string]any{"filename": parts[2], "additions": added, "deletions": deleted})
+		f := map[string]any{"filename": path, "status": status[path], "additions": added, "deletions": deleted}
+		if prev != "" {
+			f["previous_filename"] = prev
+		}
+		if len(files) < compareFileCap {
+			files = append(files, f)
+		}
 	}
 	// Commits on base that head lacks: how far behind head is; and the
 	// reverse.

@@ -1202,14 +1202,28 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 // commits head has that base lacks (AheadBy) and the reverse (BehindBy:
 // base is an ancestor of head only at 0), and each changed file's lines.
 type Comparison struct {
-	AheadBy  int `json:"ahead_by"`
-	BehindBy int `json:"behind_by"`
-	Files    []struct {
-		Filename  string `json:"filename"`
-		Additions int    `json:"additions"`
-		Deletions int    `json:"deletions"`
-	} `json:"files"`
+	AheadBy  int            `json:"ahead_by"`
+	BehindBy int            `json:"behind_by"`
+	Files    []ComparedFile `json:"files"`
 }
+
+// ComparedFile is one file of a Comparison; PreviousFilename is a rename's
+// other side.
+type ComparedFile struct {
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename,omitempty"`
+	// added, removed, modified, renamed, copied, changed or unchanged.
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
+// CompareFileCap is the most files GitHub's compare lists: at it, the list
+// may be cut short.
+const CompareFileCap = 300
+
+// Truncated says the comparison may list fewer files than changed.
+func (c Comparison) Truncated() bool { return len(c.Files) >= CompareFileCap }
 
 // Lines is the comparison's changed lines: additions and deletions.
 func (c Comparison) Lines() int {

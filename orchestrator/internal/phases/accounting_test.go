@@ -15,7 +15,9 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -32,6 +34,9 @@ type accountingRun struct {
 	start  string
 	// The base lux reported fetching (syncBase), "" before any.
 	base string
+	// Sees each request to the fake GitHub of published.
+	intercept func(*http.Request) int
+	pushed    string
 }
 
 func newAccountingRun(t *testing.T) *accountingRun {
@@ -118,6 +123,50 @@ func (a *accountingRun) account() accounting {
 }
 
 func (a *accountingRun) head() string { return git(a.t, a.work, "rev-parse", "HEAD") }
+
+// published is a publish of the checkout's HEAD as dude accounts it: lux
+// pushes it to origin (GitHub, here a fake over origin; push), GitHub
+// compares it with where the Run started, and the base lux reported
+// fetching (a.base) is checked against GitHub's main.
+func (a *accountingRun) published() accounting {
+	a.t.Helper()
+	a.push()
+	head := a.head()
+	gh := a.github()
+	ctx := context.Background()
+	task, err := gh.Compare(ctx, "acme/target", a.start, head)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	trusted, why, err := verifyBase(ctx, gh, "acme/target", "main", a.base)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	acc, err := accountPublish(ctx, a.client, gh, a.luxID, "acme/target", "target", "main", a.start, head, trusted, why, task)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	return acc
+}
+
+// push is lux's push of the checkout's HEAD, once per head.
+func (a *accountingRun) push() {
+	a.t.Helper()
+	if head := a.head(); head != a.pushed {
+		git(a.t, a.work, "push", "-q", "-f", a.origin, "HEAD:refs/heads/dude/run")
+		a.pushed = head
+	}
+}
+
+// github is a fake GitHub over origin, its requests seen by intercept.
+func (a *accountingRun) github() *forge.GitHub {
+	a.t.Helper()
+	fake := fakegithub.New(a.origin, "acme/target")
+	fake.Intercept = a.intercept
+	srv := httptest.NewServer(fake.Handler())
+	a.t.Cleanup(srv.Close)
+	return forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_x", APIBaseURL: srv.URL})
+}
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()

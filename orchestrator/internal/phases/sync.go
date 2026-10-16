@@ -1856,15 +1856,22 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if baseBranch == "" {
 			baseBranch = repo.DefaultBranch
 		}
-		// Only a base lux fetched, and GitHub's base branch contains, is
-		// left out; never what the checkout's refs say.
-		trusted, _, err := s.trustedBase(ctx, gh, r.Org, r.ID, slug, res.Repo, baseBranch)
+		// GitHub's compare is the truth for what the push holds; the
+		// checkout's evidence only narrows paths a trusted base changed.
+		cmp, err := gh.Compare(ctx, slug, base, res.Commit)
+		if err != nil {
+			return nil, fmt.Errorf("comparing %s's push with where it started: %w", repo.Name, err)
+		}
+		trusted, untrusted, err := s.trustedBase(ctx, gh, r.Org, r.ID, slug, res.Repo, baseBranch)
 		if err != nil {
 			return nil, err
 		}
-		acc, accountErr := publicationAccounting(ctx, s.Lux, r.LuxRunID, base, res.Commit, trusted, repo.Name)
+		acc, accountErr := accountPublish(ctx, s.Lux, gh, r.LuxRunID, slug, repo.Name, baseBranch, base, res.Commit, trusted, untrusted, cmp)
 		if accountErr != nil {
 			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
+		}
+		if acc.Full != "" {
+			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
 		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
 			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)

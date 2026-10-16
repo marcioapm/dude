@@ -78,6 +78,13 @@ type accounting struct {
 	// A numstat said "-": a binary change, or one the checkout's
 	// attributes keep from being counted. Over any line limit.
 	Binary bool
+	// The evidence's lines by path, a rename's on its new name.
+	ByPath map[string]int
+	// The evidence's paths that numstat could not count.
+	binary map[string]bool
+	// Why the count is GitHub's whole comparison, nothing of the base left
+	// out; "" when the trusted base and the evidence were used.
+	Full string
 }
 
 // errAccountingTransient is an accounting that did not complete for a
@@ -127,6 +134,7 @@ func parseAccounting(text, start, head string) (accounting, error) {
 	}
 	tokens = tokens[1 : len(tokens)-2]
 	seen := map[string]bool{}
+	out.ByPath, out.binary = map[string]int{}, map[string]bool{}
 	unreadable := fmt.Errorf("publication accounting returned an unreadable record")
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
@@ -157,15 +165,17 @@ func parseAccounting(text, start, head string) (accounting, error) {
 			if len(p) != 3 {
 				return accounting{}, unreadable
 			}
-			if p[2] == "" {
+			path := p[2]
+			if path == "" {
 				i += 2
-				if i >= len(tokens) {
+				if i >= len(tokens) || tokens[i-1] == "" || tokens[i] == "" {
 					return accounting{}, unreadable
 				}
+				path = tokens[i]
 			}
 			for _, n := range p[:2] {
 				if n == "-" {
-					out.Binary = true
+					out.Binary, out.binary[path] = true, true
 					continue
 				}
 				v, err := strconv.Atoi(n)
@@ -173,6 +183,7 @@ func parseAccounting(text, start, head string) (accounting, error) {
 					return accounting{}, unreadable
 				}
 				out.Lines += v
+				out.ByPath[path] += v
 			}
 		}
 	}
