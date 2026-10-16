@@ -10,6 +10,8 @@ export interface DeciderLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
   readonly waiting?: string | undefined;
   /** One quiet action: hand the decisions back, or to the conductor. */
   readonly action?: ReactNode;
+  /** In place of the default words after who decides: what a message here does. */
+  readonly detail?: ReactNode;
 }
 
 /**
@@ -19,11 +21,13 @@ export interface DeciderLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * and colour when it is the conductor; Deliver's bolt when it is the
  * pipeline's fixed rules.
  */
-export function DeciderLine({ decider, waiting, action, className, ...rest }: DeciderLineProps) {
+export function DeciderLine({ decider, waiting, action, detail: said, className, ...rest }: DeciderLineProps) {
   const conductor = decider === "conductor";
   let detail: ReactNode;
   if (waiting) {
     detail = <>waiting on {conductor ? "it" : "the person"}: {waiting}</>;
+  } else if (said) {
+    detail = said;
   } else if (conductor) {
     detail = "each step that finishes comes back to it";
   } else {

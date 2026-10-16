@@ -18,6 +18,7 @@ import { TaskHistory } from "../../components/TaskHistory.tsx";
 import { ChatRunLine } from "../../components/ChatRunLine.tsx";
 import { StartChoice } from "../../components/StartChoice.tsx";
 import { DeciderLine } from "../../components/DeciderLine.tsx";
+import { DriverEnded, DriverGlyph, DriverSwitch } from "../../components/DriverMark.tsx";
 import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
@@ -510,6 +511,36 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="ch-driver"
+        title="Who drives a task"
+        note="DriverSwitch sits after the task's StatusMark in its header, on every tab: Deliver (the bolt), Conductor (its glyph in its role colour), or Deliver · conductor in Chat (both, the conductor muted: it answers, it decides nothing). Two stored values, three shown (driverMode). Neutral, never a tone: the status carries the colour. For the owner it is a button opening a radio menu, the current one ticked, each choice saying what changes; nothing running is stopped. For anyone else the same chip, read-only, its tooltip saying only the owner can change it. An ended task is DriverEnded, muted. A board card and a sidebar row in progress carry DriverGlyph, read-only, its words in the item's name."
+      >
+        <Panes mode={mode} surface>
+          {(theme) => (
+            <Col>
+              <States items={[
+                ["Deliver", <DriverSwitch mode="deliver" handedBack={false} canSwitch onSwitch={() => undefined} />],
+                ["Conductor", <DriverSwitch mode="conductor" handedBack={false} canSwitch onSwitch={() => undefined} />],
+                ["waiting on you", <DriverSwitch mode="conductor" waiting={{ point: "before_pull_request", on: "you" }} handedBack={false} canSwitch onSwitch={() => undefined} />],
+                ["Deliver · conductor in Chat", <DriverSwitch mode="deliver-chat" handedBack canSwitch onSwitch={() => undefined} />],
+                ["a member (read-only)", <DriverSwitch mode="deliver" handedBack={false} canSwitch={false} ownerName="Ana" onSwitch={() => undefined} />],
+                ["ended", <DriverEnded decider="conductor" />],
+                ["card / row glyphs", <Row><DriverGlyph mode="deliver" /><DriverGlyph mode="conductor" /><DriverGlyph mode="deliver-chat" /></Row>],
+              ]} />
+              <Label>the owner's switch, open (under Deliver, the fixer running)</Label>
+              <DriverMenuOpen theme={theme} />
+              <Label>Chat after Let Deliver finish it: messages are answered and take nothing back</Label>
+              <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+                <DeciderLine decider="policy" detail="you let Deliver finish it. Messages here are answered, and take no decisions back"
+                  action={<Button variant="quiet" size="sm" leadingIcon="conductor">Give decisions to the conductor</Button>} />
+                <ChatComposer mode="chat" sentAs="Ana" to={<>To <b>Conductor</b> · answers only, Deliver decides</>} onSubmit={() => undefined} />
+              </div>
+            </Col>
+          )}
+        </Panes>
+      </Block>
+
+      <Block
         id="ch-steer"
         title="Steer delivery"
         note="A steer lands at the agent's next step: the harness takes it while a tool runs, and the model reads it before its next call, in the same turn, the tool never cancelled. Until it is read it keeps the queued treatment — dashed bar, Queued mark, and one line saying where it lands (pendingReason): after the named running tool, at the next step, when the turn ends (a harness that reads only between turns), when the run resumes, when the agent starts. Interrupt now is always a named choice on the line, never a fallback. Read, it loses the queued treatment and sits where the agent read it — between the tool it waited for and the next one — with 'sent · read …, after Bash' in its header. An older lux reports only the handoff: 'delivered', no read time. Failed is a danger line with Retry."
@@ -705,6 +736,16 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+/** The owner's switch drawn open, in place, in its pane's theme. */
+function DriverMenuOpen({ theme }: { readonly theme: string }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  return (
+    <div ref={setHost} data-theme={theme} style={{ minHeight: 300, position: "relative" }}>
+      {host ? <DriverSwitch mode="deliver" running="fixer" handedBack={false} canSwitch onSwitch={() => undefined} open forceMount container={host} /> : null}
+    </div>
   );
 }
 

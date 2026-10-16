@@ -54,7 +54,7 @@ const AGE_HOURS: Record<TaskStatus, number> = {
 const SPENDS: ReadonlySet<TaskStatus> = new Set(["intake", "awaiting_confirmation", "running", "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted"]);
 
 let n = 2400;
-function wi(title: string, status: TaskStatus, opts: { people?: Person[]; sessions?: NavSession[]; runs?: number } = {}): NavTask {
+function wi(title: string, status: TaskStatus, opts: { people?: Person[]; sessions?: NavSession[]; runs?: number; driver?: NavTask["driver"] } = {}): NavTask {
   n += 1;
   const id = `wi_${n}`;
   const spread = ((n * 37) % 17) / 17 + 0.15;
@@ -72,7 +72,7 @@ function wi(title: string, status: TaskStatus, opts: { people?: Person[]; sessio
           { id: `${id}-r${opts.runs ?? 1}`, attempt: opts.runs ?? 1, status: status === "failed" ? ("failed" as const) : ("running" as const), sessions: opts.sessions },
         ]
       : undefined;
-  return { id, key: `WI-${n}`, title, status, people: opts.people, runs, statusSince, costUsd };
+  return { id, key: `WI-${n}`, title, status, people: opts.people, runs, statusSince, costUsd, ...(opts.driver ? { driver: opts.driver } : {}) };
 }
 
 export const navProjects: NavProject[] = [
@@ -86,6 +86,7 @@ export const navProjects: NavProject[] = [
         tasks: [
           wi("Add retry with backoff to the GitHub webhook handler", "awaiting_input", {
             people: [P["marcio"]!, P["ana"]!],
+            driver: "conductor",
             sessions: [
               ses("s_2401-orc", "conductor", "awaiting_input", "Should 4xx responses be retried?", [
                 ses("s_2401-inv", "investigator", "completed"),
@@ -94,9 +95,9 @@ export const navProjects: NavProject[] = [
               ]),
             ],
           }),
-          wi("Dedupe deliveries by X-GitHub-Delivery across restarts", "running", { people: [P["marcio"]!], sessions: crew("s_2402") }),
+          wi("Dedupe deliveries by X-GitHub-Delivery across restarts", "running", { people: [P["marcio"]!], sessions: crew("s_2402"), driver: "deliver" }),
           wi("Verify webhook signature before enqueueing", "ready_to_merge", { people: [P["ana"]!, P["marcio"]!, P["tom"]!, P["lin"]!] }),
-          wi("Replay endpoint for missed deliveries", "review", { people: [P["tom"]!] }),
+          wi("Replay endpoint for missed deliveries", "review", { people: [P["tom"]!], driver: "deliver-chat" }),
           wi("Surface delivery failures in the events ledger", "queued", { people: [P["ana"]!] }),
           wi("Alert on sustained 5xx from api.github.com", "done", { people: [P["marcio"]!] }),
         ],

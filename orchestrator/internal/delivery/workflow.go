@@ -1675,6 +1675,7 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
 	st.Candidate, st.PRFeedback = nil, nil
+	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	// Who reviewed an open pull request's older head is asked to look at
 	// the fix. Before opening any new pull request, so that nothing that
 	// opening parks on leaves the open ones unasked; a replay of this step

@@ -100,6 +100,8 @@ export { StartChoice } from "./StartChoice.tsx";
 export type { StartChoiceProps, StartOption } from "./StartChoice.tsx";
 export { DeciderLine } from "./DeciderLine.tsx";
 export type { DeciderLineProps } from "./DeciderLine.tsx";
+export { DECISION_POINT_SHORT, DriverChip, DriverEnded, DriverGlyph, DriverIcons, DriverSwitch, driverLabel, driverMode, driverWords, toConductorWords, toDeliverWords } from "./DriverMark.tsx";
+export type { DriverChipProps, DriverMode, DriverSwitchProps, DriverWaiting } from "./DriverMark.tsx";
 export { ChatProgress, progressFraction } from "./ChatProgress.tsx";
 export type { ChatProgressProps } from "./ChatProgress.tsx";
 export { StepList, StepRow } from "./StepList.tsx";

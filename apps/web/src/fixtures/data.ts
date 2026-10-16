@@ -269,10 +269,10 @@ export function navigationFor(scenario: ServerScenario): NavProject[] {
           tasks: [
             { id: "t_211", key: "WC-211", title: "Cart summary: show tax breakdown", status: "done", people: [P["u_ana"]!], statusSince: iso(3 * 24 * 60 * MIN), costUsd: 1.2 },
             { id: "t_212", key: "WC-212", title: "Address form: autocomplete with Places", status: "review", people: [P["u_tom"]!, P["u_ana"]!], statusSince: iso(5 * 60 * MIN), costUsd: 2.9,
-              pullRequests: [{ ...PULL_REQUEST, number: 480, display: "ci_running" }] },
+              driver: "deliver-chat", pullRequests: [{ ...PULL_REQUEST, number: 480, display: "ci_running" }] },
             { id: TASK_ID, key: "WC-214", title: task.title, status: task.status, people: [P["u_marcio"]!, P["u_ana"]!], statusSince: iso(40 * MIN), costUsd: 2.41, runs: [current],
-              ...(inReview ? { pullRequests: [PULL_REQUEST] } : {}) },
-            { id: "t_215", key: "WC-215", title: "Payment step: Apple Pay fallback", status: "awaiting_input", people: [P["u_lin"]!], statusSince: iso(20 * MIN), costUsd: 0.8, waitingFor: "the implementer asked which wallet to prefer" },
+              driver: "deliver", ...(inReview ? { pullRequests: [PULL_REQUEST] } : {}) },
+            { id: "t_215", key: "WC-215", title: "Payment step: Apple Pay fallback", status: "awaiting_input", people: [P["u_lin"]!], statusSince: iso(20 * MIN), costUsd: 0.8, waitingFor: "the implementer asked which wallet to prefer", driver: "conductor" },
             { id: "t_216", key: "WC-216", title: "Order confirmation e-mail template", status: "queued", people: [P["u_sam"]!], statusSince: iso(2 * 60 * MIN) },
             { id: "t_217", key: "WC-217", title: "Analytics: checkout funnel events", status: "received", statusSince: iso(30 * MIN) },
           ],
