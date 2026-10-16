@@ -1016,18 +1016,32 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		return s.fail(ctx, r, "the task's "+strings.TrimPrefix(reason, "its "))
 	}
 	spec.Workload.Attachments = images
+	if err := s.recordSubmitting(ctx, r, given); err != nil {
+		return s.retryLater(ctx, r, err)
+	}
 	// The dude Run id is the idempotency key: a submit that timed out and is
 	// retried returns the lux Run the first one created.
 	NamePool(ctx, s.Lux, machine)
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
-	if reason := PoolGone(err, machine); reason != "" {
+	// A refusal fails the Run, which was given nothing. A submit that may
+	// yet be retried keeps the copy: lux may have started the Run anyway.
+	failGiven := func(reason string) error {
+		if ferr := s.forgetSubmitting(ctx, r, given); ferr != nil {
+			s.Log.Warn("forgetting a refused submit's secret copy failed; the backstop deletes it", "run", r.ID, "error", ferr)
+		}
 		return s.fail(ctx, r, reason)
 	}
+	if reason := PoolGone(err, machine); reason != "" {
+		return failGiven(reason)
+	}
 	if reason := attachmentsRefused(err); reason != "" {
-		return s.fail(ctx, r, "the task's prompt: "+reason)
+		return failGiven("the task's prompt: " + reason)
+	}
+	if le, ok := lux.AsError(err); ok && !le.Retryable() {
+		return failGiven(fmt.Sprintf("lux refused the run: %s", le.Message))
 	}
 	if err != nil {
-		return s.retryOrFail(ctx, r, err, "lux refused the run")
+		return s.retryLater(ctx, r, err)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
@@ -1065,7 +1079,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		if err := s.recordGiven(ctx, tx, r, acceptedProjectSecrets(lr, given)); err != nil {
+		if err := s.recordGiven(ctx, tx, r, given, acceptedProjectSecrets(lr, given)); err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.lease.acquired", ledger.ActorSystem, map[string]any{"luxRunId": lr.ID})

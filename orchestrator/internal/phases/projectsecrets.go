@@ -182,18 +182,65 @@ func secretNames(list []lux.Secret) []string {
 	return names
 }
 
-// recordGiven records what a submitted Run was given: its names, its copy
-// of the values, and the one event naming them.
-func (s *Syncer) recordGiven(ctx context.Context, tx pgx.Tx, r phaseRun, given []lux.Secret) error {
-	if len(given) == 0 {
+// recordSubmitting records, committed before lux sees the spec, the names
+// and exact values a submit sends: lux may start the agent, and its output
+// reach dude, before Submit returns, and that output is redacted with these.
+// A value an earlier attempt of the same submit recorded is kept: lux
+// answers a retry with that attempt's Run when it got through, and a value
+// rotated since is still caught as the name's current one. A crash before
+// Submit leaves them on a pending Run, which the next attempt reuses; one
+// that ends unsubmitted loses them to ForgetSecretCopies.
+func (s *Syncer) recordSubmitting(ctx context.Context, r phaseRun, sent []lux.Secret) error {
+	if len(sent) == 0 {
 		return nil
 	}
-	names := secretNames(given)
-	if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, names); err != nil {
-		return err
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, secretNames(sent)); err != nil {
+			return err
+		}
+		for _, sec := range sent {
+			if _, err := tx.Exec(ctx, `INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ($1, $2, $3, $4)
+				ON CONFLICT (run_id, name) DO NOTHING`, r.ID, r.Org, sec.Name, sec.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// forgetSubmitting undoes recordSubmitting for a submit that failed for
+// good: the Run was given nothing.
+func (s *Syncer) forgetSubmitting(ctx context.Context, r phaseRun, sent []lux.Secret) error {
+	if len(sent) == 0 {
+		return nil
 	}
-	if err := replaceRunCopy(ctx, tx, r, given); err != nil {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = '{}' WHERE id = $1`, r.ID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM run_project_secrets WHERE run_id = $1`, r.ID)
 		return err
+	})
+}
+
+// recordGiven records what lux accepted of sent: the names and copy are
+// trimmed to it (a retried submit is answered with the first submit's Run),
+// and the one event names it.
+func (s *Syncer) recordGiven(ctx context.Context, tx pgx.Tx, r phaseRun, sent, accepted []lux.Secret) error {
+	if len(sent) == 0 {
+		return nil
+	}
+	names := secretNames(accepted)
+	if len(accepted) < len(sent) {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET project_secret_names = $2 WHERE id = $1`, r.ID, names); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM run_project_secrets WHERE run_id = $1 AND name <> ALL($2)`, r.ID, names); err != nil {
+			return err
+		}
+	}
+	if len(accepted) == 0 {
+		return nil
 	}
 	return s.event(ctx, tx, r, EvSecretsGiven, ledger.ActorSystem, map[string]any{"names": names})
 }

@@ -454,7 +454,10 @@ characters).
 as dude's own LLM key is. The Run records the names it was given
 (`runs.project_secret_names`, the header's "N secrets" chip and one
 `run.secrets.given` event, names only) and keeps a copy of the exact values
-(`run_project_secrets`) while its output may still need redacting. A change
+(`run_project_secrets`) while its output may still need redacting. The
+names and copy are written before lux is asked to start the Run, so its
+first output is redacted with them, trimmed to what lux accepted, and
+dropped if lux refuses the submit. A change
 reaches Runs that start after it; a running one keeps what it has. A
 resume gives a Run the current value of every name it was given (never one
 added since) and replaces its copy; a name since removed, or no longer

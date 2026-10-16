@@ -12,14 +12,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // leaks are the value in the forms dude must catch.
@@ -170,5 +174,115 @@ func TestARotationMidRunStillRedactsTheValueTheRunWasGiven(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message' AND payload->>'text' LIKE 'Connected with [REDACTED:SNOWFLAKE_PASSWORD]%'`, review); n == 0 {
 		t.Error("the reply does not show the marker")
+	}
+}
+
+// emitsDuringSubmit is a lux that starts the agent before its submit
+// answers: inside Submit, the project's value is rotated and the agent
+// reports the value it was given through dude's tools.
+type emitsDuringSubmit struct {
+	lux.Client
+	w      *world
+	tools  string
+	value  string
+	copied map[string]string
+}
+
+func (c *emitsDuringSubmit) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	raw, _ := json.Marshal(spec)
+	c.copied = c.w.runCopy(key)
+	mustExec(c.w.t, c.w.owner, `UPDATE project_secrets SET value = 'impl-test-ROTATED-in-submit-000' WHERE project_id = $1`, c.w.project)
+	if status, body := c.w.callTool(c.tools, string(raw), "emit_event", `{"type":"progress","data":{"token":"`+c.value+`"}}`); status >= 300 {
+		c.w.t.Errorf("emit_event during submit: %d %s", status, body)
+	}
+	return c.Client.Submit(ctx, spec, key)
+}
+
+// Output reaching dude while lux is still answering the submit is
+// redacted with the value the Run was sent, though the project's value
+// was rotated before it came: the Run's copy exists before lux sees it.
+func TestOutputBeforeTheSubmitAnswersIsRedactedWithTheValueSent(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	early := &emitsDuringSubmit{Client: w.syncer.Lux, w: w, tools: tools.URL, value: implToken}
+	w.syncer.Lux = early
+	_, runID, _ := w.liveImplementer()
+	if early.copied["IMPL_TOKEN"] != implToken {
+		t.Errorf("when lux was asked, the Run's copy held %d values, want IMPL_TOKEN's", len(early.copied))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND payload::text LIKE '%' || $2 || '%'`, runID, implToken); n != 0 {
+		t.Errorf("%d events hold the value sent", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.custom.progress'
+		AND payload->'data'->>'token' = '[REDACTED:IMPL_TOKEN]'`, runID); n != 1 {
+		t.Errorf("%d progress events show the marker, want 1", n)
+	}
+	if evs := w.givenEvents(runID); len(evs) != 1 {
+		t.Errorf("%d run.secrets.given, want 1 after lux accepted", len(evs))
+	}
+}
+
+// acceptsLess answers a submit with a Run declaring none of the names in
+// drop, as lux answers a retry with the first attempt's Run.
+type acceptsLess struct {
+	lux.Client
+	drop string
+}
+
+func (c acceptsLess) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	lr, err := c.Client.Submit(ctx, spec, key)
+	lr.Spec.Secrets = slices.DeleteFunc(lr.Spec.Secrets, func(s lux.StoredSecret) bool { return s.Name == c.drop })
+	return lr, err
+}
+
+// The names and copy recorded before the submit shrink to what lux's Run
+// declares; the event names only those.
+func TestARunsCopyIsTrimmedToTheNamesLuxAccepted(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.grant("EVERYONE_KEY", everyoneKey, "implementer")
+	w.syncer.Lux = acceptsLess{Client: w.syncer.Lux, drop: "EVERYONE_KEY"}
+	_, runID, _ := w.liveImplementer()
+	if got := w.runCopy(runID); len(got) != 1 || got["IMPL_TOKEN"] != implToken {
+		t.Errorf("copy holds %v, want IMPL_TOKEN only", slices.Sorted(maps.Keys(got)))
+	}
+	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+		t.Errorf("names = %v", got)
+	}
+	if evs := w.givenEvents(runID); len(evs) != 1 || strings.Contains(evs[0], "EVERYONE_KEY") {
+		t.Errorf("run.secrets.given = %v", evs)
+	}
+}
+
+// refusesSubmit is a lux refusing every submit for good.
+type refusesSubmit struct{ lux.Client }
+
+func (refusesSubmit) Submit(context.Context, lux.Spec, string) (lux.Run, error) {
+	return lux.Run{}, &lux.Error{Status: 422, Code: "invalid_spec", Message: "spec refused"}
+}
+
+// A submit lux refuses fails the Run, which keeps no names and no copy.
+func TestARefusedSubmitLeavesNoCopy(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.syncer.Lux = refusesSubmit{w.syncer.Lux}
+	task := w.task()
+	w.deliver(task)
+	var runID string
+	w.until("the implementer failed", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, task).Scan(&runID)
+		return runID != ""
+	})
+	if got := w.runCopy(runID); len(got) != 0 {
+		t.Errorf("a refused Run keeps a copy of %v", slices.Sorted(maps.Keys(got)))
+	}
+	if got := w.givenNames(runID); len(got) != 0 {
+		t.Errorf("a refused Run records %v", got)
+	}
+	if evs := w.givenEvents(runID); len(evs) != 0 {
+		t.Errorf("a refused Run wrote %d run.secrets.given", len(evs))
 	}
 }
