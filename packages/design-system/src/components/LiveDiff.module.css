@@ -380,6 +380,18 @@
   gap: var(--ds-space-8);
 }
 @media (max-width: 640px) {
+  /* The file list above the diff, one scroll for both: beside it, it leaves the lines and their comments a
+     few characters wide, and with a scroll of its own it takes what little height a phone leaves the diff. */
+  .body {
+    display: block;
+    overflow: auto;
+  }
+  .files {
+    max-height: 30vh;
+  }
+  .diffs {
+    overflow: visible;
+  }
   .after,
   .dragHint {
     padding-left: var(--ds-space-8);

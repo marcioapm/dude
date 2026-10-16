@@ -216,6 +216,15 @@ describe("general feedback, the tray and the submit", () => {
     await until(() => (page.querySelectorAll("[data-testid=fb-tray]").length === 0 ? true : null), "no tray");
   });
 
+  test("a failed read is shown, and the tab does not claim there is no feedback", async () => {
+    const client = new FeedbackClient();
+    client.feedback = () => Promise.reject(new ApiError(503, "unavailable", "The feedback service did not answer."));
+    const page = await taskPage(client, "feedback");
+    const problem = await until(() => page.querySelector("[data-testid=feedback-problem]"), "the problem");
+    expect(problem.textContent).toContain("The feedback service did not answer.");
+    expect(page.textContent).not.toContain("No feedback on this attempt yet");
+  });
+
   test("Resolve on a card acts on that item and the tab moves it", async () => {
     const client = new FeedbackClient();
     client.feedbackItems.push(item({ id: "o1", body: "Rename it" }));

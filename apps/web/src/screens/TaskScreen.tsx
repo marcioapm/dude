@@ -759,7 +759,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
-                    feedbackHolds={feedback.blocking} onShowFeedback={() => pickTab("feedback")}>
+                    feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
                         factActions={actions.facts} factUnder={actions.under}
@@ -840,7 +840,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {earlier ? (
             <EarlierFeedbackTab client={client} task={item} fb={feedback} shown={shown} current={current} version={version} onCurrent={() => pickAttempt(current)} />
           ) : (
-            <FeedbackTab task={item} fb={feedback} items={feedback.items} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
+            <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
               onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined} />
           )}
         </TabPanel>

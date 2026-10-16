@@ -256,11 +256,14 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   const scroller = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!follow || fresh.lines.size === 0) return;
-    const box = scroller.current;
-    const marks = box?.querySelectorAll<HTMLElement>("[data-fresh]");
+    const diffs = scroller.current;
+    const marks = diffs?.querySelectorAll<HTMLElement>("[data-fresh]");
     const last = marks?.[marks.length - 1];
+    // On a narrow screen the file list and the diff scroll as one, in the body around them.
+    const box = diffs && getComputedStyle(diffs).overflowY === "visible" ? diffs.parentElement : diffs;
     if (box && last) {
-      box.scrollTo({ top: Math.max(0, last.offsetTop - box.clientHeight / 3), behavior: "smooth" });
+      const top = last.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      box.scrollTo({ top: Math.max(0, top - box.clientHeight / 3), behavior: "smooth" });
     }
   }, [follow, fresh]);
 

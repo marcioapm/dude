@@ -32,6 +32,8 @@ export interface TaskFeedbackController {
   readonly drafts: ReadonlyArray<FeedbackItem>;
   /** Submitted items of the current attempt that hold the merge, as the API counts them. */
   readonly blocking: number;
+  /** Whether the list has been read at least once: before that, `blocking` is not known. */
+  readonly loaded: boolean;
   readonly onDiff: FeedbackOnDiff;
   readonly reload: () => void;
   /** The draft open in its editor on the Feedback tab. */
@@ -49,7 +51,7 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
   onShowInDiff: (runId: string) => void;
   onShowOnTab: () => void;
 }): TaskFeedbackController {
-  const { list, reload, problem } = useTaskFeedback(client, taskId, undefined, version);
+  const { list, loaded, reload, problem } = useTaskFeedback(client, taskId, undefined, version);
   const [editing, setEditing] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [focus, setFocus] = useState<FeedbackOnDiff["focus"]>(null);
@@ -93,7 +95,7 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
     latest.current.onShowInDiff(runId);
   }, []);
 
-  return { items: list.feedback, drafts, blocking: list.blocking, problem, onDiff, reload: () => void reload(), editing, setEditing, highlight, showInDiff };
+  return { items: list.feedback, drafts, blocking: list.blocking, loaded, problem, onDiff, reload: () => void reload(), editing, setEditing, highlight, showInDiff };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,15 +179,18 @@ export function MergeHoldChip({ count, onOpen }: { count: number; onOpen: () => 
 export function EarlierFeedbackTab({ client, task, fb, shown, current, version, onCurrent }: {
   client: ApiClient; task: TaskDetail; fb: TaskFeedbackController; shown: number; current: number; version: number; onCurrent: () => void;
 }) {
-  const { list } = useTaskFeedback(client, task.id, shown, version);
-  return <FeedbackTab task={task} fb={fb} items={list.feedback} earlier shown={shown} current={current} onCurrent={onCurrent} />;
+  const { list, loaded, problem } = useTaskFeedback(client, task.id, shown, version);
+  return <FeedbackTab task={task} fb={fb} items={list.feedback} loaded={loaded} problem={problem} earlier shown={shown} current={current} onCurrent={onCurrent} />;
 }
 
-export function FeedbackTab({ task, fb, items, earlier, shown, current, onCurrent, onStopped }: {
+export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, earlier, shown, current, onCurrent, onStopped }: {
   task: TaskDetail;
   fb: TaskFeedbackController;
   /** The attempt shown's items: the current one's (`fb.items`), or an earlier one's. */
   items: ReadonlyArray<FeedbackItem>;
+  /** Whether `items` has been read; with `problem`, why the last read failed. */
+  loaded: boolean;
+  problem: string | null;
   earlier: boolean;
   shown: number;
   current: number;
@@ -253,6 +258,11 @@ export function FeedbackTab({ task, fb, items, earlier, shown, current, onCurren
       </PageRail>
     }>
       <div className="taskPane feedbackPane" data-testid="feedback-tab">
+        {readProblem ? (
+          <Callout tone="danger" data-testid="feedback-problem">
+            <b>Could not read this attempt's feedback.</b> {readProblem}
+          </Callout>
+        ) : null}
         {earlier ? (
           <Callout tone="neutral" data-testid="feedback-earlier">
             <span className="feedbackLine">
@@ -297,7 +307,8 @@ export function FeedbackTab({ task, fb, items, earlier, shown, current, onCurren
         ) : null}
 
         {submitted.length === 0 ? (
-          drafts.length > 0 ? null : (
+          // Unread or unreadable is not "no feedback".
+          drafts.length > 0 || !loaded || readProblem ? null : (
             <FeedbackEmpty description={readOnly ? "Nobody gave this attempt feedback."
               : <>Comment on lines in a Run's <b>Changes</b> (Sessions › a Run › Changes), or write general feedback above. What you write is a private draft until you submit it; then it goes to whoever drives the task, and holds the merge until it is handled.</>} />
           )
