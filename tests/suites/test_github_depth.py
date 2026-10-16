@@ -276,7 +276,9 @@ def test_the_fakes_compare_lists_a_rename_as_removed_plus_added(fake_github: Fak
     listing = fake_github._git_out("ls-tree", "refs/heads/main").replace("\tREADME.md", "\tGUIDE.md")
     tree = subprocess.run(["git", "mktree"], cwd=fake_github.bare, input=listing + "\n", text=True,
                           capture_output=True, check=True).stdout.strip()
-    sha = fake_github._git_out("commit-tree", tree, "-p", "refs/heads/main", "-m", "move the readme")
+    sha = fake_github._git_out("commit-tree", tree, "-p", "refs/heads/main", "-m", "move the readme",
+                               env={"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@example.com",
+                                    "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "t@example.com"})
     fake_github._git_out("update-ref", "refs/heads/moved", sha)
     resp = requests.get(f"{fake_github.api_url}/repos/{fake_github.owner}/{fake_github.repo}/compare/main...moved", timeout=10)
     assert resp.status_code == 200, resp.text
