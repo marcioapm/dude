@@ -536,6 +536,38 @@ func TestTwoConflictingPullRequestsAreIntegratedInTurn(t *testing.T) {
 	}
 }
 
+// Two conflicts reach the workflow in one batch: the one it takes first
+// has nothing to integrate after all (GitHub reads it merging now), so the
+// step goes back to waiting with the other still queued. The workflow
+// integrates that one by itself: no sync and no signal follows.
+func TestAQueuedConflictIsIntegratedWithoutASignal(t *testing.T) {
+	w := newWorld(t)
+	wi := w.twoConflictingPullRequests()
+	// The batch's last conflict is the one taken first; the others queue.
+	var first string
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->>'repo' FROM workflow_signals
+		WHERE workflow_run_id = (SELECT id FROM workflow_runs WHERE task_id = $1) AND consumed_at IS NULL
+		AND payload->>'kind' = 'conflict' ORDER BY received_at DESC, id DESC LIMIT 1`, wi).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	taken, queued := w.gh, "web"
+	if first == "web" {
+		taken, queued = w.web, "target"
+	}
+	// GitHub is working its mergeability out again: not a conflict to
+	// integrate now.
+	taken.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.until("the queued conflict's integration Run", func() bool {
+		if r := w.escalationReason(wi); r != "" {
+			t.Fatalf("escalated: %s", r)
+		}
+		return w.count(integrationRuns+` AND pr_feedback::text LIKE '%in `+queued+`.%'`, wi) == 1
+	})
+	if n := w.count(integrationRuns, wi); n != 1 {
+		t.Fatalf("integration Runs %d, want the queued conflict's alone", n)
+	}
+}
+
 // A sibling whose pull request merged while the first integration ran is
 // not integrated: its queued conflict is dropped, and nothing escalates.
 func TestAQueuedConflictOnAMergedSiblingIsSkipped(t *testing.T) {

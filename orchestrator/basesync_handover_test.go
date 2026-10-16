@@ -552,6 +552,49 @@ func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
 	}
 }
 
+// As above, with nothing read from GitHub and no signal after the hand-over
+// is recorded: the step takes its pass on the hand-over without waiting for
+// a signal, and that pass writes the closing line, once.
+func TestAHandOverIsClosedByTheWorkflowAloneWithoutASignal(t *testing.T) {
+	w := newWorld(t)
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step == "openPullRequest" && next == "awaitPullRequest" {
+			once.Do(func() {
+				w.mergesCleanly()
+				w.sync()
+			})
+		}
+	})
+	wi := w.handedOverWithout(func() { armed.Store(true) })
+	w.until("the closing line", func() bool { return w.count(integrationCompleted, wi) == 1 })
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d", n)
+	}
+}
+
+// handedOverWithout is handedOverWith(false, arm) with no pull request read
+// once the step's last read of GitHub is armed: what follows is the
+// workflow's alone.
+func (w *world) handedOverWithout(arm func()) string {
+	w.t.Helper()
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.conflictWithMovedBase()
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.until("validation reading GitHub", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
+			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
+	})
+	arm()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
+	return wi
+}
+
 // HandOverMergedTx runs while the step that records the hand-over is still
 // committing: it waits on the step's row lock on the delivery, then sees the
 // hand-over and writes the closing line.
