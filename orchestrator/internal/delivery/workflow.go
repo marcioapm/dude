@@ -995,29 +995,55 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		if err != nil {
 			return workflow.Result{}, err
 		}
+		settled := true
 		for _, p := range states {
 			if p.Repo != st.Integration.Repo || p.Number != st.Integration.Number || p.State == forge.StateClosed || p.State == forge.StateMerged {
 				continue
 			}
-			fresh, err := gh.PullRequest(ctx, p.Slug, p.Number)
+			ref, mergeable, err := gh.Mergeability(ctx, p.Slug, p.Number)
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			if fresh.State == forge.StateClosed || fresh.State == forge.StateMerged {
+			if ref.State == forge.StateClosed || ref.State == forge.StateMerged {
 				continue
 			}
-			if fresh.Mergeable == forge.MergeConflicting {
-				return w.integrationFailure(ctx, sc, st, "still conflicting after integration")
+			if mergeable == forge.MergeConflicting {
+				return w.integrationFailure(ctx, sc, st, reasonStillConflicting)
 			}
-			if fresh.Mergeable == forge.MergeUnknown {
-				return workflow.Result{Next: "openPullRequest", State: st, SleepUntil: time.Now().Add(time.Second)}, nil
+			if mergeable == forge.MergeUnknown {
+				if st.Integration.Polls < unknownMergeabilityPolls {
+					wait := min(time.Second<<st.Integration.Polls, time.Minute)
+					st.Integration.Polls++
+					return workflow.Result{Next: "openPullRequest", State: st, SleepUntil: time.Now().Add(wait)}, nil
+				}
+				// GitHub still has not said. The reading on record is the
+				// old head's: forgotten, so the pull request syncer's next
+				// conflicting read is news and signals this workflow, and
+				// the integrated head is recorded as attempted against this
+				// base, so that signal escalates rather than integrating again.
+				if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE pull_requests SET mergeable_state = 'unknown', updated_at = now()
+						WHERE id = $1 AND state IN ('open', 'draft')`, p.ID)
+					return err
+				}); err != nil {
+					return workflow.Result{}, err
+				}
+				after := *st.Integration
+				after.Head = st.Heads[after.Repo]
+				if st.IntegrationPairs == nil {
+					st.IntegrationPairs = map[string]string{}
+				}
+				st.IntegrationPairs[after.pair()] = st.Integration.RunID
+				settled = false
 			}
 		}
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
 			return workflow.Result{}, err
 		}
-		if err := w.integrationEvent(ctx, sc, st, "integration-completed", map[string]any{"head": st.Heads[st.Integration.Repo]}); err != nil {
-			return workflow.Result{}, err
+		if settled {
+			if err := w.integrationEvent(ctx, sc, st, "integration-completed", map[string]any{"head": st.Heads[st.Integration.Repo]}); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 		st.Integration, st.PRFeedback = nil, nil
 	}
@@ -1200,7 +1226,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
 			if st.Integration != nil {
-				return w.integrationFailure(ctx, sc, st, "this head/base pair was already attempted")
+				return w.integrationFailure(ctx, sc, st, reasonPairAttempted)
 			}
 			gh, err := w.forges.For(ctx, sc.OrganizationID)
 			if err != nil {

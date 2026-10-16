@@ -855,3 +855,112 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 		t.Fatal("the retry changed the person's fix budget")
 	}
 }
+
+// While GitHub has not worked out whether the integrated pull request
+// merges, the step reads GET /pulls/{n} and nothing else, backing off
+// (1 s, 2 s, 4 s…). Past its bound it waits on the pull request syncer: a
+// conflict that syncer reads then escalates the attempted pair.
+func TestUnknownMergeabilityIsReadCheaplyWithBackOffThenLeftToTheSyncer(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	integrations := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrations, wi) == 1 })
+	var other atomic.Int32
+	var counting atomic.Bool
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.MergeableUnknown[1] = true
+		s.Intercept = func(r *http.Request) int {
+			if counting.Load() && !(r.Method == "GET" && r.URL.Path == "/repos/acme/target/pulls/1") {
+				other.Add(1)
+			}
+			return 0
+		}
+	})
+	polls := func(n int) string {
+		return fmt.Sprintf(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
+			AND (state->'integration'->>'polls')::int = %d`, n)
+	}
+	w.until("the first read", func() bool { return w.count(polls(1), wi) == 1 })
+	counting.Store(true)
+	w.until("the second read", func() bool { return w.count(polls(2), wi) == 1 })
+	if n := w.count(polls(2)+` AND wake_at > now() + interval '1500 milliseconds'`, wi); n != 1 {
+		t.Fatal("the second wait did not double")
+	}
+	counting.Store(false)
+	if n := other.Load(); n != 0 {
+		t.Fatalf("%d GitHub requests besides GET /pulls/1 while mergeability was unknown", n)
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
+	w.until("waiting on the pull request", func() bool {
+		// The push's webhook: the syncer reads mergeability as unknown.
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'
+			AND state->'integration' IS NULL`, wi) == 1
+	})
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatalf("escalated while GitHub had not said: %s", r)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+	w.until("the attempted pair's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	if n := w.count(integrations, wi); n != 1 {
+		t.Fatalf("integration Runs %d", n)
+	}
+}
+
+// A conductor's publish from the task's head reads no branch named by a
+// commit (GET /git/ref/heads/<sha> is a 404 every time).
+func TestAConductorPublishReadsNoBranchNamedByACommit(t *testing.T) {
+	e, _ := newCommitted(t)
+	var shaReads atomic.Int32
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			if isBranchRead(r) && len(name) == 40 && strings.Trim(name, "0123456789abcdef") == "" {
+				shaReads.Add(1)
+			}
+			return 0
+		}
+	})
+	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	if n := shaReads.Load(); n != 0 {
+		t.Fatalf("%d branch reads by commit", n)
+	}
+}
+
+// Starting an integration reads only GET /pulls/{n}: no checks, reviews or
+// compare, and no second read of its head.
+func TestStartingAnIntegrationReadsThePullRequestOnce(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.sync()
+	var reads, other atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			switch {
+			case r.Method == "GET" && r.URL.Path == "/repos/acme/target/pulls/1":
+				reads.Add(1)
+			case r.Method == "GET" && strings.Contains(r.URL.Path, "/pulls/1/"), strings.Contains(r.URL.Path, "/commits/"),
+				strings.Contains(r.URL.Path, "/compare/"):
+				other.Add(1)
+			}
+			return 0
+		}
+	})
+	w.until("the integration Run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi) == 1
+	})
+	// One read to decide (prepareIntegration), one for where the fix starts
+	// (prFix's fromPullRequestHeads, as every PR fix does).
+	if r, o := reads.Load(), other.Load(); r != 2 || o != 0 {
+		t.Fatalf("GET /pulls/1 %d times, %d reads of its checks, reviews or compare", r, o)
+	}
+}

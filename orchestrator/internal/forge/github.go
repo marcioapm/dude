@@ -601,6 +601,17 @@ func (g *GitHub) readReviews(ctx context.Context, slug string, number int, p ghP
 // base: GitHub computes mergeability lazily, so right after a push it is
 // null — unknown, not clean — and the next read (a webhook will prompt one)
 // has it.
+// Mergeability is a pull request's state, head and whether it merges, from
+// GET /pulls/{n} alone: no checks, reviews, compare or threads. Behind is
+// not told apart from clean.
+func (g *GitHub) Mergeability(ctx context.Context, slug string, number int) (PullRequestRef, string, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return PullRequestRef{}, "", err
+	}
+	return p.ref(), mergeable(p.Mergeable, p.MergeableState, 0), nil
+}
+
 func mergeable(ok *bool, state string, behindBy int) string {
 	switch {
 	case state == "dirty" || ok != nil && !*ok:

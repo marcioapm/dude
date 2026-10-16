@@ -90,7 +90,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if run := st.IntegrationPairs[i.pair()]; run != "" {
 			i.RunID = run
 			st.Integration = i
-			r, e := w.integrationFailure(ctx, sc, st, "this head/base pair was already attempted")
+			r, e := w.integrationFailure(ctx, sc, st, reasonPairAttempted)
 			return r, true, e
 		}
 		merged, e := gh.MergeBase(ctx, slug, st.Branch, bh)
@@ -133,7 +133,21 @@ type Integration struct {
 	Published bool   `json:"published,omitempty"`
 	MergeSHA  string `json:"mergeSha,omitempty"`
 	BeforePR  bool   `json:"beforePr,omitempty"`
+	// Reads of the pull request after the integration published that
+	// found GitHub had not worked its mergeability out yet.
+	Polls int `json:"polls,omitempty"`
 }
+
+// unknownMergeabilityPolls bounds those reads, 1 s apart and doubling up
+// to a minute (about four minutes in all); past it the pull request
+// syncer's reads take over.
+const unknownMergeabilityPolls = 8
+
+// Why an integration escalated, as the escalation's error says it.
+const (
+	reasonStillConflicting = "still conflicting after integration"
+	reasonPairAttempted    = "this head/base pair was already attempted"
+)
 
 func (i *Integration) pair() string { return i.Repo + ":" + i.Head + ":" + i.BaseHead }
 func (i *Integration) brief() string {
@@ -217,11 +231,14 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 	maps.Copy(payload, extra)
 	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		// The workflow's step lease admits one runner of this step at a
-		// time, which is what makes this read-then-append write once.
+		// time, which is what makes this read-then-append write once. The
+		// type and correlation narrow it to the integration's own events
+		// (events_correlation_idx), not every event of the task.
 		var seen bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
-				AND payload->>'action' = $3 AND payload->>'attempt' = $4)`,
-			st.TaskID, EvPullRequestAction, action, payload["attempt"]).Scan(&seen); err != nil || seen {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+				AND event_type = 'pull_request.action' AND correlation_id = $1
+				AND payload->>'action' = $2 AND payload->>'attempt' = $3)`,
+			st.TaskID, action, payload["attempt"]).Scan(&seen); err != nil || seen {
 			return err
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID,
@@ -264,17 +281,15 @@ func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext,
 		if err != nil {
 			return false, err
 		}
-		fresh, e := gh.PullRequest(ctx, p.Slug, p.Number)
+		// One GET /pulls/{n}: its state, head and mergeability.
+		fresh, mergeable, e := gh.Mergeability(ctx, p.Slug, p.Number)
 		if e != nil {
 			return false, e
 		}
-		if fresh.State == forge.StateClosed || fresh.State == forge.StateMerged || fresh.Mergeable != forge.MergeConflicting {
+		if fresh.State == forge.StateClosed || fresh.State == forge.StateMerged || mergeable != forge.MergeConflicting {
 			return false, nil
 		}
-		head, e := gh.Head(ctx, p.Slug, p.Number)
-		if e != nil {
-			return false, e
-		}
+		head := fresh.HeadSHA
 		base := st.BaseFor(repo)
 		bh, e := gh.BranchSHA(ctx, p.Slug, base)
 		if e != nil {
