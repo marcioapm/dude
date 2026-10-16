@@ -46,7 +46,7 @@ func newAdvancing(t *testing.T) *advancing {
 }
 
 func (a *advancing) advance() (advanced, error) {
-	return advanceBranch(context.Background(), a.gh, "acme/target", "task", "main", a.start, a.commit)
+	return advanceBranch(context.Background(), a.gh, "acme/target", "task", "main", a.start, a.commit, true)
 }
 
 func TestAWriterIsMergedInOnlyOverMergesOfTheBase(t *testing.T) {

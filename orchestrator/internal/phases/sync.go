@@ -2048,7 +2048,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if acc.Full != "" {
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
-		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit)
+		// A phase keeps no merge marker: a finish retried after a lost
+		// answer may find its own merge of res.Commit.
+		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit, true)
 		if err != nil {
 			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}

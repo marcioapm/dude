@@ -67,7 +67,11 @@ func (e *errUnsafeMerge) Error() string {
 // GitHub's merges endpoint takes no expected head: a branch that moves
 // between the judgement and the merge is judged again from the merge's
 // first parent, and an error says so when that is not only base merges.
-func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, beforeMerge ...func() error) (advanced, error) {
+//
+// A head that is already a merge of commit is adopted only when attempted:
+// the caller may have sent that merge itself. Otherwise someone else made
+// it, and it is refused like any other move.
+func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted bool, beforeMerge ...func() error) (advanced, error) {
 	refusal := gh.FastForward(ctx, slug, branch, commit)
 	if refusal == nil || !notFastForward(refusal) || start == "" || baseBranch == "" {
 		return advanced{Head: commit}, refusal
@@ -83,7 +87,7 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 		return advanced{}, refusal
 	case err != nil:
 		return advanced{}, err
-	case !j.only:
+	case !j.only, j.own && !attempted:
 		return advanced{}, refusal
 	case j.own:
 		// commit merged already, by an attempt whose answer was lost.
@@ -222,7 +226,7 @@ func baseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 			return judgement{}, err
 		}
 		if !pure {
-			return judgement{}, &errUnsafeMerge{merge: at, first: ps[0], second: ps[1], expected: start}
+			return judgement{}, nil
 		}
 		in, err := gh.Compare(ctx, slug, ps[1], baseBranch)
 		if err != nil || in.BehindBy > 0 {
