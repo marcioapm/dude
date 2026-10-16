@@ -12,6 +12,18 @@ import (
 const integrationBrief = "Base integration: this branch conflicts with `main` in target. Call sync_base, then " +
 	"`git merge lux/main`. Resolve every conflict keeping both sides' intent."
 
+// briefRecording is integrationBrief with the base head it records.
+func briefRecording(head string) string {
+	return integrationBrief + " The recorded base head is " + head + "."
+}
+
+// setScriptFetchWait sets each of the script's waits for the fetch for the
+// test.
+func setScriptFetchWait(t *testing.T, wait time.Duration) {
+	scriptFetchWait = wait
+	t.Cleanup(func() { scriptFetchWait = SyncBaseRetryFor / 2 })
+}
+
 // conflict is a checkout of a task branch whose FACTORY.md conflicts with
 // main's, as lux checks one out: the task's work at HEAD, the base on
 // origin's main, and nothing at lux/main until a fetch. Its git runs there.
@@ -22,25 +34,28 @@ type conflict struct {
 
 func newConflict(t *testing.T) *conflict {
 	c := &conflict{t: t, work: t.TempDir()}
-	write := func(content string) {
-		if err := os.WriteFile(filepath.Join(c.work, "FACTORY.md"), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	c.git("init", "-q", "-b", "main")
-	write("original\n")
+	c.write("original\n")
 	c.git("add", ".")
 	c.git("commit", "-qm", "seed")
 	c.git("switch", "-qc", "task")
-	write("task intent\n")
+	c.write("task intent\n")
 	c.git("commit", "-qam", "task")
 	c.git("switch", "-q", "main")
-	write("base intent\n")
+	c.write("base intent\n")
 	c.git("commit", "-qam", "base")
 	c.base = c.git("rev-parse", "HEAD")
 	c.git("update-ref", "refs/remotes/origin/main", "main")
 	c.git("switch", "-q", "task")
 	return c
+}
+
+// write sets the checkout's FACTORY.md to content.
+func (c *conflict) write(content string) {
+	c.t.Helper()
+	if err := os.WriteFile(filepath.Join(c.work, "FACTORY.md"), []byte(content), 0o644); err != nil {
+		c.t.Fatal(err)
+	}
 }
 
 func (c *conflict) git(args ...string) string {
@@ -130,7 +145,7 @@ func TestTheIntegrationScriptMergesTheBaseKeepingBothSides(t *testing.T) {
 	}
 	c := newConflict(t)
 	task := c.git("rev-parse", "HEAD")
-	brief := integrationBrief + " The recorded base head is " + c.base + "."
+	brief := briefRecording(c.base)
 	if calls := c.play(IntegrationScript(brief, c.work), func(int) { c.fetch() }); calls != 1 {
 		t.Fatalf("sync_base called %d times for a fetch reported at once", calls)
 	}
@@ -141,11 +156,10 @@ func TestTheIntegrationScriptMergesTheBaseKeepingBothSides(t *testing.T) {
 // yet when the script would merge. It waits for the fetch, and merges the
 // base once it lands, rather than failing a merge of nothing.
 func TestTheIntegrationScriptWaitsForAFetchReportedLate(t *testing.T) {
-	scriptFetchWait = 10 * time.Second
-	t.Cleanup(func() { scriptFetchWait = SyncBaseRetryFor / 2 })
+	setScriptFetchWait(t, 10*time.Second)
 	c := newConflict(t)
 	task := c.git("rev-parse", "HEAD")
-	brief := integrationBrief + " The recorded base head is " + c.base + "."
+	brief := briefRecording(c.base)
 	calls := c.play(IntegrationScript(brief, c.work), func(int) {
 		time.AfterFunc(1500*time.Millisecond, c.fetch)
 	})
@@ -160,12 +174,11 @@ func TestTheIntegrationScriptWaitsForAFetchReportedLate(t *testing.T) {
 // script waits for the recorded head, and when the first fetch never lands
 // calls sync_base again and merges what that one brings.
 func TestTheIntegrationScriptCallsSyncBaseAgainWhenTheFetchNeverLands(t *testing.T) {
-	scriptFetchWait = 2 * time.Second
-	t.Cleanup(func() { scriptFetchWait = SyncBaseRetryFor / 2 })
+	setScriptFetchWait(t, 2*time.Second)
 	c := newConflict(t)
 	task := c.git("rev-parse", "HEAD")
 	c.git("update-ref", "refs/remotes/lux/main", "main~1")
-	brief := integrationBrief + " The recorded base head is " + c.base + "."
+	brief := briefRecording(c.base)
 	calls := c.play(IntegrationScript(brief, c.work), func(call int) {
 		if call == 2 {
 			c.fetch()
@@ -182,23 +195,20 @@ func TestTheIntegrationScriptCallsSyncBaseAgainWhenTheFetchNeverLands(t *testing
 // that is not the one recorded. Once both waits run out the script merges
 // nothing, so the Run publishes nothing and ends in no_merge.
 func TestTheIntegrationScriptMergesNothingWhenNoFetchLands(t *testing.T) {
-	scriptFetchWait = time.Second
-	t.Cleanup(func() { scriptFetchWait = SyncBaseRetryFor / 2 })
+	setScriptFetchWait(t, time.Second)
 	c := newConflict(t)
 	task := c.git("rev-parse", "HEAD")
 	stale := c.base
 	c.git("update-ref", "refs/remotes/lux/main", stale)
 	c.git("switch", "-q", "main")
-	if err := os.WriteFile(filepath.Join(c.work, "FACTORY.md"), []byte("later base intent\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	c.write("later base intent\n")
 	c.git("commit", "-qam", "later base")
 	recorded := c.git("rev-parse", "HEAD")
 	c.git("switch", "-q", "task")
 	if out, err := exec.Command("git", "-C", c.work, "merge-tree", "--write-tree", "HEAD", stale).CombinedOutput(); err == nil {
 		t.Fatalf("the stale lux/main merges cleanly, want a conflict: %s", out)
 	}
-	brief := integrationBrief + " The recorded base head is " + recorded + "."
+	brief := briefRecording(recorded)
 	if calls := c.play(IntegrationScript(brief, c.work), func(int) {}); calls != 2 {
 		t.Fatalf("sync_base called %d times, want two", calls)
 	}

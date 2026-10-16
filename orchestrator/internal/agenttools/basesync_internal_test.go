@@ -34,6 +34,20 @@ func syncReport(id int64, res lux.SyncResult) lux.Frame {
 
 var targetMain = []lux.SyncRef{{Repo: "target", Ref: "main", Mode: lux.SyncFetch}}
 
+// fetchingCaller is Run r1 on lux l, whose fetch lux accepts and does not
+// report within sync_base's 50 ms bound.
+func fetchingCaller(l lux.Client) Caller {
+	return Caller{RunID: "r1", env: env{lux: l, syncBaseWait: 50 * time.Millisecond,
+		syncBase: func(context.Context, string, string, string, string, []lux.SyncRef) error { return nil }}}
+}
+
+// targetAsk is r1's fetch of target's main, a writer that is not an
+// integration.
+func targetAsk() baseAsk {
+	return baseAsk{LuxRunID: "lr1", Refs: targetMain, Names: map[string]string{"target": "target"},
+		Recorded: map[string]string{}}
+}
+
 // Reports that are not an earlier landed fetch of this Run's base: none
 // is counted, nor masks one that is. want is lux's To by repository.
 func TestLandedEarlierCountsOnlyThisRunsLandedFetchOfTheBase(t *testing.T) {
@@ -82,10 +96,7 @@ func TestLandedEarlierCountsOnlyThisRunsLandedFetchOfTheBase(t *testing.T) {
 func TestSyncBaseSaysAnAnswerIsAnEarlierCallsReport(t *testing.T) {
 	l := &eventsLux{frames: []lux.Frame{syncReport(1, lux.SyncResult{Repo: "target", Ref: "main",
 		RequestID: "base-r1-1", Status: "fetched", To: "aaa111", Behind: 3, Ahead: 2})}}
-	c := Caller{RunID: "r1", env: env{lux: l, syncBaseWait: 50 * time.Millisecond,
-		syncBase: func(context.Context, string, string, string, string, []lux.SyncRef) error { return nil }}}
-	out, err := fetchBase(context.Background(), c, baseAsk{LuxRunID: "lr1", Refs: targetMain,
-		Names: map[string]string{"target": "target"}, Recorded: map[string]string{}})
+	out, err := fetchBase(context.Background(), fetchingCaller(l), targetAsk())
 	if err != nil || len(out.Repositories) != 1 {
 		t.Fatalf("answered %+v (%v)", out, err)
 	}
@@ -118,10 +129,6 @@ func (l *hangingLux) Events(ctx context.Context, _ string, after int64) ([]lux.F
 func TestSyncBaseAnswersWithinItsBoundWhenLuxHangs(t *testing.T) {
 	l := &hangingLux{frames: []lux.Frame{syncReport(1, lux.SyncResult{Repo: "target", Ref: "main",
 		RequestID: "base-r1-1", Status: "fetched", To: "aaa111", Behind: 1})}}
-	c := Caller{RunID: "r1", env: env{lux: l, syncBaseWait: 50 * time.Millisecond,
-		syncBase: func(context.Context, string, string, string, string, []lux.SyncRef) error { return nil }}}
-	ask := baseAsk{LuxRunID: "lr1", Refs: targetMain, Names: map[string]string{"target": "target"},
-		Recorded: map[string]string{}}
 	type result struct {
 		out syncBaseOut
 		err error
@@ -129,7 +136,7 @@ func TestSyncBaseAnswersWithinItsBoundWhenLuxHangs(t *testing.T) {
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		out, err := fetchBase(context.Background(), c, ask)
+		out, err := fetchBase(context.Background(), fetchingCaller(l), targetAsk())
 		done <- result{out, err}
 	}()
 	select {

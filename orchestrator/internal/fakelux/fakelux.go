@@ -1852,13 +1852,12 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// merge a lux/<base> that is missing or old.
 		deadline := time.Now().Add(cmp.Or(s.SyncBaseRetryFor, fakeagent.SyncBaseRetryFor))
 		for time.Now().Before(deadline) {
-			wait := fakeagent.SyncBaseRetryEvery
+			var wait time.Duration
 			switch {
 			case status == 422 && strings.Contains(string(body), "container is not running"):
 				wait = 20 * time.Millisecond
 			case status == 200 && fakeagent.SyncBasePending(body):
-			default:
-				wait = 0
+				wait = fakeagent.SyncBaseRetryEvery
 			}
 			if wait == 0 {
 				break

@@ -123,10 +123,7 @@ func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
 // base and publishes the merge.
 func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
-		SyncBase: w.syncer.SyncBase, SyncBaseWait: 50 * time.Millisecond}).Handler())
-	t.Cleanup(tools.Close)
-	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
+	w.toolsWithSyncWaiting(50 * time.Millisecond)
 	wi := w.reviewing()
 	branch := w.gh.Pull(1).Head
 	w.lux.HoldSyncs = true
@@ -182,10 +179,7 @@ func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 // publishes nothing and escalates no_merge, with no merge on the branch.
 func TestAnIntegrationWhoseFetchNeverLandsPublishesNoMerge(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
-		SyncBase: w.syncer.SyncBase, SyncBaseWait: 50 * time.Millisecond}).Handler())
-	t.Cleanup(tools.Close)
-	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
+	w.toolsWithSyncWaiting(50 * time.Millisecond)
 	w.lux.SyncBaseRetryFor = 5 * time.Second
 	wi := w.reviewing()
 	branch := w.gh.Pull(1).Head

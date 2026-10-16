@@ -555,27 +555,32 @@ func IntegrationCalls(prompt string) [][2]string {
 // fetch lux has not reported yet (status "asked"): lux/<base> may be
 // missing, or older than the base, until it has.
 func SyncBasePending(answer []byte) bool {
-	var out struct {
-		Repositories []struct{ Status string } `json:"repositories"`
-	}
-	if json.Unmarshal(answer, &out) != nil {
-		return false
-	}
-	return slices.ContainsFunc(out.Repositories, func(r struct{ Status string }) bool { return r.Status == "asked" })
+	return slices.Contains(syncBaseStatuses(answer), "asked")
 }
 
 // SyncBaseLanded says whether a sync_base answer brought every
 // repository's base in: each fetched or up-to-date.
 func SyncBaseLanded(answer []byte) bool {
+	statuses := syncBaseStatuses(answer)
+	return len(statuses) > 0 && !slices.ContainsFunc(statuses, func(s string) bool {
+		return s != "fetched" && s != "up-to-date"
+	})
+}
+
+// syncBaseStatuses are a sync_base answer's statuses, one per repository;
+// nil when the answer is not JSON.
+func syncBaseStatuses(answer []byte) []string {
 	var out struct {
 		Repositories []struct{ Status string } `json:"repositories"`
 	}
-	if json.Unmarshal(answer, &out) != nil || len(out.Repositories) == 0 {
-		return false
+	if json.Unmarshal(answer, &out) != nil {
+		return nil
 	}
-	return !slices.ContainsFunc(out.Repositories, func(r struct{ Status string }) bool {
-		return r.Status != "fetched" && r.Status != "up-to-date"
-	})
+	statuses := make([]string, len(out.Repositories))
+	for i, r := range out.Repositories {
+		statuses[i] = r.Status
+	}
+	return statuses
 }
 
 // How long the scripted agent goes on calling sync_base while its fetch is

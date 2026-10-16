@@ -1613,14 +1613,14 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	if st.Integration != nil {
+		st.PendingRunIDs, st.Heads, st.ChangedPaths = nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
 		// Nothing published to the conflicting repository is no merge: its
 		// review and test would judge the head that conflicts. A push to
 		// another repository is still where that one's work stands.
 		if _, merged := out.Heads[st.Integration.Repo]; !merged {
-			st.PendingRunIDs, st.Heads, st.ChangedPaths = nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
 			return w.integrationFailure(ctx, sc, st, causeNoMerge, reasonNoMerge)
 		}
-		st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
+		st.HeadRunID = runID
 		st.Integration.Published = true
 		st.Integration.MergeSHA = st.Heads[st.Integration.Repo]
 		st.Iteration = 0
