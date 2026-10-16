@@ -172,6 +172,52 @@ func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 	}
 }
 
+// lux never reports the fixer's fetch within its bound, and the checkout's
+// lux/main holds an older base that conflicts as well (an earlier fetch).
+// The scripted fixer merges nothing once its bound runs out: the Run
+// publishes nothing and escalates no_merge, with no merge on the branch.
+func TestAnIntegrationWhoseFetchNeverLandsPublishesNoMerge(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
+		SyncBase: w.syncer.SyncBase, SyncBaseWait: 50 * time.Millisecond}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
+	w.lux.SyncBaseRetryFor = 5 * time.Second
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	w.lux.HoldSyncs = true
+	stale := w.conflictOnFactory()
+	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "later base intent\n", "Yet another task's change")
+	w.until("sync_base answered that the fetch is not reported yet", func() bool {
+		w.sync()
+		return slices.Contains(w.syncBaseAnswers(wi), "asked")
+	})
+	// While the fixer calls again (the fake releases its lock between
+	// calls): its checkout's lux/main at the earlier base.
+	var fixer string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1
+		AND pr_feedback::text LIKE '%Base integration%'`, wi).Scan(&fixer); err != nil {
+		t.Fatal(err)
+	}
+	work, err := w.lux.Checkout(w.luxRunOf(fixer), "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, work, "update-ref", "refs/remotes/lux/main", stale)
+	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	raw, _ := w.escalationOf(wi)
+	if !strings.Contains(string(raw), `"cause": "no_merge"`) {
+		t.Fatalf("escalation %s; sync_base answered %v; branch log %v", raw, w.syncBaseAnswers(wi), w.gh.Log(branch))
+	}
+	if head := w.gh.SHA(branch); head != before {
+		t.Fatalf("the branch moved to %s: %v", head, w.gh.Log(branch))
+	}
+	if answers := w.syncBaseAnswers(wi); len(answers) < 2 || slices.ContainsFunc(answers, func(s string) bool { return s != "asked" }) {
+		t.Fatalf("sync_base answered %v, want only asked, called again within the bound", answers)
+	}
+}
+
 // The fake lux plays the fixer's turn as soon as the Run is submitted, and
 // dude records it running only when a later pass of the phase sweep
 // follows its output. Here that pass comes 6 s late, as on a loaded

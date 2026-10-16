@@ -13,6 +13,7 @@
 package fakelux
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -234,6 +235,9 @@ type Run struct {
 	workspace string
 	// Edit tool calls made, so each has an id of its own.
 	edits int
+	// The agent's last sync_base did not bring every base in (pending,
+	// failed or refused): its integrate step merges nothing.
+	baseUnfetched bool
 
 	busy  bool
 	woken bool
@@ -666,6 +670,9 @@ type Server struct {
 	// report it: no git.sync or sync.done follows, until ReleaseSyncs.
 	HoldSyncs bool
 	heldSyncs []func()
+	// How long the scripted agent calls sync_base again while it answers
+	// pending; zero is fakeagent.SyncBaseRetryFor.
+	SyncBaseRetryFor time.Duration
 	// NoOperationCredentials is a runner from before credentials on push
 	// and sync: one carrying them is refused, 409
 	// git_credentials_unsupported.
@@ -1827,6 +1834,10 @@ func (s *Server) requestMachine(run *Run, args string) int {
 // failure is said in the agent's reply. Its HTTP status, 0 when it never
 // got one.
 func (s *Server) callTool(run *Run, tool, args string) int {
+	if tool == fakeagent.LocalIntegrate && run.baseUnfetched {
+		// As the brief says: no merge of a lux/<base> never fetched.
+		return http.StatusOK
+	}
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
 		return http.StatusOK
@@ -1839,7 +1850,7 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// dude has not yet recorded its Run as running (refused), and while
 		// lux has not reported the fetch (pending): merging before would
 		// merge a lux/<base> that is missing or old.
-		deadline := time.Now().Add(fakeagent.SyncBaseRetryFor)
+		deadline := time.Now().Add(cmp.Or(s.SyncBaseRetryFor, fakeagent.SyncBaseRetryFor))
 		for time.Now().Before(deadline) {
 			wait := fakeagent.SyncBaseRetryEvery
 			switch {
@@ -1857,6 +1868,7 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 			s.mu.Lock()
 			status, body, err = s.toolRequest(run, tool, args)
 		}
+		run.baseUnfetched = err != nil || status != 200 || !fakeagent.SyncBaseLanded(body)
 	}
 	s.saidOfTool(run, tool, status, err)
 	if err == nil && status != 0 && status < 300 {

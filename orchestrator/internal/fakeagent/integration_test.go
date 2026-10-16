@@ -177,6 +177,39 @@ func TestTheIntegrationScriptCallsSyncBaseAgainWhenTheFetchNeverLands(t *testing
 	c.merged(task)
 }
 
+// Neither fetch lands, and lux/main holds an older base that conflicts too
+// (an earlier fetch): merging it would publish a resolution against a base
+// that is not the one recorded. Once both waits run out the script merges
+// nothing, so the Run publishes nothing and ends in no_merge.
+func TestTheIntegrationScriptMergesNothingWhenNoFetchLands(t *testing.T) {
+	scriptFetchWait = time.Second
+	t.Cleanup(func() { scriptFetchWait = SyncBaseRetryFor / 2 })
+	c := newConflict(t)
+	task := c.git("rev-parse", "HEAD")
+	stale := c.base
+	c.git("update-ref", "refs/remotes/lux/main", stale)
+	c.git("switch", "-q", "main")
+	if err := os.WriteFile(filepath.Join(c.work, "FACTORY.md"), []byte("later base intent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c.git("commit", "-qam", "later base")
+	recorded := c.git("rev-parse", "HEAD")
+	c.git("switch", "-q", "task")
+	if out, err := exec.Command("git", "-C", c.work, "merge-tree", "--write-tree", "HEAD", stale).CombinedOutput(); err == nil {
+		t.Fatalf("the stale lux/main merges cleanly, want a conflict: %s", out)
+	}
+	brief := integrationBrief + " The recorded base head is " + recorded + "."
+	if calls := c.play(IntegrationScript(brief, c.work), func(int) {}); calls != 2 {
+		t.Fatalf("sync_base called %d times, want two", calls)
+	}
+	if head := c.git("rev-parse", "HEAD"); head != task {
+		t.Fatalf("HEAD moved to %s (parents %s), want the task's %s unchanged", head, c.git("log", "-1", "--format=%P"), task)
+	}
+	if status := c.git("status", "--porcelain"); status != "" {
+		t.Fatalf("left in the checkout: %s", status)
+	}
+}
+
 func TestSyncBasePendingReadsTheAnswer(t *testing.T) {
 	cases := []struct {
 		answer string
@@ -192,6 +225,21 @@ func TestSyncBasePendingReadsTheAnswer(t *testing.T) {
 	for _, tc := range cases {
 		if got := SyncBasePending([]byte(tc.answer)); got != tc.want {
 			t.Errorf("SyncBasePending(%s) = %v, want %v", tc.answer, got, tc.want)
+		}
+	}
+}
+
+func TestSyncBaseLandedReadsTheAnswer(t *testing.T) {
+	for answer, want := range map[string]bool{
+		`{"repositories":[{"repo":"target","status":"fetched","behind":2}]}`:               true,
+		`{"repositories":[{"repo":"target","status":"up-to-date"}]}`:                       true,
+		`{"repositories":[{"repo":"a","status":"fetched"},{"repo":"b","status":"asked"}]}`: false,
+		`{"repositories":[{"repo":"target","status":"failed"}]}`:                           false,
+		`{"repositories":[]}`: false,
+		`not json`:            false,
+	} {
+		if got := SyncBaseLanded([]byte(answer)); got != want {
+			t.Errorf("SyncBaseLanded(%s) = %v, want %v", answer, got, want)
 		}
 	}
 }
