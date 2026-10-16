@@ -6,17 +6,153 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // blockedBy counts the backends waiting on a lock pid holds.
 const blockedBy = `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`
+
+// interleaveHandOvers holds the syncer's hand-over transaction until the
+// step's closeHandedOver transaction has written and not yet committed,
+// then holds that commit until the syncer waits on a lock the step holds.
+// finished is closed by the caller when Sync returns. Either side not
+// reaching its point within 20 s fails t: the interleaving did not happen.
+func (w *world) interleaveHandOvers(t *testing.T, finished <-chan struct{}) {
+	gate := make(chan struct{})
+	var opened sync.Once
+	w.prs.HandingOver = func(context.Context) error {
+		select {
+		case <-gate:
+		case <-time.After(20 * time.Second):
+			t.Error("closeHandedOver never reached its hook: no interleaving")
+		}
+		return nil
+	}
+	store := &delivery.Store{DB: w.app}
+	store.HandOverClosing = func(ctx context.Context, tx pgx.Tx) {
+		first := false
+		opened.Do(func() { first = true; close(gate) })
+		if !first {
+			return
+		}
+		var pid int
+		if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			t.Error(err)
+			return
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case <-finished:
+				t.Error("the syncer finished without waiting on closeHandedOver's lock")
+				return
+			default:
+			}
+			var n int
+			if err := w.owner.QueryRow(ctx, blockedBy, pid).Scan(&n); err == nil && n > 0 {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Error("the syncer never waited on closeHandedOver's lock")
+	}
+	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+}
+
+// A syncer read the pull request before another recorded it clean without
+// a closing line (that one read before the hand-over was recorded). The
+// first syncer's hand-over and the workflow's closeHandedOver then run at
+// once: the delivery's row lock serialises them, so the line is written
+// once, and the step's own claim of that row does not block its lock.
+func TestAHandOverClosedByTheWorkflowAndASyncerAtOnceIsWrittenOnce(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	ctx := context.Background()
+	var prID string
+	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan struct{})
+	w.interleaveHandOvers(t, finished)
+	read := make(chan struct{})
+	var once sync.Once
+	handingOver := w.prs.HandingOver
+	w.prs.HandingOver = func(ctx context.Context) error {
+		once.Do(func() { close(read) })
+		return handingOver(ctx)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	done := make(chan error, 1)
+	go func() { err := w.prs.Sync(ctx, w.org, prID); close(finished); done <- err }()
+	select {
+	case <-read:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the syncer never reached its hand-over")
+	}
+	// The other syncer's clean reading: the held one's own write then loses
+	// the race and reads again.
+	mustExec(t, w.owner, `UPDATE pull_requests SET mergeable_state = 'clean', updated_at = now() WHERE id = $1`, prID)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'running' WHERE task_id = $1`, wi)
+	if n, err := w.runtime.Tick(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("tick advanced %d (err %v), want the delivery", n, err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the syncer hung")
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'
+		AND status = 'waiting' AND locked_by IS NULL AND last_error IS NULL`, wi); n != 1 {
+		t.Fatalf("the step did not commit its transition:\n%s", w.describeRuns())
+	}
+}
+
+// The syncer's hand-over transaction fails once: nothing of that sync is
+// recorded, and the next sync writes the closing line.
+func TestAHandOverWhoseTransactionFailsIsCompletedByTheNextSync(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	ctx := context.Background()
+	var prID string
+	if err := w.owner.QueryRow(ctx, `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("hand-over transaction failed")
+	failed := false
+	w.prs.HandingOver = func(context.Context) error {
+		if failed {
+			return nil
+		}
+		failed = true
+		return injected
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	if err := w.prs.Sync(ctx, w.org, prID); !errors.Is(err, injected) {
+		t.Fatalf("first sync: %v, want the injected failure", err)
+	}
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Errorf("completions %d, want 1", n)
+	}
+}
 
 // The step records the hand-over after the syncer's hand-over transaction
 // found none, and its closeHandedOver reads the pull request before the
