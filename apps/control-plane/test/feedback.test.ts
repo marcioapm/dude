@@ -316,7 +316,8 @@ describe("a code anchor is pinned to the Run's stored diff", () => {
     await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, base_shas, heads) VALUES
       ('run_web', ${ORG}, 'prj_fb', 'wi_fb2', 1, 'completed', 'fix', 'implementer', 'agent',
        ${{ [spec]: "w0", api: "a0" }}::jsonb, '{"Web":{"sha":"w1"}}')`;
-    await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_web', ${ORG}, 'w0', ${files}::jsonb, 'sum-web')`;
+    // The diff's own base is another, so a base read under the wrong key shows.
+    await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_web', ${ORG}, 'main', ${files}::jsonb, 'sum-web')`;
     const res = await draft(ana.key, "wi_fb2", { body: "on Web", anchor: {
       kind: "code", runId: "run_web", path: `${spec}/src/vat.ts`, side: "new", startLine: 11, endLine: 11 } });
     expect(res.status).toBe(201);

@@ -20,14 +20,16 @@ import (
 
 // agentResolve is a fixer resolving a person's item through the agent
 // tools server, as its publish moves the task branch: the commit is
-// pick(the branch before, the Run's new head). compare, when set, sees
-// each GitHub compare request (its path) and may fail it with a status.
+// pick(the branch before, the Run's new head); also, further items it
+// resolves with the same commit. compare, when set, sees each GitHub
+// compare request (its path) and may fail it with a status.
 type agentResolve struct {
 	mu       sync.Mutex
 	fixer    string
 	commit   string
 	answer   string
 	compares []string
+	also     []string
 }
 
 func (w *world) resolveAsItPublishes(task, item string, pick func(base, head string) string, compare func(path string) int) *agentResolve {
@@ -71,17 +73,21 @@ func (w *world) resolveAsItPublishes(task, item string, pick func(base, head str
 			token, hash := agenttools.NewToken()
 			mustExec(w.t, w.owner, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, fixer, hash)
 			ar.fixer, ar.commit = fixer, pick(w.gh.SHA(branch), in.SHA)
-			req, _ := http.NewRequest("POST", tools.URL+"/tools/feedback_resolve",
-				strings.NewReader(fmt.Sprintf(`{"id":%q,"commit":%q}`, item, ar.commit)))
-			req.Header.Set("Authorization", "Bearer "+token)
-			res, err := http.DefaultClient.Do(req)
-			if err != nil {
-				ar.answer = err.Error()
-				return 0
+			for _, id := range append([]string{item}, ar.also...) {
+				req, _ := http.NewRequest("POST", tools.URL+"/tools/feedback_resolve",
+					strings.NewReader(fmt.Sprintf(`{"id":%q,"commit":%q}`, id, ar.commit)))
+				req.Header.Set("Authorization", "Bearer "+token)
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					ar.answer = err.Error()
+					return 0
+				}
+				out, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+				if a := fmt.Sprintf("%d %s", res.StatusCode, out); ar.answer == "" || strings.HasPrefix(ar.answer, "200 ") {
+					ar.answer = a
+				}
 			}
-			out, _ := io.ReadAll(res.Body)
-			res.Body.Close()
-			ar.answer = fmt.Sprintf("%d %s", res.StatusCode, out)
 			return 0
 		}
 	})
@@ -195,6 +201,54 @@ func TestFeedbackACompareFailureWhileSettlingAResolutionBacksOff(t *testing.T) {
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer); n != 1 {
 		t.Error("the fixer did not complete")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'git.commit_created'`, fixer); n != 1 {
+		t.Errorf("%d git.commit_created for the fixer's head after the retry, want 1", n)
+	}
+}
+
+// Two items resolved by one fixer with the same commit are weighed with
+// one compare of it: the compares naming it are publish's own compare of
+// the head and one base...commit, not one per item.
+func TestFeedbackTwoResolutionsWithOneCommitCompareItOnce(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	ar := w.resolveAsItPublishes(wi, "fbi_res", func(_, head string) string { return head[:12] }, nil)
+	ar.mu.Lock()
+	ar.also = []string{"fbi_two"}
+	ar.mu.Unlock()
+	for id, body := range map[string]string{"fbi_res": "Log the retry count at info, not debug.", "fbi_two": "Name the flag --dry-run."} {
+		mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor)
+			SELECT $1, $2, $3, task_attempt($3), person_id, $5, 'general', '{"kind":"general"}' FROM api_keys WHERE id = $4`,
+			id, w.org, wi, ana, body)
+	}
+	if code, body := w.callAs(ana, "/internal/tasks/"+wi+"/feedback/submit",
+		map[string]any{"draftIds": []string{"fbi_res", "fbi_two"}, "submissionKey": "k-two"}); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("the fixer resolved both items and completed", func() bool {
+		fixer, _, _ := ar.state()
+		return fixer != "" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer) == 1
+	})
+	_, commit, answer := ar.state()
+	if !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve: %s", answer)
+	}
+	if n := w.count(`SELECT count(*) FROM feedback_items WHERE id IN ('fbi_res', 'fbi_two') AND status = 'resolved'
+		AND resolved_verified_at IS NOT NULL`); n != 2 {
+		t.Errorf("%d of 2 resolutions verified", n)
+	}
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+	n := 0
+	for _, p := range ar.compares {
+		if strings.Contains(p, commit) {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d compares name %s, want 2: %v", n, commit, ar.compares)
 	}
 }
 

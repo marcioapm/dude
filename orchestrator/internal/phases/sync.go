@@ -1971,6 +1971,13 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			if _, err := tx.Exec(ctx, `UPDATE runs SET files_changed_at = now() WHERE id = $1`, r.ID); err != nil {
 				return err
 			}
+			// Once per head: a finish retried after a back-off publishes again.
+			var said bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2
+				AND payload->>'repo' = $3 AND payload->>'headSha' = $4)`,
+				r.ID, delivery.EvGitCommitCreated, repo.Name, res.Commit).Scan(&said); err != nil || said {
+				return err
+			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
 				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
 		}); err != nil {
