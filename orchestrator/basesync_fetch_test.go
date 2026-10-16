@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -222,13 +223,22 @@ func TestAnIntegrationWhoseFetchNeverLandsPublishesNoMerge(t *testing.T) {
 
 // The fake lux plays the fixer's turn as soon as the Run is submitted, and
 // dude records it running only when a later pass of the phase sweep
-// follows its output. Here that pass comes 6 s late, as on a loaded
-// runner: sync_base refuses ("your container is not running") until it
-// does, and the fixer, as told, calls again rather than merging a
-// lux/<base> nobody fetched.
+// follows its output. Here no pass comes until the fixer has called
+// sync_base again, as on a loaded runner: sync_base refuses ("your
+// container is not running") until the Run is recorded running, and the
+// fixer, as told, calls again rather than merging a lux/<base> nobody
+// fetched.
 func TestAnIntegrationWhoseRunIsRecordedRunningLateMergesTheMovedBase(t *testing.T) {
 	w := newWorld(t)
-	w.toolsWithSync()
+	var calls atomic.Int32
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
+		BeforeCall: func(tool string) {
+			if tool == "sync_base" {
+				calls.Add(1)
+			}
+		}}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
 	wi := w.reviewing()
 	branch := w.gh.Pull(1).Head
 	base := w.conflictOnFactory()
@@ -237,7 +247,13 @@ func TestAnIntegrationWhoseRunIsRecordedRunningLateMergesTheMovedBase(t *testing
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND pr_feedback::text LIKE '%Base integration%'
 			AND lux_run_id IS NOT NULL`, wi) == 1
 	})
-	time.Sleep(6 * time.Second)
+	// No pump, so no sweep: the fixer's first call is refused, and it calls
+	// again.
+	for deadline := time.Now().Add(20 * time.Second); calls.Load() < 2; time.Sleep(untilPoll) {
+		if time.Now().After(deadline) {
+			t.Fatalf("sync_base called %d times while the Run was not recorded running, want a call again", calls.Load())
+		}
+	}
 	w.until("the base merged into the task branch", func() bool {
 		w.sync()
 		if r := w.escalationReason(wi); r != "" {
