@@ -43,7 +43,7 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 		return err
 	}
 	line := fmt.Sprintf("`%s` moved: %s merged (#%d). Call sync_base if your work depends on it.", base, key, number)
-	wakeKey := fmt.Sprintf("base-moved:%s", prID)
+	wakeKey := heldWakePrefix + prID
 	for _, t := range targets {
 		tag, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
 			VALUES ($1, $2, $3, 'checkout', $4, $5) ON CONFLICT (task_id, key) DO NOTHING`, ids.New("cwk"), org, t.TaskID, wakeKey, line)

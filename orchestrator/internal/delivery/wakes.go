@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -18,6 +19,13 @@ import (
 
 // wakeLines caps the lines of one note; the rest are counted.
 const wakeLines = 10
+
+// heldWakePrefix keys a reason that is news, not a call to act: told now to
+// a conductor between turns, held for the next note of one parked or not
+// running, never resuming or starting one by itself (a base that moved).
+const heldWakePrefix = "base-moved:"
+
+func heldKey(key string) bool { return strings.HasPrefix(key, heldWakePrefix) }
 
 // WakeNote is the note for reasons' lines, in the order they came.
 func WakeNote(lines []string) string {
@@ -46,9 +54,9 @@ func WakeNote(lines []string) string {
 // started, briefed with it. Returns the conductor woken, "" for none yet.
 // The caller holds the task's Chat lock.
 func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
-	type reason struct{ ID, Kind, Line string }
+	type reason struct{ ID, Kind, Line, Key string }
 	pendingNow := func() ([]reason, error) {
-		rows, err := tx.Query(ctx, `SELECT id, kind, line FROM conductor_wakes
+		rows, err := tx.Query(ctx, `SELECT id, kind, line, key FROM conductor_wakes
 			WHERE task_id = $1 AND delivered_at IS NULL ORDER BY created_at, id FOR UPDATE`, taskID)
 		if err != nil {
 			return nil, err
@@ -59,12 +67,12 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	// holds that Run while a receipt settles reasons (heardTx), so the
 	// opposite order would deadlock with it.
 	var runID string
-	var between, ending bool
+	var between, ending, paused bool
 	liveNow := func() error {
-		runID, between, ending = "", false, false
+		runID, between, ending, paused = "", false, false, false
 		err := tx.QueryRow(ctx, `SELECT r.id, r.status = 'paused' OR (r.status = 'running'
-				AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)), COALESCE(`+Ending+`, false)
-			FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between, &ending)
+				AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL)), COALESCE(`+Ending+`, false), r.status = 'paused'
+			FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &between, &ending, &paused)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -107,6 +115,11 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	}
 	if runID != "" && !between {
 		// Mid-turn, or not started yet: what it hears next.
+		return "", nil
+	}
+	if parked := runID == "" || paused; parked && !slices.ContainsFunc(pending, func(r reason) bool { return !heldKey(r.Key) }) {
+		// Only news that waits (a base that moved): a parked conductor is
+		// not resumed, nor one started, for it. It goes with the next note.
 		return "", nil
 	}
 	lines, kinds := make([]string, len(pending)), make([]string, len(pending))
@@ -342,9 +355,13 @@ func RecordFailedTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) e
 // window, and its live conductor can hear a note (between turns, or
 // paused), or it has none (one is started), or the one it has is ending
 // (it is ended first). Selected before the sweep's batch limit, so tasks
-// that must wait (a conductor mid-turn) cannot fill the batch.
+// that must wait (a conductor mid-turn) cannot fill the batch. Held
+// reasons alone (heldWakePrefix) wait for a conductor running between turns.
 const Wakeable = `c.delivered_at IS NULL
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
-		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))`
+		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))
+	AND (EXISTS (SELECT 1 FROM conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL
+			AND h.key NOT LIKE '` + heldWakePrefix + `%')
+		OR EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running'))`

@@ -964,3 +964,60 @@ func TestStartingAnIntegrationReadsThePullRequestOnce(t *testing.T) {
 		t.Fatalf("GET /pulls/1 %d times, %d reads of its checks, reviews or compare", r, o)
 	}
 }
+
+// A base that moved is news for a conductor, not a call to act: a live
+// one between turns hears it now; one parked is not resumed for it, and
+// hears it with its next note.
+func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
+	setup := func(t *testing.T, warm time.Duration) (*world, string, string, func()) {
+		w := conducting(t)
+		w.syncer.ConductorWarm = warm
+		merging := w.reviewing()
+		other := w.task()
+		cond := w.talk(other)
+		merged := func() {
+			w.gh.Merge(1)
+			var id string
+			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id=$1`, merging).Scan(&id)
+			if err := w.prs.Sync(context.Background(), w.org, id); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND key LIKE 'base-moved:%'`, other); n != 1 {
+				t.Fatalf("base-moved reasons %d", n)
+			}
+		}
+		return w, other, cond, merged
+	}
+	notes := `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='conductor.woken' AND payload->>'text' LIKE '%moved:%'`
+	t.Run("live", func(t *testing.T) {
+		w, other, _, merged := setup(t, time.Hour)
+		merged()
+		w.until("the note", func() bool { return w.count(notes, other) == 1 })
+	})
+	t.Run("parked", func(t *testing.T) {
+		w, other, cond, merged := setup(t, 300*time.Millisecond)
+		w.until("the conductor parked", func() bool {
+			_, status, pause := w.conductor(other)
+			return status == "paused" && pause == "conductor"
+		})
+		w.syncer.ConductorWarm = time.Hour
+		resumes := `SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.unparked'`
+		before := w.count(resumes, cond)
+		merged()
+		for range 5 {
+			time.Sleep(60 * time.Millisecond)
+			w.pump()
+		}
+		if _, status, _ := w.conductor(other); status != "paused" || w.count(resumes, cond) != before {
+			t.Fatalf("the conductor is %s: resumed for a base that moved", status)
+		}
+		if n := w.count(notes, other); n != 0 {
+			t.Fatalf("%d notes to a parked conductor", n)
+		}
+		w.reason(other, "decision:next", "A decision waits for you.", time.Second)
+		w.until("the next note, carrying it", func() bool { return w.count(notes, other) == 1 })
+		if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND delivered_at IS NULL`, other); n != 0 {
+			t.Fatalf("%d reasons left pending", n)
+		}
+	})
+}
