@@ -312,11 +312,10 @@ func cutBytes(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	s = s[:limit]
-	for len(s) > 0 && !utf8.ValidString(s[max(0, len(s)-utf8.UTFMax):]) {
-		s = s[:len(s)-1]
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
 	}
-	return s
+	return s[:limit]
 }
 
 type ghLineOut struct {
