@@ -5,6 +5,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -38,12 +39,76 @@ func (w *world) syncBaseAnswers(wi string) []string {
 	return out
 }
 
+// syncBaseNext is what sync_base's first answer of status told a task's
+// integration Run to do next.
+func (w *world) syncBaseNext(wi, status string) string {
+	w.t.Helper()
+	var next string
+	if err := w.owner.QueryRow(context.Background(), `SELECT e.payload->'result'->'repositories'->0->>'next'
+		FROM events e JOIN runs r ON r.id = e.run_id
+		WHERE r.task_id = $1 AND r.pr_feedback::text LIKE '%Base integration%' AND e.event_type = 'agent.tool.dude'
+		  AND e.payload->>'tool' = 'sync_base' AND e.payload->'result'->'repositories'->0->>'status' = $2
+		ORDER BY e.cursor LIMIT 1`, wi, status).Scan(&next); err != nil {
+		w.t.Fatal(err)
+	}
+	return next
+}
+
 // conflictOnFactory moves main so that it conflicts with the task's
 // FACTORY.md, as another task's merge does; GitHub works the conflict out
 // from git.
 func (w *world) conflictOnFactory() string {
 	w.t.Helper()
 	return w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "base intent\n", "Another task's change")
+}
+
+// syncBaseLine is the first repository's line of a sync_base answer.
+func syncBaseLine(t *testing.T, body string) agenttools.BaseSync {
+	t.Helper()
+	var out struct{ Repositories []agenttools.BaseSync }
+	if err := json.Unmarshal([]byte(body), &out); err != nil || len(out.Repositories) != 1 {
+		t.Fatalf("sync_base answered %s (%v)", body, err)
+	}
+	return out.Repositories[0]
+}
+
+// Every report comes after its own call's bound, as on a slow but healthy
+// lux. A later call counts the fetch an earlier call asked for once lux
+// has reported it, and of several such reports the newest: the base as
+// lux last fetched it, not as it first did.
+func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
+	w := newWorld(t)
+	w.lux.HoldSyncs = true
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
+		SyncBase: w.syncer.SyncBase, SyncBaseWait: 50 * time.Millisecond}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	w.implementerAtWork()
+	spec := string(w.lux.Runs()[0].Spec)
+	if _, err := w.lux.Checkout(w.lux.Runs()[0].ID, "target"); err != nil {
+		t.Fatal(err)
+	}
+	call := func() agenttools.BaseSync {
+		t.Helper()
+		status, body := w.callTool(tools.URL, spec, "sync_base", `{}`)
+		if status != 200 {
+			t.Fatalf("sync_base: %d %s", status, body)
+		}
+		return syncBaseLine(t, body)
+	}
+	w.gh.AdvanceBase("main", "Someone else's work")
+	if got := call(); got.Status != "asked" {
+		t.Fatalf("first call, nothing reported: %+v", got)
+	}
+	w.lux.ReleaseSyncs()
+	w.gh.AdvanceBase("main", "More of someone else's work")
+	if got := call(); got.Status != "fetched" || got.Behind != 1 {
+		t.Fatalf("second call, the first call's fetch reported: %+v, want fetched 1 behind", got)
+	}
+	w.lux.ReleaseSyncs()
+	if got := call(); got.Status != "fetched" || got.Behind != 2 {
+		t.Fatalf("third call, both earlier fetches reported: %+v, want the newer, fetched 2 behind", got)
+	}
 }
 
 // lux reports the fetch sync_base asked for only after the call's bound
@@ -68,6 +133,22 @@ func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 		}
 		return slices.Contains(w.syncBaseAnswers(wi), "asked")
 	})
+	// The fixer is told the way out its brief gives: the recorded head on
+	// lux/main, or finishing without a merge.
+	next := w.syncBaseNext(wi, "asked")
+	if !strings.Contains(next, "git merge-base --is-ancestor "+base+" lux/main") ||
+		!strings.Contains(next, "finish without merging") {
+		t.Fatalf("an integration's pending answer: %s", next)
+	}
+	var brief string
+	if err := w.owner.QueryRow(context.Background(), `SELECT pr_feedback::text FROM runs WHERE task_id = $1
+		AND pr_feedback::text LIKE '%Base integration%'`, wi).Scan(&brief); err != nil {
+		t.Fatal(err)
+	}
+	if _, when, _ := strings.Cut(next, "call sync_base again in a moment. "); when == "" ||
+		!strings.Contains(brief, strings.SplitN(when, ".", 2)[0]) {
+		t.Fatalf("the brief and sync_base word the merge differently:\nbrief %s\nnext %s", brief, next)
+	}
 	w.lux.HoldSyncs = false
 	w.lux.ReleaseSyncs()
 	w.until("the base merged into the task branch", func() bool {
