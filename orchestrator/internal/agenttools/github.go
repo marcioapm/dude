@@ -1,6 +1,7 @@
 package agenttools
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -513,9 +514,9 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	return pr
 }
 
-// fit encodes a result within resultCap. Past it, one pass in key order
-// gives each text what the budget has left and ends lists once it runs
-// out, then the tree is encoded once more, and "cut" says so.
+// fit encodes a result within resultCap. Past it, one pass in fitRank's
+// order gives each text what the budget has left and ends lists once it
+// runs out, then the tree is encoded once more, and "cut" says so.
 func (w wrapper) fit(v any) (json.RawMessage, error) {
 	out, err := marshalResult(v)
 	if err != nil || len(out) <= resultCap {
@@ -553,7 +554,9 @@ func (w wrapper) fit(v any) (json.RawMessage, error) {
 			for k := range x {
 				keys = append(keys, k)
 			}
-			slices.Sort(keys)
+			slices.SortFunc(keys, func(a, b string) int {
+				return cmp.Or(cmp.Compare(fitRank(a), fitRank(b)), strings.Compare(a, b))
+			})
 			for _, k := range keys {
 				remaining -= jsonLen(k) + 2
 				x[k] = budget(x[k])
@@ -570,6 +573,21 @@ func (w wrapper) fit(v any) (json.RawMessage, error) {
 }
 
 var marshalResult = json.Marshal
+
+// fitRank is the order fit spends the budget in: the note saying the
+// quotes are data, then what the item is, then the flags saying what is
+// missing, and the bodies and long lists last. Ties go by name.
+func fitRank(key string) int {
+	switch key {
+	case "external":
+		return 0
+	case "issue", "pullRequest", "number", "title", "url", "state", "draft", "head", "base":
+		return 1
+	case "cut", "more", "moreComments", "moreReviews", "moreChecks", "moreFiles", "threadsUnknown", "notListed", "notChanged":
+		return 2
+	}
+	return 3
+}
 
 // jsonLen is s's length as a JSON string, quotes included, as encoding/json
 // writes it (HTML characters and U+2028/U+2029 escaped).

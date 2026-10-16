@@ -101,6 +101,86 @@ func BenchmarkFitThreadShape(b *testing.B) {
 	}
 }
 
+// balancedQuotes says every quote in v opens and closes under id.
+func balancedQuotes(v any, id string) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Count(x, "⟦external "+id+"⟧") == strings.Count(x, "⟦/external "+id+"⟧")
+	case []any:
+		for _, item := range x {
+			if !balancedQuotes(item, id) {
+				return false
+			}
+		}
+	case map[string]any:
+		for _, item := range x {
+			if !balancedQuotes(item, id) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Past the budget, what says what the result is — the note on its quotes,
+// the issue or pull request's identity, and the flags saying what is
+// missing — is kept whole, and the bodies and lists give way.
+func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
+	w := wrapper{id: "order"}
+	long := strings.Repeat("Retries count twice. ", 400)
+	issue := forge.IssueRead{IssueLine: forge.IssueLine{Number: 7, Title: "Rollup counts twice", Author: "ana", State: "open",
+		URL: "https://github.test/acme/target/issues/7"}, Body: long, CommentCount: 80}
+	for range 50 {
+		issue.Comments = append(issue.Comments, forge.IssueComment{Author: "bo", Body: long})
+	}
+	pr := forge.PullRequestRead{IssueLine: forge.IssueLine{Number: 8, Title: "Count once", Author: "ana", State: "draft",
+		URL: "https://github.test/acme/target/pull/8"}, Body: long, Draft: true, Head: "feature/once", Base: "main",
+		ReviewsCut: true, ThreadsUnknown: true, ChecksCut: true}
+	for range 50 {
+		pr.Reviews = append(pr.Reviews, forge.ReviewRead{Author: "bo", State: "COMMENTED", Body: long})
+	}
+	for range 300 {
+		pr.Files = append(pr.Files, forge.FileRead{Path: strings.Repeat("dir/", 40) + "file.go"})
+	}
+	for _, tc := range []struct {
+		name string
+		v    map[string]any
+		kept []string
+	}{
+		{"issue", w.issue(issue), []string{"external", "issue", "moreComments"}},
+		{"pull request", w.pullRequest(pr, []string{"missing.go"}),
+			[]string{"external", "pullRequest", "draft", "head", "base", "moreReviews", "threadsUnknown", "moreChecks", "moreFiles", "notListed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			whole, _ := json.Marshal(tc.v)
+			if len(whole) <= resultCap {
+				t.Fatalf("the shape fits already: %d bytes", len(whole))
+			}
+			var before map[string]any
+			_ = json.Unmarshal(whole, &before)
+			out, err := w.fit(tc.v)
+			if err != nil || len(out) > resultCap || !json.Valid(out) {
+				t.Fatalf("fit: %d bytes, err %v", len(out), err)
+			}
+			var after map[string]any
+			_ = json.Unmarshal(out, &after)
+			for _, k := range tc.kept {
+				b, _ := json.Marshal(before[k])
+				a, _ := json.Marshal(after[k])
+				if string(a) != string(b) {
+					t.Errorf("%s changed in the cut:\n got %.200s\nwant %.200s", k, a, b)
+				}
+			}
+			if cut, _ := after["cut"].(string); !strings.HasPrefix(cut, cutMark) {
+				t.Errorf("no cut note: %v", after["cut"])
+			}
+			if !balancedQuotes(after, w.id) {
+				t.Error("a quote lost its end")
+			}
+		})
+	}
+}
+
 func TestCutBytesKeepsWholeUTF8Prefix(t *testing.T) {
 	for _, tc := range []struct {
 		text        string
