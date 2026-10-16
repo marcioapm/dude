@@ -31,11 +31,18 @@ export function placeItems(items: ReadonlyArray<FeedbackItem>, runId: string, di
 
 const lineWords = (r: DiffRange) => (r.startLine === r.endLine ? `line ${r.startLine}` : `lines ${r.startLine}–${r.endLine}`);
 
-/** The editor under a picked range, with its own text: a keystroke re-renders it alone, not the diff. */
-function InlineCommentEditor({ fb, runId, checksum, range, onDone }: {
-  fb: FeedbackOnDiff; runId: string; checksum: string; range: DiffRange; onDone: () => void;
+/**
+ * The editor under a picked range, with its own text: a keystroke re-renders it alone, not the diff.
+ * `onText` mirrors each keystroke into the hook so a remount (a press in the gutter) starts from `initial`.
+ */
+function InlineCommentEditor({ fb, runId, checksum, range, initial, onText, onDone }: {
+  fb: FeedbackOnDiff; runId: string; checksum: string; range: DiffRange; initial: string; onText: (text: string) => void; onDone: () => void;
 }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(initial);
+  const setText = (t: string) => {
+    setTextState(t);
+    onText(t);
+  };
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const save = async () => {
@@ -89,7 +96,11 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
     setSelection(range);
     setEditing(done && range !== null);
   }, []);
+  // The unsaved comment: kept across the editor's remounts, cleared on save or cancel. A ref, so a keystroke re-renders only the editor.
+  const unsaved = useRef("");
+  const keepUnsaved = useCallback((text: string) => { unsaved.current = text; }, []);
   const closeEditor = useCallback(() => {
+    unsaved.current = "";
     setEditing(false);
     setSelection(null);
   }, []);
@@ -108,10 +119,11 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
     return (
       <>
         {here?.map((i) => card(i))}
-        {editor ? <InlineCommentEditor fb={fb} runId={runId} checksum={diff.checksum} range={editorAt} onDone={closeEditor} /> : null}
+        {editor ? <InlineCommentEditor fb={fb} runId={runId} checksum={diff.checksum} range={editorAt}
+          initial={unsaved.current} onText={keepUnsaved} onDone={closeEditor} /> : null}
       </>
     );
-  }, [byLine, card, fb, diff, runId, editorAt, closeEditor]);
+  }, [byLine, card, fb, diff, runId, editorAt, closeEditor, keepUnsaved]);
   const renderFileHead = useCallback((path: string) => {
     const off = heads.get(path);
     if (!off) return null;

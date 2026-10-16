@@ -495,6 +495,34 @@ describe("what a keystroke, a reload and an event redraw", () => {
     expect(reads).toBe(before);
   });
 
+  test("a press in the gutter keeps the comment being typed; Cancel clears it", async () => {
+    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
+    const { FeedbackProvider } = await import("../src/feedback.tsx");
+    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [appFile] };
+    const client = { runDiff: async () => diff } as unknown as ApiClient;
+    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
+    const ok = async () => true;
+    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
+      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
+    const { container, unmount } = await mount(
+      <TooltipProvider><FeedbackProvider value={fb}>
+        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
+          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
+      </FeedbackProvider></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=diffs]"), "the diff");
+    const pick = async () => {
+      await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+      await act(async () => void window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })));
+      return until(() => container.querySelector<HTMLTextAreaElement>("[data-testid=fb-editor] textarea"), "the editor");
+    };
+    await typeInto(await pick(), "abc");
+    expect((await pick()).value).toBe("abc");
+    await click(button(container.querySelector("[data-testid=fb-editor]")!, "Cancel")!);
+    expect(container.querySelectorAll("[data-testid=fb-editor]").length).toBe(0);
+    expect((await pick()).value).toBe("");
+  });
+
   /** The task page on its open session's Changes, its diff's rows counted; and the feedback reads counted. */
   async function sessionChanges() {
     let reads = 0;
