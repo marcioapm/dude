@@ -92,7 +92,7 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
    FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
      AND runs.status IN ('scheduled', 'starting', 'running') AND COALESCE(runs.lux_state, '') <> 'running'
    ORDER BY e.cursor DESC LIMIT 1) AS "startStage",
-  can_run_containers AS "canRunContainers"`;
+  can_run_containers AS "canRunContainers", project_secret_names AS "projectSecretNames"`;
 
 const SESSION_SELECT = `
   id, organization_id AS "organizationId", run_id AS "runId",

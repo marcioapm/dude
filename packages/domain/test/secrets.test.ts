@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import * as secrets from "../src/secrets.ts";
 import {
   addSecretSchema,
+  replaceSecretSchema,
   recipeInputSchema,
   recipeSecretClash,
   secretHint,
@@ -16,6 +18,35 @@ const project = {
     { name: "api", env: [] },
   ],
 };
+
+describe("project secret recipients", () => {
+  test("a new secret defaults to Previews and Tester", () => {
+    expect(addSecretSchema.parse({ name: "SNOWFLAKE_PASSWORD", value: "sf-test-not-a-real-password-123" }).recipients).toEqual(["previews", "tester"]);
+  });
+
+  test("only the six recipients are accepted, and at least one is required", () => {
+    for (const recipient of ["previews", "tester", "implementer", "fixer", "simplifier", "reviewer"] as const) {
+      expect(secrets.secretRecipientsSchema.parse([recipient])).toEqual([recipient]);
+    }
+    for (const recipients of [[], ["conductor"], ["brainstorm"], ["qa_browser"], ["tester", null], ["tester", "tester"]]) {
+      expect(secrets.secretRecipientsSchema.safeParse(recipients).success).toBe(false);
+    }
+    const none = secrets.secretRecipientsSchema.safeParse([]);
+    expect(none.success ? "" : none.error.issues[0]?.message).toBe("Give it to at least one, or don't add it yet");
+  });
+
+  test("recipients and value are separate write contracts", () => {
+    expect(secrets.changeSecretRecipientsSchema.parse({ recipients: ["reviewer"] })).toEqual({ recipients: ["reviewer"] });
+    expect(secrets.changeSecretRecipientsSchema.safeParse({ recipients: ["tester"], value: "not-a-real-value" }).success).toBe(false);
+    expect(replaceSecretSchema.safeParse({ value: "not-a-real-value", recipients: ["tester"] }).success).toBe(false);
+  });
+
+  test("all dude and harness environment names are refused", () => {
+    for (const name of ["DUDE_CUSTOM", "DUDE_LLM_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "OPENAI_API_KEY", "CODEX_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_DISABLE_MODELS_FETCH", "OPENCODE_ENABLE_EXA", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_AUTOUPDATER", "TERM", "FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"]) {
+      expect(secretNameProblem(name, project)?.kind).toBe("invalid");
+    }
+  });
+});
 
 describe("a secret's name", () => {
   test("an environment variable's name, as a recipe's", () => {

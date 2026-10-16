@@ -35,6 +35,10 @@ const (
 	PeerMessage = "pm"
 	PeerWait    = "pw"
 	EpicNote    = "epn"
+	// A person's feedback (migration 127).
+	FeedbackBatch = "fbt"
+	FeedbackItem  = "fbi"
+	FeedbackReply = "fbr"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

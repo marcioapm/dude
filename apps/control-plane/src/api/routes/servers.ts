@@ -12,8 +12,10 @@
 
 import { auditActor } from "../auth.ts";
 import {
+  DEFAULT_SECRET_RECIPIENTS,
   EventTypes,
   addSecretSchema,
+  changeSecretRecipientsSchema,
   addServerSchema,
   previewSettingsSchema,
   recipeInputSchema,
@@ -22,7 +24,7 @@ import {
   secretHint,
   secretNameProblem,
   serverNameSchema,
-  type PreviewSecret,
+  type ProjectSecret,
   type PreviewSettings,
   type Recipe,
 } from "@dude/domain";
@@ -168,13 +170,13 @@ async function secretNames(scope: OrgScope, projectId: string): Promise<string[]
   return rows.map((r) => r.name);
 }
 
-async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<PreviewSecret[]> {
+async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<ProjectSecret[]> {
   return (await scope.sql`
-    SELECT s.name, s.hint, s.updated_at AS "updatedAt",
+    SELECT s.name, s.hint, s.recipients, s.updated_at AS "updatedAt",
       (SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = s.updated_by) AS "updatedBy"
     FROM project_secrets s
     WHERE s.project_id = ${projectId} AND (${name ?? null}::text IS NULL OR s.name = ${name ?? null})
-    ORDER BY s.name`) as PreviewSecret[];
+    ORDER BY s.name`) as ProjectSecret[];
 }
 
 async function getProjectSecrets(ctx: RequestContext): Promise<Response> {
@@ -197,8 +199,8 @@ async function addProjectSecret(ctx: RequestContext): Promise<Response> {
     const problem = secretNameProblem(input.name, { secrets: await secretNames(scope, projectId), recipes: servers });
     if (problem) throw problem.kind === "conflict" ? conflict(problem.message) : badRequest(problem.message);
     await scope.sql`
-      INSERT INTO project_secrets (project_id, organization_id, name, value, hint, updated_by)
-      VALUES (${projectId}, ${scope.organizationId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId})`;
+      INSERT INTO project_secrets (project_id, organization_id, name, value, hint, updated_by, recipients)
+      VALUES (${projectId}, ${scope.organizationId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId}, ${scope.sql.array(input.recipients ?? [...DEFAULT_SECRET_RECIPIENTS], "text")}::text[])`;
     await recordChange(scope, ctx, projectId, { secrets: { [input.name]: "added" } });
     return (await listSecrets(scope, projectId, input.name))[0]!;
   });
@@ -217,6 +219,23 @@ async function replaceProjectSecret(ctx: RequestContext): Promise<Response> {
       WHERE project_id = ${projectId} AND name = ${name} RETURNING name`;
     if (changed.length === 0) throw notFound(`project ${projectId} has no secret ${name}`);
     await recordChange(scope, ctx, projectId, { secrets: { [name]: "replaced" } });
+    return (await listSecrets(scope, projectId, name))[0]!;
+  });
+  return json(secret);
+}
+
+async function changeProjectSecretRecipients(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await requireProjectEditor(ctx, projectId);
+  const name = ctx.params.name!;
+  const input = await parseBody(ctx.request, changeSecretRecipientsSchema);
+  const secret = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const changed = await scope.sql`
+      UPDATE project_secrets SET recipients = ${scope.sql.array(input.recipients, "text")}::text[], updated_at = now(),
+        updated_by = ${ctx.principal.personId}
+      WHERE project_id = ${projectId} AND name = ${name} RETURNING name`;
+    if (changed.length === 0) throw notFound(`project ${projectId} has no secret ${name}`);
+    await recordChange(scope, ctx, projectId, { secrets: { [name]: { recipients: input.recipients } } });
     return (await listSecrets(scope, projectId, name))[0]!;
   });
   return json(secret);
@@ -288,6 +307,7 @@ export function registerServerRoutes(router: Router): void {
   router.put("/v1/projects/:id/preview-settings", putPreviewSettings);
   router.get("/v1/projects/:id/secrets", getProjectSecrets);
   router.post("/v1/projects/:id/secrets", addProjectSecret);
+  router.put("/v1/projects/:id/secrets/:name/recipients", changeProjectSecretRecipients);
   router.put("/v1/projects/:id/secrets/:name", replaceProjectSecret);
   router.delete("/v1/projects/:id/secrets/:name", removeProjectSecret);
 

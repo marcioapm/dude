@@ -309,6 +309,19 @@ export const EventTypes = {
    * starts. A start that fails says its stage in `run.failed`.
    */
   RunStage: "run.stage",
+  /**
+   * The project secrets an agent Run was given at submit, by the phase's
+   * recipient (`project_secrets.recipients`). Once per Run. Payload:
+   * `{ names }`, never a value. The conductor and brainstorm get none.
+   */
+  RunSecretsGiven: "run.secrets.given",
+  /**
+   * dude did not ask lux to push a Run's work: the work to be pushed holds
+   * a value of a project secret the Run was given, in some form. The Run
+   * fails, kept, and its task escalates. Payload: `{ secrets, files }`:
+   * names and paths only, never a value.
+   */
+  RunPushRefused: "run.push.refused",
 
   // Run lifecycle
   RunCreated: "run.created",
@@ -341,7 +354,8 @@ export const EventTypes = {
    * A phase Run was stopped and a fresh one put in its slot. On the old
    * Run. Payload: `{ from, to, note, phase, category?, tier?, by? }`:
    * `by: "conductor"` for the conductor's restart_run (the actor is its
-   * Run), absent for a person's.
+   * Run), `by: "dude"` for a paused Run a project secret it was given is no
+   * longer its phase's (it cannot resume), absent for a person's.
    */
   RunRestarted: "run.restarted",
   /**
@@ -392,6 +406,12 @@ export const EventTypes = {
   // Review
   ReviewCompleted: "review.completed",
   FindingResolved: "review.finding_resolved",
+  FeedbackSubmitted: "feedback.submitted",
+  FeedbackDelivered: "feedback.delivered",
+  FeedbackReplied: "feedback.replied",
+  FeedbackResolved: "feedback.resolved",
+  FeedbackReopened: "feedback.reopened",
+  FeedbackOutdated: "feedback.outdated",
 
   // Pull requests — the factory's output, and the state it waits on.
   PullRequestOpened: "pull_request.opened",

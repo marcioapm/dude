@@ -364,7 +364,30 @@ type Step struct {
 	// It starts a task subagent first ("subagent" or "subagent ask", as
 	// lux-fake's script line says it), then hangs.
 	Subagent string
+	// It prints the project secrets in its environment (every env secret
+	// its Run declares) with a bash tool call, NAME=value a line.
+	PrintEnv bool
+	// It commits those lines to this file, as an agent hard-coding a
+	// credential would.
+	CommitEnv string
 }
+
+// Agents that handle the project secrets they were given carelessly, for
+// redaction and the push scan (the fake lux only: a real lux's lux-fake
+// script plays them as the scripted agent).
+const (
+	// PrintSecretsModel prints its env secrets in a tool call, then works
+	// as the scripted agent does; with AskModel's question first when it
+	// implements, so a test can change a secret between its turns: the
+	// reply after the answer quotes the values it was given.
+	PrintSecretsModel = "fake/print-secrets"
+	// CommitSecretsModel's implementer commits its env secrets to
+	// SecretsFile in place of its usual commit.
+	CommitSecretsModel = "fake/commit-secrets"
+)
+
+// SecretsFile is where CommitSecretsModel's implementer commits them.
+const SecretsFile = "config/secrets.env"
 
 // ToolsThought is what ToolsModel's implementer thinks before it acts.
 const ToolsThought = "Progress first, then the commit: the person watching should see each step land."
@@ -606,6 +629,12 @@ func For(phase, model, runID string, fixed bool) Step {
 		}
 		if model == PeerModel {
 			step.Peer = true
+		}
+		if model == PrintSecretsModel {
+			step.PrintEnv, step.Ask = true, Question
+		}
+		if model == CommitSecretsModel {
+			step.Commit, step.CommitEnv = nil, SecretsFile
 		}
 		return step
 	case "fix":

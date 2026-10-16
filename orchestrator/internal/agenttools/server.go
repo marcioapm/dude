@@ -382,7 +382,7 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, coordinationTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, coordinationTools, feedbackTools, brainstormTools)
 }
 
 // define makes a tool from a typed function: its input schema from In,
@@ -463,6 +463,16 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
+	}
+	// Whatever a tool does with its arguments — a table, the ledger, a
+	// pull request on GitHub, a peer — it does with the Run's secret values
+	// redacted: lux redacts the agent's output stream, not its calls to dude.
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		red, err := ledger.Redactor(ctx, tx, c.RunID)
+		args = red.JSON(args)
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	// record keeps the call in the ledger, with its result, in tx. The
 	// result of a call already counted by its attempt is marked attempted,
