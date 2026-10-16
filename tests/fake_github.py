@@ -331,6 +331,11 @@ class FakeGitHub:
             self.send_webhook("issue_comment", {"action": "created", "issue": {"number": number, "pull_request": {"url": ""}}})
         return comment_id
 
+    def delete_comment(self, number: int, comment_id: int) -> None:
+        """A person deletes a conversation comment on GitHub."""
+        with self._lock:
+            self.pulls[number].comments = [c for c in self.pulls[number].comments if c["id"] != comment_id]
+
     def approve(self, number: int, reviewer: str = "alice") -> None:
         """A reviewer approves the pull request, and GitHub says so by webhook."""
         self.review(number, "APPROVED", reviewer=reviewer)
@@ -548,6 +553,19 @@ class FakeGitHub:
                 return subprocess.run(["git", *args], cwd=self.github.bare, capture_output=True, text=True)
 
             def do_PATCH(self) -> None:
+                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/issues/comments/(\d+)", self.path):
+                    # An edit of a conversation comment by its id: 404 when
+                    # it is not there (deleted), 403 when the token is not its author.
+                    body = self._body()
+                    with self.github._lock:
+                        for pr in self.github.pulls.values():
+                            for c in pr.comments:
+                                if c["id"] == int(m[1]) and not c.get("path"):
+                                    if c["user"]["login"] != self.github.token_login:
+                                        return self._send(403, {"message": "Resource not accessible by personal access token"})
+                                    c["body"], c["updated_at"] = body.get("body", ""), _now()
+                                    return self._send(200, c)
+                    return self._send(404, {"message": "Not Found"})
                 if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/hooks/(\d+)", self.path):
                     body = self._body()
                     with self.github._lock:
@@ -768,7 +786,7 @@ class FakeGitHub:
                     # Who the token is. The fixture accepts only the tokens it knows.
                     if self._profile() is None or not (self.headers.get("authorization") or "").startswith("Bearer "):
                         return self._send(401, {"message": "Bad credentials"})
-                    return self._send(200, {"login": "dude-bot"})
+                    return self._send(200, {"login": self.github.token_login})
                 if path == prefix:
                     return self._send(200, {"full_name": f"{self.github.owner}/{self.github.repo}", "private": True,
                                             "default_branch": "main", "owner": {"login": self.github.owner, "type": root.owner_type}})

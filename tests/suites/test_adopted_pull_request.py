@@ -30,10 +30,20 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
     """Review → fix → review → simplify on the person's branch, no implement, and no second pull request."""
+    resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token",
+                                                "apiBaseUrl": fake_github.api_url, "publicUrl": "https://dude.example.com"})
+    assert resp.status_code == 200, resp.text
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True},
+        "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
+                                         "simplifier": "fake/scripted", "qa_browser": "fake/test-fail-once"}),
+    })
+    assert resp.status_code == 200, resp.text
     person_head = fake_github.open_pull("feature/greet", title="Greet in Portuguese", author="gus")
     task = client.create_task(
         forge_project["id"], "Finish the Portuguese greeting",
         goal="Take over the open pull request and get it ready to merge.",
+        acceptanceCriteria=["It greets in Portuguese"],
         source={"kind": "pr", "repositoryId": _repo_id(forge_project), "pullRequest": "#1"},
     )
     assert task["source"] == {"kind": "pr", "repositoryId": _repo_id(forge_project), "repository": "greeter",
@@ -49,7 +59,21 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
         and any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(task["id"])),
         timeout=90, message="the adopted pull request never got back to review",
     )
+    verdict = wait_until(
+        lambda: next((c for c in fake_github.pulls[1].comments
+                      if f"<!-- dude:verdict task={task['id']} -->" in c["body"]
+                      and "- **pass** — It greets in Portuguese" in c["body"]), None),
+        timeout=90, message="no passing verdict comment on the adopted pull request",
+    )
+    head = fake_github.branch_sha("feature/greet")
+    assert f"Tested at `{head[:7]}`." in verdict["body"], verdict
+    assert "dude's test verdict for this pull request" in verdict["body"], verdict
+    assert "## Verification" in verdict["body"] and f"/task/{task['id']}" in verdict["body"], verdict
+    assert verdict["user"]["login"] == fake_github.token_login and verdict.get("updated_at"), verdict
+    assert len(fake_github.pulls[1].comments) == 1, fake_github.pulls[1].comments
+    assert fake_github.pulls[1].body == "", "the person's description was edited"
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
+    assert phases.count("test") == 2, phases
     assert "implement" not in phases, phases
     assert phases[0] == "review", phases
 

@@ -432,8 +432,30 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
+	mux.HandleFunc("PATCH "+prefix+"/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
+		p := s.number(w, r)
+		if p == nil {
+			return
+		}
+		var in struct{ Body string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		p.Body = in.Body
+		write(w, 200, s.pullJSON(p))
+	})
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
+	mux.HandleFunc("PATCH "+prefix+"/issues/comments/{id}", s.patchComment)
+	// Who the token is: the account its comments are by.
+	mux.HandleFunc("GET /user", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		write(w, 200, map[string]any{"login": s.poster()})
+	})
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec...}", s.compare)
@@ -697,7 +719,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	return map[string]any{
 		"number": p.Number, "node_id": s.NodeID(p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title,
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title, "body": p.Body,
 		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
@@ -966,6 +988,44 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	c.ID, c.Path = nextID.Add(1), parent.Path
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
+}
+
+// patchComment edits a conversation comment by its id, wherever it is, as
+// GitHub's issue comment endpoint does: 404 for one that is not there (or
+// was deleted), 403 when only its author may and the token is not.
+func (s *Server) patchComment(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var in struct {
+		Body string `json:"body"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.pulls {
+		for i := range p.Comments {
+			c := &p.Comments[i]
+			if c.ID != id {
+				continue
+			}
+			if c.Author != s.poster() {
+				fail(w, 403, "Resource not accessible by personal access token")
+				return
+			}
+			c.Body, c.UpdatedAt = in.Body, time.Now().UTC().Format(time.RFC3339)
+			write(w, 200, s.commentsJSON(p, []Comment{*c}, "issuecomment")[0])
+			return
+		}
+	}
+	fail(w, 404, "Not Found")
+}
+
+// DeleteComment removes a conversation comment, as a person deleting it on
+// GitHub does.
+func (s *Server) DeleteComment(number int, id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	p.Comments = slices.DeleteFunc(p.Comments, func(c Comment) bool { return c.ID == id })
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {

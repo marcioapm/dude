@@ -47,6 +47,8 @@ const (
 	EvPullRequestAction = "pull_request.action"
 	// Mergeability or distance from the base changed.
 	EvPullRequestMergeable = "pull_request.mergeable_changed"
+	// Verdict comment post/edit, or its failure, on an adopted pull request.
+	EvPullRequestVerdictCommented = "pull_request.verdict_commented"
 	// dude pushed a fix to an open pull request and asked again for a
 	// review from whoever had reviewed an older head (rerequestReviews).
 	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
@@ -68,6 +70,9 @@ type Store struct {
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
+	// Bound on the GitHub calls of one verdict comment; zero means
+	// verdictCommentTimeout.
+	CommentTimeout time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -981,7 +986,7 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 	if v := verificationSection(verified, st.Heads, link); v != "" {
 		// Before the factory's sign-off line.
 		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
-		body = body[:i] + v + "\n\n" + body[i:]
+		body = body[:i] + markedVerification(v) + "\n\n" + body[i:]
 	}
 	return title, body, err
 }

@@ -109,6 +109,7 @@ func newWorld(t *testing.T) *world {
 	mux.Handle("/acme/web.git/", w.web.Handler())
 	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
+	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if app := w.ghApp.Load(); app != nil && fakegithub.AppPath(r.URL.Path) {

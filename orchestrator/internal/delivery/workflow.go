@@ -1315,6 +1315,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
 	st.ActingOnPR = false
+	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	// Who reviewed an open pull request's older head is asked to look at
 	// the fix. Before opening any new pull request, so that nothing that
 	// opening parks on leaves the open ones unasked; a replay of this step

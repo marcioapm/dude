@@ -163,6 +163,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
+	ownVerdict, err := ownVerdicts(ctx, gh, listed)
+	if err != nil {
+		return err
+	}
 
 	// fresh is feedback not recorded yet; edited is feedback recorded
 	// before, whose words now address dude and have reached no conductor
@@ -213,7 +217,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			case body != f.Body:
 				rewritten = append(rewritten, f)
 			}
-			if !slices.Contains(mentioned, f.ID) && forge.AddressedToDude(f, s.FactoryLogins) {
+			if !slices.Contains(mentioned, f.ID) && !ownVerdict[f.ID] && forge.AddressedToDude(f, s.FactoryLogins) {
 				edited = append(edited, f)
 			}
 		}
@@ -329,7 +333,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 			addressed := forge.AddressedToDude(f, s.FactoryLogins)
 			switch {
-			case forge.Own(f):
+			case forge.Own(f) || ownVerdict[f.ID]:
 				p["own"] = true
 			case !waking[f.Author] && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
 				// Shown on the task, not acted on: say why.
@@ -360,7 +364,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
 		for _, f := range heard {
-			if !waking[f.Author] || !forge.AddressedToDude(f, s.FactoryLogins) {
+			if !waking[f.Author] || ownVerdict[f.ID] || !forge.AddressedToDude(f, s.FactoryLogins) {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
@@ -397,7 +401,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 
 	var permitted []forge.Feedback
 	for _, f := range fresh {
-		if waking[f.Author] {
+		if waking[f.Author] && !ownVerdict[f.ID] {
 			permitted = append(permitted, f)
 		}
 	}
@@ -488,6 +492,12 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 	if len(bots) == 0 {
 		return batch, nil
 	}
+	// dude's verdict comment, posted as an App, is a bot's too: never context.
+	ownVerdict, err := ownVerdicts(ctx, gh, bots)
+	if err != nil {
+		return nil, err
+	}
+	bots = slices.DeleteFunc(bots, func(b forge.Feedback) bool { return ownVerdict[b.ID] })
 	// A bot's line comment in a thread resolved or outdated is no longer open; a
 	// top-level comment has no resolution and stays. Unread, the batch goes
 	// without bots: its feedback is already recorded, and no later sync
@@ -506,6 +516,29 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 		}
 	}
 	return forge.RideAlong(batch, requested, open), nil
+}
+
+// ownVerdicts are the ids of dude's verdict comments among fs: marked, and
+// by the account dude posts as, which is asked of GitHub only when a
+// comment carries the marker. A person's copy of the marker is theirs.
+func ownVerdicts(ctx context.Context, gh *forge.GitHub, fs []forge.Feedback) (map[string]bool, error) {
+	out := map[string]bool{}
+	self := ""
+	for _, f := range fs {
+		if !forge.VerdictMarked(f) {
+			continue
+		}
+		if self == "" {
+			var err error
+			if self, err = gh.Login(ctx); err != nil {
+				return nil, err
+			}
+		}
+		if forge.OwnVerdict(f, self) {
+			out[f.ID] = true
+		}
+	}
+	return out, nil
 }
 
 // signal tells the workflow what a sync found. One signal per distinct

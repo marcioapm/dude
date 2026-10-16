@@ -6,15 +6,19 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -338,6 +342,8 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
+	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {
 		return workflow.Result{}, err
@@ -413,6 +419,303 @@ func SettleVerdictTx(ctx context.Context, tx pgx.Tx, e *Escalation, action, pers
 	_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
 		WHERE id = ANY($1) AND status = 'open'`, findingIDs, decision+" by a person: "+note)
 	return err
+}
+
+// verdictCommentTimeout bounds every GitHub call of one verdict comment
+// together: up to a recovery search, an edit and a post, each also under
+// forge's own per-request limit.
+const verdictCommentTimeout = 30 * time.Second
+
+// CommentVerdict keeps one verdict comment on each adopted pull request.
+// Its successful ledger event keeps the comment id across workflow replays
+// and attempts; the marker recovers a post whose response or record was
+// lost. GitHub failures are recorded, never returned to the delivery.
+//
+// Two short transactions around the GitHub calls, none open across them:
+// what to post, then its record. No lock: the callers are steps of the
+// task's one delivery (testVerdict, awaitPRFix), which never run at once,
+// and an adopted pull request is one live task's.
+func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
+	if !st.adoptedPR() {
+		return
+	}
+	var prID, repo, repoURL, body string
+	var number int
+	var commentID int64
+	var section, link string
+	var err error
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.number
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND pr.adopted AND pr.state IN ('open', 'draft')`,
+			st.PullRequestIDs, st.TaskID).Scan(&prID, &repo, &repoURL, &number); err != nil {
+			if db.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		section, link, err = verificationText(ctx, tx, st)
+		if err != nil {
+			return err
+		}
+		if section == "" {
+			return nil
+		}
+		body = "dude's test verdict for this pull request"
+		if link != "" {
+			body += " — " + link
+		}
+		body += "\n\n" + section + "\n\n" + forge.VerdictMarker(st.TaskID)
+		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT (payload->>'commentId')::bigint FROM events
+			WHERE event_type = $1 AND payload->>'pullRequestId' = $2 AND payload ? 'commentId'
+			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID)
+	})
+	if err != nil || body == "" {
+		if err != nil {
+			slog.Warn("reading the adopted pull request's test verdict failed", "task", st.TaskID, "error", err)
+		}
+		return
+	}
+	payload := map[string]any{"pullRequestId": prID, "repo": repo, "number": number, "head": st.Heads[repo]}
+	posted, edited, postErr := s.postVerdict(ctx, org, forges, forge.SlugFromURL(repoURL), number, st.TaskID, &commentID, body)
+	payload["edited"] = edited
+	if postErr != nil {
+		slog.Warn("posting the adopted pull request's test verdict failed", "pr", prID, "error", postErr)
+		payload["error"] = postErr.Error()
+		if commentID != 0 {
+			payload["commentId"] = commentID
+		}
+	} else {
+		payload["commentId"], payload["url"] = posted.CommentID, posted.URL
+	}
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return emitTx(ctx, tx, org, st, EvPullRequestVerdictCommented, payload)
+	}); err != nil {
+		slog.Warn("recording the adopted pull request's test verdict comment failed", "task", st.TaskID, "error", err)
+	}
+}
+
+// postVerdict is the GitHub side of CommentVerdict, within its time limit:
+// the comment *commentID names edited, else one found by its marker, else
+// a new one. *commentID ends as the comment tried.
+func (s *Store) postVerdict(ctx context.Context, org string, forges Forges, slug string, number int, taskID string,
+	commentID *int64, body string) (posted forge.Posted, edited bool, err error) {
+	timeout := s.CommentTimeout
+	if timeout == 0 {
+		timeout = verdictCommentTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gh, err := forges.For(ctx, org)
+	if err == nil && gh == nil {
+		err = fmt.Errorf("no forge credential to post the verdict with")
+	}
+	if err != nil {
+		return posted, false, err
+	}
+	if *commentID == 0 {
+		found, err := gh.FindVerdictComment(ctx, slug, number, taskID)
+		if err != nil {
+			return posted, false, err
+		}
+		*commentID = found.CommentID
+	}
+	if *commentID != 0 {
+		posted, err = gh.EditComment(ctx, slug, *commentID, body)
+		var refusal *forge.Error
+		if !errors.As(err, &refusal) || !refusal.NotFound() {
+			return posted, true, err
+		}
+	}
+	posted, err = gh.Comment(ctx, slug, number, body)
+	return posted, false, err
+}
+
+// RefreshVerification updates only dude's section in the current GitHub body
+// of each open pull request dude opened, at most refreshWorkers at once.
+// Database reads and ledger writes finish in separate transactions around GitHub.
+func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, forges Forges) {
+	if st.adoptedPR() || len(st.PullRequestIDs) == 0 {
+		return
+	}
+	type target struct {
+		ID, Repo, URL string
+		Number        int
+	}
+	var prs []target
+	var section string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.number
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) AND pr.task_id = $2 AND NOT pr.adopted AND pr.state IN ('open', 'draft')`,
+			st.PullRequestIDs, st.TaskID)
+		if err != nil {
+			return err
+		}
+		prs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[target])
+		if err != nil || len(prs) == 0 {
+			return err
+		}
+		section, _, err = verificationText(ctx, tx, st)
+		return err
+	})
+	if err != nil {
+		slog.Warn("reading pull request verification failed", "task", st.TaskID, "error", err)
+		return
+	}
+	if section == "" {
+		return
+	}
+	// One budget for every pull request together, so a task over many
+	// repositories ends within it; the ledger writes keep the step's ctx and
+	// record a pull request the budget ran out on.
+	timeout := s.CommentTimeout
+	if timeout == 0 {
+		timeout = verdictCommentTimeout
+	}
+	budget, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gh, ghErr := forges.For(budget, org)
+	if ghErr == nil && gh == nil {
+		ghErr = fmt.Errorf("no forge credential to update verification with")
+	}
+	jobs := make(chan target)
+	var wg sync.WaitGroup
+	for range min(refreshWorkers, len(prs)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pr := range jobs {
+				updateErr := ghErr
+				if updateErr == nil {
+					updateErr = refreshBody(budget, gh, forge.SlugFromURL(pr.URL), pr.Number, section)
+				}
+				payload := map[string]any{"pullRequestId": pr.ID, "repo": pr.Repo, "number": pr.Number, "head": st.Heads[pr.Repo]}
+				if updateErr != nil {
+					slog.Warn("updating pull request verification failed", "pr", pr.ID, "error", updateErr)
+					payload["error"] = updateErr.Error()
+				}
+				if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					return emitTx(ctx, tx, org, st, "pull_request.verification_updated", payload)
+				}); err != nil {
+					slog.Warn("recording pull request verification update failed", "pr", pr.ID, "error", err)
+				}
+			}
+		}()
+	}
+	for _, pr := range prs {
+		jobs <- pr
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+// refreshWorkers bounds how many pull requests' bodies one refresh asks
+// GitHub about at once.
+const refreshWorkers = 4
+
+// refreshAttempts bounds how many times one refresh merges its section into
+// a body a person keeps editing before it leaves it to the next verdict.
+const refreshAttempts = 3
+
+var errBodyChanged = errors.New("body changed during update")
+
+// refreshBody writes section into the pull request's current body. GitHub
+// has no conditional update for an issue body, so the body is read again
+// just before the PATCH and, if a person changed it since, merged again
+// from theirs. A person's edit landing between that last read and the PATCH
+// itself, about one round-trip, is still overwritten.
+func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, section string) error {
+	body, err := gh.PullRequestBody(ctx, slug, number)
+	if err != nil {
+		return err
+	}
+	for range refreshAttempts {
+		merged := replaceVerification(body, section)
+		if merged == body {
+			return nil
+		}
+		fresh, err := gh.PullRequestBody(ctx, slug, number)
+		if err != nil {
+			return err
+		}
+		if fresh == body {
+			return gh.EditPullRequest(ctx, slug, number, merged)
+		}
+		body = fresh
+	}
+	return errBodyChanged
+}
+
+// The hidden lines around the verification section dude writes into a pull
+// request body it opened: what lies between them is dude's, nothing else is.
+const (
+	verificationStart = "<!-- dude:verification -->"
+	verificationEnd   = "<!-- /dude:verification -->"
+)
+
+func markedVerification(section string) string {
+	return verificationStart + "\n" + section + "\n" + verificationEnd
+}
+
+func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string, error) {
+	v, err := latestVerification(ctx, tx, st)
+	if err != nil {
+		return "", "", err
+	}
+	link, err := taskLink(ctx, tx, st.TaskID)
+	if err != nil {
+		return "", "", err
+	}
+	return verificationSection(v, st.Heads, link), link, nil
+}
+
+// replaceVerification puts section between dude's markers in body, keeping
+// every other byte. A marker counts only as a whole line at column 0 and
+// outside a fenced code block; any other is text. With
+// no marked section it appends one: a `## Verification` without markers is a
+// person's, or one dude wrote before it marked its sections, and either way
+// is left as it is.
+func replaceVerification(body, section string) string {
+	nl := "\n"
+	if strings.Contains(body, "\r\n") {
+		nl = "\r\n"
+	}
+	marked := strings.ReplaceAll(markedVerification(section), "\n", nl)
+	start, fence, offset := -1, "", 0
+	for line := range strings.SplitAfterSeq(body, "\n") {
+		content := strings.TrimRight(line, "\r\n")
+		var code bool
+		fence, code = fenceAfter(fence, content)
+		// An indented marker is a person's, e.g. in a list item's fenced
+		// example, whose fence fenceAfter does not see.
+		switch content {
+		case verificationStart:
+			if !code {
+				start = offset
+			}
+		case verificationEnd:
+			if !code && start >= 0 {
+				return body[:start] + marked + body[offset+len(content):]
+			}
+		}
+		offset += len(line)
+	}
+	if fence != "" {
+		// A fence the person left open would swallow the section.
+		if !strings.HasSuffix(body, nl) {
+			body += nl
+		}
+		body += fence
+	}
+	separator := nl + nl
+	switch {
+	case body == "" || strings.HasSuffix(body, nl+nl):
+		separator = ""
+	case strings.HasSuffix(body, nl):
+		separator = nl
+	}
+	return body + separator + marked
 }
 
 // verificationSection is the pull request's account of the test: each

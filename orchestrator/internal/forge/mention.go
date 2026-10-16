@@ -17,6 +17,13 @@ const DudeMention = "dude"
 // who may be a person whose comments otherwise count.
 const ReplyMarker = "<!-- dude:conductor -->"
 
+// VerdictMarker ends the comment that carries dude's test verdict on a
+// pull request it took over: hidden, as ReplyMarker, and naming the task
+// whose verdict it is.
+func VerdictMarker(taskID string) string { return "<!-- dude:verdict task=" + taskID + " -->" }
+
+var verdictMarker = regexp.MustCompile(`^<!-- dude:verdict task=[A-Za-z0-9_-]+ -->$`)
+
 // Own says the feedback is a comment the conductor posted: its last
 // non-blank line is the marker itself, as delivery.CheckReplyTx writes it, outside
 // any code fence and blockquote. A person quoting a reply carries the
@@ -28,6 +35,22 @@ func Own(f Feedback) bool {
 	// The marker line itself goes through the fence reading: a marker that
 	// ends a list item ends a fence left open in it.
 	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
+}
+
+// VerdictMarked says the feedback ends in a VerdictMarker, read as Own
+// reads ReplyMarker. Anyone can type it: alone it says nothing of whose
+// comment it is (OwnVerdict).
+func VerdictMarked(f Feedback) bool {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
+	ind, rest := indent(lines[len(lines)-1])
+	return verdictMarker.MatchString(strings.TrimSpace(rest)) && ind <= 3 && !fenced(lines)
+}
+
+// OwnVerdict says the feedback is dude's verdict comment: verdict-marked
+// and posted by self, the account dude posts as (GitHub.Login). With no
+// self known, nothing is.
+func OwnVerdict(f Feedback, self string) bool {
+	return self != "" && strings.EqualFold(f.Author, self) && VerdictMarked(f)
 }
 
 // fenced says the last of lines is inside a code fence, or an HTML block
@@ -237,9 +260,11 @@ func AddressedToDude(f Feedback, factoryLogins []string) bool {
 }
 
 // Posted is a comment dude posted: its feedback id (as Feedback names
-// comments) and where a person reads it.
+// comments), where a person reads it, and GitHub's id of a conversation
+// comment (what EditComment takes).
 type Posted struct {
-	ID, URL string
+	ID, URL   string
+	CommentID int64
 }
 
 type ghPosted struct {
@@ -253,7 +278,39 @@ func (g *GitHub) Comment(ctx context.Context, slug string, number int, body stri
 	if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), map[string]string{"body": body}, &out); err != nil {
 		return Posted{}, err
 	}
-	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL}, nil
+	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL, CommentID: out.ID}, nil
+}
+
+// EditComment replaces the body of a conversation comment the token
+// posted. A comment deleted on GitHub is a 404 (Error.NotFound).
+func (g *GitHub) EditComment(ctx context.Context, slug string, commentID int64, body string) (Posted, error) {
+	var out ghPosted
+	if err := g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/comments/%d", slug, commentID), map[string]string{"body": body}, &out); err != nil {
+		return Posted{}, err
+	}
+	return Posted{ID: fmt.Sprintf("issue-comment-%d", out.ID), URL: out.HTMLURL, CommentID: out.ID}, nil
+}
+
+// FindVerdictComment recovers a verdict post whose response or ledger
+// record was lost. All conversation comments are checked, including pages
+// before the feedback cursor; only one by dude's account counts
+// (OwnVerdict), and a quote is not the marker.
+func (g *GitHub) FindVerdictComment(ctx context.Context, slug string, number int, taskID string) (Posted, error) {
+	self, err := g.Login(ctx)
+	if err != nil {
+		return Posted{}, err
+	}
+	comments, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number))
+	if err != nil {
+		return Posted{}, err
+	}
+	for _, c := range comments {
+		if OwnVerdict(Feedback{Author: login(c.User), Body: c.Body}, self) &&
+			strings.HasSuffix(strings.TrimSpace(c.Body), VerdictMarker(taskID)) {
+			return Posted{ID: fmt.Sprintf("issue-comment-%d", c.ID), URL: c.HTMLURL, CommentID: c.ID}, nil
+		}
+	}
+	return Posted{}, nil
 }
 
 // ReplyToLineComment answers a line comment in its review thread.

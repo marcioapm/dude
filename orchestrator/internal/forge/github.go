@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -525,6 +526,18 @@ func (g *GitHub) OpenPullRequestAs(ctx context.Context, in OpenPullRequest, toke
 	return creation.OpenPullRequest(ctx, in)
 }
 
+func (g *GitHub) PullRequestBody(ctx context.Context, slug string, number int) (string, error) {
+	var p struct {
+		Body string `json:"body"`
+	}
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p)
+	return p.Body, err
+}
+
+func (g *GitHub) EditPullRequest(ctx context.Context, slug string, number int, body string) error {
+	return g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/%d", slug, number), map[string]string{"body": body}, nil)
+}
+
 func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullRequestRef, error) {
 	var p ghPull
 	err := g.do(ctx, "POST", "/repos/"+in.Slug+"/pulls", map[string]any{
@@ -1018,6 +1031,39 @@ func (g *GitHub) UserID(ctx context.Context, login string) (int64, error) {
 		return 0, err
 	}
 	return u.ID, nil
+}
+
+var logins sync.Map // sessionKey → login
+
+// Login is the account the credential's comments are posted as: a GitHub
+// App's bot ("<slug>[bot]"), else the PAT's owner from GET /user. Read once
+// per credential and process; a failed read is not kept.
+func (g *GitHub) Login(ctx context.Context) (string, error) {
+	key := sessionKey(g.cred)
+	if l, ok := logins.Load(key); ok {
+		return l.(string), nil
+	}
+	var login string
+	if g.IsApp() {
+		bot, err := g.Bot(ctx)
+		if err != nil {
+			return "", err
+		}
+		login = bot.Name
+	} else {
+		var u struct {
+			Login string `json:"login"`
+		}
+		if err := g.do(ctx, "GET", "/user", nil, &u); err != nil {
+			return "", err
+		}
+		login = u.Login
+	}
+	if login == "" {
+		return "", &Error{Status: http.StatusBadGateway, Message: "GitHub named no login for the credential"}
+	}
+	logins.Store(key, login)
+	return login, nil
 }
 
 // CanWrite says whether a permission lets its holder push: what "a
