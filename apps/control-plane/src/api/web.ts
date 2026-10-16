@@ -15,6 +15,8 @@ const HASHED_PREFIX = "/assets/";
 // Scripts other origins load (a preview page's overlay, apps/web/public/feedback):
 // a missing one is a 404, never index.html parsed as script on someone's page.
 const SCRIPT_PREFIX = "/feedback/";
+// Loadable by a preview page that sends Cross-Origin-Embedder-Policy: require-corp.
+const CROSS_ORIGIN = { "cross-origin-resource-policy": "cross-origin" };
 const IMMUTABLE = "public, max-age=31536000, immutable";
 // index.html names the current hashes, and sw.js must be re-checked for a
 // new service worker to install, so neither may be served stale.
@@ -44,6 +46,7 @@ export function webApp(dir: string): Fallback {
     if (file !== root && !file.startsWith(root + sep)) return badRequest();
 
     if (await isFile(file)) {
+      if (path.startsWith(SCRIPT_PREFIX)) return send(request, file, REVALIDATE, CROSS_ORIGIN);
       const hashed = path.startsWith(HASHED_PREFIX);
       return send(request, file, hashed ? IMMUTABLE : REVALIDATE);
     }
@@ -66,13 +69,37 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-function send(request: Request, path: string, cacheControl: string): Response {
+async function send(request: Request, path: string, cacheControl: string, extra: Record<string, string> = {}): Promise<Response> {
   const file = Bun.file(path);
-  const headers = { "content-type": file.type, "cache-control": cacheControl };
+  const { size, mtimeMs } = await stat(path);
+  // HTTP dates have whole seconds; If-Modified-Since is compared at that grain.
+  const modified = Math.floor(mtimeMs / 1000) * 1000;
+  const etag = `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`;
+  const headers = {
+    "content-type": file.type,
+    "cache-control": cacheControl,
+    "last-modified": new Date(modified).toUTCString(),
+    etag,
+    ...extra,
+  };
+  if (notModified(request, etag, modified)) return new Response(null, { status: 304, headers });
   if (request.method === "HEAD") {
-    return new Response(null, { headers: { ...headers, "content-length": String(file.size) } });
+    return new Response(null, { headers: { ...headers, "content-length": String(size) } });
   }
   return new Response(file, { headers });
+}
+
+// RFC 9110 13.1.2/13.1.3: If-None-Match (weak comparison) wins over If-Modified-Since.
+function notModified(request: Request, etag: string, modified: number): boolean {
+  const inm = request.headers.get("if-none-match");
+  if (inm !== null) {
+    const weak = (t: string) => t.trim().replace(/^W\//, "");
+    return inm.split(",").some((t) => t.trim() === "*" || weak(t) === weak(etag));
+  }
+  const ims = request.headers.get("if-modified-since");
+  if (ims === null) return false;
+  const since = Date.parse(ims);
+  return !Number.isNaN(since) && modified <= since;
 }
 
 function badRequest(): Response {

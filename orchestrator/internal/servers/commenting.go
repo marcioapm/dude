@@ -94,6 +94,7 @@ func OverlaySnippet(origin string) string {
 		return ""
 	}
 	o := html.EscapeString(strings.TrimRight(origin, "/"))
+	// Never add crossorigin: it makes the load a CORS request, and dude sends no Access-Control-Allow-Origin.
 	s := `<script src="` + o + `/feedback/overlay.js" data-dude-origin="` + o + `" async></script>`
 	if len(s) > maxInject {
 		return ""

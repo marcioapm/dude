@@ -4,7 +4,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRouter } from "../src/index.ts";
@@ -86,6 +86,46 @@ describe("DUDE_WEB_DIR", () => {
   test("a missing overlay script is a 404, never the page parsed as script", async () => {
     const res = await get("/feedback/other.js");
     expect(res.status).toBe(404);
+  });
+
+  test("the overlay may be embedded cross-origin; the page may not", async () => {
+    const overlay = await get("/feedback/overlay.js");
+    expect(overlay.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+    const page = await get("/");
+    expect(page.headers.has("cross-origin-resource-policy")).toBe(false);
+  });
+
+  test("a revalidation with a validator is a 304 until the file changes", async () => {
+    const path = join(parent, "web", "feedback", "overlay.js");
+    const first = await get("/feedback/overlay.js");
+    const etag = first.headers.get("etag");
+    const modified = first.headers.get("last-modified");
+    expect(etag).toBeTruthy();
+    expect(modified).toBeTruthy();
+    await first.text();
+    for (const validator of [{ "if-none-match": etag! }, { "if-modified-since": modified! }]) {
+      const again = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: validator }));
+      expect(again.status).toBe(304);
+      expect(await again.text()).toBe("");
+    }
+    // index.html goes through the same path.
+    const index = await get("/");
+    const indexAgain = await router.handle(new Request("http://dude.test/", { headers: { "if-none-match": index.headers.get("etag")! } }));
+    expect(indexAgain.status).toBe(304);
+
+    const changed = "console.debug('overlay, changed');";
+    await writeFile(path, changed);
+    await utimes(path, new Date(), new Date(Date.now() + 5_000));
+    try {
+      const res = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: { "if-none-match": etag! } }));
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe(changed);
+      const byDate = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: { "if-modified-since": modified! } }));
+      expect(byDate.status).toBe(200);
+      expect(await byDate.text()).toBe(changed);
+    } finally {
+      await writeFile(path, OVERLAY);
+    }
   });
 
   test("serving the overlay opens no API route to the same anonymous caller", async () => {
