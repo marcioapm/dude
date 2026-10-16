@@ -1,0 +1,391 @@
+/*
+ * People's feedback: the card, its anchor, excerpt, thread and status; the
+ * inline editor; the drafts tray; the submit confirmation. Lines follow the
+ * rules: a field's edge, focus, a diff's gutter, and a 2px bar that carries
+ * a thread or a draft's dashed "not sent".
+ */
+
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spacer {
+  flex: 1;
+}
+.sha {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  padding: 0 var(--ds-space-4);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-active-wash);
+}
+.statusWrap {
+  display: inline-flex;
+}
+.problem {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-danger-fg);
+}
+.limit {
+  color: var(--ds-tone-attention-fg);
+  font-size: var(--ds-text-sm);
+}
+
+/* -- The card ------------------------------------------------------- */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-primary);
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-md);
+}
+.inline {
+  max-width: 880px;
+}
+/* A draft: the surface, and a dashed bar as a steer not yet read has — not sent, and nobody else's to see. */
+.draft {
+  background: var(--ds-color-surface);
+}
+.draft::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(to bottom, var(--ds-color-accent) 0 4px, transparent 4px 7px);
+}
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6) var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.who {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.anchorRow {
+  display: flex;
+  min-width: 0;
+}
+.anchor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.anchor b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.anchorLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.anchorLink:hover b {
+  color: var(--ds-color-accent-text);
+  text-decoration: underline;
+}
+.anchorLink:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.body {
+  min-width: 0;
+}
+.body > *,
+.entryBody > * {
+  margin: 0;
+}
+.excerpt {
+  overflow: hidden;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-surface);
+}
+.excerptNote {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-4) var(--ds-space-12);
+  background: var(--ds-color-hover-wash);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.thread {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--ds-space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  /* A bar that carries a thread. */
+  box-shadow: inset 2px 0 0 var(--ds-color-border);
+}
+.entry {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--ds-space-8);
+}
+.entryFace {
+  padding-top: 1px;
+}
+.entryMain {
+  min-width: 0;
+}
+.entryHead {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.entryHead b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.entryBody {
+  margin-top: 2px;
+}
+.pendingLine {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.pendingLine svg {
+  margin-right: var(--ds-space-4);
+  vertical-align: -1px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin: 0 calc(-1 * var(--ds-space-8)) calc(-1 * var(--ds-space-4));
+  font-size: var(--ds-text-sm);
+}
+.actions > .muted {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding-left: var(--ds-space-8);
+}
+.replyBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+
+/* -- A preview item's page ------------------------------------------ */
+.preview {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--ds-space-12);
+  align-items: start;
+}
+.previewNoShot {
+  grid-template-columns: minmax(0, 1fr);
+}
+.shot {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-sunken);
+}
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+}
+.facts dt {
+  color: var(--ds-color-text-muted);
+}
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.facts a {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  color: var(--ds-color-accent-text);
+}
+
+/* -- The editor ----------------------------------------------------- */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  max-width: 880px;
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-raised);
+  box-shadow: var(--ds-shadow-1);
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-md);
+}
+.card .editor {
+  padding: 0;
+  box-shadow: none;
+  background: none;
+}
+.editorHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.editorWhere {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.editorWhere b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.private {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+}
+.editorFoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+
+/* -- The tray: at the foot of a task's pages ------------------------ */
+.tray {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--ds-z-raised);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-chrome);
+  box-shadow: var(--ds-shadow-2);
+}
+.trayBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  min-height: 48px;
+  padding: var(--ds-space-6) var(--ds-space-main-pad);
+  font-size: var(--ds-text-sm);
+}
+.trayIcon {
+  color: var(--ds-color-text-secondary);
+}
+.trayCount b {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.trayNote,
+.trayRoute {
+  color: var(--ds-color-text-muted);
+}
+.trayPanel {
+  max-height: min(40vh, 360px);
+  overflow: auto;
+  padding: var(--ds-space-8) var(--ds-space-main-pad) 0;
+}
+.trayList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.trayRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+}
+.trayRow:hover {
+  background: var(--ds-color-hover-wash);
+}
+.trayAnchor {
+  display: flex;
+  min-width: 0;
+}
+.trayText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.trayActions {
+  display: inline-flex;
+}
+@media (max-width: 640px) {
+  .trayRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .trayText {
+    display: none;
+  }
+  .trayNote,
+  .trayRoute {
+    display: none;
+  }
+  .preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* -- Submit --------------------------------------------------------- */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.confirm p {
+  margin: 0;
+}
+.confirmBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.confirmBlock h3 {
+  margin: 0;
+}
+.confirmLine b {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}

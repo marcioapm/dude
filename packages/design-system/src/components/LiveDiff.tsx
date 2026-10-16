@@ -1,7 +1,9 @@
 import { createPortal } from "react-dom";
-import { useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
+import { plural } from "../util/format.ts";
+import { Icon } from "../icons/index.tsx";
 import { IconButton } from "../primitives/Button.tsx";
 import { DiffStat } from "./DiffStat.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
@@ -50,9 +52,80 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly onSelectedChange?: ((path: string | null) => void) | undefined;
   /** The list of files down the left; off for one file on its own (in a viewer). */
   readonly fileList?: boolean | undefined;
+  /** Comments on lines: a gutter "+", a range picked by press and drag, and rows under a line. */
+  readonly commenting?: LiveDiffCommenting | undefined;
 }
 
 export type LiveDiffView = "unified" | "split";
+export type DiffSide = "old" | "new";
+
+/** Lines of one side of one file, as numbered on that side. */
+export interface DiffRange {
+  readonly path: string;
+  readonly side: DiffSide;
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+export interface LiveDiffCommenting {
+  /** Lines can be picked to comment on: the "+" and the drag. Off, only what `renderAfterLine` draws shows. */
+  readonly canStart?: boolean | undefined;
+  /** At most this many lines in one range. */
+  readonly maxLines: number;
+  /** The range picked, the app's to keep. */
+  readonly selection: DiffRange | null;
+  /** A range picked: `done` false while the pointer still drags it, true once let go (or picked by key). */
+  readonly onSelectionChange: (range: DiffRange | null, done: boolean) => void;
+  /** Under the line numbered `line` on `side`: what was written there, the editor. Called for every line: keep it cheap. */
+  readonly renderAfterLine?: ((path: string, side: DiffSide, line: number) => ReactNode) | undefined;
+  /** Under a file's header, before its first hunk: what no longer has lines in it. */
+  readonly renderFileHead?: ((path: string) => ReactNode) | undefined;
+  /** After a file's name in the list: how many comments it has. */
+  readonly fileMark?: ((path: string) => ReactNode) | undefined;
+}
+
+/** A line's "+" and numbers carry where they are, so one handler on the diff serves all of them. */
+interface Point {
+  readonly path: string;
+  readonly side: DiffSide;
+  readonly line: number;
+  readonly hunk: number;
+}
+
+const pointOf = (el: Element | null, side?: DiffSide): Point | null => {
+  const at = el?.closest<HTMLElement>("[data-cline]");
+  if (!at) return null;
+  // A unified context line is on both sides: dragged over from the old side, it is its old number.
+  const old = at.dataset["cold"];
+  if (side === "old" && old !== undefined) return { path: at.dataset["cpath"]!, side, line: Number(old), hunk: Number(at.dataset["chunk"]) };
+  return { path: at.dataset["cpath"]!, side: at.dataset["cside"] as DiffSide, line: Number(at.dataset["cline"]), hunk: Number(at.dataset["chunk"]) };
+};
+
+/** `from` stretched to `to` on its side and hunk, capped at `max` lines counted from `from`. */
+export function stretchRange(from: Point, to: Point, max: number): DiffRange | null {
+  if (from.path !== to.path || from.side !== to.side || from.hunk !== to.hunk) return null;
+  let start = Math.min(from.line, to.line);
+  let end = Math.max(from.line, to.line);
+  if (end - start + 1 > max) {
+    if (to.line > from.line) end = start + max - 1;
+    else start = end - max + 1;
+  }
+  return { path: from.path, side: from.side, startLine: start, endLine: end };
+}
+
+const sideOfLine = (l: LiveDiffLine): DiffSide => (l.kind === "-" ? "old" : "new");
+const numberOn = (l: LiveDiffLine, side: DiffSide) => (side === "old" ? l.old : l.new);
+const inRange = (r: DiffRange | null, path: string, side: DiffSide, n: number | null) =>
+  r !== null && n !== null && r.path === path && r.side === side && n >= r.startLine && n <= r.endLine;
+
+/** Unified: which rows of a hunk a range covers, the other side's lines between its ends included. */
+function coveredRows(lines: ReadonlyArray<LiveDiffLine>, path: string, r: DiffRange | null): [number, number] | null {
+  if (!r || r.path !== path) return null;
+  const on = (l: LiveDiffLine) => (r.side === "old" ? l.kind !== "+" : l.kind !== "-");
+  const first = lines.findIndex((l) => on(l) && numberOn(l, r.side) === r.startLine);
+  const last = lines.findIndex((l) => on(l) && numberOn(l, r.side) === r.endLine);
+  return first >= 0 && last >= first ? [first, last] : null;
+}
 
 /** What the agent did last: its face, the tool ("Write"), the file's name, and when. */
 export interface LastChange {
@@ -125,7 +198,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, commenting, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -193,6 +266,93 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
 
   const short = base.slice(0, 7);
   const last = lastChange ? <LastChangeLine change={lastChange} /> : null;
+
+  // Picking lines: a press on a "+" or a line number starts a range, moving
+  // over lines of the same side and hunk stretches it, letting go anywhere ends it.
+  const canStart = Boolean(commenting?.canStart);
+  const drag = useRef<{ from: Point; range: DiffRange } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const latestCommenting = useRef(commenting);
+  latestCommenting.current = commenting;
+  useEffect(() => {
+    if (!dragging) return;
+    const up = () => {
+      const d = drag.current;
+      drag.current = null;
+      setDragging(false);
+      if (d) latestCommenting.current?.onSelectionChange(d.range, true);
+    };
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, [dragging]);
+  const hovered = useRef<HTMLElement | null>(null);
+  const setHover = (el: HTMLElement | null) => {
+    if (hovered.current === el) return;
+    hovered.current?.removeAttribute("data-hover");
+    hovered.current = el;
+    el?.setAttribute("data-hover", "");
+  };
+  const pointer = commenting ? {
+    onMouseDown: (e: React.MouseEvent) => {
+      if (!canStart || e.button !== 0) return;
+      const start = (e.target as Element).closest("[data-cstart]");
+      const at = start ? pointOf(start) : null;
+      if (!at) return;
+      e.preventDefault();
+      const range = { path: at.path, side: at.side, startLine: at.line, endLine: at.line };
+      drag.current = { from: at, range };
+      setDragging(true);
+      commenting.onSelectionChange(range, false);
+    },
+    onMouseOver: (e: React.MouseEvent) => {
+      const row = (e.target as Element).closest<HTMLElement>("[data-cline]");
+      setHover(canStart && !drag.current ? row : null);
+      const d = drag.current;
+      const at = pointOf(row, d?.from.side);
+      if (!d || !at) return;
+      const range = stretchRange(d.from, at, commenting.maxLines);
+      if (range && (range.startLine !== d.range.startLine || range.endLine !== d.range.endLine)) {
+        d.range = range;
+        commenting.onSelectionChange(range, false);
+      }
+    },
+    onMouseLeave: () => setHover(null),
+  } : {};
+  // The "+" by key: Enter or Space picks its line; with Shift, stretches the range picked to it.
+  const pickByKey = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!commenting || e.detail !== 0) return;
+    const at = pointOf(e.currentTarget);
+    if (!at) return;
+    const sel = commenting.selection;
+    // Stretched only within the hunk the range is in: the start's line, found as the drag would find it.
+    const startEl = sel && e.shiftKey ? [...(scroller.current?.querySelectorAll("[data-cline]") ?? [])]
+      .find((el) => { const p = pointOf(el, sel.side); return p?.path === sel.path && p.side === sel.side && p.line === sel.startLine; }) : undefined;
+    const from = startEl ? pointOf(startEl, sel!.side) : null;
+    const range = (from && stretchRange(from, pointOf(e.currentTarget, from.side) ?? at, commenting.maxLines))
+      ?? { path: at.path, side: at.side, startLine: at.line, endLine: at.line };
+    commenting.onSelectionChange(range, true);
+  };
+  const selection = commenting?.selection ?? null;
+  /** A line's place, for the handlers above, and its "+" when lines can be picked. */
+  const lineAttrs = (path: string, side: DiffSide, n: number | null, hunk: number, old?: number | null) =>
+    commenting && n !== null ? { "data-cpath": path, "data-cside": side, "data-cline": n, "data-chunk": hunk, ...(old != null ? { "data-cold": old } : {}) } : {};
+  const numberAttrs = (n: number | null) => (canStart && n !== null ? { "data-cstart": "" } : {});
+  const plus = (side: DiffSide, n: number | null) => canStart && n !== null ? (
+    <button type="button" className={styles["plus"]} data-cstart="" data-testid="gutter-add" onClick={pickByKey}
+      aria-label={`Comment on line ${n}${side === "old" ? " (removed)" : ""}`}>
+      <Icon name="plus" size={12} />
+    </button>
+  ) : null;
+  const hint = (path: string, side: DiffSide, n: number | null) => dragging && selection && selection.path === path && selection.side === side && selection.endLine === n ? (
+    <div className={styles["dragHint"]} data-testid="drag-hint">
+      {plural(selection.endLine - selection.startLine + 1, "line")} · let go to comment
+      <span className={styles["muted"]}> · at most {commenting!.maxLines}, one side</span>
+    </div>
+  ) : null;
+  const after = (path: string, side: DiffSide, n: number | null) => {
+    const node = n !== null ? commenting?.renderAfterLine?.(path, side, n) : null;
+    return node ? <div className={styles["after"]} data-testid="after-line" data-side={side} data-line={n ?? undefined}>{node}</div> : null;
+  };
   const tools = (
     <>
         {files.length > 0 ? (
@@ -266,14 +426,17 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                       {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
                       <b>{f.path.slice(slash + 1)}</b>
                     </span>
-                    <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+                    <span className={styles["fileTail"]}>
+                      {commenting?.fileMark?.(f.path)}
+                      <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+                    </span>
                   </button>
                 );
               })}
               <p className={styles["note"]}>Uncommitted work counts: this is the agent's checkout now, not what it has pushed.</p>
             </nav>
           ) : null}
-          <div className={styles["diffs"]} ref={scroller} data-testid="diffs">
+          <div className={cx(styles["diffs"], commenting && styles["commentable"], dragging && styles["dragging"])} ref={scroller} data-testid="diffs" {...pointer}>
             {fileList ? null : last}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
@@ -288,37 +451,76 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                     <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
                   ) : null}
                 </header>
+                {commenting?.renderFileHead ? <FileHead node={commenting.renderFileHead(f.path)} /> : null}
                 {f.binary ? <div className={styles["empty"]}>Binary file not shown.</div> : null}
                 {f.hunks.map((h, hi) => (
                   <div key={hi}>
                     <div className={styles["hunk"]}>{h.header}</div>
                     {view === "unified"
-                      ? h.lines.map((l, li) => {
-                          const isFresh = fresh.lines.has(lineKey(f.path, l));
-                          return (
-                            <div
-                              key={li}
-                              className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"])}
-                              data-fresh={isFresh ? "" : undefined}
-                            >
-                              <span className={styles["n"]}>{l.old ?? ""}</span>
-                              <span className={styles["n"]}>{l.new ?? ""}</span>
-                              <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
-                              <span className={styles["text"]}>{l.text || " "}</span>
-                            </div>
-                          );
-                        })
+                      ? (() => {
+                          const covered = coveredRows(h.lines, f.path, selection);
+                          return h.lines.map((l, li) => {
+                            const isFresh = fresh.lines.has(lineKey(f.path, l));
+                            const side = sideOfLine(l);
+                            const n = numberOn(l, side);
+                            const picked = covered !== null && li >= covered[0] && li <= covered[1];
+                            // A context line ends a range on either side: what goes under it is asked for both.
+                            const below = commenting ? (
+                              <>
+                                {hint(f.path, side, n)}
+                                {after(f.path, side, n)}
+                                {l.kind === " " ? hint(f.path, "old", l.old) : null}
+                                {l.kind === " " ? after(f.path, "old", l.old) : null}
+                              </>
+                            ) : null;
+                            return (
+                              <Fragment key={li}>
+                                <div
+                                  className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"], picked && styles["picked"])}
+                                  data-fresh={isFresh ? "" : undefined}
+                                  data-picked={picked || undefined}
+                                  {...lineAttrs(f.path, side, n, hi, l.kind === " " ? l.old : null)}
+                                >
+                                  <span className={styles["n"]} {...numberAttrs(n)}>{l.old ?? ""}</span>
+                                  <span className={styles["n"]} {...numberAttrs(n)}>{l.new ?? ""}</span>
+                                  <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
+                                  <span className={styles["text"]}>{l.text || " "}</span>
+                                  {plus(side, n)}
+                                </div>
+                                {below}
+                              </Fragment>
+                            );
+                          });
+                        })()
                       : split!.get(f.path)![hi]!.map((row, ri) => {
                           // Context sits on both sides and is never fresh: one side is enough to ask.
                           const changed = row.left?.kind === " " ? null : (row.left ?? row.right);
                           const isFresh = changed !== null && (fresh.lines.has(lineKey(f.path, changed)) ||
                             (row.right !== null && row.right !== changed && fresh.lines.has(lineKey(f.path, row.right))));
+                          const below = (line: LiveDiffLine | null, s: DiffSide) => {
+                            if (!commenting || !line) return null;
+                            const n = numberOn(line, s);
+                            const parts = [hint(f.path, s, n), after(f.path, s, n)];
+                            return parts.some(Boolean) ? <>{parts[0]}{parts[1]}</> : null;
+                          };
+                          const left = below(row.left, "old");
+                          const right = below(row.right, "new");
+                          const side = (line: LiveDiffLine | null, s: DiffSide) => (
+                            <SplitSide line={line} side={s} picked={line !== null && inRange(selection, f.path, s, numberOn(line, s))}
+                              attrs={line ? lineAttrs(f.path, s, numberOn(line, s), hi) : {}} numberAttrs={line ? numberAttrs(numberOn(line, s)) : {}}
+                              plus={line ? plus(s, numberOn(line, s)) : null} />
+                          );
                           return (
-                            <div key={ri} className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
-                              data-testid="split-row">
-                              <SplitSide line={row.left} side="old" />
-                              <SplitSide line={row.right} side="new" />
-                            </div>
+                            <Fragment key={ri}>
+                              <div className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
+                                data-testid="split-row">
+                                {side(row.left, "old")}
+                                {side(row.right, "new")}
+                              </div>
+                              {left || right ? (
+                                <div className={styles["splitAfter"]}><div>{left}</div><div>{right}</div></div>
+                              ) : null}
+                            </Fragment>
                           );
                         })}
                   </div>
@@ -334,15 +536,24 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
 }
 
 /** One side of a split row: its number, sign and text, or an empty stretch where that side has no line. */
-function SplitSide({ line, side }: { line: LiveDiffLine | null; side: "old" | "new" }) {
+function SplitSide({ line, side, picked, attrs, numberAttrs, plus }: {
+  line: LiveDiffLine | null; side: "old" | "new"; picked?: boolean; attrs?: object; numberAttrs?: object; plus?: ReactNode;
+}) {
   if (!line) return <span className={cx(styles["side"], styles["gap"])} />;
   return (
-    <span className={cx(styles["side"], line.kind === "+" && styles["added"], line.kind === "-" && styles["removed"])}>
-      <span className={styles["n"]}>{side === "old" ? line.old : line.new}</span>
+    <span className={cx(styles["side"], line.kind === "+" && styles["added"], line.kind === "-" && styles["removed"], picked && styles["picked"])}
+      data-picked={picked || undefined} {...attrs}>
+      <span className={styles["n"]} {...numberAttrs}>{side === "old" ? line.old : line.new}</span>
       <span className={styles["sign"]} aria-hidden>{SIGN[line.kind]}</span>
       <span className={styles["text"]}>{line.text || " "}</span>
+      {plus}
     </span>
   );
+}
+
+/** What the app puts under a file's header, when it has something to put there. */
+function FileHead({ node }: { node: ReactNode }) {
+  return node ? <div className={styles["fileNotes"]} data-testid="file-head">{node}</div> : null;
 }
 
 function StatusGlyph({ status }: { status: LiveDiffFile["status"] }) {
