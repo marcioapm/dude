@@ -111,6 +111,12 @@ type Server struct {
 	OpenAs map[string]string
 	// LoseOpenResponses creates the pull request, then answers 502.
 	LoseOpenResponses int
+	// LoseMergeResponses makes the merge POST /merges asks for, then
+	// answers 502.
+	LoseMergeResponses int
+	// CompareAnswer, when set, may change a compare's answer before it is
+	// sent: base and head as the request named them.
+	CompareAnswer     func(base, head string, answer map[string]any)
 	ReceiveStatus     int
 	ReceiveBody       string
 	ReceiveHeaders    http.Header
@@ -285,7 +291,23 @@ func (s *Server) CommitFiles(branch, message string, files map[string]string) st
 // person resolving a conflict in GitHub's editor does. Its SHA, "" when
 // git cannot merge them and resolved leaves the conflict.
 func (s *Server) MergeInto(branch, from string, resolved map[string]string) string {
-	head, other := s.SHA(branch), s.SHA(from)
+	return s.mergeAs("GitHub", branch, s.SHA(from), "Merge branch '"+from+"' into "+branch, resolved)
+}
+
+// MergeLocally is MergeInto made by a person on their own machine and
+// pushed: the same parents, but not GitHub's commit.
+func (s *Server) MergeLocally(branch, from string, resolved map[string]string) string {
+	return s.mergeAs("Alice", branch, s.SHA(from), "Merge branch '"+from+"' into "+branch, resolved)
+}
+
+// MergeCommit merges the commit sha into branch on GitHub, as POST
+// /merges does; its SHA, "" when they conflict.
+func (s *Server) MergeCommit(branch, sha string) string {
+	return s.mergeAs("GitHub", branch, sha, "Merge "+sha+" into "+branch, nil)
+}
+
+func (s *Server) mergeAs(name, branch, other, message string, resolved map[string]string) string {
+	head := s.SHA(branch)
 	out, err := s.git("merge-tree", "--write-tree", head, other)
 	tree, _, _ := strings.Cut(out, "\n")
 	if err != nil && len(resolved) == 0 {
@@ -294,7 +316,7 @@ func (s *Server) MergeInto(branch, from string, resolved map[string]string) stri
 	if tree, err = s.treeWith(tree, resolved); err != nil {
 		return ""
 	}
-	sha, err := s.gitAs("GitHub", "commit-tree", tree, "-p", head, "-p", other, "-m", "Merge branch '"+from+"' into "+branch)
+	sha, err := s.gitAs(name, "commit-tree", tree, "-p", head, "-p", other, "-m", message)
 	if err != nil {
 		return ""
 	}
@@ -531,6 +553,16 @@ func (s *Server) Handler() http.Handler {
 		}
 		if err != nil {
 			fail(w, 409, "Branch moved")
+			return
+		}
+		s.mu.Lock()
+		lost := s.LoseMergeResponses > 0
+		if lost {
+			s.LoseMergeResponses--
+		}
+		s.mu.Unlock()
+		if lost {
+			fail(w, 502, "response lost")
 			return
 		}
 		// As GitHub answers: the merge commit, with its parents.
@@ -1376,7 +1408,14 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	write(w, 200, map[string]any{"files": files, "behind_by": n, "ahead_by": a, "commits": commits, "total_commits": a})
+	answer := map[string]any{"files": files, "behind_by": n, "ahead_by": a, "commits": commits, "total_commits": a}
+	s.mu.Lock()
+	rewrite := s.CompareAnswer
+	s.mu.Unlock()
+	if rewrite != nil {
+		rewrite(base, head, answer)
+	}
+	write(w, 200, answer)
 }
 
 // compareCommitCap is the most commits GitHub's compare lists
