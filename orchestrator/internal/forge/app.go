@@ -378,6 +378,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		return &Unreachable{err}
 	}
 	defer res.Body.Close()
+	noteRate(target, authorization, res.Header)
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
 		return &Unreachable{err}

@@ -42,6 +42,7 @@ type Pull struct {
 	Locked bool
 	// The repository its head is in, owner/name, when not this one (a fork).
 	HeadRepo string
+	Labels   []string
 }
 
 type Review struct {
@@ -62,6 +63,8 @@ type Comment struct {
 	// Set when the comment is edited, as GitHub's updated_at.
 	UpdatedAt string
 	InReplyTo int64
+	// A line comment's line in the file; 0 for none.
+	Line int
 }
 
 type Server struct {
@@ -133,6 +136,12 @@ type Server struct {
 	MarkedReady     []int
 	// When set, the review-thread query (with comment ids) fails with it.
 	ThreadsStatus int
+	// Issues (reads.go), and every API request received (Requests).
+	issues   map[int]*Issue
+	requests []string
+	// Requests left of GitHub's hourly limit, by resource (core, graphql,
+	// search): answers carry them as X-RateLimit headers. Unset, none.
+	RateRemaining map[string]int
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -204,6 +213,22 @@ func (s *Server) AdvanceBase(base, message string) string {
 
 func (s *Server) git(args ...string) (string, error) {
 	return s.gitAs("", args...)
+}
+
+// gitIn runs git with stdin.
+func (s *Server) gitIn(stdin string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// gitEnv runs git with extra environment.
+func (s *Server) gitEnv(env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
+	cmd.Env = append(cmd.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 // gitAs runs git with the given person as a commit's author and committer:
@@ -477,7 +502,13 @@ func (s *Server) Handler() http.Handler {
 		p.Body = in.Body
 		write(w, 200, s.pullJSON(p))
 	})
-	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
+	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", func(w http.ResponseWriter, r *http.Request) {
+		if !s.issueComments(w, r) {
+			s.comments(w, r)
+		}
+	})
+	mux.HandleFunc("GET "+prefix+"/issues/{n}", s.getIssue)
+	mux.HandleFunc("GET "+prefix+"/pulls/{n}/files", s.pullFiles)
 	mux.HandleFunc("POST "+prefix+"/issues/{n}/comments", s.postComment)
 	mux.HandleFunc("PATCH "+prefix+"/issues/comments/{id}", s.patchComment)
 	// Who the token is: the account its comments are by.
@@ -669,8 +700,10 @@ func (s *Server) Handler() http.Handler {
 		write(w, 201, h)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.logRequest(r)
 		s.mu.Lock()
 		intercept := s.Intercept
+		s.rateHeaders(w, "core")
 		s.mu.Unlock()
 		if intercept != nil {
 			if status := intercept(r); status != 0 {
@@ -756,7 +789,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
-		"user": s.userJSON(p.Author),
+		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),
 	}
 }
 
@@ -817,6 +850,14 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 		for _, s := range servers {
 			if s.Slug != in.Variables.Owner+"/"+in.Variables.Name {
 				continue
+			}
+			s.logRequest(r)
+			s.mu.Lock()
+			s.rateHeaders(w, "graphql")
+			s.mu.Unlock()
+			if strings.Contains(in.Query, "totalCount") {
+				write(w, 200, s.threadsRead(in.Variables.Number))
+				return
 			}
 			if strings.Contains(in.Query, "suggestedReviewers") {
 				write(w, 200, s.reviewerCandidates(in.Variables.Number, in.Variables.Q))

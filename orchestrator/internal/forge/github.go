@@ -9,6 +9,8 @@ package forge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -739,13 +741,18 @@ func elapsed(from, to string) int64 {
 // pages reads every page of a list endpoint. GitHub pages lists at 30 by
 // default and 100 at most; a pull request with a long review has more.
 func pages[T any](ctx context.Context, g *GitHub, path string) ([]T, error) {
+	// Bounded, so an endpoint that ignores paging cannot loop forever.
+	return pagesUpTo[T](ctx, g, path, 50)
+}
+
+// pagesUpTo reads at most most pages of 100 of a list endpoint.
+func pagesUpTo[T any](ctx context.Context, g *GitHub, path string, most int) ([]T, error) {
 	sep := "?"
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
 	var all []T
-	// Bounded, so an endpoint that ignores paging cannot loop forever.
-	for page := 1; page <= 50; page++ {
+	for page := 1; page <= most; page++ {
 		var batch []T
 		if err := g.do(ctx, "GET", fmt.Sprintf("%s%sper_page=100&page=%d", path, sep, page), nil, &batch); err != nil {
 			return nil, err
@@ -1464,4 +1471,381 @@ func SlugFromURL(u string) string {
 		return ""
 	}
 	return m[1] + "/" + m[2]
+}
+
+// ---- Reads for agents: issues and pull requests, as anyone can write them --
+
+// What these return is what people (anyone who may comment) wrote on
+// GitHub: titles, bodies, comments, review text, diffs. Callers hand it to
+// an agent only marked as someone else's words.
+
+// IssueLine is an issue or pull request as a search lists it.
+type IssueLine struct {
+	Number      int
+	Title       string
+	Author      string
+	State       string // open | closed; a pull request's also draft | merged
+	Labels      []string
+	UpdatedAt   string
+	URL         string
+	PullRequest bool
+}
+
+// IssueComment is one comment: on an issue's conversation, or in a review
+// thread.
+type IssueComment struct {
+	Author, Body, CreatedAt string
+}
+
+// IssueRead is an issue (or a pull request's conversation) with its
+// comments, oldest first, at most the number asked for; CommentCount is how
+// many it has.
+type IssueRead struct {
+	IssueLine
+	Body         string
+	Comments     []IssueComment
+	CommentCount int
+}
+
+// ReviewRead is one submitted review: its verdict and the text in its box.
+type ReviewRead struct {
+	Author, State, Body, SubmittedAt string
+}
+
+// ThreadRead is an unresolved review thread: where it is and what was said
+// in it, oldest first; CommentCount is how many comments it has.
+type ThreadRead struct {
+	Path         string
+	Line         int
+	Outdated     bool
+	Comments     []IssueComment
+	CommentCount int
+}
+
+// FileRead is one file a pull request changes, with its unified diff hunks
+// as GitHub gives them (none for a binary or a very large file).
+type FileRead struct {
+	Path                 string
+	Status               string
+	Additions, Deletions int
+	Patch                string
+}
+
+// PullRequestRead is a pull request as a reader on GitHub sees it.
+type PullRequestRead struct {
+	IssueLine
+	Body       string
+	Draft      bool
+	Head, Base string
+	Reviews    []ReviewRead
+	// Only the threads nobody resolved; ThreadsUnknown when GitHub would
+	// not say (see unresolvedThreads).
+	Threads        []ThreadRead
+	ThreadsUnknown bool
+	Checks         []Check
+	Files          []FileRead
+}
+
+type ghLabel struct {
+	Name string `json:"name"`
+}
+
+type ghFile struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Patch     string `json:"patch"`
+}
+
+type ghIssue struct {
+	Number        int       `json:"number"`
+	Title         string    `json:"title"`
+	Body          string    `json:"body"`
+	State         string    `json:"state"`
+	HTMLURL       string    `json:"html_url"`
+	UpdatedAt     string    `json:"updated_at"`
+	User          *ghUser   `json:"user"`
+	Labels        []ghLabel `json:"labels"`
+	Comments      int       `json:"comments"`
+	RepositoryURL string    `json:"repository_url"`
+	PullRequest   *struct {
+		MergedAt *string `json:"merged_at"`
+	} `json:"pull_request"`
+	Draft bool `json:"draft"`
+}
+
+func labelNames(ls []ghLabel) []string {
+	out := make([]string, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.Name)
+	}
+	return out
+}
+
+func (i ghIssue) line() IssueLine {
+	state := i.State
+	if i.PullRequest != nil && i.PullRequest.MergedAt != nil {
+		state = StateMerged
+	} else if i.PullRequest != nil && i.Draft && state == StateOpen {
+		state = StateDraft
+	}
+	return IssueLine{Number: i.Number, Title: i.Title, Author: login(i.User), State: state, Labels: labelNames(i.Labels),
+		UpdatedAt: i.UpdatedAt, URL: i.HTMLURL, PullRequest: i.PullRequest != nil}
+}
+
+// SearchIssues lists slug's issues or pull requests (kind "issue" or "pr")
+// matching words, in state open, closed or "" for both, most recently
+// updated first, at most limit; and how many match in all. GitHub's search
+// ORs repo: qualifiers, so words naming another repository would widen it:
+// an item of any other repository is dropped.
+func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state string, limit int) ([]IssueLine, int, error) {
+	if err := g.readBudget(ctx, slug, "core", "search"); err != nil {
+		return nil, 0, err
+	}
+	q := "repo:" + slug + " is:" + kind
+	if state == "open" || state == "closed" {
+		q += " is:" + state
+	}
+	if w := strings.TrimSpace(words); w != "" {
+		q += " " + w
+	}
+	v := url.Values{"q": {q}, "sort": {"updated"}, "order": {"desc"}, "per_page": {strconv.Itoa(limit)}}
+	var out struct {
+		TotalCount int       `json:"total_count"`
+		Items      []ghIssue `json:"items"`
+	}
+	if err := g.doURL(ctx, slug, "GET", g.cred.APIBaseURL+"/search/issues?"+v.Encode(), nil, &out); err != nil {
+		return nil, 0, err
+	}
+	lines := []IssueLine{}
+	for _, it := range out.Items {
+		if !strings.HasSuffix(strings.ToLower(it.RepositoryURL), "/repos/"+strings.ToLower(slug)) {
+			continue
+		}
+		if len(lines) < limit {
+			lines = append(lines, it.line())
+		}
+	}
+	return lines, out.TotalCount, nil
+}
+
+// Issue reads an issue, or a pull request's conversation, with its first
+// maxComments comments.
+func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int) (IssueRead, error) {
+	if err := g.readBudget(ctx, slug, "core"); err != nil {
+		return IssueRead{}, err
+	}
+	var i ghIssue
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/issues/%d", slug, number), nil, &i); err != nil {
+		return IssueRead{}, err
+	}
+	out := IssueRead{IssueLine: i.line(), Body: i.Body, CommentCount: i.Comments, Comments: []IssueComment{}}
+	if i.Comments == 0 || maxComments <= 0 {
+		return out, nil
+	}
+	comments, err := pagesUpTo[ghComment](ctx, g, fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), (maxComments+99)/100)
+	if err != nil {
+		return IssueRead{}, err
+	}
+	for _, c := range comments[:min(len(comments), maxComments)] {
+		out.Comments = append(out.Comments, IssueComment{Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt})
+	}
+	out.CommentCount = max(out.CommentCount, len(comments))
+	return out, nil
+}
+
+// PullRequestRead reads a pull request whole: its text, head and base,
+// every review with its text, the threads nobody resolved, the checks on
+// its head and the files it changes (at most maxFiles), each file's diff
+// with it.
+func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int) (PullRequestRead, error) {
+	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
+		return PullRequestRead{}, err
+	}
+	var p struct {
+		ghPull
+		Body      string    `json:"body"`
+		UpdatedAt string    `json:"updated_at"`
+		Labels    []ghLabel `json:"labels"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return PullRequestRead{}, err
+	}
+	ref := p.ref()
+	out := PullRequestRead{
+		IssueLine: IssueLine{Number: p.Number, Title: p.Title, Author: login(p.User), State: ref.State, Labels: labelNames(p.Labels),
+			UpdatedAt: p.UpdatedAt, URL: p.HTMLURL, PullRequest: true},
+		Body: p.Body, Draft: p.Draft, Head: p.Head.Ref, Base: p.Base.Ref,
+		Reviews: []ReviewRead{}, Threads: []ThreadRead{}, Checks: []Check{}, Files: []FileRead{},
+	}
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
+		return PullRequestRead{}, err
+	}
+	for _, r := range reviews {
+		if r.SubmittedAt == nil || r.State == "PENDING" {
+			continue
+		}
+		out.Reviews = append(out.Reviews, ReviewRead{Author: login(r.User), State: r.State, Body: r.Body, SubmittedAt: *r.SubmittedAt})
+	}
+	if out.Threads, out.ThreadsUnknown, err = g.openThreads(ctx, slug, number); err != nil {
+		return PullRequestRead{}, err
+	}
+	if p.Head.SHA != "" {
+		if _, out.Checks, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
+			return PullRequestRead{}, err
+		}
+		if out.Checks == nil {
+			out.Checks = []Check{}
+		}
+	}
+	files, err := pagesUpTo[ghFile](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/files", slug, number), (maxFiles+99)/100)
+	if err != nil {
+		return PullRequestRead{}, err
+	}
+	for _, f := range files[:min(len(files), maxFiles)] {
+		out.Files = append(out.Files, FileRead{Path: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch})
+	}
+	return out, nil
+}
+
+// openThreads is a pull request's unresolved review threads with their
+// comments, at most 5 pages of 50 threads and 20 comments each. Like
+// unresolvedThreads, a rate limit is an error and any other GraphQL
+// failure is unknown.
+func (g *GitHub) openThreads(ctx context.Context, slug string, number int) ([]ThreadRead, bool, error) {
+	owner, name, _ := strings.Cut(slug, "/")
+	const query = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){` +
+		`pullRequest(number:$number){reviewThreads(first:50,after:$after){nodes{isResolved isOutdated path line ` +
+		`comments(first:20){totalCount nodes{author{login} body createdAt}}}pageInfo{hasNextPage endCursor}}}}}`
+	out := []ThreadRead{}
+	var after *string
+	for range 5 {
+		var data struct {
+			Repository *struct {
+				PullRequest *struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							IsResolved bool   `json:"isResolved"`
+							IsOutdated bool   `json:"isOutdated"`
+							Path       string `json:"path"`
+							Line       int    `json:"line"`
+							Comments   struct {
+								TotalCount int `json:"totalCount"`
+								Nodes      []struct {
+									Author *struct {
+										Login string `json:"login"`
+									} `json:"author"`
+									Body      string `json:"body"`
+									CreatedAt string `json:"createdAt"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		}
+		errs, err := g.graphql(ctx, query, map[string]any{"owner": owner, "name": name, "number": number, "after": after}, &data)
+		if err != nil {
+			if Transient(err) {
+				return nil, false, err
+			}
+			return []ThreadRead{}, true, nil
+		}
+		if len(errs) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
+			return []ThreadRead{}, true, nil
+		}
+		threads := data.Repository.PullRequest.ReviewThreads
+		for _, n := range threads.Nodes {
+			if n.IsResolved {
+				continue
+			}
+			t := ThreadRead{Path: n.Path, Line: n.Line, Outdated: n.IsOutdated, CommentCount: n.Comments.TotalCount}
+			for _, c := range n.Comments.Nodes {
+				author := "unknown"
+				if c.Author != nil {
+					author = c.Author.Login
+				}
+				t.Comments = append(t.Comments, IssueComment{Author: author, Body: c.Body, CreatedAt: c.CreatedAt})
+			}
+			out = append(out, t)
+		}
+		if !threads.PageInfo.HasNextPage {
+			break
+		}
+		c := threads.PageInfo.EndCursor
+		after = &c
+	}
+	return out, false, nil
+}
+
+// The share of a token's hourly limit kept for delivery: once GitHub says
+// fewer requests than limit/agentReadReserve are left, an agent's read is
+// refused until the limit resets. Delivery opens, reads back and fixes
+// pull requests on the same App installation; an agent reading issues
+// must never be what leaves it none.
+const agentReadReserve = 5
+
+// rateReading is what GitHub last said of a token's limit on one resource
+// (core, graphql, search), from its X-RateLimit headers.
+type rateReading struct {
+	remaining, limit int
+	reset            time.Time
+}
+
+var rateReadings sync.Map // rateKey → rateReading
+
+// rateKey names one token's limit on one resource at one GitHub (its
+// API's host), never holding the token itself.
+func rateKey(target, authorization, resource string) string {
+	host := target
+	if u, err := url.Parse(target); err == nil {
+		host = u.Host
+	}
+	sum := sha256.Sum256([]byte(host + "\x00" + authorization))
+	return hex.EncodeToString(sum[:12]) + "\x00" + resource
+}
+
+// noteRate keeps the rate limit an answer reports for the token that asked.
+func noteRate(target, authorization string, h http.Header) {
+	remaining, err1 := strconv.Atoi(h.Get("X-RateLimit-Remaining"))
+	limit, err2 := strconv.Atoi(h.Get("X-RateLimit-Limit"))
+	reset, err3 := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return
+	}
+	resource := h.Get("X-RateLimit-Resource")
+	if resource == "" {
+		resource = "core"
+	}
+	rateReadings.Store(rateKey(target, authorization, resource), rateReading{remaining: remaining, limit: limit, reset: time.Unix(reset, 0)})
+}
+
+// readBudget refuses an agent's read, before any request, while the token
+// for scope has less of a resource left than delivery's reserve: a 429
+// *Error carrying the wait, as GitHub's own limit would be.
+func (g *GitHub) readBudget(ctx context.Context, scope string, resources ...string) error {
+	token, err := g.Token(ctx, scope)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, resource := range resources {
+		v, ok := rateReadings.Load(rateKey(g.cred.APIBaseURL, "Bearer "+token, resource))
+		if !ok {
+			continue
+		}
+		r := v.(rateReading)
+		if r.reset.After(now) && r.remaining < r.limit/agentReadReserve {
+			return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter),
+				Message: fmt.Sprintf("GitHub's %s rate limit has %d of %d requests left until %s: they are kept for delivery",
+					resource, r.remaining, r.limit, r.reset.UTC().Format(time.RFC3339))}
+		}
+	}
+	return nil
 }
