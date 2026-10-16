@@ -2,7 +2,7 @@
  * The backend's one background loop: attachment storage upkeep.
  *
  * Images uploaded and never sent (or taken out of their task's text) are
- * removed a day later, and every object
+ * removed a day later, unless a feedback item names one as its picture, and every object
  * whose attachment row is gone — swept, removed by a person, or taken with
  * its task (ON DELETE CASCADE) — is deleted from storage. The rows' trigger
  * queues the keys (migration 071); this drains the queue. A key whose
@@ -36,7 +36,9 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   const expired = await withoutTenant(async ({ sql }) => {
     await sql`SET LOCAL ROLE dude_sweeper`;
     // A task's image removed from its text is unsent again from then (detached_at, migration 074).
-    const rows = await sql`DELETE FROM attachments WHERE attached_at IS NULL AND COALESCE(detached_at, created_at) < ${cutoff} RETURNING id`;
+    // A feedback item's picture is kept while any item names it (migration 133).
+    const rows = await sql`DELETE FROM attachments a WHERE a.attached_at IS NULL AND COALESCE(a.detached_at, a.created_at) < ${cutoff}
+      AND NOT EXISTS (SELECT 1 FROM feedback_items f WHERE f.anchor->>'attachmentId' = a.id) RETURNING a.id`;
     return rows.length as number;
   });
   let deleted = 0;

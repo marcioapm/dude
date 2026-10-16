@@ -411,6 +411,57 @@ describe("the sweeper", () => {
   });
 });
 
+describe("a feedback item's picture", () => {
+  const picture = async (name: string) => {
+    const a: Json = await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png", name))).json();
+    // Uploaded two days ago: past the sweeper's day.
+    await owner`UPDATE attachments SET created_at = now() - interval '2 days' WHERE id = ${a.id}`;
+    return a.id as string;
+  };
+  const kept = async (id: string) => (await owner`SELECT count(*)::int AS n FROM attachments WHERE id = ${id}`)[0].n === 1;
+  const draftOn = async (attachmentId: string) => {
+    const res = await call(anaKey, "POST", `/v1/tasks/${taskId}/feedback/drafts`, JSON.stringify({
+      body: "the button overlaps", anchor: { kind: "preview", url: "https://web.preview.test/pay", attachmentId } }));
+    expect(res.status).toBe(201);
+    return ((await res.json()) as Json).id as string;
+  };
+
+  test("survives a sweep past a day while a draft names it; after the draft is removed it is swept; one no item names is swept", async () => {
+    const held = await picture("held.png");
+    const loose = await picture("loose.png");
+    const item = await draftOn(held);
+    const [row] = await owner`SELECT object_key FROM attachments WHERE id = ${held}`;
+
+    await sweepAttachments();
+    expect(await kept(held)).toBe(true);
+    expect(objects.has(row.object_key)).toBe(true);
+    expect(await kept(loose)).toBe(false);
+
+    expect((await call(anaKey, "DELETE", `/v1/feedback/${item}`)).status).toBe(204);
+    await sweepAttachments();
+    expect(await kept(held)).toBe(false);
+    expect(objects.has(row.object_key)).toBe(false);
+  });
+
+  test("a submitted item keeps it too, and a draft whose anchor drops it lets it go", async () => {
+    const submitted = await picture("submitted.png");
+    const dropped = await picture("dropped.png");
+    await owner`INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+      SELECT 'fbt_sweep', ${ORG}, ${taskId}, 1, uploaded_by, 'k' FROM attachments WHERE id = ${submitted}`;
+    await owner`INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind, anchor, status, submitted_at)
+      SELECT 'fbi_sweep', ${ORG}, ${taskId}, 1, 'fbt_sweep', uploaded_by, 'x', 'preview',
+        jsonb_build_object('kind', 'preview', 'url', 'https://w.test', 'attachmentId', id), 'open', now()
+      FROM attachments WHERE id = ${submitted}`;
+    const item = await draftOn(dropped);
+    expect((await call(anaKey, "PATCH", `/v1/feedback/${item}`, JSON.stringify({
+      body: "the button overlaps", anchor: { kind: "preview", url: "https://web.preview.test/pay" } }))).status).toBe(200);
+
+    await sweepAttachments();
+    expect(await kept(submitted)).toBe(true);
+    expect(await kept(dropped)).toBe(false);
+  });
+});
+
 describe("a task's images are the ones its text shows", () => {
   const GOAL = "The header overlaps the menu on a narrow window; it should sit under it.";
   const img = async (task: string, name = "shot.png") =>
