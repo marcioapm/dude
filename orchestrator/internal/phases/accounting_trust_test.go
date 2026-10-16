@@ -107,6 +107,34 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
 		}
 	})
+	t.Run("a compare of the task's push GitHub cut short counts in full", func(t *testing.T) {
+		a := newAccountingRun(t)
+		a.advanceBase(map[string]string{"shared.txt": "base\n"})
+		a.syncBase()
+		files := map[string]string{"shared.txt": "task\n"}
+		for i := range forge.CompareFileCap + 1 {
+			files[fmt.Sprintf("mine/f%03d", i)] = "x\n"
+		}
+		a.commit(files, "task")
+		acc := a.published()
+		if !strings.Contains(acc.Full, "GitHub listed 300 files, its most") {
+			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
+		}
+	})
+	t.Run("a compare of what the base brought in cut short counts in full", func(t *testing.T) {
+		a := newAccountingRun(t)
+		files := map[string]string{"shared.txt": "base\n"}
+		for i := range forge.CompareFileCap {
+			files[fmt.Sprintf("gen/f%03d", i)] = "x\n"
+		}
+		a.advanceBase(files)
+		a.syncBase()
+		a.commit(map[string]string{"shared.txt": "task\n"}, "task")
+		acc := a.published()
+		if !strings.Contains(acc.Full, "of what main brought in, its most") || acc.Lines != 1 {
+			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
+		}
+	})
 	t.Run("a compare of the base GitHub would not answer counts in full", func(t *testing.T) {
 		a := conflictMerged(t)
 		a.intercept = func(r *http.Request) int {

@@ -853,7 +853,8 @@ class FakeGitHub:
                     return self._send(200, [{"name": n, "commit": {"sha": self.github.branch_sha(n)},
                                              "protected": n in self.github.protected} for n in names])
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
-                    diff = self._git("diff", "--numstat", m[1], m[2])
+                    # As GitHub's: from the merge base (three dots).
+                    diff = self._git("diff", "--numstat", f"{m[1]}...{m[2]}")
                     if diff.returncode:
                         return self._send(404, {"message": "Not Found"})
                     files = []
