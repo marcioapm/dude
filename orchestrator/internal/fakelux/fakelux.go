@@ -897,18 +897,28 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
 
-// envSecretLines are a submitted spec's env secrets as NAME=value lines,
-// in the spec's order.
-func envSecretLines(spec map[string]any) string {
+// envSecretsOf are a submitted spec's env secrets, name and value, in the
+// spec's order.
+func envSecretsOf(spec map[string]any) [][2]string {
 	list, _ := spec["secrets"].([]any)
-	var b strings.Builder
+	var out [][2]string
 	for _, raw := range list {
 		s, _ := raw.(map[string]any)
 		name, _ := s["name"].(string)
 		value, _ := s["value"].(string)
 		if as, _ := s["as"].(string); as == "env" && name != "" {
-			b.WriteString(name + "=" + value + "\n")
+			out = append(out, [2]string{name, value})
 		}
+	}
+	return out
+}
+
+// envSecretLines are a submitted spec's env secrets as NAME=value lines,
+// in the spec's order.
+func envSecretLines(spec map[string]any) string {
+	var b strings.Builder
+	for _, s := range envSecretsOf(spec) {
+		b.WriteString(s[0] + "=" + s[1] + "\n")
 	}
 	return b.String()
 }
@@ -917,15 +927,9 @@ func envSecretLines(spec map[string]any) string {
 // print it: NAME_B64, NAME_HEX, NAME_URL (query-escaped) and NAME_JSON (a
 // JSON string body, as json.Marshal escapes it), one line each.
 func envSecretEncodings(spec map[string]any) string {
-	list, _ := spec["secrets"].([]any)
 	var b strings.Builder
-	for _, raw := range list {
-		s, _ := raw.(map[string]any)
-		name, _ := s["name"].(string)
-		value, _ := s["value"].(string)
-		if as, _ := s["as"].(string); as != "env" || name == "" {
-			continue
-		}
+	for _, s := range envSecretsOf(spec) {
+		name, value := s[0], s[1]
 		quoted, _ := json.Marshal(value)
 		fmt.Fprintf(&b, "%s_B64=%s\n%s_HEX=%s\n%s_URL=%s\n%s_JSON=%s\n",
 			name, base64.StdEncoding.EncodeToString([]byte(value)), name, hex.EncodeToString([]byte(value)),
