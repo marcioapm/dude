@@ -274,7 +274,8 @@ func (e *Escalation) findingIDs() []string {
 	return d.FindingIDs
 }
 
-// feedbackIDs are the people's feedback items a stuck review is about.
+// feedbackIDs are the people's feedback items a stuck or exhausted review
+// loop is held by.
 func (e *Escalation) feedbackIDs() []string {
 	var d struct {
 		FeedbackIDs []string `json:"feedbackIds"`
@@ -1423,8 +1424,21 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// What happened to them while the fix ran was signalled to a step not
 	// listening for it: one may have been merged or closed, or be approved
 	// with green checks already. Weighed now rather than waited for.
-	res, _, err := w.pullRequestEnded(ctx, sc, st)
-	return res, err
+	res, finished, err := w.pullRequestEnded(ctx, sc, st)
+	if err != nil || finished {
+		return res, err
+	}
+	// People's feedback the fix left unanswered is open again, and no
+	// signal will come for it: another fix, within MaxPRFixIterations.
+	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if len(open) > 0 {
+		return w.next(ctx, sc, st, PointPRFeedback, "prFix",
+			fmt.Sprintf("%d feedback items from people are still open after the fix: read them with feedback.", len(open)))
+	}
+	return res, nil
 }
 
 // pullRequestEnded: one of the task's pull requests was merged or

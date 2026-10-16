@@ -200,7 +200,8 @@ func IsBlocking(p Policy, f FindingState) bool {
 // Three exits, named separately because they mean different things to a
 // person: "clear" needs no attention, "stuck" means the fixer is stuck on
 // something specific, and "exhausted" means the whole loop ran out of budget.
-// A stuck person's item is named in FeedbackIDs, never among the findings.
+// A person's item a stuck or exhausted loop is held by is named in
+// FeedbackIDs, never among the findings.
 type LoopExit struct {
 	Reason      string   `json:"reason"`
 	FindingIDs  []string `json:"findingIds,omitempty"`
@@ -234,7 +235,16 @@ func Exit(p Policy, findings []FindingState, iteration int) *LoopExit {
 		return &LoopExit{Reason: "stuck", FindingIDs: stuck, FeedbackIDs: stuckFeedback}
 	}
 	if iteration >= p.MaxReviewIterations {
-		return &LoopExit{Reason: "exhausted", Iterations: iteration}
+		// The person's items still blocking are named, so accepting the
+		// escalation resolves them rather than meeting them again at the
+		// pull request.
+		var feedback []string
+		for _, f := range blocking {
+			if f.Human {
+				feedback = append(feedback, f.ID)
+			}
+		}
+		return &LoopExit{Reason: "exhausted", Iterations: iteration, FeedbackIDs: feedback}
 	}
 	return nil
 }

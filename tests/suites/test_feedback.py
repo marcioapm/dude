@@ -8,8 +8,6 @@ GitHub that delivers signed webhooks.
 
 from __future__ import annotations
 
-import time
-
 from fake_github import FakeGitHub
 from helpers import ApiClient, create_api_key, query, wait_until
 
@@ -61,26 +59,40 @@ def test_a_draft_is_private_and_a_batch_at_the_pull_request_wait_holds_it_until_
     assert batch["routedTo"] == "workflow"
     assert _item(bo, task["id"], item["id"])["body"] == "Name the flag --dry-run, as git does."
 
-    # A fixer is given it, in the person's words.
-    fixer = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "fix"
-                                     and query(env.owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND %s = ANY(feedback_item_ids)",
-                                               (r["id"], item["id"]))), None),
-                       timeout=60, message="no fixer given the item")
-    assert len([r for r in client.task_runs(task["id"]) if r["phase"] == "fix"]) == fixes_before + 1
-    wait_until(lambda: client.get_run(fixer["id"])["status"] == "completed", timeout=60, message="the fixer never finished")
-
-    # Approved, but the item is unanswered: not ready, and dude will not merge.
+    # Approved while the item is open: dude sees the approval, and never
+    # calls the task ready to merge.
     fake_github.approve(pr["number"])
-    wait_until(lambda: _item(client, task["id"], item["id"])["status"] == "open", timeout=30, message="item not open again")
+    wait_until(lambda: _pull_requests(client, task["id"])[0]["review"] == "approved", timeout=30,
+               message="the approval never reached dude")
+
+    def fixers_given() -> list[dict]:
+        return [r for r in client.task_runs(task["id"]) if r["phase"] == "fix"
+                and query(env.owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND %s = ANY(feedback_item_ids)", (r["id"], item["id"]))]
+
+    # A fixer is given it, in the person's words; the scripted fixer answers
+    # nothing, so another is, until the pull request fix bound asks a person.
+    wait_until(lambda: fixers_given(), timeout=60, message="no fixer given the item")
+    wait_until(lambda: _task(client, task["id"])["status"] == "awaiting_input", timeout=90,
+               message="the unanswered item never reached the fix bound")
+    reason = query(env.owner_dsn, "SELECT state->'escalation'->>'reason' AS r FROM workflow_runs WHERE task_id = %s",
+                   (task["id"],))[0]["r"]
+    assert reason == "pr_loop_exhausted", reason
+    fixers = fixers_given()
+    assert len(fixers) == 3 and all(f["status"] == "completed" for f in fixers), fixers
+    assert len([r for r in client.task_runs(task["id"]) if r["phase"] == "fix"]) == fixes_before + 3
+    assert _item(client, task["id"], item["id"])["status"] == "open"
+
+    # Unanswered: dude will not merge, and it was never ready.
     merge = client.post(f"/v1/pull-requests/{pr['id']}/merge")
     assert merge.status_code == 409 and "feedback" in merge.text, merge.text
-    assert _task(client, task["id"])["status"] != "ready_to_merge"
+    ready = query(env.owner_dsn, "SELECT count(*) AS n FROM events WHERE task_id = %s AND event_type = 'task.ready_to_merge'",
+                  (task["id"],))
+    assert ready[0]["n"] == 0
     assert client.get(f"/v1/tasks/{task['id']}/feedback").json()["blocking"] == 1
 
     # Bo replies; it no longer holds anything.
     assert bo.post(f"/v1/feedback/{item['id']}/reply", {"body": "git calls it --dry-run too."}).status_code == 200
-    wait_until(lambda: _task(client, task["id"])["status"] == "ready_to_merge", timeout=30,
-               message="a replied item still holds the pull request")
+    assert client.get(f"/v1/tasks/{task['id']}/feedback").json()["blocking"] == 0
     history = _item(client, task["id"], item["id"])["history"]
     assert [h["kind"] for h in history] == ["reply"], history
 
@@ -107,6 +119,12 @@ def test_a_working_implementer_hears_feedback_at_its_next_step(client: ApiClient
     # Never interrupting: fake/hang never ends its turn, so it has not read
     # it, and the item is not counted as given to it until it does.
     assert query(env.owner_dsn, "SELECT interrupt FROM directives WHERE id = %s", (directives[0]["id"],))[0]["interrupt"] is False
-    time.sleep(2)
+    # lux took the directive; the agent has not read it (no delivery receipt).
+    wait_until(lambda: query(env.owner_dsn, "SELECT accepted_at FROM directives WHERE id = %s",
+                             (directives[0]["id"],))[0]["accepted_at"] is not None,
+               timeout=30, message="lux never took the directive")
+    read = query(env.owner_dsn, "SELECT count(*) AS n FROM events WHERE run_id = %s AND event_type = 'run.directive.delivered'",
+                 (impl["id"],))
+    assert read[0]["n"] == 0
     assert _item(client, task["id"], item["id"])["status"] == "open"
     assert client.get(f"/v1/tasks/{task['id']}/feedback").json()["blocking"] == 1

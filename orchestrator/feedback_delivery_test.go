@@ -24,45 +24,51 @@ func (w *world) feedbackStatus(id string) string {
 }
 
 // At the pull request wait, a person's feedback sends a fixer the words;
-// until the item is handled the task is not ready to merge and dude will
-// not merge it; a person resolving it lets both through.
+// a fixer that leaves it unanswered is followed by another, up to the pull
+// request fix bound. Until the item is handled the task is never ready to
+// merge and dude will not merge it; a person resolving it lets it through.
 func TestFeedbackAtThePullRequestWaitGoesToAFixerAndHoldsTheMerge(t *testing.T) {
 	w := newWorld(t)
 	ana := w.person("Ana")
 	wi := w.reviewing()
+	// The fixer is a real model, so its spec carries the prompt a real agent gets.
+	w.onModel("implementer", "llm-impl")
 	if code, body := w.feedback(ana, wi, "fbi_pr", "Log the retry count at info, not debug."); code != 201 || body["routedTo"] != "workflow" {
 		t.Fatalf("submit: %d %v", code, body)
 	}
+	// Approved with the item open: nothing may call it ready from here on.
+	w.gh.Review(1, "alice", "APPROVED")
+	readyBefore := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi)
 	var fixer string
 	w.until("a fixer given the item", func() bool {
 		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_pr' = ANY(feedback_item_ids)`, wi).Scan(&fixer)
 		return fixer != ""
 	})
-	// Its prompt is rendered from these ids (delivery tests read the words).
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created'
 		AND payload->'feedbackItemIds' ? 'fbi_pr' AND payload::text NOT LIKE '%retry count%'`, fixer); n != 1 {
 		t.Errorf("the fixer's run.created does not name the item, or carries its words")
 	}
-	// The scripted fixer commits but answers nothing: the item is open again.
-	w.until("the fix published and the pull request waited on again", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1 &&
-			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer) == 1
-	})
+	w.until("the fixer's prompt", func() bool { return w.promptOf(fixer) != "" })
+	if p := w.promptOf(fixer); !strings.Contains(p, "### fbi_pr — Ana") || !strings.Contains(p, "> Log the retry count at info, not debug.") {
+		t.Errorf("the fixer is not given the person's words:\n%s", p)
+	}
+	// The fixer commits but answers nothing: the item goes to another, and
+	// past the bound a person is asked.
+	w.until("pr_loop_exhausted", func() bool { w.sync(); return w.escalationReason(wi) == "pr_loop_exhausted" })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_pr' = ANY(feedback_item_ids)`, wi); n != scriptedPolicy().MaxPRFixIterations {
+		t.Errorf("%d fixers given the item, want %d", n, scriptedPolicy().MaxPRFixIterations)
+	}
 	if s := w.feedbackStatus("fbi_pr"); s != "open" {
-		t.Fatalf("an item its fixer left unanswered is %s", s)
+		t.Fatalf("an item its fixers left unanswered is %s", s)
 	}
-	w.gh.Review(1, "alice", "APPROVED")
-	for range 5 {
-		w.sync()
-		w.pump()
-	}
-	if s := w.taskStatus(wi); s == "ready_to_merge" {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi); n != readyBefore {
 		t.Fatal("ready to merge with a person's feedback open")
 	}
+	w.sync()
 	var prID string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
 	if code, body := w.callAs(ana, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 409 ||
-		!strings.Contains(fmt.Sprint(body), "feedback") {
+		!strings.Contains(fmt.Sprint(body), "feedback_open") {
 		t.Fatalf("dude merged past open feedback: %d %v", code, body)
 	}
 	if len(w.gh.Merges) != 0 {
@@ -72,10 +78,6 @@ func TestFeedbackAtThePullRequestWaitGoesToAFixerAndHoldsTheMerge(t *testing.T) 
 	if code, body := w.callAs(bo, "/internal/feedback/fbi_pr/resolve", map[string]any{}); code != 200 {
 		t.Fatalf("resolve: %d %v", code, body)
 	}
-	w.until("ready to merge", func() bool {
-		w.sync()
-		return w.taskStatus(wi) == "ready_to_merge"
-	})
 	if code, body := w.callAs(ana, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 200 {
 		t.Fatalf("merge after the item was handled: %d %v", code, body)
 	}
