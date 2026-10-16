@@ -69,6 +69,21 @@ func (w *world) assertWaiting(runID string) {
 	}
 }
 
+// untilImplementer pumps until the Run's status is one of statuses.
+func (w *world) untilImplementer(runID string, statuses ...string) {
+	w.t.Helper()
+	w.until("the implementer "+strings.Join(statuses, " or "), func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status::text = ANY($2)`, runID, statuses) == 1
+	})
+}
+
+func assertPushedOnce(t *testing.T, w *world, runID string) {
+	t.Helper()
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
+		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
+	}
+}
+
 // readsHistory records the bases each history scan dude ran was given.
 type readsHistory struct {
 	lux.Client
@@ -99,12 +114,8 @@ func TestATurnEndedBeforeItsBaseWaitsForIt(t *testing.T) {
 	w.assertWaiting(runID)
 
 	release()
-	w.until("the implementer completed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
-	})
-	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
-		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
-	}
+	w.untilImplementer(runID, "completed")
+	assertPushedOnce(t, w, runID)
 	var base string
 	_ = w.owner.QueryRow(context.Background(), `SELECT base_shas->>'target' FROM runs WHERE id = $1`, runID).Scan(&base)
 	history.mu.Lock()
@@ -124,9 +135,7 @@ func TestATurnWhoseBaseNeverArrivesFailsAfterTheWait(t *testing.T) {
 	w.holdCheckouts()
 	task := w.task()
 	runID, _ := w.untilTurnReadUnbased(task)
-	w.until("the implementer failed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
-	})
+	w.untilImplementer(runID, "failed")
 	assertRefusedForNoBase(t, w, runID)
 }
 
@@ -153,9 +162,7 @@ func TestATurnWaitingForItsBaseFailsWhenLuxEndsTheRun(t *testing.T) {
 	w.assertWaiting(runID)
 
 	w.lux.Crash(luxID)
-	w.until("the implementer failed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
-	})
+	w.untilImplementer(runID, "failed")
 	assertRefusedForNoBase(t, w, runID)
 }
 
@@ -209,15 +216,11 @@ func TestATurnWithOneOfTwoBasesWaitsForTheOther(t *testing.T) {
 	w.assertWaiting(runID)
 
 	release()
-	w.until("the implementer completed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
-	})
+	w.untilImplementer(runID, "completed")
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND base_shas ? 'target' AND base_shas ? 'web'`, runID); n != 1 {
 		t.Error("both bases are not recorded")
 	}
-	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
-		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
-	}
+	assertPushedOnce(t, w, runID)
 }
 
 // untilWithoutSweeps polls the database until sql counts one row, running
@@ -254,15 +257,11 @@ func TestABaseArrivingPastTheWaitBeforeTheNextSweepIsPushed(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND push_request_id IS NOT NULL`, runID); n != 1 {
 		t.Fatalf("the sweep after the base arrived did not ask lux to push\nruns:\n%s", w.describeRuns())
 	}
-	w.until("the implementer completed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
-	})
+	w.untilImplementer(runID, "completed", "failed")
 	var status, reason string
 	_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &reason)
 	if status != "completed" || strings.Contains(reason, noBase) {
 		t.Errorf("the Run is %s (%q), want completed", status, reason)
 	}
-	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
-		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
-	}
+	assertPushedOnce(t, w, runID)
 }
