@@ -71,8 +71,10 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)) AND EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL))
 	OR (r.dude_pause IN ('conductor', 'session') AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT (d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))))))
-	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT (r.status IN ('scheduled', 'starting', 'running') AND COALESCE(r.push_branch, '') <> ''
+	AND r.push_result IS NULL AND COALESCE(r.push_request_id, '') = '' AND EXISTS (SELECT 1 FROM unnest(r.lux_pushes) p WHERE NOT r.base_shas ? p)
+	AND r.turn_done_at > now() - make_interval(secs => $6::float8))) OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT (d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open')))
-		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+		OR (r.phase IS NULL AND r.turn_done_at < now() - make_interval(secs => lim.warm_secs))
 		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost')))) DESC, r.created_at
 			LIMIT $5

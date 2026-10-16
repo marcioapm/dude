@@ -192,7 +192,7 @@ func (g *dueStates) adversarial(owner *pgx.Conn, ref string, cov *dueCoverage) {
 func referenceRuns(t *testing.T, tx pgx.Tx, ref string, s *Syncer, limit int) []phaseRun {
 	t.Helper()
 	ctx := context.Background()
-	rows, err := tx.Query(ctx, ref, append(s.limits(), s.RetryAhead.Seconds(), limit)...)
+	rows, err := tx.Query(ctx, ref, append(s.limits(), s.RetryAhead.Seconds(), limit, s.baseWait().Seconds())...)
 	if err != nil {
 		t.Fatal(err)
 	}

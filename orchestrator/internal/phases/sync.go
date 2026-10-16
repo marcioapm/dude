@@ -433,14 +433,27 @@ const sweepBatch = 1000
 
 // actionable (SQL, over runFrom): a Run the sweep has something to do for
 // now, sorted ahead of those it only follows. A finished phase is
-// collected. A conductor's finished turn is work only when something is
-// queued for it, its warm period is over, or its container stopped: a
-// warm, quiet conductor waits for a person, and a thousand of them must
-// not keep a newer pending Run out of the batch.
+// collected, unless it is waiting for its checkout's base (baseWaiting).
+// A conductor's finished turn is work only when something is queued for
+// it, its warm period is over, or its container stopped: a warm, quiet
+// conductor waits for a person, and a thousand of them, or of phase Runs
+// waiting for a base, must not keep a newer pending Run out of the batch.
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
-	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
-		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT ` + baseWaiting + `) OR ` + unsentDirective + `
+		OR (r.phase IS NULL AND r.turn_done_at < now() - make_interval(secs => lim.warm_secs))
 		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
+
+// baseMissing (SQL, over runs r): a repository the Run pushes has no
+// recorded base (git.checkout) yet.
+const baseMissing = `EXISTS (SELECT 1 FROM unnest(r.lux_pushes) p WHERE NOT r.base_shas ? p)`
+
+// baseWaiting (SQL, over runs r; $6 the base wait in seconds): finish
+// would wait for the Run's checkout bases — live, pushing, not yet asked
+// to push, a base missing and its turn ended within the wait. lux
+// reporting the Run over ends the wait as well; actionable checks that.
+const baseWaiting = `(r.status IN ('scheduled', 'starting', 'running') AND COALESCE(r.push_branch, '') <> ''
+	AND r.push_result IS NULL AND COALESCE(r.push_request_id, '') = '' AND ` + baseMissing + `
+	AND r.turn_done_at > now() - make_interval(secs => $6::float8))`
 
 // due is what one sweep takes up: every live Run, not the oldest N — a Run
 // with nothing to do still needs its stream followed, and a paused, idle
@@ -464,7 +477,7 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 	var runs []phaseRun
 	b := &pgx.Batch{}
 	b.Queue(`SELECT set_config('jit', 'off', true)`)
-	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...).Query(func(rows pgx.Rows) (err error) {
+	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit, s.baseWait().Seconds())...).Query(func(rows pgx.Rows) (err error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
 		return err
 	})
@@ -473,7 +486,8 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 }
 
 // dueQuery is due's selection. Its parameters: runFrom's $1–$3, $4 how far
-// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch.
+// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch, $6
+// the base wait (seconds).
 const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			WHERE ` + sweptRuns + `
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -1875,16 +1889,19 @@ const baseWait = 2 * time.Minute
 // repository the Run pushes has no base yet; over: its turn ended longer
 // than the base wait ago.
 func (s *Syncer) checkoutBases(ctx context.Context, r phaseRun) (bases map[string]string, missing, over bool, err error) {
-	wait := s.BaseWait
-	if wait == 0 {
-		wait = baseWait
-	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT base_shas, EXISTS (SELECT 1 FROM unnest(lux_pushes) p WHERE NOT base_shas ? p),
-				COALESCE(turn_done_at <= now() - make_interval(secs => $2), false)
-			FROM runs WHERE id = $1`, r.ID, wait.Seconds()).Scan(&bases, &missing, &over)
+		return tx.QueryRow(ctx, `SELECT r.base_shas, `+baseMissing+`,
+				COALESCE(r.turn_done_at <= now() - make_interval(secs => $2), false)
+			FROM runs r WHERE r.id = $1`, r.ID, s.baseWait().Seconds()).Scan(&bases, &missing, &over)
 	})
 	return bases, missing, over, err
+}
+
+func (s *Syncer) baseWait() time.Duration {
+	if s.BaseWait == 0 {
+		return baseWait
+	}
+	return s.BaseWait
 }
 
 // taskBranch is the task branch of r's attempt, as its delivery keeps it.
