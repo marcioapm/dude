@@ -458,7 +458,11 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		pr["moreFiles"] = fmt.Sprintf("%s: the first %d changed files", cutMark, filesMax)
 	}
 	if len(missing) > 0 {
-		pr["notChanged"] = missing
+		if len(p.Files) >= filesMax {
+			pr["notListed"] = missing
+		} else {
+			pr["notChanged"] = missing
+		}
 	}
 	return pr
 }
