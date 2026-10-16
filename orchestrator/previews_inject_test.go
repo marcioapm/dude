@@ -268,6 +268,34 @@ func TestARunningServerWithoutTheCurrentOverlayNeedsARestart(t *testing.T) {
 	}
 }
 
+// Start all puts the current overlay on each server it starts, as a
+// person's start of one does.
+func TestStartAllPutsTheCurrentOverlayOnAServer(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.luxsWakeTimeout()
+	w.commenting(true, "")
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	w.running(runID, "web")
+	w.until("web ready", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/stop", nil); code != 200 {
+		t.Fatalf("stop = %d %v", code, out)
+	}
+	w.commenting(true, dudeOrigin)
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/start-all", nil); code != 200 {
+		t.Fatalf("start-all = %d %v", code, out)
+	}
+	sv, _ := w.lux.TenantServer(web)
+	if sv.Inject != overlayTag {
+		t.Errorf("after Start all lux holds inject %q", sv.Inject)
+	}
+	if sv.State == lux.SrvStopped {
+		t.Errorf("Start all left web stopped")
+	}
+}
+
 // An asleep server without the current overlay is not flagged: its next
 // wake syncs it before lux starts it.
 func TestAnAsleepServerNeverNeedsARestart(t *testing.T) {

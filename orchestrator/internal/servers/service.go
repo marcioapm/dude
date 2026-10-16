@@ -694,8 +694,15 @@ func (s *Service) All(ctx context.Context, org, runID, action string) (TaskServe
 	case r.parked():
 	default:
 		for _, name := range names {
-			if _, err = s.Lux.ServerAction(ctx, r.LuxRunID, name, action); err != nil {
+			// As Action does: a server started gets the overlay snippet wanted now.
+			if r.Wakeable && action == "start" {
+				err = s.syncInject(ctx, r, name)
+			}
+			if err == nil {
+				_, err = s.Lux.ServerAction(ctx, r.LuxRunID, name, action)
 				err = luxError(err)
+			}
+			if err != nil {
 				var e *Error
 				if errors.As(err, &e) {
 					e.Message = name + ": " + e.Message
