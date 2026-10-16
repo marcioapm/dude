@@ -163,7 +163,6 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 	return read, nil
 }
 
-
 func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (githubRead, error) {
 	kind, state := strings.TrimSpace(in.Kind), strings.TrimSpace(in.State)
 	switch {
