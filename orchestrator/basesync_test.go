@@ -352,7 +352,12 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if w.escalationReason(wi) != "" {
 		t.Fatal(w.escalationReason(wi))
 	}
-	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 1 {
+	// Kept past the integration, whose fixer has no candidate: the fix on
+	// the candidate after it is given the comment.
+	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
+		t.Fatal("the integration fixer was given the comment")
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%preserve this feedback%' AND branch=$2`, wi, delivery.CandidateBranch(wi, 1)) != 1 {
 		t.Fatal("feedback lost")
 	}
 	branch := w.gh.Pull(1).Head
@@ -1053,11 +1058,11 @@ func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
 	})
 }
 
-// The people's open feedback rides along with an integration: its fixer is
-// given the items but makes no fix attempt at them, they hold no merge of
-// the base, and once the integration is done they go to ordinary pull
+// The people's open feedback waits out an integration: its fixer, which
+// publishes with no candidate, is not given the items, they hold no merge
+// of the base, and once the integration is done they go to ordinary pull
 // request fixes, which have all of the pull request's budget.
-func TestAnIntegrationFixerIsGivenThePeoplesOpenFeedback(t *testing.T) {
+func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
 	for name, attempts := range map[string]int{"a new item": 0, "an item one fix left open": 1} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
@@ -1082,10 +1087,9 @@ func TestAnIntegrationFixerIsGivenThePeoplesOpenFeedback(t *testing.T) {
 			mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
 
 			w.until("the integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) >= 1 })
-			if n := w.count(integrationRuns+` AND 'fbi_int' = ANY(feedback_item_ids)`, wi); n != 1 {
-				t.Fatalf("integration fixers given the item: %d, want 1", n)
+			if n := w.count(integrationRuns+` AND 'fbi_int' = ANY(feedback_item_ids)`, wi); n != 0 {
+				t.Fatalf("integration fixers given the item: %d, want 0", n)
 			}
-			// Given with the Run's creation, in its transaction.
 			if n := w.count(`SELECT fix_attempts FROM feedback_items WHERE id = 'fbi_int'`); n != attempts {
 				t.Fatalf("fix_attempts %d after the integration fixer, want %d: it was counted", n, attempts)
 			}
@@ -1124,5 +1128,72 @@ func TestAnIntegrationFixerIsGivenThePeoplesOpenFeedback(t *testing.T) {
 				t.Errorf("fix_attempts %d, want %d: one per ordinary fix", n, attempts+bound)
 			}
 		})
+	}
+}
+
+// An integration fixer publishes to the pull request's branch with no
+// candidate. A person's item open during it, and a comment that came with
+// the conflict, are neither given to it nor settled by its publish: the
+// fix after the integration's review and test takes them up on a
+// candidate, and the item's resolution holds once that candidate is
+// promoted.
+func TestAnIntegrationLeavesTheOpenFeedbackToTheNextCheckedFix(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	ctx := context.Background()
+	// A writer at work keeps the conflict queued while the item is
+	// submitted, so both are there when the integration starts.
+	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
+	ar := w.resolveAsItPublishes(wi, "fbi_int", func(_, head string) string { return head }, nil)
+	w.conflictWithMovedBase()
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.syncRounds(3)
+	if code, body := w.feedback(ana, wi, "fbi_int", "Rename the flag."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
+
+	w.until("the integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	if n := w.count(integrationRuns+` AND (feedback_item_ids <> '{}' OR pr_feedback::text LIKE '%rename the greeting%')`, wi); n != 0 {
+		t.Fatalf("the integration fixer was given the people's feedback")
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("the item verified", func() bool {
+		w.sync()
+		_, verified := w.resolution("fbi_int")
+		return verified
+	})
+	if w.count(integrationCompleted, wi) != 1 {
+		t.Fatalf("the item was verified before the integration was reviewed and tested:\n%s", w.describeRuns())
+	}
+	var completedAt time.Time
+	if err := w.owner.QueryRow(ctx, `SELECT occurred_at FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'integration-completed'`, wi).Scan(&completedAt); err != nil {
+		t.Fatal(err)
+	}
+	fixer, commit, answer := ar.state()
+	if !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("feedback_resolve with %s: %s", commit, answer)
+	}
+	// The fixer that resolved it ran on the candidate, after the
+	// integration was checked, and was given the comment too.
+	var branch string
+	var created time.Time
+	var given bool
+	if err := w.owner.QueryRow(ctx, `SELECT COALESCE(branch, ''), created_at, pr_feedback::text LIKE '%rename the greeting%'
+		FROM runs WHERE id = $1`, fixer).Scan(&branch, &created, &given); err != nil {
+		t.Fatal(err)
+	}
+	if branch != delivery.CandidateBranch(wi, 1) || !created.After(completedAt) || !given {
+		t.Errorf("resolved by %s on %q at %s (integration completed %s), given the comment %v: want the candidate fix after the integration",
+			fixer, branch, created, completedAt, given)
+	}
+	// Verified by the promotion: in the transaction that records the move.
+	if n := w.count(`SELECT count(*) FROM events v JOIN events m ON m.xmin = v.xmin AND m.task_id = v.task_id
+		AND m.event_type = $2 WHERE v.task_id = $1 AND v.event_type = 'feedback.resolved' AND v.payload->>'verified' = 'true'`,
+		wi, delivery.EvPullRequestFixMoved); n != 1 {
+		t.Errorf("%d verifications recorded with a candidate's promotion, want 1", n)
 	}
 }

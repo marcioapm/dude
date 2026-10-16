@@ -994,10 +994,13 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	}
 	// The people's feedback still to be handled goes with every fix, the
 	// conductor's included, whatever findings it named: its words are
-	// dude's to give, and no decision leaves an item out.
-	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
-	if err != nil {
-		return workflow.Result{}, err
+	// dude's to give, and no decision leaves an item out. Not an
+	// integration's: it publishes with no candidate (prFix).
+	var feedback []string
+	if st.Integration == nil {
+		if feedback, err = w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	// Counted once per fix step, however often the step is replayed: with
 	// the Run's creation, which a replay finds by its key.
@@ -1291,7 +1294,25 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 				return workflow.Result{}, err
 			}
 		}
-		st.Integration, st.PRFeedback = nil, nil
+		st.Integration = nil
+		// The pull request comments that came with the conflict, and the
+		// people's open items, were not the integration fixer's: they go to
+		// a fix checked on a candidate, now the integration is reviewed and
+		// tested.
+		if len(st.PullRequestIDs) > 0 {
+			open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if len(st.PRFeedback) > 0 || len(open) > 0 {
+				st.ActingOnPR = false
+				line := fmt.Sprintf("%d feedback items from people are open after the base integration: read them with feedback.", len(open))
+				if len(st.PRFeedback) > 0 {
+					line = feedbackLine(st.PRFeedback)
+				}
+				return w.next(ctx, sc, st, PointPRFeedback, "prFix", line)
+			}
+		}
 	}
 	acting := st.ActingOnPR
 	st.ActingOnPR = false
@@ -1662,15 +1683,16 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
 	}
 	d := directed(st, PhaseFix)
+	// An integration fixer publishes to the pull request's branch with no
+	// candidate, so what it resolved would hold before its review and test:
+	// it is given its brief alone. The pull request comments stay in
+	// st.PRFeedback and the people's items stay open, for the candidate fix
+	// openPullRequest starts once the integration is checked.
 	prFeedback := st.PRFeedback
+	var feedback []string
 	if st.Integration != nil {
-		prFeedback = append(slices.Clone(prFeedback), forge.ActionableFeedback{Repo: st.Integration.Repo, Source: "integration", Body: st.Integration.brief()})
-	}
-	// The people's open items go with every fixer, the integration's too.
-	// An integration's is not a fix attempt at them: it is there for the
-	// base, and the items come back to an ordinary fix after it.
-	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
-	if err != nil {
+		prFeedback = []forge.ActionableFeedback{{Repo: st.Integration.Repo, Source: "integration", Body: st.Integration.brief()}}
+	} else if feedback, err = w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st); err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
@@ -2338,6 +2360,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			// The fix stays on its candidate branch: not the pull request's.
 			st.PRFeedback = nil
 		}
+		// Items that waited out an integration have no signal coming: a
+		// fix, as prFixLanded does.
+		handOpen := false
 		if st.Integration != nil {
 			beforePR := st.Integration.BeforePR
 			st.Integration = nil
@@ -2348,10 +2373,21 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			if len(st.PRFeedback) > 0 {
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
+			handOpen = true
 		}
 		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil
+		}
+		if handOpen && len(st.PullRequestIDs) > 0 {
+			open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if len(open) > 0 {
+				return w.next(ctx, sc, st, PointPRFeedback, "prFix",
+					fmt.Sprintf("%d feedback items from people are open: read them with feedback.", len(open)))
+			}
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
 	}
