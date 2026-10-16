@@ -373,7 +373,13 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := g.http.Do(req)
+	client := g.http
+	if isAgentRead(ctx) {
+		copy := *client
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copy
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return &Unreachable{err}
 	}

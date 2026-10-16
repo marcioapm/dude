@@ -93,6 +93,24 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 // Once GitHub says less than a fifth of the token's limit is left, an
 // agent's read is refused before any request, until it resets; delivery's
 // own reads go on.
+func TestAgentReadRefusesRepositoryRedirect(t *testing.T) {
+	forbiddenCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/acme/allowed/issues/1" {
+			http.Redirect(w, r, "/repos/acme/forbidden/issues/1", http.StatusFound)
+			return
+		}
+		forbiddenCalls++
+		_, _ = w.Write([]byte(`{"title":"private-outside-canary","body":"private-outside-canary"}`))
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	result, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
+	if err == nil || forbiddenCalls != 0 || strings.Contains(result.Title+result.Body, "private-outside-canary") {
+		t.Fatalf("redirect: err=%v forbidden calls=%d result=%+v", err, forbiddenCalls, result)
+	}
+}
+
 func TestAgentReadsLeaveDeliveryItsShareOfTheRateLimit(t *testing.T) {
 	target, _, gh := readsWorld(t)
 	n := target.OpenIssue("ana", "Rollup", "Body")

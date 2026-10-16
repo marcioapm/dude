@@ -1594,12 +1594,23 @@ func (i ghIssue) line() IssueLine {
 		UpdatedAt: i.UpdatedAt, URL: i.HTMLURL, PullRequest: i.PullRequest != nil}
 }
 
+type agentReadKey struct{}
+
+func agentReadContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, agentReadKey{}, true)
+}
+
+func isAgentRead(ctx context.Context) bool {
+	return ctx.Value(agentReadKey{}) == true
+}
+
 // SearchIssues lists slug's issues or pull requests (kind "issue" or "pr")
 // matching words, in state open, closed or "" for both, most recently
 // updated first, at most limit; and how many match in all. GitHub's search
 // ORs repo: qualifiers, so words naming another repository would widen it:
 // an item of any other repository is dropped.
 func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state string, limit int) ([]IssueLine, int, error) {
+	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core", "search"); err != nil {
 		return nil, 0, err
 	}
@@ -1633,6 +1644,7 @@ func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state stri
 // Issue reads an issue, or a pull request's conversation, with its first
 // maxComments comments.
 func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int) (IssueRead, error) {
+	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
 		return IssueRead{}, err
 	}
@@ -1660,6 +1672,7 @@ func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int
 // its head and the files it changes (at most maxFiles), each file's diff
 // with it.
 func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int) (PullRequestRead, error) {
+	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
 		return PullRequestRead{}, err
 	}
