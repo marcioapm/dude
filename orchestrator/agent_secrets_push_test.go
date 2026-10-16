@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -356,5 +358,54 @@ func TestACleanMultiCommitHistoryIsPushed(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.push.refused'`, task); n != 0 {
 		t.Errorf("%d push refusals of clean work", n)
+	}
+}
+
+// An implementer given a secret fetches a base that moved by more than the
+// scan reads (sync_base's fetch, recorded as the Run's trusted base) and
+// merges it: what the base brought is GitHub's already and is not read, so
+// the push goes ahead; with the fetch's record gone, the whole history is
+// read and the push is refused as unchecked.
+func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
+	for name, trusted := range map[string]bool{"trusted": true, "untrusted": false} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.grant("IMPL_TOKEN", implToken, "implementer")
+			w.scriptedImplementer()
+			task := w.task()
+			w.deliver(task)
+			runID, luxID := w.basedImplementer(task)
+			line := strings.Repeat("b", 99) + "\n"
+			w.commitFileIn(w.gh.Repo, "main", "vendor.txt", strings.Repeat(line, (8<<20)/len(line)), "Vendor a large file")
+			w.fetchBase(runID)
+			if !trusted {
+				mustExec(t, w.owner, `UPDATE runs SET synced_bases = '{}' WHERE id = $1`, runID)
+			}
+			work, err := w.lux.Checkout(luxID, "target")
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := func(args ...string) string {
+				return gitOut(t, work, append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+			}
+			if err := os.WriteFile(filepath.Join(work, "task.txt"), []byte("task\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "task.txt")
+			git("commit", "-q", "-m", "Task work")
+			git("merge", "-q", "--no-edit", "lux/main")
+			w.lux.EndTurn(luxID)
+			w.until("the implementer failed or pushed", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
+			})
+			var reason, status string
+			_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &reason)
+			switch {
+			case trusted && (status != "completed" || !w.luxRunFor(runID).Pushed):
+				t.Fatalf("under the trusted base: %s, pushed %v: %s", status, w.luxRunFor(runID).Pushed, reason)
+			case !trusted && !strings.Contains(reason, "more than dude reads"):
+				t.Fatalf("without the trusted base: %q, want the history over the limit", reason)
+			}
+		})
 	}
 }
