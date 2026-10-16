@@ -813,6 +813,10 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		step = fakeagent.Tester(str("dude.model"), criteria, fixes)
 		step.PrintEnv = str("dude.model") == fakeagent.PrintSecretsModel
 	}
+	if str("dude.integration") == "true" {
+		step.Commit = nil
+		step.Tools = fakeagent.IntegrationCalls(str("dude.integration.prompt"))
+	}
 	if raw := str(fakeagent.CallsLabel); raw != "" {
 		var calls [][2]string
 		_ = json.Unmarshal([]byte(raw), &calls)
@@ -1829,6 +1833,18 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	id, from := InboxLast(run.Inputs)
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
+	if tool == "sync_base" {
+		// The scripted agent can call before dude has recorded its Run as
+		// running, which sync_base refuses until it has: as an agent told
+		// to call again in a moment, it does.
+		deadline := time.Now().Add(5 * time.Second)
+		for status == 422 && strings.Contains(string(body), "container is not running") && time.Now().Before(deadline) {
+			s.mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			s.mu.Lock()
+			status, body, err = s.toolRequest(run, tool, args)
+		}
+	}
 	s.saidOfTool(run, tool, status, err)
 	if err == nil && status != 0 && status < 300 {
 		var answer struct{ ID string }
@@ -2518,6 +2534,14 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			sha, err = pushWorkspace(work, path, branch, base)
 		} else {
 			sha, err = commit(path, base, branch, files, run.behavior.Message)
+			if err == nil && work != "" && sha != base {
+				// lux pushes what is in the checkout: the scripted commit
+				// made in the repository is the checkout's too, its objects
+				// fetched in (HEAD is left where the agent's edits are).
+				if out, ferr := exec.Command("git", "-C", work, "fetch", "-q", path, sha).CombinedOutput(); ferr != nil {
+					err = fmt.Errorf("fetching the commit into the checkout: %v: %s", ferr, out)
+				}
+			}
 		}
 		switch {
 		case err != nil:

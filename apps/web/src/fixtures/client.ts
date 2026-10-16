@@ -13,10 +13,10 @@
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
-import { canStart, canStop } from "@dude/design-system";
+import { canStart, canStop, feedbackHolds } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
-import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
+import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
@@ -418,6 +418,10 @@ export class FixtureClient extends ApiClient {
   override recentPullRequests() {
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
   }
+  // No workflow waits in the mockups' world: the request is accepted and nothing changes.
+  override resolvePullRequestConflicts(id: string): ReturnType<ApiClient["resolvePullRequestConflicts"]> {
+    return Promise.resolve({ pullRequestId: id, action: "resolve-conflicts" });
+  }
   // The mockups' world has no brainstorm sessions; a test's client adds its own.
   override sessions(): Promise<SessionsList> {
     return Promise.resolve({ sessions: [], invitations: [], questions: [] });
@@ -459,6 +463,27 @@ export class FixtureClient extends ApiClient {
   override listFindings(taskId: string) {
     if (this.#restarted) return Promise.resolve({ findings: taskId === TASK_ID ? RESTARTED_FINDINGS : [] });
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
+  }
+  /** People's feedback, kept in memory as the API keeps it: a draft listed to its author alone. */
+  feedbackItems: FeedbackItem[] = [];
+  #currentAttempt(): number {
+    return Math.max(1, ...this.#task.runs.map((r) => r.attempt));
+  }
+  override feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
+    const n = attempt ?? this.#currentAttempt();
+    const feedback = this.feedbackItems.filter((i) => i.taskId === taskId && i.attempt === n && (i.status !== "draft" || i.author?.id === YOU));
+    const blocking = feedback.filter((i) => feedbackHolds(i.status, i.resolutionPending)).length;
+    return Promise.resolve({ feedback, blocking });
+  }
+  override async createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    if (draft.anchor.kind === "code") throw new ApiError(400, "bad_request", "No diff in the fixtures.");
+    const now = new Date().toISOString();
+    const me = PEOPLE.find((p) => p.id === YOU)!;
+    const item: FeedbackItem = { id: `fbk_${this.feedbackItems.length + 1}`, taskId, attempt: this.#currentAttempt(),
+      batchId: null, author: { id: me.id, name: me.name }, body: draft.body, anchor: draft.anchor, status: "draft", deliveredRunId: null,
+      resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [] };
+    this.feedbackItems.push(item);
+    return item;
   }
   override listArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: this.#restarted ? RESTARTED_ARTIFACTS : [] });

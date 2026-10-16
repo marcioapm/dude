@@ -37,9 +37,16 @@ const (
 
 // State is everything the workflow remembers between steps.
 type State struct {
-	TaskID    string `json:"taskId"`
-	ProjectID string `json:"projectId"`
-	Policy    Policy `json:"policy"`
+	TaskID           string            `json:"taskId"`
+	ProjectID        string            `json:"projectId"`
+	Policy           Policy            `json:"policy"`
+	Integration      *Integration      `json:"integration,omitempty"`
+	IntegrationPairs map[string]string `json:"integrationPairs,omitempty"`
+	// Integrations whose merge published while GitHub had not said whether
+	// the pull request still conflicts, left to the pull request syncer's
+	// next reading, by pair.
+	HandedOver       map[string]Integration `json:"handedOver,omitempty"`
+	PendingConflicts []forge.Signal         `json:"pendingConflicts,omitempty"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
@@ -166,6 +173,9 @@ type State struct {
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
 	authorizeGate bool
+	// The step handed an integration over: the wait after it takes one
+	// pass first (closeHandedOver). Never persisted.
+	handingOver bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -220,7 +230,16 @@ func (e *Escalation) Actions() []string {
 		// Test again (after someone told dude how to run it), or ship what
 		// could not be checked, with a reason.
 		out = append(out, "retry", ActionWaive)
-	case "pull_request_conflict", "ci_stuck":
+	case "pull_request_conflict":
+		var d struct {
+			Integration bool `json:"integration"`
+		}
+		e.decode(&d)
+		if d.Integration {
+			out = append(out, "retry")
+		}
+		out = append(out, "wait")
+	case "ci_stuck":
 		// A person resolves the conflict, or sees to CI, on GitHub; dude
 		// waits on the pull request again.
 		out = append(out, "wait")
@@ -694,6 +713,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	var runIDs []string
 	for _, c := range categories {
 		k := key(sc, st, ":review:", st.Iteration, ":", c)
+		if st.Integration != nil {
+			k = key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
+		}
 		if d != nil {
 			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
 		}
@@ -702,6 +724,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 				p.ReviewRange = reviewRange
 				d.apply(p)
+				if st.Integration != nil {
+					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Integration.MergeSHA, st.Integration.MergeSHA)}}
+				}
 			})
 		if err != nil {
 			return workflow.Result{}, err
@@ -824,13 +849,11 @@ func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings and
-// the people's feedback still to be handled. A candidate's loop weighs the
-// findings alone: its fixers are given the feedback, but what they leave
-// open is the pull request loop's after promotion (prFixLanded), bounded
-// by MaxPRFixIterations, never a stuck candidate round.
+// the people's feedback still to be handled. Candidate and integration loops
+// weigh reviewers' findings alone; open feedback returns to the PR fix loop.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
 	findings, err := w.s.Findings(ctx, org, st)
-	if err != nil || st.checkingCandidate() {
+	if err != nil || st.checkingCandidate() || st.Integration != nil {
 		return findings, err
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
@@ -843,9 +866,11 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
+		if st.Integration != nil {
+			return workflow.Result{Next: "test", State: st}, nil
+		}
 		if st.ActingOnPR && st.Candidate == nil {
-			// Work the conductor started at the pull request wait: back to
-			// waiting, through a test first when a failed test sent the fix.
+			// A failed test's fix must be tested before returning to the PR.
 			if st.RetestDue {
 				return workflow.Result{Next: "test", State: st}, nil
 			}
@@ -943,6 +968,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
 	}
 	k := key(sc, st, ":fix:", st.Iteration)
+	if st.Integration != nil {
+		k = key(sc, st, ":integration:", st.Integration.RunID, ":fix:", st.Iteration)
+	}
 	if len(st.TestFindingIDs) > 0 {
 		// A failed test's findings, those still open, in a Run of their own.
 		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
@@ -1141,6 +1169,9 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 // testRoundKey is key, distinct per fix round a failed test started: the
 // simplify and test after it are new Runs, not the ones before it.
 func testRoundKey(sc workflow.StepContext, st *State, part string) string {
+	if st.Integration != nil {
+		return key(sc, st, ":integration:", st.Integration.RunID, part, ":test-round:", st.TestFixRounds)
+	}
 	if st.TestFixRounds > 0 {
 		return key(sc, st, part, ":after-test:", st.TestFixRounds)
 	}
@@ -1173,6 +1204,9 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 // (Open or Draft) — except for a pull request taken over, which is open
 // already and has nothing to decide.
 func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
+	if st.Integration != nil {
+		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	}
 	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
@@ -1187,6 +1221,77 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Integration != nil && st.Integration.Published {
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		settled := true
+		for _, p := range states {
+			if p.Repo != st.Integration.Repo || p.Number != st.Integration.Number || p.State == forge.StateClosed || p.State == forge.StateMerged {
+				continue
+			}
+			ref, mergeable, err := gh.Mergeability(ctx, p.Slug, p.Number)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if ref.State == forge.StateClosed || ref.State == forge.StateMerged {
+				continue
+			}
+			if mergeable == forge.MergeConflicting {
+				return w.integrationFailure(ctx, sc, st, causeStillConflicting, reasonStillConflicting)
+			}
+			if mergeable == forge.MergeUnknown {
+				if st.Integration.Polls < unknownMergeabilityPolls {
+					wait := min(time.Second<<st.Integration.Polls, time.Minute)
+					st.Integration.Polls++
+					return workflow.Result{Next: "openPullRequest", State: st, SleepUntil: time.Now().Add(wait)}, nil
+				}
+				// GitHub still has not said. The reading on record is the
+				// old head's: forgotten, so the pull request syncer's next
+				// conflicting read is news and signals this workflow, and
+				// the integrated head is recorded as attempted against this
+				// base, so that signal escalates rather than integrating again.
+				if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE pull_requests SET mergeable_state = 'unknown', updated_at = now()
+						WHERE id = $1 AND state IN ('open', 'draft')`, p.ID)
+					return err
+				}); err != nil {
+					return workflow.Result{}, err
+				}
+				after := *st.Integration
+				after.Head = st.Heads[after.Repo]
+				if st.IntegrationPairs == nil {
+					st.IntegrationPairs = map[string]string{}
+				}
+				st.IntegrationPairs[after.pair()] = st.Integration.RunID
+				if after.agentRun() {
+					if st.HandedOver == nil {
+						st.HandedOver = map[string]Integration{}
+					}
+					// Kept as it started, so its closing line names the same attempt.
+					st.HandedOver[after.pair()] = *st.Integration
+					st.handingOver = true
+				}
+				settled = false
+			}
+		}
+		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
+			return workflow.Result{}, err
+		}
+		// A merge GitHub made cleanly resolved nothing: its own merge-base
+		// line says what happened.
+		if settled && st.Integration.agentRun() {
+			if err := w.integrationEvent(ctx, sc, st, "integration-completed", map[string]any{"head": st.Heads[st.Integration.Repo]}); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.Integration, st.PRFeedback = nil, nil
 	}
 	acting := st.ActingOnPR
 	st.ActingOnPR = false
@@ -1248,6 +1353,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if st.GateRequired && st.GateAt != nil {
 		st.Draft = st.GateAt.Draft
 	}
+	if res, diverted, err := w.syncBeforePR(ctx, sc, st); diverted || err != nil {
+		return res, err
+	}
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if errors.As(err, new(forge.OwnerAuthorizationError)) {
 		return w.awaitOwnerAuthorization(ctx, sc, st, err)
@@ -1273,6 +1381,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
 		return workflow.Result{}, err
 	}
+	if len(st.PendingConflicts) > 0 {
+		return workflow.Result{Next: "awaitPullRequest", State: st}, nil
+	}
 	return waitForPR(st), nil
 }
 
@@ -1293,12 +1404,22 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if err := w.closeHandedOver(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
 	// Every signal of the batch is read before anything is decided: they are
 	// consumed together, so one PR merging must not drop feedback on another
 	// that arrived with it.
 	var actionable []forge.ActionableFeedback
 	ended, readiness := false, false
 	var stop *forge.Signal // a conflict, or CI stuck: a person's to see to
+	// A conflict another stop takes the place of waits its turn.
+	stopAt := func(next *forge.Signal) {
+		if stop != nil && stop.Kind == "conflict" {
+			st.PendingConflicts = append(st.PendingConflicts, *stop)
+		}
+		stop = next
+	}
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -1313,13 +1434,18 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		case "readiness":
 			readiness = true
 		case "conflict", "ci_stuck":
-			stop = &s
+			stopAt(&s)
 		default:
 			actionable = append(actionable, s.Feedback...)
 			if s.Conflict {
-				stop = &forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number}
+				stopAt(&forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number})
 			}
 		}
+	}
+	if stop == nil && len(st.PendingConflicts) > 0 {
+		s := st.PendingConflicts[0]
+		st.PendingConflicts = st.PendingConflicts[1:]
+		stop = &s
 	}
 	if ended {
 		res, finished, err := w.pullRequestEnded(ctx, sc, st)
@@ -1347,6 +1473,31 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		// Kept for after: a person who resolves the conflict and waits
 		// again has the feedback that arrived with it fixed then.
 		st.PRFeedback = append(st.PRFeedback, actionable...)
+		if stop.Kind == "conflict" {
+			start, err := w.prepareIntegration(ctx, sc, st, stop)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if start {
+				return workflow.Result{Next: "prFix", State: st}, nil
+			}
+			if st.Integration != nil {
+				cause, problem := st.attemptCause(st.Integration)
+				return w.integrationFailure(ctx, sc, st, cause, problem)
+			}
+			gh, err := w.forges.For(ctx, sc.OrganizationID)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			// Nothing to integrate after all: a person's request, or the
+			// automatic setting, goes back to waiting rather than escalating.
+			if stop.Requested || gh != nil && gh.Settings.WhenBehind == "update" {
+				if len(st.PRFeedback) > 0 {
+					return workflow.Result{Next: "prFix", State: st}, nil
+				}
+				return waitForPR(st), nil
+			}
+		}
 		reason := "pull_request_conflict"
 		if stop.Kind == "ci_stuck" {
 			reason = "ci_stuck"
@@ -1428,40 +1579,41 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if st.Integration != nil {
+		k := key(sc, st, ":prfix:", max(st.PRFixKey, st.PRIteration)+1)
+		existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if existing == "" {
+			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+					return err
+				}
+				var writer bool
+				if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
+					return err
+				}
+				if writer {
+					return workflow.Wait{After: time.Second, Why: "integration waits for the current writer"}
+				}
+				return nil
+			}); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+	}
 	total := forge.DefaultSettings().FixRoundsPerPR
 	if gh != nil {
 		total = gh.Settings.FixRoundsPerPR
 	}
-	st.PRIteration++
-	// A workflow from before rounds counted its fixes in PRIteration only.
-	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
-	var spent []string // pull requests past the organization's budget
-	repos := feedbackRepos(st.PRFeedback)
-	if len(repos) == 0 {
-		// A fix the conductor started while the pull requests waited, on
-		// no feedback: it counts against each still open.
-		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-		if err != nil {
-			return workflow.Result{}, err
-		}
-		for _, p := range states {
-			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
-				repos = append(repos, p.Repo)
-			}
-		}
-	}
-	for _, repo := range repos {
-		if st.PRFixes == nil {
-			st.PRFixes = map[string]int{}
-		}
-		st.PRFixes[repo]++
-		if total > 0 && st.PRFixes[repo] > total {
-			spent = append(spent, repo)
-		}
-	}
-	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
-		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
-			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
+	if st.Integration != nil {
+		// Bringing the base in is dude's upkeep, not a fix the pull
+		// request's people asked for: it spends none of their budget, and
+		// is bounded by one Run per head/base pair instead.
+		st.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
+	} else if res, exhausted, err := w.chargePRFix(ctx, sc, st, total); err != nil || exhausted {
+		return res, err
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
@@ -1500,22 +1652,43 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
-	// The fix goes to the candidate branch, not the pull request's: it is
-	// reviewed and tested there first (promoteCandidate moves it).
-	st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
-	// Several comments arriving together cost one fix Run, not one each;
-	// the people's feedback in dude goes with it, each item a fix attempt.
+	if st.Integration != nil && existing == "" {
+		st.Integration.Head = st.Heads[st.Integration.Repo]
+		st.Integration.Published = false
+		st.Integration.Polls = 0
+	}
+	// PR feedback fixes are checked on a candidate before promotion.
+	if st.Integration == nil {
+		st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
+	}
 	d := directed(st, PhaseFix)
+	prFeedback := st.PRFeedback
+	if st.Integration != nil {
+		prFeedback = append(slices.Clone(prFeedback), forge.ActionableFeedback{Repo: st.Integration.Repo, Source: "integration", Body: st.Integration.brief()})
+	}
+	// The people's open items go with every fixer, the integration's too.
+	// An integration's is not a fix attempt at them: it is there for the
+	// base, and the items come back to an ordinary fix after it.
 	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
-		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = st.PRFeedback, feedback, true
+		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = prFeedback, feedback, st.Integration == nil
 		d.apply(p)
 	})
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Integration != nil {
+		st.Integration.RunID = runID
+		if st.IntegrationPairs == nil {
+			st.IntegrationPairs = map[string]string{}
+		}
+		st.IntegrationPairs[st.Integration.pair()] = runID
+		if err := w.integrationEvent(ctx, sc, st, "integration-started", nil); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
 }
@@ -1529,6 +1702,44 @@ func (st *State) candidateBranch() string {
 		return st.Branch + candidateSuffix
 	}
 	return CandidateBranch(st.TaskID, max(st.Attempt, 1))
+}
+
+// chargePRFix counts a fix against this round's budget and each pull
+// request's it addresses; the escalation, and true, when either is spent.
+func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (workflow.Result, bool, error) {
+	st.PRIteration++
+	// A workflow from before rounds counted its fixes in PRIteration only.
+	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
+	var spent []string // pull requests past the organization's budget
+	repos := feedbackRepos(st.PRFeedback)
+	if len(repos) == 0 {
+		// A fix the conductor started while the pull requests waited, on
+		// no feedback: it counts against each still open.
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return workflow.Result{}, false, err
+		}
+		for _, p := range states {
+			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
+				repos = append(repos, p.Repo)
+			}
+		}
+	}
+	for _, repo := range repos {
+		if st.PRFixes == nil {
+			st.PRFixes = map[string]int{}
+		}
+		st.PRFixes[repo]++
+		if total > 0 && st.PRFixes[repo] > total {
+			spent = append(spent, repo)
+		}
+	}
+	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
+		res, err := w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
+			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
+		return res, true, err
+	}
+	return workflow.Result{}, false, nil
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.
@@ -1610,11 +1821,20 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
+		if st.Integration != nil {
+			return w.integrationFailure(ctx, sc, st, causeRunFailed, out.Error)
+		}
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
+	if st.Integration != nil {
+		st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
+		st.Integration.Published = true
+		st.Integration.MergeSHA = st.Heads[st.Integration.Repo]
+		st.Iteration = 0
+		st.ActingOnPR = true
+		return workflow.Result{Next: "review", State: st}, nil
+	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
-	// A fix the conductor started at the pull request wait is checked on
-	// its candidate like any other: its review starts from the candidate.
 	st.ActingOnPR = false
 	if len(out.Heads) == 0 || st.Candidate == nil {
 		// Nothing changed (or a fix from before candidates, already on the
@@ -2012,6 +2232,10 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
 	switch reason {
+	case "pull_request_conflict":
+		if st.Integration != nil {
+			st.Escalation.Step = "prFix"
+		}
 	case "review_failed":
 		// Its retry is the failed reviewers again, not a fix.
 		st.Escalation.Step = "review"
@@ -2114,6 +2338,17 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			// The fix stays on its candidate branch: not the pull request's.
 			st.PRFeedback = nil
 		}
+		if st.Integration != nil {
+			beforePR := st.Integration.BeforePR
+			st.Integration = nil
+			st.ActingOnPR = false
+			if beforePR {
+				return workflow.Result{Next: "openPullRequest", State: st}, nil
+			}
+			if len(st.PRFeedback) > 0 {
+				return workflow.Result{Next: "prFix", State: st}, nil
+			}
+		}
 		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil
@@ -2190,6 +2425,10 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 			st.RetestDue = true
 		}
 	case "prFix":
+		if st.Integration != nil {
+			// One more integration Run: it spent no fix budget to give back.
+			break
+		}
 		// The same fix again, not the next: what the stopped one counted
 		// is given back. A budget spent is a new one.
 		st.PRIteration--
@@ -2244,6 +2483,9 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 // waitForPR waits on the task's pull requests: what the forge says of
 // them, a person's decision, or a person's feedback in dude.
 func waitForPR(st *State) workflow.Result {
+	if len(st.PendingConflicts) > 0 || st.handingOver {
+		return workflow.Result{Next: "awaitPullRequest", State: st}
+	}
 	return workflow.Result{Next: "awaitPullRequest", State: st,
 		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}}
 }

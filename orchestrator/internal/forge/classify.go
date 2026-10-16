@@ -24,6 +24,9 @@ type Signal struct {
 	// Which pull request, for a person reading the escalation.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// A person asked dude to resolve the conflict: integrate even when
+	// whenBehind is "tell".
+	Requested bool `json:"requested,omitempty"`
 }
 
 // ActionableFeedback is one thing a fixer is sent to address.

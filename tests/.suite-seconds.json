@@ -1,5 +1,6 @@
 {
   "suites/test_accounts_access.py": 7.0,
+  "suites/test_base_sync.py": 43.9,
   "suites/test_bun_floor.py": 0.0,
   "suites/test_chat.py": 26.3,
   "suites/test_chat_images.py": 62.9,
@@ -12,6 +13,7 @@
   "suites/test_driving.py": 21.4,
   "suites/test_events.py": 1.3,
   "suites/test_feedback.py": 33.9,
+  "suites/test_feedback_ui.py": 37.2,
   "suites/test_gallery_build.py": 0.0,
   "suites/test_gallery_components.py": 261.7,
   "suites/test_gallery_deferred.py": 118.0,

@@ -1389,6 +1389,15 @@ here.
   approved, requested changes, commented, review requested (a team too),
   and "asked again · approved before" — attention, their earlier word
   muted — for one asked again after a verdict. Faces are GitHub's.
+- **A pull request's base is named in mono** in PullRequestPanel's base
+  line ("Conflicts with `main`", "Up to date with `main`"). A conflict has
+  three states, told by glyph, tone and words: for its owner, the danger
+  line ends in the app's action (Resolve conflicts); while dude resolves
+  it (`conflict={{ resolving: true }}`), "Conflicts with `main` · **dude is
+  resolving it**" with no action, in the panel's in-progress convention
+  (attention with `circle-dotted`, as for running checks); for anyone else
+  (`conflict={{ waitingFor: "Ana" }}`), the danger line ends in "Waiting
+  for Ana" in muted ink, never a control that is refused when pressed.
 - **Checks dude cannot read are said plainly**: "GitHub won't show dude
   this repository's checks", beneath it that a fine-grained token cannot
   read check runs and which token can, and a link to
@@ -2253,7 +2262,8 @@ MarkdownCheatsheet.
   tool gives way before the file name), `onOpenFile` for the viewer,
   `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
-  file on its own.
+  file on its own, and `commenting` for people's feedback on its lines (see
+  *People's feedback*).
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
 - **SessionHeader** — the transcript's header on its own, for an agent
@@ -2504,6 +2514,53 @@ an ordinary completed step, and review follows on the unchanged head.
   headers and page regions sit. Non-rail pages need not adopt it.
 - Drag-and-drop on the board. The workflow owns every lane transition; see
   the Board rules.
+
+### People's feedback
+
+`src/components/FeedbackCard.tsx`, and `LiveDiff`'s `commenting` prop.
+Gallery: *People's feedback* (`#fb-diff`, `#fb-cards`, `#fb-editor`,
+`#fb-tray`).
+
+In the web app, commenting lives on the task page: a Run's Changes take
+comments when opened there, never on the standalone Run page.
+
+- **Commenting is props on `LiveDiff`, not a second diff.** `commenting`
+  takes `canStart`, `maxLines`, the `selection` (the app's to keep) with
+  `onSelectionChange(range, done)`, `renderAfterLine(path, side, line)`,
+  `renderFileHead(path)` and `fileMark(path)`. With `canStart`, every line
+  with a number on its side has a "+" in its gutter: a real `<button>`
+  named "Comment on line N" ("(removed)" on the old side), shown on the
+  hovered line and on focus. A press on the "+" or a line number starts a
+  range; moving over lines of the same side and hunk stretches it, capped
+  at `maxLines` from where it started; letting go anywhere ends it (`done`).
+  By key, Enter or Space on a "+" picks its line and Shift stretches the
+  range to it. The range is on the selection wash with the accent's 2px
+  bar; while dragging a line under it says how many and the cap. What
+  `renderAfterLine` returns sits on the chrome shade under that line —
+  in Split, under that side's column — and a unified context line asks for
+  both its sides.
+- **`FeedbackCard`** is one item: author, when, where its batch went, its
+  status (`feedbackStatusSpec`: tone, glyph and words — never hue alone),
+  what it is on (`FeedbackAnchorLine`), its words, its thread
+  (`FeedbackThread`, on the thread's 2px bar) and the actions its status
+  allows: Reply and Resolve while it needs handling; Reopen once answered
+  or resolved; while its commit is unpublished, Reply off with why and
+  Confirm resolved. A draft is on the surface with a steer's dashed bar
+  and "Only you see this until you submit", Edit and Delete. `inline` drops
+  the anchor (its lines are above it); `placement="outdated"` or
+  `"unchanged"` shows the original excerpt (`FeedbackExcerpt`) with the
+  words that say why it is not on lines. `readOnly` has no actions.
+  A refused action keeps what was written and shows the API's words.
+- **`CommentEditor`**: ⌘/Ctrl+Enter saves, Escape cancels, "Private draft
+  until you submit"; `full` turns the field off and says why.
+- **`DraftsTray`** sits at the foot of a task's pages (`position: sticky`)
+  while there are drafts: the count, "only you see them until you
+  submit", where a submit goes now, Review (the list: jump, edit, delete)
+  and **Submit N…**. At `max` it says so. `submitRefused` turns Submit off
+  with the API's reason. **`SubmitFeedbackDialog`** says what goes, where,
+  and what it holds until handled; Keep as drafts, Submit N.
+- **Holding the merge is not needs-you.** Nothing here is attention-toned:
+  an item waits on an agent or on its author, not on the reader.
 
 ## Project secrets
 

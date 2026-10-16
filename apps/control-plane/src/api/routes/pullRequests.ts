@@ -471,10 +471,11 @@ async function revokeAuthorization(ctx: PublicContext, organizationId: string, d
 /**
  * What a person does to a pull request through dude, as GitHub's page
  * would let them: merge it, update its branch, re-run its failed checks, or
- * ask someone to review it. The orchestrator does it on GitHub, records who
- * asked, and reads the pull request back.
+ * ask someone to review it — or ask dude's workflow to resolve its
+ * conflicts. The orchestrator does it, records who asked, and reads the
+ * pull request back.
  */
-function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | "reviewers") {
+function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | "reviewers" | "resolve-conflicts") {
   return async (ctx: RequestContext): Promise<Response> =>
     orchestrator(ctx.principal.organizationId, "POST", `/internal/pull-requests/${encodeURIComponent(ctx.params.id!)}/${action}`,
       await ctx.request.text(), ctx.principal);
@@ -496,7 +497,7 @@ async function reviewerCandidates(ctx: RequestContext): Promise<Response> {
 
 /**
  * How dude behaves on GitHub for the organization — who may wake a fixer,
- * how pull requests open and merge, what happens when main moves ahead,
+ * how pull requests open and merge, what happens when a task's base moves ahead,
  * the fix budget. The orchestrator owns their meaning and defaults.
  */
 async function getGithubSettings(ctx: RequestContext): Promise<Response> {
@@ -531,6 +532,7 @@ export function registerPullRequestRoutes(router: Router): void {
   router.post("/v1/pull-requests/:id/update-branch", pullRequestAction("update-branch"));
   router.post("/v1/pull-requests/:id/rerun-failed", pullRequestAction("rerun-failed"));
   router.post("/v1/pull-requests/:id/reviewers", pullRequestAction("reviewers"));
+  router.post("/v1/pull-requests/:id/resolve-conflicts", pullRequestAction("resolve-conflicts"));
   router.get("/v1/pull-requests/:id/reviewer-candidates", reviewerCandidates);
   router.get("/v1/forge/reviewer-candidates", reviewerCandidates);
   router.publicRoute("POST", "/v1/webhooks/github/:org", receiveWebhook);

@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { mergeBlockedBy, pullRequestActivity } from "../src/pullRequests.ts";
+import { mergeBlockedBy, pullRequestActivity, resolvingConflicts } from "../src/pullRequests.ts";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   id: "pr_1", taskId: "t", runId: null, repositoryId: "r", repositoryName: "web", number: 41, url: "https://github.com/a/web/pull/41",
@@ -107,5 +107,43 @@ describe("activity", () => {
     const line = pullRequestActivity(event("pull_request.action", { action: "merge", method: "squash" }, "key_ana"), false);
     expect(line).toEqual({ who: null, actorId: "key_ana", text: "merged #41 (squash)", quote: undefined });
     expect(pullRequestActivity(event("pull_request.action", { action: "rerun-failed", rerun: 2 }, "key_ana"), false)?.text).toBe("re-ran 2 failed checks on #41");
+    expect(pullRequestActivity(event("pull_request.action", { action: "resolve-conflicts" }, "key_ana"), false)?.text)
+      .toBe("asked dude to resolve the conflicts on #41");
+  });
+
+  test("dude's base integration reads as dude's, in words, the base as a name, no internal reasons", () => {
+    const merged = pullRequestActivity(event("pull_request.action", { action: "merge-base", number: undefined, base: "main", head: "abc" }), false);
+    expect(merged).toEqual({ who: null, actorId: null, text: "merged main into the branch in web on GitHub; it is tested again",
+      parts: ["merged ", { mono: "main" }, " into the branch in web on GitHub; it is tested again"], quote: undefined, byDude: true });
+    expect(pullRequestActivity(event("pull_request.action", { action: "integration-started", base: "main", runId: "run_1" }), false)?.text)
+      .toBe("started resolving #41's conflicts with main");
+    expect(pullRequestActivity(event("pull_request.action", { action: "integration-completed", base: "main" }), false)?.text)
+      .toBe("resolved #41's conflicts with main, then reviewed and tested it");
+    const refused = (cause: string, error: string) =>
+      pullRequestActivity(event("pull_request.action", { action: "integration-refused", base: "main", cause, error }), false)?.text;
+    expect(refused("still_conflicting", "still conflicting after integration"))
+      .toBe("could not resolve #41's conflicts with main: it merged the base in, and GitHub still finds a conflict");
+    expect(refused("pair_attempted", "this head/base pair was already attempted"))
+      .toBe("could not resolve #41's conflicts with main: it already tried this branch against this base");
+    expect(refused("run_failed", "lux 0 stream_ended: exec ended"))
+      .toBe("could not resolve #41's conflicts with main: the agent resolving it stopped before it finished");
+    expect(refused("", "integration fix budget exhausted")).toBe("could not resolve #41's conflicts with main");
+    const lines = ["merge-base", "integration-started", "integration-completed", "integration-refused"].map((action) =>
+      pullRequestActivity(event("pull_request.action", { action, base: "main", cause: "still_conflicting", error: "this head/base pair was already attempted" }), false)!);
+    expect(lines.filter((l) => l.text.includes("`") || /pair|attempted after|integration/.test(l.text)).length).toBe(0);
+    // No line names the files it resolved: nothing records which conflicted.
+    expect(lines.filter((l) => /resolving conflicts in|\.ts|\.go/.test(l.text)).length).toBe(0);
+  });
+
+  test("dude is resolving a pull request from its latest integration line while the task works", () => {
+    const line = (action: string, number = 41, repo = "web") => event("pull_request.action", { action, number, repo });
+    const p = { repositoryName: "web", number: 41 };
+    expect(resolvingConflicts(p, [line("integration-started")], "running")).toBe(true);
+    expect(resolvingConflicts(p, [line("integration-started")], "review")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started"), line("integration-completed")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started"), line("integration-refused")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started", 7)], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started", 41, "api")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [], "running")).toBe(false);
   });
 });

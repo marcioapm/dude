@@ -301,3 +301,99 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
 }
+
+/* Commenting: a "+" in the gutter of the line under the pointer (or
+   focused), a range picked on one side shown on the selection wash with an
+   accent bar, and rows under a line for what was written there. */
+.fileTail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.commentable .side {
+  position: relative;
+}
+.commentable [data-cstart] {
+  cursor: pointer;
+}
+.dragging,
+.dragging * {
+  user-select: none;
+}
+.plus {
+  position: absolute;
+  top: 1px;
+  left: 86px;
+  z-index: 2;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-accent);
+  color: var(--ds-color-text-inverse);
+  opacity: 0;
+}
+.side .plus {
+  left: 42px;
+}
+[data-hover] > .plus,
+.plus:focus-visible {
+  opacity: 1;
+}
+.plus:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.picked {
+  background: var(--ds-color-selection);
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+.dragHint {
+  padding: 2px var(--ds-space-12) 2px 106px;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  background: var(--ds-color-chrome);
+}
+.after {
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) 106px;
+  background: var(--ds-color-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.splitAfter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.splitAfter .after,
+.splitAfter .dragHint {
+  padding-left: var(--ds-space-12);
+}
+.fileNotes {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+@media (max-width: 640px) {
+  /* The file list above the diff, one scroll for both: beside it, it leaves the lines and their comments a
+     few characters wide, and with a scroll of its own it takes what little height a phone leaves the diff. */
+  .body {
+    display: block;
+    overflow: auto;
+  }
+  .files {
+    max-height: 30vh;
+  }
+  .diffs {
+    overflow: visible;
+  }
+  .after,
+  .dragHint {
+    padding-left: var(--ds-space-8);
+  }
+}

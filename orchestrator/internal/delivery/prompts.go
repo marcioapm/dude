@@ -381,6 +381,20 @@ const implementContract = "Before you finish, exercise the changed behaviour you
 const commitNote = "Commit your work when you are done. Only committed changes are kept. " +
 	"Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them."
 
+// Every move of the task branch is a fast-forward, so a writer brings the
+// base in by merging it: a rebase would never publish, and would orphan
+// review threads tied to the old commits. dude's, like commitNote: an
+// organisation's prompt does not drop it.
+const baseIntegrationNote = "Call sync_base when you need the base's latest work: credentials stay outside your checkout. " +
+	"Merge lux/<base>, never rebase, and never force anything. Resolve every conflict keeping both sides' intent, " +
+	"run the affected tests, and commit with git's default merge message. Finish your Run to publish normally."
+
+// conductorBaseNote is baseIntegrationNote for the conductor, which runs
+// no tests and publishes with its tool.
+const conductorBaseNote = "Call sync_base to fetch the base as lux/<base>. Merge it, never rebase, and never force anything. " +
+	"Resolve small conflicts keeping both sides' intent and commit with git's default merge message, then publish. " +
+	"For larger resolutions delegate fix; delegate review and test before shipping. Never run tests yourself."
+
 // testerContract is what a person merging the change relies on from the
 // tester, whatever its instructions say: every criterion accounted for in
 // one report, evidence behind each pass, and a product it did not touch.
@@ -588,7 +602,7 @@ var builtinInstructions = map[string][]string{
 		"Do not commit: your output is findings, and someone else will make the change."},
 	// The fixer's second paragraph follows the feedback it is given.
 	"fixer": {"Address the feedback below.",
-		"Fix only what is raised above. Widening the change makes the re-review harder and risks new findings."},
+		"Fix only what is raised above, including merging the base when an integration brief asks for it. Widening the change makes the re-review harder and risks new findings."},
 	"simplifier": {"Simplify the changes on this branch without changing what they do.",
 		"Remove needless complexity, improve names and structure, delete dead code the change " +
 			"introduced, and consolidate obvious duplication.",
@@ -709,7 +723,7 @@ func ConductorPrompt(briefing string, in PromptInput) string {
 		if in.TaskBranch != "" {
 			fmt.Fprintf(&b, "\n\nThe task branch is `%s`; dude brings it in as `lux/%s`.", in.TaskBranch, in.TaskBranch)
 		}
-		sections = append(sections, b.String())
+		sections = append(sections, b.String(), conductorBaseNote)
 	}
 	if in.Tools {
 		sections = append(sections, conductorToolsNote)
@@ -743,7 +757,7 @@ func Prompt(phase string, in PromptInput) string {
 		if in.Continues != nil {
 			add(continueNote(in.Continues))
 		}
-		add(implementContract, commitNote)
+		add(implementContract, commitNote, baseIntegrationNote)
 		add(in.task())
 		if len(in.Feedback) > 0 {
 			add(FeedbackText(in.Feedback, in.CLI))
@@ -762,6 +776,11 @@ func Prompt(phase string, in PromptInput) string {
 			contract = "## How you review\n\n" + reviewRange(in.ReviewBase, in.ReviewOf, len(in.Repositories)) + reviewRules
 		}
 		add("The task under review:\n\n"+in.task(), contract, findingFormat, reviewSummary)
+		for _, f := range in.PRFeedback {
+			if f.Source == "integration" {
+				add(f.Body)
+			}
+		}
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}
@@ -841,13 +860,13 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(tail...)
 		add(fixContract)
-		add(commitNote)
+		add(commitNote, baseIntegrationNote)
 		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
 
 	case PhaseSimplify:
 		add(lead...)
-		add(commitNote)
+		add(commitNote, baseIntegrationNote)
 		add("The task this branch implements:\n\n" + in.task())
 
 	case PhaseTest:

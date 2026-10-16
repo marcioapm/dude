@@ -610,6 +610,17 @@ func (g *GitHub) readReviews(ctx context.Context, slug string, number int, p ghP
 	return nil
 }
 
+// Mergeability is a pull request's state, head and whether it merges, from
+// GET /pulls/{n} alone: no checks, reviews, compare or threads. Behind is
+// not told apart from clean.
+func (g *GitHub) Mergeability(ctx context.Context, slug string, number int) (PullRequestRef, string, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return PullRequestRef{}, "", err
+	}
+	return p.ref(), mergeable(p.Mergeable, p.MergeableState, 0), nil
+}
+
 // mergeable reads GitHub's two mergeable fields and the distance from the
 // base: GitHub computes mergeability lazily, so right after a push it is
 // null — unknown, not clean — and the next read (a webhook will prompt one)
@@ -1102,6 +1113,15 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
+// MergeBase merges an exact base commit into the task branch without a PR.
+func (g *GitHub) MergeBase(ctx context.Context, slug, branch, head string) (string, error) {
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	err := g.do(ctx, "POST", "/repos/"+slug+"/merges", map[string]string{"base": branch, "head": head}, &out)
+	return out.SHA, err
+}
+
 // ClosePullRequest closes a pull request without merging it. One already
 // closed or merged is left as it is.
 func (g *GitHub) ClosePullRequest(ctx context.Context, slug string, number int) error {
@@ -1228,32 +1248,33 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 // commits head has that base lacks (AheadBy) and the reverse (BehindBy:
 // base is an ancestor of head only at 0), and each changed file's lines.
 type Comparison struct {
-	AheadBy  int `json:"ahead_by"`
-	BehindBy int `json:"behind_by"`
-	Files    []struct {
-		Filename  string `json:"filename"`
-		Additions int    `json:"additions"`
-		Deletions int    `json:"deletions"`
-	} `json:"files"`
+	AheadBy  int            `json:"ahead_by"`
+	BehindBy int            `json:"behind_by"`
+	Files    []ComparedFile `json:"files"`
 }
 
-// Lines is the comparison's changed lines: additions and deletions.
-func (c Comparison) Lines() int {
-	n := 0
-	for _, f := range c.Files {
-		n += f.Additions + f.Deletions
-	}
-	return n
+// ComparedFile is one file of a Comparison; PreviousFilename is a rename's
+// or copy's other side.
+type ComparedFile struct {
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename,omitempty"`
+	// added, removed, modified, renamed, copied, changed or unchanged.
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	// The file's blob.
+	SHA string `json:"sha"`
+	// The diff's text; GitHub omits it for a binary file, a change of no
+	// lines, and a diff too large to show.
+	Patch string `json:"patch,omitempty"`
 }
 
-// Paths are the comparison's changed files.
-func (c Comparison) Paths() []string {
-	out := make([]string, 0, len(c.Files))
-	for _, f := range c.Files {
-		out = append(out, f.Filename)
-	}
-	return out
-}
+// CompareFileCap is the most files GitHub's compare lists: at it, the list
+// may be cut short.
+const CompareFileCap = 300
+
+// Truncated says the comparison may list fewer files than changed.
+func (c Comparison) Truncated() bool { return len(c.Files) >= CompareFileCap }
 
 // Compare compares head with base, two commits.
 func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparison, error) {

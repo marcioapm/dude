@@ -24,8 +24,7 @@ func baseNote(bases map[string]string) string {
 	b.WriteString("## Base\n\nThis work continues an existing branch. Its changes are measured against its base, " +
 		"not the default branch:")
 	for _, repo := range slices.Sorted(maps.Keys(bases)) {
-		fmt.Fprintf(&b, "\n- `%s`: `%s` (`git fetch origin %s`, then `git diff origin/%s...HEAD`)", repo, bases[repo],
-			bases[repo], bases[repo])
+		fmt.Fprintf(&b, "\n- `%s`: `%s`. Writers call sync_base, then merge lux/%s; reviewers use the available local base refs with `git diff <base>...HEAD`, and report if a base ref is unavailable. Credentials are not in the checkout.", repo, bases[repo], bases[repo])
 	}
 	return b.String()
 }

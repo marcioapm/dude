@@ -18,6 +18,7 @@ import { RelationsSection } from "./sections/Relations.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
+import { FeedbackSection } from "./sections/Feedback.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
 import { ServersSection } from "./sections/Servers.tsx";
 import { BrainstormSection } from "./sections/Brainstorm.tsx";
@@ -226,6 +227,15 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "People's feedback",
+    [
+      ["fb-diff", "Commenting on a diff"],
+      ["fb-cards", "FeedbackCard"],
+      ["fb-editor", "CommentEditor"],
+      ["fb-tray", "DraftsTray / Submit"],
+    ],
+  ],
+  [
     "Brainstorm",
     [
       ["bs-title", "SessionTitle"],
@@ -367,6 +377,7 @@ function Shell() {
           <SettingsGallerySection mode={panes} />
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
+          <FeedbackSection mode={panes} />
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />
