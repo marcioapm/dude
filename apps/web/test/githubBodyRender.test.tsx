@@ -7,6 +7,8 @@ import type { PersistedEvent } from "@dude/domain";
 import { act, click, mount } from "./dom.ts";
 
 let unmount: (() => Promise<void>) | undefined;
+const toggle = (root: HTMLElement, name = "Show all") =>
+  [...root.querySelectorAll<HTMLButtonElement>('button, [role="button"]')].find((button) => button.textContent === name);
 afterEach(async () => { await unmount?.(); unmount = undefined; });
 
 describe("GitHub bodies in Activity", () => {
@@ -36,16 +38,31 @@ describe("GitHub bodies in Activity", () => {
     expect([...root.querySelectorAll("summary")].map((el) => el.textContent)).toEqual(["Review info", "Run configuration"]);
     expect(root.querySelectorAll("details details").length).toBe(1);
     expect(root.querySelectorAll("details[open]").length).toBe(0);
+    await click(root.querySelector("summary")!);
+    expect(root.querySelector("details")!.open).toBe(true);
+    expect(root.textContent).toContain("Run configuration");
+    expect(root.querySelectorAll("details[open]").length).toBe(1);
     expect([...root.querySelector("blockquote")!.querySelectorAll("strong")].map((el) => el.textContent)).toEqual(["Actionable comments posted: 2", "Review profile"]);
     expect(root.querySelectorAll("img, picture, source").length).toBe(0);
     expect(root.textContent).not.toContain("<details>");
     expect(root.textContent).not.toContain("<!--");
     expect(root.textContent).not.toContain("Fix comments");
-    expect(root.querySelectorAll(".githubBody button").length).toBe(0);
+    expect(toggle(root)).toBeUndefined();
   });
 
-  // happy-dom has no layout: the measured element gets a 24px line, and is 1200px tall when it holds
-  // over 1000 characters or an open disclosure, 24px otherwise.
+  test("unsafe HTML and Markdown URLs render as text while HTTPS remains a link", async () => {
+    const page = await mount(<GitHubBody source={'<a href="https://example.com">https</a> <a href="javascript:alert(1)">js</a> <a href="data:text/html,x">data</a> <a href="javascript&#58;alert(1)">entity</a> <a href="&#106;avascript:alert(1)">numeric</a> [md](javascript:alert(1))'} />);
+    unmount = page.unmount;
+    const links = [...page.container.querySelectorAll("a")];
+    expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([["https", "https://example.com"]]);
+    expect(page.container.textContent).toContain("js");
+    expect(page.container.textContent).toContain("data");
+    expect(page.container.textContent).toContain("entity");
+    expect(page.container.textContent).toContain("numeric");
+    expect(page.container.textContent).toContain("md");
+  });
+
+  // happy-dom has no layout: a 24px line, 1200px tall for over 1000 characters or an open disclosure, 24px otherwise.
   async function withLayout(run: (measure: () => Promise<void>) => Promise<void>) {
     const original = globalThis.ResizeObserver;
     const measures: Array<() => void> = [];
@@ -88,27 +105,27 @@ describe("GitHub bodies in Activity", () => {
     await withLayout(async (measure) => {
       const page = await mountBody(long);
       await measure();
-      const toggle = () => page.container.querySelector<HTMLButtonElement>("button");
+      const button = (name?: string) => toggle(page.container, name);
       const content = page.container.querySelector<HTMLElement>(".githubSections")!;
-      expect(toggle()!.textContent).toBe("Show all");
-      expect(toggle()!.getAttribute("aria-expanded")).toBe("false");
+      expect(button()!.getAttribute("aria-expanded")).toBe("false");
       expect(content.style.maxHeight).toBe("288px");
       expect(content.style.overflow).toBe("hidden");
-      await click(toggle()!);
-      expect(toggle()!.textContent).toBe("Show less");
-      expect(toggle()!.getAttribute("aria-expanded")).toBe("true");
+      await click(button()!);
+      expect(button()).toBeUndefined();
+      expect(button("Show less")!.getAttribute("aria-expanded")).toBe("true");
       expect(content.style.maxHeight).toBe("");
       expect(content.style.overflow).toBe("");
-      await click(toggle()!);
+      await click(button("Show less")!);
       expect(content.style.maxHeight).toBe("288px");
       expect(content.style.overflow).toBe("hidden");
-      await click(toggle()!);
+      await click(button()!);
       await page.show("Short now.");
       await measure();
-      expect(toggle()).toBeNull();
+      expect(button()).toBeUndefined();
+      expect(button("Show less")).toBeUndefined();
       await page.show(long);
       await measure();
-      expect(toggle()!.getAttribute("aria-expanded")).toBe("false");
+      expect(button()!.getAttribute("aria-expanded")).toBe("false");
       expect(content.style.overflow).toBe("hidden");
     });
   });
@@ -122,25 +139,34 @@ describe("GitHub bodies in Activity", () => {
     await withLayout(async (measure) => {
       const page = await mountBody("<details><summary>Review info</summary>Run configuration</details>");
       await measure();
-      expect(page.container.querySelector("button")).toBeNull();
+      expect(toggle(page.container)).toBeUndefined();
       const details = page.container.querySelector("details")!;
       await act(async () => {
         details.open = true;
         details.dispatchEvent(new Event("toggle"));
       });
-      expect(page.container.querySelector("button")!.textContent).toBe("Show all");
+      expect(toggle(page.container)).toBeDefined();
     });
   });
 
-  test("focus moving into the clipped tail shows the whole quote", async () => {
+  test("focus expands the quote only when the focused element is below the clamp", async () => {
     await withLayout(async (measure) => {
-      const page = await mountBody(long);
+      const page = await mountBody("[Top](https://example.com/top)\n\n" + long);
       await measure();
       const content = page.container.querySelector<HTMLElement>(".githubSections")!;
+      const top = page.container.querySelector<HTMLAnchorElement>("a[href='https://example.com/top']")!;
+      const tail = page.container.querySelector<HTMLAnchorElement>("a[href='https://example.com/log']")!;
+      // The clamp shows 0-288px; the top link sits in it, the tail link far below.
+      const bottomAt = (el: Element, bottom: number) => { el.getBoundingClientRect = () => ({ bottom }) as DOMRect; };
+      bottomAt(content, 288);
+      bottomAt(top, 24);
+      bottomAt(tail, 2000);
+      await act(async () => top.focus());
       expect(content.style.overflow).toBe("hidden");
-      await act(async () => page.container.querySelector<HTMLAnchorElement>("a[href='https://example.com/log']")!.focus());
+      expect(toggle(page.container)!.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => tail.focus());
       expect(content.style.overflow).toBe("");
-      expect(page.container.querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle(page.container, "Show less")!.getAttribute("aria-expanded")).toBe("true");
     });
   });
 });

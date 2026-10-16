@@ -44,7 +44,9 @@ export function GitHubBody({ source }: { source: string }) {
 
   return <div className="githubBody">
     {/* Tabbing into the clipped tail shows it all, so focus never lands out of sight. */}
-    <div ref={ref} className="githubSections" onFocus={clipped ? () => setOpen(true) : undefined}
+    <div ref={ref} className="githubSections" onFocus={clipped ? (event) => {
+      if (event.target.getBoundingClientRect().bottom > event.currentTarget.getBoundingClientRect().bottom) setOpen(true);
+    } : undefined}
       style={{ maxHeight: open ? undefined : limit, overflow: open ? undefined : "hidden" }}>
       <Sections sections={sections} />
     </div>
