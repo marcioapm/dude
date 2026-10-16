@@ -80,7 +80,7 @@ func verifyBase(ctx context.Context, gh *forge.GitHub, slug, branch, synced stri
 // short at GitHub's file cap, or with no evidence, the count is GitHub's
 // whole compare and Full says why. An error is one that may pass: a
 // forge's (forge.Transient), or an errAccountingTransient.
-func accountPublish(ctx context.Context, l lux.Client, gh *forge.GitHub, luxRunID, slug, repo, baseBranch,
+func accountPublish(ctx context.Context, evidence evidenceFunc, gh *forge.GitHub, slug, repo, baseBranch,
 	start, head, trusted, untrusted string, task forge.Comparison) (accounting, error) {
 	full := func(why string) (accounting, error) {
 		acc := fromComparison(task, nil, nil)
@@ -114,7 +114,7 @@ func accountPublish(ctx context.Context, l lux.Client, gh *forge.GitHub, luxRunI
 	if !shared {
 		return fromComparison(task, nil, nil), nil
 	}
-	ev, err := publicationAccounting(ctx, l, luxRunID, start, head, trusted, repo)
+	ev, err := evidence(ctx, start, head, trusted, repo)
 	switch {
 	case accountingTransient(err):
 		return accounting{}, err

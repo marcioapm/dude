@@ -200,6 +200,15 @@ func (s *Server) DropExecs(of string, n int) int {
 	return left
 }
 
+// HangExecs makes the next n execs whose command contains of hang, as an
+// exec does on a host that took the stream and stopped answering: no
+// output and no exit code until the caller goes away.
+func (s *Server) HangExecs(of string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hangExecs, s.hangExecsOf = n, of
+}
+
 // exec is lux's exec stream: refused over plain HTTP when the Run is not
 // running, else a WebSocket whose first message names the command, then its
 // output as {"data","ch"} messages, then {"exitCode"}.
@@ -250,7 +259,18 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	if drop {
 		s.dropExecs--
 	}
+	hang := s.hangExecs > 0 && slices.ContainsFunc(open.Command, func(a string) bool { return strings.Contains(a, s.hangExecsOf) })
+	if hang {
+		s.hangExecs--
+	}
 	s.mu.Unlock()
+	if hang {
+		for {
+			if _, _, err := ws.Read(ctx); err != nil {
+				return
+			}
+		}
+	}
 	if drop {
 		_ = ws.Close(websocket.StatusGoingAway, "host gone")
 		return

@@ -37,6 +37,8 @@ type accountingRun struct {
 	// Sees each request to the fake GitHub of published.
 	intercept func(*http.Request) int
 	pushed    string
+	// Reads the evidence in published, instead of this Run's Exec.
+	evidence evidenceFunc
 }
 
 func newAccountingRun(t *testing.T) *accountingRun {
@@ -142,7 +144,13 @@ func (a *accountingRun) published() accounting {
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	acc, err := accountPublish(ctx, a.client, gh, a.luxID, "acme/target", "target", "main", a.start, head, trusted, why, task)
+	evidence := func(ctx context.Context, start, head, base, repo string) (accounting, error) {
+		return publicationAccounting(ctx, a.client, a.luxID, start, head, base, repo)
+	}
+	if a.evidence != nil {
+		evidence = a.evidence
+	}
+	acc, err := accountPublish(ctx, evidence, gh, "acme/target", "target", "main", a.start, head, trusted, why, task)
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -395,8 +403,6 @@ func TestAccountingThatMayPassIsRetried(t *testing.T) {
 	}))
 	t.Cleanup(hung.Close)
 	t.Cleanup(func() { close(release) })
-	defer func(d time.Duration) { accountingTimeout = d }(accountingTimeout)
-	accountingTimeout = 200 * time.Millisecond
 
 	stopped := newAccountingRun(t)
 	stopped.fake.Crash(stopped.luxID)
@@ -412,7 +418,9 @@ func TestAccountingThatMayPassIsRetried(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
-				_, err := publicationAccounting(context.Background(), c.client, c.run, "a", "b", "", "target")
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				_, err := publicationAccounting(ctx, c.client, c.run, "a", "b", "", "target")
 				done <- err
 			}()
 			select {

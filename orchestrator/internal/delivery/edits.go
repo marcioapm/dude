@@ -38,6 +38,9 @@ const (
 	// past any line limit.
 	RefusedBinary = "%s has a change git cannot count in lines (a binary file), past the conductor's limit: " +
 		"delegate this (start_phase implement)"
+	// RefusedUnaccounted: the container stopped, or lux could not reach
+	// it, before the publish's changes could be counted.
+	RefusedUnaccounted = "the agent's container stopped before its work could be accounted"
 	// UntestedHead is the pull request gate refusing a head that is a
 	// conductor's commit no review or test Run has run on.
 	UntestedHead = "the last commit is the conductor's; run a review first"

@@ -51,6 +51,11 @@ const (
 	publishBackoffMax  = 5 * time.Minute
 )
 
+// publishAccountingTries is how many failures in a row a publish's
+// accounting may meet before the publish is refused: with the back-off,
+// about 8 minutes.
+const publishAccountingTries = 8
+
 // publishPushed records lux's git.push for a publish of the conductor's:
 // due at once. claim is the worker's claim on it, "" for the conductor's
 // follower, which holds none: its report ends any worker's claim, so a
@@ -439,7 +444,10 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		if err != nil {
 			return errPublishTransient{err}
 		}
-		acc, err := accountPublish(ctx, s.Lux, gh, p.LuxRunID, slug, repo.Name, baseBranch, start, res.Commit, trusted, untrusted, cmp)
+		acc, err := accountPublish(ctx, s.evidence(p.LuxRunID), gh, slug, repo.Name, baseBranch, start, res.Commit, trusted, untrusted, cmp)
+		if accountingTransient(err) && (lux.Terminal(p.LuxState) || p.Failures >= publishAccountingTries) {
+			return s.refusePublish(ctx, p, delivery.RefusedUnaccounted)
+		}
 		if accountingTransient(err) || forge.Transient(err) {
 			return errPublishTransient{err}
 		}

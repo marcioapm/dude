@@ -674,6 +674,9 @@ type Server struct {
 	// in it end their stream before any exit code (DropExecs).
 	dropExecs   int
 	dropExecsOf string
+	// hangExecs: likewise, those that hang (HangExecs).
+	hangExecs   int
+	hangExecsOf string
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.

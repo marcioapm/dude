@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,8 +14,23 @@ import (
 )
 
 // accountingTimeout bounds the accounting Exec, as diffTimeout bounds
-// readDiff: a hung lux must not hold up the sweep. Sized for long histories.
-var accountingTimeout = 60 * time.Second
+// readDiff: a hung lux must not hold up the sweep. The worst history
+// measured (49 base merges over 1500 files) took 5.4 s.
+const accountingTimeout = 20 * time.Second
+
+// evidenceFunc reads the checkout's evidence of start..head against base
+// in one repository (publicationAccounting, on one Run).
+type evidenceFunc func(ctx context.Context, start, head, base, repo string) (accounting, error)
+
+// evidence reads it from lux Run luxRunID, within the syncer's bound.
+func (s *Syncer) evidence(luxRunID string) evidenceFunc {
+	bound := cmp.Or(s.AccountingTimeout, accountingTimeout)
+	return func(ctx context.Context, start, head, base, repo string) (accounting, error) {
+		ctx, cancel := context.WithTimeout(ctx, bound)
+		defer cancel()
+		return publicationAccounting(ctx, s.Lux, luxRunID, start, head, base, repo)
+	}
+}
 
 // accountingScript prints what start..head changed that is the task's own,
 // as NUL-separated records. base is a commit dude trusts as the base (the
@@ -103,14 +119,17 @@ func accountingTransient(err error) bool {
 
 // publicationAccounting reads the task's own change from the Run's
 // checkout. base is a commit trustedBase vouched for, "" for none. Anything
-// short of complete, readable evidence is an error; one that may pass is an
-// errAccountingTransient.
+// short of complete, readable evidence is an error; one that may pass (ctx
+// done included) is an errAccountingTransient.
 func publicationAccounting(ctx context.Context, l lux.Client, runID, start, head, base, repo string) (accounting, error) {
 	if start == "" || head == "" {
 		return accounting{}, fmt.Errorf("publication accounting needs exact start and head")
 	}
-	ctx, cancel := context.WithTimeout(ctx, accountingTimeout)
-	defer cancel()
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, accountingTimeout)
+		defer cancel()
+	}
 	res, err := l.Exec(ctx, runID, []string{"sh", "-c", accountingScript, "account", "/workspace/repos/" + lux.SpecName(repo), start, head, base})
 	if err != nil {
 		le, isLux := lux.AsError(err)

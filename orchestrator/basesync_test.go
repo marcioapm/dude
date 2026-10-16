@@ -23,6 +23,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // toolsWithSync serves dude's tools with sync_base wired to the world's
@@ -780,10 +781,37 @@ func TestSyncBaseOnALuxWithoutSyncModesIsRefused(t *testing.T) {
 	}
 }
 
-// The base moves on GitHub while an implementer works and it never calls
-// sync_base; then lux cannot reach the Run's host for the accounting's
-// exec. The publish is accounted against what the checkout holds, retried
-// past the outage, and the implementer completes with its own file.
+// phaseRunOf is the task's latest Run of phase.
+func (w *world) phaseRunOf(taskID, phase string) string {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase::text = $2
+		ORDER BY created_at DESC LIMIT 1`, taskID, phase).Scan(&id); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
+// fetchBase is sync_base's fetch for the Run runID: lux fetches main into
+// its checkout, and the commit it reports (main on GitHub now) is recorded
+// as the Run's trusted base.
+func (w *world) fetchBase(runID string) string {
+	w.t.Helper()
+	refs := []lux.SyncRef{{Repo: "target", Ref: "main", Mode: lux.SyncFetch}}
+	if err := w.syncer.SyncBase(context.Background(), w.org, runID, w.luxRunOf(runID), fmt.Sprintf("base-%s-%d", runID, time.Now().UnixNano()), refs); err != nil {
+		w.t.Fatal(err)
+	}
+	want := w.gh.SHA("main")
+	w.until("lux's fetch of main recorded", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND synced_bases->'target'->>'main' = $2`, runID, want) == 1
+	})
+	return want
+}
+
+// The base moves on GitHub while an implementer works, on the file it
+// changes; it fetched the base and never merged it. Then lux cannot reach
+// the Run's host for the accounting's exec. The publish is retried past the
+// outage, and the implementer completes with its own file.
 func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldPushes = true
@@ -792,7 +820,8 @@ func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 	w.until("the implementer pushing", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
 	})
-	w.gh.AdvanceBase("main", "Someone else's merge")
+	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "someone else's\n", "Someone else's merge")
+	w.fetchBase(w.phaseRunOf(wi, "implement"))
 	w.lux.DropExecs("DUDE_ACCOUNTING", 1)
 	w.lux.HoldPushes = false
 	w.lux.ReleasePushes()
@@ -816,7 +845,8 @@ func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 // host is tried again, not refused.
 func TestAConductorPublishWaitsOutALuxOutage(t *testing.T) {
 	e, _ := newCommitted(t)
-	e.gh.AdvanceBase("main", "Base moved")
+	e.commitFileIn(e.gh.Repo, "main", "README.md", "# base\n", "Base moved")
+	e.fetchBase(e.cond)
 	e.lux.DropExecs("DUDE_ACCOUNTING", 1)
 	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
 		t.Fatalf("publish %s: %s", status, why)
