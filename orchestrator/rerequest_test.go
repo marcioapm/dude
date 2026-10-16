@@ -450,11 +450,10 @@ func TestReviewersAreAskedBeforeASiblingPullRequestOpens(t *testing.T) {
 	}
 }
 
-// The promotion created web's task branch, then opening web's pull request
-// failed, and a person deleted the branch before the step ran again: the
-// retry does not create it a second time, and stops for a person with the
-// checked head.
-func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testing.T) {
+// siblingFixWorld is a task whose pull request on target is reviewed by
+// jerv, and whose next fix changes web, which has no task branch yet:
+// promoting it creates web's branch and opens web's pull request.
+func siblingFixWorld(t *testing.T) (*world, string) {
 	w := newWorld(t)
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -476,6 +475,43 @@ func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testin
 		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
 	})
 	w.gh.Review(1, "jerv", "COMMENTED")
+	return w, wi
+}
+
+// lastQuestionDetail is the detail of the last question asked on wi.
+func lastQuestionDetail(t *testing.T, w *world, wi string) map[string]any {
+	t.Helper()
+	var detail map[string]any
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	return detail
+}
+
+func branchCreatingEvents(w *world, wi string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvTaskBranchCreating)
+}
+
+// createRefSHA is the SHA a create-ref POST for branch asks for, ok false
+// for any other request. The body is restored for the fake to read.
+func createRefSHA(r *http.Request, branch string) (sha string, ok bool) {
+	if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") {
+		return "", false
+	}
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var in struct{ Ref, SHA string }
+	_ = json.Unmarshal(body, &in)
+	return in.SHA, in.Ref == "refs/heads/"+branch
+}
+
+// The promotion created web's task branch, then opening web's pull request
+// failed, and a person deleted the branch before the step ran again: the
+// retry does not create it a second time, and stops for a person with the
+// checked head.
+func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testing.T) {
+	w, wi := siblingFixWorld(t)
 	branch := w.gh.Pull(1).Head
 	var deleted atomic.Bool
 	var creates atomic.Int32
@@ -516,43 +552,11 @@ func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testin
 	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q", r)
 	}
-	var detail map[string]any
-	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
-		t.Fatal(err)
-	}
+	detail := lastQuestionDetail(t, w, wi)
 	if detail["repo"] != "web" || detail["found"] != "" || detail["expected"] != "" || detail["candidate"] != checked ||
 		detail["branch"] != delivery.CandidateBranch(wi, 1) {
 		t.Errorf("refusal %v, want web missing with candidate %s", detail, checked)
 	}
-}
-
-// siblingFixWorld is a task whose pull request on target is reviewed by
-// jerv, and whose next fix changes web, which has no task branch yet:
-// promoting it creates web's branch and opens web's pull request.
-func siblingFixWorld(t *testing.T) (*world, string) {
-	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		switch {
-		case labels["dude.phase"] == "implement":
-			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
-		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
-			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
-		}
-		return b
-	}
-	w.askingFor("jerv")
-	wi := w.task()
-	w.addWeb(wi, "write")
-	w.deliver(wi)
-	w.until("target's pull request in review", func() bool {
-		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
-	})
-	w.gh.Review(1, "jerv", "COMMENTED")
-	return w, wi
 }
 
 // GitHub failing a request on web's task branch before the create is sent
@@ -581,8 +585,7 @@ func TestATransientFailureBeforeASiblingBranchIsCreatedStillOpensItsPullRequest(
 	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
 		t.Fatalf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
-		delivery.EvTaskBranchCreating); n != 1 {
+	if n := branchCreatingEvents(w, wi); n != 1 {
 		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
 	}
 }
@@ -596,17 +599,11 @@ func TestASiblingBranchCreatedBehindA502IsMovedWithoutWaiting(t *testing.T) {
 	var failed atomic.Int32
 	w.web.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") {
+			sha, ok := createRefSHA(r, branch)
+			if !ok || failed.Add(1) != 1 {
 				return 0
 			}
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			var in struct{ Ref, SHA string }
-			_ = json.Unmarshal(body, &in)
-			if in.Ref != "refs/heads/"+branch || failed.Add(1) != 1 {
-				return 0
-			}
-			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", in.Ref, in.SHA, "").CombinedOutput(); err != nil {
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", "refs/heads/"+branch, sha, "").CombinedOutput(); err != nil {
 				t.Errorf("create web's branch: %v %s", err, out)
 			}
 			return http.StatusBadGateway
@@ -630,8 +627,7 @@ func TestASiblingBranchCreatedBehindA502IsMovedWithoutWaiting(t *testing.T) {
 	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
 		t.Errorf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
-		delivery.EvTaskBranchCreating); n != 1 {
+	if n := branchCreatingEvents(w, wi); n != 1 {
 		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
 	}
 }
@@ -645,26 +641,23 @@ func TestASiblingBranchSomeoneCreatedFirstIsNeverOverwritten(t *testing.T) {
 	var pushed, candidate atomic.Value
 	w.web.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") || pushed.Load() != nil {
+			if pushed.Load() != nil {
 				return 0
 			}
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			var in struct{ Ref, SHA string }
-			_ = json.Unmarshal(body, &in)
-			if in.Ref != "refs/heads/"+branch {
+			sha, ok := createRefSHA(r, branch)
+			if !ok {
 				return 0
 			}
-			out, err := exec.Command("git", "-C", w.web.Repo, "rev-parse", in.SHA+"^").Output()
+			out, err := exec.Command("git", "-C", w.web.Repo, "rev-parse", sha+"^").Output()
 			if err != nil {
 				t.Errorf("parent of the candidate's head: %v", err)
 				return 0
 			}
 			parent := strings.TrimSpace(string(out))
-			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", in.Ref, parent, "").CombinedOutput(); err != nil {
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", "refs/heads/"+branch, parent, "").CombinedOutput(); err != nil {
 				t.Errorf("push web's branch: %v %s", err, out)
 			}
-			candidate.Store(in.SHA)
+			candidate.Store(sha)
 			pushed.Store(parent)
 			return 0
 		}
@@ -688,15 +681,10 @@ func TestASiblingBranchSomeoneCreatedFirstIsNeverOverwritten(t *testing.T) {
 	if n := len(w.web.Pulls()); n != 0 {
 		t.Errorf("%d pull requests on web", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
-		delivery.EvTaskBranchCreating); n != 1 {
+	if n := branchCreatingEvents(w, wi); n != 1 {
 		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
 	}
-	var detail map[string]any
-	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
-		t.Fatal(err)
-	}
+	detail := lastQuestionDetail(t, w, wi)
 	if detail["repo"] != "web" || detail["found"] != person || detail["candidate"] != checked {
 		t.Errorf("refusal %v, want web found at %s with candidate %s", detail, person, checked)
 	}

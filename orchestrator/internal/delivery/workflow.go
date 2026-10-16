@@ -1570,27 +1570,29 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	}
 	for _, repo := range repos {
 		to := st.Heads[repo]
-		move, creating := gh.FastForwardExisting, false
+		// A branch never on the forge here is created (a repository the
+		// fix changed first); one that was is a person's deletion.
+		fresh := false
 		if at[repo] == "" {
-			// A branch never on the forge here is created (a repository the
-			// fix changed first); one that was is a person's deletion.
-			if fresh, err := w.s.neverPublished(ctx, sc.OrganizationID, st, repo); err != nil {
+			if fresh, err = w.s.neverPublished(ctx, sc.OrganizationID, st, repo); err != nil {
 				return workflow.Result{}, err
-			} else if fresh {
-				if err := w.s.branchCreatingTx(ctx, sc.OrganizationID, st, repo); err != nil {
-					return workflow.Result{}, err
-				}
-				// Only the create is sent: any request failing after the
-				// record makes a replay read the branch as deleted.
-				move, creating = gh.CreateBranch, true
 			}
 		}
-		err := move(ctx, slugs[repo], st.Branch, to)
-		if creating && forge.Transient(err) {
-			// GitHub may have created it before failing: at to, it did.
-			if found, rerr := gh.BranchSHA(ctx, slugs[repo], st.Branch); rerr == nil && found == to {
-				err = nil
+		if fresh {
+			if err = w.s.branchCreatingTx(ctx, sc.OrganizationID, st, repo); err != nil {
+				return workflow.Result{}, err
 			}
+			// Only the create is sent: any request failing after the
+			// record makes a replay read the branch as deleted.
+			err = gh.CreateBranch(ctx, slugs[repo], st.Branch, to)
+			if forge.Transient(err) {
+				// GitHub may have created it before failing: at to, it did.
+				if found, rerr := gh.BranchSHA(ctx, slugs[repo], st.Branch); rerr == nil && found == to {
+					err = nil
+				}
+			}
+		} else {
+			err = gh.FastForwardExisting(ctx, slugs[repo], st.Branch, to)
 		}
 		var fe *forge.Error
 		if errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
