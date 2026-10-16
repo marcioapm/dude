@@ -11,7 +11,8 @@
 --
 -- No data changes. Safe to run again.
 
-CREATE INDEX IF NOT EXISTS feedback_items_attachment_idx ON feedback_items ((anchor->>'attachmentId'))
-  WHERE anchor->>'attachmentId' IS NOT NULL;
+-- Not partial: Postgres keeps expression statistics only for a whole
+-- index, and without them the sweeper's NOT EXISTS seq-scans every item.
+CREATE INDEX IF NOT EXISTS feedback_items_attachment_idx ON feedback_items ((anchor->>'attachmentId'));
 
 GRANT SELECT (anchor) ON feedback_items TO dude_sweeper;

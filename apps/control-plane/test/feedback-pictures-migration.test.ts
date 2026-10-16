@@ -79,3 +79,19 @@ test("as the sweeper, an item's anchor is readable and its words are not", async
   });
   await expect(words).rejects.toThrow("permission denied");
 });
+
+// The sweeper asks, per expired upload, whether any item names it. With
+// statistics on the anchor's attachmentId (a whole-table expression index
+// has them; a partial one has none) the planner knows how few items name a
+// picture and looks them up by the index instead of reading every item.
+test("the planner has statistics on which items name a picture", async () => {
+  await db`INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor)
+    SELECT 'fbi_g' || n, 'org_p', 'wi_p', 1, 'per_ana', 'g', 'general', '{"kind":"general"}' FROM generate_series(1, 500) n`;
+  await db`ANALYZE feedback_items`;
+  const stats = await db`SELECT null_frac, n_distinct FROM pg_stats WHERE tablename = 'feedback_items_attachment_idx'`;
+  expect(stats.length).toBe(1);
+  expect(stats[0].null_frac).toBeGreaterThan(0.99);
+  const [plan] = await db.unsafe(`EXPLAIN (FORMAT JSON) SELECT 1 FROM feedback_items f WHERE f.anchor->>'attachmentId' = 'att_none'`);
+  // Postgres's default equality guess with no statistics is 0.5% of 503 rows (3); with them, 1.
+  expect(plan["QUERY PLAN"][0].Plan["Plan Rows"]).toBe(1);
+});
