@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, PREVIEW_WAKE_TIMEOUT_MAX_MINUTES, type MachineSizeWithUse, type PreviewSecret, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, PREVIEW_WAKE_TIMEOUT_MAX_MINUTES, type MachineSizeWithUse, type ProjectSecret, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
@@ -35,7 +35,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
 }) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
-  const [secrets, setSecrets] = useState<PreviewSecret[] | null>(null);
+  const [secrets, setSecrets] = useState<ProjectSecret[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [editing, setEditing] = useState<Recipe | "new" | null>(null);
   const [removing, setRemoving] = useState<Recipe | null>(null);

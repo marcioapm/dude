@@ -82,7 +82,7 @@ import type {
   MemoryInput,
   SearchOutcome,
   AttachmentInfo,
-  PreviewSecret,
+  ProjectSecret,
   SecretRecipient,
   NoteRecord,
   EpicNotes,
@@ -1598,19 +1598,19 @@ export class ApiClient {
   }
 
   /** The project's secrets: names, recipients and hints, never a value. */
-  projectSecrets(projectId: string): Promise<{ secrets: PreviewSecret[] }> {
+  projectSecrets(projectId: string): Promise<{ secrets: ProjectSecret[] }> {
     return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
   }
 
-  addProjectSecret(projectId: string, name: string, value: string, recipients?: readonly SecretRecipient[]): Promise<PreviewSecret> {
+  addProjectSecret(projectId: string, name: string, value: string, recipients?: readonly SecretRecipient[]): Promise<ProjectSecret> {
     return this.#request("POST", `/v1/projects/${encodeURIComponent(projectId)}/secrets`, recipients ? { name, value, recipients } : { name, value });
   }
 
-  changeProjectSecretRecipients(projectId: string, name: string, recipients: readonly SecretRecipient[]): Promise<PreviewSecret> {
+  changeProjectSecretRecipients(projectId: string, name: string, recipients: readonly SecretRecipient[]): Promise<ProjectSecret> {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}/recipients`, { recipients });
   }
 
-  replaceProjectSecret(projectId: string, name: string, value: string): Promise<PreviewSecret> {
+  replaceProjectSecret(projectId: string, name: string, value: string): Promise<ProjectSecret> {
     return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`, { value });
   }
 

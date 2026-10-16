@@ -24,7 +24,7 @@ import {
   secretHint,
   secretNameProblem,
   serverNameSchema,
-  type PreviewSecret,
+  type ProjectSecret,
   type PreviewSettings,
   type Recipe,
 } from "@dude/domain";
@@ -170,13 +170,13 @@ async function secretNames(scope: OrgScope, projectId: string): Promise<string[]
   return rows.map((r) => r.name);
 }
 
-async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<PreviewSecret[]> {
+async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<ProjectSecret[]> {
   return (await scope.sql`
     SELECT s.name, s.hint, s.recipients, s.updated_at AS "updatedAt",
       (SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = s.updated_by) AS "updatedBy"
     FROM project_secrets s
     WHERE s.project_id = ${projectId} AND (${name ?? null}::text IS NULL OR s.name = ${name ?? null})
-    ORDER BY s.name`) as PreviewSecret[];
+    ORDER BY s.name`) as ProjectSecret[];
 }
 
 async function getProjectSecrets(ctx: RequestContext): Promise<Response> {

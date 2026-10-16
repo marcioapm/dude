@@ -167,5 +167,3 @@ export interface ProjectSecret {
   updatedAt: string;
   updatedBy: { id: string; name: string } | null;
 }
-
-export type PreviewSecret = ProjectSecret;
