@@ -174,6 +174,19 @@ func TestCappedResolvedThreadsRemainUnknown(t *testing.T) {
 	}
 }
 
+func TestRateReadingsExpireOnWrite(t *testing.T) {
+	old := rateKey("https://expiry.test", "old-token", "core")
+	rateReadings.Store(old, rateReading{remaining: 1, limit: 100, reset: time.Now().Add(-time.Minute)})
+	h := http.Header{}
+	h.Set("X-RateLimit-Remaining", "90")
+	h.Set("X-RateLimit-Limit", "100")
+	h.Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+	noteRate("https://expiry.test", "new-token", h)
+	if _, ok := rateReadings.Load(old); ok {
+		t.Fatal("expired old-token reading retained")
+	}
+}
+
 func TestAgentReadsLeaveDeliveryItsShareOfTheRateLimit(t *testing.T) {
 	target, _, gh := readsWorld(t)
 	n := target.OpenIssue("ana", "Rollup", "Body")

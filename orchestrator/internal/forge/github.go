@@ -1868,6 +1868,13 @@ func noteRate(target, authorization string, h http.Header) {
 	}
 	rateAdmission.Lock()
 	defer rateAdmission.Unlock()
+	now := time.Now()
+	rateReadings.Range(func(key, value any) bool {
+		if !value.(rateReading).reset.After(now) {
+			rateReadings.Delete(key)
+		}
+		return true
+	})
 	rateReadings.Store(rateKey(target, authorization, resource), rateReading{remaining: remaining, limit: limit, reset: time.Unix(reset, 0)})
 }
 
