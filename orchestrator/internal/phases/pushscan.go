@@ -96,9 +96,15 @@ func scanWork(red *redact.Redactor, text string) []SecretInWork {
 // section starts "# dude-history <name> <base>"; each commit
 // "\x00commit <sha>", then its author's and committer's name and email a
 // line each, its whole message, "\x00", and its patch (a merge's against
-// each parent). Read-only POSIX sh. It exits 4 when a repository's
-// checkout, base or history cannot be read rather than leaving it out, and
-// prints at most historyLimit+1 bytes.
+// each parent). Read-only POSIX sh.
+//
+// The log is piped through head, so at most historyLimit+1 bytes are ever
+// held; past that, head closes the pipe and git dies of SIGPIPE (141). POSIX
+// sh has no pipefail, so each repository's outcome goes to a status file:
+// "fail" for a checkout, base or log that cannot be read (exit 4), "cut"
+// for a log stopped by the closed pipe, and "done" once every repository
+// was read; without "done", or with "cut", the history was cut short at
+// the limit (exit 5).
 const historyScript = `set -u
 base_of() {
   if first=$(git -C "$1" reflog show --format=%H "refs/heads/$2" -- 2>/dev/null | tail -n 1) && [ -n "$first" ]; then
@@ -107,24 +113,36 @@ base_of() {
     git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null || git -C "$1" rev-parse -q --verify "origin/$2^{commit}"
   fi
 }
-out=$(mktemp) || exit 3
-status=0
-while [ $# -ge 3 ]; do
-  name=$1 dir=$2 ref=$3; shift 3
-  [ -d "$dir" ] || { echo "$name: no checkout at $dir" >&2; status=4; continue; }
-  if ! base=$(base_of "$dir" "$ref"); then
-    echo "$name: no commit $ref" >&2; status=4; continue
-  fi
-  echo "# dude-history $name $base" >> "$out"
-  git -C "$dir" -c core.quotePath=off log -p -m --no-color --no-ext-diff --no-textconv \
-    --format='%x00commit %H%n%an%n%ae%n%cn%n%ce%n%B%x00' "$base..HEAD" -- >> "$out" || status=4
-done
-head -c ` + historyLimitText + ` "$out"
-rm -f "$out"
-exit $status`
+st=$(mktemp) || exit 3
+{
+  while [ $# -ge 3 ]; do
+    name=$1 dir=$2 ref=$3; shift 3
+    if [ ! -d "$dir" ]; then
+      echo "$name: no checkout at $dir" >&2; echo fail >> "$st"; continue
+    fi
+    if ! base=$(base_of "$dir" "$ref"); then
+      echo "$name: no commit $ref" >&2; echo fail >> "$st"; continue
+    fi
+    echo "# dude-history $name $base"
+    git -C "$dir" -c core.quotePath=off log -p -m --no-color --no-ext-diff --no-textconv \
+      --format='%x00commit %H%n%an%n%ae%n%cn%n%ce%n%B%x00' "$base..HEAD" --
+    case $? in
+      0) ;;
+      141) echo cut >> "$st" ;;
+      *) echo fail >> "$st" ;;
+    esac
+  done
+  echo done >> "$st"
+} | head -c ` + historyLimitText + `
+grep -qx fail "$st"; failed=$?
+grep -qx done "$st" && ! grep -qx cut "$st"; whole=$?
+rm -f "$st"
+[ $failed -ne 0 ] || exit 4
+[ $whole -eq 0 ] || exit 5`
 
-// historyLimit is the most history the scan reads (below lux.ExecLimit, so
-// nothing is dropped unseen); a push with more is refused as unchecked.
+// historyLimit is the most history the scan reads; a push with more is
+// refused as unchecked. A constant, not a setting: it must stay below
+// lux.ExecLimit (8 MiB) so that nothing is dropped unseen.
 const (
 	historyLimit     = 7 << 20
 	historyLimitText = "7340033" // historyLimit+1
@@ -218,14 +236,14 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 		return nil, err
 	}
 	history, err := s.execChecked(ctx, r, historyCommand(r.BaseSHAs), "the history")
-	if exit := (execExit{}); errors.As(err, &exit) && exit.code == 4 {
+	exit := execExit{}
+	switch {
+	case errors.As(err, &exit) && exit.code == 4:
 		return nil, errUnchecked{exit.Error()}
-	}
-	if err != nil {
-		return nil, err
-	}
-	if len(history) > historyLimit {
+	case errors.As(err, &exit) && exit.code == 5, err == nil && len(history) > historyLimit:
 		return nil, errUnchecked{fmt.Sprintf("the commits to push are over %d MiB, more than dude reads", historyLimit>>20)}
+	case err != nil:
+		return nil, err
 	}
 	// Exit 0 is not enough: every repository lux would push has its section.
 	if missing := missingHistory(history, r.BaseSHAs); len(missing) > 0 {
