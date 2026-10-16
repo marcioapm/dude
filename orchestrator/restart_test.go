@@ -177,10 +177,20 @@ func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T
 	scripted := w.lux.Decide
 	var fixes atomic.Int32
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" && fixes.Add(1) == 1 {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] != "fix" {
+			return scripted(spec)
+		}
+		if fixes.Add(1) == 1 {
 			return fakelux.Behaviour{Hang: true}
 		}
-		return scripted(spec)
+		// The restarted fix does its work, then holds its turn until dude
+		// has recorded where its checkout started: lux reports that after
+		// the agent's own records, and a turn ending first is refused for
+		// the missing base (as finishOnceBased).
+		b := scripted(spec)
+		b.Hang = true
+		return b
 	}
 	head := w.gh.Pull(1).Head
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
@@ -199,6 +209,13 @@ func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T
 	}
 	var fresh string
 	_ = w.owner.QueryRow(context.Background(), `SELECT replaced_by FROM runs WHERE id = $1`, fix).Scan(&fresh)
+	var freshLux string
+	w.until("the restarted fix's base recorded", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1 AND status = 'running'
+			AND base_shas <> '{}'::jsonb AND lux_run_id IS NOT NULL`, fresh).Scan(&freshLux)
+		return freshLux != ""
+	})
+	w.lux.EndTurn(freshLux)
 	w.until("the restarted fix completed", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fresh) == 1
 	})
