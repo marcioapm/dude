@@ -15,6 +15,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
 // Source values the events table uses (eventSourceSchema in the domain package).
@@ -55,8 +56,12 @@ const insertColumns = `INSERT INTO events (id, organization_id, event_type, occu
 		                    actor_type, actor_id, source, correlation_id, causation_id, payload)`
 
 // Append writes one event in the caller's transaction, so it commits or
-// rolls back with the state change that produced it.
+// rolls back with the state change that produced it. An event of a Run is
+// redacted with that Run's secret values first (Redactor).
 func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
+	if err := redactRun(ctx, tx, &e); err != nil {
+		return "", err
+	}
 	id, args, err := row(e)
 	if err != nil {
 		return "", err
@@ -66,12 +71,86 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 	return id, err
 }
 
+// Redactor is the redactor of a Run's text: its secret values, as
+// run_secret_values (migration 130) reads them in tx. Empty for a Run given
+// none, and in a transaction whose role may not read them. Under a ctx
+// carrying Redactors, each Run's is read once and reused.
+func Redactor(ctx context.Context, tx pgx.Tx, runID string) (*redact.Redactor, error) {
+	if runID == "" {
+		return nil, nil
+	}
+	cache, _ := ctx.Value(redactorsKey{}).(Redactors)
+	if r, ok := cache[runID]; ok {
+		return r, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT name, value FROM run_secret_values($1)`, runID)
+	if err != nil {
+		return nil, err
+	}
+	values, err := pgx.CollectRows(rows, pgx.RowToStructByPos[redact.Secret])
+	if err != nil {
+		return nil, err
+	}
+	var r *redact.Redactor
+	if len(values) > 0 {
+		r = redact.FromList(values)
+	}
+	if cache != nil {
+		cache[runID] = r
+	}
+	return r, nil
+}
+
+// Redactors holds Runs' redactors, by Run id, for the appends of one
+// transaction (a batch of a Run's output), so each is read once, not once
+// per event. Only for a transaction that changes no Run's secret names or
+// copy: those it reads are what they were at the first lookup.
+type Redactors map[string]*redact.Redactor
+
+type redactorsKey struct{}
+
+// WithRedactors is ctx whose Redactor calls go through c, a non-nil map.
+func WithRedactors(ctx context.Context, c Redactors) context.Context {
+	return context.WithValue(ctx, redactorsKey{}, c)
+}
+
+// None records that runID has no secrets: it is never looked up.
+func (c Redactors) None(runID string) { c[runID] = nil }
+
+// redactRun redacts e's payload with its Run's values, through its JSON:
+// a payload may carry structs as well as maps and strings.
+func redactRun(ctx context.Context, tx pgx.Tx, e *Event) error {
+	if e.RunID == "" || e.Payload == nil {
+		return nil
+	}
+	r, err := Redactor(ctx, tx, e.RunID)
+	if err != nil || r.Empty() {
+		return err
+	}
+	raw, err := json.Marshal(e.Payload)
+	if err != nil {
+		return err
+	}
+	if _, found := r.Contains(string(raw)); !found {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(r.JSON(raw), &payload); err != nil {
+		return err
+	}
+	e.Payload = payload
+	return nil
+}
+
 // AppendOncePerEpoch writes e unless e's Run already has an event of e's
 // type whose payload epoch is epoch, in one statement; it says whether it
 // wrote. The check takes no lock: two transactions appending the same
 // epoch at once could both write, so a caller must be the Run's only
 // writer of that type.
 func AppendOncePerEpoch(ctx context.Context, tx pgx.Tx, e Event, epoch int) (bool, error) {
+	if err := redactRun(ctx, tx, &e); err != nil {
+		return false, err
+	}
 	_, args, err := row(e)
 	if err != nil {
 		return false, err

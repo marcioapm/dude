@@ -994,7 +994,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	case err != nil:
 		return s.retryLater(ctx, r, err)
 	}
-	spec, sizes, sent, err := s.spec(ctx, r, nil, chosenImage{image, nested})
+	spec, sizes, sent, given, err := s.spec(ctx, r, nil, chosenImage{image, nested})
 	machine := sizes.Now
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
@@ -1016,18 +1016,32 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		return s.fail(ctx, r, "the task's "+strings.TrimPrefix(reason, "its "))
 	}
 	spec.Workload.Attachments = images
+	if err := s.recordSending(ctx, r, given); err != nil {
+		return s.retryLater(ctx, r, err)
+	}
 	// The dude Run id is the idempotency key: a submit that timed out and is
 	// retried returns the lux Run the first one created.
 	NamePool(ctx, s.Lux, machine)
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
-	if reason := PoolGone(err, machine); reason != "" {
+	// A refusal fails the Run, which was given nothing. A submit that may
+	// yet be retried keeps the copy: lux may have started the Run anyway.
+	failGiven := func(reason string) error {
+		if ferr := s.forgetSubmitting(ctx, r); ferr != nil {
+			s.Log.Warn("forgetting a refused submit's secret copy failed; the backstop deletes it", "run", r.ID, "error", ferr)
+		}
 		return s.fail(ctx, r, reason)
 	}
+	if reason := PoolGone(err, machine); reason != "" {
+		return failGiven(reason)
+	}
 	if reason := attachmentsRefused(err); reason != "" {
-		return s.fail(ctx, r, "the task's prompt: "+reason)
+		return failGiven("the task's prompt: " + reason)
+	}
+	if le, ok := lux.AsError(err); ok && !le.Retryable() {
+		return failGiven(fmt.Sprintf("lux refused the run: %s", le.Message))
 	}
 	if err != nil {
-		return s.retryOrFail(ctx, r, err, "lux refused the run")
+		return s.retryLater(ctx, r, err)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
@@ -1063,6 +1077,9 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, spec.Labels["dude.model_tier"], got, spec.Network,
 			spec.Labels["dude.effort"], lr.NestedContainers(spec))
 		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := s.recordGiven(ctx, tx, r, lr); err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.lease.acquired", ledger.ActorSystem, map[string]any{"luxRunId": lr.ID})
@@ -1152,11 +1169,12 @@ const EvImagePreparing = "run.image_preparing"
 // organization has none), which submit records, and for a resume the size
 // runs.machine records, read in the same transaction. And the
 // task's images in the order the prompt numbers them, read in the same
-// transaction as its text: submit sends exactly these.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, error) {
+// transaction as its text: submit sends exactly these. And the project
+// secrets the spec declares (projectsecrets.go), with their values.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, []lux.Secret, error) {
 	if r.brainstorm() {
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
-		return spec, sizes, nil, err
+		return spec, sizes, nil, nil, err
 	}
 	var in specInput
 	var title, goal string
@@ -1173,6 +1191,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
+	var projectSecrets []lux.Secret
 	var tier delivery.Tier
 	var noTier string
 	var taskImages []delivery.SentAttachment
@@ -1249,6 +1268,24 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// The project's secrets this phase is given; a resume's, only the
+		// names it was submitted with (lux ignores a name added since).
+		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() {
+			var names []string
+			if stored != nil {
+				if err := tx.QueryRow(ctx, `SELECT project_secret_names FROM runs WHERE id = $1`, r.ID).Scan(&names); err != nil {
+					return err
+				}
+			}
+			if stored == nil || len(names) > 0 {
+				if projectSecrets, err = loadProjectSecrets(ctx, tx, r.ProjectID, recipient, names); err != nil {
+					return fmt.Errorf("load the project's secrets: %w", err)
+				}
+			}
+			if gone := missingNames(names, projectSecrets); len(gone) > 0 {
+				return errSecretsGone(gone)
+			}
+		}
 		// What people decided on this task, across its Runs.
 		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
 			WHERE task_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.TaskID)
@@ -1282,10 +1319,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, runSizes{}, nil, err
+		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	if noTier != "" {
-		return lux.Spec{}, runSizes{}, nil, errNoModel(noTier)
+		return lux.Spec{}, runSizes{}, nil, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
 	if r.conductor() {
@@ -1316,7 +1353,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		in.Image = stored.Image.Ref
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, runSizes{}, nil, err
+		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -1361,14 +1398,14 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, runSizes{}, nil, errForge{err}
+		return lux.Spec{}, runSizes{}, nil, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, in.RepoTokens, err = forgeTokens(ctx, gh, in.Repos, firstRepo); err != nil {
-			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
+			return lux.Spec{}, runSizes{}, nil, nil, forgeFailure(err)
 		}
 		if in.Bot, err = botOf(ctx, gh); err != nil {
-			return lux.Spec{}, runSizes{}, nil, forgeFailure(err)
+			return lux.Spec{}, runSizes{}, nil, nil, forgeFailure(err)
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -1376,17 +1413,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, runSizes{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, runSizes{}, nil, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
 		if in.ToolsToken, err = s.toolsToken(ctx, r); err != nil {
-			return lux.Spec{}, runSizes{}, nil, err
+			return lux.Spec{}, runSizes{}, nil, nil, err
 		}
 	}
-	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, taskImages, nil
+	spec := buildSpec(s.Agent, in)
+	given := withProjectSecrets(&spec, projectSecrets)
+	return spec, runSizes{Now: in.Machine, Recorded: recorded}, taskImages, given, nil
 }
 
 // checkoutOf is where a task's Run checks repo out, and whether read only:
@@ -1632,29 +1671,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 				break more
 			}
 		}
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			// The Run's row before any directive: the order abort and the
-			// Run's other ends take them in (FailUnreadTx), so a receipt in
-			// this batch and an abort wait for each other, never deadlock.
-			// save updates the row at the batch's end anyway.
-			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
-				return err
-			}
-			var cursor string
-			var afterEvent int64
-			for _, f := range batch {
-				if err := t.apply(ctx, tx, s, f); err != nil {
-					return err
-				}
-				switch f.Kind {
-				case "record":
-					cursor = f.Cursor
-				case "lux":
-					afterEvent = max(afterEvent, f.EventID)
-				}
-			}
-			return t.save(ctx, tx, cursor, afterEvent)
-		}); err != nil {
+		if err := s.applyBatch(ctx, t, batch); err != nil {
 			// What was read but not recorded is read again from the saved
 			// cursor by the next follower.
 			t.resumes = nil
@@ -1666,6 +1683,42 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		}
 	}
 	return <-read
+}
+
+// applyBatch records a batch of the Run's frames in one transaction, with
+// the cursor past them. Each Run's redactor is read once for the batch
+// (ledger.Redactors), and never for a Run given no secret: nothing in a
+// batch changes a Run's secret names or copy.
+func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Frame) error {
+	return s.DB.InOrg(ctx, t.run.Org, func(tx pgx.Tx) error {
+		// Per transaction: an attempt run again reads afresh.
+		redactors := ledger.Redactors{}
+		if t.noSecrets {
+			redactors.None(t.run.ID)
+		}
+		ctx := ledger.WithRedactors(ctx, redactors)
+		// The Run's row before any directive: the order abort and the
+		// Run's other ends take them in (FailUnreadTx), so a receipt in
+		// this batch and an abort wait for each other, never deadlock.
+		// save updates the row at the batch's end anyway.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID); err != nil {
+			return err
+		}
+		var cursor string
+		var afterEvent int64
+		for _, f := range batch {
+			if err := t.apply(ctx, tx, s, f); err != nil {
+				return err
+			}
+			switch f.Kind {
+			case "record":
+				cursor = f.Cursor
+			case "lux":
+				afterEvent = max(afterEvent, f.EventID)
+			}
+		}
+		return t.save(ctx, tx, cursor, afterEvent)
+	})
 }
 
 // finish collects what a phase produced once its agent finished its turn.
@@ -1695,6 +1748,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return false, nil
 		}
 		reqID := pushRequest(r)
+		// Once GitHub has the per-Run branch it has every value in it.
+		if ok, err := s.pushScanned(ctx, r); !ok {
+			return true, err
+		}
 		creds, err := s.runCredentials(ctx, r.Org, r.ID)
 		if forge.Refused(err) {
 			return true, s.failKept(ctx, r, "GitHub would not give dude a token to push the agent's work: "+err.Error())
@@ -2212,6 +2269,13 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
+	var gone errSecretsGone
+	if errors.As(err, &gone) && r.TaskID != "" {
+		if retired, rerr := s.retireForSecrets(ctx, r, gone); retired || rerr != nil {
+			return true, rerr
+		}
+		return true, s.fail(ctx, r, "cannot resume: "+gone.Error())
+	}
 	if errors.As(err, &noLogin) {
 		return true, s.waitForLogin(ctx, r, noLogin)
 	}
@@ -2328,8 +2392,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
-	spec, sizes, _, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
-	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
+	spec, sizes, _, given, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
+	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) || errors.As(err, new(errSecretsGone)) {
 		return lux.Run{}, 0, err
 	}
 	if err != nil {
@@ -2364,6 +2428,11 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		}
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
+	// Added to the copy before lux starts the new process, whose first
+	// output is redacted with them; what it held before stays.
+	if err := s.recordSending(ctx, r, given); err != nil {
+		return lux.Run{}, foreseen, err
+	}
 	defer func() {
 		answer := resumed
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {

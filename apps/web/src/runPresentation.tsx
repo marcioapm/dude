@@ -21,7 +21,8 @@ export function runRestartedText(run: Run, events: readonly PersistedEvent[], pe
   const label = runStatusLabel(run);
   if (!label) return null;
   const event = events.findLast((e) => e.eventType === "run.restarted" && e.runId === run.id && e.payload.to === run.replacedBy);
-  const who = event?.payload.by === "conductor" || event?.actor.type === "agent" ? "the conductor"
+  const who = event?.payload.by === "dude" ? "dude"
+    : event?.payload.by === "conductor" || event?.actor.type === "agent" ? "the conductor"
     : event ? actorName(humanActor(event), people.names) : null;
   const note = typeof event?.payload.note === "string" ? event.payload.note.trim() : "";
   return `${label}${who ? ` by ${who}` : ""}${note ? `: ${note}` : "."}`;

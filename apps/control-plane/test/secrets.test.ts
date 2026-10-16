@@ -140,13 +140,53 @@ describe("a project's secrets", () => {
     const added = await call(adminKey, "POST", secretsPath(), { name: "SEED_LLM_KEY", value: VALUE });
     expect(added.status).toBe(201);
     expect(added.json).toMatchObject({ name: "SEED_LLM_KEY", hint: "3f9a", updatedBy: { name: "Ana" } });
-    expect(Object.keys(added.json).sort()).toEqual(["hint", "name", "updatedAt", "updatedBy"]);
+    expect(Object.keys(added.json).sort()).toEqual(["hint", "name", "recipients", "updatedAt", "updatedBy"]);
+    expect(added.json.recipients).toEqual(["previews", "tester"]);
 
     const listed = await call(memberKey, "GET", secretsPath());
     expect(listed.json.secrets).toEqual([added.json]);
 
     // Stored exactly as given.
     expect(await storedValue("SEED_LLM_KEY")).toBe(VALUE);
+  });
+
+  test("recipient edits preserve values and value edits preserve recipients", async () => {
+    await seed("SNOWFLAKE_PASSWORD", VALUE);
+    const changed = await call(adminKey, "PUT", `${secretsPath()}/SNOWFLAKE_PASSWORD/recipients`, { recipients: ["tester", "reviewer"] });
+    expect(changed.status).toBe(200);
+    expect(changed.json).toMatchObject({ name: "SNOWFLAKE_PASSWORD", hint: "3f9a", recipients: ["tester", "reviewer"] });
+    expect(await storedValue("SNOWFLAKE_PASSWORD")).toBe(VALUE);
+    const rotated = await call(adminKey, "PUT", `${secretsPath()}/SNOWFLAKE_PASSWORD`, { value: REPLACED });
+    expect(rotated.status).toBe(200);
+    expect(rotated.json.recipients).toEqual(["tester", "reviewer"]);
+    expect(await storedValue("SNOWFLAKE_PASSWORD")).toBe(REPLACED);
+    expect((await call(memberKey, "GET", secretsPath())).json.secrets).toEqual([rotated.json]);
+  });
+
+  test("preview-only grants stay preview-only through rotation", async () => {
+    await owner`INSERT INTO project_secrets (project_id, organization_id, name, value, hint)
+      VALUES (${PROJECT}, ${ORG}, 'LEGACY', ${VALUE}, '3f9a')`;
+    expect((await call(memberKey, "GET", secretsPath())).json.secrets[0].recipients).toEqual(["previews"]);
+    const rotated = await call(adminKey, "PUT", `${secretsPath()}/LEGACY`, { value: REPLACED });
+    expect(rotated.json.recipients).toEqual(["previews"]);
+    const added = await call(adminKey, "POST", secretsPath(), { name: "PREVIEW_ONLY", value: VALUE, recipients: ["previews"] });
+    expect(added.status).toBe(201);
+    expect(added.json.recipients).toEqual(["previews"]);
+  });
+
+  test("recipients are validated and editor-only without accepting a value", async () => {
+    await seed("SNOWFLAKE_PASSWORD", VALUE);
+    const path = `${secretsPath()}/SNOWFLAKE_PASSWORD/recipients`;
+    expect((await call(memberKey, "PUT", path, { recipients: ["reviewer"] })).status).toBe(403);
+    expect((await call(otherKey, "PUT", path, { recipients: ["reviewer"] })).status).toBe(404);
+    expect((await call(adminKey, "PUT", `${secretsPath()}/MISSING/recipients`, { recipients: ["reviewer"] })).status).toBe(404);
+    for (const recipients of [[], ["conductor"], ["brainstorm"], ["invalid"], ["tester", "tester"], null]) {
+      expect((await call(adminKey, "PUT", path, { recipients })).status).toBe(400);
+      expect((await call(adminKey, "POST", secretsPath(), { name: "INVALID", value: VALUE, recipients })).status).toBe(400);
+    }
+    expect((await call(adminKey, "PUT", path, { recipients: ["tester"], value: REPLACED })).status).toBe(400);
+    expect((await call(adminKey, "PUT", `${secretsPath()}/SNOWFLAKE_PASSWORD`, { value: REPLACED, recipients: ["tester"] })).status).toBe(400);
+    expect(await storedValue("SNOWFLAKE_PASSWORD")).toBe(VALUE);
   });
 
   test("a PEM keeps its newlines, and its hint is its body's", async () => {
@@ -259,6 +299,7 @@ describe("a project's secrets", () => {
     await seed("SEED_LLM_KEY", VALUE);
     await seed("SIGNING_KEY_PEM", PEM);
     expect((await call(adminKey, "PUT", `${secretsPath()}/SEED_LLM_KEY`, { value: REPLACED })).status).toBe(200);
+    expect((await call(adminKey, "PUT", `${secretsPath()}/SEED_LLM_KEY/recipients`, { recipients: ["reviewer"] })).status).toBe(200);
     expect((await call(adminKey, "DELETE", `${secretsPath()}/SIGNING_KEY_PEM`)).status).toBe(204);
     const rows = await owner`SELECT payload FROM events WHERE project_id = ${PROJECT} AND event_type = 'settings.updated'
                              AND payload->'changed' ? 'secrets' AND cursor > ${since} ORDER BY cursor`;
@@ -266,6 +307,7 @@ describe("a project's secrets", () => {
       { secrets: { SEED_LLM_KEY: "added" } },
       { secrets: { SIGNING_KEY_PEM: "added" } },
       { secrets: { SEED_LLM_KEY: "replaced" } },
+      { secrets: { SEED_LLM_KEY: { recipients: ["reviewer"] } } },
       { secrets: { SIGNING_KEY_PEM: "removed" } },
     ]);
     const all = JSON.stringify(await owner`SELECT payload FROM events WHERE cursor > ${since}`);

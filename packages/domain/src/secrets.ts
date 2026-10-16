@@ -1,19 +1,51 @@
 import { z } from "zod";
 import { ENV_NAME } from "./servers.ts";
 
-/**
- * Preview secrets: a project's environment variables that every branch
- * preview gets as lux secrets (`as: env`), and no agent ever does. Written
- * once and never shown again: the API answers with a hint, the value's last
- * characters. Shared by the API and the web app; the orchestrator reads the
- * values (orchestrator/internal/servers).
- */
+/** Project environment secrets are write-only; clients receive names, recipients and hints. */
 
 /**
  * Names dude declares as lux secrets of its own (orchestrator/internal/phases):
  * a preview declaring one twice is refused by lux.
  */
-export const DUDE_SECRET_NAMES = ["GIT_TOKEN", "DUDE_TOOLS_AUTH", "DUDE_REGISTRY_AUTH"] as const;
+export const DUDE_SECRET_NAMES = [
+  "GIT_TOKEN", "DUDE_TOOLS_AUTH", "DUDE_REGISTRY_AUTH", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS", "OPENAI_API_KEY", "CODEX_CONFIG", "DISABLE_AUTOUPDATER",
+  "TERM", "FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS",
+] as const;
+
+export const SECRET_RECIPIENTS = ["previews", "tester", "implementer", "fixer", "simplifier", "reviewer"] as const;
+export type SecretRecipient = typeof SECRET_RECIPIENTS[number];
+export const DEFAULT_SECRET_RECIPIENTS: readonly SecretRecipient[] = ["previews", "tester"];
+export const SECRET_RECIPIENTS_REQUIRED = "Give it to at least one, or don't add it yet";
+export const secretRecipientsSchema = z.array(z.enum(SECRET_RECIPIENTS)).min(1, SECRET_RECIPIENTS_REQUIRED)
+  .refine((names) => new Set(names).size === names.length, "Choose each recipient only once.");
+export const changeSecretRecipientsSchema = z.object({ recipients: secretRecipientsSchema }).strict();
+
+/** Each recipient as the settings name it, with what it does. */
+export const SECRET_RECIPIENT_OPTIONS: readonly { id: SecretRecipient; label: string; description: string }[] = [
+  { id: "previews", label: "Previews", description: "Servers and setup scripts of branch previews" },
+  { id: "tester", label: "Tester", description: "Runs tests, including against real services" },
+  { id: "implementer", label: "Implementer", description: "Implements the task" },
+  { id: "fixer", label: "Fixer", description: "Fixes findings and PR feedback" },
+  { id: "simplifier", label: "Simplifier", description: "Simplifies the changes" },
+  { id: "reviewer", label: "Reviewer", description: "Reviews the changes" },
+];
+
+/** A recipient's label. */
+export function secretRecipientLabel(id: SecretRecipient): string {
+  return SECRET_RECIPIENT_OPTIONS.find((o) => o.id === id)?.label ?? id;
+}
+
+/** dude redacts values at least this many bytes long (orchestrator/internal/redact). */
+export const SECRET_REDACT_MIN_BYTES = 6;
+
+/** Said in the dialogs while a value is too short to be redacted. */
+export const SHORT_SECRET_WARNING = `Values shorter than ${SECRET_REDACT_MIN_BYTES} characters are not redacted from agent output: they match too much ordinary text.`;
+
+/** Whether dude would leave value unredacted for its length. */
+export function secretTooShortToRedact(value: string): boolean {
+  return value !== "" && new TextEncoder().encode(value).length < SECRET_REDACT_MIN_BYTES;
+}
 
 /** A value's most UTF-8 bytes: well under lux's 8 MiB request and Linux's 128 KiB per variable. */
 export const SECRET_VALUE_MAX_BYTES = 32 * 1024;
@@ -32,6 +64,7 @@ export function secretNameShapeProblem(name: string): string | null {
   // GIT_TOKEN_<OWNER> carries a GitHub App's token for each repository owner.
   if (/^GIT_TOKEN(_|$)/.test(name)) return "dude sets GIT_TOKEN and every GIT_TOKEN_ name itself, from the GitHub connection.";
   if ((DUDE_SECRET_NAMES as readonly string[]).includes(name)) return `dude sets ${name} itself.`;
+  if (/^(DUDE_|OPENCODE_|CLAUDE_CODE_|GIT_CONFIG_|GIT_AUTHOR_|GIT_COMMITTER_)/.test(name)) return `dude sets ${name} itself.`;
   return null;
 }
 
@@ -118,13 +151,18 @@ export const secretValueSchema = z.string().superRefine((v, ctx) => {
 });
 
 /** `POST /v1/projects/:id/secrets` */
-export const addSecretSchema = z.object({ name: secretNameSchema, value: secretValueSchema }).strict();
+export const addSecretSchema = z.object({
+  name: secretNameSchema,
+  value: secretValueSchema,
+  recipients: secretRecipientsSchema.default(() => [...DEFAULT_SECRET_RECIPIENTS]),
+}).strict();
 /** `PUT /v1/projects/:id/secrets/:name` */
 export const replaceSecretSchema = z.object({ value: secretValueSchema }).strict();
 
 /** A project's secret, as the API shows it: never its value. */
-export interface PreviewSecret {
+export interface ProjectSecret {
   name: string;
+  recipients: SecretRecipient[];
   hint: string;
   updatedAt: string;
   updatedBy: { id: string; name: string } | null;

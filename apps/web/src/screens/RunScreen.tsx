@@ -36,6 +36,7 @@ import {
   summarizeToolArgs,
   MachineChip,
   MachineTip,
+  SecretsChip,
   TierChip,
   TierTip,
   AttachDropZone,
@@ -556,6 +557,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
         {run.model ? <RunTierChip tier={run.modelTier} model={run.model} effort={run.effort} harness={run.harness} role={role} phase={run.phase} /> : null}
         {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
+        <SecretsChip names={run.projectSecretNames ?? []} data-testid="run-secrets" />
         {run.image ? <RunImageChip image={run.image} /> : null}
         {run.canRunContainers ? <CanRunContainersBadge tooltip={CAN_RUN_CONTAINERS_TIP} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}

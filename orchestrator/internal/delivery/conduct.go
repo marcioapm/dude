@@ -33,6 +33,9 @@ func (r Refusal) Error() string { return r.Msg }
 
 func refusef(format string, a ...any) error { return Refusal{Msg: fmt.Sprintf(format, a...)} }
 
+// IsRefusal says whether err is a Refusal.
+func IsRefusal(err error) bool { return errors.As(err, new(Refusal)) }
+
 // Delivery is a task's latest delivery; LoadDelivery locks it for a decision.
 type Delivery struct {
 	WorkflowID, Status, Step string
