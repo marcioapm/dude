@@ -460,6 +460,10 @@ Without either, no inject is sent to lux, and a task's servers say why
 (`commenting: {available: false, reason: "public_url" | "lux"}`). The
 orchestrator logs at startup whether commenting is on, and if not, which
 one is missing. Turning it off leaves on a server the tag it already has.
+A `public_url` that is not an https origin (no path, an ASCII host: an
+internationalised name as punycode) never stops the orchestrator: it
+starts with commenting off, logs why, and `validate` prints it as a
+warning.
 
 The tag is put on a server when it is created and at each wake, before
 lux starts it, and on a person's start or restart of it. A server running

@@ -152,14 +152,7 @@ func run(log *slog.Logger) error {
 	default:
 		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
 	}
-	switch {
-	case set.PublicURL == "":
-		log.Info("commenting on previews is off: auth.public_url is unset")
-	case !preview.ServerInject:
-		log.Info("commenting on previews is off: lux does not report serverInject (lux v0.1.32 or later)")
-	default:
-		log.Info("commenting on previews is on", "origin", set.PublicURL)
-	}
+	logCommenting(log, set, preview.ServerInject)
 	bucket, err := objects.New(set.Objects)
 	if err != nil {
 		log.Error("image storage", "error", err)
@@ -321,6 +314,21 @@ type previewMode struct {
 	LuxOff   bool // lux reports previews: false
 	// lux reports serverInject: its servers take inject.
 	ServerInject bool
+}
+
+// logCommenting says once at startup whether commenting on previews is on,
+// and if not, what is missing.
+func logCommenting(log *slog.Logger, set settings, serverInject bool) {
+	switch {
+	case set.PublicURLProblem != "":
+		log.Warn(set.publicURLWarning())
+	case set.PublicURL == "":
+		log.Info("commenting on previews is off: auth.public_url is unset")
+	case !serverInject:
+		log.Info("commenting on previews is off: lux does not report serverInject (lux v0.1.32 or later)")
+	default:
+		log.Info("commenting on previews is on", "origin", set.PublicURL)
+	}
 }
 
 // service is the servers.Service startup runs, in this preview mode;

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,6 +34,8 @@ type settings struct {
 	PreviewReapAfter time.Duration
 	// auth.public_url as an origin (no trailing slash); "" when unset.
 	PublicURL string
+	// Why a set auth.public_url is not an https origin; PublicURL is then "".
+	PublicURLProblem string
 
 	Agent    phases.AgentConfig
 	Registry registrySettings
@@ -126,12 +129,14 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	if s.PreviewReapAfter = cfg.Duration("DUDE_PREVIEW_REAP_AFTER"); s.PreviewReapAfter <= 0 {
 		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_PREVIEW_REAP_AFTER"), s.PreviewReapAfter)
 	}
-	if raw := cfg.String("DUDE_AUTH_PUBLIC_URL"); raw != "" {
-		origin, err := servers.PublicOrigin(raw)
-		if err != nil {
-			return settings{}, fmt.Errorf("%s: %w", cfg.Label("DUDE_AUTH_PUBLIC_URL"), err)
+	// The backend ignores public_url under api_key, so a value the snippet
+	// cannot use turns commenting off rather than stopping startup.
+	if raw := cfg.String("DUDE_AUTH_PUBLIC_URL"); strings.TrimSpace(raw) != "" {
+		if origin, err := servers.PublicOrigin(raw); err != nil {
+			s.PublicURLProblem = err.Error()
+		} else {
+			s.PublicURL = origin
 		}
-		s.PublicURL = origin
 	}
 
 	agent, err := phases.LoadAgentConfig(cfg)
@@ -187,6 +192,15 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 		s.EmbeddingsModel, s.EmbeddingsDimension = cfg.String("DUDE_EMBEDDINGS_MODEL"), indexDimensions
 	}
 	return s, nil
+}
+
+// publicURLWarning is what startup logs and validate prints when
+// auth.public_url is set but unusable; "" when there is nothing to say.
+func (s settings) publicURLWarning() string {
+	if s.PublicURLProblem == "" {
+		return ""
+	}
+	return "commenting on previews is off: auth.public_url is not an https origin (" + s.PublicURLProblem + ")"
 }
 
 // logConfig reports which file was read and what the loader warned about.

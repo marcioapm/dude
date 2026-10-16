@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"html"
+	"net/netip"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -21,14 +24,67 @@ import (
 const maxInject = 8 << 10
 
 // PublicOrigin is auth.public_url as the snippet names it: an https origin
-// with no path, query, fragment or credentials, and no trailing slash.
+// with no path, query, fragment or credentials, and no trailing slash. It
+// is exactly the browser's serialisation (WHATWG URL origin), as the
+// overlay compares it with event.origin: lower case, no :443. A host is an
+// ASCII DNS name, a dotted-decimal IPv4 address or a bracketed IPv6
+// address; what WHATWG would rewrite otherwise (IDN, 0x7f.1, ::ffff:a.b.c.d)
+// is refused rather than guessed.
 func PublicOrigin(raw string) (string, error) {
-	u, err := url.Parse(raw)
+	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
 		(u.Path != "" && u.Path != "/") || u.Opaque != "" {
-		return "", errors.New("an https origin with no path, query or credentials")
+		return "", errors.New("an https origin with no path, query, fragment or credentials")
 	}
-	return "https://" + strings.ToLower(u.Host), nil
+	host, err := originHost(u.Hostname())
+	if err != nil {
+		return "", err
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("an empty port")
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n > 65535 {
+			return "", errors.New("a port past 65535")
+		}
+		if n != 443 {
+			host += ":" + strconv.Itoa(n)
+		}
+	}
+	return "https://" + host, nil
+}
+
+var originLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// WHATWG parses a host whose last label is a number (decimal or 0x hex) as IPv4.
+var numericLabel = regexp.MustCompile(`^([0-9]+|0x[0-9a-f]*)$`)
+
+// originHost is h (url.Hostname: no brackets, no port) as an origin names it.
+func originHost(h string) (string, error) {
+	h = strings.ToLower(h)
+	if strings.Contains(h, ":") {
+		a, err := netip.ParseAddr(h)
+		// An IPv4-mapped address is written ::ffff:a.b.c.d by Go and in hex by WHATWG.
+		if err != nil || !a.Is6() || a.Zone() != "" || a.Is4In6() {
+			return "", errors.New("a host that is not an IPv6 address WHATWG writes as Go does")
+		}
+		return "[" + a.String() + "]", nil
+	}
+	labels := strings.Split(h, ".")
+	if numericLabel.MatchString(labels[len(labels)-1]) {
+		a, err := netip.ParseAddr(h)
+		if err != nil || !a.Is4() || a.String() != h {
+			return "", errors.New("a host that ends in a number but is not a dotted-decimal IPv4 address")
+		}
+		return h, nil
+	}
+	for _, l := range labels {
+		if !originLabel.MatchString(l) {
+			return "", errors.New("a host that is not an ASCII DNS name, IPv4 or bracketed IPv6 address; give an internationalised name as punycode (xn--…)")
+		}
+	}
+	return h, nil
 }
 
 // OverlaySnippet is the inject that loads the overlay from origin, or ""

@@ -31,16 +31,47 @@ func TestTheOverlaySnippetIsOneTagNamingTheOriginOnly(t *testing.T) {
 	}
 }
 
+// publicOrigins are inputs PublicOrigin accepts, each with what a browser
+// gives as new URL(input).origin (WHATWG), hard-coded: the overlay compares
+// data-dude-origin with event.origin as strings. The control plane's
+// config.test.ts checks its publicUrl parser against the same table.
+var publicOrigins = map[string]string{
+	"https://Dude.Example.com/":          "https://dude.example.com",
+	"https://d.test:8443":                "https://d.test:8443",
+	"https://DUDE.EXAMPLE.COM:443":       "https://dude.example.com",
+	"https://d.test:443/":                "https://d.test",
+	"https://d.test:0443":                "https://d.test",
+	"https://d.test:08443":               "https://d.test:8443",
+	" https://d.test\n":                  "https://d.test",
+	"https://xn--bcher-kva.example":      "https://xn--bcher-kva.example",
+	"https://127.0.0.1:8443":             "https://127.0.0.1:8443",
+	"https://[::1]":                      "https://[::1]",
+	"https://[2001:DB8:0:0:0:0:0:1]:443": "https://[2001:db8::1]",
+	"https://a-b.c-d.test":               "https://a-b.c-d.test",
+}
+
 func TestPublicOriginIsAnHTTPSOrigin(t *testing.T) {
-	for raw, want := range map[string]string{"https://Dude.Example.com/": "https://dude.example.com", "https://d.test:8443": "https://d.test:8443"} {
+	for raw, want := range publicOrigins {
 		if got, err := PublicOrigin(raw); err != nil || got != want {
-			t.Errorf("%q: %q %v", raw, got, err)
+			t.Errorf("%q: %q %v, want %q", raw, got, err, want)
 		}
 	}
-	for _, raw := range []string{"http://d.test", "https://d.test/x", "https://u@d.test", "https://d.test?q", "https://d.test#f", "d.test", "https://"} {
+	for _, raw := range []string{"http://d.test", "https://d.test/x", "https://u@d.test", "https://d.test?q", "https://d.test#f", "d.test", "https://",
+		// An empty port: the browser drops it, so the origin would differ.
+		"https://d.test:", "https://d.test:/",
+		// Not ASCII DNS, IPv4 or bracketed IPv6: WHATWG would rewrite or refuse it.
+		"https://Bücher.example", "https://x.test<b>", "https://x.test'y", "https://x.test&amp;", "https://a_b.test",
+		"https://-a.test", "https://a..test", "https://0x7f.1", "https://1.2.3", "https://127.000.0.1", "https://d.test.1",
+		"https://[::ffff:1.2.3.4]", "https://[fe80::1%25eth0]", "https://d.test:65536"} {
 		if got, err := PublicOrigin(raw); err == nil {
 			t.Errorf("%q accepted as %q", raw, got)
 		}
+	}
+	if _, err := PublicOrigin("https://Bücher.example"); err == nil || !strings.Contains(err.Error(), "punycode") {
+		t.Errorf("IDN: %v, want it to name punycode", err)
+	}
+	if _, err := PublicOrigin("https://d.test#f"); err == nil || !strings.Contains(err.Error(), "fragment") {
+		t.Errorf("fragment: %v, want it named", err)
 	}
 }
 

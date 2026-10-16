@@ -185,6 +185,15 @@ func TestValidate(t *testing.T) {
 	r, _ = runValidate(t, good, 0o600, "extra")
 	check("extra argument", r, 2, "", "usage: dude-orchestrator validate")
 
+	// A public_url that is no https origin is a warning: startup runs with commenting off.
+	for _, url := range []string{"http://localhost:3000", "https://x/app"} {
+		r, path = runValidate(t, good+"[auth]\nprovider = \"api_key\"\npublic_url = \""+url+"\"\n", 0o600)
+		check("public_url "+url, r, 0, "ok: "+path+"\n")
+		if want := "warning: commenting on previews is off: auth.public_url is not an https origin (an https origin with no path, query, fragment or credentials)\n"; r.stderr != want {
+			t.Errorf("public_url %s: stderr %q, want %q", url, r.stderr, want)
+		}
+	}
+
 	if n := connections(); n != 0 {
 		t.Errorf("validate made %d connections", n)
 	}
