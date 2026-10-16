@@ -361,11 +361,12 @@ func TestACleanMultiCommitHistoryIsPushed(t *testing.T) {
 	}
 }
 
-// An implementer given a secret fetches a base that moved by more than the
-// scan reads (sync_base's fetch, recorded as the Run's trusted base) and
-// merges it: what the base brought is GitHub's already and is not read, so
-// the push goes ahead; with the fetch's record gone, the whole history is
-// read and the push is refused as unchecked.
+// An implementer given a secret commits, then fetches a base that moved by
+// more than the scan reads (sync_base's fetch, recorded as the Run's
+// trusted base) and merges it: what the base brought is GitHub's already
+// and is not read, nor the merge against its first parent, so the push
+// goes ahead; with the fetch's record gone, the whole history is read and
+// the push is refused as unchecked.
 func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 	for name, trusted := range map[string]bool{"trusted": true, "untrusted": false} {
 		t.Run(name, func(t *testing.T) {
@@ -375,12 +376,6 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 			task := w.task()
 			w.deliver(task)
 			runID, luxID := w.basedImplementer(task)
-			line := strings.Repeat("b", 99) + "\n"
-			w.commitFileIn(w.gh.Repo, "main", "vendor.txt", strings.Repeat(line, (8<<20)/len(line)), "Vendor a large file")
-			w.fetchBase(runID)
-			if !trusted {
-				mustExec(t, w.owner, `UPDATE runs SET synced_bases = '{}' WHERE id = $1`, runID)
-			}
 			work, err := w.lux.Checkout(luxID, "target")
 			if err != nil {
 				t.Fatal(err)
@@ -393,7 +388,16 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 			}
 			git("add", "task.txt")
 			git("commit", "-q", "-m", "Task work")
+			line := strings.Repeat("b", 99) + "\n"
+			w.commitFileIn(w.gh.Repo, "main", "vendor.txt", strings.Repeat(line, (8<<20)/len(line)), "Vendor a large file")
+			w.fetchBase(runID)
+			if !trusted {
+				mustExec(t, w.owner, `UPDATE runs SET synced_bases = '{}' WHERE id = $1`, runID)
+			}
 			git("merge", "-q", "--no-edit", "lux/main")
+			if parents := strings.Fields(git("log", "-1", "--format=%P")); len(parents) != 2 {
+				t.Fatalf("HEAD has parents %v, want a merge", parents)
+			}
 			w.lux.EndTurn(luxID)
 			w.until("the implementer failed or pushed", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
