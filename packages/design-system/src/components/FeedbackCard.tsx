@@ -74,7 +74,8 @@ export function FeedbackStatusBadge({ status, pending, withWhom }: { readonly st
 // ---------------------------------------------------------------------------
 
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-const lineWords = (start: number, end: number) => (start === end ? `line ${start}` : `lines ${start}–${end}`);
+/** "line 4" or "lines 4–9". */
+export const lineWords = (start: number, end: number): string => (start === end ? `line ${start}` : `lines ${start}–${end}`);
 const SIGN = { "+": "+", "-": "−", " ": "" } as const;
 
 /** Where an item points, in one line: a file's lines, General, or a preview's page. */
@@ -159,6 +160,14 @@ export interface FeedbackThreadEntry {
 
 const ageOf = (at: string, now: number) => <Duration ms={Math.max(0, now - Date.parse(at))} format="age" tone="muted" />;
 
+function entryVerb(entry: FeedbackThreadEntry): ReactNode {
+  switch (entry.kind) {
+    case "reply": return "answered";
+    case "reopen": return "reopened it";
+    case "resolve": return entry.commit ? <>resolved it in <code className={styles["sha"]}>{entry.commit.slice(0, 7)}</code></> : "resolved it";
+  }
+}
+
 export function FeedbackThread({ entries, now = Date.now() }: { readonly entries: ReadonlyArray<FeedbackThreadEntry>; readonly now?: number }) {
   if (entries.length === 0) return null;
   return (
@@ -169,8 +178,7 @@ export function FeedbackThread({ entries, now = Date.now() }: { readonly entries
           <div className={styles["entryMain"]}>
             <div className={styles["entryHead"]}>
               <b>{h.who}</b>{" "}
-              {h.kind === "reply" ? "answered" : h.kind === "reopen" ? "reopened it" : h.commit
-                ? <>resolved it in <code className={styles["sha"]}>{h.commit.slice(0, 7)}</code></> : "resolved it"}
+              {entryVerb(h)}
               <span className={styles["muted"]}> · {ageOf(h.at, now)} ago</span>
             </div>
             {h.body ? <div className={styles["entryBody"]}><Markdown source={h.body} unmeasured /></div> : null}
@@ -476,7 +484,7 @@ export function DraftsTray({ drafts, max, destination, open, onOpenChange, onSub
       <div className={styles["trayBar"]}>
         <Icon name="comments" size={16} className={styles["trayIcon"]} />
         <span className={styles["trayCount"]}>
-          {full ? <><b data-testid="fb-tray-count">{n}</b> of {max} drafts</> : <><b data-testid="fb-tray-count">{n}</b> {n === 1 ? "draft" : "drafts"}</>}
+          <b data-testid="fb-tray-count">{n}</b>{full ? ` of ${max} drafts` : ` ${n === 1 ? "draft" : "drafts"}`}
           <span className={styles["trayNote"]}>{full ? " · the most you can keep" : " · only you see them until you submit"}</span>
         </span>
         <span className={styles["spacer"]} />

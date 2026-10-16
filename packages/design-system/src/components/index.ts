@@ -33,7 +33,7 @@ export { LiveDiff, stretchRange } from "./LiveDiff.tsx";
 export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange, LiveDiffCommenting, DiffRange, DiffSide } from "./LiveDiff.tsx";
 export {
   CommentEditor, DraftsTray, FeedbackAnchorLine, FeedbackCard, FeedbackEmpty, FeedbackExcerpt, FeedbackPreview, FeedbackStatusBadge, FeedbackThread,
-  SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec,
+  SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
 } from "./FeedbackCard.tsx";
 export type {
   CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,

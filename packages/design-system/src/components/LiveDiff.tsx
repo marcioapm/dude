@@ -101,6 +101,8 @@ const pointOf = (el: Element | null, side?: DiffSide): Point | null => {
   return { path: at.dataset["cpath"]!, side: at.dataset["cside"] as DiffSide, line: Number(at.dataset["cline"]), hunk: Number(at.dataset["chunk"]) };
 };
 
+const pointRange = (at: Point): DiffRange => ({ path: at.path, side: at.side, startLine: at.line, endLine: at.line });
+
 /** `from` stretched to `to` on its side and hunk, capped at `max` lines counted from `from`. */
 export function stretchRange(from: Point, to: Point, max: number): DiffRange | null {
   if (from.path !== to.path || from.side !== to.side || from.hunk !== to.hunk) return null;
@@ -302,7 +304,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
       const at = start ? pointOf(start) : null;
       if (!at) return;
       e.preventDefault();
-      const range = { path: at.path, side: at.side, startLine: at.line, endLine: at.line };
+      const range = pointRange(at);
       drag.current = { from: at, range };
       setDragging(true);
       commenting.onSelectionChange(range, false);
@@ -330,11 +332,11 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     if (!at) return;
     const sel = commenting.selection;
     // Stretched only within the hunk the range is in: the start's line, found as the drag would find it.
-    const startEl = sel && e.shiftKey ? [...(scroller.current?.querySelectorAll("[data-cline]") ?? [])]
-      .find((el) => { const p = pointOf(el, sel.side); return p?.path === sel.path && p.side === sel.side && p.line === sel.startLine; }) : undefined;
-    const from = startEl ? pointOf(startEl, sel!.side) : null;
-    const range = (from && stretchRange(from, pointOf(e.currentTarget, from.side) ?? at, commenting.maxLines))
-      ?? { path: at.path, side: at.side, startLine: at.line, endLine: at.line };
+    const from = sel && e.shiftKey
+      ? [...(scroller.current?.querySelectorAll("[data-cline]") ?? [])].map((el) => pointOf(el, sel.side))
+        .find((p) => p?.path === sel.path && p.side === sel.side && p.line === sel.startLine) ?? null
+      : null;
+    const range = (from && stretchRange(from, pointOf(e.currentTarget, from.side) ?? at, commenting.maxLines)) ?? pointRange(at);
     commenting.onSelectionChange(range, true);
   }, []);
   const selection = commenting?.selection ?? null;
@@ -478,7 +480,7 @@ interface HunkProps {
 
 /** One hunk's lines, re-rendered only when what it shows changes. */
 const Hunk = memo(function Hunk({ path, hunk: h, index: hi, view, rows, fresh, commentable, canStart, maxLines, selection, dragging, renderAfterLine, onPlus }: HunkProps) {
-  /** A line's place, for the diff's handlers, and its "+" when lines can be picked. */
+  // A line's place, read by the diff's handlers; `data-cstart` marks where a press starts a range.
   const lineAttrs = (side: DiffSide, n: number | null, old?: number | null) =>
     commentable && n !== null ? { "data-cpath": path, "data-cside": side, "data-cline": n, "data-chunk": hi, ...(old != null ? { "data-cold": old } : {}) } : {};
   const numberAttrs = (n: number | null) => (canStart && n !== null ? { "data-cstart": "" } : {});
@@ -498,45 +500,43 @@ const Hunk = memo(function Hunk({ path, hunk: h, index: hi, view, rows, fresh, c
     const node = n !== null ? renderAfterLine?.(path, side, n) : null;
     return node ? <div className={styles["after"]} data-testid="after-line" data-side={side} data-line={n ?? undefined}>{node}</div> : null;
   };
+  const covered = coveredRows(h.lines, path, selection);
   return (
     <div>
       <div className={styles["hunk"]}>{h.header}</div>
       {view === "unified" || !rows
-        ? (() => {
-            const covered = coveredRows(h.lines, path, selection);
-            return h.lines.map((l, li) => {
-              const isFresh = fresh.has(lineKey(path, l));
-              const side = sideOfLine(l);
-              const n = numberOn(l, side);
-              const picked = covered !== null && li >= covered[0] && li <= covered[1];
-              // A context line ends a range on either side: what goes under it is asked for both.
-              const below = commentable ? (
-                <>
-                  {hint(side, n)}
-                  {after(side, n)}
-                  {l.kind === " " ? hint("old", l.old) : null}
-                  {l.kind === " " ? after("old", l.old) : null}
-                </>
-              ) : null;
-              return (
-                <Fragment key={li}>
-                  <div
-                    className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"], picked && styles["picked"])}
-                    data-fresh={isFresh ? "" : undefined}
-                    data-picked={picked || undefined}
-                    {...lineAttrs(side, n, l.kind === " " ? l.old : null)}
-                  >
-                    <span className={styles["n"]} {...numberAttrs(n)}>{l.old ?? ""}</span>
-                    <span className={styles["n"]} {...numberAttrs(n)}>{l.new ?? ""}</span>
-                    <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
-                    <span className={styles["text"]}>{l.text || " "}</span>
-                    {plus(side, n)}
-                  </div>
-                  {below}
-                </Fragment>
-              );
-            });
-          })()
+        ? h.lines.map((l, li) => {
+            const isFresh = fresh.has(lineKey(path, l));
+            const side = sideOfLine(l);
+            const n = numberOn(l, side);
+            const picked = covered !== null && li >= covered[0] && li <= covered[1];
+            // A context line ends a range on either side: what goes under it is asked for both.
+            const below = commentable ? (
+              <>
+                {hint(side, n)}
+                {after(side, n)}
+                {l.kind === " " ? hint("old", l.old) : null}
+                {l.kind === " " ? after("old", l.old) : null}
+              </>
+            ) : null;
+            return (
+              <Fragment key={li}>
+                <div
+                  className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"], picked && styles["picked"])}
+                  data-fresh={isFresh ? "" : undefined}
+                  data-picked={picked || undefined}
+                  {...lineAttrs(side, n, l.kind === " " ? l.old : null)}
+                >
+                  <span className={styles["n"]} {...numberAttrs(n)}>{l.old ?? ""}</span>
+                  <span className={styles["n"]} {...numberAttrs(n)}>{l.new ?? ""}</span>
+                  <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
+                  <span className={styles["text"]}>{l.text || " "}</span>
+                  {plus(side, n)}
+                </div>
+                {below}
+              </Fragment>
+            );
+          })
         : rows.map((row, ri) => {
             // Context sits on both sides and is never fresh: one side is enough to ask.
             const changed = row.left?.kind === " " ? null : (row.left ?? row.right);
@@ -545,16 +545,17 @@ const Hunk = memo(function Hunk({ path, hunk: h, index: hi, view, rows, fresh, c
             const below = (line: LiveDiffLine | null, s: DiffSide) => {
               if (!commentable || !line) return null;
               const n = numberOn(line, s);
-              const parts = [hint(s, n), after(s, n)];
-              return parts.some(Boolean) ? <>{parts[0]}{parts[1]}</> : null;
+              const hinted = hint(s, n);
+              const written = after(s, n);
+              return hinted || written ? <>{hinted}{written}</> : null;
             };
             const left = below(row.left, "old");
             const right = below(row.right, "new");
-            const side = (line: LiveDiffLine | null, s: DiffSide) => (
-              <SplitSide line={line} side={s} picked={line !== null && inRange(selection, path, s, numberOn(line, s))}
-                attrs={line ? lineAttrs(s, numberOn(line, s)) : {}} numberAttrs={line ? numberAttrs(numberOn(line, s)) : {}}
-                plus={line ? plus(s, numberOn(line, s)) : null} />
-            );
+            const side = (line: LiveDiffLine | null, s: DiffSide) => {
+              if (!line) return <SplitSide line={null} side={s} />;
+              const n = numberOn(line, s);
+              return <SplitSide line={line} side={s} picked={inRange(selection, path, s, n)} attrs={lineAttrs(s, n)} numberAttrs={numberAttrs(n)} plus={plus(s, n)} />;
+            };
             return (
               <Fragment key={ri}>
                 <div className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}

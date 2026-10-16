@@ -32,6 +32,17 @@ async function mount(node: ReactNode) {
   return host;
 }
 
+/** `node` drawn in place of what is mounted, keeping the root. */
+async function rerender(node: ReactNode) {
+  await act(async () => root!.render(<TooltipProvider>{node}</TooltipProvider>));
+  return host!;
+}
+
+const typeInto = async (el: HTMLTextAreaElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+});
+
 const mouse = (type: string, init: MouseEventInit = {}) => new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init });
 const fire = async (el: EventTarget, ev: Event) => act(async () => void el.dispatchEvent(ev));
 
@@ -206,11 +217,6 @@ describe("CommentEditor", () => {
     return <CommentEditor where="Comment on line 3" value={value} onChange={setValue} full={full}
       onSave={() => log.push(`save:${value}`)} onCancel={() => log.push("cancel")} />;
   }
-  const type = async (el: HTMLTextAreaElement, text: string) => act(async () => {
-    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-    set.call(el, text);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  });
   const key = (k: string, init: KeyboardEventInit = {}) => new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init });
 
   test("⌘/Ctrl+Enter saves what is written, never an empty draft; Escape cancels", async () => {
@@ -220,7 +226,7 @@ describe("CommentEditor", () => {
     expect(document.activeElement).toBe(field);
     await fire(field, key("Enter", { ctrlKey: true }));
     expect(log).toEqual([]);
-    await type(field, "Name the person");
+    await typeInto(field, "Name the person");
     await fire(field, key("Enter"));
     expect(log).toEqual([]);
     await fire(field, key("Enter", { ctrlKey: true }));
@@ -273,14 +279,13 @@ describe("DraftsTray", () => {
   });
 
   test("none: no tray. At the limit it says so; refused, Submit is off with the reason", async () => {
-    let el = await mount(<DraftsTray drafts={[]} max={50} open onOpenChange={() => {}} onSubmit={() => {}} />);
-    expect(el.querySelectorAll("[data-testid=fb-tray]").length).toBe(0);
-    await act(async () => root!.render(<TooltipProvider><DraftsTray drafts={drafts} max={2} open onOpenChange={() => {}} onSubmit={() => {}} /></TooltipProvider>));
-    el = host!;
+    const none = await mount(<DraftsTray drafts={[]} max={50} open onOpenChange={() => {}} onSubmit={() => {}} />);
+    expect(none.querySelectorAll("[data-testid=fb-tray]").length).toBe(0);
+    const el = await rerender(<DraftsTray drafts={drafts} max={2} open onOpenChange={() => {}} onSubmit={() => {}} />);
     expect(el.querySelector("[data-testid=fb-tray]")!.textContent).toContain("2 of 2 drafts · the most you can keep");
     expect(el.querySelector("[role=note]")!.textContent).toContain("2 drafts is the most kept on a task");
-    await act(async () => root!.render(<TooltipProvider><DraftsTray drafts={drafts} max={50} open={false} onOpenChange={() => {}} onSubmit={() => {}}
-      submitRefused="This task is done: feedback on it goes in a follow-up task." /></TooltipProvider>));
+    await rerender(<DraftsTray drafts={drafts} max={50} open={false} onOpenChange={() => {}} onSubmit={() => {}}
+      submitRefused="This task is done: feedback on it goes in a follow-up task." />);
     expect(byRole<HTMLButtonElement>(host!, "button", "Submit 2").disabled).toBe(true);
     expect(allByRole(host!, "button", "Submit 2…").length).toBe(0);
   });
@@ -299,7 +304,7 @@ describe("SubmitFeedbackDialog", () => {
     expect(document.querySelector("[role=dialog]")!.contains(focused)).toBe(true);
     await fire(focused, new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
     expect(confirmed).toBe(1);
-    await act(async () => root!.render(<TooltipProvider>{dialog(true)}</TooltipProvider>));
+    await rerender(dialog(true));
     await fire(document.activeElement!, new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
     expect(confirmed).toBe(1);
   });
@@ -331,16 +336,12 @@ describe("FeedbackCard", () => {
   test("open or delivered: Reply and Resolve; answered or resolved: Reopen; resolved pending: Reply off and Confirm resolved", async () => {
     let el = await mount(<FeedbackCard item={item({ status: "open" })} {...all} />);
     expect(actionsOf(el)).toEqual(["Show in diff", "Reply", "Resolve"]);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({ status: "delivered", withWhom: "Fix" })} {...all} /></TooltipProvider>));
-    el = host!;
+    el = await rerender(<FeedbackCard item={item({ status: "delivered", withWhom: "Fix" })} {...all} />);
     expect(el.querySelector("[data-testid=fb-status]")!.textContent).toBe("With Fix");
     expect(actionsOf(el)).toEqual(["Show in diff", "Reply", "Resolve"]);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({ status: "replied" })} {...all} /></TooltipProvider>));
-    expect(actionsOf(host!)).toEqual(["Show in diff", "Reply", "Reopen"]);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({ status: "resolved" })} {...all} /></TooltipProvider>));
-    expect(actionsOf(host!)).toEqual(["Show in diff", "Reply", "Reopen"]);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({ status: "resolved", resolutionPending: true, resolvedCommit: "9c1e4a7f00" })} {...all} /></TooltipProvider>));
-    el = host!;
+    expect(actionsOf(await rerender(<FeedbackCard item={item({ status: "replied" })} {...all} />))).toEqual(["Show in diff", "Reply", "Reopen"]);
+    expect(actionsOf(await rerender(<FeedbackCard item={item({ status: "resolved" })} {...all} />))).toEqual(["Show in diff", "Reply", "Reopen"]);
+    el = await rerender(<FeedbackCard item={item({ status: "resolved", resolutionPending: true, resolvedCommit: "9c1e4a7f00" })} {...all} />);
     expect(actionsOf(el)).toEqual(["Show in diff", "Reply", "Confirm resolved"]);
     expect(byRole<HTMLButtonElement>(el, "button", "Reply").disabled).toBe(true);
     expect(el.querySelector("[data-testid=fb-pending]")!.textContent).toContain("9c1e4a7");
@@ -356,10 +357,7 @@ describe("FeedbackCard", () => {
     const el = await mount(<FeedbackCard item={item({ status: "open" })} onReply={async (b) => void sent.push(b)} />);
     await fire(byRole(el, "button", "Reply"), mouse("click"));
     const box = byRole<HTMLTextAreaElement>(el, "textbox", "Reply");
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Kept: see criterion 1");
-      box.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(box, "Kept: see criterion 1");
     await fire(box, new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
     expect(sent).toEqual(["Kept: see criterion 1"]);
     expect(allByRole(el, "textbox", "Reply").length).toBe(0);
@@ -374,13 +372,12 @@ describe("FeedbackCard", () => {
   test("inline on its lines, the excerpt is not repeated; outdated or unchanged, it is, with the words that say why", async () => {
     let el = await mount(<FeedbackCard item={item({})} inline />);
     expect(el.querySelectorAll("[data-testid=fb-excerpt]").length).toBe(0);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({})} inline placement="outdated" /></TooltipProvider>));
-    el = host!;
+    el = await rerender(<FeedbackCard item={item({})} inline placement="outdated" />);
     expect(el.querySelector("[data-testid=fb-excerpt]")!.textContent).toContain("The lines it was on have changed");
     expect(el.querySelector("[data-testid=fb-excerpt]")!.textContent).toContain("const c = 4;");
     expect(el.querySelector("[data-testid=fb-item]")!.getAttribute("data-placement")).toBe("outdated");
     expect(el.textContent).toContain("Lines changed since");
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({})} inline placement="unchanged" /></TooltipProvider>));
+    await rerender(<FeedbackCard item={item({})} inline placement="unchanged" />);
     expect(host!.querySelector("[data-testid=fb-excerpt]")!.textContent).toContain("These lines are unchanged in this diff");
     expect(host!.textContent).not.toContain("Lines changed since");
   });
@@ -394,7 +391,7 @@ describe("FeedbackCard", () => {
     expect(p.textContent).toContain("button[data-testid=pause]");
     expect(p.textContent).toContain("SessionHeader src/Header.tsx:31");
     expect(p.querySelectorAll("img").length).toBe(0);
-    await act(async () => root!.render(<TooltipProvider><FeedbackCard item={item({ anchor: preview })} imageUrl="blob:x" /></TooltipProvider>));
+    await rerender(<FeedbackCard item={item({ anchor: preview })} imageUrl="blob:x" />);
     expect(host!.querySelectorAll("[data-testid=fb-preview] img").length).toBe(1);
   });
 });
