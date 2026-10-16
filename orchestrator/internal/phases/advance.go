@@ -165,9 +165,18 @@ type judgement struct {
 	under     string
 }
 
-// pureMerge verifies that the merge added exactly the first parent's changes
-// to the second parent. Comparing both sides by file makes a manually
-// resolved extra edit visible without relying on commit messages or authors.
+// pureMerge verifies that merge is GitHub's (web-flow, verified) and added
+// exactly first's changes to second: compare second...first and compare
+// second...merge list the same files, each with the same status and the
+// same resulting blob SHA.
+//
+// Sound against false positives: any content in merge beyond first's
+// changes either adds a path to second...merge or changes a listed path's
+// blob SHA, and a blob SHA is the hash of the file's whole content.
+//
+// Conservative: a file both parents changed, which git merged cleanly,
+// has a merge blob different from first's, so the merge is judged impure
+// and the writer's fast-forward refusal stands.
 func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge string) (bool, error) {
 	provenance, err := gh.CommitProvenance(ctx, slug, merge)
 	if err != nil {

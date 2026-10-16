@@ -12,7 +12,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // One sync reads a change request and the pull request falling behind
@@ -380,6 +383,54 @@ func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2`, wi, m); n != 0 {
 		t.Errorf("%d commit events taking the merge as the fix's", n)
+	}
+}
+
+// The task branch and the base both edit NOTES.md, in different hunks,
+// and GitHub merges the base in cleanly under a fix. The merge's NOTES.md
+// is neither side's, so it is not proven only the base's: the fix's
+// publish is refused as not a fast-forward, and the branch keeps the merge.
+func TestAFixIsRefusedOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
+	w := newWorld(t)
+	lines := func(first, last string) string {
+		return first + "\n2\n3\n4\n5\n6\n7\n8\n9\n" + last + "\n"
+	}
+	w.gh.CommitFiles("main", "Notes", map[string]string{"NOTES.md": lines("1", "10")})
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			b.Commit = maps.Clone(b.Commit)
+			if b.Commit == nil {
+				b.Commit = map[string]string{}
+			}
+			b.Commit["NOTES.md"] = lines("1", "ten, the task's")
+		}
+		return b
+	}
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	start := w.gh.SHA(branch)
+	landed := w.underTheWriter(branch, func() string {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"NOTES.md": lines("one, the base's", "10")})
+		return w.gh.MergeInto(branch, "main", nil)
+	})
+	fix := w.prFixSettled(wi)
+	x := landed()
+	if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != start {
+		t.Fatalf("GitHub's merge %q has parents %v, want the task branch %.8s first", x, got, start)
+	}
+	if out, _ := exec.Command("git", "-C", w.gh.Repo, "show", x+":NOTES.md").Output(); string(out) != lines("one, the base's", "ten, the task's") {
+		t.Fatalf("the merge's NOTES.md is %q, want both edits", out)
+	}
+	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
+		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
+	}
+	if r := w.escalationReason(wi); r != "pr_fix_failed" {
+		t.Errorf("escalated %q, want pr_fix_failed", r)
+	}
+	if got := w.gh.SHA(branch); got != x {
+		t.Errorf("the task branch at %.8s, want GitHub's merge %.8s", got, x)
 	}
 }
 
