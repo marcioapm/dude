@@ -2360,9 +2360,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			// The fix stays on its candidate branch: not the pull request's.
 			st.PRFeedback = nil
 		}
-		// Items that waited out an integration have no signal coming: a
-		// fix, as prFixLanded does.
-		handOpen := false
+		// Items the refused candidate reopened, or that waited out an
+		// integration, have no signal coming: a fix, as prFixLanded does.
+		handOpen := e.Reason == ReasonPullRequestMoved
 		if st.Integration != nil {
 			beforePR := st.Integration.BeforePR
 			st.Integration = nil

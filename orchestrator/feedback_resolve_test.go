@@ -378,6 +378,43 @@ func TestFeedbackAResolutionOnACandidateNeverPromotedDoesNotHold(t *testing.T) {
 	}
 }
 
+// A person who waits after a refused candidate leaves the item it reopened
+// open, and no signal comes for it: a fixer is given it all the same, on a
+// candidate of its own.
+func TestFeedbackAWaitAfterARefusedCandidateGivesTheReopenedItemToAFixer(t *testing.T) {
+	w := newPRFixWorld(t)
+	ana := w.person("Ana")
+	w.assignOwner(w.wi, ana)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	w.onTest = func() { w.gh.CommitOnTop(w.branch, "A person's own fix") }
+	w.armed.Store(true)
+	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonPullRequestMoved, w.describeRuns())
+	}
+	fixer, _, _ := ar.state()
+	if status, _ := w.resolution("fbi_x"); status != "open" {
+		t.Fatalf("after the refusal the item is %s, want open", status)
+	}
+	if code, body := w.decide(ana, w.wi, "wait", ""); code != 200 {
+		t.Fatalf("wait: %d %v", code, body)
+	}
+	var next, branch string
+	w.until("a fixer after the wait", func() bool {
+		w.sync()
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(branch, '') FROM runs WHERE task_id = $1 AND phase = 'fix'
+			AND 'fbi_x' = ANY(feedback_item_ids) AND created_at > (SELECT created_at FROM runs WHERE id = $2)
+			ORDER BY created_at LIMIT 1`, w.wi, fixer).Scan(&next, &branch)
+		return next != ""
+	})
+	if branch != delivery.CandidateBranch(w.wi, 1) {
+		t.Errorf("the fixer after the wait publishes to %q, want the candidate", branch)
+	}
+}
+
 // A fixer's resolution on a candidate holds once the candidate is
 // promoted, and not before: while it is reviewed and tested the item still
 // holds the merge; once the pull request's branch is at the candidate's
