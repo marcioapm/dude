@@ -1389,6 +1389,15 @@ here.
   approved, requested changes, commented, review requested (a team too),
   and "asked again · approved before" — attention, their earlier word
   muted — for one asked again after a verdict. Faces are GitHub's.
+- **A pull request's base is named in mono** in PullRequestPanel's base
+  line ("Conflicts with `main`", "Up to date with `main`"). A conflict has
+  three states, told by glyph, tone and words: for its owner, the danger
+  line ends in the app's action (Resolve conflicts); while dude resolves
+  it (`conflict={{ resolving: true }}`), an attention line, "Conflicts with
+  main · **dude is resolving it**", with no action, since nothing waits on
+  a person; for anyone else (`conflict={{ waitingFor: "Ana" }}`), the
+  danger line ends in "Waiting for Ana" in muted ink, the escalation
+  banner's words, never a control that is refused when pressed.
 - **Checks dude cannot read are said plainly**: "GitHub won't show dude
   this repository's checks", beneath it that a fine-grained token cannot
   read check runs and which token can, and a link to

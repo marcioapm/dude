@@ -87,7 +87,7 @@ import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
-import { pullRequestActivity } from "../pullRequests.ts";
+import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { refusedBlockers } from "../api/client.ts";
@@ -388,6 +388,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       return pr !== undefined && mine.has(pr);
     });
   }, [events, parts.prs, allPrs]);
+  // The pull requests dude is resolving conflicts on now, read from their own events.
+  const status = item?.status ?? "";
+  const resolving = useMemo(() => new Set(parts.prs.filter((pr) => resolvingConflicts(pr, prEvents, status)).map((pr) => pr.id)),
+    [parts.prs, prEvents, status]);
   // Each Run's run.created payload: what it was started for.
   const createdFor = useMemo(() => new Map(events.filter((e) => e.eventType === "run.created" && e.runId)
     .map((e) => [e.runId as string, e.payload])), [events]);
@@ -726,10 +730,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                       : pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
-                  <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
+                  <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
+                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        factActions={actions.facts} factUnder={actions.under}
+                        factActions={actions.facts} factUnder={actions.under} conflict={actions.conflict}
                         note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
                         diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
                         actions={

@@ -40,6 +40,25 @@ export type Words = ReadonlyArray<string | { readonly mono: string }>;
 /** Words as plain text: what is read aloud, filtered and tested. */
 export const plainWords = (w: Words): string => w.map((p) => (typeof p === "string" ? p : p.mono)).join("");
 
+/**
+ * dude is resolving the pull request's conflicts now: its latest
+ * integration line is the start, and the task is at work (an integration
+ * is followed by review and test, then the task waits on its pull requests
+ * again, back in review).
+ */
+export function resolvingConflicts(pr: Pick<PullRequest, "repositoryName" | "number">, events: ReadonlyArray<PersistedEvent>,
+  taskStatus: string): boolean {
+  if (taskStatus !== "running") return false;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    const a = str(e.payload.action);
+    if (e.eventType !== "pull_request.action" || !a.startsWith("integration-")) continue;
+    if (e.payload.number !== pr.number || str(e.payload.repo) !== pr.repositoryName) continue;
+    return a === "integration-started";
+  }
+  return false;
+}
+
 export interface PullRequestActivity {
   /** A GitHub login or a name, when a person did it; null for dude or GitHub. */
   who: string | null;

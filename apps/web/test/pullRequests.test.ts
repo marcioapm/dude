@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { mergeBlockedBy, pullRequestActivity } from "../src/pullRequests.ts";
+import { mergeBlockedBy, pullRequestActivity, resolvingConflicts } from "../src/pullRequests.ts";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   id: "pr_1", taskId: "t", runId: null, repositoryId: "r", repositoryName: "web", number: 41, url: "https://github.com/a/web/pull/41",
@@ -135,4 +135,15 @@ describe("activity", () => {
     expect(lines.filter((l) => /resolving conflicts in|\.ts|\.go/.test(l.text)).length).toBe(0);
   });
 
+  test("dude is resolving a pull request from its latest integration line while the task works", () => {
+    const line = (action: string, number = 41, repo = "web") => event("pull_request.action", { action, number, repo });
+    const p = { repositoryName: "web", number: 41 };
+    expect(resolvingConflicts(p, [line("integration-started")], "running")).toBe(true);
+    expect(resolvingConflicts(p, [line("integration-started")], "review")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started"), line("integration-completed")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started"), line("integration-refused")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started", 7)], "running")).toBe(false);
+    expect(resolvingConflicts(p, [line("integration-started", 41, "api")], "running")).toBe(false);
+    expect(resolvingConflicts(p, [], "running")).toBe(false);
+  });
 });

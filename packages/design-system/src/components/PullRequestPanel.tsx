@@ -26,6 +26,11 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
   readonly factUnder?: Partial<Record<FactKind, ReactNode>> | undefined;
   /** After what to do about checks dude cannot read: a link to where it is done. */
   readonly diagnosticAction?: ReactNode;
+  /**
+   * A conflict with its base, beyond the fact: dude resolving it now (no
+   * action is offered), or the person it waits on to ask (their name).
+   */
+  readonly conflict?: { readonly resolving?: boolean | undefined; readonly waitingFor?: string | undefined } | undefined;
 }
 
 /** A reviewer's line, by their latest word: its tone and glyph (the words are `reviewWords`). */
@@ -55,7 +60,7 @@ interface Fact {
  * the forge reports them), reviews (by person when it does), how it stands
  * against its base, open threads. What is not known is not said.
  */
-export function PullRequestPanel({ pr, additions, deletions, actions, note, factActions, factUnder, diagnosticAction, className, ...rest }: PullRequestPanelProps) {
+export function PullRequestPanel({ pr, additions, deletions, actions, note, factActions, factUnder, diagnosticAction, conflict, className, ...rest }: PullRequestPanelProps) {
   const facts: Fact[] = [];
   if (pr.state === "merged") facts.push({ tone: "ok", glyph: "merge", text: "Merged" });
 
@@ -153,11 +158,18 @@ export function PullRequestPanel({ pr, additions, deletions, actions, note, fact
   }
 
   if (pr.state === "open" || pr.state === "draft") {
-    const base = pr.baseBranch ?? "its base";
+    const base = pr.baseBranch ? <span className="ds-mono">{pr.baseBranch}</span> : "its base";
     if (pr.unresolvedThreads) facts.push({ kind: "threads", tone: "attention", glyph: "comments", text: `${pr.unresolvedThreads} unresolved comment${pr.unresolvedThreads === 1 ? "" : "s"}` });
-    if (pr.mergeable === "conflicting") facts.push({ kind: "base", tone: "bad", glyph: "git-conflict", text: `Conflicts with ${base}` });
-    else if (pr.behindBy) facts.push({ kind: "base", tone: "neutral", glyph: "arrow-up", text: `${pr.behindBy} commit${pr.behindBy === 1 ? "" : "s"} behind ${base} · no conflicts` });
-    else if (pr.mergeable === "clean") facts.push({ kind: "base", tone: "ok", glyph: "arrow-up", text: `Up to date with ${base}` });
+    if (pr.mergeable === "conflicting" && conflict?.resolving) {
+      // dude is at work on it: no action, nothing for anyone to do yet.
+      facts.push({ kind: "base", tone: "attention", glyph: "circle-dotted", text: <>Conflicts with {base} · <b>dude is resolving it</b></> });
+    } else if (pr.mergeable === "conflicting") {
+      facts.push({
+        kind: "base", tone: "bad", glyph: "git-conflict", text: <>Conflicts with {base}</>,
+        trailing: conflict?.waitingFor ? <span className={styles["muted"]} data-testid="pr-conflict-waiting">Waiting for {conflict.waitingFor}</span> : undefined,
+      });
+    } else if (pr.behindBy) facts.push({ kind: "base", tone: "neutral", glyph: "arrow-up", text: <>{pr.behindBy} commit{pr.behindBy === 1 ? "" : "s"} behind {base} · no conflicts</> });
+    else if (pr.mergeable === "clean") facts.push({ kind: "base", tone: "ok", glyph: "arrow-up", text: <>Up to date with {base}</> });
   }
 
   return (
@@ -182,13 +194,15 @@ export function PullRequestPanel({ pr, additions, deletions, actions, note, fact
         {facts.map((f, i) => {
           // A kind's action sits on its last line, and what opens under it after: after every reviewer, not each.
           const last = f.kind !== undefined && facts.findLastIndex((g) => g.kind === f.kind) === i ? f.kind : undefined;
+          // A conflict dude is resolving, or that waits on someone else, offers nothing to press.
+          const quiet = last === "base" && pr.mergeable === "conflicting" && (conflict?.resolving || conflict?.waitingFor);
           return (
             <li key={i} data-fact={f.kind}>
               <span className={styles["fact"]}>
                 <Icon name={f.glyph} size={14} className={cx(styles["glyph"], styles[f.tone])} />
                 <span className={styles["factText"]}>{f.text}</span>
                 {f.trailing}
-                {last ? factActions?.[last] : null}
+                {last && !quiet ? factActions?.[last] : null}
               </span>
               {f.children}
               {last && factUnder?.[last] ? <div className={styles["under"]}>{factUnder[last]}</div> : null}

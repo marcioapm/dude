@@ -337,6 +337,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           <ReviewerDemo />
         </Panes>
       </Block>
+      <Block id="s-pr-conflict" title="PullRequestPanel: a conflict with its base" note="The base by name, in mono. For the owner the line ends in Resolve conflicts; while dude resolves it the line says so, attention-toned, and offers nothing; anyone else reads whom it waits on, as the escalation banner does.">
+        <Panes mode={mode}>
+          <ConflictDemo />
+        </Panes>
+      </Block>
       <Block id="s-machines" title="NumberInput / Select meta / FitBar / ProportionBar / MachineChip" note="A machine size in the pieces that show it. NumberInput moves in steps (− value + and ↑ ↓), keeps what is typed, and names the step when it is off. A Select option's meta is muted on its line and follows the label into the trigger; description is a line under it; footer sits under the list. FitBar is how much of one host a size takes, words only when nobody knows the host. ProportionBar splits a host's memory, the part nobody gets hatched. MachineChip is the session header's machine, its origin in a tooltip.">
         <Panes mode={mode}>
           <MachinesDemo />
@@ -433,6 +438,25 @@ function ReviewerDemo() {
             { login: "acme/platform", state: "REQUESTED", team: true },
           ] }}
         factActions={{ reviews: <Button size="sm" variant="quiet">Request review</Button> }} />
+    </Col>
+  );
+}
+
+const CONFLICTING = {
+  number: 517, url: "#", title: "Greet in Portuguese", repositoryName: "control-plane", headBranch: "dude/cp-42/attempt-1",
+  state: "open", review: "approved", checks: "passing", baseBranch: "main", mergeable: "conflicting", behindBy: 3,
+} as const;
+
+/** A pull request that conflicts with its base: for its owner, while dude resolves it, and for anyone else. */
+function ConflictDemo() {
+  return (
+    <Col>
+      <Label>Conflicting, for its owner</Label>
+      <PullRequestPanel pr={CONFLICTING} factActions={{ base: <Button size="sm">Resolve conflicts</Button> }} />
+      <Label>dude is resolving it</Label>
+      <PullRequestPanel pr={CONFLICTING} conflict={{ resolving: true }} />
+      <Label>Waiting for its owner</Label>
+      <PullRequestPanel pr={CONFLICTING} conflict={{ waitingFor: "Ana Ribeiro" }} />
     </Col>
   );
 }
