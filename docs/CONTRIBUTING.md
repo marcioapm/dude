@@ -128,6 +128,20 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   a branch that does not exist — and the orchestrator fast-forwards the work
   item's branch to it through GitHub, never forcing. The next phase checks
   out that commit.
+- **A task branch only ever fast-forwards**, but for one case
+  (`phases/advance.go`, both a phase's publish and a conductor's): a
+  writer refused only because its base was merged into the branch under
+  it — dude's own update, a person's **Update branch**, GitHub's — is
+  merged in on GitHub (`/merges`), and that merge is the next phase's
+  start. Only merges means every commit on the branch's first-parent line
+  since the writer's start is a two-parent merge whose second parent the
+  base contains, read from GitHub's compares. The change counted is still
+  the writer's own; `git.commit_created` names the merge as `headSha` and
+  the writer's commit under `mergedBase`. A merge GitHub refuses (409) is
+  refused naming the base merge. Anything else under the writer, a
+  person's commit, a rebase or a force-push, is refused as before. The PR
+  syncer asks for no automatic update in a sync that has just signalled
+  the workflow: fewer such merges, not none.
 - **Every Run is on a machine size.** The organisation's sizes
   (`machine_sizes`) are named by each role's settings and a project's
   previews; the spec carries the size as `resources` and its pool, by
