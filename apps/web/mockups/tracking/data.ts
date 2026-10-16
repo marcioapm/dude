@@ -138,7 +138,7 @@ export const KIND: Record<Kind, { readonly label: string; readonly plural: strin
 export const PRIORITY: Record<Priority, { readonly label: string; readonly line: string }> = {
   P0: { label: "P0", line: "Drop other work for it." },
   P1: { label: "P1", line: "Next, before the normal queue." },
-  P2: { label: "P2", line: "Normal. The default, and not shown." },
+  P2: { label: "P2", line: "Normal: the default. Cards and rows leave it out." },
   P3: { label: "P3", line: "When there is room." },
 };
 

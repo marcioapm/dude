@@ -191,7 +191,7 @@
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: 88px 20px minmax(0, 1fr) auto 140px 32px 24px 40px;
+  grid-template-columns: 76px 20px minmax(0, 1fr) auto 150px 32px 24px 40px;
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-default);

@@ -20,11 +20,24 @@ import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarToggle } from "
 import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
 import { BoardPage, NO_FILTERS, type BoardFilters } from "./BoardPage.tsx";
+import { ArchiveEpicDialog, TaskDialogBug } from "./Dialogs.tsx";
+import { ActivityLines, TaskPage, type Overlay, type TaskView } from "./TaskPage.tsx";
+import { TasksList, type View } from "./TasksList.tsx";
 import { ROLE, YOU, keyOf, world } from "./data.ts";
+import pageStyles from "./pages.module.css";
 
 export const SCREENS = {
   meaning: "0 · What the words mean",
   "board-later": "1 · Board with the Later shelf",
+  "defer-dialog": "1 · Put on Later",
+  "deferred-task": "1 · A task on Later",
+  "close-dialog": "1 · Close, as a duplicate",
+  "closed-wontdo": "1 · Closed: Won't do",
+  "closed-duplicate": "1 · Closed: Duplicate (both tasks)",
+  "archive-task": "1 · Archive a task",
+  "archive-epic-refused": "1 · Archive an epic: refused",
+  "archived-view": "1 · Archived",
+  "activity-lifecycle": "1 · Activity, every new line",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
@@ -32,12 +45,27 @@ const params = new URLSearchParams(location.search);
 const first = (params.get("screen") ?? params.get("s") ?? "board-later") as Screen;
 
 type Place =
-  | { view: "board"; filters: BoardFilters; shelfOpen: boolean; chips: boolean }
+  | { view: "board"; filters: BoardFilters; shelfOpen: boolean; chips: boolean; overlay?: "archive-epic" | "task-dialog" | undefined }
+  | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined }
+  | { view: "list"; list: View }
+  | { view: "activity" }
   | { view: "other"; screen: Screen };
+
+const board = (o: Partial<Extract<Place, { view: "board" }>> = {}): Place => ({ view: "board", filters: NO_FILTERS, shelfOpen: false, chips: true, ...o });
+const page = (key: string, o: Partial<Extract<Place, { view: "task" }>> = {}): Place => ({ view: "task", key, tab: "overview", overlay: null, ...o });
 
 function placeOf(s: Screen): Place {
   switch (s) {
-    case "board-later": return { view: "board", filters: NO_FILTERS, shelfOpen: true, chips: false };
+    case "board-later": return board({ shelfOpen: true, chips: false });
+    case "defer-dialog": return page("CP-62", { overlay: "defer" });
+    case "deferred-task": return page("CP-62");
+    case "close-dialog": return page("CP-63", { overlay: "close" });
+    case "closed-wontdo": return page("CP-46");
+    case "closed-duplicate": return page("CP-63", { split: "CP-62" });
+    case "archive-task": return page("CP-46", { overlay: "archive" });
+    case "archive-epic-refused": return board({ overlay: "archive-epic" });
+    case "archived-view": return { view: "list", list: "archived" };
+    case "activity-lifecycle": return { view: "activity" };
     default: return { view: "other", screen: s };
   }
 }
@@ -51,10 +79,32 @@ function Mock() {
 
   let main: ReactNode = null;
   let selected: NavRef | null = { kind: "project", id: "p_cp" };
+  const openTask = (key: string) => { setPlace(page(key)); setNavOpen(false); };
+  const toBoard = () => setPlace(board());
   if (place.view === "board") {
     const p = place;
-    main = <BoardPage filters={p.filters} onFilters={(filters) => setPlace({ ...p, filters })} shelfOpen={p.shelfOpen}
-      onShelfOpen={(shelfOpen) => setPlace({ ...p, shelfOpen })} onOpen={() => undefined} onArchived={() => undefined} showChips={p.chips} />;
+    main = (
+      <>
+        <BoardPage filters={p.filters} onFilters={(filters) => setPlace({ ...p, filters })} shelfOpen={p.shelfOpen}
+          onShelfOpen={(shelfOpen) => setPlace({ ...p, shelfOpen })} onOpen={openTask} onArchived={() => setPlace({ view: "list", list: "archived" })} showChips={p.chips} />
+        <ArchiveEpicDialog open={p.overlay === "archive-epic"} onOpenChange={(o) => setPlace({ ...p, overlay: o ? "archive-epic" : undefined })} />
+        <TaskDialogBug open={p.overlay === "task-dialog"} onOpenChange={(o) => setPlace({ ...p, overlay: o ? "task-dialog" : undefined })} />
+      </>
+    );
+  } else if (place.view === "task") {
+    const p = place;
+    selected = { kind: "task", id: `t_${p.key}` };
+    const one = (k: string) => (
+      <TaskPage key={k} k={k} view={p.tab} onView={(tab) => setPlace({ ...p, tab })} overlay={k === p.key ? p.overlay : null}
+        onOverlay={(overlay) => setPlace({ ...p, overlay })} onOpen={openTask} onBoard={toBoard} />
+    );
+    main = p.split ? <div className={pageStyles["split"]}>{one(p.key)}{one(p.split)}</div> : one(p.key);
+  } else if (place.view === "list") {
+    const p = place;
+    main = <TasksList view={p.list} onView={(list) => setPlace({ view: "list", list })} onOpen={openTask} />;
+  } else if (place.view === "activity") {
+    selected = { kind: "task", id: "t_CP-62" };
+    main = <div className="screen taskScreen"><div className="taskPane"><h1 className="taskTitle" style={{ marginBottom: 16 }}>Activity: every new line</h1><ActivityLines k="CP-62" /></div></div>;
   } else {
     selected = null;
   }
@@ -77,7 +127,7 @@ function Mock() {
       </div>
       <div className="shell" style={{ flex: 1, minHeight: 0 }}>
         <Sidebar projects={[world(undefined, true)]} title="dude" you={YOU.id} selected={selected}
-          onSelect={(ref) => { if (ref.kind === "task") keyOf(ref.id); }}
+          onSelect={(ref) => { if (ref.kind === "task") openTask(keyOf(ref.id)); else toBoard(); }}
           collapsible open={navOpen} onOpenChange={setNavOpen}
           footer={<><SidebarLink icon="building">Organisation settings</SidebarLink><SidebarProfile person={YOU} detail={ROLE === "owner" ? "ana@acme.dev" : "marcio@acme.dev"} onOpen={() => undefined} /></>} />
         <main className="main flush">

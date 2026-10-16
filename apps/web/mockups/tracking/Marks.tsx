@@ -261,7 +261,7 @@ export function TaskRow({ row, menu, onOpen }: { readonly row: TaskRowData; read
     <li className={styles["row"]} data-archived={row.archived || undefined} data-key={row.key}>
       <button type="button" className={styles["rowOpen"]} onClick={() => onOpen?.(row.key)} aria-label={`${row.key} ${row.title}`}>
         <span className={styles["rowLead"]}>
-          <StatusMark status={row.status} size="sm" />
+          <StatusMark status={row.status} size="sm" iconOnly />
           <span className={styles["mono"]}>{row.key}</span>
         </span>
         <span className={styles["rowKind"]}><KindMark kind={row.kind} quietDefault /></span>

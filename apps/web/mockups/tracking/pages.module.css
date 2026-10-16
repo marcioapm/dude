@@ -29,6 +29,26 @@
   text-decoration: underline;
 }
 
+/* closed-duplicate: both tasks side by side. */
+.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  background: var(--ds-color-sunken);
+}
+.split > * {
+  background: var(--ds-color-canvas);
+  min-width: 0;
+}
+.split :global(.taskTop) {
+  flex-wrap: wrap;
+}
+.split :global(.taskCrumbs) {
+  flex-basis: 100%;
+}
+
 /* -- Board -- */
 .boardHost {
   display: flex;
@@ -196,6 +216,15 @@
   flex-wrap: wrap;
   gap: var(--ds-space-8);
   margin-top: var(--ds-space-8);
+}
+/* StartGate's reachable disabled control, for any refused action. */
+.gateTriggerish {
+  display: inline-flex;
+  border-radius: var(--ds-radius-control);
+}
+.gateTriggerish:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
 }
 .bugGrid {
   display: grid;
