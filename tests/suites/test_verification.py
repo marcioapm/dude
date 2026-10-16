@@ -158,8 +158,12 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
                                       if v["heads"].get("greeter") == head), None), timeout=30,
                         message="no verdict at the pull request's new head")
     assert latest["stale"] is False, latest
-    body = fake_github.pulls[pr["number"]].body
-    assert f"Tested at `{head[:7]}`." in body and "Stale" not in body, body
+    # The verdict at the new head is the candidate's, recorded before the
+    # move; the step after the move refreshes the description.
+    fresh = f"Tested at `{head[:7]}`."
+    body = wait_until(lambda: (b if fresh in (b := fake_github.pulls[pr["number"]].body) else None), timeout=30,
+                      message="the pull request's description was not refreshed at its new head")
+    assert "Stale" not in body, body
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
