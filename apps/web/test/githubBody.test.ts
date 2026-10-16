@@ -112,7 +112,7 @@ Included review availability.
     for (const body of bodies) {
       const start = performance.now();
       expect(() => githubBody(body)).not.toThrow();
-      // Each takes a few milliseconds; the old scanner took 0.1-1s and grew quadratically.
+      // Each takes a few milliseconds; a quadratic scan takes hundreds.
       expect(performance.now() - start).toBeLessThan(200);
     }
     expect(githubBody("\uE000`a`\uE000")).toEqual([markdown("\uE000`a`\uE000")]);
