@@ -452,8 +452,8 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	if slices.ContainsFunc(p.Checks, func(c forge.Check) bool { return c.Diagnostic == "…cut: check runs incomplete" }) {
 		pr["moreChecks"] = cutMark + ": check runs incomplete"
 	}
-	if len(p.Reviews) > reviewsMax {
-		pr["moreReviews"] = fmt.Sprintf("%s: the first %d of %d reviews", cutMark, reviewsMax, len(p.Reviews))
+	if p.ReviewsCut || len(p.Reviews) > reviewsMax {
+		pr["moreReviews"] = fmt.Sprintf("%s: at most %d reviews; review history incomplete", cutMark, reviewsMax)
 	}
 	if p.ThreadsUnknown {
 		pr["threadsUnknown"] = cutMark + ": GitHub would not list all review threads"

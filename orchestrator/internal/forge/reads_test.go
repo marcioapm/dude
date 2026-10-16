@@ -209,6 +209,35 @@ func TestSearchUsesCanonicalRepositoryName(t *testing.T) {
 	}
 }
 
+func TestAgentReviewsFetchOnlyBoundedHistory(t *testing.T) {
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			pages++
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			size, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+			batch := []map[string]any{}
+			for i := (page-1)*size; i < min(page*size, 120); i++ {
+				batch = append(batch, map[string]any{"state": "COMMENTED", "body": "review", "submitted_at": "2026-01-01T00:00:00Z"})
+			}
+			_ = json.NewEncoder(w).Encode(batch)
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/graphql":
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"number":1}`))
+		}
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	p, err := gh.PullRequestRead(context.Background(), "acme/allowed", 1, 300)
+	if err != nil || pages > 2 || len(p.Reviews) != 50 || !p.ReviewsCut {
+		t.Fatalf("reviews=%d pages=%d err=%v", len(p.Reviews), pages, err)
+	}
+}
+
 func TestAgentReadsLeaveDeliveryItsShareOfTheRateLimit(t *testing.T) {
 	target, _, gh := readsWorld(t)
 	n := target.OpenIssue("ana", "Rollup", "Body")

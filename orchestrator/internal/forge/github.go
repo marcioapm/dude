@@ -1544,7 +1544,8 @@ type PullRequestRead struct {
 	Body       string
 	Draft      bool
 	Head, Base string
-	Reviews    []ReviewRead
+	Reviews        []ReviewRead
+	ReviewsCut     bool
 	// Only the threads nobody resolved; ThreadsUnknown when GitHub would
 	// not say (see unresolvedThreads).
 	Threads        []ThreadRead
@@ -1709,16 +1710,22 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		Body: p.Body, Draft: p.Draft, Head: p.Head.Ref, Base: p.Base.Ref,
 		Reviews: []ReviewRead{}, Threads: []ThreadRead{}, Checks: []Check{}, Files: []FileRead{},
 	}
-	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
-	if err != nil {
+	var reviews []ghReview
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=60&page=1", slug, number), nil, &reviews); err != nil {
 		return PullRequestRead{}, err
 	}
+	out.ReviewsCut = len(reviews) >= 60
 	for _, r := range reviews {
 		if r.SubmittedAt == nil || r.State == "PENDING" {
 			continue
 		}
+		if len(out.Reviews) == 50 {
+			out.ReviewsCut = true
+			break
+		}
 		out.Reviews = append(out.Reviews, ReviewRead{Author: login(r.User), State: r.State, Body: r.Body, SubmittedAt: *r.SubmittedAt})
 	}
+	var err error
 	if out.Threads, out.ThreadsUnknown, err = g.openThreads(ctx, slug, number); err != nil {
 		return PullRequestRead{}, err
 	}
