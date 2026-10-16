@@ -85,8 +85,8 @@ class PageHoldsStill(unittest.TestCase):
               - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth); };
           const goal = document.querySelector('section[aria-label=Goal]');
           const items = [...document.querySelectorAll('ul[aria-label="Acceptance criteria"] > li')];
-          return { goal: [goal.querySelector('[data-testid="task-goal"]').getBoundingClientRect().width, content(goal)],
-            criteria: items.map(li => [li.querySelector('[data-testid="task-criterion"]').getBoundingClientRect().width, content(li)]) };
+          return { goal: [goal.querySelector('[data-testid="overview-goal"]').getBoundingClientRect().width, content(goal)],
+            criteria: items.map(li => [li.querySelector('[data-testid="overview-criterion"]').getBoundingClientRect().width, content(li)]) };
         }""")
         self.assertGreater(markdown["goal"][1], 820)
         self.assertAlmostEqual(*markdown["goal"], delta=1)

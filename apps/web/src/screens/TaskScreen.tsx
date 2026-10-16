@@ -670,7 +670,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Goal</h2>
                   <div className="taskGoal">
                     {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
-                    <Markdown data-testid="task-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
+                    <Markdown data-testid="overview-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
                   </div>
                 </section>
               ) : null}
@@ -679,7 +679,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Acceptance criteria</h2>
                   <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
                     {item.acceptanceCriteria.map((c, i) => (
-                      <li key={i}><Markdown data-testid="task-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
+                      <li key={i}><Markdown data-testid="overview-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
                     ))}
                   </ul>
                 </section>
