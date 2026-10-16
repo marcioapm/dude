@@ -434,6 +434,9 @@ export const EventTypes = {
    * (github_search, github_issue, github_pull_request), on its Run.
    * Payload: `{ tool, repo, number?, query?, kind?, state?, files?, bytes }`:
    * what was asked and the result's size in bytes, never what GitHub said.
+   * A read refused once checked has `{ refused, status }` in place of
+   * `bytes`: dude's kind (moved, redirect, rate_reserve, rate_limited,
+   * not_found, too_large, forbidden, refused, unavailable) and the HTTP status.
    */
   GitHubRead: "github.read",
 
