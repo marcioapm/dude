@@ -9,7 +9,10 @@ status deliveries CI sends.
 
 from __future__ import annotations
 
+import subprocess
 import time
+
+import requests
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, execute, query, wait_for_escalation, wait_until
@@ -265,6 +268,20 @@ def test_update_branch_brings_it_up_to_date(client: ApiClient, forge_project: di
     assert fake_github.updates == [pr["number"]]
     [action] = _events(client, task["id"], "pull_request.action")
     assert action["payload"]["action"] == "update-branch" and action["actor"]["type"] == "human"
+
+
+def test_the_fakes_compare_lists_a_rename_as_removed_plus_added(fake_github: FakeGitHub):
+    """dude's accounting reads the compare's files; the fake does no rename
+    detection, so a moved file is the old name removed and the new added."""
+    listing = fake_github._git_out("ls-tree", "refs/heads/main").replace("\tREADME.md", "\tGUIDE.md")
+    tree = subprocess.run(["git", "mktree"], cwd=fake_github.bare, input=listing + "\n", text=True,
+                          capture_output=True, check=True).stdout.strip()
+    sha = fake_github._git_out("commit-tree", tree, "-p", "refs/heads/main", "-m", "move the readme")
+    fake_github._git_out("update-ref", "refs/heads/moved", sha)
+    resp = requests.get(f"{fake_github.api_url}/repos/{fake_github.owner}/{fake_github.repo}/compare/main...moved", timeout=10)
+    assert resp.status_code == 200, resp.text
+    files = sorted((f["filename"], f["status"], f["deletions"], f["additions"]) for f in resp.json()["files"])
+    assert files == [("GUIDE.md", "added", 0, 1), ("README.md", "removed", 1, 0)]
 
 
 # -- merging ------------------------------------------------------------------

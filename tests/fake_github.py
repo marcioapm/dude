@@ -855,11 +855,12 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
                     # As GitHub's: from the merge base (three dots), each file with its status
                     # and blob, and a patch only where lines changed (none for a binary file).
+                    # No rename detection: a rename is a removal plus an addition.
                     spec = f"{m[1]}...{m[2]}"
-                    diff = self._git("diff", "--numstat", spec)
+                    diff = self._git("diff", "--no-renames", "--numstat", spec)
                     if diff.returncode:
                         return self._send(404, {"message": "Not Found"})
-                    raw = self._git("diff", "--raw", "--no-abbrev", spec).stdout
+                    raw = self._git("diff", "--no-renames", "--raw", "--no-abbrev", spec).stdout
                     blob = {}
                     for line in raw.splitlines():
                         meta, _, name = line.partition("\t")
