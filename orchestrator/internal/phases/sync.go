@@ -1748,6 +1748,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		branch = tb.Branch
 	}
 	held, err := s.resolutionsHeld(ctx, r, heads)
+	if forge.Transient(err) {
+		return true, s.retryLater(ctx, r, err)
+	}
 	if err != nil {
 		return true, err
 	}
@@ -1816,14 +1819,25 @@ func (s *Syncer) resolutionsHeld(ctx context.Context, r phaseRun, heads map[stri
 	}
 	var cmp delivery.Comparer
 	if gh != nil {
+		type comparison struct{ repo, base, head string }
+		type answer struct{ ahead, behind int }
+		seen := map[comparison]answer{}
 		cmp = func(ctx context.Context, repo, base, head string) (int, int, error) {
+			key := comparison{repo, base, head}
+			if a, ok := seen[key]; ok {
+				return a.ahead, a.behind, nil
+			}
 			c, err := gh.Compare(ctx, slugs[repo], base, head)
-			var fe *forge.Error
-			if errors.As(err, &fe) && fe.NotFound() {
-				// A commit GitHub does not have was never published.
+			if forge.Refused(err) {
+				// GitHub not having the commit (404), or refusing to
+				// compare it, is a commit never published there.
 				return 0, 1, nil
 			}
-			return c.AheadBy, c.BehindBy, err
+			if err != nil {
+				return 0, 0, err
+			}
+			seen[key] = answer{c.AheadBy, c.BehindBy}
+			return c.AheadBy, c.BehindBy, nil
 		}
 	}
 	held := map[string]bool{}
