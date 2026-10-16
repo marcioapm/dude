@@ -33,10 +33,10 @@ const (
 	// RefusedTooBig takes the lines, files, and the limits.
 	RefusedTooBig = "this is %d lines in %d files, past the conductor's limit of %d lines / %d files: " +
 		"delegate this (start_phase implement)"
-	// RefusedBinary takes the repository: a change GitHub would not show
-	// in lines (a binary file, or a diff too large) is past any line limit.
-	RefusedBinary = "%s has a change git cannot count in lines (a binary file), past the conductor's limit: " +
-		"delegate this (start_phase implement)"
+	// RefusedBinary takes the repository: a change GitHub shows no lines
+	// for is past any line limit.
+	RefusedBinary = "%s has a change GitHub shows no lines for (a binary file, a rename or mode change with no edits, " +
+		"or a diff too large to show), past the conductor's limit: delegate this (start_phase implement)"
 	// UntestedHead is the pull request gate refusing a head that is a
 	// conductor's commit no review or test Run has run on.
 	UntestedHead = "the last commit is the conductor's; run a review first"

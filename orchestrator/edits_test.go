@@ -732,7 +732,7 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e.wokenWith(e.task, "after implement")
 		e.current()
 		e.commit(map[string]string{"logo.bin": "\x00\x01\x02"})
-		settled(t, e, "target has a change git cannot count in lines")
+		settled(t, e, "target has a change GitHub shows no lines for (a binary file,")
 	})
 }
 
