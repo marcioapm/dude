@@ -16,7 +16,7 @@ import { Icon } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
 import type { BoardCard } from "../../../../packages/design-system/src/util/boardModel.ts";
 import { EPICS, KIND, PRIORITY, ROLE, YOU, archived, firstName, keyOf, laterOf, shelf, task, world, type Kind, type Priority, type Task } from "./data.ts";
-import { KindMark, LaterGate, LaterMark, PriorityMark, TaskFilterBar } from "./Marks.tsx";
+import { KindMark, LaterGate, LaterMark, PriorityMark, ResolutionMark, TaskFilterBar } from "./Marks.tsx";
 import styles from "./pages.module.css";
 
 export interface BoardFilters {
@@ -61,8 +61,8 @@ function useLeadSlots(root: HTMLElement | null, version: unknown) {
 }
 
 /** The Later shelf: under the columns, folded to one line by default. */
-export function LaterShelf({ open, onOpenChange, onOpen }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly onOpen: (k: string) => void }) {
-  const items = shelf();
+export function LaterShelf({ open, onOpenChange, onOpen, keep: k = () => true }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly onOpen: (k: string) => void; readonly keep?: (t: Task) => boolean }) {
+  const items = shelf().filter(k);
   const own = items.filter((t) => t.later);
   const epicTasks = items.filter((t) => !t.later);
   return (
@@ -75,21 +75,21 @@ export function LaterShelf({ open, onOpenChange, onOpen }: { readonly open: bool
         {!open ? (
           <span className={styles["shelfPeek"]}>
             {own.map((t) => <span key={t.key}><span className={styles["mono"]}>{t.key}</span> {t.later!.until ?? "no date"}</span>)}
-            <span><Icon name="layers" size={12} /> {EPICS.alerts.title} · {epicTasks.length} tasks · {EPICS.alerts.later!.until}</span>
+            {epicTasks.length ? <span><Icon name="layers" size={12} /> {EPICS.alerts.title} · {epicTasks.length} tasks · {EPICS.alerts.later!.until}</span> : null}
           </span>
         ) : <span className={styles["shelfPeek"]}>Not started, and won't be until brought back. Nothing here counts on the board.</span>}
       </button>
       {open ? (
         <div className={styles["shelfBody"]}>
           {own.map((t) => <ShelfCard key={t.key} t={t} onOpen={onOpen} />)}
-          <div className={styles["shelfEpic"]} data-deferred="" data-testid="shelf-epic">
+          {epicTasks.length ? <div className={styles["shelfEpic"]} data-deferred="" data-testid="shelf-epic">
             <span className={styles["shelfEpicHead"]}>
               <Icon name="layers" size={14} /> <b>{EPICS.alerts.title}</b>
               <LaterMark until={EPICS.alerts.later!.until} />
               <span className={styles["muted"]}>put later by {firstName(EPICS.alerts.later!.by)}, with its {epicTasks.length} tasks</span>
             </span>
             <span className={styles["shelfEpicKeys"]}>{epicTasks.map((t) => <button key={t.key} type="button" className={styles["linkish"]} onClick={() => onOpen(t.key)}><span className={styles["mono"]}>{t.key}</span> {t.title}</button>)}</span>
-          </div>
+          </div> : null}
         </div>
       ) : null}
     </section>
@@ -153,6 +153,9 @@ export function BoardPage({ filters, onFilters, shelfOpen, onShelfOpen, onOpen, 
 
   const cardMarks = useMemo(() => (card: BoardCard) => {
     const blockers = card.task.blockedBy ?? [];
+    const t = task(card.task.key!);
+    // A closed card names its resolution; "stopped" alone would hide a person's decision.
+    if (t.resolution && t.resolution !== "nothing_to_merge") return <ResolutionMark resolution={t.resolution} of={t.duplicateOf} />;
     return blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null;
   }, []);
   const cardStart = useMemo(() => (card: BoardCard, focus: { tabIndex: 0 | -1 }) => (
@@ -187,7 +190,7 @@ export function BoardPage({ filters, onFilters, shelfOpen, onShelfOpen, onOpen, 
             <Button variant="primary" size="sm" leadingIcon="plus">New task</Button>
           </span>
         }
-        overview={<LaterShelf open={shelfOpen} onOpenChange={onShelfOpen} onOpen={onOpen} />}
+        overview={<LaterShelf open={shelfOpen} onOpenChange={onShelfOpen} onOpen={onOpen} keep={keep(filters)} />}
       />
       {slots.map((s) => {
         const t = task(s.key);

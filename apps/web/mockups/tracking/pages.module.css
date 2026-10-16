@@ -385,6 +385,15 @@
 }
 
 /* -- Find work tokens -- */
+/* Stands in for the proposed Sidebar search mode: while a query has tokens,
+   the results take the tree's place (the tree's "No matches" would be wrong). */
+.finding :global(aside) > [class*="_treeHead_"],
+.finding :global(aside) > [class*="_scroll_"] {
+  display: none;
+}
+.finding :global(aside) > [class*="_band_"] {
+  margin-top: auto;
+}
 .findPane {
   display: flex;
   flex-direction: column;

@@ -22,6 +22,7 @@ import type { NavRef } from "../../../../packages/design-system/src/util/navMode
 import { BoardPage, NO_FILTERS, type BoardFilters } from "./BoardPage.tsx";
 import { ArchiveEpicDialog, TaskDialogBug } from "./Dialogs.tsx";
 import { BriefPage, ProposalKindsPage } from "./Classification.tsx";
+import { FIND_QUERY, FindWorkPane, MeaningPage } from "./Finding.tsx";
 import { ActivityLines, TaskPage, type Overlay, type TaskView } from "./TaskPage.tsx";
 import { TasksList, type View } from "./TasksList.tsx";
 import { ROLE, YOU, keyOf, world } from "./data.ts";
@@ -45,6 +46,12 @@ export const SCREENS = {
   "board-kinds": "2 · Board: kinds and priorities",
   "proposal-card-kinds": "2 · Proposal with kinds",
   "brief-bug": "2 · What a kind tells the agents",
+  "tasks-list": "3 · Tasks list",
+  "tasks-list-view-bugs": "3 · Tasks list: Bugs",
+  "tasks-list-archived": "3 · Tasks list: Archived",
+  "find-work-tokens": "3 · Find work with tokens",
+  "board-filters": "3 · Board filters",
+  narrow: "4 · A deferred bug at 390px",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
@@ -77,6 +84,12 @@ function placeOf(s: Screen): Place {
     case "bug-task": return page("CP-61");
     case "introduced-by-proposed": return page("CP-60");
     case "board-kinds": return board({ chips: false });
+    case "tasks-list": return { view: "list", list: "all" };
+    case "tasks-list-view-bugs": return { view: "list", list: "bugs" };
+    case "tasks-list-archived": return { view: "list", list: "archived" };
+    case "find-work-tokens": return board();
+    case "board-filters": return board({ filters: { ...NO_FILTERS, kind: "bug", mine: true } });
+    case "narrow": return page("CP-62");
     default: return { view: "other", screen: s };
   }
 }
@@ -86,6 +99,8 @@ function Mock() {
   const [screen, setScreen] = useState<Screen>(first in SCREENS ? first : "board-later");
   const [place, setPlace] = useState<Place>(() => placeOf(screen));
   const [navOpen, setNavOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const finding = screen === "find-work-tokens";
   const go = (s: Screen) => { setScreen(s); setPlace(placeOf(s)); setNavOpen(false); };
 
   let main: ReactNode = null;
@@ -122,6 +137,9 @@ function Mock() {
   } else if (place.screen === "brief-bug") {
     selected = null;
     main = <BriefPage />;
+  } else if (place.screen === "meaning") {
+    selected = null;
+    main = <MeaningPage />;
   } else {
     selected = null;
   }
@@ -142,8 +160,10 @@ function Mock() {
       <div className="mocknote">
         Reading as {YOU.name} ({ROLE}). Later is a shelf, not a status; Close is a person's decision with a resolution; Archive takes finished work out of everyday views.
       </div>
-      <div className="shell" style={{ flex: 1, minHeight: 0 }}>
+      <div className={`shell ${finding ? pageStyles["finding"] : ""}`} style={{ flex: 1, minHeight: 0 }}>
         <Sidebar projects={[world(undefined, true)]} title="dude" you={YOU.id} selected={selected}
+          query={finding ? FIND_QUERY : query} onQueryChange={setQuery}
+          sessions={finding ? <FindWorkPane /> : undefined}
           onSelect={(ref) => { if (ref.kind === "task") openTask(keyOf(ref.id)); else toBoard(); }}
           collapsible open={navOpen} onOpenChange={setNavOpen}
           footer={<><SidebarLink icon="building">Organisation settings</SidebarLink><SidebarProfile person={YOU} detail={ROLE === "owner" ? "ana@acme.dev" : "marcio@acme.dev"} onOpen={() => undefined} /></>} />
