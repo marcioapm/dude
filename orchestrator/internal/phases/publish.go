@@ -455,7 +455,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		lines += acc.Lines
 		files += len(acc.Paths)
 		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
-			ChangedPaths: db.NonNil(acc.Paths), Lines: acc.Lines, Status: delivery.MovePending}
+			ChangedPaths: db.NonNil(acc.Paths), Lines: acc.Lines, Status: delivery.MovePending, BaseBranch: baseBranch}
 	}
 	if len(moves) == 0 {
 		return s.refusePublish(ctx, p, delivery.RefusedNothing)
@@ -542,6 +542,12 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 		}
 		if at {
 			m.Status = delivery.MoveMoved
+			if m.AttemptedAt != nil {
+				// A merge of an earlier attempt's, its answer lost, is the head.
+				if err := ownMerge(ctx, gh, &m, p.Branch); err != nil {
+					return errPublishTransient{err}
+				}
+			}
 			if err := keep(name, m); err != nil {
 				return err
 			}
@@ -581,10 +587,16 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 				m.AttemptedAt = &at
 				p.Moves[name] = m
 			}
-			err := gh.FastForward(ctx, m.Slug, p.Branch, m.Head)
+			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head)
+			var conflict *errBaseMergeConflict
 			switch {
 			case err == nil:
 				m.Status = delivery.MoveMoved
+				if adv.Head != m.Head {
+					m.MergedHead, m.MergedInto = adv.Head, adv.MergedInto
+				}
+			case errors.As(err, &conflict):
+				m.Status, m.Error = delivery.MoveRefused, fmt.Sprintf("%v: `git merge lux/%s`, then publish again", err, p.Branch)
 			case !forgeRefused(err):
 				// Sent, and no answer to trust: it may have landed.
 				if err := unconfirmed(name, m, err); err != nil {
@@ -608,6 +620,25 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 
 // errNoForge: the organization has no forge credential to move with.
 var errNoForge = errors.New("no forge credential to read the task branch with")
+
+// ownMerge records on m the merge of m.Head an earlier attempt's
+// advanceBranch made, when the branch's head is it: a move sent whose
+// answer was lost. Anything else on top is not the publish's, and is left
+// unrecorded, as reached says.
+func ownMerge(ctx context.Context, gh *forge.GitHub, m *delivery.Move, branch string) error {
+	if m.MergedHead != "" || m.BaseBranch == "" {
+		return nil
+	}
+	at, err := gh.BranchSHA(ctx, m.Slug, branch)
+	if err != nil || at == m.Head || at == "" {
+		return err
+	}
+	j, err := baseMerges(ctx, gh, m.Slug, m.BaseBranch, m.Base, at, m.Head)
+	if err == nil && j.own && j.only {
+		m.MergedHead, m.MergedInto = at, j.under
+	}
+	return err
+}
 
 // reached says whether branch already contains head: at it, or at a
 // descendant of it (the forge's compare head...current behind by none), as
@@ -658,7 +689,9 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 	for name, m := range p.Moves {
 		switch m.Status {
 		case delivery.MoveMoved:
-			heads[name] = delivery.PublishHead{SHA: m.Head, Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
+			// The branch's head, the next writer's start; the change is
+			// the conductor's own, Base...Head.
+			heads[name] = delivery.PublishHead{SHA: m.BranchHead(), Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
 		case delivery.MoveRefused:
 			refused[name] = m.Error
 		case delivery.MoveStalled:
@@ -701,9 +734,13 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 			if said {
 				continue
 			}
-			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": name, "baseSha": h.Base, "headSha": h.SHA, "branch": p.Branch, "changedPaths": h.ChangedPaths,
-				"lines": h.Lines, "by": delivery.RoleConductor, "publishId": p.ID, "message": p.Message}); err != nil {
+			adv := advanced{Head: h.SHA}
+			if m.MergedHead != "" {
+				adv.Commit, adv.MergedInto = m.Head, m.MergedInto
+			}
+			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, adv.payload(map[string]any{
+				"repo": name, "baseSha": h.Base, "branch": p.Branch, "changedPaths": h.ChangedPaths,
+				"lines": h.Lines, "by": delivery.RoleConductor, "publishId": p.ID, "message": p.Message})); err != nil {
 				return err
 			}
 		}

@@ -1167,13 +1167,37 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
-// MergeBase merges an exact base commit into the task branch without a PR.
+// MergeBase merges head, an exact commit, into branch on GitHub without a
+// pull request: the merge commit's first parent is branch's head, its
+// second head. "" with no error when branch already contains head (204);
+// GitHub refuses a conflict with 409.
 func (g *GitHub) MergeBase(ctx context.Context, slug, branch, head string) (string, error) {
+	m, err := g.MergeCommit(ctx, slug, branch, head)
+	return m.SHA, err
+}
+
+// Merged is a merge commit GitHub made, with its parents, first parent
+// first.
+type Merged struct {
+	SHA     string
+	Parents []string
+}
+
+// MergeCommit is MergeBase with the merge's parents, as GitHub answers
+// them: the first is the head branch was at when GitHub merged.
+func (g *GitHub) MergeCommit(ctx context.Context, slug, branch, head string) (Merged, error) {
 	var out struct {
-		SHA string `json:"sha"`
+		SHA     string `json:"sha"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
 	}
 	err := g.do(ctx, "POST", "/repos/"+slug+"/merges", map[string]string{"base": branch, "head": head}, &out)
-	return out.SHA, err
+	m := Merged{SHA: out.SHA}
+	for _, p := range out.Parents {
+		m.Parents = append(m.Parents, p.SHA)
+	}
+	return m, err
 }
 
 // ClosePullRequest closes a pull request without merging it. One already
@@ -1305,7 +1329,23 @@ type Comparison struct {
 	AheadBy  int            `json:"ahead_by"`
 	BehindBy int            `json:"behind_by"`
 	Files    []ComparedFile `json:"files"`
+	// The commits head has that base lacks, oldest first: at most
+	// CompareCommitCap of TotalCommits.
+	Commits      []ComparedCommit `json:"commits"`
+	TotalCommits int              `json:"total_commits"`
 }
+
+// ComparedCommit is one commit of a Comparison, with its parents, first
+// parent first.
+type ComparedCommit struct {
+	SHA     string `json:"sha"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+// CompareCommitCap is the most commits GitHub's compare lists.
+const CompareCommitCap = 250
 
 // ComparedFile is one file of a Comparison; PreviousFilename is a rename's
 // or copy's other side.

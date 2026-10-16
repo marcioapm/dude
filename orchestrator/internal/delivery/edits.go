@@ -371,6 +371,22 @@ type Move struct {
 	// When its fast-forward was first sent (AttemptMoveTx): from then on
 	// the branch may have moved whatever the forge answered.
 	AttemptedAt *time.Time `json:"attemptedAt,omitempty"`
+	// The base branch Head's work is measured against.
+	BaseBranch string `json:"baseBranch,omitempty"`
+	// The task branch's head once moved, when it is not Head: the merge of
+	// Head GitHub made because BaseBranch was merged into the branch under
+	// the conductor (on MergedInto).
+	MergedHead string `json:"mergedHead,omitempty"`
+	MergedInto string `json:"mergedInto,omitempty"`
+}
+
+// BranchHead is the task branch's head the move left: MergedHead, else
+// Head.
+func (m Move) BranchHead() string {
+	if m.MergedHead != "" {
+		return m.MergedHead
+	}
+	return m.Head
 }
 
 // A Move's status. Stalled: its fast-forward was sent and whether it
