@@ -662,9 +662,6 @@ body {
 .taskGoal {
   color: var(--ds-color-text-secondary);
 }
-.taskGoal > * {
-  max-width: none;
-}
 /* Each criterion is Markdown of its own; the list is the criteria's,
    its markers on the goal's Markdown list indent. */
 .taskCriteria {
