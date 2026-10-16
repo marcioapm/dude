@@ -47,12 +47,25 @@ func (e *errBaseMergeConflict) Error() string {
 
 func (e *errBaseMergeConflict) Unwrap() error { return e.cause }
 
+// errUnsafeMerge: a merge of the writer's commit on the task branch that
+// dude will not adopt. found and expected are clauses naming what the
+// merge is and what dude's own merge would have been.
 type errUnsafeMerge struct {
-	merge, first, second, expected string
+	merge, found, expected string
 }
 
 func (e *errUnsafeMerge) Error() string {
-	return fmt.Sprintf("ERROR: GitHub merge %s has first parent %s and second parent %s, expected first parent %s and second parent %s; automatic recovery is refused. Have a human reconcile the task branch with the documented merge recovery, then publish again", e.merge, e.first, e.second, e.expected, e.second)
+	return fmt.Sprintf("ERROR: GitHub merge %s %s, expected %s; automatic recovery is refused. Have a human reconcile the task branch with the documented merge recovery, then publish again", e.merge, e.found, e.expected)
+}
+
+// mergedOnto is errUnsafeMerge's expectation for dude's merge of commit:
+// first parent at, or what only merged baseBranch in on top of it.
+func mergedOnto(at, baseBranch, commit string) string {
+	return fmt.Sprintf("first parent %s or a merge of %s on it, and second parent the writer's commit %s", at, baseBranch, commit)
+}
+
+func parentsOf(parents []string) string {
+	return fmt.Sprintf("has parents [%s]", strings.Join(parents, " "))
 }
 
 // start, and is the one way a writer's publish moves a task branch. A
@@ -115,21 +128,22 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 			into = m.Parents[0]
 		}
 		if len(m.Parents) != 2 || into == "" {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: "", expected: at}
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
 		}
 		j, err := baseMerges(ctx, gh, slug, baseBranch, start, into, commit)
 		if err != nil {
 			return advanced{}, err
 		}
 		if !j.only && into != start {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: m.Parents[1], expected: at}
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
 		}
 		pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA)
 		if err != nil {
 			return advanced{}, err
 		}
 		if !pure {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: m.Parents[1], expected: at}
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents) + " and content beyond its parents' automatic merge",
+				expected: "GitHub's automatic merge of the writer's commit " + commit + " onto " + into}
 		}
 		at = into
 	}

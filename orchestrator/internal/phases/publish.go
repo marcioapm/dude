@@ -675,7 +675,8 @@ func ownMerge(ctx context.Context, gh *forge.GitHub, m *delivery.Move, branch st
 	}
 	j, err := baseMerges(ctx, gh, m.Slug, m.BaseBranch, m.Base, at, m.Head)
 	if err == nil && (!j.own || !j.only) {
-		return &errUnsafeMerge{merge: at, first: m.Base, second: m.Head, expected: m.Base}
+		return &errUnsafeMerge{merge: at, found: "is the task branch's head",
+			expected: fmt.Sprintf("GitHub's merge of the writer's commit %s onto %s or merges of %s on it", m.Head, m.Base, m.BaseBranch)}
 	}
 	if err == nil && j.own && j.only {
 		m.MergedHead, m.MergedInto = at, j.under

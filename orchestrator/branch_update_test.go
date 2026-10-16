@@ -565,6 +565,12 @@ func TestAConductorsMergeOntoABranchThatMovedAgainIsJudgedAgain(t *testing.T) {
 		if status != delivery.PublishRefused || !strings.Contains(why, m) || !strings.Contains(why, p) || !strings.Contains(why, sha) {
 			t.Fatalf("publish %s: %q, want refused naming the merge %s, its parents %s and %s", status, why, m, p, sha)
 		}
+		// What was found, then what dude's merge would have been.
+		found := "GitHub merge " + m + " has parents [" + p + " " + sha + "], expected first parent " + x +
+			" or a merge of main on it, and second parent the writer's commit " + sha + ";"
+		if !strings.Contains(why, found) {
+			t.Errorf("refusal %q, want it to say %q", why, found)
+		}
 		if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND moves->'target'->>'status' = 'refused'
 			AND strpos(moves->'target'->>'error', $2) > 0`, id, m); n != 1 {
 			t.Error("the move's refusal does not name the merge")
