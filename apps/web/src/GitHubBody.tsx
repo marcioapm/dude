@@ -3,9 +3,10 @@ import { Markdown } from "@dude/design-system/components";
 import { Button } from "@dude/design-system/primitives";
 import { githubBody, type GitHubSection } from "./githubBody.ts";
 
+// githubBody bounds how deep disclosures nest, so this recursion is bounded too.
 function Sections({ sections }: { sections: readonly GitHubSection[] }) {
   return sections.map((section, i) => section.kind === "markdown"
-    ? <Markdown key={i} source={section.source} variant="message" unmeasured />
+    ? <Markdown key={i} source={section.source} variant="message" breaks unmeasured />
     : <details key={i}>
       <summary>{section.summary}</summary>
       <div className="githubSections"><Sections sections={section.children} /></div>
@@ -18,6 +19,7 @@ export function GitHubBody({ source }: { source: string }) {
   const [open, setOpen] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [limit, setLimit] = useState<number>();
+  const clipped = overflows && !open;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -41,7 +43,9 @@ export function GitHubBody({ source }: { source: string }) {
   }, [sections]);
 
   return <div className="githubBody">
-    <div ref={ref} className="githubSections" style={{ maxHeight: open ? undefined : limit, overflow: open ? undefined : "hidden" }}>
+    {/* Tabbing into the clipped tail shows it all, so focus never lands out of sight. */}
+    <div ref={ref} className="githubSections" onFocus={clipped ? () => setOpen(true) : undefined}
+      style={{ maxHeight: open ? undefined : limit, overflow: open ? undefined : "hidden" }}>
       <Sections sections={sections} />
     </div>
     {overflows ? <Button size="sm" variant="quiet" aria-expanded={open} onClick={() => setOpen((value) => !value)}>

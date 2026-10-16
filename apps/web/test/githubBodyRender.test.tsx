@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { useState } from "react";
 import { Timeline, TimelineItem } from "@dude/design-system/components";
 import { GitHubBody } from "../src/GitHubBody.tsx";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
@@ -35,7 +36,7 @@ describe("GitHub bodies in Activity", () => {
     expect([...root.querySelectorAll("summary")].map((el) => el.textContent)).toEqual(["Review info", "Run configuration"]);
     expect(root.querySelectorAll("details details").length).toBe(1);
     expect(root.querySelectorAll("details[open]").length).toBe(0);
-    expect(root.querySelectorAll("strong").length).toBe(2);
+    expect([...root.querySelector("blockquote")!.querySelectorAll("strong")].map((el) => el.textContent)).toEqual(["Actionable comments posted: 2", "Review profile"]);
     expect(root.querySelectorAll("img, picture, source").length).toBe(0);
     expect(root.textContent).not.toContain("<details>");
     expect(root.textContent).not.toContain("<!--");
@@ -43,41 +44,103 @@ describe("GitHub bodies in Activity", () => {
     expect(root.querySelectorAll(".githubBody button").length).toBe(0);
   });
 
-  test("overflow offers Show all and Show less, and remeasures when the quote gets shorter", async () => {
-    // happy-dom has no layout; give the measured element browser-sized boxes.
+  // happy-dom has no layout: the measured element gets a 24px line, and is 1200px tall when it holds
+  // over 1000 characters or an open disclosure, 24px otherwise.
+  async function withLayout(run: (measure: () => Promise<void>) => Promise<void>) {
     const original = globalThis.ResizeObserver;
     const measures: Array<() => void> = [];
     globalThis.ResizeObserver = class {
       constructor(private callback: ResizeObserverCallback) {}
       observe(target: Element) {
         (target as HTMLElement).style.lineHeight = "24px";
-        Object.defineProperty(target, "scrollHeight", { configurable: true, get: () => (target.textContent?.length ?? 0) > 1000 ? 1200 : 24 });
+        Object.defineProperty(target, "scrollHeight", {
+          configurable: true,
+          get: () => (target.textContent?.length ?? 0) > 1000 || target.querySelector("details[open]") ? 1200 : 24,
+        });
         measures.push(() => this.callback([], this as unknown as ResizeObserver));
       }
       unobserve() {}
       disconnect() {}
     } as unknown as typeof ResizeObserver;
     try {
-      const long = "### Verification\n\n" + "- Reviewed `DataFreshness.java:32-43`; all tests pass.\n".repeat(80);
-      const page = await mount(<GitHubBody source={long} />);
-      unmount = page.unmount;
-      await act(async () => measures.forEach((measure) => measure()));
-      const toggle = page.container.querySelector<HTMLButtonElement>("button")!;
-      expect(toggle.textContent).toBe("Show all");
-      expect(toggle.getAttribute("aria-expanded")).toBe("false");
-      const content = page.container.querySelector<HTMLElement>(".githubSections")!;
-      expect(content.style.maxHeight).toBe("288px");
-      await click(toggle);
-      expect(toggle.textContent).toBe("Show less");
-      expect(toggle.getAttribute("aria-expanded")).toBe("true");
-      expect(content.style.maxHeight).toBe("");
-      await click(toggle);
-      expect(content.style.maxHeight).toBe("288px");
-      Object.defineProperty(content, "scrollHeight", { configurable: true, value: 24 });
-      await act(async () => measures.forEach((measure) => measure()));
-      expect(page.container.querySelectorAll("button").length).toBe(0);
+      await run(() => act(async () => measures.forEach((measure) => measure())));
     } finally {
       globalThis.ResizeObserver = original;
     }
+  }
+
+  // Mounted once; `show` rerenders the same GitHubBody with another source.
+  async function mountBody(source: string) {
+    let setSource: (source: string) => void = () => {};
+    function Harness() {
+      const [current, set] = useState(source);
+      setSource = set;
+      return <GitHubBody source={current} />;
+    }
+    const page = await mount(<Harness />);
+    unmount = page.unmount;
+    return { container: page.container, show: (next: string) => act(async () => setSource(next)) };
+  }
+
+  const long = "### Verification\n\n" + "- Reviewed `DataFreshness.java:32-43`; all tests pass.\n".repeat(80) + "\n[Run log](https://example.com/log)";
+
+  test("overflow clamps with Show all and Show less, and remeasures when the quote changes", async () => {
+    await withLayout(async (measure) => {
+      const page = await mountBody(long);
+      await measure();
+      const toggle = () => page.container.querySelector<HTMLButtonElement>("button");
+      const content = page.container.querySelector<HTMLElement>(".githubSections")!;
+      expect(toggle()!.textContent).toBe("Show all");
+      expect(toggle()!.getAttribute("aria-expanded")).toBe("false");
+      expect(content.style.maxHeight).toBe("288px");
+      expect(content.style.overflow).toBe("hidden");
+      await click(toggle()!);
+      expect(toggle()!.textContent).toBe("Show less");
+      expect(toggle()!.getAttribute("aria-expanded")).toBe("true");
+      expect(content.style.maxHeight).toBe("");
+      expect(content.style.overflow).toBe("");
+      await click(toggle()!);
+      expect(content.style.maxHeight).toBe("288px");
+      expect(content.style.overflow).toBe("hidden");
+      await click(toggle()!);
+      await page.show("Short now.");
+      await measure();
+      expect(toggle()).toBeNull();
+      await page.show(long);
+      await measure();
+      expect(toggle()!.getAttribute("aria-expanded")).toBe("false");
+      expect(content.style.overflow).toBe("hidden");
+    });
+  });
+
+  test("a single newline is a line break, as on GitHub", async () => {
+    const page = await mountBody("First line\nSecond line");
+    expect(page.container.querySelectorAll("p br").length).toBe(1);
+  });
+
+  test("opening a disclosure in a short quote makes it overflow", async () => {
+    await withLayout(async (measure) => {
+      const page = await mountBody("<details><summary>Review info</summary>Run configuration</details>");
+      await measure();
+      expect(page.container.querySelector("button")).toBeNull();
+      const details = page.container.querySelector("details")!;
+      await act(async () => {
+        details.open = true;
+        details.dispatchEvent(new Event("toggle"));
+      });
+      expect(page.container.querySelector("button")!.textContent).toBe("Show all");
+    });
+  });
+
+  test("focus moving into the clipped tail shows the whole quote", async () => {
+    await withLayout(async (measure) => {
+      const page = await mountBody(long);
+      await measure();
+      const content = page.container.querySelector<HTMLElement>(".githubSections")!;
+      expect(content.style.overflow).toBe("hidden");
+      await act(async () => page.container.querySelector<HTMLAnchorElement>("a[href='https://example.com/log']")!.focus());
+      expect(content.style.overflow).toBe("");
+      expect(page.container.querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
+    });
   });
 });

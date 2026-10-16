@@ -1033,7 +1033,6 @@ body {
   margin-top: var(--ds-space-4);
   color: var(--ds-color-text-secondary);
 }
-/* Which attempt an Activity line belongs to: muted, and secondary for the one shown. */
 .githubBody {
   white-space: normal;
   font-size: var(--ds-text-prose);
@@ -1050,6 +1049,7 @@ body {
   margin-top: var(--ds-space-8);
   padding-left: var(--ds-space-12);
 }
+/* Which attempt an Activity line belongs to: muted, and secondary for the one shown. */
 .lineAttempt {
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-sm);
