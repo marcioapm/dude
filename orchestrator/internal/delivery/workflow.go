@@ -1679,6 +1679,19 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	for _, p := range states {
+		if p.State == forge.StateMerged || p.State == forge.StateClosed {
+			// A person's merge or close ends this repository's publication.
+			delete(slugs, p.Repo)
+			if from, ok := c.From[p.Repo]; ok {
+				st.Heads[p.Repo] = from
+			}
+		}
+	}
 	// Every branch read before any moves: one someone pushed to refuses
 	// the promotion with nothing moved. One at the candidate's head was
 	// moved by an earlier run of this step.
@@ -1809,6 +1822,11 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
 	st.Candidate, st.PRFeedback = nil, nil
+	// Ended pull requests are weighed before any new publication can hide
+	// that the delivery has already finished.
+	if res, finished, err := w.pullRequestEnded(ctx, sc, st); err != nil || finished {
+		return res, err
+	}
 	if len(heads) > 0 && !promoted {
 		// The adopted pull request's verdict comment, stale past a fix from
 		// before candidates, pushed unchecked. A promoted one's is refreshPromoted's.
