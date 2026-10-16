@@ -147,3 +147,33 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 		}
 	})
 }
+
+// A GitHub failing on any compare of the trusted path is an error to retry
+// on, neither a full count nor a refusal.
+func TestAGitHubBlipOnATrustedCompareIsRetried(t *testing.T) {
+	for name, failing := range map[string]func(a *accountingRun, path string) bool{
+		"main...T": func(a *accountingRun, path string) bool {
+			return strings.HasSuffix(path, "/compare/main..."+a.base)
+		},
+		"start...T": func(a *accountingRun, path string) bool {
+			return strings.HasSuffix(path, "/compare/"+a.start+"..."+a.base)
+		},
+		"T...head": func(a *accountingRun, path string) bool {
+			return strings.Contains(path, "/compare/"+a.base+"...")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := conflictMerged(t)
+			a.intercept = func(r *http.Request) int {
+				if failing(a, r.URL.Path) {
+					return http.StatusBadGateway
+				}
+				return 0
+			}
+			acc, err := a.publishedErr()
+			if err == nil || !forge.Transient(err) {
+				t.Fatalf("err %v, lines %d full %q: want a transient error", err, acc.Lines, acc.Full)
+			}
+		})
+	}
+}
