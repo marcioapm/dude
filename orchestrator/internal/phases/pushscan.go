@@ -96,9 +96,9 @@ func scanWork(red *redact.Redactor, text string) []SecretInWork {
 // section starts "# dude-history <name> <base>"; each commit
 // "\x00commit <sha>", then its author's and committer's name and email a
 // line each, its whole message, "\x00", and its patch (a merge's against
-// each parent). Read-only POSIX sh. It exits 4 when a repository's base
-// or history cannot be read rather than leaving it out, and prints at
-// most historyLimit+1 bytes.
+// each parent). Read-only POSIX sh. It exits 4 when a repository's
+// checkout, base or history cannot be read rather than leaving it out, and
+// prints at most historyLimit+1 bytes.
 const historyScript = `set -u
 base_of() {
   if first=$(git -C "$1" reflog show --format=%H "refs/heads/$2" -- 2>/dev/null | tail -n 1) && [ -n "$first" ]; then
@@ -111,7 +111,7 @@ out=$(mktemp) || exit 3
 status=0
 while [ $# -ge 3 ]; do
   name=$1 dir=$2 ref=$3; shift 3
-  [ -d "$dir" ] || continue
+  [ -d "$dir" ] || { echo "$name: no checkout at $dir" >&2; status=4; continue; }
   if ! base=$(base_of "$dir" "$ref"); then
     echo "$name: no commit $ref" >&2; status=4; continue
   fi
@@ -180,6 +180,24 @@ func scanHistory(red *redact.Redactor, text string) []SecretInWork {
 	return found
 }
 
+// missingHistory are the repositories of bases historyScript's output has
+// no section for, in name order.
+func missingHistory(text string, bases map[string]string) []string {
+	seen := map[string]bool{}
+	for _, part := range strings.Split("\n"+text, "\n# dude-history ")[1:] {
+		head, _, _ := strings.Cut(part, "\n")
+		repo, _, _ := strings.Cut(head, " ")
+		seen[repo] = true
+	}
+	var missing []string
+	for _, name := range slices.Sorted(maps.Keys(bases)) {
+		if !seen[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
 // scanBeforePush reads what a push of the Run would send and finds its
 // secrets in it; nothing for a Run given none.
 func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork, error) {
@@ -208,6 +226,10 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 	}
 	if len(history) > historyLimit {
 		return nil, errUnchecked{fmt.Sprintf("the commits to push are over %d MiB, more than dude reads", historyLimit>>20)}
+	}
+	// Exit 0 is not enough: every repository lux would push has its section.
+	if missing := missingHistory(history, r.BaseSHAs); len(missing) > 0 {
+		return nil, errUnchecked{"no history was read for " + strings.Join(missing, ", ")}
 	}
 	var found hits
 	for _, h := range slices.Concat(scanWork(red, work), scanHistory(red, history)) {

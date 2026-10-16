@@ -246,6 +246,36 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 	}
 }
 
+// A history dude cannot read is not pushed unchecked: a repository the
+// Run's recorded bases name, with no checkout where lux keeps it, refuses
+// the push rather than being left out of the scan.
+func TestAMissingCheckoutRefusesThePush(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.scriptedImplementer(writeCall("README.md", "configured"), commitCall("Configure"))
+	task := w.task()
+	w.deliver(task)
+	var runID, luxID, base string
+	w.until("the implementer's base recorded", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, lux_run_id, base_shas->>'target' FROM runs WHERE task_id = $1
+			AND phase = 'implement' AND base_shas ? 'target' AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID, &base)
+		return luxID != ""
+	})
+	mustExec(t, w.owner, `UPDATE runs SET base_shas = base_shas || jsonb_build_object('ghost', $2::text) WHERE id = $1`, runID, base)
+	w.lux.EndTurn(luxID)
+	w.until("the implementer failed or pushed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || w.luxRunFor(runID).Pushed
+	})
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
+		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
+	}
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, runID).Scan(&reason)
+	if !strings.Contains(reason, "cannot check the work for secrets") || !strings.Contains(reason, "ghost") {
+		t.Errorf("the reason does not say the ghost checkout went unchecked: %q", reason)
+	}
+}
+
 // A history of several clean commits, one deleting what another added, is
 // pushed.
 func TestACleanMultiCommitHistoryIsPushed(t *testing.T) {
