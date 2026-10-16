@@ -341,7 +341,7 @@ func (t *translator) codexItemDone(ctx context.Context, tx pgx.Tx, s *Syncer, c 
 		out = b.String()
 	}
 	if out != "" {
-		payload["output"] = capOutput(out)
+		payload["output"] = storedToolOutput(name, out)
 	}
 	return t.callEnded(ctx, tx, s, c, payload)
 }

@@ -204,7 +204,19 @@ func (t *translator) claudeResult(ctx context.Context, tx pgx.Tx, s *Syncer, b c
 		st = "error"
 	}
 	payload := map[string]any{"tool": "tool", "callId": b.ToolUseID, "status": st}
-	maps.Copy(payload, claudeOutput(b, raw))
+	name := t.seenCalls[b.ToolUseID]
+	switch name {
+	case "github_search", "github_issue", "github_pull_request":
+		var text string
+		if json.Unmarshal(b.Content, &text) != nil {
+			var blocks []claudeBlock
+			_ = json.Unmarshal(b.Content, &blocks)
+			text = claudeText(blocks)
+		}
+		payload["output"] = storedToolOutput(name, text)
+	default:
+		maps.Copy(payload, claudeOutput(b, raw))
+	}
 	return t.callEnded(ctx, tx, s, nil, payload)
 }
 

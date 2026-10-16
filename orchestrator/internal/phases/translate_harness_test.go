@@ -350,6 +350,38 @@ func TestEachCodexTurnSumsItsOwnRequests(t *testing.T) {
 // Each mapped tool, line by line, as each harness names it and as the
 // chat's cards know it, with an unknown tool passed through by its name:
 // the shapes are the recorded ones, trimmed.
+func TestGitHubReadCompletionsWithholdBodies(t *testing.T) {
+	for _, tool := range []string{"github_search", "github_issue", "github_pull_request"} {
+		for _, harness := range []string{"claude", "codex", "opencode"} {
+			t.Run(harness+"/"+tool, func(t *testing.T) {
+				w := newHarnessWorld(t)
+				const body = "private-github-body-canary"
+				switch harness {
+				case "claude":
+					w.feed(map[string]any{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "read1", "name": "mcp__dude__" + tool, "input": map[string]any{}}}}}},
+						map[string]any{"type": "claude.user", "data": map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "read1", "content": body}}}}})
+				case "codex":
+					w.feed(map[string]any{"type": "codex.item/completed", "data": map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "read1", "server": "dude", "tool": tool, "status": "completed", "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": body}}}}}})
+				case "opencode":
+					w.feed(map[string]any{"type": "opencode.session", "data": map[string]any{"id": "child1", "parentID": "parent1"}}, map[string]any{"type": "opencode.part", "data": map[string]any{"sessionID": "child1", "tool": tool, "callID": "read1", "status": "completed", "output": body}})
+				}
+				events := w.events()
+				encoded, _ := json.Marshal(events)
+				if strings.Contains(string(encoded), body) {
+					t.Fatalf("body leaked: %s", encoded)
+				}
+				completed := ofType(events, evToolCompleted)
+				if harness == "opencode" {
+					completed = ofType(events, evChildToolCompleted)
+				}
+				if len(completed) != 1 || completed[0].Payload["output"].(map[string]any)["withheld"] != true {
+					t.Fatalf("missing withheld completion: %s", encoded)
+				}
+			})
+		}
+	}
+}
+
 func TestEachHarnessesToolsAreNamedAsTheChatKnowsThem(t *testing.T) {
 	claudeUse := func(id, name string, input map[string]any) map[string]any {
 		return map[string]any{"type": "claude.assistant", "data": map[string]any{"type": "assistant", "message": map[string]any{
