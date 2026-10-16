@@ -87,6 +87,7 @@ import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
+import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
@@ -699,7 +700,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Goal</h2>
                   <div className="taskGoal">
                     {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
-                    <Markdown source={item.goal} breaks attachmentImage={taskImages.attachmentImage} />
+                    <Markdown data-testid="overview-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
                   </div>
                 </section>
               ) : null}
@@ -708,7 +709,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Acceptance criteria</h2>
                   <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
                     {item.acceptanceCriteria.map((c, i) => (
-                      <li key={i}><Markdown source={c} breaks attachmentImage={taskImages.attachmentImage} /></li>
+                      <li key={i}><Markdown data-testid="overview-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
                     ))}
                   </ul>
                 </section>
@@ -1468,7 +1469,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
         const said = line.parts ? <MonoWords words={line.parts} /> : line.text;
         const text = line.actorId ? <>{person} {said}</> : line.byDude ? <><b>{dude}</b> {said}</> : said;
-        out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
+        out.push({ ...base, who, text, quote: line.quote ? <GitHubBody source={line.quote} /> : undefined, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }
     }
