@@ -266,9 +266,40 @@ func TestAgentChecksStopAtPageCap(t *testing.T) {
 	}))
 	defer srv.Close()
 	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
-	_, checks, err := gh.checks(agentReadContext(context.Background()), "acme/allowed", "abc")
-	if err != nil || pages > 3 || len(checks) == 0 || checks[len(checks)-1].Diagnostic != "…cut: check runs incomplete" {
-		t.Fatalf("checks cap: pages=%d checks=%+v err=%v", pages, checks, err)
+	_, checks, cut, err := gh.checks(agentReadContext(context.Background()), "acme/allowed", "abc")
+	if err != nil || pages > 3 || len(checks) == 0 || !cut {
+		t.Fatalf("checks cap: pages=%d checks=%+v cut=%v err=%v", pages, checks, cut, err)
+	}
+}
+
+// Commit statuses fill most of the list: the check runs past its cap are
+// left out, and the list says it is cut, whatever GitHub's total.
+func TestAgentChecksSayCutWhenStatusesFillTheList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "check-runs") {
+			statuses := []map[string]any{}
+			for i := range 100 {
+				statuses = append(statuses, map[string]any{"context": "status-" + strconv.Itoa(i), "state": "success"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success", "total_count": 100, "statuses": statuses})
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		runs := []map[string]any{}
+		for i := (page - 1) * 100; i < min(page*100, 250); i++ {
+			conclusion := "success"
+			if i == 249 {
+				conclusion = "failure"
+			}
+			runs = append(runs, map[string]any{"name": "run-" + strconv.Itoa(i), "status": "completed", "conclusion": conclusion})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 250, "check_runs": runs})
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	_, checks, cut, err := gh.checks(agentReadContext(context.Background()), "acme/allowed", "abc")
+	if err != nil || !cut || len(checks) > 300 {
+		t.Fatalf("checks=%d cut=%v err=%v, want the list marked cut", len(checks), cut, err)
 	}
 }
 

@@ -578,7 +578,7 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	}
 	st := Status{PullRequestRef: p.ref()}
 	var err error
-	if st.Checks, st.CheckList, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
+	if st.Checks, st.CheckList, _, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
 		return Status{}, err
 	}
 	if err := g.readReviews(ctx, slug, number, p, &st); err != nil {
@@ -673,7 +673,7 @@ func mergeable(ok *bool, state string, behindBy int) string {
 // fixer — and the list says why with a CheckRunsForbidden entry beside the
 // checks it could read. A rate limit is also a 403, and is neither: it
 // fails the sync, to be tried again.
-func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check, error) {
+func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check, bool, error) {
 	var combined struct {
 		State      string `json:"state"`
 		TotalCount int    `json:"total_count"`
@@ -686,7 +686,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		} `json:"statuses"`
 	}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", slug, sha), nil, &combined); err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	rollup := checkState(combined.State, combined.TotalCount)
 	var list []Check
@@ -698,9 +698,12 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		}
 		list = append(list, c)
 	}
+	// An agent's read stops at 3 pages or 300 checks in all, saying it cut.
+	cut := false
+pages:
 	for page, seen := 1, 0; ; page++ {
 		if isAgentRead(ctx) && (page > 3 || seen >= 300) {
-			list = append(list, Check{Name: "GitHub check runs", Status: CheckUnavailable, Diagnostic: "…cut: check runs incomplete"})
+			cut = true
 			break
 		}
 		var runs struct {
@@ -729,11 +732,12 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 			break
 		}
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
 		for _, r := range runs.CheckRuns {
 			if isAgentRead(ctx) && len(list) >= 300 {
-				break
+				cut = true
+				break pages
 			}
 			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
 			link := r.HTMLURL
@@ -752,7 +756,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 			break
 		}
 	}
-	return rollup, list, nil
+	return rollup, list, cut, nil
 }
 
 // elapsed is the milliseconds between two GitHub timestamps, or 0.
@@ -1571,7 +1575,9 @@ type PullRequestRead struct {
 	Threads        []ThreadRead
 	ThreadsUnknown bool
 	Checks         []Check
-	Files          []FileRead
+	// ChecksCut: the agent read's cap left checks out.
+	ChecksCut bool
+	Files     []FileRead
 }
 
 type ghLabel struct {
@@ -1750,7 +1756,7 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		return PullRequestRead{}, err
 	}
 	if p.Head.SHA != "" {
-		if _, out.Checks, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
+		if _, out.Checks, out.ChecksCut, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
 			return PullRequestRead{}, err
 		}
 		if out.Checks == nil {

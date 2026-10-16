@@ -28,6 +28,20 @@ func TestCappedFileListingDoesNotClaimTailUnchanged(t *testing.T) {
 	}
 }
 
+// A cut check list says so, beside the checks it has; a whole one does not.
+func TestCutChecksSaySo(t *testing.T) {
+	w := wrapper{id: "checks"}
+	p := forge.PullRequestRead{Checks: []forge.Check{{Name: "ci", Status: "completed", Conclusion: "success"}}, ChecksCut: true}
+	out := w.pullRequest(p, nil)
+	if out["moreChecks"] != cutMark+": check runs incomplete" || len(out["checks"].([]ghCheckOut)) != 1 {
+		t.Fatalf("cut checks: moreChecks=%v checks=%v", out["moreChecks"], out["checks"])
+	}
+	p.ChecksCut = false
+	if _, ok := w.pullRequest(p, nil)["moreChecks"]; ok {
+		t.Fatal("a whole check list said it was cut")
+	}
+}
+
 func TestGitHubAuthorsAreExternalText(t *testing.T) {
 	w := wrapper{id: "authors"}
 	if got := w.line(forge.IssueLine{Author: "ana"}).Author; !strings.Contains(got, "⟦external authors⟧ana⟦/external authors⟧") {
