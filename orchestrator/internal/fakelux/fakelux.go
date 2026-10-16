@@ -1768,6 +1768,9 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
 	if tool == "sync_base" {
+		// The scripted agent can call before dude has recorded its Run as
+		// running, which sync_base refuses until it has: as an agent told
+		// to call again in a moment, it does.
 		deadline := time.Now().Add(5 * time.Second)
 		for status == 422 && strings.Contains(string(body), "container is not running") && time.Now().Before(deadline) {
 			s.mu.Unlock()

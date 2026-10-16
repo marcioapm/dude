@@ -174,9 +174,9 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       const parts = acts[str(p.action)];
       if (!parts) return null;
       const marked = parts.some((x) => typeof x !== "string") ? parts : undefined;
+      const line = system(plainWords(parts), undefined, marked);
       // dude's own: the workflow merged or resolved; a person's otherwise.
-      if (e.actor.type === "system") return { ...system(plainWords(parts), undefined, marked), byDude: true };
-      return { ...system(plainWords(parts), undefined, marked), actorId: e.actor.id };
+      return e.actor.type === "system" ? { ...line, byDude: true } : { ...line, actorId: e.actor.id };
     }
     case "pull_request.merged":
       return system(`${pr} was merged`);

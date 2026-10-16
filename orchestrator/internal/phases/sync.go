@@ -1865,9 +1865,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if err != nil {
 			return nil, err
 		}
-		acc, accountErr := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, trusted, untrusted, cmp)
-		if accountErr != nil {
-			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
+		acc, err := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, trusted, untrusted, cmp)
+		if err != nil {
+			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, err)
 		}
 		if acc.Full != "" {
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)

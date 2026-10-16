@@ -241,14 +241,17 @@ func (s *Server) workspaceWrite(run *Run, path, content string) string {
 	return ""
 }
 
-// integrateWorkspace resolves text fixtures by retaining both conflicting sides.
+// integrateWorkspace runs git args (a merge) in the checkout of repo, the
+// Run's first when "": a merge that stops on conflicts is resolved by
+// keeping both sides of each conflicted file (git's marker lines dropped)
+// and committed with git's own message.
 func (s *Server) integrateWorkspace(run *Run, repo string, args []string) string {
 	work, err := s.firstCheckout(run)
-	if err == nil && repo != "" {
-		work = filepath.Join(filepath.Dir(work), lux.SpecName(repo))
-	}
 	if err != nil {
 		return err.Error()
+	}
+	if repo != "" {
+		work = filepath.Join(filepath.Dir(work), lux.SpecName(repo))
 	}
 	git := func(a ...string) ([]byte, error) {
 		c := exec.Command("git", append([]string{"-C", work, "-c", "user.name=Acme", "-c", "user.email=agent@example.com"}, a...)...)

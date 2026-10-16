@@ -494,7 +494,9 @@ const CallsLabel = "dude.calls"
 // message (ConductorCalls) but done in the container rather than called
 // on dude: write {"path","content"} writes a file in its first
 // repository, commit {"message"} commits everything there, git
-// {"args"} runs git there (the fake lux only), and artifact
+// {"args"} runs git there (the fake lux only), integrate {"args","repo"}
+// runs a merge in repo's checkout and resolves its conflicts keeping both
+// sides (the fake lux only), and artifact
 // {"path","content","description"} publishes a file for people with
 // lux-shim publish.
 const (
@@ -508,10 +510,12 @@ const (
 // Local says whether a call is the scripted conductor's own work in its
 // container rather than one of dude's tools.
 func Local(name string) bool {
-	return name == LocalIntegrate || name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact
+	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact || name == LocalIntegrate
 }
 
-// IntegrationCalls exercises the real fetch tool before merging in the checkout.
+// IntegrationCalls are the scripted integration fixer's calls for an
+// integration brief: sync_base on dude, then the merge of lux/<base> in
+// the checkout. nil when the prompt names no integration.
 func IntegrationCalls(prompt string) [][2]string {
 	base, repo, ok := integrationTarget(prompt)
 	if !ok {
