@@ -369,4 +369,3 @@ func TestAParkedConductorIsNotWokenForABaseThatMoved(t *testing.T) {
 		t.Fatalf("the parked conductor was woken (%q) for a base that moved", woken)
 	}
 }
-
