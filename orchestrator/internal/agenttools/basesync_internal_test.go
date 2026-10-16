@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -72,5 +73,52 @@ func TestLandedEarlierCountsOnlyThisRunsLandedFetchOfTheBase(t *testing.T) {
 				t.Fatalf("counted %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// hangingLux has one page of events, frames; asked for the next, it
+// answers only once the caller gives up, as a lux that hangs.
+type hangingLux struct {
+	lux.Client
+	frames []lux.Frame
+}
+
+func (l *hangingLux) Events(ctx context.Context, _ string, after int64) ([]lux.Frame, error) {
+	if after == 0 {
+		return l.frames, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// lux hangs after the first page of the re-read: the call returns within
+// landedEarlierWait, answering from what that page held.
+func TestSyncBaseAnswersWithinItsBoundWhenLuxHangs(t *testing.T) {
+	l := &hangingLux{frames: []lux.Frame{syncReport(1, lux.SyncResult{Repo: "target", Ref: "main",
+		RequestID: "base-r1-1", Status: "fetched", To: "aaa111", Behind: 1})}}
+	c := Caller{RunID: "r1", env: env{lux: l, syncBaseWait: 50 * time.Millisecond,
+		syncBase: func(context.Context, string, string, string, string, []lux.SyncRef) error { return nil }}}
+	ask := baseAsk{LuxRunID: "lr1", Refs: targetMain, Names: map[string]string{"target": "target"},
+		Recorded: map[string]string{}}
+	type result struct {
+		out syncBaseOut
+		err error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		out, err := fetchBase(context.Background(), c, ask)
+		done <- result{out, err}
+	}()
+	select {
+	case r := <-done:
+		if took := time.Since(start); took > landedEarlierWait+2*time.Second {
+			t.Fatalf("answered after %s, want within %s", took, landedEarlierWait)
+		}
+		if r.err != nil || len(r.out.Repositories) != 1 || r.out.Repositories[0].Status != "fetched" {
+			t.Fatalf("answered %+v (%v), want fetched from the page read", r.out, r.err)
+		}
+	case <-time.After(landedEarlierWait + 5*time.Second):
+		t.Fatalf("no answer after %s while lux hangs", landedEarlierWait+5*time.Second)
 	}
 }

@@ -29,6 +29,10 @@ const syncBaseWait = 20 * time.Second
 // syncBaseEvery is how often lux's events are read while it waits.
 const syncBaseEvery = 250 * time.Millisecond
 
+// landedEarlierWait bounds the re-read of lux's events for an earlier
+// call's report.
+const landedEarlierWait = 5 * time.Second
+
 const syncBaseDescription = "Fetch the base your task branch merges into (main, or the base it continues) into your " +
 	"checkout as lux/<base>, with credentials your checkout does not have: `git fetch origin` cannot. Nothing in your " +
 	"checkout moves. It answers, per repository, the ref to merge, how many commits the base is ahead of you, and how " +
@@ -198,7 +202,11 @@ func baseRequestPrefix(runID string) string { return "base-" + runID + "-" }
 // Run than own: read from the start of the lux Run's events, since the
 // Run's follower may have read past them. The newest, as each fetch sets
 // lux/<base> again. A lux Run started afresh has a new checkout, and none.
+// Read for at most landedEarlierWait: on a timeout or error, what was read
+// so far, which can only miss a report, never invent one.
 func landedEarlier(ctx context.Context, c Caller, ask baseAsk, own string) map[string]lux.SyncResult {
+	ctx, cancel := context.WithTimeout(ctx, landedEarlierWait)
+	defer cancel()
 	refs := map[string]string{}
 	for _, r := range ask.Refs {
 		refs[r.Repo] = r.Ref
