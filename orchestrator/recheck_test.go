@@ -279,6 +279,18 @@ func lastPrompt(specs []lux.Spec) string {
 	return specs[len(specs)-1].Workload.Prompt
 }
 
+// findingOnTheCandidatesSimplification is a play: the candidate's second
+// review, of the simplifier's diff, raises simplifierFinding, and the
+// third, of its fix, clears it.
+func findingOnTheCandidatesSimplification(phase string, n int, b *fakelux.Behaviour) {
+	switch {
+	case phase == "review" && n == 2:
+		b.Reply = simplifierFinding
+	case phase == "review" && n == 3:
+		b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
+	}
+}
+
 func (w *prFixWorld) candidate() string { return w.gh.SHA(delivery.CandidateBranch(w.wi, 1)) }
 
 // state reads the delivery's state field as JSON text.
@@ -387,14 +399,7 @@ func TestAFindingOnTheSimplificationOfAPullRequestFixIsFixedOnTheCandidate(t *te
 	w := newPRFixWorld(t)
 	var atTest string
 	w.onTest = func() { atTest = w.gh.SHA(w.branch) }
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		switch {
-		case phase == "review" && n == 2:
-			b.Reply = simplifierFinding
-		case phase == "review" && n == 3:
-			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
-		}
-	}
+	w.play = findingOnTheCandidatesSimplification
 	before := len(w.rangeSpecs(delivery.RangeSimplify))
 	w.comment("Please rename the greeting.")
 	w.until("the fix on the pull request", func() bool {
@@ -438,14 +443,7 @@ func TestAFindingThePullRequestOpenedWithIsNeverSentToItsCandidatesFix(t *testin
 	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
 		SELECT 'fnd_left_open', organization_id, task_id, id, 'correctness', 'low', 'The greeting could be shorter', 'Advisory.'
 		FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range IS NULL ORDER BY created_at LIMIT 1`, w.wi)
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		switch {
-		case phase == "review" && n == 2:
-			b.Reply = simplifierFinding
-		case phase == "review" && n == 3:
-			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
-		}
-	}
+	w.play = findingOnTheCandidatesSimplification
 	w.comment("Please rename the greeting.")
 	w.until("the fix on the pull request", func() bool {
 		w.sync()
@@ -738,12 +736,8 @@ func TestARepositoryTheSimplifierOfACandidateChangesFirstIsInTheFixsRange(t *tes
 func TestARepositoryAFixOfACandidatesSimplificationChangesFirstIsInTheFixsRange(t *testing.T) {
 	w := newPRFixWorldIn(t, true, fakeagent.TestFailModel)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		switch {
-		case phase == "review" && n == 2:
-			b.Reply = simplifierFinding
-		case phase == "review" && n == 3:
-			b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
-		case phase == "fix" && n == 2:
+		findingOnTheCandidatesSimplification(phase, n, b)
+		if phase == "fix" && n == 2 {
 			b.Commit = map[string]string{"web:SIMPLE.md": "the fix of the simplification\n"}
 		}
 	}

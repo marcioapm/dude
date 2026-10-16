@@ -56,15 +56,11 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
 /** The delivery's working heads, and the pull requests' while a candidate is checked. */
 type Work = { heads?: Record<string, string> | null; from?: Record<string, string> | null };
 
-/**
- * A verdict against what the branch holds: stale once it moved past the
- * verdict's heads; while a candidate is checked, the branch holds the
- * candidate's starting heads, and a verdict at the candidate's own heads
- * is the candidate's.
- */
+/** A verdict against what the branch holds: `heads`, or `from` while a candidate is checked (see the file doc). */
 export function standing(tested: Record<string, string>, work: Work): { stale: boolean; candidate: boolean } {
   const now = work.heads ?? {};
   if (!work.from) return { stale: isStale(tested, now), candidate: false };
+  // At the candidate's own heads, once it has moved off the pull request's.
   const candidate = isStale(work.from, now) && !isStale(tested, now);
   return { stale: !candidate && isStale(tested, work.from), candidate };
 }

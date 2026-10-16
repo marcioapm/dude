@@ -142,20 +142,31 @@ export function VerificationGroup({ heads, stale, candidate, title = "Verificati
             </span>
           ))}
         </span>
-        {candidate ? (
-          <Badge tone="info" emphasis="tinted" size="sm" data-testid="verification-candidate"
-            title="Tested on the fix being checked: the pull request shows it once its test passes.">
-            Candidate — not on the pull request yet
-          </Badge>
-        ) : stale ? (
-          <Badge tone="attention" emphasis="tinted" size="sm" icon="warning" data-testid="verification-stale"
-            title="The branch has changed since this test: its verdict is about the commits it names.">
-            Stale
-          </Badge>
-        ) : null}
+        <StandingBadge stale={stale} candidate={candidate} />
         {actions ? <span className={styles["groupActions"]}>{actions}</span> : null}
       </header>
       <ul className={styles["list"]}>{children}</ul>
     </section>
   );
+}
+
+// A candidate's verdict is never shown stale: the pull request does not hold it yet.
+function StandingBadge({ stale, candidate }: Pick<VerificationGroupProps, "stale" | "candidate">) {
+  if (candidate) {
+    return (
+      <Badge tone="info" emphasis="tinted" size="sm" data-testid="verification-candidate"
+        title="Tested on the fix being checked: the pull request shows it once its test passes.">
+        Candidate — not on the pull request yet
+      </Badge>
+    );
+  }
+  if (stale) {
+    return (
+      <Badge tone="attention" emphasis="tinted" size="sm" icon="warning" data-testid="verification-stale"
+        title="The branch has changed since this test: its verdict is about the commits it names.">
+        Stale
+      </Badge>
+    );
+  }
+  return null;
 }

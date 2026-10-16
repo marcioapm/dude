@@ -886,8 +886,8 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	if st.checkingCandidate() {
 		// A pull request's fix fixes what its own reviews raised — of the
 		// fix, and of its simplifier's diff — never the findings a person
-		// let the pull request open with.
-		// After a failed test SimplifyBase is empty: the narrow review's open findings are not sent.
+		// let the pull request open with. After a failed test SimplifyBase
+		// is empty: the narrow review's open findings are not sent.
 		ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
 		if len(st.SimplifyBase) > 0 {
 			ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
