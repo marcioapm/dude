@@ -542,9 +542,16 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 		}
 		if at {
 			m.Status = delivery.MoveMoved
-			if m.AttemptedAt != nil {
+			if m.MergeAttempted {
 				// A merge of an earlier attempt's, its answer lost, is the head.
 				if err := ownMerge(ctx, gh, &m, p.Branch); err != nil {
+					if unsafe := (*errUnsafeMerge)(nil); errors.As(err, &unsafe) {
+						m.Status, m.Error = delivery.MoveRefused, err.Error()
+						if err := keep(name, m); err != nil {
+							return err
+						}
+						continue
+					}
 					return errPublishTransient{err}
 				}
 			}
@@ -587,7 +594,38 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 				m.AttemptedAt = &at
 				p.Moves[name] = m
 			}
-			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head)
+			if m.BaseBranch == "" {
+				var repos []delivery.Repository
+				if err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+					var err error
+					repos, err = delivery.TaskRepositories(ctx, tx, p.TaskID)
+					return err
+				}); err != nil {
+					return err
+				}
+				for _, repo := range repos {
+					if repo.Name == name {
+						m.BaseBranch = repo.DefaultBranch
+						break
+					}
+				}
+				p.Moves[name] = m
+			}
+			if m.BaseBranch == "" {
+				m.Status, m.Error = delivery.MoveRefused, "ERROR: no base branch is recorded for this legacy move; have a human reconcile the task branch, then publish again"
+				if err := keep(name, m); err != nil {
+					return err
+				}
+				continue
+			}
+			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head, func() error {
+				err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.AttemptMergeTx(ctx, tx, p.of(), name) })
+				if err == nil {
+					m.MergeAttempted = true
+				}
+				return err
+			})
+			var unsafe *errUnsafeMerge
 			var conflict *errBaseMergeConflict
 			switch {
 			case err == nil:
@@ -597,6 +635,8 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 				}
 			case errors.As(err, &conflict):
 				m.Status, m.Error = delivery.MoveRefused, fmt.Sprintf("%v: `git merge lux/%s`, then publish again", err, p.Branch)
+			case errors.As(err, &unsafe):
+				m.Status, m.Error = delivery.MoveRefused, err.Error()
 			case !forgeRefused(err):
 				// Sent, and no answer to trust: it may have landed.
 				if err := unconfirmed(name, m, err); err != nil {
@@ -634,6 +674,9 @@ func ownMerge(ctx context.Context, gh *forge.GitHub, m *delivery.Move, branch st
 		return err
 	}
 	j, err := baseMerges(ctx, gh, m.Slug, m.BaseBranch, m.Base, at, m.Head)
+	if err == nil && (!j.own || !j.only) {
+		return &errUnsafeMerge{merge: at, first: m.Base, second: m.Head, expected: m.Base}
+	}
 	if err == nil && j.own && j.only {
 		m.MergedHead, m.MergedInto = at, j.under
 	}

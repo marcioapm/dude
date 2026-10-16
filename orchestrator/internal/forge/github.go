@@ -1040,6 +1040,36 @@ func (g *GitHub) Head(ctx context.Context, slug string, number int) (string, err
 	return p.Head.SHA, nil
 }
 
+// CommitProvenance is the identity GitHub verified for a commit.
+type CommitProvenance struct {
+	Login    string
+	Verified bool
+}
+
+// CommitProvenance reads the commit identity and signature verification GitHub
+// returned for sha. Web-flow is GitHub's identity for merges made through the
+// web/API merge flow.
+func (g *GitHub) CommitProvenance(ctx context.Context, slug, sha string) (CommitProvenance, error) {
+	var c struct {
+		Committer *struct {
+			Login string `json:"login"`
+		} `json:"committer"`
+		Commit struct {
+			Verification struct {
+				Verified bool `json:"verified"`
+			} `json:"verification"`
+		} `json:"commit"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s", slug, sha), nil, &c); err != nil {
+		return CommitProvenance{}, err
+	}
+	var login string
+	if c.Committer != nil {
+		login = c.Committer.Login
+	}
+	return CommitProvenance{Login: login, Verified: c.Commit.Verification.Verified}, nil
+}
+
 // CommitAuthor is who made a commit, by GitHub login when GitHub knows
 // the address, else by the name in the commit.
 func (g *GitHub) CommitAuthor(ctx context.Context, slug, sha string) (string, error) {
@@ -1326,16 +1356,20 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 // commits head has that base lacks (AheadBy) and the reverse (BehindBy:
 // base is an ancestor of head only at 0), and each changed file's lines.
 type Comparison struct {
-	AheadBy  int            `json:"ahead_by"`
-	BehindBy int            `json:"behind_by"`
-	Files    []ComparedFile `json:"files"`
-	// The commits head has that base lacks, oldest first: at most
-	// CompareCommitCap of TotalCommits.
+	AheadBy   int            `json:"ahead_by"`
+	BehindBy  int            `json:"behind_by"`
+	Files     []ComparedFile `json:"files"`
+	MergeBase string         `json:"merge_base_commit"`
+}
+
+// CommitComparison is the ancestry-bearing form used by phase advancement.
+type CommitComparison struct {
+	Comparison
 	Commits      []ComparedCommit `json:"commits"`
 	TotalCommits int              `json:"total_commits"`
 }
 
-// ComparedCommit is one commit of a Comparison, with its parents, first
+// ComparedCommit is one commit of a comparison, with its parents, first
 // parent first.
 type ComparedCommit struct {
 	SHA     string `json:"sha"`
@@ -1377,8 +1411,14 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 	return cmp, err
 }
 
-// FastForward moves branch to sha, creating it if it does not exist.
-//
+// CompareCommits returns the ancestry-bearing compare response for phase
+// advancement. Ordinary callers use Compare and do not materialize commits.
+func (g *GitHub) CompareCommits(ctx context.Context, slug, base, head string) (CommitComparison, error) {
+	var cmp CommitComparison
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s", slug, base, head), nil, &cmp)
+	return cmp, err
+}
+
 // Never forced: GitHub refuses the update unless sha descends from the
 // branch's current commit, so a person who pushed to the branch in the
 // meantime is never overwritten. That refusal is reported as an error.

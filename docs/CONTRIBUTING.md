@@ -135,10 +135,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   merged in on GitHub (`/merges`), and that merge is the next phase's
   start. Only merges means every commit on the branch's first-parent line
   since the writer's start is a two-parent merge whose second parent the
-  base contains, read from GitHub's compares. The change counted is still
-  the writer's own; `git.commit_created` names the merge as `headSha` and
-  the writer's commit under `mergedBase`. A merge GitHub refuses (409) is
-  refused naming the base merge. Anything else under the writer, a
+  base contains, read from GitHub's compares. A candidate merge must also be
+  GitHub's verified `web-flow` merge and its tree/diff must be the automatic
+  no-extra-edit result; manually resolved or unknown merges are refused. Anything else under the writer, a
   person's commit, a rebase or a force-push, is refused as before. The PR
   syncer asks for no automatic update in a sync that has just signalled
   the workflow: fewer such merges, not none.

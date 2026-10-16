@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -46,7 +47,14 @@ func (e *errBaseMergeConflict) Error() string {
 
 func (e *errBaseMergeConflict) Unwrap() error { return e.cause }
 
-// advanceBranch moves branch to commit, a writer's work started from
+type errUnsafeMerge struct {
+	merge, first, second, expected string
+}
+
+func (e *errUnsafeMerge) Error() string {
+	return fmt.Sprintf("ERROR: GitHub merge %s has first parent %s and second parent %s, expected first parent %s and second parent %s; automatic recovery is refused. Have a human reconcile the task branch with the documented merge recovery, then publish again", e.merge, e.first, e.second, e.expected, e.second)
+}
+
 // start, and is the one way a writer's publish moves a task branch. A
 // fast-forward, never a force. When GitHub refuses it as not a
 // fast-forward and the branch's head X only merged baseBranch in since
@@ -59,7 +67,7 @@ func (e *errBaseMergeConflict) Unwrap() error { return e.cause }
 // GitHub's merges endpoint takes no expected head: a branch that moves
 // between the judgement and the merge is judged again from the merge's
 // first parent, and an error says so when that is not only base merges.
-func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string) (advanced, error) {
+func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, beforeMerge ...func() error) (advanced, error) {
 	refusal := gh.FastForward(ctx, slug, branch, commit)
 	if refusal == nil || !notFastForward(refusal) || start == "" || baseBranch == "" {
 		return advanced{Head: commit}, refusal
@@ -81,6 +89,11 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 		// commit merged already, by an attempt whose answer was lost.
 		return advanced{Head: at, Commit: commit, MergedInto: j.under}, nil
 	}
+	if len(beforeMerge) > 0 {
+		if err := beforeMerge[0](); err != nil {
+			return advanced{}, err
+		}
+	}
 	m, err := gh.MergeCommit(ctx, slug, branch, commit)
 	var fe *forge.Error
 	switch {
@@ -96,13 +109,22 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 		if len(m.Parents) > 0 {
 			into = m.Parents[0]
 		}
+		if len(m.Parents) != 2 || into == "" {
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: "", expected: at}
+		}
 		j, err := baseMerges(ctx, gh, slug, baseBranch, start, into, commit)
 		if err != nil {
 			return advanced{}, err
 		}
 		if !j.only && into != start {
-			return advanced{}, fmt.Errorf("the task branch moved while dude merged %s into it: the merge %s is on it over %s, which is not only merges of %s",
-				short(commit), short(m.SHA), short(into), baseBranch)
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: m.Parents[1], expected: at}
+		}
+		pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA)
+		if err != nil {
+			return advanced{}, err
+		}
+		if !pure {
+			return advanced{}, &errUnsafeMerge{merge: m.SHA, first: into, second: m.Parents[1], expected: at}
 		}
 		at = into
 	}
@@ -124,6 +146,39 @@ type judgement struct {
 	under     string
 }
 
+// pureMerge verifies that the merge added exactly the first parent's changes
+// to the second parent. Comparing both sides by file makes a manually
+// resolved extra edit visible without relying on commit messages or authors.
+func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge string) (bool, error) {
+	provenance, err := gh.CommitProvenance(ctx, slug, merge)
+	if err != nil {
+		return false, err
+	}
+	if !provenance.Verified || provenance.Login != "web-flow" {
+		return false, nil
+	}
+	left, err := gh.Compare(ctx, slug, second, first)
+	if err != nil {
+		return false, err
+	}
+	right, err := gh.Compare(ctx, slug, second, merge)
+	if err != nil {
+		return false, err
+	}
+	if left.Truncated() || right.Truncated() {
+		return false, nil
+	}
+	return maps.Equal(comparisonFiles(left.Files), comparisonFiles(right.Files)), nil
+}
+
+func comparisonFiles(files []forge.ComparedFile) map[string]string {
+	out := map[string]string{}
+	for _, file := range files {
+		out[file.Filename] = file.Status + "\x00" + file.SHA
+	}
+	return out
+}
+
 // baseMerges judges whether head moved from start only by merges of
 // baseBranch into it. It does when every commit on head's first-parent
 // line down to start is a two-parent merge whose second parent baseBranch
@@ -139,7 +194,7 @@ func baseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 	if head == "" || head == start {
 		return judgement{}, nil
 	}
-	cmp, err := gh.Compare(ctx, slug, start, head)
+	cmp, err := gh.CompareCommits(ctx, slug, start, head)
 	if err != nil || cmp.BehindBy > 0 || len(cmp.Commits) < cmp.TotalCommits {
 		return judgement{}, err
 	}
@@ -161,6 +216,13 @@ func baseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 		if at == head && ps[1] == commit {
 			j.own, j.under = true, ps[0]
 			continue
+		}
+		pure, err := pureMerge(ctx, gh, slug, ps[0], ps[1], at)
+		if err != nil {
+			return judgement{}, err
+		}
+		if !pure {
+			return judgement{}, &errUnsafeMerge{merge: at, first: ps[0], second: ps[1], expected: start}
 		}
 		in, err := gh.Compare(ctx, slug, ps[1], baseBranch)
 		if err != nil || in.BehindBy > 0 {

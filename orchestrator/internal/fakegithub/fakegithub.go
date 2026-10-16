@@ -525,7 +525,7 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 409, "Merge conflict")
 			return
 		}
-		sha, err := s.gitAs("Acme", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
+		sha, err := s.gitAs("GitHub", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
 		if err == nil {
 			_, err = s.git("update-ref", "refs/heads/"+in.Base, sha, from)
 		}
@@ -660,7 +660,15 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 404, "No commit found")
 			return
 		}
-		write(w, 200, map[string]any{"author": nil, "commit": map[string]any{"author": map[string]string{"name": out}}})
+		committer := map[string]string{"name": "Alice"}
+		verified := false
+		if out == "GitHub" {
+			committer = map[string]string{"name": "GitHub"}
+			verified = true
+		}
+		write(w, 200, map[string]any{"author": nil, "committer": map[string]string{"login": map[bool]string{true: "web-flow", false: ""}[verified]}, "commit": map[string]any{
+			"author": map[string]string{"name": out}, "committer": committer,
+			"verification": map[string]bool{"verified": verified}}})
 	})
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/update-branch", func(w http.ResponseWriter, r *http.Request) {
 		p := s.number(w, r)
@@ -679,12 +687,27 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 422, "merge conflict between base and head")
 			return
 		}
-		// A merge commit of the base into the head, as GitHub makes; the
-		// head it was made on is the one it replaces.
+		var in struct {
+			ExpectedHeadSHA string `json:"expected_head_sha"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
 		head := s.SHA(p.Head)
-		tree, _ := s.git("rev-parse", head+"^{tree}")
+		if in.ExpectedHeadSHA != "" && in.ExpectedHeadSHA != head {
+			fail(w, 422, "Head branch was modified. Review and try again.")
+			return
+		}
+		base := s.SHA(p.Base)
+		tree, err := s.git("merge-tree", "--write-tree", head, base)
+		if err != nil {
+			fail(w, 422, "merge conflict between base and head")
+			return
+		}
+		// The old head guards the ref update even if it moves during the merge.
 		sha, err := s.gitAs("GitHub", "commit-tree", tree,
-			"-p", head, "-p", "refs/heads/"+p.Base, "-m", "Merge branch '"+p.Base+"' into "+p.Head)
+			"-p", head, "-p", base, "-m", "Merge branch '"+p.Base+"' into "+p.Head)
 		if err == nil {
 			_, err = s.git("update-ref", "refs/heads/"+p.Head, sha, head)
 		}
