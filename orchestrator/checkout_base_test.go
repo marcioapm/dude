@@ -168,3 +168,59 @@ func assertRefusedForNoBase(t *testing.T, w *world, runID string) {
 		t.Errorf("lux was asked to push %d times", len(lr.PushCredentials))
 	}
 }
+
+// holdLaterCheckouts holds every lux Run's stream before any git.checkout
+// but the Run's first, until the returned release is called (also at
+// cleanup): one checkout's base is recorded, the next is not.
+func (w *world) holdLaterCheckouts() (release func()) {
+	held := make(chan struct{})
+	release = sync.OnceFunc(func() { close(held) })
+	var mu sync.Mutex
+	first := map[string]int64{}
+	w.lux.BeforeEvent(func(runID string, eventID int64, typ string) {
+		if typ != "git.checkout" {
+			return
+		}
+		mu.Lock()
+		if _, ok := first[runID]; !ok {
+			first[runID] = eventID
+		}
+		later := first[runID] != eventID
+		mu.Unlock()
+		if later {
+			<-held
+		}
+	})
+	w.t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
+	return release
+}
+
+// (d) Two repositories to push, and only one's base arrives: the Run
+// waits with one base recorded, never pushed. Once the other arrives both
+// bases are recorded and it is pushed once.
+func TestATurnWithOneOfTwoBasesWaitsForTheOther(t *testing.T) {
+	w := newWorld(t)
+	release := w.holdLaterCheckouts()
+	task := w.task()
+	w.addWeb(task, "write")
+	w.start(task, scriptedPolicy())
+	var runID string
+	w.until("the turn's end read with one of two bases", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND turn_done_at IS NOT NULL AND lux_state = 'running' AND lux_pushes @> '{target,web}'
+			AND (SELECT count(*) FROM jsonb_object_keys(base_shas)) = 1`, task).Scan(&runID)
+		return runID != ""
+	})
+	w.assertWaiting(runID)
+
+	release()
+	w.until("the implementer completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND base_shas ? 'target' AND base_shas ? 'web'`, runID); n != 1 {
+		t.Error("both bases are not recorded")
+	}
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 1 || !lr.Pushed {
+		t.Errorf("lux was asked to push %d times, pushed %v", len(lr.PushCredentials), lr.Pushed)
+	}
+}
