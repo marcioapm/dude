@@ -216,8 +216,9 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   nothing in the checkout is read. The base left out is the commit lux
   reported fetching (`runs.synced_bases`), only if GitHub's base contains
   it and the push contains it: a file whose new name the base changed
-  counts as `compare base...push` shows it, so a pure import counts
-  nothing; any other file counts as `compare start...push` shows it. No
+  counts as `compare base...push` shows it, under its old name too when
+  the base left that alone, so a pure import counts nothing; any other
+  file counts as `compare start...push` shows it. No
   such base, or a compare refused or cut short at 300 files, counts
   `start...push` in full. A file GitHub shows no patch for is binary
   unless it is empty. The activity's integration lines name no

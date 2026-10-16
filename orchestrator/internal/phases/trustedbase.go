@@ -21,7 +21,8 @@ import (
 // (git.sync's `to`, kept in runs.synced_bases), which GitHub's base branch
 // must contain. With T an ancestor of head, a file of start...head counts
 // with GitHub's numbers unless its new name is a path T brought in
-// (start...T); such a file counts only as T...head shows it, the task's
+// (start...T); such a file counts only as T...head shows it under that
+// name, and under its old name too when T left that alone, the task's
 // change on top of the base it merged, so a pure import counts nothing.
 // No T, a T that head does not contain, or any compare refused or cut
 // short at GitHub's file cap counts start...head in full, Full saying why.
@@ -142,8 +143,17 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 	for _, f := range task.Files {
 		if !byBase[f.Filename] {
 			own = append(own, f)
-		} else if g, changed := ownOnTop[f.Filename]; changed {
-			own = append(own, g)
+		} else {
+			if g, changed := ownOnTop[f.Filename]; changed {
+				own = append(own, g)
+			}
+			// A task deletion GitHub paired with a file the base added:
+			// T...head lists the deletion under the old name.
+			if f.PreviousFilename != "" && !byBase[f.PreviousFilename] {
+				if g, changed := ownOnTop[f.PreviousFilename]; changed {
+					own = append(own, g)
+				}
+			}
 		}
 	}
 	return counted(own), nil

@@ -93,6 +93,42 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 			t.Fatalf("lines %d full %q, want new.go's 400 from the start", acc.Lines, acc.Full)
 		}
 	})
+	// The task deletes x.txt and the base adds n.txt like it: GitHub pairs
+	// the deletion as a rename x.txt → n.txt, and T...head lists it as x.txt.
+	for name, added := range map[string]string{
+		"a deletion GitHub pairs with a copy the base added counts":        lines(500, "x"),
+		"a deletion GitHub pairs with a file the base grew from it counts": lines(500, "x") + lines(100, "more"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newAccountingRun(t)
+			a.seed(map[string]string{"x.txt": lines(500, "x")})
+			a.commit(map[string]string{"x.txt": "", "keep.go": "package keep\n"}, "delete x")
+			a.advanceBase(map[string]string{"n.txt": added})
+			a.syncBase()
+			a.mergeBase(nil)
+			acc := a.published()
+			samePaths(t, acc, "keep.go", "x.txt")
+			if acc.Lines != 501 || acc.Full != "" || acc.Binary {
+				t.Fatalf("lines %d full %q binary %v, want x.txt's 500 and keep.go's 1", acc.Lines, acc.Full, acc.Binary)
+			}
+		})
+	}
+	t.Run("a rename of a path the base rewrote counts its new name from the start", func(t *testing.T) {
+		// T...head pairs b.txt → z.txt (R100, no patch); from the start
+		// b.txt is removed and z.txt added, and z.txt is no base path.
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"b.txt": lines(10, "old")})
+		git(t, a.work, "mv", "b.txt", "z.txt")
+		a.commit(map[string]string{"mine.go": "package mine\n"}, "rename")
+		a.advanceBase(map[string]string{"b.txt": lines(400, "base")})
+		a.syncBase()
+		a.mergeBase(nil)
+		acc := a.published()
+		samePaths(t, acc, "mine.go", "z.txt")
+		if acc.Lines != 401 || acc.Full != "" || acc.Binary {
+			t.Fatalf("lines %d full %q binary %v, want z.txt's 400 and mine.go's 1", acc.Lines, acc.Full, acc.Binary)
+		}
+	})
 	t.Run("a fetched base GitHub's main does not answer for counts in full", func(t *testing.T) {
 		a := conflictMerged(t)
 		a.intercept = func(r *http.Request) int {
