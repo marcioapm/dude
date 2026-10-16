@@ -29,9 +29,9 @@ const HOST = /[a-zA-Z0-9.-]/;
 const ATTRIBUTE_START = /[a-zA-Z_:]/;
 const ATTRIBUTE = /[\w:.-]/;
 const UNQUOTED_STOP = /["'=<>`]/;
-const isSpace = (c: number) => c === 32 || c === 9 || c === 10 || c === 13 || c === 12;
-const isLetter = (c: number) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
-const isDigit = (c: number) => c >= 48 && c <= 57;
+function isSpace(c: number): boolean { return c === 32 || c === 9 || c === 10 || c === 13 || c === 12; }
+function isLetter(c: number): boolean { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+function isDigit(c: number): boolean { return c >= 48 && c <= 57; }
 
 /** GitHub's HTML becomes text and disclosures, never HTML to inject. */
 export function githubBody(source: string): GitHubSection[] {
@@ -92,8 +92,9 @@ function fenceEnd(src: string, i: number): number {
     if (lineEnd < 0) lineEnd = src.length;
     const line = linePrefix(src, start);
     if (line.quotes !== open.quotes || line.column < column || line.column > column + 3) continue;
-    if (src.charCodeAt(line.at) !== char || fenceRun(src, line.at) < length) continue;
-    let j = line.at + fenceRun(src, line.at);
+    const closingLength = fenceRun(src, line.at);
+    if (closingLength < length) continue;
+    let j = line.at + closingLength;
     while (src.charCodeAt(j) === 32 || src.charCodeAt(j) === 9) j++;
     if (j === lineEnd) return lineEnd;
   }
