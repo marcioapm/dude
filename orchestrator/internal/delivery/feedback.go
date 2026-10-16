@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -100,7 +102,15 @@ type FeedbackAnchor struct {
 		Width  int `json:"width"`
 		Height int `json:"height"`
 	} `json:"viewport,omitempty"`
-	Component *struct {
+	// The element's box in the window, in CSS pixels.
+	Rect *struct {
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	} `json:"rect,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	Component    *struct {
 		Name string `json:"name,omitempty"`
 		File string `json:"file,omitempty"`
 		Line int    `json:"line,omitempty"`
@@ -129,6 +139,29 @@ func (a FeedbackAnchor) Where() string {
 	}
 	return ""
 }
+
+// PageLine is where on its page a preview item was made: "Route /cart in
+// a 1280×720 window · the element is 92×38 at 152, 431". Each clause only
+// with its data; "" without a window or a box, as the URL is already said.
+func (a FeedbackAnchor) PageLine() string {
+	if a.Kind != "preview" || (a.Viewport == nil && a.Rect == nil) {
+		return ""
+	}
+	route := "/"
+	if u, err := url.Parse(a.URL); err == nil && u.EscapedPath() != "" {
+		route = u.EscapedPath()
+	}
+	line := "Route " + route
+	if v := a.Viewport; v != nil {
+		line += fmt.Sprintf(" in a %d×%d window", v.Width, v.Height)
+	}
+	if r := a.Rect; r != nil {
+		line += fmt.Sprintf(" · the element is %d×%d at %d, %d", px(r.Width), px(r.Height), px(r.X), px(r.Y))
+	}
+	return line
+}
+
+func px(v float64) int { return int(math.Round(v)) }
 
 // FeedbackItem is a submitted item as an agent is shown it: the person's
 // own words, never a summary.
@@ -241,6 +274,9 @@ func FeedbackText(items []FeedbackItem, cli bool) string {
 					b.WriteString("\n" + l.Kind + l.Text)
 				}
 				b.WriteString("\n```")
+			}
+			if line := it.Anchor.PageLine(); line != "" {
+				b.WriteString("\n\n" + line)
 			}
 			if it.Anchor.Kind == "preview" && it.Anchor.Text != "" {
 				b.WriteString("\n\nThe element's text: " + clip(oneLine(it.Anchor.Text), 400))
