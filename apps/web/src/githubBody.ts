@@ -93,7 +93,7 @@ function fenceEnd(src: string, i: number): number {
     const line = linePrefix(src, start);
     if (line.quotes !== open.quotes || line.column < column || line.column > column + 3) continue;
     const closingLength = fenceRun(src, line.at);
-    if (closingLength < length) continue;
+    if (src.charCodeAt(line.at) !== char || closingLength < length) continue;
     let j = line.at + closingLength;
     while (src.charCodeAt(j) === 32 || src.charCodeAt(j) === 9) j++;
     if (j === lineEnd) return lineEnd;

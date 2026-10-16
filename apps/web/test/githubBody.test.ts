@@ -59,6 +59,8 @@ Included review availability.
   });
 
   test("a fence in a quote, an indent or a list item is code up to a closer in the same container", () => {
+    // A fence closes only on its own character: ~~~ inside a backtick fence is code.
+    expect(githubBody("```\n~~~\n<!-- kept -->\n```")).toEqual([markdown("```\n~~~\n<!-- kept -->\n```")]);
     const quoted = '> ```html\n> <details><summary>literal</summary></details>\n> <!-- literal --> &amp;\n> ```\n> <b>after</b>';
     expect(githubBody(quoted)).toEqual([markdown('> ```html\n> <details><summary>literal</summary></details>\n> <!-- literal --> &amp;\n> ```\n> **after**')]);
     expect(githubBody("  ```\n  <b>literal</b>\n  ```\n<b>after</b>")).toEqual([markdown("```\n  <b>literal</b>\n  ```\n**after**")]);
