@@ -329,6 +329,24 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 	}
 }
 
+// auth.public_url reaches the orchestrator as an origin: a trailing slash
+// and letter case are dropped; anything but an https origin is refused.
+func TestThePublicURLIsAnOrigin(t *testing.T) {
+	for raw, want := range map[string]string{"": "", "https://Dude.Example.com/": "https://dude.example.com",
+		"https://dude.example.com": "https://dude.example.com", "https://dude.example.com:8443": "https://dude.example.com:8443"} {
+		if s := mustSettings(t, loadConfig(t, required, 0o600, map[string]string{"DUDE_AUTH_PUBLIC_URL": raw})); s.PublicURL != want {
+			t.Errorf("%q: %q, want %q", raw, s.PublicURL, want)
+		}
+	}
+	for _, raw := range []string{"http://dude.example.com", "https://dude.example.com/app", "https://u:p@dude.example.com",
+		"https://dude.example.com/?x=1", "dude.example.com"} {
+		if _, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_AUTH_PUBLIC_URL": raw})); err == nil ||
+			!strings.Contains(err.Error(), "auth.public_url (DUDE_AUTH_PUBLIC_URL)") {
+			t.Errorf("%q: err = %v, want refused", raw, err)
+		}
+	}
+}
+
 func TestAOneConnectionDatabasePoolIsRefused(t *testing.T) {
 	for url, ok := range map[string]bool{
 		"postgres://file/dude?pool_max_conns=1": false,

@@ -152,6 +152,14 @@ func run(log *slog.Logger) error {
 	default:
 		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
 	}
+	switch {
+	case set.PublicURL == "":
+		log.Info("commenting on previews is off: auth.public_url is unset")
+	case !preview.ServerInject:
+		log.Info("commenting on previews is off: lux does not report serverInject (lux v0.1.32 or later)")
+	default:
+		log.Info("commenting on previews is on", "origin", set.PublicURL)
+	}
 	bucket, err := objects.New(set.Objects)
 	if err != nil {
 		log.Error("image storage", "error", err)
@@ -178,7 +186,7 @@ func run(log *slog.Logger) error {
 			log.Info("timed resumes an earlier process left untimed", "resumes", n)
 		}
 	}()
-	serverService := preview.service(database, luxClient, log, set.ConsoleURL)
+	serverService := preview.service(database, luxClient, log, set.ConsoleURL, set.PublicURL)
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
 		DefaultImageContainers: agent.NestedContainers, Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
@@ -311,11 +319,15 @@ type previewMode struct {
 	Domain   string
 	Relative bool
 	LuxOff   bool // lux reports previews: false
+	// lux reports serverInject: its servers take inject.
+	ServerInject bool
 }
 
-// service is the servers.Service startup runs, in this preview mode.
-func (m previewMode) service(database *db.DB, luxClient *lux.HTTPClient, log *slog.Logger, consoleURL string) *servers.Service {
-	return &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: consoleURL, PreviewDomain: m.Domain, PreviewRelative: m.Relative}
+// service is the servers.Service startup runs, in this preview mode;
+// publicURL is auth.public_url as settingsFrom normalised it.
+func (m previewMode) service(database *db.DB, luxClient *lux.HTTPClient, log *slog.Logger, consoleURL, publicURL string) *servers.Service {
+	return &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: consoleURL, PreviewDomain: m.Domain, PreviewRelative: m.Relative,
+		PublicURL: publicURL, ServerInject: m.ServerInject}
 }
 
 func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, log *slog.Logger, retry time.Duration) (previewMode, error) {
@@ -333,12 +345,12 @@ func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, lo
 				if configured != "" && luxDomain == "" {
 					log.Info("DUDE_PREVIEW_DOMAIN ignored for naming: lux accepts relative preview hostnames")
 				}
-				return previewMode{Relative: true}, nil
+				return previewMode{Relative: true, ServerInject: capability.ServerInject}, nil
 			}
 			if configured != "" {
 				luxDomain = configured
 			}
-			return previewMode{Domain: luxDomain}, nil
+			return previewMode{Domain: luxDomain, ServerInject: capability.ServerInject}, nil
 		}
 		if errors.Is(err, lux.ErrNoServers) {
 			return previewMode{}, fmt.Errorf("lux at startup: %w", err)

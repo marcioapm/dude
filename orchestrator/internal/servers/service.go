@@ -33,7 +33,12 @@ type Service struct {
 	PreviewDomain string
 	// PreviewRelative sends bare labels for lux to resolve under its domain.
 	PreviewRelative bool
-	Log             *slog.Logger
+	// dude's origin (auth.public_url, normalised: PublicOrigin), "" when
+	// unset; and whether lux's servers take inject (whoami serverInject).
+	// Together they turn on commenting on previews (commenting.go).
+	PublicURL    string
+	ServerInject bool
+	Log          *slog.Logger
 	// Wakes the loops after a change, so a preview starts or stops now.
 	Kick func()
 }

@@ -333,7 +333,7 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
-		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter}
+		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter, Inject: p.inject()}
 	domain := p.PreviewDomain
 	if p.PreviewRelative {
 		domain = ""

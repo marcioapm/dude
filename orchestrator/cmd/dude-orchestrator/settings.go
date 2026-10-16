@@ -14,6 +14,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
+	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
 
 // settings is every value run builds its services from, resolved from the
@@ -30,6 +31,8 @@ type settings struct {
 	// previews.domain ("": lux's own) and previews.reap_after.
 	PreviewDomain    string
 	PreviewReapAfter time.Duration
+	// auth.public_url as an origin (no trailing slash); "" when unset.
+	PublicURL string
 
 	Agent    phases.AgentConfig
 	Registry registrySettings
@@ -122,6 +125,13 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	}
 	if s.PreviewReapAfter = cfg.Duration("DUDE_PREVIEW_REAP_AFTER"); s.PreviewReapAfter <= 0 {
 		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_PREVIEW_REAP_AFTER"), s.PreviewReapAfter)
+	}
+	if raw := cfg.String("DUDE_AUTH_PUBLIC_URL"); raw != "" {
+		origin, err := servers.PublicOrigin(raw)
+		if err != nil {
+			return settings{}, fmt.Errorf("%s: %w", cfg.Label("DUDE_AUTH_PUBLIC_URL"), err)
+		}
+		s.PublicURL = origin
 	}
 
 	agent, err := phases.LoadAgentConfig(cfg)
