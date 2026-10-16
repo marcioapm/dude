@@ -14,6 +14,7 @@ import {
   FEEDBACK_LIMITS, feedbackDraftSchema, feedbackReopenSchema, feedbackReplySchema, feedbackResolveSchema, feedbackSubmitSchema,
   newId, type FeedbackAnchor, type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackExcerptLine, type RunDiffFile,
 } from "@dude/domain";
+import { SQL } from "bun";
 import type { ZodType } from "zod";
 import { type OrgScope, withOrg } from "../../db/client.ts";
 import { HttpError, badRequest, conflict, forbidden, intParam, json, noContent, notFound, readCapped } from "../http.ts";
@@ -82,6 +83,13 @@ function refuseDone(task: TaskRow): void {
   if (task.status === "done") throw conflict("this task is done: feedback on it goes in a follow-up task");
 }
 
+/** An excerpt line's text past this many characters is cut, with an ellipsis: a minified line is not quoted whole. */
+export const EXCERPT_LINE_MAX = 2_000;
+
+function clipLine(text: string): string {
+  return text.length > EXCERPT_LINE_MAX ? `${text.slice(0, EXCERPT_LINE_MAX)}…` : text;
+}
+
 /** The lines of `file` from start to end on `side`, as one hunk holds them; null if any is not there. */
 export function excerptOf(file: RunDiffFile, side: "old" | "new", start: number, end: number): FeedbackExcerptLine[] | null {
   for (const hunk of file.hunks ?? []) {
@@ -94,10 +102,18 @@ export function excerptOf(file: RunDiffFile, side: "old" | "new", start: number,
       const first = hunk.lines.indexOf(lines[0]!);
       const last = hunk.lines.indexOf(lines[lines.length - 1]!);
       // The range as the diff shows it, the other side's lines between included.
-      return hunk.lines.slice(first, last + 1).map((l) => ({ kind: l.kind, old: l.old, new: l.new, text: l.text }));
+      return hunk.lines.slice(first, last + 1).map((l) => ({ kind: l.kind, old: l.old, new: l.new, text: clipLine(l.text) }));
     }
   }
   return null;
+}
+
+/** feedback_items_anchor_check (64 KB of jsonb) refusing an anchor still too big after clipping: the caller's to narrow. */
+function anchorRefused(err: unknown): never {
+  if (err instanceof SQL.PostgresError && err.errno === "23514" && err.constraint === "feedback_items_anchor_check") {
+    throw new HttpError(413, "the lines you chose are too much to quote: choose fewer", "too_large");
+  }
+  throw err;
 }
 
 /**
@@ -195,7 +211,7 @@ async function createDraft(ctx: RequestContext): Promise<Response> {
         VALUES (${newId("feedbackItem")}, ${scope.organizationId}, ${taskId}, ${task.attempt}, ${person}, ${input.body},
                 ${built.kind}, ${built.runId}, ${built.anchor}::jsonb)
         RETURNING *)
-      SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`;
+      SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`.catch(anchorRefused);
     return row;
   });
   return json(item, 201);
@@ -226,7 +242,7 @@ async function updateDraft(ctx: RequestContext): Promise<Response> {
           anchor = ${built.anchor}::jsonb, updated_at = now()
         WHERE id = ${id} AND author_person_id = ${person} AND status = 'draft'
         RETURNING *)
-      SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`;
+      SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`.catch(anchorRefused);
     if (!row) throw notFound(`draft ${id} not found`);
     return row;
   });

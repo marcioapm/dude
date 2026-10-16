@@ -89,6 +89,7 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 		return Steered{}, "", refusef("%s has ended (%s): start another phase instead of steering it", runID, rstatus)
 	}
 	var items []FeedbackItem
+	var words string
 	if len(feedbackIDs) > 0 {
 		if phase != PhaseImplement && phase != PhaseFix {
 			return Steered{}, "", refusef("%s is a %s Run: feedback goes to an implementer or fixer, which can change the code", runID, phase)
@@ -104,15 +105,11 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 			}
 			items = append(items, open[i])
 		}
-		words := FeedbackText(items, true)
-		if strings.TrimSpace(text) != "" {
-			text = strings.TrimSpace(text) + "\n\n" + words
-		} else {
-			text = words
-		}
+		words = FeedbackText(items, true)
 	}
 	out, err := Steer(ctx, tx, ref.Org, SteerInput{RunID: runID, Text: text, Interrupt: interrupt,
-		Actor: Writer{ActorType: ledger.ActorAgent, ActorID: ref.RunID}, Conductor: ref.RunID})
+		Actor: Writer{ActorType: ledger.ActorAgent, ActorID: ref.RunID}, Conductor: ref.RunID,
+		FeedbackIDs: feedbackIDs, FeedbackWords: words})
 	if se, ok := err.(SteerError); ok {
 		return Steered{}, "", refusef("%s", se.Msg)
 	}

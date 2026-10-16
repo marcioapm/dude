@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -91,8 +92,20 @@ func TestFeedbackFromTheShellByRole(t *testing.T) {
 		}
 	}
 	conductor := f.conductor(t)
-	if status := f.postAs(t, conductor, "feedback", `{"all":true}`, &res); status != 200 {
-		t.Errorf("the conductor's feedback: %d %v", status, res)
+	var listed struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if status := f.postAs(t, conductor, "feedback", `{"all":true}`, &listed); status != 200 {
+		t.Errorf("the conductor's feedback: %d %v", status, listed)
+	}
+	var got []string
+	for _, it := range listed.Items {
+		got = append(got, it.ID)
+	}
+	if !slices.Contains(got, "fbi_open") || slices.Contains(got, "fbi_draft") {
+		t.Errorf("the conductor's feedback lists %v", got)
 	}
 	if status := f.postAs(t, conductor, "feedback_resolve", `{"id":"fbi_two","commit":"abcdef1"}`, &res); status != 404 {
 		t.Errorf("the conductor's resolve: %d", status)
@@ -120,6 +133,20 @@ func TestTheConductorPassesFeedbackByIDInThePersonsWords(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != "fbi_open" {
 		t.Errorf("the fixer's items: %v", ids)
+	}
+	// The ledger's run.steered has the conductor's words and the item's id,
+	// never the person's words.
+	var said string
+	var steeredIDs []string
+	_ = f.owner.QueryRow(context.Background(), `SELECT payload->>'text', ARRAY(SELECT jsonb_array_elements_text(payload->'feedbackItemIds'))
+		FROM events WHERE run_id = 'run_fix' AND event_type = 'run.steered'`).Scan(&said, &steeredIDs)
+	if said != "Start with these." || len(steeredIDs) != 1 || steeredIDs[0] != "fbi_open" {
+		t.Errorf("run.steered: text %q, items %v", said, steeredIDs)
+	}
+	var leaked int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE payload::text LIKE '%Name the flag%'`).Scan(&leaked)
+	if leaked != 0 {
+		t.Error("the ledger carries the person's words")
 	}
 	for body, why := range map[string]string{
 		`{"run":"run_rev","feedbackIds":["fbi_open"]}`:  "a reviewer",

@@ -323,6 +323,27 @@ describe("a code anchor is pinned to the Run's stored diff", () => {
     expect(((await res.json()) as Json).anchor).toMatchObject({ repo: "Web", path: "src/vat.ts", baseSha: "w0", headSha: "w1" });
   });
 
+  test("a long line is quoted clipped, and a range still too big to quote is a 413", async () => {
+    const long = "x".repeat(70_000);
+    const wide = Array.from({ length: 40 }, (_, i) => ({ kind: "+", old: null, new: i + 1, text: "y".repeat(3_000) }));
+    const files = [
+      { path: "dist/app.min.js", status: "A", additions: 1, deletions: 0,
+        hunks: [{ header: "@@ -0,0 +1 @@", lines: [{ kind: "+", old: null, new: 1, text: long }] }] },
+      { path: "dist/wide.js", status: "A", additions: 40, deletions: 0, hunks: [{ header: "@@ -0,0 +1,40 @@", lines: wide }] },
+    ];
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, base_shas, heads) VALUES
+      ('run_min', ${ORG}, 'prj_fb', 'wi_fb', 2, 'running', 'fix', 'implementer', 'agent', '{"api":"bbb"}', '{}')`;
+    await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_min', ${ORG}, 'bbb', ${files}::jsonb, 'sum-min')`;
+    const res = await draft(ana.key, "wi_fb", { body: "minified", anchor: {
+      kind: "code", runId: "run_min", path: "dist/app.min.js", side: "new", startLine: 1, endLine: 1 } });
+    expect(res.status).toBe(201);
+    const [line] = ((await res.json()) as Json).anchor.excerpt;
+    expect(line.text).toBe(`${"x".repeat(2_000)}…`);
+    const tooMuch = await draft(ana.key, "wi_fb", { body: "all of it", anchor: {
+      kind: "code", runId: "run_min", path: "dist/wide.js", side: "new", startLine: 1, endLine: 40 } });
+    expect(tooMuch.status).toBe(413);
+  });
+
   test("a range is one hunk's lines on one side", () => {
     const file = DIFF[0] as Json;
     expect(excerptOf(file, "new", 10, 13)?.map((l) => l.text)).toEqual([

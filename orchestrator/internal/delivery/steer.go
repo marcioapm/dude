@@ -41,6 +41,10 @@ type SteerInput struct {
 	AttachmentIDs                  []string
 	Actor                          Writer
 	Conductor                      string
+	// People's feedback items whose words (FeedbackWords) follow Text in
+	// the directive; the ledger's run.steered names the ids, not the words.
+	FeedbackIDs   []string
+	FeedbackWords string
 }
 
 // Steered is a steer queued: its directive and event payload.
@@ -54,6 +58,10 @@ type Steered struct {
 // images, and its run.steered event — as the phase syncer then delivers
 // it. Refused with a SteerError. Locks the Run.
 func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, error) {
+	said := in.Text
+	if in.FeedbackWords != "" {
+		in.Text = strings.TrimSpace(strings.TrimSpace(in.Text) + "\n\n" + in.FeedbackWords)
+	}
 	if len(in.Text) > SteerTextMax {
 		return Steered{}, steerErr("bad_request", "a steer is at most %d KiB of text", SteerTextMax>>10)
 	}
@@ -93,8 +101,11 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	if err != nil {
 		return Steered{}, err
 	}
-	payload := map[string]any{"directiveId": id, "text": in.Text, "scope": in.Scope, "supersedes": db.Nullable(in.Supersedes),
+	payload := map[string]any{"directiveId": id, "text": said, "scope": in.Scope, "supersedes": db.Nullable(in.Supersedes),
 		"interrupt": in.Interrupt}
+	if len(in.FeedbackIDs) > 0 {
+		payload["feedbackItemIds"] = in.FeedbackIDs
+	}
 	if in.Conductor != "" {
 		if _, err := tx.Exec(ctx, `UPDATE directives SET conductor_run_id = $2 WHERE id = $1`, id, in.Conductor); err != nil {
 			return Steered{}, err

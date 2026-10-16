@@ -74,6 +74,11 @@ CREATE INDEX feedback_items_batch_idx ON feedback_items (batch_id) WHERE batch_i
 -- The gate's query: what still blocks this task's attempt?
 CREATE INDEX feedback_items_blocking_idx ON feedback_items (task_id, attempt)
   WHERE status IN ('open', 'delivered') OR (status = 'resolved' AND resolved_verified_at IS NULL);
+-- What a directive's receipt or failure, a Run's end and a Run's publish
+-- look up items by (and the ON DELETE SET NULL of each reference).
+CREATE INDEX feedback_items_directive_idx ON feedback_items (directive_id) WHERE directive_id IS NOT NULL;
+CREATE INDEX feedback_items_delivered_run_idx ON feedback_items (delivered_run_id) WHERE delivered_run_id IS NOT NULL;
+CREATE INDEX feedback_items_resolved_run_idx ON feedback_items (resolved_by_run_id) WHERE resolved_by_run_id IS NOT NULL;
 
 CREATE TABLE feedback_replies (
   id              text PRIMARY KEY,
