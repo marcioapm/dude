@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // previewFeedback drafts a preview item as person on the task's current
@@ -83,14 +87,87 @@ func TestAPreviewItemsPictureGoesToTheWorkingAgentWithItsWords(t *testing.T) {
 // the prompt, after the task's own images, and the prompt says so; one
 // whose picture is gone from the task is given the words without the line.
 func TestAFixerGivenAPreviewItemIsGivenItsPicture(t *testing.T) {
+	cases := []struct {
+		name string
+		// picture uploads the item's picture, or leaves it gone from the task.
+		picture func(w *world, b bucket, wi string)
+		want    bool
+	}{
+		{name: "the task's", want: true, picture: func(w *world, b bucket, wi string) {
+			w.upload(b, "att_fb", wi, "fb_d1-element.png", screenshot)
+		}},
+		{name: "deleted", picture: func(w *world, b bucket, wi string) {
+			w.upload(b, "att_fb", wi, "fb_d1-element.png", screenshot)
+			mustExec(w.t, w.owner, `DELETE FROM attachments WHERE id = 'att_fb'`)
+		}},
+		{name: "another task's", picture: func(w *world, b bucket, wi string) {
+			w.upload(b, "att_fb", w.task(), "fb_d1-element.png", screenshot)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			b := w.withImages()
+			ana := w.person("Ana")
+			wi := w.reviewing()
+			w.onModel("implementer", "llm-impl")
+			c.picture(w, b, wi)
+			imgs, prompt := w.fixerGiven(ana, wi)
+			if !c.want {
+				if len(imgs) != 0 || strings.Contains(prompt, "Picture:") || !strings.Contains(prompt, "> The Pay button is cut off.") {
+					t.Fatalf("the fixer's spec carried %d images; prompt:\n%s", len(imgs), prompt)
+				}
+				return
+			}
+			if len(imgs) != 1 || imgs[0].Name != "fb_d1-element.png" || !bytes.Equal(imgs[0].Data, screenshot) {
+				t.Fatalf("the fixer's spec carried %d images", len(imgs))
+			}
+			if !strings.Contains(prompt, "Picture: fb_d1-element.png, attached (the element, outlined)") {
+				t.Errorf("the fixer's prompt does not say the picture is attached:\n%s", prompt)
+			}
+		})
+	}
+}
+
+// A task whose text shows as many images as one message carries leaves no
+// room for a preview item's picture: the fixer is given the task's images
+// and the item's words, with no Picture: line.
+func TestAFixerWithAFullMessageIsGivenNoPicture(t *testing.T) {
 	w := newWorld(t)
 	b := w.withImages()
 	ana := w.person("Ana")
 	wi := w.reviewing()
 	w.onModel("implementer", "llm-impl")
+	goal := "Fix the cart."
+	for i := 1; i <= delivery.MaxAttachmentsPerMessage; i++ {
+		id := fmt.Sprintf("att_t%d", i)
+		w.upload(b, id, wi, id+".png", screenshot)
+		goal += fmt.Sprintf(" ![%s.png](attachment:%s)", id, id)
+	}
+	w.describe(wi, goal)
 	w.upload(b, "att_fb", wi, "fb_d1-element.png", screenshot)
-	if code, body := w.previewFeedback(ana, wi, "fbi_pr", "The Pay button is cut off.", "att_fb"); code != 201 || body["routedTo"] != "workflow" {
-		t.Fatalf("submit: %d %v", code, body)
+	imgs, prompt := w.fixerGiven(ana, wi)
+	var names []string
+	for _, im := range imgs {
+		names = append(names, im.Name)
+	}
+	if len(imgs) != delivery.MaxAttachmentsPerMessage || slices.Contains(names, "fb_d1-element.png") {
+		t.Errorf("the fixer's spec carried %v", names)
+	}
+	if strings.Contains(prompt, "Picture:") || !strings.Contains(prompt, "> The Pay button is cut off.") {
+		t.Errorf("the fixer's prompt:\n%s", prompt)
+	}
+}
+
+// fixerGiven submits a preview item naming att_fb on a task in review and
+// returns the images and prompt of the fixer given it.
+func (w *world) fixerGiven(person, wi string) ([]struct {
+	Name, ContentType string
+	Data              []byte
+}, string) {
+	w.t.Helper()
+	if code, body := w.previewFeedback(person, wi, "fbi_pr", "The Pay button is cut off.", "att_fb"); code != 201 || body["routedTo"] != "workflow" {
+		w.t.Fatalf("submit: %d %v", code, body)
 	}
 	var fixer string
 	w.until("a fixer given the item", func() bool {
@@ -104,11 +181,5 @@ func TestAFixerGivenAPreviewItemIsGivenItsPicture(t *testing.T) {
 			spec = r.Spec
 		}
 	}
-	imgs := specImages(t, spec)
-	if len(imgs) != 1 || imgs[0].Name != "fb_d1-element.png" || !bytes.Equal(imgs[0].Data, screenshot) {
-		t.Fatalf("the fixer's spec carried %d images", len(imgs))
-	}
-	if p := w.promptOf(fixer); !strings.Contains(p, "Picture: fb_d1-element.png, attached (the element, outlined)") {
-		t.Errorf("the fixer's prompt does not say the picture is attached:\n%s", p)
-	}
+	return specImages(w.t, spec), w.promptOf(fixer)
 }

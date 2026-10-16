@@ -108,3 +108,25 @@ func TestCommentingNeedsAnOriginAndALuxThatInjects(t *testing.T) {
 		}
 	}
 }
+
+// A server needs a restart for the overlay only while its Run is up, or on
+// its way up, without the snippet wanted now.
+func TestNeedsRestartOnlyWhileTheRunIsUpWithoutTheSnippet(t *testing.T) {
+	want := OverlaySnippet("https://d.test")
+	stale := OverlaySnippet("https://old.test")
+	up := map[string]bool{"submitted": true, "scheduled": true, "starting": true, "resuming": true, "running": true}
+	for _, state := range []string{"submitted", "provisioning", "scheduled", "starting", "resuming", "running",
+		"stopping", "stopped", "succeeded", "failed", "cancelled", "terminated", "lost", ""} {
+		for _, inject := range []string{"", stale} {
+			if got := needsRestart(lux.TenantServer{RunState: state, Inject: inject}, want); got != up[state] {
+				t.Errorf("%q with inject %q: %v, want %v", state, inject, got, up[state])
+			}
+		}
+		if needsRestart(lux.TenantServer{RunState: state, Inject: want}, want) {
+			t.Errorf("%q with the snippet wanted: needs a restart", state)
+		}
+		if needsRestart(lux.TenantServer{RunState: state, Inject: stale}, "") {
+			t.Errorf("%q with commenting off: needs a restart", state)
+		}
+	}
+}

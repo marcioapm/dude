@@ -88,6 +88,12 @@ describe("DUDE_WEB_DIR", () => {
     expect(res.status).toBe(404);
   });
 
+  test("a feedback path under another prefix is the page, not the overlay", async () => {
+    const res = await get("/x/feedback/overlay.js");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(INDEX);
+  });
+
   test("the overlay may be embedded cross-origin; the page may not", async () => {
     const overlay = await get("/feedback/overlay.js");
     expect(overlay.headers.get("cross-origin-resource-policy")).toBe("cross-origin");

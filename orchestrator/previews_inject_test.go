@@ -84,8 +84,10 @@ func TestAPreviewServerIsCreatedWithTheOverlayOnlyWhenCommentingIsAvailable(t *t
 				switch {
 				case tc.want == "" && s != nil:
 					t.Errorf("%s named inject %q", calls[i], *s)
-				case tc.want != "" && (s == nil || *s != tc.want):
-					t.Errorf("%s: inject %v, want %s", calls[i], s, tc.want)
+				case tc.want != "" && s == nil:
+					t.Errorf("%s: no inject, want %q", calls[i], tc.want)
+				case tc.want != "" && *s != tc.want:
+					t.Errorf("%s: inject %q, want %q", calls[i], *s, tc.want)
 				}
 			}
 			if tc.want == "" {
