@@ -47,10 +47,11 @@ const HASH_SUFFIX = /^[0-9a-f]{8}$/;
  * leading '-' and '_' dropped, cut to 23, then '-' and 8 hex digits of
  * SHA-256. The 8 hex digits are matched by form, not recomputed: no
  * synchronous SHA-256 is available here. Migration 094 makes checkout
- * names unique per project, so no two repositories share a directory; the
- * only misread left is a project holding both `Web` (`web-29751047`) and a
- * repository literally named `web-<other 8 hex>`, when only the latter
- * changed the path.
+ * names unique per project, so no two repositories share a directory. The
+ * misread left: another repository of the project checked out as the same
+ * base plus 8 hex digits, either one literally named that (`web-1234abcd`
+ * beside `Web`) or one lux also rewrites to that base (`WEB` beside `Web`),
+ * when only that one changed the path.
  */
 function isHashedCheckout(segment: string, repo: string): boolean {
   if (LUX_NAME.test(repo)) return false;
