@@ -371,23 +371,8 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 	for name, trusted := range map[string]bool{"trusted": true, "untrusted": false} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
-			w.grant("IMPL_TOKEN", implToken, "implementer")
-			w.scriptedImplementer()
-			task := w.task()
-			w.deliver(task)
-			runID, luxID := w.basedImplementer(task)
-			work, err := w.lux.Checkout(luxID, "target")
-			if err != nil {
-				t.Fatal(err)
-			}
-			git := func(args ...string) string {
-				return gitOut(t, work, append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
-			}
-			if err := os.WriteFile(filepath.Join(work, "task.txt"), []byte("task\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			git("add", "task.txt")
-			git("commit", "-q", "-m", "Task work")
+			runID, luxID, git, commit := w.idleImplementerCheckout()
+			commit("task.txt", "task\n", "Task work")
 			line := strings.Repeat("b", 99) + "\n"
 			w.commitFileIn(w.gh.Repo, "main", "vendor.txt", strings.Repeat(line, (8<<20)/len(line)), "Vendor a large file")
 			w.fetchBase(runID)
@@ -398,10 +383,7 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 			if parents := strings.Fields(git("log", "-1", "--format=%P")); len(parents) != 2 {
 				t.Fatalf("HEAD has parents %v, want a merge", parents)
 			}
-			w.lux.EndTurn(luxID)
-			w.until("the implementer failed or pushed", func() bool {
-				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
-			})
+			w.endTurnUntilEnded(runID, luxID)
 			var reason, status string
 			_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&status, &reason)
 			switch {
@@ -420,33 +402,15 @@ func TestABaseMergedUnderItsTrustedFetchIsNotScanned(t *testing.T) {
 // commit lux reported is left out.
 func TestASecretBehindAMovedFetchRefIsStillRefused(t *testing.T) {
 	w := newWorld(t)
-	w.grant("IMPL_TOKEN", implToken, "implementer")
-	w.scriptedImplementer()
-	task := w.task()
-	w.deliver(task)
-	runID, luxID := w.basedImplementer(task)
-	work, err := w.lux.Checkout(luxID, "target")
-	if err != nil {
-		t.Fatal(err)
-	}
-	git := func(args ...string) string {
-		return gitOut(t, work, append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
-	}
+	runID, luxID, git, commit := w.idleImplementerCheckout()
 	w.commitFileIn(w.gh.Repo, "main", "base.txt", "base\n", "Base moved")
 	w.fetchBase(runID)
 	git("merge", "-q", "--no-edit", "lux/main")
-	if err := os.WriteFile(filepath.Join(work, "config.toml"), []byte("password = "+implToken+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	git("add", "config.toml")
-	git("commit", "-q", "-m", "Configure")
+	commit("config.toml", "password = "+implToken+"\n", "Configure")
 	git("rm", "-q", "config.toml")
 	git("commit", "-q", "-m", "Read the password from the environment")
 	git("update-ref", "refs/remotes/lux/main", "HEAD")
-	w.lux.EndTurn(luxID)
-	w.until("the implementer failed or pushed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
-	})
+	w.endTurnUntilEnded(runID, luxID)
 	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
 		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
 	}
@@ -455,4 +419,42 @@ func TestASecretBehindAMovedFetchRefIsStillRefused(t *testing.T) {
 	if !strings.Contains(reason, "IMPL_TOKEN in config.toml") {
 		t.Fatalf("reason %q, want IMPL_TOKEN in config.toml", reason)
 	}
+}
+
+// idleImplementerCheckout delivers a task whose implementer, given
+// IMPL_TOKEN, does nothing in its turn, and waits for its checkout's base:
+// its Run, its lux Run, git in its target checkout, and commit, which
+// writes content to file there and commits it.
+func (w *world) idleImplementerCheckout() (runID, luxID string, git func(args ...string) string, commit func(file, content, message string)) {
+	w.t.Helper()
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.scriptedImplementer()
+	task := w.task()
+	w.deliver(task)
+	runID, luxID = w.basedImplementer(task)
+	work, err := w.lux.Checkout(luxID, "target")
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	git = func(args ...string) string {
+		return gitOut(w.t, work, append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+	}
+	commit = func(file, content, message string) {
+		if err := os.WriteFile(filepath.Join(work, file), []byte(content), 0o644); err != nil {
+			w.t.Fatal(err)
+		}
+		git("add", file)
+		git("commit", "-q", "-m", message)
+	}
+	return runID, luxID, git, commit
+}
+
+// endTurnUntilEnded ends the lux Run's turn and waits for the Run to fail
+// or complete.
+func (w *world) endTurnUntilEnded(runID, luxID string) {
+	w.t.Helper()
+	w.lux.EndTurn(luxID)
+	w.until("the implementer failed or pushed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, runID) == 1
+	})
 }

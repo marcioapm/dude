@@ -16,13 +16,13 @@ import (
 // historyScript to read from "main" (its reflog's first entry).
 func historyRepo(t *testing.T) (dir string, git func(args ...string) string) {
 	t.Helper()
-	dir, git, _ = historyRepoWithOrigin(t)
+	dir, _, git, _ = historyRepoWithOrigin(t)
 	return dir, git
 }
 
-// historyRepoWithOrigin is historyRepo with git run in its origin too: the
-// base branch on GitHub.
-func historyRepoWithOrigin(t *testing.T) (dir string, git, inOrigin func(args ...string) string) {
+// historyRepoWithOrigin is historyRepo with its origin, the base branch on
+// GitHub, and git run there.
+func historyRepoWithOrigin(t *testing.T) (dir, originDir string, git, inOrigin func(args ...string) string) {
 	t.Helper()
 	root := t.TempDir()
 	origin, dir := filepath.Join(root, "origin"), filepath.Join(root, "repo")
@@ -39,7 +39,7 @@ func historyRepoWithOrigin(t *testing.T) (dir string, git, inOrigin func(args ..
 	run(origin, "commit", "-q", "--allow-empty", "-m", "base")
 	run(root, "clone", "-q", "--no-checkout", origin, dir)
 	run(dir, "checkout", "-q", "-B", "main", "origin/main")
-	return dir, func(args ...string) string { return run(dir, args...) },
+	return dir, origin, func(args ...string) string { return run(dir, args...) },
 		func(args ...string) string { return run(origin, args...) }
 }
 
@@ -160,20 +160,26 @@ func scannedHistory(out string) []SecretInWork {
 // fetching.
 func mergedBase(t *testing.T, before, resolution string) (dir, trusted string, git func(args ...string) string) {
 	t.Helper()
-	dir, git, inOrigin := historyRepoWithOrigin(t)
-	originDir := strings.TrimSpace(git("remote", "get-url", "origin"))
+	dir, origin, git, inOrigin := historyRepoWithOrigin(t)
 	writeCommit(t, dir, git, "conflict.txt", "task side\n", "Task side")
 	writeCommit(t, dir, git, "task.txt", before, "Task work")
 	line := strings.Repeat("b", 99) + "\n"
-	writeCommit(t, originDir, inOrigin, "base.txt", strings.Repeat(line, (historyLimit+historyLimit/2)/len(line)), "Base delta")
-	writeCommit(t, originDir, inOrigin, "conflict.txt", "base side\n", "Base side")
-	trusted = strings.TrimSpace(inOrigin("rev-parse", "HEAD"))
-	git("fetch", "-q", "origin", "+main:refs/remotes/lux/main")
+	writeCommit(t, origin, inOrigin, "base.txt", strings.Repeat(line, (historyLimit+historyLimit/2)/len(line)), "Base delta")
+	writeCommit(t, origin, inOrigin, "conflict.txt", "base side\n", "Base side")
+	trusted = fetchAsLux(git, inOrigin)
 	if out, err := exec.Command("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@x", "merge", "-q", "lux/main").CombinedOutput(); err == nil {
 		t.Fatalf("the merge did not conflict: %s", out)
 	}
 	writeCommit(t, dir, git, "conflict.txt", resolution, "Merge lux/main")
 	return dir, trusted, git
+}
+
+// fetchAsLux fetches origin's main into refs/remotes/lux/main, as lux
+// does, and returns the commit fetched: the trusted base.
+func fetchAsLux(git, inOrigin func(args ...string) string) string {
+	trusted := strings.TrimSpace(inOrigin("rev-parse", "HEAD"))
+	git("fetch", "-q", "origin", "+main:refs/remotes/lux/main")
+	return trusted
 }
 
 // A base delta larger than historyLimit, merged under a trusted base, is
@@ -230,11 +236,9 @@ func TestASecretInATaskCommitBeforeTheMergeIsFoundUnderATrustedBase(t *testing.T
 // remerge-diff skips an octopus merge: a secret one adds is still found,
 // read against each parent.
 func TestASecretInAnOctopusMergeIsFoundUnderATrustedBase(t *testing.T) {
-	dir, git, inOrigin := historyRepoWithOrigin(t)
-	originDir := strings.TrimSpace(git("remote", "get-url", "origin"))
-	writeCommit(t, originDir, inOrigin, "base.txt", "base\n", "Base")
-	trusted := strings.TrimSpace(inOrigin("rev-parse", "HEAD"))
-	git("fetch", "-q", "origin", "+main:refs/remotes/lux/main")
+	dir, origin, git, inOrigin := historyRepoWithOrigin(t)
+	writeCommit(t, origin, inOrigin, "base.txt", "base\n", "Base")
+	trusted := fetchAsLux(git, inOrigin)
 	git("checkout", "-q", "-b", "side")
 	writeCommit(t, dir, git, "side.txt", "side\n", "Side")
 	git("checkout", "-q", "main")
