@@ -57,7 +57,7 @@ describe("the session's project secrets", () => {
 
   test("the header names how many it was given, after the machine; the tip lists names and no value", async () => {
     const page = await session({ client: new RunClient({ projectSecretNames: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_PASSWORD"] }) });
-    const shown = await until(() => allByRole<HTMLButtonElement>(page, "button", NAME)[0], "the secrets chip");
+    const shown = await until(() => allByRole(page, "button", NAME)[0] as HTMLButtonElement | undefined, "the secrets chip");
     expect(shown.textContent).toBe("2 secrets");
     const machine = machineChip(page)!;
     expect(machine.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
