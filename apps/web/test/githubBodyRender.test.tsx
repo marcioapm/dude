@@ -8,7 +8,7 @@ import { act, click, mount } from "./dom.ts";
 
 let unmount: (() => Promise<void>) | undefined;
 const toggle = (root: HTMLElement, name = "Show all") =>
-  [...root.querySelectorAll<HTMLButtonElement>('button, [role="button"]')].find((button) => button.textContent === name);
+  [...root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === name);
 afterEach(async () => { await unmount?.(); unmount = undefined; });
 
 describe("GitHub bodies in Activity", () => {
@@ -55,11 +55,7 @@ describe("GitHub bodies in Activity", () => {
     unmount = page.unmount;
     const links = [...page.container.querySelectorAll("a")];
     expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([["https", "https://example.com"]]);
-    expect(page.container.textContent).toContain("js");
-    expect(page.container.textContent).toContain("data");
-    expect(page.container.textContent).toContain("entity");
-    expect(page.container.textContent).toContain("numeric");
-    expect(page.container.textContent).toContain("md");
+    expect(page.container.textContent).toBe("https js data entity numeric md");
   });
 
   // happy-dom has no layout: a 24px line, 1200px tall for over 1000 characters or an open disclosure, 24px otherwise.

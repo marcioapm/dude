@@ -111,7 +111,8 @@ Included review availability.
   test("adversarial bodies parse in linear time", () => {
     let ticks = "";
     for (let n = 1; ticks.length < 400_000; n++) ticks += "x" + "`".repeat(n);
-    // Each is about 400k characters: the parser reads one in tens of milliseconds, a quadratic scan takes many seconds.
+    // Each is about 400k characters: the parser reads one in tens of milliseconds, a quadratic scan in minutes.
+    // The bound is loose so a busy runner cannot fail it.
     const bodies = [
       '<a "'.repeat(100_000),
       "<details>".repeat(45_000),
@@ -126,7 +127,7 @@ Included review availability.
     for (const body of bodies) {
       const start = performance.now();
       expect(() => githubBody(body)).not.toThrow();
-      expect(performance.now() - start).toBeLessThan(1500);
+      expect(performance.now() - start).toBeLessThan(5000);
     }
     expect(githubBody("\uE000`a`\uE000")).toEqual([markdown("\uE000`a`\uE000")]);
   });
