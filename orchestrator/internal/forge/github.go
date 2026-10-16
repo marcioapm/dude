@@ -1545,8 +1545,8 @@ type PullRequestRead struct {
 	Body       string
 	Draft      bool
 	Head, Base string
-	Reviews        []ReviewRead
-	ReviewsCut     bool
+	Reviews    []ReviewRead
+	ReviewsCut bool
 	// Only the threads nobody resolved; ThreadsUnknown when GitHub would
 	// not say (see unresolvedThreads).
 	Threads        []ThreadRead

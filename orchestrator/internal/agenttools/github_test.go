@@ -89,7 +89,7 @@ func BenchmarkFitThreadShape(b *testing.B) {
 
 func TestCutBytesKeepsWholeUTF8Prefix(t *testing.T) {
 	for _, tc := range []struct {
-		text string
+		text        string
 		limit, want int
 	}{{strings.Repeat("界", 3000), 8192, 8190}, {strings.Repeat("𐀀", 3000), 8191, 8188}, {strings.Repeat("𐀀", 3000), 8192, 8192}} {
 		got := cutBytes(tc.text, tc.limit)

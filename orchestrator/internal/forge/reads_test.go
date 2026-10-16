@@ -1,15 +1,15 @@
 package forge
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,7 +222,7 @@ func TestAgentReviewsFetchOnlyBoundedHistory(t *testing.T) {
 			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 			size, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 			batch := []map[string]any{}
-			for i := (page-1)*size; i < min(page*size, 120); i++ {
+			for i := (page - 1) * size; i < min(page*size, 120); i++ {
 				batch = append(batch, map[string]any{"state": "COMMENTED", "body": "review", "submitted_at": "2026-01-01T00:00:00Z"})
 			}
 			_ = json.NewEncoder(w).Encode(batch)
