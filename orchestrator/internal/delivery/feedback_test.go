@@ -378,6 +378,36 @@ func TestASubmitOnABlockedTaskNeverDeliveredWaits(t *testing.T) {
 	}
 }
 
+// A fix Run restarted carries the same people's items: its replacement is
+// given them again, and they are delivered to it.
+func TestARestartedFixerIsGivenTheSameFeedback(t *testing.T) {
+	w := newFeedbackWorld(t)
+	wf := w.delivery(t, "awaitFix", "policy", `["phase.finished"]`)
+	w.run(t, "run_fix", "ABS-1", "fix", "implementer", "running")
+	w.exec(t, `UPDATE workflow_runs SET state = jsonb_set(state, '{pendingRunIds}', '["run_fix"]') WHERE id = $1`, wf)
+	w.draft(t, "fbi_1", w.ana, "one")
+	if _, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(t, `UPDATE runs SET feedback_item_ids = '{fbi_1}' WHERE id = 'run_fix'`)
+	w.exec(t, `UPDATE feedback_items SET status = 'delivered', delivered_run_id = 'run_fix', directive_id = NULL WHERE id = 'fbi_1'`)
+	var fresh string
+	w.in(t, func(tx pgx.Tx) (err error) {
+		fresh, err = delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_fix", Note: "stuck",
+			Actor: delivery.Writer{ActorType: "person", ActorID: w.ana}})
+		return err
+	})
+	var ids []string
+	var given string
+	if err := w.owner.QueryRow(context.Background(), `SELECT r.feedback_item_ids, COALESCE(f.delivered_run_id, '')
+		FROM runs r, feedback_items f WHERE r.id = $1 AND f.id = 'fbi_1'`, fresh).Scan(&ids, &given); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "fbi_1" || given != fresh || w.status(t, "fbi_1") != "delivered" {
+		t.Errorf("the restarted fixer %s carries %v; fbi_1 is %s with %q", fresh, ids, w.status(t, "fbi_1"), given)
+	}
+}
+
 // Done refuses; failed and aborted say Recover; the drafts stay.
 func TestEndedTasksRefuseAndKeepTheDrafts(t *testing.T) {
 	for status, want := range map[string]string{"done": "follow-up", "failed": "Recover", "aborted": "Recover"} {

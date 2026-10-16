@@ -3,6 +3,7 @@ package agenttools_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"slices"
@@ -109,6 +110,36 @@ func TestFeedbackFromTheShellByRole(t *testing.T) {
 	}
 	if status := f.postAs(t, conductor, "feedback_resolve", `{"id":"fbi_two","commit":"abcdef1"}`, &res); status != 404 {
 		t.Errorf("the conductor's resolve: %d", status)
+	}
+}
+
+// The conductor at the decision before the pull request, with a person's
+// item open: open_pull_request is refused naming the feedback, and a fix
+// for it is taken.
+func TestTheConductorOpensNoPullRequestPastOpenFeedback(t *testing.T) {
+	f := feedbackFixture(t)
+	conductor := f.conductor(t)
+	mustExec(t, f.owner, `UPDATE feedback_items SET status = 'replied' WHERE id = 'fbi_two'`)
+	mustExec(t, f.owner, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id,
+			awaiting_signals)
+		VALUES ('wfr_g', $1, 'task.delivery', 'delivery:g', 'waiting', 'conductorDecision',
+			jsonb_build_object('taskId', $2::text, 'decider', 'conductor', 'attempt', 1, 'policy', jsonb_build_object('maxReviewIterations', 5,
+				'maxAttemptsPerFinding', 2), 'decision', jsonb_build_object('point', 'before_pull_request', 'policy', 'openPullRequest')),
+			$2, '["conductor.decision"]')`, f.org, f.item)
+	var refused map[string]any
+	if status := f.postAs(t, conductor, "decide", `{"action":"open_pull_request"}`, &refused); status != 422 ||
+		!strings.Contains(fmt.Sprint(refused["error"]), "feedback items from people are not handled") {
+		t.Fatalf("open_pull_request with an item open: %d %v", status, refused)
+	}
+	var taken map[string]any
+	if status := f.postAs(t, conductor, "start_phase", `{"phase":"fix"}`, &taken); status != 200 {
+		t.Fatalf("start_phase fix: %d %v", status, taken)
+	}
+	var action, phase string
+	_ = f.owner.QueryRow(context.Background(), `SELECT state->'decision'->'taken'->>'action', state->'decision'->'taken'->>'phase'
+		FROM workflow_runs WHERE id = 'wfr_g'`).Scan(&action, &phase)
+	if action != "start_phase" || phase != "fix" {
+		t.Errorf("the decision taken: %s %s", action, phase)
 	}
 }
 

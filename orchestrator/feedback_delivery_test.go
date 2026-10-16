@@ -98,12 +98,23 @@ func TestFeedbackOnWorkReadyToReadStartsAFixerAndBoundsIt(t *testing.T) {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitRead' AND status = 'waiting'`, wi) == 1
 	})
 	fixesBefore := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi)
+	// An item open with no signal sent: the delivery still waits on its
+	// reader, and mark done is refused for the item alone.
+	mustExec(t, w.owner, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+		SELECT 'fbt_quiet', $1, $2, task_attempt($2), person_id, 'quiet' FROM api_keys WHERE id = $3`, w.org, wi, ana)
+	mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind,
+			anchor, status, submitted_at)
+		SELECT 'fbi_quiet', $1, $2, task_attempt($2), 'fbt_quiet', person_id, 'Quiet', 'general', '{"kind":"general"}', 'open', now()
+		FROM api_keys WHERE id = $3`, w.org, wi, ana)
+	if code, body := w.callAs(ana, "/internal/tasks/"+wi+"/done", map[string]any{}); code != 409 ||
+		!strings.Contains(fmt.Sprint(body["error"]), "feedback_open") {
+		t.Errorf("mark done with an item open: %d %v", code, body)
+	}
+	if code, body := w.callAs(ana, "/internal/feedback/fbi_quiet/resolve", map[string]any{}); code != 200 {
+		t.Fatalf("resolve the quiet item: %d %v", code, body)
+	}
 	if code, body := w.feedback(ana, wi, "fbi_read", "The summary should list the open risks first."); code != 201 {
 		t.Fatalf("submit: %d %v", code, body)
-	}
-	// Mark done is refused while it is open.
-	if code, _ := w.callAs(ana, "/internal/tasks/"+wi+"/done", map[string]any{}); code != 409 {
-		t.Errorf("mark done with feedback open: %d", code)
 	}
 	w.until("stuck on the person's item", func() bool {
 		var reason, ids string

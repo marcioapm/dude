@@ -74,3 +74,37 @@ func TestAcceptingAnExhaustedLoopResolvesThePeoplesFeedback(t *testing.T) {
 		t.Errorf("open for the pull request gate: %v %v", open, err)
 	}
 }
+
+// A person's item open as the step that opens the pull request runs (one
+// submitted after the review loop's exit): a fixer first, no pull request.
+func TestNoPullRequestOpensPastAnOpenItem(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, sql := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_x', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+			VALUES ('wi_x', $1, 'prj_x', 1, 'Greet', 'greet', 'running')`,
+		`INSERT INTO people (id, organization_id, name) VALUES ('per_ana_'||$1, $1, 'Ana')`,
+		`INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+			VALUES ('fbt_x', $1, 'wi_x', 1, 'per_ana_'||$1, 'k')`,
+		`INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind, anchor,
+				status, submitted_at)
+			VALUES ('fbi_late', $1, 'wi_x', 1, 'fbt_x', 'per_ana_'||$1, 'Late', 'general', '{"kind":"general"}', 'open', now())`,
+	} {
+		if _, err := owner.Exec(ctx, sql, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &steps{s: &Store{DB: app}}
+	st := &State{TaskID: "wi_x", ProjectID: "prj_x", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"}}
+	raw, _ := json.Marshal(st)
+	res, err := w.openPullRequest(ctx, workflow.StepContext{WorkflowRunID: "wf_x", OrganizationID: org, Step: "openPullRequest", State: raw})
+	if err != nil || res.Next != "fix" {
+		t.Fatalf("openPullRequest with an item open went to %q: %v", res.Next, err)
+	}
+	var prs int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM pull_requests WHERE task_id = 'wi_x'`).Scan(&prs); err != nil || prs != 0 {
+		t.Errorf("%d pull requests opened: %v", prs, err)
+	}
+}
