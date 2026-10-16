@@ -1474,6 +1474,14 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if existing == "" {
+		// The last round's candidate never reached the pull request (a
+		// promoted one has nothing pending): what its fixers resolved goes
+		// to this round's fixer.
+		if err := w.s.abandonCandidate(ctx, sc.OrganizationID, st); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	if existing == "" && gh != nil {
 		// What GitHub has, not what dude last pushed: a person may have
 		// pushed since, and a fix from dude's head would fail to
@@ -1731,7 +1739,7 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 		}
 		moved[repo] = to
 	}
-	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved, true); err != nil {
 		return workflow.Result{}, err
 	}
 	for repo := range moved {
@@ -1758,7 +1766,8 @@ const forgeWaitMin = 5 * time.Second
 // branches a forge race let move before it (by repository, to the
 // candidate's head): recorded, their reviewers asked again and their
 // descriptions brought up to them. The delivery goes on from what each
-// branch holds.
+// branch holds; the candidate's resolutions hold only in the moved ones
+// (CandidateMovedTx), and are reopened in the rest.
 func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string, moved map[string]string) (workflow.Result, error) {
 	c := st.Candidate
 	detail := map[string]any{"repo": repo, "expected": c.From[repo], "found": found, "candidate": st.Heads[repo],
@@ -1768,7 +1777,8 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	} else if n > 0 {
 		detail["number"] = n
 	}
-	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
+	// The candidate goes no further: its resolutions hold where it moved.
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved, true); err != nil {
 		return workflow.Result{}, err
 	}
 	// What the pull request shows is what the delivery stands on now; a
@@ -2091,6 +2101,11 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Kept, so the task can be picked back up where it stopped.
 		e.Decided = nil
 		st.Stopped = e
+		if st.Candidate != nil {
+			if err := w.s.abandonCandidate(ctx, sc.OrganizationID, st); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")

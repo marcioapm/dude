@@ -172,11 +172,34 @@ func (s *Store) pullRequestNumber(ctx context.Context, org string, st *State, re
 // was moved to the candidate's (moved, by repository): their checks are
 // yet to run on it, as after any push; and the move, once per pull
 // request and head.
-func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, moved map[string]string) error {
-	if len(moved) == 0 {
-		return nil
-	}
+//
+// The candidate's Runs' resolutions are verified in the same transaction
+// in each repository moved to an open pull request (or to one not opened
+// yet): a commit that held at the candidate's head holds at the head the
+// branch was fast-forwarded to. With abandon, the round is over and the
+// rest are reopened for the next fixer.
+func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, moved map[string]string, abandon bool) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var verify []string
+		for _, repo := range slices.Sorted(maps.Keys(moved)) {
+			// A pull request merged or closed while the candidate was checked
+			// never took the candidate's commits.
+			var ended bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+				WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('merged', 'closed'))
+				AND NOT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+				WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('open', 'draft'))`, st.PullRequestIDs, repo).Scan(&ended); err != nil {
+				return err
+			}
+			if !ended {
+				verify = append(verify, repo)
+			}
+		}
+		if st.Candidate != nil {
+			if err := candidateResolutionsTx(ctx, tx, org, st.TaskID, st.Attempt, st.Candidate.Branch, verify, abandon); err != nil {
+				return err
+			}
+		}
 		for _, repo := range slices.Sorted(maps.Keys(moved)) {
 			var id string
 			var number int
@@ -205,4 +228,65 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 		}
 		return nil
 	})
+}
+
+// AbandonCandidateTx reopens the pending resolutions of the candidate
+// branch's Runs (task, attempt; 0 for the task's current) when its round
+// ends without reaching the pull request: the next fixer is given them.
+func AbandonCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string) error {
+	return candidateResolutionsTx(ctx, tx, org, taskID, attempt, branch, nil, true)
+}
+
+// abandonCandidate is AbandonCandidateTx for the delivery's candidate
+// branch, in a transaction of its own.
+func (s *Store) abandonCandidate(ctx context.Context, org string, st *State) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return AbandonCandidateTx(ctx, tx, org, st.TaskID, st.Attempt, st.candidateBranch())
+	})
+}
+
+// candidateResolutionsTx settles the pending resolutions made by the Runs
+// that published to branch: verified in a repository of verify; in any
+// other, reopened with reopen, else left pending.
+func candidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string, verify []string, reopen bool) error {
+	rows, err := tx.Query(ctx, `SELECT f.id, f.resolved_by_run_id, COALESCE(f.resolved_commit, ''), COALESCE(f.resolved_repo, '')
+		FROM feedback_items f JOIN runs r ON r.id = f.resolved_by_run_id
+		WHERE r.task_id = $1 AND r.attempt = `+attemptOr+` AND r.branch = $3
+		  AND f.status = 'resolved' AND f.resolved_verified_at IS NULL
+		ORDER BY f.id FOR UPDATE OF f`, taskID, attempt, branch)
+	if err != nil {
+		return err
+	}
+	type pending struct{ ID, RunID, Commit, Repo string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[pending])
+	if err != nil {
+		return err
+	}
+	for _, p := range got {
+		ref := RunRef{Org: org, TaskID: taskID, RunID: p.RunID}
+		if slices.Contains(verify, p.Repo) {
+			if _, err := tx.Exec(ctx, `UPDATE feedback_items SET resolved_verified_at = now(), updated_at = now() WHERE id = $1`, p.ID); err != nil {
+				return err
+			}
+			if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackResolved, ledger.ActorSystem,
+				map[string]any{"itemId": p.ID, "commit": p.Commit, "repo": p.Repo, "verified": true})); err != nil {
+				return err
+			}
+			continue
+		}
+		if !reopen {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+` WHERE id = $1`, p.ID); err != nil {
+			return err
+		}
+		if _, err := historyTx(ctx, tx, org, p.ID, "reopen", "", p.RunID, "its commit never reached the pull request", ""); err != nil {
+			return err
+		}
+		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
+			map[string]any{"itemId": p.ID, "why": "not_published"})); err != nil {
+			return err
+		}
+	}
+	return nil
 }

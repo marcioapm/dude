@@ -1086,6 +1086,18 @@ func ResolutionHolds(ctx context.Context, cmp Comparer, repo, base, head, commit
 // open again for the next fixer. A resolution left out of held is
 // reopened: its commit was not published.
 func SettleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
+	return settleResolutionsTx(ctx, tx, org, runID, held, true)
+}
+
+// SettleCandidateResolutionsTx is SettleResolutionsTx for a Run that
+// published to a candidate branch: what does not hold is reopened, and
+// what holds stays pending (still blocking) until the pull request's
+// branch reaches the candidate's head (CandidateMovedTx).
+func SettleCandidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
+	return settleResolutionsTx(ctx, tx, org, runID, held, false)
+}
+
+func settleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool, verify bool) error {
 	pending, err := PendingResolutionsTx(ctx, tx, runID)
 	if err != nil {
 		return err
@@ -1093,6 +1105,9 @@ func SettleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held
 	for _, p := range pending {
 		ref := RunRef{Org: org, TaskID: p.TaskID, RunID: runID}
 		if held[p.ID] {
+			if !verify {
+				continue
+			}
 			if _, err := tx.Exec(ctx, `UPDATE feedback_items SET resolved_verified_at = now(), updated_at = now() WHERE id = $1`, p.ID); err != nil {
 				return err
 			}

@@ -295,8 +295,15 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   nothing) by another `prFix`, within `MaxPRFixIterations`. An
   agent replies (`replied` holds nothing) or resolves with a commit, which
   holds until its Run publishes and GitHub's compare shows the commit in
-  the published head and new since the Run's base. A merge on GitHub's own
-  page is not blocked.
+  the published head and new since the Run's base. A resolution on a
+  candidate is checked against the candidate's head as its Run finishes
+  (reopened if it does not hold), but becomes verified only at promotion
+  (`CandidateMovedTx`, in the repositories moved): until then it blocks as
+  an open item does. A round that ends without promotion (refused by a
+  person's push, a retry's `prFix`, a person's stop or a Run abort)
+  reopens it for the next fixer. A candidate is promoted even while an item
+  its fixers were given is still open; the gates above hold that item. A
+  merge on GitHub's own page is not blocked.
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that

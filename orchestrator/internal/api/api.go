@@ -1016,6 +1016,15 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 				return err
 			}
 		}
+		// A pull request fix being checked on its candidate stops short of
+		// the pull request: what its fixers resolved is open again.
+		if d, err := delivery.ReadDelivery(r.Context(), tx, ri.TaskID); err != nil {
+			return err
+		} else if d != nil && d.Live() && d.State.Candidate != nil {
+			if err := delivery.AbandonCandidateTx(r.Context(), tx, org, ri.TaskID, d.State.Attempt, d.State.Candidate.Branch); err != nil {
+				return err
+			}
+		}
 		// The task stops too: an aborted Run should not leave its work
 		// item looking like it is still progressing.
 		// Through the one way statuses change, so it is recorded like any
