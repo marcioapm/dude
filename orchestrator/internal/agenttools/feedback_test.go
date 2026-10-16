@@ -9,6 +9,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // feedbackFixture is the fixture task with Ana's submitted item and her
@@ -159,7 +164,7 @@ func TestTheConductorPassesFeedbackByIDInThePersonsWords(t *testing.T) {
 	_ = f.owner.QueryRow(context.Background(), `SELECT d.text, r.feedback_item_ids FROM directives d JOIN runs r ON r.id = d.run_id
 		WHERE d.run_id = 'run_fix'`).Scan(&text, &ids)
 	if !strings.HasPrefix(text, "Start with these.") || !strings.Contains(text, "### fbi_open — Ana") ||
-		!strings.Contains(text, "> Name the flag --dry-run, as git does.") || strings.Contains(text, "fbi_two") {
+		strings.Count(text, "> Name the flag --dry-run, as git does.") != 1 || strings.Contains(text, "fbi_two") {
 		t.Errorf("the steer:\n%s", text)
 	}
 	if len(ids) != 1 || ids[0] != "fbi_open" {
@@ -192,5 +197,50 @@ func TestTheConductorPassesFeedbackByIDInThePersonsWords(t *testing.T) {
 	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM directives WHERE text LIKE '%secret draft%' OR run_id = 'run_rev'`).Scan(&n)
 	if n != 0 {
 		t.Error("a refused steer was queued")
+	}
+}
+
+// A person's Interrupt now on the conductor's feedback steer sends the
+// run.steered text back: the agent gets the person's words again, once, as
+// the same instruction, settled to the conductor.
+func TestInterruptNowOnAConductorsFeedbackSteerResendsThePersonsWords(t *testing.T) {
+	f := feedbackFixture(t)
+	conductor := f.conductor(t)
+	f.run(t, "run_fix", "implementer", "running")
+	var res map[string]any
+	if status := f.postAs(t, conductor, "steer", `{"run":"run_fix","text":"Start with these.","feedbackIds":["fbi_open"]}`, &res); status != 200 {
+		t.Fatalf("steer with feedback: %d %v", status, res)
+	}
+	ctx := context.Background()
+	var first, said string
+	_ = f.owner.QueryRow(ctx, `SELECT payload->>'directiveId', payload->>'text' FROM events
+		WHERE run_id = 'run_fix' AND event_type = 'run.steered'`).Scan(&first, &said)
+	var again delivery.Steered
+	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		var err error
+		again, err = delivery.Steer(ctx, tx, f.org, delivery.SteerInput{RunID: "run_fix", Text: said, Supersedes: first,
+			Interrupt: true, Actor: delivery.Writer{ActorType: ledger.ActorHuman, ActorID: "per_ana_" + f.org}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	var resends, conductorRun *string
+	var interruptOnly *bool
+	_ = f.owner.QueryRow(ctx, `SELECT text, resends, interrupt_only, conductor_run_id FROM directives WHERE id = $1`, again.ID).
+		Scan(&text, &resends, &interruptOnly, &conductorRun)
+	if !strings.HasPrefix(text, "Start with these.") || strings.Count(text, "> Name the flag --dry-run, as git does.") != 1 {
+		t.Errorf("the resent steer:\n%s", text)
+	}
+	if resends == nil || *resends != first || interruptOnly != nil {
+		t.Errorf("resends %v, interrupt_only %v: want %s and unset", resends, interruptOnly, first)
+	}
+	if conductorRun == nil || *conductorRun != "run_cond" {
+		t.Errorf("conductor_run_id %v, want run_cond", conductorRun)
+	}
+	var leaked int
+	_ = f.owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE payload::text LIKE '%Name the flag%'`).Scan(&leaked)
+	if leaked != 0 {
+		t.Error("the ledger carries the person's words")
 	}
 }

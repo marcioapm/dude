@@ -90,6 +90,23 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	default:
 		return Steered{}, steerErr("conflict", "run %s is %s and can no longer be steered", in.RunID, status)
 	}
+	if in.Supersedes != "" && in.FeedbackWords == "" {
+		// run.steered of a steer carrying feedback has only the steerer's
+		// words, which Retry and Interrupt now send back: the repeat is the
+		// directive's full text, the people's words included.
+		var full string
+		var feedbackIDs []string
+		err := tx.QueryRow(ctx, `SELECT d.text, ARRAY(SELECT jsonb_array_elements_text(e.payload->'feedbackItemIds'))
+			FROM directives d JOIN events e ON e.run_id = d.run_id AND e.event_type = $3 AND e.payload->>'directiveId' = d.id
+			WHERE d.id = $1 AND d.run_id = $2 AND e.payload ? 'feedbackItemIds' AND e.payload->>'text' = $4
+			LIMIT 1`, in.Supersedes, in.RunID, EvRunSteered, said).Scan(&full, &feedbackIDs)
+		switch {
+		case err == nil:
+			in.Text, in.FeedbackIDs = full, feedbackIDs
+		case !db.IsNotFound(err):
+			return Steered{}, err
+		}
+	}
 	if in.Supersedes != "" {
 		if err := checkRepeat(ctx, tx, in.RunID, in.Supersedes, in.Text, len(in.AttachmentIDs) > 0); err != nil {
 			return Steered{}, err
