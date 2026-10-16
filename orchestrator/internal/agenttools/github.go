@@ -336,11 +336,14 @@ func newWrapper() wrapper {
 	return wrapper{id: hex.EncodeToString(b[:])}
 }
 
-// text is s wrapped as external text, cut to limit bytes first.
+// text is s wrapped as external text, cut to limit bytes first. Invalid
+// UTF-8 is replaced (U+FFFD) before the cut, so the cut and its count are
+// of what the agent is shown.
 func (w wrapper) text(s string, limit int) string {
 	if s == "" {
 		return ""
 	}
+	s = strings.ToValidUTF8(s, "\uFFFD")
 	cut := ""
 	if len(s) > limit {
 		cut = fmt.Sprintf(" %s: %d of %d bytes", cutMark, len(cutBytes(s, limit)), len(s))
@@ -357,12 +360,13 @@ func (w wrapper) labels(ls []string) []string {
 	return out
 }
 
-// cutBytes is s's first limit bytes, ending on a whole character.
+// cutBytes is s's first limit bytes, ending on a whole character. s is
+// valid UTF-8 (text made it so), so at most UTFMax-1 bytes are given back.
 func cutBytes(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	for limit > 0 && !utf8.RuneStart(s[limit]) {
+	for i := 0; i < utf8.UTFMax && limit > 0 && !utf8.RuneStart(s[limit]); i++ {
 		limit--
 	}
 	return s[:limit]

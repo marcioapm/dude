@@ -2,6 +2,7 @@ package agenttools
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -176,6 +177,36 @@ func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
 			}
 			if !balancedQuotes(after, w.id) {
 				t.Error("a quote lost its end")
+			}
+		})
+	}
+}
+
+// GitHub text with invalid UTF-8 reaches the agent as valid UTF-8, each
+// invalid sequence one U+FFFD, cut on a whole character and counted as
+// what is shown.
+func TestInvalidUTF8FromGitHubIsReplacedBeforeTheCut(t *testing.T) {
+	w := wrapper{id: "utf8"}
+	for _, tc := range []struct {
+		name, text string
+		limit      int
+		want       string
+	}{
+		{"malformed leading byte", "\xffab", 100, "\uFFFDab"},
+		{"truncated sequence", "ab\xe7\x95", 100, "ab\uFFFD"},
+		{"interior invalid sequence", "a\xc0\xafb", 100, "a\uFFFDb"},
+		{"cut after a malformed leading byte", "\xffabcdef", 4, "\uFFFDa"},
+		{"cut through a replaced sequence", "ab\xe7\x95cdef", 4, "ab"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := w.text(tc.text, tc.limit)
+			inner, _, _ := strings.Cut(strings.TrimPrefix(got, "⟦external utf8⟧"), "⟦/external utf8⟧")
+			if !utf8.ValidString(got) || inner != tc.want {
+				t.Fatalf("text(%q, %d) = %q, want %q inside, valid UTF-8", tc.text, tc.limit, got, tc.want)
+			}
+			normalised := strings.ToValidUTF8(tc.text, "\uFFFD")
+			if len(normalised) > tc.limit && !strings.HasSuffix(got, fmt.Sprintf("%s: %d of %d bytes", cutMark, len(tc.want), len(normalised))) {
+				t.Errorf("cut note: %q", got)
 			}
 		})
 	}
