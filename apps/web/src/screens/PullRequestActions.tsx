@@ -83,8 +83,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
       </Button>
     );
   }
-  // GitHub cannot update a branch that conflicts: dude's integration Run
-  // resolves it instead, reviewed and tested before it is pushed.
+  // GitHub cannot update a branch that conflicts: an agent merges the base
+  // in and resolves it, then dude reviews and tests it.
   if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
     facts.base = (
       <Button size="sm" disabled={busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
@@ -94,7 +94,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
     );
   } else if (pr.mergeable === "conflicting") {
     facts.base = (
-      <Tooltip content="An agent merges the base into the branch and resolves the conflicts; dude reviews and tests it before pushing">
+      <Tooltip content="An agent merges the base into the branch and resolves the conflicts; then dude reviews and tests it">
         <Button size="sm" disabled={busy !== null} onClick={() => void act("resolve", () => client.resolvePullRequestConflicts(pr.id))}
           data-testid="pr-resolve-conflicts">
           {busy === "resolve" ? "Asking…" : "Resolve conflicts"}

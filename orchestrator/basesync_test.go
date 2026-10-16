@@ -164,6 +164,10 @@ func TestBeforePRMergesMovedBaseAndAdoptsHead(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='merge-base'`, wi); n != 1 {
 		t.Fatalf("merge events %d", n)
 	}
+	// GitHub merged it cleanly: nothing was resolved, reviewed or tested by an agent's integration.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action' LIKE 'integration-%'`, wi); n != 0 {
+		t.Fatalf("%d integration lines for a clean server merge", n)
+	}
 }
 
 func TestIntegrationWaitsForAnExistingWriter(t *testing.T) {
@@ -634,7 +638,7 @@ func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T
 	if err := json.Unmarshal(raw, &e); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(e.Actions(), " ") != "retry wait stop" || !strings.Contains(string(raw), "still conflicting after integration") {
+	if strings.Join(e.Actions(), " ") != "retry wait stop" || !strings.Contains(string(raw), `"cause": "still_conflicting"`) {
 		t.Fatalf("escalation %s, actions %v", raw, e.Actions())
 	}
 	if n := w.count(integrations, wi); n != 1 {

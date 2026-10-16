@@ -1008,7 +1008,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 				continue
 			}
 			if mergeable == forge.MergeConflicting {
-				return w.integrationFailure(ctx, sc, st, reasonStillConflicting)
+				return w.integrationFailure(ctx, sc, st, causeStillConflicting, reasonStillConflicting)
 			}
 			if mergeable == forge.MergeUnknown {
 				if st.Integration.Polls < unknownMergeabilityPolls {
@@ -1040,7 +1040,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		if err := w.s.RerequestReviews(ctx, sc.OrganizationID, st, gh, st.Heads); err != nil {
 			return workflow.Result{}, err
 		}
-		if settled {
+		// A merge GitHub made cleanly resolved nothing: its own merge-base
+		// line says what happened.
+		if settled && st.Integration.agentRun() {
 			if err := w.integrationEvent(ctx, sc, st, "integration-completed", map[string]any{"head": st.Heads[st.Integration.Repo]}); err != nil {
 				return workflow.Result{}, err
 			}
@@ -1226,7 +1228,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
 			if st.Integration != nil {
-				return w.integrationFailure(ctx, sc, st, reasonPairAttempted)
+				return w.integrationFailure(ctx, sc, st, causePairAttempted, reasonPairAttempted)
 			}
 			gh, err := w.forges.For(ctx, sc.OrganizationID)
 			if err != nil {
@@ -1512,7 +1514,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	if !out.Succeeded {
 		if st.Integration != nil {
-			return w.integrationFailure(ctx, sc, st, out.Error)
+			return w.integrationFailure(ctx, sc, st, causeRunFailed, out.Error)
 		}
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}

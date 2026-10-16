@@ -17,6 +17,7 @@ import { runLabel } from "@dude/domain";
 import type { ApiClient, EscalationAction, Person, TaskDetail } from "../api/client.ts";
 import { escalationWords, needsReason, testCriteria } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { MonoWords } from "../monoWords.tsx";
 
 const ACTION_LABEL: Record<EscalationAction, string> = {
   resume: "Resume it",
@@ -91,7 +92,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
     <Callout tone="attention" data-testid="escalation" data-reason={reason}>
       <div className="escalation">
         <p>
-          <strong>{words.short}.</strong> {words.sentence}{" "}
+          <strong>{words.short}.</strong> {words.parts ? <MonoWords words={words.parts} /> : words.sentence}{" "}
           {words.runId ? (
             <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRun(words.runId!)}
               data-testid="escalation-run">

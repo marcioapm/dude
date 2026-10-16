@@ -88,6 +88,7 @@ import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
+import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
@@ -1324,7 +1325,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         const who = line.actorId ? face : line.who
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
-        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
+        const said = line.parts ? <MonoWords words={line.parts} /> : line.text;
+        const text = line.actorId ? <>{person} {said}</> : line.byDude ? <><b>{dude}</b> {said}</> : said;
         out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }

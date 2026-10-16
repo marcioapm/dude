@@ -10,12 +10,15 @@
 
 import type { Escalation } from "@dude/domain";
 import { plural } from "@dude/design-system";
+import { integrationCause, plainWords, type Words } from "./pullRequests.ts";
 
 export interface EscalationWords {
   /** A few words, for a row: "Implementer failed". */
   short: string;
   /** A sentence, for the task's page. */
   sentence: string;
+  /** The sentence with a branch or base marked, where it names one. */
+  parts?: Words | undefined;
   /** The Run it is about, when the workflow named one: where to look. */
   runId: string | null;
 }
@@ -122,14 +125,11 @@ export function escalationWords(e: Escalation): EscalationWords {
     case "pull_request_conflict": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
       if (d.integration === true) {
-        const base = typeof d.base === "string" && d.base ? `\`${d.base}\`` : "its base";
+        const base: Words = typeof d.base === "string" && d.base ? [{ mono: d.base }] : ["its base"];
         const what = num("number") ? `Pull request ${which}` : `The branch in ${typeof d.repo === "string" ? d.repo : "the repository"}`;
-        const why = typeof d.error === "string" && d.error ? ` (${shortError(d.error)})` : "";
-        return {
-          short: "Could not resolve conflicts",
-          sentence: `${what} still conflicts with ${base}: dude's attempt to merge it in did not finish${why}. Try again, or resolve it yourself and wait on it again.`,
-          runId,
-        };
+        const cause = integrationCause(d.cause);
+        const parts: Words = [`${what} still conflicts with `, ...base, `: dude could not resolve it${cause ? `, as ${cause}` : ""}. Try again, or resolve it yourself and wait on it again.`];
+        return { short: "Could not resolve conflicts", sentence: plainWords(parts), parts, runId };
       }
       return {
         short: "A pull request conflicts",

@@ -11,6 +11,8 @@ import type { PersistedEvent, PullRequest } from "@dude/domain";
 import { prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, reviewWords } from "@dude/domain";
 import { plural } from "@dude/design-system";
 
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
 /** Why the Merge button is off, in a person's words; null when it is on. */
 export function mergeBlockedBy(pr: PullRequest): string | null {
   if (pr.state !== "open") return pr.state === "draft" ? "It is a draft" : null;
@@ -28,18 +30,46 @@ export function mergeBlockedBy(pr: PullRequest): string | null {
   return why.length ? `Blocked: ${why.join(", ")}` : "Not ready to merge";
 }
 
+/**
+ * Words with an identifier in them: plain text, and a branch or base that is
+ * set in mono where it is shown (the design system's convention), never
+ * Markdown in a string.
+ */
+export type Words = ReadonlyArray<string | { readonly mono: string }>;
+
+/** Words as plain text: what is read aloud, filtered and tested. */
+export const plainWords = (w: Words): string => w.map((p) => (typeof p === "string" ? p : p.mono)).join("");
+
 export interface PullRequestActivity {
   /** A GitHub login or a name, when a person did it; null for dude or GitHub. */
   who: string | null;
   /** Whose name to look up among the organization's people: an actor id. */
   actorId: string | null;
   text: string;
+  /** The text with its branch or base marked, where it names one. */
+  parts?: Words | undefined;
   quote?: string | undefined;
   /** dude did it: the caller puts his name first, and his face beside it. */
   byDude?: boolean | undefined;
 }
 
-const str = (v: unknown) => (typeof v === "string" ? v : "");
+/**
+ * Why dude could not bring the base in, in a person's words, from the
+ * escalation's or the activity line's cause; "" when it names none.
+ */
+export function integrationCause(cause: unknown): string {
+  switch (cause) {
+    case "still_conflicting":
+      return "it merged the base in, and GitHub still finds a conflict";
+    case "pair_attempted":
+      return "it already tried this branch against this base";
+    case "run_failed":
+      return "the agent resolving it stopped before it finished";
+    default:
+      return "";
+  }
+}
+
 
 /**
  * One line of a task's activity for what happened to its pull request, or
@@ -105,23 +135,29 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       if (p.to === "clean" && p.from !== "unknown") return system(`${pr} is up to date with its base`);
       return null;
     case "pull_request.action": {
-      const base = p.base ? `\`${str(p.base)}\`` : "its base";
+      // The base by name, in mono where it is shown.
+      const base: Words = p.base ? [{ mono: str(p.base) }] : ["its base"];
       const target = p.number ? pr : `the branch in ${str(p.repo)}`;
-      const act = {
-        merge: `merged ${pr}${p.method ? ` (${str(p.method)})` : ""}`,
-        "update-branch": `updated ${pr}'s branch`,
-        "rerun-failed": `re-ran ${plural(Number(p.rerun ?? 0), "failed check")} on ${pr}`,
-        reviewers: `asked ${Array.isArray(p.logins) ? (p.logins as string[]).join(" and ") : "someone"} to review ${pr}`,
-        "resolve-conflicts": `asked dude to resolve the conflicts on ${pr}`,
-        "merge-base": `merged ${base} into ${target} on GitHub; it is tested again`,
-        "integration-started": `started resolving ${target}'s conflicts with ${base}`,
-        "integration-completed": `resolved ${target}'s conflicts with ${base}, reviewed and tested`,
-        "integration-refused": `could not resolve ${target}'s conflicts with ${base}${p.error ? `: ${str(p.error)}` : ""}`,
-      }[str(p.action)];
-      if (!act) return null;
+      // Each line says only what the event proves: no resolved files are
+      // named, since nothing records which conflicted.
+      const cause = integrationCause(p.cause);
+      const acts: Record<string, Words> = {
+        merge: [`merged ${pr}${p.method ? ` (${str(p.method)})` : ""}`],
+        "update-branch": [`updated ${pr}'s branch`],
+        "rerun-failed": [`re-ran ${plural(Number(p.rerun ?? 0), "failed check")} on ${pr}`],
+        reviewers: [`asked ${Array.isArray(p.logins) ? (p.logins as string[]).join(" and ") : "someone"} to review ${pr}`],
+        "resolve-conflicts": [`asked dude to resolve the conflicts on ${pr}`],
+        "merge-base": ["merged ", ...base, ` into ${target} on GitHub; it is tested again`],
+        "integration-started": ["started resolving ", `${target}'s conflicts with `, ...base],
+        "integration-completed": ["resolved ", `${target}'s conflicts with `, ...base, ", then reviewed and tested it"],
+        "integration-refused": ["could not resolve ", `${target}'s conflicts with `, ...base, cause ? `: ${cause}` : ""],
+      };
+      const parts = acts[str(p.action)];
+      if (!parts) return null;
+      const line = { text: plainWords(parts), ...(parts.some((x) => typeof x !== "string") ? { parts } : {}) };
       // dude's own: the workflow merged or resolved; a person's otherwise.
-      if (e.actor.type === "system") return { ...system(act), byDude: true };
-      return { who: null, actorId: e.actor.id, text: act };
+      if (e.actor.type === "system") return { who: null, actorId: null, ...line, quote: undefined, byDude: true };
+      return { who: null, actorId: e.actor.id, ...line };
     }
     case "pull_request.merged":
       return system(`${pr} was merged`);

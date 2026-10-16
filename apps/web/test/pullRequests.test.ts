@@ -111,14 +111,28 @@ describe("activity", () => {
       .toBe("asked dude to resolve the conflicts on #41");
   });
 
-  test("dude's base integration reads as dude's, in words, with no internal names", () => {
+  test("dude's base integration reads as dude's, in words, the base as a name, no internal reasons", () => {
     const merged = pullRequestActivity(event("pull_request.action", { action: "merge-base", number: undefined, base: "main", head: "abc" }), false);
-    expect(merged).toEqual({ who: null, actorId: null, text: "merged `main` into the branch in web on GitHub; it is tested again", quote: undefined, byDude: true });
+    expect(merged).toEqual({ who: null, actorId: null, text: "merged main into the branch in web on GitHub; it is tested again",
+      parts: ["merged ", { mono: "main" }, " into the branch in web on GitHub; it is tested again"], quote: undefined, byDude: true });
     expect(pullRequestActivity(event("pull_request.action", { action: "integration-started", base: "main", runId: "run_1" }), false)?.text)
-      .toBe("started resolving #41's conflicts with `main`");
+      .toBe("started resolving #41's conflicts with main");
     expect(pullRequestActivity(event("pull_request.action", { action: "integration-completed", base: "main" }), false)?.text)
-      .toBe("resolved #41's conflicts with `main`, reviewed and tested");
-    expect(pullRequestActivity(event("pull_request.action", { action: "integration-refused", base: "main", error: "still conflicting after integration" }), false)?.text)
-      .toBe("could not resolve #41's conflicts with `main`: still conflicting after integration");
+      .toBe("resolved #41's conflicts with main, then reviewed and tested it");
+    const refused = (cause: string, error: string) =>
+      pullRequestActivity(event("pull_request.action", { action: "integration-refused", base: "main", cause, error }), false)?.text;
+    expect(refused("still_conflicting", "still conflicting after integration"))
+      .toBe("could not resolve #41's conflicts with main: it merged the base in, and GitHub still finds a conflict");
+    expect(refused("pair_attempted", "this head/base pair was already attempted"))
+      .toBe("could not resolve #41's conflicts with main: it already tried this branch against this base");
+    expect(refused("run_failed", "lux 0 stream_ended: exec ended"))
+      .toBe("could not resolve #41's conflicts with main: the agent resolving it stopped before it finished");
+    expect(refused("", "integration fix budget exhausted")).toBe("could not resolve #41's conflicts with main");
+    const lines = ["merge-base", "integration-started", "integration-completed", "integration-refused"].map((action) =>
+      pullRequestActivity(event("pull_request.action", { action, base: "main", cause: "still_conflicting", error: "this head/base pair was already attempted" }), false)!);
+    expect(lines.filter((l) => l.text.includes("`") || /pair|attempted after|integration/.test(l.text)).length).toBe(0);
+    // No line names the files it resolved: nothing records which conflicted.
+    expect(lines.filter((l) => /resolving conflicts in|\.ts|\.go/.test(l.text)).length).toBe(0);
   });
+
 });

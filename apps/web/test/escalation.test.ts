@@ -55,16 +55,25 @@ describe("escalationWords", () => {
       .toBe("The pull request in web has had 5 fixes, the most the organisation allows for one.");
   });
 
-  test("a failed integration says what it tried, why it stopped, and links its Run only", () => {
+  test("a failed integration says what is true, why in words, the base as a name, and links its Run only", () => {
     const tried = escalationWords({ reason: "pull_request_conflict", at,
-      detail: { repo: "web", number: 4, base: "release", integration: true, runId: "run_9", error: "still conflicting after integration" } });
+      detail: { repo: "web", number: 4, base: "release", integration: true, runId: "run_9", cause: "still_conflicting", error: "still conflicting after integration" } });
     expect(tried.short).toBe("Could not resolve conflicts");
-    expect(tried.sentence).toBe("Pull request web #4 still conflicts with `release`: dude's attempt to merge it in did not finish (still conflicting after integration). Try again, or resolve it yourself and wait on it again.");
+    expect(tried.sentence).toBe("Pull request web #4 still conflicts with release: dude could not resolve it, as it merged the base in, and GitHub still finds a conflict. Try again, or resolve it yourself and wait on it again.");
+    expect(tried.parts?.filter((p) => typeof p !== "string")).toEqual([{ mono: "release" }]);
     expect(tried.runId).toBe("run_9");
     const beforePR = escalationWords({ reason: "pull_request_conflict", at,
-      detail: { repo: "web", number: 0, base: "main", integration: true, error: "this head/base pair was already attempted" } });
-    expect(beforePR.sentence).toStartWith("The branch in web still conflicts with `main`");
+      detail: { repo: "web", number: 0, base: "main", integration: true, cause: "pair_attempted", error: "this head/base pair was already attempted" } });
+    expect(beforePR.sentence).toBe("The branch in web still conflicts with main: dude could not resolve it, as it already tried this branch against this base. Try again, or resolve it yourself and wait on it again.");
     expect(beforePR.runId).toBeNull();
+    const failed = escalationWords({ reason: "pull_request_conflict", at,
+      detail: { repo: "web", number: 4, base: "main", integration: true, runId: "run_9", cause: "run_failed", error: "lux 0 stream_ended" } });
+    expect(failed.sentence).toBe("Pull request web #4 still conflicts with main: dude could not resolve it, as the agent resolving it stopped before it finished. Try again, or resolve it yourself and wait on it again.");
+    // An older escalation names no cause: none is made up, and no internal words show.
+    const older = escalationWords({ reason: "pull_request_conflict", at,
+      detail: { repo: "web", number: 4, base: "main", integration: true, error: "integration fix budget exhausted" } });
+    expect(older.sentence).toBe("Pull request web #4 still conflicts with main: dude could not resolve it. Try again, or resolve it yourself and wait on it again.");
+    expect([tried, beforePR, failed, older].filter((w) => /`|pair|budget|integration|stream_ended/.test(w.sentence)).length).toBe(0);
   });
 });
 

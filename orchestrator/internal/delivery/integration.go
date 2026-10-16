@@ -90,7 +90,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if run := st.IntegrationPairs[i.pair()]; run != "" {
 			i.RunID = run
 			st.Integration = i
-			r, e := w.integrationFailure(ctx, sc, st, reasonPairAttempted)
+			r, e := w.integrationFailure(ctx, sc, st, causePairAttempted, reasonPairAttempted)
 			return r, true, e
 		}
 		merged, e := gh.MergeBase(ctx, slug, st.Branch, bh)
@@ -143,8 +143,13 @@ type Integration struct {
 // syncer's reads take over.
 const unknownMergeabilityPolls = 8
 
-// Why an integration escalated, as the escalation's error says it.
+// Why an integration escalated: the escalation's and its activity line's
+// cause, which the web words; the error is for logs and the Run's own.
 const (
+	causeStillConflicting = "still_conflicting"
+	causePairAttempted    = "pair_attempted"
+	causeRunFailed        = "run_failed"
+
 	reasonStillConflicting = "still conflicting after integration"
 	reasonPairAttempted    = "this head/base pair was already attempted"
 )
@@ -200,13 +205,16 @@ func (e *Escalation) about(repo string, number int) bool {
 	return d.Repo == repo && d.Number == number
 }
 
-func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext, st *State, problem string) (workflow.Result, error) {
+// integrationFailure escalates the integration as pull_request_conflict
+// (retry or wait). cause is the web's to word: causeStillConflicting,
+// causePairAttempted, or causeRunFailed with the Run's error.
+func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext, st *State, cause, problem string) (workflow.Result, error) {
 	i := st.Integration
-	detail := map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "error": problem, "integration": true}
+	detail := map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "cause": cause, "error": problem, "integration": true}
 	if i.agentRun() {
 		detail["runId"] = i.RunID
 	}
-	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"error": problem}); err != nil {
+	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": cause, "error": problem}); err != nil {
 		return workflow.Result{}, err
 	}
 	return w.escalate(ctx, sc, st, "pull_request_conflict", detail)

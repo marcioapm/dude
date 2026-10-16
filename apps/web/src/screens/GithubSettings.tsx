@@ -209,8 +209,8 @@ export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: b
         <SettingRow label="When a task's base moves ahead"
           help="The branch a task's pull request merges into: the repository's default, or the task's own base.">
           <Select disabled={!admin} aria-label="When a task's base moves ahead" value={draft.whenBehind} onValueChange={(v) => set("whenBehind", v)}
-            options={[{ value: "update", label: "Merge it in; an agent resolves conflicts, reviewed and tested" },
-              { value: "tell", label: "Only tell the task's people; they can ask dude to resolve" }]} />
+            options={[{ value: "update", label: "Keep it up to date: merge the base in, and resolve conflicts with an agent" },
+              { value: "tell", label: "Only tell the task's people" }]} />
         </SettingRow>
         <SettingRow label="Fix rounds per pull request" help="Then the owner decides how it goes on. 0 for no limit.">
           <Input aria-label="Fix rounds per pull request" type="number" min={0} max={50} value={draft.fixRoundsPerPr}
