@@ -7,7 +7,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -41,11 +40,7 @@ func (w *world) pausedImplementer() (task, runID, luxID string) {
 	w.t.Helper()
 	task = w.task()
 	w.deliver(task)
-	w.until("the implementer's base recorded", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'
-			AND base_shas <> '{}'::jsonb AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID)
-		return luxID != ""
-	})
+	runID, luxID = w.basedImplementer(task)
 	w.pausePhase(runID)
 	w.until("paused", func() bool { return w.personallyPaused(runID) })
 	return task, runID, luxID
@@ -67,11 +62,7 @@ func (w *world) remembered(runID string) {
 // encoded, and that the Run's printed command shows the marker.
 func (w *world) assertNotStored(task, runID, value string) {
 	w.t.Helper()
-	for _, l := range leaks(value) {
-		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%' || $2 || '%'`, task, l); n != 0 {
-			w.t.Errorf("%d of the task's events hold the value as %q", n, l)
-		}
-	}
+	w.assertTaskHoldsNo(task, value)
 	if runID == "" {
 		return
 	}
@@ -94,20 +85,10 @@ func TestAValueCommittedBeforeAResumeStillRefusesThePush(t *testing.T) {
 	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "finish"}); status != 201 {
 		t.Fatalf("steer: %d %v", status, body)
 	}
-	pushed := func() string {
-		out, _ := exec.Command("git", "-C", w.gh.Repo, "for-each-ref", "--format=%(refname)", "refs/heads/dude/").Output()
-		var runs []string
-		for _, ref := range strings.Fields(string(out)) {
-			if strings.Contains(ref, "/run-") {
-				runs = append(runs, ref)
-			}
-		}
-		return strings.Join(runs, " ")
-	}
 	w.until("the implementer failed or pushed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || pushed() != ""
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || w.runBranchesOnGitHub() != ""
 	})
-	if branch := pushed(); branch != "" {
+	if branch := w.runBranchesOnGitHub(); branch != "" {
 		t.Fatalf("the work reached GitHub as %s", branch)
 	}
 	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 {

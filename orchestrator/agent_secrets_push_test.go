@@ -59,11 +59,7 @@ func TestAnImplementerCommittingASecretIsRefusedBeforeThePush(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND keep`, runID); n != 1 {
 				t.Error("the Run is not kept for its owner to resume")
 			}
-			for _, leak := range leaks(implToken) {
-				if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%' || $2 || '%'`, task, leak); n != 0 {
-					t.Errorf("%d of the task's events hold the value as %q", n, leak)
-				}
-			}
+			w.assertTaskHoldsNo(task, implToken)
 			var escalation string
 			_ = w.owner.QueryRow(context.Background(), `SELECT state->'escalation'->>'reason' FROM workflow_runs WHERE task_id = $1`, task).Scan(&escalation)
 			if escalation != "implement_failed" {
@@ -125,13 +121,45 @@ func (w *world) scriptedImplementer(calls ...[2]string) {
 // rather than for what the test put in its history.
 func (w *world) finishOnceBased(task string) {
 	w.t.Helper()
-	var luxID string
+	_, luxID := w.basedImplementer(task)
+	w.lux.EndTurn(luxID)
+}
+
+// basedImplementer waits until dude has recorded where the task's running
+// implementer's checkout started; its Run and lux Run.
+func (w *world) basedImplementer(task string) (runID, luxID string) {
+	w.t.Helper()
 	w.until("the implementer's base recorded", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'
-			AND base_shas <> '{}'::jsonb AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&luxID)
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, lux_run_id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND base_shas <> '{}'::jsonb AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID)
 		return luxID != ""
 	})
-	w.lux.EndTurn(luxID)
+	return runID, luxID
+}
+
+// runBranchesOnGitHub are the per-Run branches lux pushed to, space
+// separated; the attempt's branch dude makes itself, from the base, is
+// not one.
+func (w *world) runBranchesOnGitHub() string {
+	out, _ := exec.Command("git", "-C", w.gh.Repo, "for-each-ref", "--format=%(refname)", "refs/heads/dude/").Output()
+	var runs []string
+	for _, ref := range strings.Fields(string(out)) {
+		if strings.Contains(ref, "/run-") {
+			runs = append(runs, ref)
+		}
+	}
+	return strings.Join(runs, " ")
+}
+
+// assertTaskHoldsNo checks that no event of the task holds value, raw or
+// encoded.
+func (w *world) assertTaskHoldsNo(task, value string) {
+	w.t.Helper()
+	for _, l := range leaks(value) {
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%' || $2 || '%'`, task, l); n != 0 {
+			w.t.Errorf("%d of the task's events hold the value as %q", n, l)
+		}
+	}
 }
 
 func jsonArg(key, value string) string {
@@ -214,23 +242,11 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 			w.deliver(task)
 			w.finishOnceBased(task)
 			var runID string
-			// The per-Run branch lux pushes to; the attempt's branch dude
-			// makes itself, from the base.
-			pushed := func() string {
-				out, _ := exec.Command("git", "-C", w.gh.Repo, "for-each-ref", "--format=%(refname)", "refs/heads/dude/").Output()
-				var runs []string
-				for _, ref := range strings.Fields(string(out)) {
-					if strings.Contains(ref, "/run-") {
-						runs = append(runs, ref)
-					}
-				}
-				return strings.Join(runs, " ")
-			}
 			w.until("the implementer failed or pushed", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, task).Scan(&runID)
-				return runID != "" || pushed() != ""
+				return runID != "" || w.runBranchesOnGitHub() != ""
 			})
-			if branch := pushed(); branch != "" {
+			if branch := w.runBranchesOnGitHub(); branch != "" {
 				t.Fatalf("the work reached GitHub as %s", branch)
 			}
 			if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 {
@@ -249,10 +265,8 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 				if strings.Contains(reason, leak) {
 					t.Errorf("the reason holds the value as %q", leak)
 				}
-				if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%' || $2 || '%'`, task, leak); n != 0 {
-					t.Errorf("%d of the task's events hold the value as %q", n, leak)
-				}
 			}
+			w.assertTaskHoldsNo(task, implToken)
 			w.pump()
 			if n := w.phaseRuns(task, delivery.PhaseImplement); n != 1 {
 				t.Errorf("%d implementers; the refusal was retried", n)
@@ -267,6 +281,18 @@ func TestASecretAnywhereInThePushedHistoryIsRefused(t *testing.T) {
 func TestAMissingCheckoutRefusesThePush(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
+	reason := w.ghostRepositoryPushRefused()
+	if !strings.Contains(reason, "cannot check the work for secrets") || !strings.Contains(reason, "ghost") {
+		t.Errorf("the reason does not say the ghost checkout went unchecked: %q", reason)
+	}
+}
+
+// ghostRepositoryPushRefused delivers a task whose implementer commits,
+// adds "ghost", a repository with no checkout, to its recorded bases once
+// target's is recorded, and ends its turn; it requires that the Run fails
+// without lux being asked to push, and returns the Run's error.
+func (w *world) ghostRepositoryPushRefused() string {
+	w.t.Helper()
 	w.scriptedImplementer(writeCall("README.md", "configured"), commitCall("Configure"))
 	task := w.task()
 	w.deliver(task)
@@ -276,19 +302,17 @@ func TestAMissingCheckoutRefusesThePush(t *testing.T) {
 			AND phase = 'implement' AND base_shas ? 'target' AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID, &base)
 		return luxID != ""
 	})
-	mustExec(t, w.owner, `UPDATE runs SET base_shas = base_shas || jsonb_build_object('ghost', $2::text) WHERE id = $1`, runID, base)
+	mustExec(w.t, w.owner, `UPDATE runs SET base_shas = base_shas || jsonb_build_object('ghost', $2::text) WHERE id = $1`, runID, base)
 	w.lux.EndTurn(luxID)
 	w.until("the implementer failed or pushed", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || w.luxRunFor(runID).Pushed
 	})
 	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
-		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
+		w.t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
 	}
 	var reason string
 	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, runID).Scan(&reason)
-	if !strings.Contains(reason, "cannot check the work for secrets") || !strings.Contains(reason, "ghost") {
-		t.Errorf("the reason does not say the ghost checkout went unchecked: %q", reason)
-	}
+	return reason
 }
 
 // skipsUnreadHistory is a container whose history script leaves out a
@@ -310,25 +334,7 @@ func TestAHistoryMissingARepositorysSectionRefusesThePush(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
 	w.syncer.Lux = skipsUnreadHistory{w.syncer.Lux}
-	w.scriptedImplementer(writeCall("README.md", "configured"), commitCall("Configure"))
-	task := w.task()
-	w.deliver(task)
-	var runID, luxID, base string
-	w.until("the implementer's base recorded", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, lux_run_id, base_shas->>'target' FROM runs WHERE task_id = $1
-			AND phase = 'implement' AND base_shas ? 'target' AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID, &base)
-		return luxID != ""
-	})
-	mustExec(t, w.owner, `UPDATE runs SET base_shas = base_shas || jsonb_build_object('ghost', $2::text) WHERE id = $1`, runID, base)
-	w.lux.EndTurn(luxID)
-	w.until("the implementer failed or pushed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || w.luxRunFor(runID).Pushed
-	})
-	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
-		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
-	}
-	var reason string
-	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, runID).Scan(&reason)
+	reason := w.ghostRepositoryPushRefused()
 	if want := "cannot check the work for secrets before pushing it: no history was read for ghost"; !strings.Contains(reason, want) {
 		t.Errorf("reason %q, want it to say %q", reason, want)
 	}
