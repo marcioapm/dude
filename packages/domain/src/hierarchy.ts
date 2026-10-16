@@ -845,13 +845,17 @@ export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 
 /**
  * A test Run's verdict: the heads (repository → commit) it tested, and
- * whether the task's work has moved past them since (`stale`).
+ * whether what the branch holds has moved past them since (`stale`).
+ * While a pull request's fix is checked on its candidate branch, the
+ * candidate's own verdict is `candidate`: not on the pull request yet,
+ * and never stale for it.
  */
 export const verificationSchema = z.object({
   runId: z.string(),
   attempt: z.number().int(),
   heads: z.record(z.string(), z.string()),
   stale: z.boolean(),
+  candidate: z.boolean().optional(),
   createdAt: z.string(),
   criteria: z.array(criterionVerdictSchema),
 });

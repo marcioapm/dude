@@ -1,7 +1,8 @@
 /**
  * What the tester showed: the latest test's verdict on each acceptance
  * criterion, under the commits it tested and a stale mark once the branch
- * has moved past them. Each piece of evidence opens the file that test
+ * has moved past them — or, for a pull request's fix still being checked,
+ * a mark that the pull request does not hold it yet. Each piece of evidence opens the file that test
  * published in the artifact viewer — that test's version of it, not a
  * later one of the same name. A waiver or acceptance says who and why.
  */
@@ -28,6 +29,7 @@ export function VerificationSection({ client, verifications, artifacts, onOpenRu
   return (
     <div className="taskVerification">
       <VerificationGroup data-testid="verification" data-run={latest.runId} heads={latest.heads} stale={latest.stale}
+        candidate={latest.candidate}
         actions={
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRun(latest.runId)} data-testid="verification-run">
             Open the test

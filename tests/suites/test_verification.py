@@ -145,10 +145,22 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
 
     fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
 
+    # While the candidate is checked the pull request still holds `before`:
+    # its verdict there is never stale, whatever the candidate's heads.
+    while_checked: list[bool] = []
+
     def moved():
-        return (sha if (sha := fake_github.branch_sha(pr["headBranch"])) != before else None)
+        if (sha := fake_github.branch_sha(pr["headBranch"])) != before:
+            return sha
+        if fake_github.branch_sha(f"{pr['headBranch']}-candidate"):
+            verdicts = client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
+            at_pr = next((v for v in verdicts if v["heads"].get("greeter") == before), None)
+            if at_pr is not None and fake_github.branch_sha(pr["headBranch"]) == before:
+                while_checked.append(at_pr["stale"])
+        return None
 
     head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
+    assert while_checked and not any(while_checked), while_checked
     runs = client.task_runs(task["id"])
     fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
     assert fix["branch"] == f"{pr['headBranch']}-candidate", fix

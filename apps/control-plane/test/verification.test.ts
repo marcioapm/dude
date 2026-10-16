@@ -94,3 +94,43 @@ test("another organisation sees none of it", async () => {
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ verifications: [] });
 });
+
+/**
+ * A task with a passing test at the pull request's head (run_<id>_pr, at
+ * aaa111), a test of its candidate fix (run_<id>_c, at ccc333), and its
+ * delivery's state.
+ */
+async function candidateTask(id: string, number: number, state: Record<string, unknown>) {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${id}, 'org_v', 'prj_v', ${number}, 'Fix')`;
+  for (const [suffix, heads, at] of [["pr", { api: "aaa111", web: "www000" }, "2026-02-01T00:00:00Z"],
+    ["c", { api: "ccc333", web: "www000" }, "2026-02-02T00:00:00Z"]] as const) {
+    const run = `run_${id}_${suffix}`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status, created_at)
+      VALUES (${run}, 'org_v', 'prj_v', ${id}, 1, 'test', 'qa_browser', 'completed', ${at})`;
+    await owner`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence, observed, heads, created_at)
+      VALUES ('org_v', ${id}, ${run}, 1, 'it greets', 'pass', '{}', 'Hello.', ${heads}, ${at})`;
+  }
+  await owner`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+    VALUES (${`wf_${id}`}, 'org_v', ${id}, 'task.delivery', ${`delivery:${id}`}, 'waiting', 'awaitReview', ${state})`;
+  const res = await get(ana.key, `/v1/tasks/${id}/verification`);
+  expect(res.status).toBe(200);
+  const { verifications } = (await res.json()) as { verifications: Array<Record<string, any>> };
+  return Object.fromEntries(verifications.map((v) => [v.runId.endsWith("_pr") ? "pr" : "candidate", { stale: v.stale, candidate: v.candidate }]));
+}
+
+test("while a pull request's fix is checked, the pull request's verdict is not stale and the candidate's is the candidate's", async () => {
+  const got = await candidateTask("wi_c1", 11, { attempt: 1, heads: { api: "ccc333", web: "www000" },
+    candidate: { round: 1, branch: "dude/wi_c1/attempt-1-candidate", from: { api: "aaa111", web: "www000" }, base: { api: "aaa111" } } });
+  expect(got).toEqual({ pr: { stale: false, candidate: false }, candidate: { stale: false, candidate: true } });
+});
+
+test("after the promotion the old pull request verdict is stale and the promoted one current", async () => {
+  const got = await candidateTask("wi_c2", 12, { attempt: 1, heads: { api: "ccc333", web: "www000" } });
+  expect(got).toEqual({ pr: { stale: true, candidate: false }, candidate: { stale: false, candidate: false } });
+});
+
+test("a candidate moved on past its own test (a fix after it) leaves that test stale, and the pull request's current", async () => {
+  const got = await candidateTask("wi_c3", 13, { attempt: 1, heads: { api: "ddd444", web: "www000" },
+    candidate: { round: 1, branch: "dude/wi_c3/attempt-1-candidate", from: { api: "aaa111", web: "www000" }, base: { api: "aaa111" } } });
+  expect(got).toEqual({ pr: { stale: false, candidate: false }, candidate: { stale: true, candidate: false } });
+});

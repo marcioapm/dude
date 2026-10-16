@@ -167,7 +167,10 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   and `waive` on those two need a note and may be taken by the owner or an
   organization admin; they are recorded on the verdict. The tester's
   findings are judged by the next test, never by a reviewer. A verdict
-  whose heads the task has moved past is shown stale.
+  whose heads what the branch holds has moved past is shown stale; while a
+  pull request's fix is checked, that is the heads the candidate started
+  from (`candidate.from`), and a verdict at the candidate's own heads is
+  shown as the candidate's, not on the pull request yet.
 - **Nothing reaches the tester or the pull request unreviewed.** A
   simplifier that changed something is followed by a review round over its
   diff alone (`runs.review_range`, `{of: "simplify", base}`: the reviewer is
