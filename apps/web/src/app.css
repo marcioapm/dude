@@ -662,9 +662,6 @@ body {
 .taskGoal {
   color: var(--ds-color-text-secondary);
 }
-.taskGoal > * {
-  max-width: none;
-}
 /* Each criterion is Markdown of its own; the list is the criteria's,
    its markers on the goal's Markdown list indent. */
 .taskCriteria {
@@ -1035,6 +1032,22 @@ body {
   gap: var(--ds-space-4);
   margin-top: var(--ds-space-4);
   color: var(--ds-color-text-secondary);
+}
+.githubBody {
+  white-space: normal;
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-prose);
+}
+.githubSections > * + * {
+  margin-top: var(--ds-md-gap);
+}
+.githubSections details > summary {
+  cursor: pointer;
+  color: var(--ds-color-text-secondary);
+}
+.githubSections details > .githubSections {
+  margin-top: var(--ds-space-8);
+  padding-left: var(--ds-space-12);
 }
 /* Which attempt an Activity line belongs to: muted, and secondary for the one shown. */
 .lineAttempt {
