@@ -72,7 +72,7 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 }
 
 // Redactor is the redactor of a Run's text: its secret values, as
-// run_secret_values (migration 129) reads them in tx. Empty for a Run given
+// run_secret_values (migration 130) reads them in tx. Empty for a Run given
 // none, and in a transaction whose role may not read them. Under a ctx
 // carrying Redactors, each Run's is read once and reused.
 func Redactor(ctx context.Context, tx pgx.Tx, runID string) (*redact.Redactor, error) {

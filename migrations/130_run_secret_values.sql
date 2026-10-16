@@ -1,6 +1,6 @@
 -- The values a Run's text is redacted with (orchestrator/internal/redact):
--- its copy of what it was given (128), and the current value of each name
--- it recorded (127), which still catches a value after the copy is
+-- its copy of what it was given (129), and the current value of each name
+-- it recorded (128), which still catches a value after the copy is
 -- deleted unless it was rotated since. Empty for a role that may not read
 -- both tables (the sweeper, 051), rather than an error that would abort
 -- the caller's transaction: such a role writes no agent text.

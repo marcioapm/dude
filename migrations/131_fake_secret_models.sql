@@ -1,4 +1,4 @@
--- 130_fake_secret_models.sql — the scripted agent's fake/print-secrets
+-- 131_fake_secret_models.sql — the scripted agent's fake/print-secrets
 -- (prints the env secrets its Run was given) and fake/commit-secrets (its
 -- implementer commits them) are test models a tier may request, for the
 -- project secrets suites. This check replaces 126's whole, keeping every

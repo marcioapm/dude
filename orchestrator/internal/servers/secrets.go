@@ -13,7 +13,7 @@ import (
 )
 
 // A project's secrets granted to previews (project_secrets, migrations 081
-// and 127) are lux secrets of every preview Run, as: env, so its servers
+// and 128) are lux secrets of every preview Run, as: env, so its servers
 // and their setup scripts have them; agent Runs get those granted to their
 // phase (phases/projectsecrets.go). A preview spec's only env secrets are
 // these: GIT_TOKEN and the registry login are declared without as.

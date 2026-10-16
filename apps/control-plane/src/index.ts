@@ -18,6 +18,7 @@ import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
 import { registerPullRequestRoutes } from "./api/routes/pullRequests.ts";
 import { registerFindingRoutes } from "./api/routes/findings.ts";
+import { registerFeedbackRoutes } from "./api/routes/feedback.ts";
 import { registerArtifactRoutes } from "./api/routes/artifacts.ts";
 import { registerVerificationRoutes } from "./api/routes/verification.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
@@ -69,6 +70,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerModelRoutes(router);
   registerImageRoutes(router);
   registerFindingRoutes(router);
+  registerFeedbackRoutes(router);
   registerArtifactRoutes(router);
   registerVerificationRoutes(router);
   registerProjectRoutes(router);

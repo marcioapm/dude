@@ -15,11 +15,11 @@ import (
 )
 
 // A project's secrets reach the agent Runs of the phases each one names
-// (project_secrets.recipients, migration 127) as lux env secrets, beside
+// (project_secrets.recipients, migration 128) as lux env secrets, beside
 // dude's own. The conductor and a session's brainstorm never get one: they
 // read text anyone can write, such as pull request comments. A Run records
 // the names it was given (runs.project_secret_names) and keeps a copy of
-// the exact values (run_project_secrets, 128), which dude redacts its
+// the exact values (run_project_secrets, 129), which dude redacts its
 // output with and scans its push for, until its output is collected.
 
 // EvSecretsGiven names the project secrets a Run was given, never their
