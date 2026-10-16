@@ -5,18 +5,35 @@ import (
 	"testing"
 )
 
-func TestBaseIntegrationPromptsRespectRolePermissions(t *testing.T) {
-	for _, role := range []string{"implementer", "fixer", "simplifier", "conductor"} {
-		p := BuiltinPrompt(role)
-		for _, want := range []string{"sync_base", "never rebase", "never force"} {
-			if !strings.Contains(p, want) {
-				t.Errorf("%s lacks %s", role, want)
+// The merge-not-rebase rule is dude's, not the role's: an organisation's
+// own prompt for a writer, or for the conductor, does not drop it.
+func TestBaseIntegrationRuleSurvivesAnOrganisationsPrompt(t *testing.T) {
+	org := "Do it our way."
+	for _, custom := range []*string{nil, &org} {
+		prompts := map[string]string{
+			"implementer": Prompt(PhaseImplement, PromptInput{OrgPrompt: custom}),
+			"fixer":       Prompt(PhaseFix, PromptInput{OrgPrompt: custom}),
+			"simplifier":  Prompt(PhaseSimplify, PromptInput{OrgPrompt: custom}),
+			"conductor":   ConductorPrompt("briefing", PromptInput{OrgPrompt: custom, Repositories: []PromptRepo{{Name: "target", Path: "/workspace/repos/target"}}}),
+		}
+		for role, p := range prompts {
+			for _, want := range []string{"sync_base", "never rebase", "never force"} {
+				if !strings.Contains(p, want) {
+					t.Errorf("%s (org prompt %v) lacks %q", role, custom != nil, want)
+				}
 			}
 		}
+		if p := prompts["conductor"]; !strings.Contains(p, "delegate review and test") {
+			t.Errorf("conductor (org prompt %v) is not told to delegate review and test:\n%s", custom != nil, p)
+		}
+		if p := Prompt(PhaseReview, PromptInput{OrgPrompt: custom}); strings.Contains(p, "sync_base") {
+			t.Errorf("a reviewer (org prompt %v) is told of sync_base", custom != nil)
+		}
 	}
-	p := BuiltinPrompt("conductor")
-	if !strings.Contains(p, "delegate review and test") || !strings.Contains(p, "never build, install or run tests") {
-		t.Fatal("conductor testing permission changed", p)
+	for _, role := range []string{"implementer", "fixer", "simplifier", "conductor"} {
+		if strings.Contains(BuiltinPrompt(role), "sync_base") {
+			t.Errorf("%s's editable prompt carries the rule: an organisation's prompt would drop it", role)
+		}
 	}
 	b := baseNote(map[string]string{"target": "release"})
 	if strings.Contains(b, "git fetch origin") || !strings.Contains(b, "available") {
