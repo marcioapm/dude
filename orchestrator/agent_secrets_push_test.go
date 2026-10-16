@@ -44,9 +44,10 @@ func TestAnImplementerCommittingASecretIsRefusedBeforeThePush(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
 			w.grant("IMPL_TOKEN", implToken, "implementer")
-			w.committingImplementer("config/app.toml", content)
+			w.scriptedImplementer(writeCall("config/app.toml", content), commitCall("Add config"))
 			task := w.task()
 			w.deliver(task)
+			w.finishOnceBased(task)
 			var runID string
 			w.until("the implementer failed", func() bool {
 				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, task).Scan(&runID)
