@@ -1393,11 +1393,11 @@ here.
   line ("Conflicts with `main`", "Up to date with `main`"). A conflict has
   three states, told by glyph, tone and words: for its owner, the danger
   line ends in the app's action (Resolve conflicts); while dude resolves
-  it (`conflict={{ resolving: true }}`), an attention line, "Conflicts with
-  main · **dude is resolving it**", with no action, since nothing waits on
-  a person; for anyone else (`conflict={{ waitingFor: "Ana" }}`), the
-  danger line ends in "Waiting for Ana" in muted ink, the escalation
-  banner's words, never a control that is refused when pressed.
+  it (`conflict={{ resolving: true }}`), "Conflicts with `main` · **dude is
+  resolving it**" with no action, in the panel's in-progress convention
+  (attention with `circle-dotted`, as for running checks); for anyone else
+  (`conflict={{ waitingFor: "Ana" }}`), the danger line ends in "Waiting
+  for Ana" in muted ink, never a control that is refused when pressed.
 - **Checks dude cannot read are said plainly**: "GitHub won't show dude
   this repository's checks", beneath it that a fine-grained token cannot
   read check runs and which token can, and a link to

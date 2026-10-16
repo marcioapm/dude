@@ -89,7 +89,6 @@ export function integrationCause(cause: unknown): string {
   }
 }
 
-
 /**
  * One line of a task's activity for what happened to its pull request, or
  * null for a change not worth a line. `pr` names it (#41, or web#12 when a
@@ -98,7 +97,8 @@ export function integrationCause(cause: unknown): string {
 export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequestActivity | null {
   const p = e.payload;
   const pr = `${named && p.repo ? str(p.repo) : ""}#${String(p.number ?? "")}`;
-  const system = (text: string, quote?: string): PullRequestActivity => ({ who: null, actorId: null, text, quote });
+  const system = (text: string, quote?: string, parts?: Words): PullRequestActivity =>
+    ({ who: null, actorId: null, text, quote, ...(parts ? { parts } : {}) });
   const person = (who: string, text: string, quote?: string): PullRequestActivity => ({ who: who || "Someone", actorId: null, text, quote });
   switch (e.eventType) {
     case "pull_request.opened": {
@@ -173,10 +173,10 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       };
       const parts = acts[str(p.action)];
       if (!parts) return null;
-      const line = { text: plainWords(parts), ...(parts.some((x) => typeof x !== "string") ? { parts } : {}) };
+      const marked = parts.some((x) => typeof x !== "string") ? parts : undefined;
       // dude's own: the workflow merged or resolved; a person's otherwise.
-      if (e.actor.type === "system") return { who: null, actorId: null, ...line, quote: undefined, byDude: true };
-      return { who: null, actorId: e.actor.id, ...line };
+      if (e.actor.type === "system") return { ...system(plainWords(parts), undefined, marked), byDude: true };
+      return { ...system(plainWords(parts), undefined, marked), actorId: e.actor.id };
     }
     case "pull_request.merged":
       return system(`${pr} was merged`);

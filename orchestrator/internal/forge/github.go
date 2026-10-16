@@ -597,10 +597,6 @@ func (g *GitHub) readReviews(ctx context.Context, slug string, number int, p ghP
 	return nil
 }
 
-// mergeable reads GitHub's two mergeable fields and the distance from the
-// base: GitHub computes mergeability lazily, so right after a push it is
-// null — unknown, not clean — and the next read (a webhook will prompt one)
-// has it.
 // Mergeability is a pull request's state, head and whether it merges, from
 // GET /pulls/{n} alone: no checks, reviews, compare or threads. Behind is
 // not told apart from clean.
@@ -612,6 +608,10 @@ func (g *GitHub) Mergeability(ctx context.Context, slug string, number int) (Pul
 	return p.ref(), mergeable(p.Mergeable, p.MergeableState, 0), nil
 }
 
+// mergeable reads GitHub's two mergeable fields and the distance from the
+// base: GitHub computes mergeability lazily, so right after a push it is
+// null — unknown, not clean — and the next read (a webhook will prompt one)
+// has it.
 func mergeable(ok *bool, state string, behindBy int) string {
 	switch {
 	case state == "dirty" || ok != nil && !*ok:
