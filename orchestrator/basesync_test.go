@@ -1146,7 +1146,7 @@ func TestAnIntegrationLeavesTheOpenFeedbackToTheNextCheckedFix(t *testing.T) {
 	// A writer at work keeps the conflict queued while the item is
 	// submitted, so both are there when the integration starts.
 	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
-	ar := w.resolveAsItPublishes(wi, "fbi_int", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(wi, "fbi_int", itsNewHead, nil)
 	w.conflictWithMovedBase()
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
 	w.syncRounds(3)

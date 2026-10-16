@@ -970,7 +970,7 @@ func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor)
 		SELECT 'fbi_web', $1, $2, task_attempt($2), person_id, 'Greet in the page too.', 'code', '{"kind":"code","repo":"web"}'
 		FROM api_keys WHERE id = $3`, w.org, w.wi, ana)
-	ar := w.resolveAsItPublishesIn(w.web, "web", w.wi, "fbi_web", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishesIn(w.web, "web", w.wi, "fbi_web", itsNewHead, nil)
 	var mainAfterMerge string
 	var pullsAtTest int
 	w.onTest = func() {

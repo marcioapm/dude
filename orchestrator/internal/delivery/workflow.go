@@ -1981,7 +1981,7 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 		}
 		moved[repo] = to
 	}
-	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved, true); err != nil {
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
 	}
 	for repo := range moved {
@@ -2020,7 +2020,7 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 		detail["number"] = n
 	}
 	// The candidate goes no further: its resolutions hold where it moved.
-	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved, true); err != nil {
+	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
 	}
 	// What the pull request shows is what the delivery stands on now; a
@@ -2110,15 +2110,21 @@ func (w *steps) prFixLanded(ctx context.Context, sc workflow.StepContext, st *St
 	}
 	// People's feedback the fix left unanswered is open again, and no
 	// signal will come for it: another fix, within MaxPRFixIterations.
-	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	if len(open) > 0 {
-		return w.next(ctx, sc, st, PointPRFeedback, "prFix",
-			fmt.Sprintf("%d feedback items from people are still open after the fix: read them with feedback.", len(open)))
+	if fix, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are still open after the fix: read them with feedback."); err != nil || started {
+		return fix, err
 	}
 	return res, nil
+}
+
+// fixOpenFeedback starts a pull request fix when people's feedback items
+// are open (started), with line (formatted with their count) as its reason.
+func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st *State, line string) (res workflow.Result, started bool, err error) {
+	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil || len(open) == 0 {
+		return workflow.Result{}, false, err
+	}
+	res, err = w.next(ctx, sc, st, PointPRFeedback, "prFix", fmt.Sprintf(line, len(open)))
+	return res, true, err
 }
 
 // promotedRefreshRepos are the repositories a full promotion refreshes:
@@ -2383,13 +2389,8 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			return workflow.Result{Next: "prFix", State: st}, nil
 		}
 		if handOpen && len(st.PullRequestIDs) > 0 {
-			open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
-			if err != nil {
-				return workflow.Result{}, err
-			}
-			if len(open) > 0 {
-				return w.next(ctx, sc, st, PointPRFeedback, "prFix",
-					fmt.Sprintf("%d feedback items from people are open: read them with feedback.", len(open)))
+			if res, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are open: read them with feedback."); err != nil || started {
+				return res, err
 			}
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")

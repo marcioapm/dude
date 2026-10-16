@@ -36,6 +36,9 @@ type agentResolve struct {
 	also     []string
 }
 
+// itsNewHead picks the commit the fixer published.
+func itsNewHead(_, head string) string { return head }
+
 func (w *world) resolveAsItPublishes(task, item string, pick func(base, head string) string, compare func(path string) int) *agentResolve {
 	w.t.Helper()
 	return w.resolveAsItPublishesIn(w.gh, "", task, item, pick, compare)
@@ -350,7 +353,7 @@ func TestFeedbackAResolutionOnACandidateNeverPromotedDoesNotHold(t *testing.T) {
 	ana := w.person("Ana")
 	w.assignOwner(w.wi, ana)
 	w.gh.Review(1, "alice", "APPROVED")
-	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", itsNewHead, nil)
 	var theirs string
 	w.onTest = func() { theirs = w.gh.CommitOnTop(w.branch, "A person's own fix") }
 	w.armed.Store(true)
@@ -398,7 +401,7 @@ func TestFeedbackAWaitAfterARefusedCandidateGivesTheReopenedItemToAFixer(t *test
 	w := newPRFixWorld(t)
 	ana := w.person("Ana")
 	w.assignOwner(w.wi, ana)
-	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", itsNewHead, nil)
 	w.onTest = func() { w.gh.CommitOnTop(w.branch, "A person's own fix") }
 	w.armed.Store(true)
 	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
@@ -437,7 +440,7 @@ func TestFeedbackAResolutionOnACandidateHoldsOncePromoted(t *testing.T) {
 	ana := w.person("Ana")
 	w.assignOwner(w.wi, ana)
 	w.gh.Review(1, "alice", "APPROVED")
-	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", itsNewHead, nil)
 	type seen struct {
 		status   string
 		verified bool
@@ -493,7 +496,7 @@ func TestFeedbackAResolutionOnACandidateStoppedAtItsTestIsReopened(t *testing.T)
 	w := newPRFixWorld(t, fakeagent.TestBlockedModel)
 	ana := w.person("Ana")
 	w.assignOwner(w.wi, ana)
-	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", itsNewHead, nil)
 	w.armed.Store(true)
 	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
 		t.Fatalf("submit: %d %v", code, body)
@@ -523,7 +526,7 @@ func TestFeedbackAResolutionOnACandidateAbortedAtItsTestIsReopened(t *testing.T)
 			b.Hang = true
 		}
 	}
-	ar := w.resolveAsItPublishes(w.wi, "fbi_x", func(_, head string) string { return head }, nil)
+	ar := w.resolveAsItPublishes(w.wi, "fbi_x", itsNewHead, nil)
 	w.armed.Store(true)
 	if code, body := w.feedback(ana, w.wi, "fbi_x", "Log the retry count at info, not debug."); code != 201 {
 		t.Fatalf("submit: %d %v", code, body)
