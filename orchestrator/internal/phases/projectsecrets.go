@@ -184,16 +184,19 @@ func secretNames(list []lux.Secret) []string {
 	return names
 }
 
-// recordSubmitting records, committed before lux sees the spec, the names
-// and exact values a submit sends: lux may start the agent, and its output
-// reach dude, before Submit returns, and that output is redacted with these.
-// Until lux answers, both only grow: an earlier attempt whose answer was
-// lost may have made the Run lux holds, with a name since unticked or a
-// value since rotated, so every name and value any attempt sent is kept.
-// A crash before Submit leaves them on a pending Run, which the next
-// attempt adds to; one that ends unsubmitted loses them to
-// ForgetSecretCopies.
-func (s *Syncer) recordSubmitting(ctx context.Context, r phaseRun, sent []lux.Secret) error {
+// recordSending records, committed before lux sees them, the names and
+// exact values a submit or a resume sends: lux may start the agent, and its
+// output reach dude, before it answers, and that output is redacted with
+// these. Both only grow. An earlier submit whose answer was lost may have
+// made the Run lux holds, with a name since unticked or a value since
+// rotated. A resume keeps the checkout, its commits and the conversation,
+// which may hold any value sent before; and a retried resume may be
+// answered with an earlier attempt's, which sent another value. Only
+// forgetSubmitting (a submit refused for good), recordGiven's trim to the
+// names lux accepted, the copy's collection and ForgetSecretCopies remove
+// any. A crash before Submit leaves them on a pending Run, which the next
+// attempt adds to.
+func (s *Syncer) recordSending(ctx context.Context, r phaseRun, sent []lux.Secret) error {
 	if len(sent) == 0 {
 		return nil
 	}
@@ -213,7 +216,7 @@ func (s *Syncer) recordSubmitting(ctx context.Context, r phaseRun, sent []lux.Se
 	})
 }
 
-// forgetSubmitting undoes every attempt's recordSubmitting for a submit
+// forgetSubmitting undoes every attempt's recordSending for a submit
 // that failed for good: the Run was given nothing.
 func (s *Syncer) forgetSubmitting(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -252,19 +255,4 @@ func (s *Syncer) recordGiven(ctx context.Context, tx pgx.Tx, r phaseRun, lr lux.
 		return nil
 	}
 	return s.event(ctx, tx, r, EvSecretsGiven, ledger.ActorSystem, map[string]any{"names": names})
-}
-
-// replaceRunCopy makes the Run's copy exactly the values its process was
-// given.
-func replaceRunCopy(ctx context.Context, tx pgx.Tx, r phaseRun, given []lux.Secret) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM run_project_secrets WHERE run_id = $1`, r.ID); err != nil {
-		return err
-	}
-	for _, sec := range given {
-		if _, err := tx.Exec(ctx, `INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ($1, $2, $3, $4)`,
-			r.ID, r.Org, sec.Name, sec.Value); err != nil {
-			return err
-		}
-	}
-	return nil
 }

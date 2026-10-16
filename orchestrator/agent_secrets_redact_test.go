@@ -405,7 +405,7 @@ func TestARetriedSubmitRedactsTheValuesLuxHolds(t *testing.T) {
 
 	// (c) Rotated A→B between attempts, the first having made the Run with A.
 	// lux's answer names the Run's secrets, not their values, so the copy
-	// keeps both; a resume then replaces it with the one value it sends.
+	// keeps both; a resume then adds the value it sends.
 	t.Run("rotated, the first attempt making the Run", func(t *testing.T) {
 		w := newWorld(t)
 		w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -422,8 +422,8 @@ func TestARetriedSubmitRedactsTheValuesLuxHolds(t *testing.T) {
 		w.until("paused", func() bool { return w.personallyPaused(runID) })
 		w.grant("IMPL_TOKEN", implTokenC, "implementer")
 		w.resumePhase(runID)
-		if got := w.runCopyValues(runID); !slices.Equal(got, []string{"IMPL_TOKEN=" + implTokenC}) {
-			t.Errorf("copy after the resume holds %d values, want the one it sent", len(got))
+		if got := w.runCopyValues(runID); !slices.Equal(got, []string{"IMPL_TOKEN=" + implToken, "IMPL_TOKEN=" + implTokenB, "IMPL_TOKEN=" + implTokenC}) {
+			t.Errorf("copy after the resume holds %d values, want the submit's two and the resume's", len(got))
 		}
 	})
 }

@@ -189,8 +189,8 @@ const implTokenRotated = "impl-test-not-a-real-token-ROTATED"
 
 // Paused, the implementer's secret is rotated and another is ticked for it:
 // the resume sends the recorded name's current value and nothing added
-// since, and the Run's copy becomes exactly what the new process has.
-func TestAResumeSuppliesCurrentValuesAndReplacesTheCopy(t *testing.T) {
+// since, and the Run's copy gains that value beside the one it had.
+func TestAResumeSuppliesCurrentValuesAndAddsThemToTheCopy(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
 	_, runID, _ := w.liveImplementer()
@@ -210,8 +210,8 @@ func TestAResumeSuppliesCurrentValuesAndReplacesTheCopy(t *testing.T) {
 	if _, ok := sent["EVERYONE_KEY"]; ok {
 		t.Error("the resume sent a secret added after the Run was submitted")
 	}
-	if got := w.runCopy(runID); len(got) != 1 || got["IMPL_TOKEN"] != implTokenRotated {
-		t.Errorf("copy after the resume has %v, want IMPL_TOKEN at its current value", slices.Sorted(maps.Keys(got)))
+	if got := w.runCopyValues(runID); !slices.Equal(got, []string{"IMPL_TOKEN=" + implToken, "IMPL_TOKEN=" + implTokenRotated}) {
+		t.Errorf("copy after the resume = %d values, want the submit's and the resume's", len(got))
 	}
 	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
 		t.Errorf("names after the resume = %v", got)

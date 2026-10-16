@@ -1016,7 +1016,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		return s.fail(ctx, r, "the task's "+strings.TrimPrefix(reason, "its "))
 	}
 	spec.Workload.Attachments = images
-	if err := s.recordSubmitting(ctx, r, given); err != nil {
+	if err := s.recordSending(ctx, r, given); err != nil {
 		return s.retryLater(ctx, r, err)
 	}
 	// The dude Run id is the idempotency key: a submit that timed out and is
@@ -2325,12 +2325,10 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		}
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
-	// The copy is what the new process is given, before lux starts it: its
-	// first output is redacted with these values.
-	if len(given) > 0 {
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { return replaceRunCopy(ctx, tx, r, given) }); err != nil {
-			return lux.Run{}, foreseen, err
-		}
+	// Added to the copy before lux starts the new process, whose first
+	// output is redacted with them; what it held before stays.
+	if err := s.recordSending(ctx, r, given); err != nil {
+		return lux.Run{}, foreseen, err
 	}
 	defer func() {
 		answer := resumed

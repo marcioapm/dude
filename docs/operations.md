@@ -463,7 +463,9 @@ to those its Run declares, each keeping every value an attempt sent. Both
 are dropped if lux refuses the submit. A change
 reaches Runs that start after it; a running one keeps what it has. A
 resume gives a Run the current value of every name it was given (never one
-added since) and replaces its copy; a name since removed, or no longer
+added since) and adds those values to its copy, which keeps every value
+it held before: the resumed Run's checkout, commits and conversation may
+still hold an earlier one. A name since removed, or no longer
 given to its phase, cannot be supplied and lux would refuse the resume, so
 dude retires that Run and starts a fresh one of the phase in its slot
 (`run.restarted` by dude), which is no failure. The copy is deleted when the
