@@ -57,10 +57,13 @@ export interface TaskPageProps {
   readonly onBoard: () => void;
   /** introduced-by-proposed: Ana's conductor's proposal, not yet confirmed. */
   readonly menuOpen?: boolean | undefined;
+  /** The task as it was before it was closed: the close dialog opens on that. */
+  readonly beforeClose?: boolean | undefined;
 }
 
-export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard, menuOpen }: TaskPageProps) {
-  const t = task(k);
+export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard, menuOpen, beforeClose }: TaskPageProps) {
+  const t0 = task(k);
+  const t: Task = beforeClose ? { ...t0, status: "received", resolution: undefined, duplicateOf: undefined, blockedBy: undefined } : t0;
   const later = laterOf(t);
   const may = mayManage(t);
   const [introduced, setIntroduced] = useState(t.bug?.introducedBy?.state ?? null);
@@ -94,7 +97,7 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
         <span className="taskTopActions">
           {actions}
           <Button variant="quiet" leadingIcon="edit">Edit</Button>
-          <RowMenu label={`Actions for ${t.key}`} items={items} align="end" defaultOpen={menuOpen} />
+          <RowMenu label={`Actions for ${t.key}`} items={items} align="end" defaultOpen={menuOpen || (!may && overlay !== null)} />
         </span>
       </header>
 
@@ -137,7 +140,7 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
                   <div className="taskGoal"><Markdown source={GOALS[t.key] ?? GOALS["default"]!} breaks /></div>
                 </section>
                 {t.bug ? <BugReport t={t} introduced={introduced} setIntroduced={setIntroduced} onOpen={onOpen} /> : null}
-                <div className="taskBlock"><Relations t={t} onOpen={onOpen} /></div>
+                <div className="taskBlock"><Relations t={t} onOpen={onOpen} beforeClose={beforeClose} /></div>
               </div>
             </div>
           </PageWithRail>
@@ -147,9 +150,9 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
         </TabPanel>
       </Tabs>
 
-      <DeferDialog open={overlay === "defer"} onOpenChange={(o) => onOverlay(o ? "defer" : null)} t={t} />
-      <CloseDialog open={overlay === "close"} onOpenChange={(o) => onOverlay(o ? "close" : null)} t={t} />
-      <ArchiveDialog open={overlay === "archive"} onOpenChange={(o) => onOverlay(o ? "archive" : null)} t={t} />
+      <DeferDialog open={may && overlay === "defer"} onOpenChange={(o) => onOverlay(o ? "defer" : null)} t={t} />
+      <CloseDialog open={may && overlay === "close"} onOpenChange={(o) => onOverlay(o ? "close" : null)} t={t} />
+      <ArchiveDialog open={may && overlay === "archive"} onOpenChange={(o) => onOverlay(o ? "archive" : null)} t={t} />
     </div>
   );
 }
@@ -284,10 +287,11 @@ function Rail({ t, introduced }: { readonly t: Task; readonly introduced: string
 }
 
 /** Relations with the proposed Duplicate of / Duplicated by group, in RelationList's own anatomy. */
-function Relations({ t, onOpen }: { readonly t: Task; readonly onOpen: (k: string) => void }) {
+function Relations({ t, onOpen, beforeClose }: { readonly t: Task; readonly onOpen: (k: string) => void; readonly beforeClose?: boolean | undefined }) {
   const rel = (k: string) => { const x = task(k); return { key: x.key, title: x.title, status: x.status, owner: x.owner }; };
   const blockedBy = (t.blockedBy ?? []).map(rel);
-  const blocks = (k: string) => [...TASKS_BLOCKING(k)].map(rel);
+  // Before CP-63 was closed, CP-47 waited on it; closing it handed that to CP-62.
+  const blocks = (k: string) => (beforeClose && k === "CP-63" ? ["CP-47"] : beforeClose ? [] : TASKS_BLOCKING(k)).map(rel);
   const dupOf = t.duplicateOf ? [rel(t.duplicateOf)] : [];
   const dupBy = TASKS_DUPLICATING(t.key).map(rel);
   const inherited = t.key === "CP-62" ? ["CP-47"] : [];

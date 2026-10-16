@@ -60,7 +60,7 @@ const first = (params.get("screen") ?? params.get("s") ?? "board-later") as Scre
 
 type Place =
   | { view: "board"; filters: BoardFilters; shelfOpen: boolean; chips: boolean; overlay?: "archive-epic" | "task-dialog" | undefined }
-  | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined }
+  | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined; before?: boolean | undefined }
   | { view: "list"; list: View }
   | { view: "activity" }
   | { view: "other"; screen: Screen };
@@ -73,7 +73,7 @@ function placeOf(s: Screen): Place {
     case "board-later": return board({ shelfOpen: true, chips: false });
     case "defer-dialog": return page("CP-62", { overlay: "defer" });
     case "deferred-task": return page("CP-62");
-    case "close-dialog": return page("CP-63", { overlay: "close" });
+    case "close-dialog": return page("CP-63", { overlay: "close", before: true });
     case "closed-wontdo": return page("CP-46");
     case "closed-duplicate": return page("CP-63", { split: "CP-62" });
     case "archive-task": return page("CP-46", { overlay: "archive" });
@@ -121,7 +121,7 @@ function Mock() {
     const p = place;
     selected = { kind: "task", id: `t_${p.key}` };
     const one = (k: string) => (
-      <TaskPage key={k} k={k} view={p.tab} onView={(tab) => setPlace({ ...p, tab })} overlay={k === p.key ? p.overlay : null}
+      <TaskPage key={k} k={k} view={p.tab} onView={(tab) => setPlace({ ...p, tab })} overlay={k === p.key ? p.overlay : null} beforeClose={k === p.key && p.before}
         onOverlay={(overlay) => setPlace({ ...p, overlay })} onOpen={openTask} onBoard={toBoard} />
     );
     main = p.split ? <div className={pageStyles["split"]}>{one(p.key)}{one(p.split)}</div> : one(p.key);

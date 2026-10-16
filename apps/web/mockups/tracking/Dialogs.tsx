@@ -10,8 +10,9 @@
 import { useCallback, useState } from "react";
 import { Breadcrumb, RefLead, SearchPicker, StatusMark } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Fieldset, FormStack, Input, KeyHint, MarkdownEditor, Select, Textarea } from "@dude/design-system/primitives";
-import { EPICS, FINISHED, KIND, PRIORITY, RESOLUTION, TASKS, firstName, task, type Kind, type Priority, type Resolution, type Task } from "./data.ts";
+import { EPICS, FINISHED, KIND, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, task, type Kind, type Priority, type Resolution, type Task } from "./data.ts";
 import { KindMark } from "./Marks.tsx";
+import { DisabledWithHint } from "./TaskPage.tsx";
 import styles from "./pages.module.css";
 
 const context = (t: Task) => (
@@ -72,7 +73,8 @@ export function CloseDialog({ open, onOpenChange, t, initial = "duplicate" }: { 
     const w = q.trim().toLowerCase();
     return TASKS.filter((x) => !x.archived && (!w || x.key.toLowerCase().includes(w) || x.title.toLowerCase().includes(w))).slice(0, 8);
   }, []);
-  const waiting = TASKS.filter((x) => (x.blockedBy ?? []).includes(t.key));
+  // What waits on it: CP-47 waited on CP-63 until it was closed.
+  const waiting = t.key === "CP-63" ? [task("CP-47")] : TASKS.filter((x) => (x.blockedBy ?? []).includes(t.key));
   const isBug = t.kind === "bug";
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="md" context={context(t)} title={`Close ${t.key}`}
@@ -115,8 +117,8 @@ export function CloseDialog({ open, onOpenChange, t, initial = "duplicate" }: { 
             ) : null}
             {dup ? (
               <Callout tone="neutral" data-testid="duplicate-handover">
-                {waiting.length || t.key === "CP-63"
-                  ? <>CP-47 waits on {t.key}. Once closed, it waits on <b>{dup.key}</b> instead, and starts when {dup.key} is merged.</>
+                {waiting.length
+                  ? <>{waiting.map((w) => w.key).join(", ")} {waiting.length === 1 ? "waits" : "wait"} on {t.key}. Once closed, {waiting.length === 1 ? "it waits" : "they wait"} on <b>{dup.key}</b> instead, and {waiting.length === 1 ? "starts" : "start"} when {dup.key} is merged.</>
                   : <>Nothing waits on {t.key}.</>}
                 {" "}{dup.key} gets “Duplicated by {t.key}” in its Relations.
               </Callout>
@@ -157,7 +159,9 @@ export function ArchiveEpicDialog({ open, onOpenChange }: { readonly open: boole
       context={<Breadcrumb size="sm" current={false} items={[{ id: "p", label: "control-plane" }, { id: "e", label: "Webhook reliability", icon: "layers" }]} />}
       description={`${unfinished.length} of its tasks haven't ended. Archiving the epic would hide work that is still going on, so dude won't: finish them, close them, or move them to another epic first.`}
       footer={<><Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button variant="secondary" leadingIcon="archive" data-testid="archive-finished">Archive its {finished.length} ended tasks</Button></>}>
+        {ROLE === "owner"
+          ? <Button variant="secondary" leadingIcon="archive" data-testid="archive-finished" data-lifecycle-action="">Archive its {finished.length} ended tasks</Button>
+          : <DisabledWithHint label={`Archive its ${finished.length} ended tasks`} icon="archive" hint="Only Ana, who owns these tasks, or an admin can archive them" />}</>}>
       <div className={styles["stack"]}>
         <Fieldset legend={`Not ended · ${unfinished.length}`}>
           <ul className={styles["list"]} data-testid="unfinished">
