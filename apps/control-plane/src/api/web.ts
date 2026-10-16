@@ -12,6 +12,9 @@ import type { Fallback } from "./router.ts";
 
 // Vite puts content-hashed files here; a changed file gets a new name.
 const HASHED_PREFIX = "/assets/";
+// Scripts other origins load (a preview page's overlay, apps/web/public/feedback):
+// a missing one is a 404, never index.html parsed as script on someone's page.
+const SCRIPT_PREFIX = "/feedback/";
 const IMMUTABLE = "public, max-age=31536000, immutable";
 // index.html names the current hashes, and sw.js must be re-checked for a
 // new service worker to install, so neither may be served stale.
@@ -46,7 +49,7 @@ export function webApp(dir: string): Fallback {
     }
     // A missing hashed asset is a stale page asking for an old build:
     // index.html in its place would be parsed as script and fail obscurely.
-    if (path.startsWith(HASHED_PREFIX)) return null;
+    if (path.startsWith(HASHED_PREFIX) || path.startsWith(SCRIPT_PREFIX)) return null;
     return send(request, index, REVALIDATE);
   };
 }

@@ -1032,6 +1032,14 @@ are outside `/v1` and `/health` are served from the directory, and unknown
 paths get `index.html`. Files under `/assets/` are cached for a year;
 everything else is revalidated.
 
+`/feedback/overlay.js` is the script branch previews load from dude's
+origin to let people comment on a page. Like every file of the web app it
+is served to anyone with no credential, and an unknown path under
+`/feedback/` is a 404, never `index.html`. Behind Cloudflare Access, give
+exactly that path a **Bypass** policy: a preview page's request carries no
+Access cookie for dude's origin, and Access would answer it with its
+sign-in page. Nothing else needs one.
+
 ### dude-migrate
 
 | Variable | Default | |

@@ -12,6 +12,7 @@ import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 
 const INDEX = "<!doctype html><title>dude</title>";
+const OVERLAY = "console.debug('overlay');";
 let parent: string;
 let router: Router;
 
@@ -21,6 +22,8 @@ beforeAll(async () => {
   parent = await mkdtemp(join(tmpdir(), "dude-web-"));
   const web = join(parent, "web");
   await mkdir(join(web, "assets"), { recursive: true });
+  await mkdir(join(web, "feedback"), { recursive: true });
+  await writeFile(join(web, "feedback", "overlay.js"), OVERLAY);
   await writeFile(join(web, "index.html"), INDEX);
   await writeFile(join(web, "sw.js"), "self.addEventListener('push', () => {});");
   await writeFile(join(web, "assets", "index-abc123.js"), "console.log(1);");
@@ -66,6 +69,32 @@ describe("DUDE_WEB_DIR", () => {
   test("a missing hashed asset is a 404, not the page", async () => {
     const res = await get("/assets/index-gone.js");
     expect(res.status).toBe(404);
+  });
+
+  test("the preview overlay answers anyone, from any origin, as a short-lived script", async () => {
+    // A preview page on another origin, no session, no key.
+    const res = await router.handle(new Request("http://dude.test/feedback/overlay.js", {
+      headers: { origin: "https://web-abs-1-shop.preview.example", "sec-fetch-dest": "script", "sec-fetch-site": "cross-site" },
+    }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toStartWith("text/javascript");
+    // Unversioned URL: revalidated, so a new overlay reaches pages at once.
+    expect(res.headers.get("cache-control")).toBe("no-cache");
+    expect(await res.text()).toBe(OVERLAY);
+  });
+
+  test("a missing overlay script is a 404, never the page parsed as script", async () => {
+    const res = await get("/feedback/other.js");
+    expect(res.status).toBe(404);
+  });
+
+  test("serving the overlay opens no API route to the same anonymous caller", async () => {
+    for (const path of ["/v1/tasks/wi_1/servers", "/v1/tasks/wi_1/feedback"]) {
+      const res = await router.handle(new Request(`http://dude.test${path}`, {
+        headers: { origin: "https://web-abs-1-shop.preview.example" },
+      }));
+      expect(res.status).toBe(401);
+    }
   });
 
   test("HEAD answers headers without a body", async () => {
@@ -126,6 +155,25 @@ describe("backend.web_dir in the configuration file", () => {
     } finally {
       useConfig(null);
     }
+  });
+});
+
+describe("the web app's preview overlay (apps/web/public, copied into the build)", () => {
+  test("is a script that, on a page that loads it twice, says once that it loaded and does nothing else", async () => {
+    const res = await buildRouter(join(import.meta.dir, "../../web/public"))
+      .handle(new Request("http://dude.test/feedback/overlay.js", { headers: { origin: "https://web.preview.example" } }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toStartWith("text/javascript");
+    const source = await res.text();
+    expect(new TextEncoder().encode(source).length).toBeLessThan(8 << 10);
+    const said: unknown[][] = [];
+    const page: Record<string, unknown> = {};
+    const run = new Function("window", "console", source);
+    const console = { debug: (...a: unknown[]) => said.push(a), log: () => { throw new Error("log"); } };
+    run(page, console);
+    run(page, console);
+    expect(said.length).toBe(1);
+    expect(Object.keys(page)).toEqual(["__dudeOverlay"]);
   });
 });
 
