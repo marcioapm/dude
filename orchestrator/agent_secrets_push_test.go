@@ -20,23 +20,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// committingImplementer makes the scripted implementer write content to
-// path in its checkout and commit it, in place of its scripted commit.
-func (w *world) committingImplementer(path, content string) {
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			b.Commit = nil
-			b.CallTools = [][2]string{
-				{"write", `{"path":"` + path + `","content":"` + content + `\n"}`},
-				{"commit", `{"message":"Add config"}`},
-			}
-		}
-		return b
-	}
-}
-
 func TestAnImplementerCommittingASecretIsRefusedBeforeThePush(t *testing.T) {
 	for name, content := range map[string]string{
 		"raw":    "password = " + implToken,
@@ -99,9 +82,10 @@ func TestAnImplementerCommittingASecretIsRefusedBeforeThePush(t *testing.T) {
 func TestWorkWithoutASecretIsPushed(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
-	w.committingImplementer("config/app.toml", "password = read from IMPL_TOKEN")
+	w.scriptedImplementer(writeCall("config/app.toml", "password = read from IMPL_TOKEN"), commitCall("Add config"))
 	task := w.task()
 	w.deliver(task)
+	w.finishOnceBased(task)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 }
 
