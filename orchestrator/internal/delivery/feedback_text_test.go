@@ -55,3 +55,33 @@ func TestFeedbackTextSaysWhereOnThePageAPreviewItemWasMade(t *testing.T) {
 		t.Errorf("a code item with a route line:\n%s", text)
 	}
 }
+
+// The picture line is written only for a picture sent with the message
+// (MarkPictures), never from the anchor naming one.
+func TestFeedbackTextSaysAPictureIsAttachedOnlyWhenItIs(t *testing.T) {
+	const anchor = `{"kind":"preview","url":"https://web.preview.example/","attachmentId":"att_1","viewport":{"width":800,"height":600}}`
+	const line = "Picture: fb_d1-element.png, attached (the element, outlined)"
+	items := []delivery.FeedbackItem{previewItem(t, anchor)}
+
+	if text := delivery.FeedbackText(items, true); strings.Contains(text, "Picture:") {
+		t.Errorf("a picture named by the anchor and not sent:\n%s", text)
+	}
+	delivery.MarkPictures(items, []delivery.SentAttachment{{ID: "att_other", Name: "other.png"}})
+	if text := delivery.FeedbackText(items, true); strings.Contains(text, "Picture:") {
+		t.Errorf("another item's picture sent:\n%s", text)
+	}
+	delivery.MarkPictures(items, []delivery.SentAttachment{{ID: "att_task", Name: "design.png"}, {ID: "att_1", Name: "fb_d1-element.png"}})
+	text := delivery.FeedbackText(items, true)
+	if !strings.Contains(text, "\n\n"+line+"\n") {
+		t.Errorf("want %q in\n%s", line, text)
+	}
+	// After the route line, before the person's words.
+	if r, p, q := strings.Index(text, "Route /"), strings.Index(text, line), strings.Index(text, "> This button"); !(r < p && p < q) {
+		t.Errorf("the lines are out of order:\n%s", text)
+	}
+	// Marked again for a message without it: gone.
+	delivery.MarkPictures(items, nil)
+	if text := delivery.FeedbackText(items, true); strings.Contains(text, "Picture:") {
+		t.Errorf("a picture line after the picture was not sent:\n%s", text)
+	}
+}
