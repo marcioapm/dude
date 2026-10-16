@@ -77,7 +77,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedb
   const open = pr.state === "open" || pr.state === "draft";
   if (!open) return <>{children({ facts: {}, under: {}, merge: null, note: null })}</>;
 
-  const held = feedbackHolds > 0 ? `Can't merge: ${plural(feedbackHolds, "feedback item")} ${feedbackHolds === 1 ? "is" : "are"} not yet handled. Resolve or answer ${feedbackHolds === 1 ? "it" : "them"} first.` : null;
+  const one = feedbackHolds === 1;
+  const held = feedbackHolds > 0 ? `Can't merge: ${plural(feedbackHolds, "feedback item")} ${one ? "is" : "are"} not yet handled. Resolve or answer ${one ? "it" : "them"} first.` : null;
   const blocked = mergeBlockedBy(pr) ?? held;
   const how = method ?? defaultMethod;
   const facts: PullRequestActionSlots["facts"] = {};
@@ -147,11 +148,11 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedb
 
   const heldNote = held ? (
     <span className="mergeHeld" data-testid="pr-feedback-held">
-      {plural(feedbackHolds, "feedback item")} {feedbackHolds === 1 ? "holds" : "hold"} the merge.{" "}
-      {onShowFeedback ? <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onShowFeedback}>Show {feedbackHolds === 1 ? "it" : "them"}</Button> : null}
+      {plural(feedbackHolds, "feedback item")} {one ? "holds" : "hold"} the merge.{" "}
+      {onShowFeedback ? <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onShowFeedback}>Show {one ? "it" : "them"}</Button> : null}
     </span>
   ) : null;
   const note = problem ? <span className="prProblem" role="alert" data-testid="pr-problem">{problem}</span>
-    : blocked && blocked !== held ? <>{<span data-testid="pr-blocked">{blocked}</span>}{heldNote}</> : heldNote;
+    : blocked && blocked !== held ? <><span data-testid="pr-blocked">{blocked}</span>{heldNote}</> : heldNote;
   return <>{children({ facts, under: { reviews: asker }, merge, note })}</>;
 }

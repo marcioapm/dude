@@ -7,29 +7,40 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CommentEditor, FeedbackCard, type DiffRange, type DiffSide, type LiveDiffCommenting } from "@dude/design-system/components";
+import { CommentEditor, FeedbackCard, lineWords, type DiffRange, type DiffSide, type LiveDiffCommenting } from "@dude/design-system/components";
 import { Icon } from "@dude/design-system";
-import { FEEDBACK_LIMITS, relocateCodeAnchor, type FeedbackCodeAnchor, type FeedbackItem, type RunDiff } from "@dude/domain";
+import { FEEDBACK_LIMITS, relocateCodeAnchor, type FeedbackItem, type RunDiff } from "@dude/domain";
 import { errorText } from "./hooks/useSave.tsx";
 import { FEEDBACK_FULL, cardItem, commentableRun, threadOf, type FeedbackOnDiff } from "./feedback.tsx";
 
-type Placed = { item: FeedbackItem; at: { path: string; side: DiffSide; endLine: number } | { path: string; head: "outdated" | "unchanged" } };
+type Head = "outdated" | "unchanged";
+type Placed = { item: FeedbackItem; at: { path: string; side: DiffSide; endLine: number } | { path: string; head: Head } };
 
 /** Each code item whose file is in `diff`: on its lines, or at its file's head and why. */
 export function placeItems(items: ReadonlyArray<FeedbackItem>, runId: string, diff: Pick<RunDiff, "checksum" | "files">): Placed[] {
   const out: Placed[] = [];
   for (const item of items) {
-    if (item.anchor.kind !== "code") continue;
-    const at = relocateCodeAnchor(item.anchor, { runId, checksum: diff.checksum, files: diff.files });
-    if (at.kind === "absent") continue;
-    if (at.kind === "lines" && !item.outdated) out.push({ item, at: { path: at.path, side: at.side, endLine: at.endLine } });
-    else if (at.kind === "lines") out.push({ item, at: { path: at.path, head: "outdated" } });
-    else out.push({ item, at: { path: at.path ?? (item.anchor as FeedbackCodeAnchor).path, head: at.kind === "unchanged" ? "unchanged" : "outdated" } });
+    const anchor = item.anchor;
+    if (anchor.kind !== "code") continue;
+    const at = relocateCodeAnchor(anchor, { runId, checksum: diff.checksum, files: diff.files });
+    switch (at.kind) {
+      case "absent":
+        break;
+      case "lines":
+        out.push({ item, at: item.outdated ? { path: at.path, head: "outdated" } : { path: at.path, side: at.side, endLine: at.endLine } });
+        break;
+      case "unchanged":
+        out.push({ item, at: { path: at.path, head: "unchanged" } });
+        break;
+      case "outdated":
+        out.push({ item, at: { path: at.path ?? anchor.path, head: "outdated" } });
+        break;
+    }
   }
   return out;
 }
 
-const lineWords = (r: DiffRange) => (r.startLine === r.endLine ? `line ${r.startLine}` : `lines ${r.startLine}–${r.endLine}`);
+const lineKey = (path: string, side: DiffSide, line: number) => `${path}\u0000${side}\u0000${line}`;
 
 /**
  * The editor under a picked range, with its own text: a keystroke re-renders it alone, not the diff.
@@ -59,7 +70,7 @@ function InlineCommentEditor({ fb, runId, checksum, range, initial, onText, onDo
     }
   };
   return (
-    <CommentEditor where={<>Comment on <b>{lineWords(range)}</b>{range.side === "old" ? " (removed)" : ""}</>} value={text} onChange={setText}
+    <CommentEditor where={<>Comment on <b>{lineWords(range.startLine, range.endLine)}</b>{range.side === "old" ? " (removed)" : ""}</>} value={text} onChange={setText}
       onSave={() => void save()} onCancel={onDone} saving={saving} problem={problem} maxLength={FEEDBACK_LIMITS.body}
       full={fb.full ? FEEDBACK_FULL : undefined} placeholder="What should change on these lines…" />
   );
@@ -70,24 +81,21 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
   const [selection, setSelection] = useState<DiffRange | null>(null);
   const [editing, setEditing] = useState(false);
   const placed = useMemo(() => (fb && diff ? placeItems(fb.items, runId, diff) : []), [fb, runId, diff]);
-  const byLine = useMemo(() => {
-    const m = new Map<string, FeedbackItem[]>();
+  // Under a line, at a file's head, and how many per file: what the three render callbacks read.
+  const { byLine, heads, counts } = useMemo(() => {
+    const byLine = new Map<string, FeedbackItem[]>();
+    const heads = new Map<string, Array<{ item: FeedbackItem; head: Head }>>();
+    const counts = new Map<string, number>();
     for (const p of placed) {
-      if (!("side" in p.at)) continue;
-      const key = `${p.at.path}\u0000${p.at.side}\u0000${p.at.endLine}`;
-      m.set(key, [...(m.get(key) ?? []), p.item]);
+      if ("side" in p.at) {
+        const key = lineKey(p.at.path, p.at.side, p.at.endLine);
+        byLine.set(key, [...(byLine.get(key) ?? []), p.item]);
+      } else {
+        heads.set(p.at.path, [...(heads.get(p.at.path) ?? []), { item: p.item, head: p.at.head }]);
+      }
+      counts.set(p.at.path, (counts.get(p.at.path) ?? 0) + 1);
     }
-    return m;
-  }, [placed]);
-  const heads = useMemo(() => {
-    const m = new Map<string, Array<{ item: FeedbackItem; head: "outdated" | "unchanged" }>>();
-    for (const p of placed) if ("head" in p.at) m.set(p.at.path, [...(m.get(p.at.path) ?? []), { item: p.item, head: p.at.head }]);
-    return m;
-  }, [placed]);
-  const counts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const p of placed) m.set(p.at.path, (m.get(p.at.path) ?? 0) + 1);
-    return m;
+    return { byLine, heads, counts };
   }, [placed]);
 
   // Where the editor is: unset while a drag is under way, so a drag step leaves renderAfterLine as it is.
@@ -104,7 +112,7 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
     setEditing(false);
     setSelection(null);
   }, []);
-  const card = useCallback((item: FeedbackItem, placement?: "outdated" | "unchanged") => fb && diff ? (
+  const card = useCallback((item: FeedbackItem, placement?: Head) => fb && diff ? (
     <div key={item.id} data-fb-item={item.id}>
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
@@ -113,7 +121,7 @@ export function useDiffComments(fb: FeedbackOnDiff | null, runId: string, diff: 
     </div>
   ) : null, [fb, diff, runId]);
   const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
-    const here = byLine.get(`${path}\u0000${side}\u0000${line}`);
+    const here = byLine.get(lineKey(path, side, line));
     const editor = fb && diff && editorAt && editorAt.path === path && editorAt.side === side && editorAt.endLine === line;
     if (!here && !editor) return null;
     return (

@@ -13,7 +13,7 @@
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
-import { canStart, canStop } from "@dude/design-system";
+import { canStart, canStop, feedbackHolds } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
@@ -462,18 +462,20 @@ export class FixtureClient extends ApiClient {
   }
   /** People's feedback, kept in memory as the API keeps it: a draft listed to its author alone. */
   feedbackItems: FeedbackItem[] = [];
+  #currentAttempt(): number {
+    return Math.max(1, ...this.#task.runs.map((r) => r.attempt));
+  }
   override feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
-    const current = Math.max(1, ...this.#task.runs.map((r) => r.attempt));
-    const n = attempt ?? current;
+    const n = attempt ?? this.#currentAttempt();
     const feedback = this.feedbackItems.filter((i) => i.taskId === taskId && i.attempt === n && (i.status !== "draft" || i.author?.id === YOU));
-    const blocking = feedback.filter((i) => i.status === "open" || i.status === "delivered" || (i.status === "resolved" && i.resolutionPending)).length;
+    const blocking = feedback.filter((i) => feedbackHolds(i.status, i.resolutionPending)).length;
     return Promise.resolve({ feedback, blocking });
   }
   override async createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
     if (draft.anchor.kind === "code") throw new ApiError(400, "bad_request", "No diff in the fixtures.");
     const now = new Date().toISOString();
     const me = PEOPLE.find((p) => p.id === YOU)!;
-    const item: FeedbackItem = { id: `fbk_${this.feedbackItems.length + 1}`, taskId, attempt: Math.max(1, ...this.#task.runs.map((r) => r.attempt)),
+    const item: FeedbackItem = { id: `fbk_${this.feedbackItems.length + 1}`, taskId, attempt: this.#currentAttempt(),
       batchId: null, author: { id: me.id, name: me.name }, body: draft.body, anchor: draft.anchor, status: "draft", deliveredRunId: null,
       resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [] };
     this.feedbackItems.push(item);

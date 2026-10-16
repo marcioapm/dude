@@ -118,9 +118,9 @@ export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
   const destination = feedbackDestination(task, current, openBlockers);
   const refused = submitRefusal(task.status) ?? undefined;
   const rows: DraftsTrayRow[] = fb.drafts.map((d) => ({ id: d.id, anchor: d.anchor, body: d.body }));
-  const open_ = prs.filter((pr) => pr.state === "open" || pr.state === "draft");
-  const holds = open_.length > 0
-    ? <>Pull request{open_.length > 1 ? "s" : ""} {open_.map((pr, i) => <span key={pr.id}>{i > 0 ? ", " : ""}<b>#{pr.number}</b></span>)} can't merge from dude and the task can't be marked done.
+  const openPrs = prs.filter((pr) => pr.state === "open" || pr.state === "draft");
+  const holds = openPrs.length > 0
+    ? <>Pull request{openPrs.length > 1 ? "s" : ""} {openPrs.map((pr, i) => <span key={pr.id}>{i > 0 ? ", " : ""}<b>#{pr.number}</b></span>)} can't merge from dude and the task can't be marked done.
       An answer instead of a change, or anyone's Resolve, lets each go.</>
     : <>No pull request opens and the task can't be marked done while any is open. An answer instead of a change, or anyone's Resolve, lets each go.</>;
 
@@ -242,15 +242,18 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   const readOnly = earlier || done;
   const authors = [...new Set(submitted.map((i) => i.author?.name.split(" ")[0] ?? "someone"))];
 
-  const card = (i: FeedbackItem) => (
-    <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}
-      className={fb.highlight === i.id ? "feedbackHighlight" : undefined}
-      onJump={i.anchor.kind === "code" ? () => fb.showInDiff((i.anchor as { runId: string }).runId, i.id) : undefined}
-      onReply={(b) => d.reply(i.id, b)} onResolve={() => d.resolve(i.id)} onReopen={() => d.reopen(i.id)}
-      onSaveDraft={(b) => d.saveDraft(i, b, null)} onDelete={() => d.deleteDraft(i.id)} maxLength={FEEDBACK_LIMITS.body}
-      editing={i.status === "draft" ? fb.editing === i.id : undefined}
-      onEditingChange={(on) => fb.setEditing(on ? i.id : null)} />
-  );
+  const card = (i: FeedbackItem) => {
+    const a = i.anchor;
+    return (
+      <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}
+        className={fb.highlight === i.id ? "feedbackHighlight" : undefined}
+        onJump={a.kind === "code" ? () => fb.showInDiff(a.runId, i.id) : undefined}
+        onReply={(b) => d.reply(i.id, b)} onResolve={() => d.resolve(i.id)} onReopen={() => d.reopen(i.id)}
+        onSaveDraft={(b) => d.saveDraft(i, b, null)} onDelete={() => d.deleteDraft(i.id)} maxLength={FEEDBACK_LIMITS.body}
+        editing={i.status === "draft" ? fb.editing === i.id : undefined}
+        onEditingChange={(on) => fb.setEditing(on ? i.id : null)} />
+    );
+  };
 
   return (
     <PageWithRail rail={

@@ -13,13 +13,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { AgentAvatar, PersonAvatar, type FeedbackCardItem, type FeedbackThreadEntry } from "@dude/design-system/components";
 import { firstName } from "@dude/design-system";
 import {
-  FEEDBACK_LIMITS, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, anchorFile, isConductor, relocateCodeAnchor, runDoer, runLabel,
+  FEEDBACK_LIMITS, NOT_STARTED_STATUSES, anchorFile, isConductor, relocateCodeAnchor, runDoer, runLabel,
   type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackItem, type FeedbackList, type RunDiff, type TaskStatus,
 } from "@dude/domain";
 import type { ApiClient, FeedbackSubmitted, Run, TaskDetail } from "./api/client.ts";
 import type { People } from "./people.tsx";
 
-export const EMPTY_FEEDBACK: FeedbackList = { feedback: [], blocking: 0 };
+const EMPTY_FEEDBACK: FeedbackList = { feedback: [], blocking: 0 };
 const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
 
 /**
@@ -114,15 +114,8 @@ export function submitRefusal(status: TaskStatus): string | null {
   return null;
 }
 
-/** What an item's batch was routed to, in words. */
-export function routedWords(item: Pick<FeedbackItem, "routedTo">): string | undefined {
-  switch (item.routedTo) {
-    case "conductor": return "to the conductor";
-    case "steer": return "to the agent at work";
-    case "workflow": return "to Deliver";
-    default: return undefined;
-  }
-}
+/** What a batch was routed to, in words: on its items' cards and in Activity. */
+export const ROUTED_WORDS: Readonly<Record<string, string>> = { conductor: "to the conductor", steer: "to the agent at work", workflow: "to Deliver" };
 
 /** An item as the card draws it. */
 export function cardItem(item: FeedbackItem, people: People, runs: ReadonlyMap<string, Run>): FeedbackCardItem {
@@ -131,23 +124,21 @@ export function cardItem(item: FeedbackItem, people: People, runs: ReadonlyMap<s
   return {
     id: item.id, status: item.status, resolutionPending: item.resolutionPending, resolvedCommit: item.resolvedCommit,
     body: item.body, anchor: item.anchor, author: item.author ? { ...(known ?? {}), id: item.author.id, name: item.author.name } : null,
-    at: item.submittedAt ?? item.createdAt, routed: routedWords(item), withWhom: delivered ? runLabel(delivered) : undefined,
+    at: item.submittedAt ?? item.createdAt, routed: item.routedTo ? ROUTED_WORDS[item.routedTo] : undefined, withWhom: delivered ? runLabel(delivered) : undefined,
   };
 }
 
 /** An item's history as a thread: a person by their face and first name, an agent by its role. */
 export function threadOf(item: FeedbackItem, people: People, runs: ReadonlyMap<string, Run>): FeedbackThreadEntry[] {
   return item.history.map((h) => {
+    const entry = { id: h.id, kind: h.kind, body: h.body, commit: h.commit, at: h.createdAt };
     if (h.personId) {
       const p = people.byId.get(h.personId);
       const name = p?.name ?? people.names.get(h.personId) ?? "Someone";
-      return { id: h.id, kind: h.kind, who: firstName(name), face: <PersonAvatar person={{ ...(p ?? {}), id: h.personId, name }} size={20} />,
-        body: h.body, commit: h.commit, at: h.createdAt };
+      return { ...entry, who: firstName(name), face: <PersonAvatar person={{ ...(p ?? {}), id: h.personId, name }} size={20} /> };
     }
     const run = h.runId ? runs.get(h.runId) : undefined;
-    const doer = run ? runDoer(run) : "agent";
-    return { id: h.id, kind: h.kind, who: `The ${doer}`, face: <AgentAvatar role={run?.role ?? "implementer"} size="sm" />,
-      body: h.body, commit: h.commit, at: h.createdAt };
+    return { ...entry, who: `The ${run ? runDoer(run) : "agent"}`, face: <AgentAvatar role={run?.role ?? "implementer"} size="sm" /> };
   });
 }
 
@@ -217,7 +208,3 @@ export const useFeedbackFocus = () => useContext(FocusContext);
 export function FeedbackProvider({ value, children }: { readonly value: FeedbackOnDiff | null; readonly children: ReactNode }) {
   return <FeedbackContext.Provider value={value}><FocusContext.Provider value={value?.focus ?? null}>{children}</FocusContext.Provider></FeedbackContext.Provider>;
 }
-
-/** Runs of the attempt that ended: no agent is at work on it. */
-export const nothingAtWork = (runs: ReadonlyArray<Run>, attempt: number) =>
-  runs.filter((r) => r.attempt === attempt && r.phase).every((r) => TERMINAL_RUN_STATUSES.includes(r.status));

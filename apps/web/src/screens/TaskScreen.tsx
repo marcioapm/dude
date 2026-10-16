@@ -98,7 +98,7 @@ import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
-import { FeedbackProvider } from "../feedback.tsx";
+import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -1231,7 +1231,6 @@ function Activity({ events, people, runs, prs, source, current, many, shown, tas
 
 const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", feedback: "Feedback", task: "Task & relations" };
 
-const ROUTED: Record<string, string> = { conductor: "to the conductor", steer: "to the agent at work", workflow: "to Deliver" };
 const countOf = (p: Record<string, unknown>) => (Array.isArray(p.itemIds) ? p.itemIds.length : 1);
 
 /**
@@ -1244,7 +1243,7 @@ export function feedbackLine(e: PersistedEvent, doer: (runId: string | null) => 
   const p = e.payload;
   const n = countOf(p);
   const items = plural(n, "feedback item");
-  const routed = typeof p.routedTo === "string" && ROUTED[p.routedTo] ? <span className="muted"> · {ROUTED[p.routedTo]}</span> : null;
+  const routed = typeof p.routedTo === "string" && ROUTED_WORDS[p.routedTo] ? <span className="muted"> · {ROUTED_WORDS[p.routedTo]}</span> : null;
   switch (e.eventType) {
     case EventTypes.FeedbackSubmitted:
       return { subject: true, text: <>submitted {items}{routed}</> };
@@ -1437,13 +1436,20 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case EventTypes.FeedbackReopened: {
         const line = feedbackLine(e, doer);
         if (!line) break;
-        const agent = e.actor.type === "agent";
-        const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
-        const subject = !line.subject ? null : by ? person : agent ? <>The <b>{doer(e.runId)}</b></> : <b>{dude}</b>;
-        const text = subject ? <>{subject} {line.text}</> : line.text;
-        out.push({ ...base, kind: "feedback",
-          who: line.subject && by ? face : line.subject && agent ? <AgentAvatar role={run?.role ?? DEFAULT_RUN_ROLE} size="lg" /> : <DudeMark size={32} />,
-          text, open: { label: "Show", tab: "feedback" } });
+        // Who did it leads the words when they name a doer; dude's own acts stand alone.
+        let who: ReactNode = <DudeMark size={32} />;
+        let text = line.text;
+        if (line.subject && by) {
+          who = face;
+          text = <>{person} {line.text}</>;
+        } else if (line.subject && e.actor.type === "agent") {
+          const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
+          who = <AgentAvatar role={run?.role ?? DEFAULT_RUN_ROLE} size="lg" />;
+          text = <>The <b>{doer(e.runId)}</b> {line.text}</>;
+        } else if (line.subject) {
+          text = <><b>{dude}</b> {line.text}</>;
+        }
+        out.push({ ...base, kind: "feedback", who, text, open: { label: "Show", tab: "feedback" } });
         break;
       }
       default: {

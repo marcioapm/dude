@@ -14,10 +14,11 @@ import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
-import { ApiClient, ApiError, type FeedbackSubmitted, type TaskDetail } from "../src/api/client.ts";
+import { ApiClient, ApiError, type FeedbackSubmitted, type RunDiff, type TaskDetail } from "../src/api/client.ts";
 import { TaskScreen, activityLines } from "../src/screens/TaskScreen.tsx";
+import { ChangesPanel } from "../src/screens/ChangesPanel.tsx";
 import { PullRequestActions } from "../src/screens/PullRequestActions.tsx";
-import { Submitter, feedbackDestination, submitRefusal } from "../src/feedback.tsx";
+import { FeedbackProvider, Submitter, feedbackDestination, submitRefusal, type FeedbackOnDiff } from "../src/feedback.tsx";
 import { placeItems } from "../src/diffComments.tsx";
 import type { People } from "../src/people.tsx";
 
@@ -143,15 +144,55 @@ class FeedbackClient extends FixtureClient {
   }
 }
 
-async function taskPage(client: FixtureClient, tab?: "feedback" | "activity") {
+async function mountTaskPage(client: FixtureClient, props: { tab?: "feedback" | "activity" | "sessions" | undefined; attempt?: number; runId?: string }) {
   const { container, unmount } = await mount(
     <ToastProvider><TooltipProvider><PeopleProvider client={client}>
-      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={tab} />
+      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} {...props} />
     </PeopleProvider></TooltipProvider></ToastProvider>,
   );
   mounted.push(unmount);
+  return container;
+}
+
+async function taskPage(client: FixtureClient, tab?: "feedback" | "activity") {
+  const container = await mountTaskPage(client, { tab });
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
   await settle(80);
+  return container;
+}
+
+/** The open session's Changes switch, clicked. */
+async function openChanges(container: HTMLElement) {
+  const changes = await until(() => [...container.querySelectorAll<HTMLElement>("[data-testid=session-view] button, [data-testid=session-view] [role=radio]")]
+    .find((b) => b.textContent?.startsWith("Changes")), "the Changes switch");
+  await click(changes);
+}
+
+/** The fixture task with a second attempt: its first Run's attempt is the earlier one. */
+async function withSecondAttempt(client: FeedbackClient) {
+  const base = await client.getTask(TASK_ID);
+  const first = base.runs[0]!;
+  client.runs = [...base.runs, { ...first, id: "run_second", attempt: 2, createdAt: new Date().toISOString() }];
+  return first;
+}
+
+const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
+  refresh: async () => people, seen: () => false } as unknown as People;
+
+/** run_impl's Changes, its diff `files` (checksum c2), with the feedback given: a current-attempt implementer's, every action a no-op. */
+async function mountChanges(files: RunDiff["files"], over: Partial<FeedbackOnDiff> = {}) {
+  const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files };
+  const client = { runDiff: async () => diff } as unknown as ApiClient;
+  const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
+  const ok = async () => true;
+  const fb: FeedbackOnDiff = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
+    createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {}, ...over };
+  const { container, unmount } = await mount(
+    <TooltipProvider><FeedbackProvider value={fb}>
+      <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
+        selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
+    </FeedbackProvider></TooltipProvider>);
+  mounted.push(unmount);
   return container;
 }
 
@@ -329,15 +370,9 @@ describe("a task that takes no feedback", () => {
 describe("an earlier attempt", () => {
   test("its feedback is read for it, and only to read", async () => {
     const client = new FeedbackClient();
-    const base = await client.getTask(TASK_ID);
-    const first = base.runs[0]!;
-    client.runs = [...base.runs, { ...first, id: "run_second", attempt: 2, createdAt: new Date().toISOString() }];
+    await withSecondAttempt(client);
     client.feedbackItems.push(item({ id: "old", attempt: 1, body: "On the first attempt" }), item({ id: "new", attempt: 2, body: "On the second" }));
-    const { container, unmount } = await mount(
-      <ToastProvider><TooltipProvider><PeopleProvider client={client}>
-        <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab="feedback" attempt={1} />
-      </PeopleProvider></TooltipProvider></ToastProvider>);
-    mounted.push(unmount);
+    const container = await mountTaskPage(client, { tab: "feedback", attempt: 1 });
     const earlier = await until(() => container.querySelector("[data-testid=feedback-earlier]"), "the earlier note");
     expect(earlier.textContent).toContain("Attempt 1 was set aside");
     const tab = container.querySelector("[data-testid=feedback-tab]")!;
@@ -351,9 +386,7 @@ describe("an earlier attempt", () => {
 
   test("its Run's Changes are only to read: no \"+\", and no Reply or Resolve on the cards drawn there", async () => {
     const client = new FeedbackClient();
-    const base = await client.getTask(TASK_ID);
-    const first = base.runs[0]!;
-    client.runs = [...base.runs, { ...first, id: "run_second", attempt: 2, createdAt: new Date().toISOString() }];
+    const first = await withSecondAttempt(client);
     const diff = { base: "4be19c2", checksum: "c1", final: true, updatedAt: new Date().toISOString(), files: [{ path: "src/app.ts", status: "M" as const,
       additions: 1, deletions: 0, hunks: [{ header: "@@ -1 +1,2 @@", lines: [{ kind: " " as const, old: 1, new: 1, text: "a()" }, { kind: "+" as const, old: null, new: 2, text: "x()" }] }] }] };
     (client as unknown as { runDiff: () => Promise<unknown> }).runDiff = async () => diff;
@@ -362,15 +395,9 @@ describe("an earlier attempt", () => {
       side: "new", startLine: 2, endLine: 2, baseSha: "b", headSha: null, diffChecksum: "c9", excerpt: [{ kind: "+", old: null, new: 2, text: "x()" }] } });
     // The fixture counts attempts by its own Runs: the current attempt's list is given here.
     client.feedback = (_t: string, attempt?: number) => Promise.resolve(attempt === undefined ? { feedback: [openNow], blocking: 1 } : { feedback: [], blocking: 0 });
-    const { container, unmount } = await mount(
-      <ToastProvider><TooltipProvider><PeopleProvider client={client}>
-        <TaskScreen client={client} taskId={TASK_ID} runId={first.id} tab="sessions" onOpenRun={() => {}} onBack={() => {}} />
-      </PeopleProvider></TooltipProvider></ToastProvider>);
-    mounted.push(unmount);
+    const container = await mountTaskPage(client, { runId: first.id, tab: "sessions" });
     await until(() => container.querySelector('[data-testid=task-screen][data-attempt="1"]'), "attempt 1");
-    const changes = await until(() => [...container.querySelectorAll<HTMLElement>("[data-testid=session-view] button, [data-testid=session-view] [role=radio]")]
-      .find((b) => b.textContent?.startsWith("Changes")), "the Changes switch");
-    await click(changes);
+    await openChanges(container);
     const card = await until(() => container.querySelector<HTMLElement>("[data-fb-item=open_now]"), "the item on its lines");
     expect(container.querySelectorAll("[data-testid=gutter-add]").length).toBe(0);
     expect(card.querySelectorAll("footer").length).toBe(0);
@@ -403,8 +430,6 @@ describe("where a batch goes", () => {
 });
 
 describe("Activity", () => {
-  const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
-    refresh: async () => people, seen: () => false } as unknown as People;
   const ev = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"], runId: string | null = null): PersistedEvent => ({
     eventId: `${eventType}${JSON.stringify(payload)}`, cursor: 1, eventType, occurredAt: new Date().toISOString(), organizationId: "o", projectId: "p",
     taskId: TASK_ID, runId, sessionId: null, actor, source: "orchestrator", correlationId: null, causationId: null, payload, schemaVersion: 1,
@@ -466,25 +491,10 @@ describe("what a keystroke, a reload and an event redraw", () => {
     { kind: "+" as const, old: null, new: 3, text: "const c = 4;" },
     { kind: " " as const, old: 2, new: 4, text: "export { a };" },
   ] }] };
-  const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
-    refresh: async () => people, seen: () => false } as unknown as People;
 
   test("typing in the inline editor redraws no row of another hunk", async () => {
-    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
-    const { FeedbackProvider } = await import("../src/feedback.tsx");
     let reads = 0;
-    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [appFile, countedFile("src/other.ts", () => reads++)] };
-    const client = { runDiff: async () => diff } as unknown as ApiClient;
-    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
-    const ok = async () => true;
-    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
-      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
-    const { container, unmount } = await mount(
-      <TooltipProvider><FeedbackProvider value={fb}>
-        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
-          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
-      </FeedbackProvider></TooltipProvider>);
-    mounted.push(unmount);
+    const container = await mountChanges([appFile, countedFile("src/other.ts", () => reads++)]);
     await until(() => container.querySelector("[data-testid=diffs]"), "the diff");
     await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
     await act(async () => void window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })));
@@ -496,8 +506,6 @@ describe("what a keystroke, a reload and an event redraw", () => {
   });
 
   test("one drag step in a hunk redraws no row of another hunk", async () => {
-    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
-    const { FeedbackProvider } = await import("../src/feedback.tsx");
     let reads = 0;
     const far = [{ kind: "+" as const, old: null, new: 51, text: "one()" }, { kind: "+" as const, old: null, new: 52, text: "two()" }].map((l) => {
       const c = { ...l };
@@ -506,18 +514,7 @@ describe("what a keystroke, a reload and an event redraw", () => {
     });
     // Hunk 0 is appFile's (lines 1–4); hunk 1 (lines 51–52) counts its row renders.
     const twoHunks = { ...appFile, hunks: [...appFile.hunks, { header: "@@ -40,0 +51,2 @@", lines: far }] };
-    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [twoHunks] };
-    const client = { runDiff: async () => diff } as unknown as ApiClient;
-    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
-    const ok = async () => true;
-    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
-      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
-    const { container, unmount } = await mount(
-      <TooltipProvider><FeedbackProvider value={fb}>
-        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
-          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
-      </FeedbackProvider></TooltipProvider>);
-    mounted.push(unmount);
+    const container = await mountChanges([twoHunks]);
     await until(() => container.querySelector('[data-cside=new][data-cline="51"]'), "the second hunk");
     await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
     const before = reads;
@@ -528,20 +525,7 @@ describe("what a keystroke, a reload and an event redraw", () => {
   });
 
   test("a press in the gutter keeps the comment being typed; Cancel clears it", async () => {
-    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
-    const { FeedbackProvider } = await import("../src/feedback.tsx");
-    const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [appFile] };
-    const client = { runDiff: async () => diff } as unknown as ApiClient;
-    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
-    const ok = async () => true;
-    const fb = { taskId: TASK_ID, items: [], current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
-      createDraft: ok, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
-    const { container, unmount } = await mount(
-      <TooltipProvider><FeedbackProvider value={fb}>
-        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
-          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
-      </FeedbackProvider></TooltipProvider>);
-    mounted.push(unmount);
+    const container = await mountChanges([appFile]);
     await until(() => container.querySelector("[data-testid=diffs]"), "the diff");
     const pick = async () => {
       await act(async () => void button(container, "Comment on line 2")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
@@ -568,14 +552,8 @@ describe("what a keystroke, a reload and an event redraw", () => {
     const getTask = client.getTask.bind(client);
     client.getTask = (id: string) => { taskReads++; return getTask(id); };
     const { RUN_ID } = await import("../src/fixtures/data.ts");
-    const { container, unmount } = await mount(
-      <ToastProvider><TooltipProvider><PeopleProvider client={client}>
-        <TaskScreen client={client} taskId={TASK_ID} runId={RUN_ID} tab="sessions" onOpenRun={() => {}} onBack={() => {}} />
-      </PeopleProvider></TooltipProvider></ToastProvider>);
-    mounted.push(unmount);
-    const changes = await until(() => [...container.querySelectorAll<HTMLElement>("[data-testid=session-view] button, [data-testid=session-view] [role=radio]")]
-      .find((b) => b.textContent?.startsWith("Changes")), "the Changes switch");
-    await click(changes);
+    const container = await mountTaskPage(client, { runId: RUN_ID, tab: "sessions" });
+    await openChanges(container);
     await until(() => container.querySelector("[data-testid=diffs] [data-cline]"), "the diff");
     await settle(400);
     return { container, reads: () => reads, feedbackReads: () => feedbackReads, taskReads: () => taskReads };
@@ -631,8 +609,6 @@ describe("what a keystroke, a reload and an event redraw", () => {
 describe("commenting in a Run's Changes", () => {
   test("a draft edited from another Run's Changes keeps its own Run's lines and checksum", async () => {
     const { useTaskFeedbackPage } = await import("../src/screens/FeedbackSection.tsx");
-    const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
-      refresh: async () => people, seen: () => false } as unknown as People;
     const diffWith = (checksum: string, at: number) => ({ base: "b", checksum, final: false, updatedAt: "", files: [{ path: "src/app.ts", status: "M" as const,
       additions: 1, deletions: 0, hunks: [{ header: "@@", lines: [{ kind: "+" as const, old: null, new: at, text: "x()" }] }] }] });
     // run_impl's diff has x() at line 2 (as written, checksum impl_c1); run_fix's has it at line 7.
@@ -667,8 +643,6 @@ describe("commenting in a Run's Changes", () => {
   });
 
   test("a range picked in the gutter becomes a draft on those lines with the diff's checksum; items are drawn shifted or at the file's head", async () => {
-    const { ChangesPanel } = await import("../src/screens/ChangesPanel.tsx");
-    const { FeedbackProvider } = await import("../src/feedback.tsx");
     const diff = { base: "4be19c2", checksum: "c2", final: false, updatedAt: new Date().toISOString(), files: [{
       path: "src/app.ts", status: "M" as const, additions: 3, deletions: 0, hunks: [{ header: "@@ -1,2 +1,5 @@", lines: [
         { kind: "+" as const, old: null, new: 1, text: "// header" },
@@ -682,19 +656,7 @@ describe("commenting in a Run's Changes", () => {
     // Written on an older diff: "const b = 3;" was line 2 and is now 3 (a shift); "const z" is gone (outdated).
     const items = [code("shifted", 2, "const b = 3;"), code("gone", 3, "const z = 9;")];
     const created: Array<[unknown, string]> = [];
-    const client = { runDiff: async () => diff } as unknown as ApiClient;
-    const people = { you: YOU, me: null, all: PEOPLE, byId: new Map(PEOPLE.map((p) => [p.id, p])), names: new Map(PEOPLE.map((p) => [p.id, p.name])),
-      refresh: async () => people, seen: () => false } as unknown as People;
-    const run = { id: "run_impl", attempt: 1, phase: "implement", kind: "agent", status: "running", role: "implementer", createdAt: "" } as unknown as Run;
-    const ok = async () => true;
-    const fb = { taskId: TASK_ID, items, current: 1, closed: null, readOnly: false, full: false, runs: new Map([[run.id, run]]), people, focus: null,
-      createDraft: async (anchor: unknown, body: string) => { created.push([anchor, body]); }, saveDraft: ok, deleteDraft: ok, reply: ok, resolve: ok, reopen: ok, openOnTab: () => {} };
-    const { container, unmount } = await mount(
-      <TooltipProvider><FeedbackProvider value={fb}>
-        <div style={{ height: 600 }}><ChangesPanel client={client} runId="run_impl" role="implementer" events={[]} checksum="c2" live={false}
-          selected={null} onSelectedChange={() => {}} toolbarIn={null} /></div>
-      </FeedbackProvider></TooltipProvider>);
-    mounted.push(unmount);
+    const container = await mountChanges(diff.files, { items, createDraft: async (anchor: unknown, body: string) => { created.push([anchor, body]); } });
     await until(() => container.querySelector("[data-testid=diffs]"), "the diff");
     // Shifted: under its new line, 3.
     const after3 = container.querySelector('[data-testid=after-line][data-side=new][data-line="3"]')!;
