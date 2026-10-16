@@ -123,6 +123,74 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a deletion of a file the base edited, paired with a file the base added, counts", func(t *testing.T) {
+		// The task deletes x.txt; the base both edits x.txt and adds n.txt
+		// like it. start...head pairs x.txt → n.txt, both base paths; T...head
+		// lists x.txt's 510 deleted.
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"x.txt": lines(500, "x")})
+		a.commit(map[string]string{"x.txt": "", "keep.go": "package keep\n"}, "delete x")
+		a.advanceBase(map[string]string{"x.txt": lines(500, "x") + lines(10, "base"), "n.txt": lines(500, "x") + lines(10, "base")})
+		a.syncBase()
+		_ = gitErr(a, "merge", "-q", "--no-edit", "lux/main")
+		git(t, a.work, "rm", "-q", "x.txt")
+		git(t, a.work, "-c", "user.name=Acme", "-c", "user.email=a@example.com", "commit", "-q", "--no-edit")
+		t.Logf("start...head: %s", git(t, a.work, "diff", "-M", "-C", "--name-status", a.start+"..."+a.head()))
+		acc := a.published()
+		samePaths(t, acc, "keep.go", "x.txt")
+		if acc.Lines != 511 || acc.Full != "" || acc.Binary {
+			t.Errorf("lines %d full %q binary %v, want x.txt's 510 deleted on top of the base and keep.go's 1", acc.Lines, acc.Full, acc.Binary)
+		}
+	})
+	// The base edits x.txt or leaves it, and adds n.txt like it; the task
+	// then edits x.txt. start...head lists x.txt and n.txt as a copy of it:
+	// x.txt's 20 count once.
+	for name, baseX := range map[string]string{
+		"a copy the base added from a file both changed counts its source once":          lines(500, "x") + lines(10, "base"),
+		"a copy the base added from a file only the task changed counts its source once": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newAccountingRun(t)
+			a.seed(map[string]string{"x.txt": lines(500, "x")})
+			onBase := map[string]string{"n.txt": lines(500, "x") + lines(10, "base")}
+			if baseX != "" {
+				onBase["x.txt"] = baseX
+			} else {
+				baseX = lines(500, "x")
+			}
+			a.advanceBase(onBase)
+			a.syncBase()
+			a.mergeBase(nil)
+			a.commit(map[string]string{"x.txt": baseX + lines(20, "mine")}, "edit x")
+			pairs := git(t, a.work, "diff", "-M", "-C", "--name-status", a.start+"..."+a.head())
+			if !strings.Contains(pairs, "x.txt\tn.txt") {
+				t.Fatalf("start...head does not list n.txt as a copy of x.txt:\n%s", pairs)
+			}
+			acc := a.published()
+			samePaths(t, acc, "x.txt")
+			if acc.Lines != 20 || acc.Full != "" || acc.Binary {
+				t.Fatalf("lines %d full %q binary %v, want x.txt's 20 once", acc.Lines, acc.Full, acc.Binary)
+			}
+		})
+	}
+	t.Run("a rename the base made, imported, counts nothing under its old name", func(t *testing.T) {
+		// start...head pairs a.txt → n.txt, both the base's; T...head lists
+		// neither, so a.txt adds no entry of its own.
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"a.txt": lines(500, "a")})
+		a.moveOnBase("a.txt", "n.txt")
+		a.syncBase()
+		a.mergeBase(nil)
+		a.commit(map[string]string{"keep.go": "package keep\n"}, "task work")
+		if pairs := git(t, a.work, "diff", "-M", "-C", "--name-status", a.start+"..."+a.head()); !strings.Contains(pairs, "a.txt\tn.txt") {
+			t.Fatalf("start...head does not pair a.txt with n.txt:\n%s", pairs)
+		}
+		acc := a.published()
+		samePaths(t, acc, "keep.go")
+		if acc.Lines != 1 || acc.Full != "" || acc.Binary {
+			t.Fatalf("lines %d full %q binary %v, want keep.go's 1", acc.Lines, acc.Full, acc.Binary)
+		}
+	})
 	t.Run("a rename into a path the base added counts the task's edit and the old name's deletion", func(t *testing.T) {
 		// The new name n.txt is the base's, the old name a.txt not: n.txt
 		// counts only what T...head shows on it (mine's 5), and a.txt its
@@ -322,4 +390,12 @@ func TestABinaryChangeIsBinaryWhateverItsStatus(t *testing.T) {
 			t.Fatalf("lines %d: not past the limit", acc.Lines)
 		}
 	})
+}
+
+// gitErr is git in the checkout, its failure returned: a merge that
+// conflicts on purpose.
+func gitErr(a *accountingRun, args ...string) error {
+	cmd := append([]string{"-C", a.work, "-c", "user.name=Acme", "-c", "user.email=a@example.com"}, args...)
+	_, err := exec.Command("git", cmd...).CombinedOutput()
+	return err
 }

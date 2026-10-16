@@ -22,8 +22,9 @@ import (
 // must contain. With T an ancestor of head, a file of start...head counts
 // with GitHub's numbers unless its new name is a path T brought in
 // (start...T); such a file counts only as T...head shows it under that
-// name, and under its old name too when T left that alone, the task's
+// name, and under its old name too as T...head lists it, the task's
 // change on top of the base it merged, so a pure import counts nothing.
+// Each path counts once.
 // No T, a T that head does not contain, or any compare refused or cut
 // short at GitHub's file cap counts start...head in full, Full saying why.
 
@@ -139,20 +140,30 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 	for _, f := range onTop.Files {
 		ownOnTop[f.Filename] = f
 	}
+	// Each name counts once: a copy's source the task also changed is listed
+	// under its own name and as the copy's previous_filename.
 	var own []forge.ComparedFile
+	counts := map[string]bool{}
+	add := func(g forge.ComparedFile) {
+		if !counts[g.Filename] {
+			counts[g.Filename] = true
+			own = append(own, g)
+		}
+	}
 	for _, f := range task.Files {
 		if !byBase[f.Filename] {
-			own = append(own, f)
-		} else {
-			if g, changed := ownOnTop[f.Filename]; changed {
-				own = append(own, g)
-			}
-			// A task deletion GitHub paired with a file the base added:
-			// T...head lists the deletion under the old name.
-			if f.PreviousFilename != "" && !byBase[f.PreviousFilename] {
-				if g, changed := ownOnTop[f.PreviousFilename]; changed {
-					own = append(own, g)
-				}
+			add(f)
+			continue
+		}
+		if g, changed := ownOnTop[f.Filename]; changed {
+			add(g)
+		}
+		// A task deletion GitHub paired with a file the base added: T...head
+		// lists the deletion under the old name, whether or not the base
+		// changed that file too.
+		if f.PreviousFilename != "" {
+			if g, changed := ownOnTop[f.PreviousFilename]; changed {
+				add(g)
 			}
 		}
 	}
