@@ -489,13 +489,17 @@ with the project's network allowlist (Agent network: for example
 `*.snowflakecomputing.com`) so an agent can use it only where it should.
 
 **No secret in a push.** Before dude asks lux to push a Run's work to its
-branch on GitHub, it reads the checkout (commits and uncommitted changes
-against where it started) and looks for every form of every value the Run
-was given. One found refuses the push: the Run fails, kept for a resume,
-with `run.push.refused` and a reason naming the secret and the file, never
+branch on GitHub, it reads everything the push would send and looks for
+every form of every value the Run was given: each commit since where the
+checkout started (its message, author and committer, and every line it
+adds, so a value committed and deleted later is still found), the
+uncommitted changes, and the branch name. One found refuses the push: the
+Run fails, kept for a resume, with `run.push.refused` and a reason naming
+the secret and where (a file, or `commit message of <short sha>`), never
 the value; its task escalates to its owner, and nothing retries it. Take
 the value out of the files and their commits, then resume the agent or
-retry the step. Binary files' contents are not checked.
+retry the step. History over 7 MiB is not read and not pushed. Binary
+files' contents are not checked.
 
 ## Postgres
 
