@@ -2048,9 +2048,16 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if acc.Full != "" {
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
-		// A phase keeps no merge marker: a finish retried after a lost
-		// answer may find its own merge of res.Commit.
-		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit, true)
+		attempted, err := s.mergeAttempted(ctx, r, repo.Name, res.Commit)
+		if err != nil {
+			return nil, err
+		}
+		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
+			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,
+					map[string]any{"repo": repo.Name, "commit": res.Commit})
+			})
+		})
 		if err != nil {
 			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
@@ -2086,6 +2093,18 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 	}
 	return heads, branch, nil
+}
+
+// mergeAttempted says whether the Run recorded, before a POST /merges,
+// asking GitHub to merge commit into repo's task branch: only then is a
+// merge of commit found on the branch the Run's own.
+func (s *Syncer) mergeAttempted(ctx context.Context, r phaseRun, repo, commit string) (bool, error) {
+	var attempted bool
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2
+			AND payload->>'repo' = $3 AND payload->>'commit' = $4)`, r.ID, delivery.EvGitMergeAttempted, repo, commit).Scan(&attempted)
+	})
+	return attempted, err
 }
 
 // reportFindings parses what a reviewer said and records it as findings.

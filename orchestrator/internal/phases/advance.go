@@ -68,9 +68,10 @@ func (e *errUnsafeMerge) Error() string {
 // between the judgement and the merge is judged again from the merge's
 // first parent, and an error says so when that is not only base merges.
 //
-// A head that is already a merge of commit is adopted only when attempted:
-// the caller may have sent that merge itself. Otherwise someone else made
-// it, and it is refused like any other move.
+// A head that is already a pure merge of commit is adopted only when
+// attempted: the caller durably recorded, in beforeMerge, sending that
+// merge itself. Otherwise someone else made it, and it is refused like any
+// other move.
 func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted bool, beforeMerge ...func() error) (advanced, error) {
 	refusal := gh.FastForward(ctx, slug, branch, commit)
 	if refusal == nil || !notFastForward(refusal) || start == "" || baseBranch == "" {
@@ -190,7 +191,8 @@ func comparisonFiles(files []forge.ComparedFile) map[string]string {
 // reaches start (compare start...head lists its commits with their
 // parents). Every other commit start..head holds is then an ancestor of
 // such a second parent: the base's. The topmost may instead have commit
-// as its second parent: dude's own merge of it (own).
+// as its second parent and be GitHub's pure merge of it onto its first
+// parent: dude's own merge of it (own).
 //
 // Costs one compare, plus one per merge, at most maxBaseMerges. A commit
 // list GitHub cut short, or more merges, is judged no.
@@ -218,6 +220,12 @@ func baseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 		}
 		merges++
 		if at == head && ps[1] == commit {
+			// dude's own merge must be exactly the first parent plus
+			// commit's change, made by GitHub.
+			pure, err := pureMerge(ctx, gh, slug, commit, ps[0], at)
+			if err != nil || !pure {
+				return judgement{}, err
+			}
 			j.own, j.under = true, ps[0]
 			continue
 		}

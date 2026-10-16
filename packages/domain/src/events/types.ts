@@ -401,6 +401,8 @@ export const EventTypes = {
   RepoMaterialized: "repo.materialized",
   RepoBranchCreated: "repo.branch_created",
   GitCommitCreated: "git.commit_created",
+  /** A phase Run is about to merge its commit into the task branch on GitHub. Payload: `{ repo, commit }`. */
+  GitMergeAttempted: "git.merge_attempted",
   GitPushCompleted: "git.push_completed",
 
   // Review
