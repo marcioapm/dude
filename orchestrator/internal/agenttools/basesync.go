@@ -179,8 +179,8 @@ func baseLine(repo, base string, res lux.SyncResult) BaseSync {
 	switch {
 	case res.Status == "":
 		b.Status = "asked"
-		b.Next = fmt.Sprintf("lux has not reported the fetch yet: in a moment, `git rev-list --count HEAD..lux/%s` says "+
-			"how far behind you are (an error: not fetched yet); then %s.", base, merge)
+		b.Next = fmt.Sprintf("lux has not reported the fetch yet, so lux/%s may be missing or older than %s: call "+
+			"sync_base again in a moment, and merge only once it answers fetched or up-to-date; then %s.", base, base, merge)
 	case res.Status == "failed":
 		b.Next = "lux could not fetch it; call sync_base again, or carry on without it."
 	case res.Behind == 0:

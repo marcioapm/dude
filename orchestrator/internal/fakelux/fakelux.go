@@ -662,9 +662,10 @@ type Server struct {
 	// git.push follows, until ReleasePushes.
 	HoldPushes bool
 	heldPushes []func()
-	// HoldSyncs is a lux that accepts a running Run's sync and never
-	// reports it: no git.sync or sync.done follows.
+	// HoldSyncs is a lux that accepts a running Run's sync and does not
+	// report it: no git.sync or sync.done follows, until ReleaseSyncs.
 	HoldSyncs bool
+	heldSyncs []func()
 	// NoOperationCredentials is a runner from before credentials on push
 	// and sync: one carrying them is refused, 409
 	// git_credentials_unsupported.
@@ -1834,13 +1835,25 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
 	if tool == "sync_base" {
-		// The scripted agent can call before dude has recorded its Run as
-		// running, which sync_base refuses until it has: as an agent told
-		// to call again in a moment, it does.
-		deadline := time.Now().Add(5 * time.Second)
-		for status == 422 && strings.Contains(string(body), "container is not running") && time.Now().Before(deadline) {
+		// As an agent following sync_base's answers, it calls again while
+		// dude has not yet recorded its Run as running (refused), and while
+		// lux has not reported the fetch (pending): merging before would
+		// merge a lux/<base> that is missing or old.
+		deadline := time.Now().Add(fakeagent.SyncBaseRetryFor)
+		for time.Now().Before(deadline) {
+			wait := fakeagent.SyncBaseRetryEvery
+			switch {
+			case status == 422 && strings.Contains(string(body), "container is not running"):
+				wait = 20 * time.Millisecond
+			case status == 200 && fakeagent.SyncBasePending(body):
+			default:
+				wait = 0
+			}
+			if wait == 0 {
+				break
+			}
 			s.mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(wait)
 			s.mu.Lock()
 			status, body, err = s.toolRequest(run, tool, args)
 		}

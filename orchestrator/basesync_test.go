@@ -721,7 +721,7 @@ func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.implementerAtWork()
 	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "sync_base", `{}`)
-	if status != 200 || !strings.Contains(body, `"status":"asked"`) || !strings.Contains(body, "HEAD..lux/main") {
+	if status != 200 || !strings.Contains(body, `"status":"asked"`) || !strings.Contains(body, "call sync_base again") {
 		t.Fatalf("pending fetch: %d %s", status, body)
 	}
 }
