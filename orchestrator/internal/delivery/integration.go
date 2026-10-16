@@ -266,9 +266,10 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 }
 
 // HandOverPending says, without locking the delivery, whether it holds an
-// integration handed over at repo's head whose closing line is not on
-// record: what HandOverMergedTx would write. A line once written stays, so
-// false is final for that head; true is rechecked under the lock.
+// integration handed over at repo's head that is not closed: what
+// HandOverMergedTx would write. false because the line (or a refusal) is on
+// record is final; false for want of a hand-over is not, so every sync asks
+// again. true is rechecked under the lock.
 func HandOverPending(ctx context.Context, tx pgx.Tx, taskID, repo, head string) (bool, error) {
 	d, err := ReadDelivery(ctx, tx, taskID)
 	if err != nil || d == nil {
@@ -278,10 +279,21 @@ func HandOverPending(ctx context.Context, tx pgx.Tx, taskID, repo, head string) 
 		if pair != repo+":"+head+":"+i.BaseHead {
 			continue
 		}
-		seen, err := integrationEventSeen(ctx, tx, taskID, "integration-completed", i.attempt())
-		return !seen, err
+		closed, err := integrationClosed(ctx, tx, taskID, pair, &i)
+		return !closed, err
 	}
 	return false, nil
+}
+
+// integrationClosed says whether i, handed over under pair, has its
+// completed line or was refused: an attempt escalated as still conflicting
+// is the person's to decide, and is never completed. The refusal's attempt
+// names the integrated head (pair's), not the head i started from.
+func integrationClosed(ctx context.Context, tx pgx.Tx, taskID, pair string, i *Integration) (bool, error) {
+	if seen, err := integrationEventSeen(ctx, tx, taskID, "integration-completed", i.attempt()); err != nil || seen {
+		return seen, err
+	}
+	return integrationEventSeen(ctx, tx, taskID, "integration-refused", pair+":"+i.RunID)
 }
 
 // HandOverMergedTx is a reading that repo's pull request merges, at head,
@@ -304,6 +316,9 @@ func handOverMergedTx(ctx context.Context, tx pgx.Tx, org string, st *State, rep
 	for pair, i := range st.HandedOver {
 		if pair != repo+":"+head+":"+i.BaseHead {
 			continue
+		}
+		if closed, err := integrationClosed(ctx, tx, st.TaskID, pair, &i); err != nil || closed {
+			return err
 		}
 		return integrationEventTx(ctx, tx, org, st, &i, "integration-completed", map[string]any{"head": head})
 	}

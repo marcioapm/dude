@@ -1054,10 +1054,10 @@ func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
 	}
 }
 
-// The syncer reads the pull request merging while the step that records
-// the hand-over is still committing: its read waits for that commit and
-// sees the hand-over, so the syncer writes the closing line itself.
-func TestTheSyncerWaitsForAHandOverBeingCommitted(t *testing.T) {
+// HandOverMergedTx runs while the step that records the hand-over is still
+// committing: it waits on the step's row lock on the delivery, then sees the
+// hand-over and writes the closing line.
+func TestAHandOverBeingCommittedIsSeenUnderTheDeliveryLock(t *testing.T) {
 	w := newWorld(t)
 	wi := w.handedOver(false)
 	var key string
@@ -1088,7 +1088,7 @@ func TestTheSyncerWaitsForAHandOverBeingCommitted(t *testing.T) {
 	}()
 	select {
 	case err := <-read:
-		t.Fatalf("the syncer read the delivery while its step was committing (err %v)", err)
+		t.Fatalf("HandOverMergedTx read the delivery while its step was committing (err %v)", err)
 	case <-time.After(300 * time.Millisecond):
 	}
 	if err := step.Commit(ctx); err != nil {
@@ -1098,7 +1098,7 @@ func TestTheSyncerWaitsForAHandOverBeingCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := w.count(integrationCompleted, wi); n != 1 {
-		t.Fatalf("completions %d, want the syncer's 1", n)
+		t.Fatalf("completions %d, want 1", n)
 	}
 }
 

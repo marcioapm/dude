@@ -256,12 +256,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// over at its head and not yet closed, whatever was on record before:
 	// the step may record the hand-over after an earlier sync looked for it
 	// and read the pull request before that sync's reading committed, so no
-	// one reading is sure to be the one. Checked unlocked first, so a clean
-	// sync with nothing to close takes no workflow_runs lock. Committed
-	// before the reading below: if that fails, the next sync comes back
-	// here, and the line is not written twice. Its own transaction: it
-	// locks workflow_runs, which a publish recording holds while it updates
-	// pull_requests.
+	// one reading is sure to be the one. A refused attempt is closed too.
+	// Checked unlocked first, so a clean sync with nothing to close takes
+	// no workflow_runs lock. Committed before the reading below: if that
+	// fails, the next sync comes back here, and the line is not written
+	// twice. Its own transaction: it locks workflow_runs, which a publish
+	// recording holds while it updates pull_requests.
 	if isOpen(status.State) && (status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 			pending, err := delivery.HandOverPending(ctx, tx, pr.TaskID, pr.RepoName, status.HeadSHA)

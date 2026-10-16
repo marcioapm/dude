@@ -344,6 +344,49 @@ func TestAHandOverPassWhileASyncerWaitsToRecordCleanIsCompleted(t *testing.T) {
 	}
 }
 
+// An integration refused as still conflicting is closed: a later clean
+// reading at the same head, as when the base moves on, writes no completed
+// line for it and takes no lock on the delivery, nor does the locked closer
+// write one, and its escalation still waits for a person.
+func TestARefusedHandOverIsNotCompletedByALaterCleanReading(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	ctx := context.Background()
+	var prID, repo, head string
+	if err := w.owner.QueryRow(ctx, `SELECT p.id, split_part(k, ':', 1), split_part(k, ':', 2) FROM pull_requests p
+		JOIN workflow_runs r ON r.task_id = p.task_id, jsonb_object_keys(r.state->'handedOver') k WHERE p.task_id = $1`, wi).
+		Scan(&prID, &repo, &head); err != nil {
+		t.Fatal(err)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+	before := w.count(escalations, wi)
+	w.until("the escalation", func() bool { w.sync(); return w.count(escalations, wi) == before+1 })
+	refused := `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-refused'`
+	if n := w.count(refused, wi); n != 1 {
+		t.Fatalf("refusals %d, want 1", n)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	for range 4 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND mergeable_state='clean'`, wi); n != 1 {
+		t.Fatalf("the syncer did not record clean")
+	}
+	w.syncTakesNoDeliveryLock(t, wi, prID)
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		return delivery.HandOverMergedTx(ctx, tx, w.org, wi, repo, head)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(integrationCompleted, wi); n != 0 {
+		t.Errorf("completions %d, want 0", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='decide' AND status='waiting'`, wi); n != 1 {
+		t.Errorf("the run is not waiting at decide:\n%s", w.describeRuns())
+	}
+}
+
 // A clean reading with no handed-over integration left to close, none ever
 // or one already closed, takes no lock on the delivery: a sync is not
 // queued behind a step or a publish recording holding it.
@@ -370,38 +413,46 @@ func TestACleanSyncWithNoHandOverToCloseDoesNotLockTheDelivery(t *testing.T) {
 				Scan(&prID); err != nil {
 				t.Fatalf("no clean pull request: %v", err)
 			}
-			holder, err := w.owner.Begin(ctx)
+			w.syncTakesNoDeliveryLock(t, wi, prID)
+		})
+	}
+}
+
+// syncTakesNoDeliveryLock holds the delivery's row and fails t if a sync of
+// prID waits on it.
+func (w *world) syncTakesNoDeliveryLock(t *testing.T, wi, prID string) {
+	t.Helper()
+	ctx := context.Background()
+	holder, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx)
+	var pid int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid() FROM workflow_runs WHERE task_id = $1 FOR UPDATE`, wi).
+		Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.prs.Sync(ctx, w.org, prID) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		select {
+		case err := <-done:
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer holder.Rollback(ctx)
-			var pid int
-			if err := holder.QueryRow(ctx, `SELECT pg_backend_pid() FROM workflow_runs WHERE task_id = $1 FOR UPDATE`, wi).
-				Scan(&pid); err != nil {
-				t.Fatal(err)
-			}
-			done := make(chan error, 1)
-			go func() { done <- w.prs.Sync(ctx, w.org, prID) }()
-			deadline := time.Now().Add(20 * time.Second)
-			for {
-				select {
-				case err := <-done:
-					if err != nil {
-						t.Fatal(err)
-					}
-					return
-				default:
-				}
-				if w.count(blockedBy, pid) > 0 {
-					_ = holder.Rollback(ctx)
-					<-done
-					t.Fatal("the sync waited on the delivery's row lock")
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the sync neither returned nor waited")
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
-		})
+			return
+		default:
+		}
+		if w.count(blockedBy, pid) > 0 {
+			_ = holder.Rollback(ctx)
+			<-done
+			t.Fatal("the sync waited on the delivery's row lock")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sync neither returned nor waited")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
