@@ -301,6 +301,10 @@ func (w *steps) closeHandedOver(ctx context.Context, sc workflow.StepContext, st
 		return err
 	}
 	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		// Serialises this with the syncer's hand-over (HandOverMergedTx).
+		if _, err := LoadDelivery(ctx, tx, st.TaskID); err != nil {
+			return err
+		}
 		for _, p := range states {
 			if p.State != forge.StateOpen && p.State != forge.StateDraft ||
 				p.Mergeable != forge.MergeClean && p.Mergeable != forge.MergeBehind {
@@ -309,6 +313,9 @@ func (w *steps) closeHandedOver(ctx context.Context, sc workflow.StepContext, st
 			if err := handOverMergedTx(ctx, tx, sc.OrganizationID, st, p.Repo, p.HeadSHA); err != nil {
 				return err
 			}
+		}
+		if w.s.HandOverClosing != nil {
+			w.s.HandOverClosing(ctx, tx)
 		}
 		return nil
 	})
