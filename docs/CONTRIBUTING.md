@@ -184,10 +184,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   runs with its bounds, the tester checks every criterion, and only once the
   gate passes or a person settles it does `promoteCandidate` fast-forward
   each pull request's branch to the candidate (`gh.FastForwardExisting`,
-  never forced) and refresh, for the pull requests it moved, the
+  never forced) and refresh, for every open pull request of the task, the
   description's marked Review and Verification sections (`refreshBodies`,
   the verdict refresh's machinery), or the verdict comment of an adopted
-  one. A candidate's verdict never reaches a pull request before that.
+  one; a pull request whose refresh GitHub failed is tried again, at most
+  twice. When a push race lets only some branches move, only those are
+  refreshed. A candidate's verdict never reaches a pull request before that.
   A branch someone pushed to meanwhile is not moved: `pull_request_moved`
   asks a person (retry from their commit, or wait). Reviews are asked again
   after the move. The round counts once against `MaxPRFixIterations` and

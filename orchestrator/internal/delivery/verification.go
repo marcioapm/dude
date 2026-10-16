@@ -573,14 +573,15 @@ func (s *Store) RefreshVerification(ctx context.Context, org string, st *State, 
 	s.refreshBodies(ctx, org, st, forges, nil, false, true)
 }
 
-// refreshPromoted brings what the pull requests in repos, those a promotion
-// moved, say about review and test up to the commit they show: the marked
-// sections of a body dude opened, or an adopted pull request's verdict
-// comment. It returns the repositories whose refresh failed, and the
-// longest Retry-After GitHub gave; a failure is recorded only when
-// recordFailure is set.
+// refreshPromoted brings what the pull requests in repos say about review
+// and test up to the commits the promotion left: the marked sections of a
+// body dude opened, or an adopted pull request's verdict comment. It
+// returns the repositories whose refresh failed, and the longest
+// Retry-After GitHub gave; a failure is recorded only when recordFailure
+// is set.
 func (s *Store) refreshPromoted(ctx context.Context, org string, st *State, forges Forges, repos []string,
 	recordFailure bool) (failed []string, after time.Duration) {
+	// Empty is nothing left to do; passed on, nil would mean every pull request.
 	if len(repos) == 0 {
 		return nil, 0
 	}

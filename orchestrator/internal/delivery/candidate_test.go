@@ -39,6 +39,11 @@ func TestAPullRequestsSectionsAreReplacedAndTheRestKept(t *testing.T) {
 	if got := replaceReview(plain, "## Review\n1 finding."); got != plain+"\n\n"+markedReview("## Review\n1 finding.") {
 		t.Errorf("added: %q", got)
 	}
+	// A description opened before Review was marked keeps its unmarked one.
+	legacy := "Say hello\n\n## Review\nTheir own review notes.\n\n" + signOff
+	if got := replaceReview(legacy, "## Review\n1 finding."); got != legacy+"\n\n"+markedReview("## Review\n1 finding.") {
+		t.Errorf("an unmarked Review was not kept: %q", got)
+	}
 	// The body dude opens with carries both sections marked, before the sign-off.
 	opened := prBody("Say hello", nil, "## Review\nr", "## Verification\nv")
 	if want := "Say hello\n\n" + markedReview("## Review\nr") + "\n\n" + markedVerification("## Verification\nv") + "\n\n" + signOff; opened != want {

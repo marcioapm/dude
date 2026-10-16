@@ -644,6 +644,7 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 			return 0
 		}
 	})
+	webBody := w.web.Pull(1).Body
 	w.comment("Please rename the greeting.")
 	w.sync()
 	w.until("a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
@@ -680,6 +681,10 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 	}
 	if body := w.gh.Pull(1).Body; !strings.Contains(body, "target `"+moved[:7]+"`") {
 		t.Errorf("target's Verification is not about %s:\n%s", moved[:7], body)
+	}
+	// web refused the candidate: its description is not about it.
+	if b := w.web.Pull(1).Body; b != webBody {
+		t.Errorf("web's description changed though web never took the fix:\n%s\nwas:\n%s", b, webBody)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'
 		AND payload->>'repo' = 'target' AND payload->>'to' = $2`, w.wi, moved); n != 1 {

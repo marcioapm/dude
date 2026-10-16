@@ -1691,8 +1691,8 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 	promoted := len(heads) > 0 && st.Candidate != nil
 	st.Candidate, st.PRFeedback = nil, nil
 	if len(heads) > 0 && !promoted {
-		// The adopted pull request's verdict comment, stale past a fix
-		// pushed unchecked. A promoted one's is refreshPromoted's.
+		// The adopted pull request's verdict comment, stale past a fix from
+		// before candidates, pushed unchecked. A promoted one's is refreshPromoted's.
 		w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	}
 	// Who reviewed an open pull request's older head is asked to look at
@@ -1727,7 +1727,11 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		// What they say about review and test is about the commit they
 		// show now: in a step of its own, so that retrying it never moves
 		// a branch or records the move again.
-		st.PromotedRefresh = &PromotedRefresh{Repos: slices.Sorted(maps.Keys(heads))}
+		repos, err := w.promotedRefreshRepos(ctx, sc, st, heads)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		st.PromotedRefresh = &PromotedRefresh{Repos: repos}
 		return workflow.Result{Next: "refreshPromoted", State: st}, nil
 	}
 	// What happened to them while the fix ran was signalled to a step not
@@ -1735,6 +1739,28 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 	// with green checks already. Weighed now rather than waited for.
 	res, _, err := w.pullRequestEnded(ctx, sc, st)
 	return res, err
+}
+
+// promotedRefreshRepos are the repositories a full promotion refreshes:
+// every open pull request's, since Review and Verification are task-level
+// and the promoted verdict covers every head; an adopted one's verdict
+// comment, only the moved ones. Listed explicitly, never nil for "all".
+func (w *steps) promotedRefreshRepos(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) ([]string, error) {
+	if st.adoptedPR() {
+		return slices.Sorted(maps.Keys(heads)), nil
+	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return nil, err
+	}
+	repos := []string{}
+	for _, p := range states {
+		if (p.State == forge.StateOpen || p.State == forge.StateDraft) && !slices.Contains(repos, p.Repo) {
+			repos = append(repos, p.Repo)
+		}
+	}
+	slices.Sort(repos)
+	return repos, nil
 }
 
 // refreshPromoted refreshes, after a promotion, the pull requests (or the

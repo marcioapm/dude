@@ -191,6 +191,43 @@ func TestAPromotedRefreshRetriesOnlyThePullRequestItFailed(t *testing.T) {
 	}
 }
 
+// A fix promoted to target alone: web's pull request, which the fix did not
+// move, is refreshed too, since its Review and Verification are about both
+// heads. GitHub fails web's first update; it is tried again and lands.
+func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
+	w := newPRFixWorldIn(t, true)
+	var armed atomic.Bool
+	target := bodyPatches(w.gh, &armed, 0)
+	web := bodyPatches(w.web, &armed, 1)
+	armed.Store(true)
+	w.comment("Please rename the greeting.")
+	w.until("the fix on target's pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.elapseRefreshWait(w.wi, 1)
+	if repos := w.state("promotedRefresh"); !strings.Contains(repos, `"repos": ["web"]`) {
+		t.Errorf("retrying %s, want web alone", repos)
+	}
+	w.settledBackOnThePullRequest()
+	if at := w.web.SHA(w.branch); at != w.webBefore {
+		t.Fatalf("web moved to %s; the fix was to change target alone", at)
+	}
+	if n := target.Load(); n != 1 {
+		t.Errorf("target's description updated %d times, want once", n)
+	}
+	if n := web.Load(); n != 2 {
+		t.Errorf("web's description updated %d times, want the failure and its retry", n)
+	}
+	moved := w.gh.SHA(w.branch)
+	want := "Tested at target `" + moved[:7] + "`, web `" + w.webBefore[:7] + "`."
+	for repo, server := range map[string]*fakegithub.Server{"target": w.gh, "web": w.web} {
+		if ok, failed := w.verificationEvents(repo); ok != 1 || failed != 0 {
+			t.Errorf("%s: recorded %d updates and %d failures, want one update", repo, ok, failed)
+		}
+		if body := server.Pull(1).Body; !strings.Contains(body, want) || strings.Contains(body, "**Stale:**") {
+			t.Errorf("%s's description is not about the promoted heads (%s):\n%s", repo, want, body)
+		}
+	}
+}
+
 // The orchestrator restarts while the refresh waits, and a run of the
 // refresh is lost before its transition commits: each time the refresh
 // alone runs again; the promotion's move is made and recorded once.
