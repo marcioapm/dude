@@ -1962,7 +1962,7 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     tabs.first.click()
     history = page.get_by_test_id("chat-history")
     expect(history).to_contain_text("Delivered automatically")
-    expect(history).to_contain_text("implementer → reviewer → fixer → reviewer → simplifier → PR #")
+    expect(history).to_contain_text("implementer → reviewer → fixer → reviewer → simplifier → reviewer → PR #")
     composer = page.get_by_test_id("task-chat").get_by_placeholder("Ask about this task…")
     expect(composer).to_be_empty()
 
