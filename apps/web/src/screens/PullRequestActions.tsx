@@ -39,12 +39,18 @@ function askLabel(picked: ReadonlyArray<ReviewerCandidate>): string {
   return `Ask ${one.kind === "team" ? name : firstName(name)}`;
 }
 
-export function PullRequestActions({ client, pr, defaultMethod, onChanged, children }: {
+export function PullRequestActions({ client, pr, defaultMethod, onChanged, feedbackHolds = 0, onShowFeedback, children }: {
   client: ApiClient;
   pr: PullRequest;
   /** The organization's merge method: what Merge does first. */
   defaultMethod: MergeMethod;
   onChanged: () => void;
+  /**
+   * People's feedback holding the merge, as the API counts it: dude's merge
+   * refuses while any is (feedback_open), so Merge is off and says why.
+   */
+  feedbackHolds?: number | undefined;
+  onShowFeedback?: (() => void) | undefined;
   children: (slots: PullRequestActionSlots) => ReactNode;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -71,7 +77,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
   const open = pr.state === "open" || pr.state === "draft";
   if (!open) return <>{children({ facts: {}, under: {}, merge: null, note: null })}</>;
 
-  const blocked = mergeBlockedBy(pr);
+  const held = feedbackHolds > 0 ? `Can't merge: ${plural(feedbackHolds, "feedback item")} ${feedbackHolds === 1 ? "is" : "are"} not yet handled. Resolve or answer ${feedbackHolds === 1 ? "it" : "them"} first.` : null;
+  const blocked = mergeBlockedBy(pr) ?? held;
   const how = method ?? defaultMethod;
   const facts: PullRequestActionSlots["facts"] = {};
   if (pr.checks.some(prCheckFailed)) {
@@ -138,7 +145,13 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
     </span>
   );
 
+  const heldNote = held ? (
+    <span className="mergeHeld" data-testid="pr-feedback-held">
+      {plural(feedbackHolds, "feedback item")} {feedbackHolds === 1 ? "holds" : "hold"} the merge.{" "}
+      {onShowFeedback ? <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onShowFeedback}>Show {feedbackHolds === 1 ? "it" : "them"}</Button> : null}
+    </span>
+  ) : null;
   const note = problem ? <span className="prProblem" role="alert" data-testid="pr-problem">{problem}</span>
-    : blocked ? <span data-testid="pr-blocked">{blocked}</span> : null;
+    : blocked && blocked !== held ? <>{<span data-testid="pr-blocked">{blocked}</span>}{heldNote}</> : heldNote;
   return <>{children({ facts, under: { reviews: asker }, merge, note })}</>;
 }
