@@ -24,23 +24,25 @@ var accountingTimeout = 60 * time.Second
 // ordinary first-parent commits is one net diff; a two-parent merge whose
 // second parent is in base counts only its resolution (--remerge-diff).
 //
-// The checkout is the agent's, so nothing in it is trusted but its objects:
-// the diffs run in a scratch bare repository that borrows them
-// (objects/info/alternates), with no global or system config. Its refs
-// (refs/replace), config (diff drivers, textconv), info/attributes and a
-// committed .gitattributes (attr.tree is the empty tree) never apply; the
-// flags say the same again for a git that reads more than this.
+// The checkout is the agent's, so nothing in it is trusted: not its refs
+// (refs/replace), config (diff drivers, textconv), commit-graph,
+// info/attributes or committed .gitattributes (attr.tree is the empty
+// tree), and not its objects either. start, head and base are fetched from
+// it into a scratch bare repository with transfer.fsckObjects, so
+// index-pack hashes every object again and a rewritten tree or commit fails
+// the fetch; every git call there runs with no global or system config and
+// no commit-graph. A failed fetch is no evidence, never an empty one.
 const accountingScript = `set -eu
 export GIT_NO_REPLACE_OBJECTS=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1
 repo=$1 start=$2 head=$3 b=$4
-gd=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
+gd=$(git -C "$repo" -c core.commitGraph=false rev-parse --path-format=absolute --git-common-dir)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 git init -q --bare "$tmp/r"
-printf '%s/objects\n' "$gd" > "$tmp/r/objects/info/alternates"
-if [ -f "$gd/shallow" ]; then cp "$gd/shallow" "$tmp/r/shallow"; fi
-g() { git --git-dir="$tmp/r" -c diff.external= -c core.attributesFile=/dev/null -c attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904 "$@"; }
+g() { git --git-dir="$tmp/r" -c core.commitGraph=false -c diff.external= -c core.attributesFile=/dev/null -c attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904 "$@"; }
 d() { g "$@" --no-ext-diff --no-textconv --text -M --raw --numstat -z; }
+g -c transfer.fsckObjects=true -c fetch.writeCommitGraph=false fetch -q --no-tags --no-write-fetch-head --update-shallow \
+ --upload-pack='git -c core.commitGraph=false -c uploadpack.allowAnySHA1InWant=true upload-pack' "$gd" "$start" "$head" ${b:+"$b"}
 g cat-file -e "$start^{commit}"
 g cat-file -e "$head^{commit}"
 if [ -n "$b" ]; then g cat-file -e "$b^{commit}"; fi
