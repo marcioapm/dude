@@ -11,14 +11,17 @@ what it says after. An implementer committing a value is refused before
 anything is pushed, its owner told the secret's name, never the value.
 
 The scripted models: `fake/print-secrets` prints its env secrets in a bash
-call (and as an implementer asks a question first, then quotes them);
+call, each as NAME=value and again base64, hex, URL- and JSON-escaped (and
+as an implementer asks a question first, then quotes them);
 `fake/commit-secrets` commits them to config/secrets.env.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import os
+from urllib.parse import quote
 
 import pytest
 import requests
@@ -29,10 +32,21 @@ from helpers import ApiClient, query, sign_in, wait_for_escalation, wait_until
 
 NAME = "SNOWFLAKE_PASSWORD"
 MARK = f"[REDACTED:{NAME}]"
+# The encodings fake/print-secrets prints each secret in besides NAME=value.
+ENCODED = ("B64", "HEX", "URL", "JSON")
 
 
 def _value() -> str:
-    return f"sf-test-not-a-real-password-{os.urandom(4).hex()}"
+    # Characters URL and JSON escaping change, so each form differs from the raw value.
+    return f"sf-test-not-a-real-password-{os.urandom(4).hex()}/+&\"<x"
+
+
+def _leaks(value: str) -> tuple[str, ...]:
+    """The value in every form dude promises to redact, made here
+    independently of the Go redactor."""
+    body = json.dumps(value)[1:-1]
+    html = body.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return (value, base64.b64encode(value.encode()).decode(), value.encode().hex(), quote(value, safe=""), body, html)
 
 
 def _lux(env, path: str) -> dict:
@@ -51,8 +65,20 @@ def _declares(spec: dict) -> list[str]:
     return [s["name"] for s in spec.get("secrets", [])]
 
 
+def _strings(v) -> list[str]:
+    """Every string in a decoded payload, so a form is looked for as stored,
+    not as Python's repr escapes it."""
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, dict):
+        return [s for k, e in v.items() for s in (k, *_strings(e))]
+    if isinstance(v, list):
+        return [s for e in v for s in _strings(e)]
+    return []
+
+
 def _events_text(client: ApiClient, run_id: str) -> str:
-    return "\n".join(repr(e.get("payload")) for e in client.events(runId=run_id, limit=1000))
+    return "\n".join(s for e in client.events(runId=run_id, limit=1000) for s in _strings(e.get("payload")))
 
 
 def _events_of(client: ApiClient, run_id: str, typ: str) -> list[dict]:
@@ -100,9 +126,10 @@ def test_previews_and_tester_secret_reaches_the_tester_and_a_preview_redacted_ne
 
     # What the tester printed is stored redacted, every form of the value gone.
     text = _events_text(client, tester["id"])
-    assert f"{NAME}={MARK}" in text, text[:2000]
-    for leak in (value, base64.b64encode(value.encode()).decode()):
-        assert leak not in text
+    for printed in ("", *(f"_{e}" for e in ENCODED)):
+        assert f"{NAME}{printed}={MARK}" in text, text[:2000]
+    for leak in _leaks(value):
+        assert leak not in text, f"stored as {leak!r}"
 
     # The conductor, asked in Chat, is given nothing.
     client.patch(f"/v1/projects/{pid}", {"agentModels": {**client.get(f"/v1/projects/{pid}").json()["agentModels"],
@@ -139,7 +166,9 @@ def test_the_testers_session_shows_the_marker_and_its_secrets_chip_never_the_val
     page.goto(f"{web_url}#/session/{tester['id']}")
     expect(page.get_by_test_id("run-secrets")).to_have_text("1 secret")
     expect(page.get_by_text(MARK).first).to_be_visible()
-    assert value not in page.content()
+    shown = page.inner_text("body")
+    for leak in _leaks(value):
+        assert leak not in shown, f"shown as {leak!r}"
 
 
 def test_a_value_rotated_while_an_agent_waits_is_still_redacted(
@@ -168,8 +197,10 @@ def test_a_value_rotated_while_an_agent_waits_is_still_redacted(
     wait_until(lambda: any("Connected with these" in repr(e["payload"]) for e in _events_of(client, run_id, "agent.message")),
                timeout=120, message="the implementer never answered")
     text = _events_text(client, run_id)
-    assert old not in text and new not in text
-    assert MARK in text
+    for leak in (*_leaks(old), *_leaks(new)):
+        assert leak not in text, f"stored as {leak!r}"
+    for printed in ("", *(f"_{e}" for e in ENCODED)):
+        assert f"{NAME}{printed}={MARK}" in text, text[:2000]
 
 
 def test_an_implementer_committing_a_secret_is_refused_before_the_push(
@@ -188,9 +219,11 @@ def test_an_implementer_committing_a_secret_is_refused_before_the_push(
     assert escalated["escalation"]["reason"] == "implement_failed", escalated["escalation"]
     run = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
     assert run["status"] == "failed"
-    assert f"{NAME} in config/secrets.env" in run["error"] and value not in run["error"], run["error"]
+    assert f"{NAME} in config/secrets.env" in run["error"], run["error"]
     refused = _events_of(client, run["id"], "run.push.refused")
     assert [e["payload"] for e in refused] == [{"secrets": [NAME], "files": ["config/secrets.env"]}], refused
     # Nothing reached GitHub: no branch of this Run's.
     assert not [b for b in fake_github.branches() if run["id"] in b], fake_github.branches()
-    assert value not in _events_text(client, run["id"])
+    text = _events_text(client, run["id"])
+    for leak in _leaks(value):
+        assert leak not in run["error"] and leak not in text, f"stored as {leak!r}"

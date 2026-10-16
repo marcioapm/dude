@@ -13,11 +13,14 @@
 package fakelux
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -844,6 +847,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		// as the spec it was submitted with gives them.
 		lines := envSecretLines(spec)
 		if step.PrintEnv {
+			lines += envSecretEncodings(spec)
 			tools = append(tools, "bash")
 			toolOutput = map[string]string{"bash": lines}
 			if step.Ask != "" {
@@ -905,6 +909,27 @@ func envSecretLines(spec map[string]any) string {
 		if as, _ := s["as"].(string); as == "env" && name != "" {
 			b.WriteString(name + "=" + value + "\n")
 		}
+	}
+	return b.String()
+}
+
+// envSecretEncodings is each env secret again as an agent's tools might
+// print it: NAME_B64, NAME_HEX, NAME_URL (query-escaped) and NAME_JSON (a
+// JSON string body, as json.Marshal escapes it), one line each.
+func envSecretEncodings(spec map[string]any) string {
+	list, _ := spec["secrets"].([]any)
+	var b strings.Builder
+	for _, raw := range list {
+		s, _ := raw.(map[string]any)
+		name, _ := s["name"].(string)
+		value, _ := s["value"].(string)
+		if as, _ := s["as"].(string); as != "env" || name == "" {
+			continue
+		}
+		quoted, _ := json.Marshal(value)
+		fmt.Fprintf(&b, "%s_B64=%s\n%s_HEX=%s\n%s_URL=%s\n%s_JSON=%s\n",
+			name, base64.StdEncoding.EncodeToString([]byte(value)), name, hex.EncodeToString([]byte(value)),
+			name, url.QueryEscape(value), name, quoted[1:len(quoted)-1])
 	}
 	return b.String()
 }
