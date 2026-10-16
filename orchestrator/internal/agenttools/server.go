@@ -325,6 +325,9 @@ type tool struct {
 	// attempts: a call that passes run spends the budgets before outside
 	// runs, so a call GitHub refuses still counts (see AttemptEventType).
 	attempts bool
+	// withhold: the call's ledger event keeps the result's size, never
+	// the result (what people wrote on GitHub).
+	withhold bool
 	// describeFor, when set, is the description for the calling Run (its
 	// own machine's sizes); "" or an error keeps description.
 	describeFor func(ctx context.Context, tx pgx.Tx, c Caller) (string, error)
@@ -390,7 +393,7 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, baseSyncTools, coordinationTools, feedbackTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, coordinationTools, feedbackTools, brainstormTools)
 }
 
 // define makes a tool from a typed function: its input schema from In,
@@ -431,6 +434,12 @@ func (t tool) before(prepare func(ctx context.Context, c Caller, args json.RawMe
 // checked call, whatever outside then answers.
 func (t tool) countingAttempts() tool {
 	t.attempts = true
+	return t
+}
+
+// withholdingResult records the tool's calls without their results.
+func (t tool) withholdingResult() tool {
+	t.withhold = true
 	return t
 }
 
@@ -494,7 +503,10 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		// A large answer (a whole project's listing) is not copied into the
 		// ledger on every call: its size is.
 		recorded := any(out)
-		if len(out) > resultInLedger {
+		switch {
+		case t.withhold:
+			recorded = map[string]any{"bytes": len(out), "withheld": true}
+		case len(out) > resultInLedger:
 			recorded = map[string]any{"bytes": len(out), "truncated": true}
 		}
 		payload := map[string]any{"tool": t.name, "arguments": args, "result": recorded}

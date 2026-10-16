@@ -429,6 +429,13 @@ export const EventTypes = {
    * `{ number, repo, head, reviewersRequested?, reviewersRefused?, error? }`.
    */
   PullRequestReviewRerequested: "pull_request.review_rerequested",
+  /**
+   * A session's agent or a task's conductor read GitHub through dude
+   * (github_search, github_issue, github_pull_request), on its Run.
+   * Payload: `{ tool, repo, number?, query?, kind?, state?, files?, bytes }`:
+   * what was asked and the result's size in bytes, never what GitHub said.
+   */
+  GitHubRead: "github.read",
 
   // Agent sessions
   SessionStarted: "agent.session.started",

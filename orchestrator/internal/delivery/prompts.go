@@ -633,6 +633,9 @@ const conductorToolsNote = "The dude tools read what dude knows about this task:
 	"answer to your question about it. steer tells a running phase Run of this task something, whoever decides; " +
 	"restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier). " +
 	"reply_on_pull_request answers on one of the task's pull requests, whoever decides. " +
+	"github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull " +
+	"request, its reviews, threads, checks and diffs), at most 60 reads an hour; reading another pull request lets " +
+	"you do nothing on it. " + ExternalTextNote + " " +
 	"publish takes what you committed in your checkout to the task branch, while you decide. " +
 	"On an epic, list_tasks with peers and run_diff with task read the other tasks on it; message asks one of them " +
 	"something (never blocking; wait_for_reply ends your turn until its reply), and note pins a fact every agent on " +
