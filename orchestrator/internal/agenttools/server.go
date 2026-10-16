@@ -542,23 +542,15 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	})
 	var refused refusal
 	if errors.As(err, &refused) {
-		if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			if refused.event != nil {
-				_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
-				return err
-			}
-			if refused.blocked != nil {
-				return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
-			}
-			return nil
-		}); logged != nil {
-			s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
-		}
+		s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
 		return out, err
 	}
 	done, err := t.outside(ctx, c, checked)
+	if errors.As(err, &refused) && refused.event != nil {
+		s.recordRefusal(ctx, c, t, refused)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -577,6 +569,23 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 	}
 	return out, err
+}
+
+// recordRefusal records what a refused call says of itself, once the
+// call's own transaction is gone.
+func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) {
+	if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		if refused.event != nil {
+			_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+			return err
+		}
+		if refused.blocked != nil {
+			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+		}
+		return nil
+	}); logged != nil {
+		s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
+	}
 }
 
 // oldName is what a tool was called before, for the calls a Run made

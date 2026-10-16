@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -243,31 +244,70 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 	return w.fit(out)
 }
 
-// githubRefusal says why GitHub did not answer a read, for the agent.
+// githubRefusal says why GitHub did not answer a read, for the agent, and
+// records it as a github.read event naming the refusal's kind and HTTP
+// status, never GitHub's words.
 func githubRefusal(read githubRead, err error) error {
 	what := read.Slug
 	if read.Number > 0 {
 		what = fmt.Sprintf("%s#%d", read.Slug, read.Number)
 	}
 	var e *forge.Error
+	errors.As(err, &e)
+	var msg string
 	switch {
 	case forge.Moved(err):
-		return refuse("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
+		msg = fmt.Sprintf("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
 	case forge.RateLimited(err):
-		return refuse("GitHub is rate limiting dude (%v): read %s later", err, what)
-	case errors.As(err, &e) && e.NotFound():
-		return refuse("GitHub has no %s, or dude cannot see it", what)
+		msg = fmt.Sprintf("GitHub is rate limiting dude (%v): read %s later", err, what)
+	case e != nil && e.NotFound():
+		msg = fmt.Sprintf("GitHub has no %s, or dude cannot see it", what)
 	case forge.Refused(err):
-		return refuse("GitHub refused reading %s: %v", what, err)
+		msg = fmt.Sprintf("GitHub refused reading %s: %v", what, err)
 	case forge.Transient(err):
-		return refuse("GitHub did not answer reading %s (%v): try again later", what, err)
+		msg = fmt.Sprintf("GitHub did not answer reading %s (%v): try again later", what, err)
+	default:
+		return err
 	}
-	return err
+	payload := readPayload(read)
+	payload["refused"] = refusalKind(err)
+	if e != nil {
+		payload["status"] = e.Status
+	}
+	return refuseRecorded(EvGitHubRead, payload, msg)
+}
+
+// refusalKind is why a read was refused, in dude's words.
+func refusalKind(err error) string {
+	var e *forge.Error
+	switch {
+	case !errors.As(err, &e):
+		return "unavailable"
+	case e.Refusal != "":
+		return e.Refusal
+	case e.NotFound():
+		return "not_found"
+	case forge.RateLimited(err):
+		return "rate_limited"
+	case forge.Transient(err):
+		return "unavailable"
+	case e.Status == http.StatusForbidden:
+		return "forbidden"
+	}
+	return "refused"
 }
 
 // recordGitHubRead records the read: what was asked and the result's size.
 func recordGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead, result json.RawMessage) (json.RawMessage, error) {
-	payload := map[string]any{"tool": read.Tool, "repo": read.Slug, "bytes": len(result)}
+	payload := readPayload(read)
+	payload["bytes"] = len(result)
+	_, err := ledger.Append(ctx, tx, c.event(EvGitHubRead, payload))
+	return result, err
+}
+
+// readPayload is what a github.read event says was asked.
+func readPayload(read githubRead) map[string]any {
+	payload := map[string]any{"tool": read.Tool, "repo": read.Slug}
 	if read.Number > 0 {
 		payload["number"] = read.Number
 	}
@@ -280,8 +320,7 @@ func recordGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead,
 	if len(read.Files) > 0 {
 		payload["files"] = read.Files
 	}
-	_, err := ledger.Append(ctx, tx, c.event(EvGitHubRead, payload))
-	return result, err
+	return payload
 }
 
 // wrapper writes what a read returns: GitHub's text wrapped as external,

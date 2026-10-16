@@ -192,8 +192,10 @@ type Error struct {
 // Why dude refused an agent's read on its own account. Message then holds
 // dude's words only, never what GitHub sent.
 const (
-	RefusalMoved    = "moved"    // a permanent redirect of /repos/{slug}…
-	RefusalRedirect = "redirect" // any other redirect
+	RefusalMoved       = "moved"        // a permanent redirect of /repos/{slug}…
+	RefusalRedirect    = "redirect"     // any other redirect
+	RefusalRateReserve = "rate_reserve" // the rest of the rate limit is delivery's
+	RefusalTooLarge    = "too_large"    // an answer past the agent read limit
 )
 
 // Moved says GitHub answered an agent's read of a repository with a
@@ -1882,7 +1884,7 @@ func reserveAgentRequest(target, authorization, resource string) error {
 		return nil
 	}
 	if r.remaining <= r.limit/agentReadReserve {
-		return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter),
+		return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
 			Message: "GitHub's rate limit is kept for delivery"}
 	}
 	r.remaining--
@@ -1941,7 +1943,7 @@ func (g *GitHub) readBudget(ctx context.Context, scope string, resources ...stri
 		}
 		r := v.(rateReading)
 		if r.reset.After(now) && r.remaining < r.limit/agentReadReserve {
-			return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter),
+			return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
 				Message: fmt.Sprintf("GitHub's %s rate limit has %d of %d requests left until %s: they are kept for delivery",
 					resource, r.remaining, r.limit, r.reset.UTC().Format(time.RFC3339))}
 		}

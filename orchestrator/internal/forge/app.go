@@ -408,7 +408,8 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	}
 	data, err := io.ReadAll(response)
 	if isAgentRead(ctx) && len(data) > agentResponseMax {
-		return &Error{Status: http.StatusRequestEntityTooLarge, Message: "GitHub response exceeds the agent read limit (4 MiB)"}
+		return &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
+			Message: "GitHub response exceeds the agent read limit (4 MiB)"}
 	}
 	if err != nil {
 		return &Unreachable{err}
