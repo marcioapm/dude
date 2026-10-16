@@ -679,6 +679,10 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		list = append(list, c)
 	}
 	for page, seen := 1, 0; ; page++ {
+		if isAgentRead(ctx) && (page > 3 || seen >= 300) {
+			list = append(list, Check{Name: "GitHub check runs", Status: CheckUnavailable, Diagnostic: "…cut: check runs incomplete"})
+			break
+		}
 		var runs struct {
 			TotalCount int `json:"total_count"`
 			CheckRuns  []struct {
@@ -708,6 +712,9 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 			return "", nil, err
 		}
 		for _, r := range runs.CheckRuns {
+			if isAgentRead(ctx) && len(list) >= 300 {
+				break
+			}
 			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
 			link := r.HTMLURL
 			if link == "" {
@@ -1812,6 +1819,29 @@ type rateReading struct {
 }
 
 var rateReadings sync.Map // rateKey → rateReading
+var rateAdmission sync.Mutex
+
+func reserveAgentRequest(target, authorization, resource string) error {
+	rateAdmission.Lock()
+	defer rateAdmission.Unlock()
+	key := rateKey(target, authorization, resource)
+	v, ok := rateReadings.Load(key)
+	if !ok {
+		return nil
+	}
+	r := v.(rateReading)
+	now := time.Now()
+	if !r.reset.After(now) {
+		return nil
+	}
+	if r.remaining <= r.limit/agentReadReserve {
+		return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter),
+			Message: "GitHub's rate limit is kept for delivery"}
+	}
+	r.remaining--
+	rateReadings.Store(key, r)
+	return nil
+}
 
 // rateKey names one token's limit on one resource at one GitHub (its
 // API's host), never holding the token itself.
@@ -1836,6 +1866,8 @@ func noteRate(target, authorization string, h http.Header) {
 	if resource == "" {
 		resource = "core"
 	}
+	rateAdmission.Lock()
+	defer rateAdmission.Unlock()
 	rateReadings.Store(rateKey(target, authorization, resource), rateReading{remaining: remaining, limit: limit, reset: time.Unix(reset, 0)})
 }
 

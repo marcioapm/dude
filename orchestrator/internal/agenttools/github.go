@@ -421,6 +421,9 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	}
 	checks := []ghCheckOut{}
 	for _, c := range p.Checks {
+		if c.Diagnostic == "…cut: check runs incomplete" {
+			continue
+		}
 		checks = append(checks, ghCheckOut{Name: w.text(c.Name, 200), Status: c.Status, Conclusion: c.Conclusion})
 	}
 	files := []ghFileOut{}
@@ -443,6 +446,9 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	pr := map[string]any{"pullRequest": w.line(p.IssueLine), "body": w.text(p.Body, textCap), "draft": p.Draft,
 		"head": w.text(p.Head, 300), "base": w.text(p.Base, 300), "reviews": reviews, "unresolvedThreads": threads,
 		"checks": checks, "files": files, "external": w.note()}
+	if slices.ContainsFunc(p.Checks, func(c forge.Check) bool { return c.Diagnostic == "…cut: check runs incomplete" }) {
+		pr["moreChecks"] = cutMark + ": check runs incomplete"
+	}
 	if len(p.Reviews) > reviewsMax {
 		pr["moreReviews"] = fmt.Sprintf("%s: the first %d of %d reviews", cutMark, reviewsMax, len(p.Reviews))
 	}

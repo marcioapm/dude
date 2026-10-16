@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
@@ -108,6 +110,49 @@ func TestAgentReadRefusesRepositoryRedirect(t *testing.T) {
 	result, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
 	if err == nil || forbiddenCalls != 0 || strings.Contains(result.Title+result.Body, "private-outside-canary") {
 		t.Fatalf("redirect: err=%v forbidden calls=%d result=%+v", err, forbiddenCalls, result)
+	}
+}
+
+func TestAgentReadRechecksReserveBetweenRequests(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("X-RateLimit-Remaining", "19")
+		w.Header().Set("X-RateLimit-Limit", "100")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		if strings.HasSuffix(r.URL.Path, "/comments") {
+			_, _ = w.Write([]byte(`[]`))
+		} else {
+			_, _ = w.Write([]byte(`{"number":1,"comments":100}`))
+		}
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	_, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
+	if !RateLimited(err) || !strings.Contains(err.Error(), "kept for delivery") || calls != 1 {
+		t.Fatalf("reserve: err=%v calls=%d", err, calls)
+	}
+}
+
+func TestAgentChecksStopAtPageCap(t *testing.T) {
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "check-runs") {
+			pages++
+			if pages > 4 {
+				_, _ = w.Write([]byte(`{"total_count":10000,"check_runs":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"total_count":10000,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"state":"success","statuses":[]}`))
+		}
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	_, checks, err := gh.checks(agentReadContext(context.Background()), "acme/allowed", "abc")
+	if err != nil || pages > 3 || len(checks) == 0 || checks[len(checks)-1].Diagnostic != "…cut: check runs incomplete" {
+		t.Fatalf("checks cap: pages=%d checks=%+v err=%v", pages, checks, err)
 	}
 }
 

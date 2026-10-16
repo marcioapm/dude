@@ -373,6 +373,17 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if isAgentRead(ctx) {
+		resource := "core"
+		if strings.Contains(target, "/graphql") {
+			resource = "graphql"
+		} else if strings.Contains(target, "/search/") {
+			resource = "search"
+		}
+		if err := reserveAgentRequest(target, authorization, resource); err != nil {
+			return err
+		}
+	}
 	client := g.http
 	if isAgentRead(ctx) {
 		copy := *client
