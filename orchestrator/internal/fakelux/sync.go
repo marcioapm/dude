@@ -113,6 +113,8 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["status"] = lux.SyncAhead
 	default:
 		if out, err := git("merge", "-q", "--ff-only", to); err != nil {
+			// As lux: a failed sync reports no commit it reached.
+			delete(ev, "to")
 			ev["status"], ev["error"] = "failed", out
 			return
 		}

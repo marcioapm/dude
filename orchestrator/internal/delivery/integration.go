@@ -273,13 +273,43 @@ func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head st
 	if err != nil || d == nil {
 		return err
 	}
-	for pair, i := range d.State.HandedOver {
+	return handOverMergedTx(ctx, tx, org, &d.State, repo, head)
+}
+
+func handOverMergedTx(ctx context.Context, tx pgx.Tx, org string, st *State, repo, head string) error {
+	for pair, i := range st.HandedOver {
 		if pair != repo+":"+head+":"+i.BaseHead {
 			continue
 		}
-		return integrationEventTx(ctx, tx, org, &d.State, &i, "integration-completed", map[string]any{"head": head})
+		return integrationEventTx(ctx, tx, org, st, &i, "integration-completed", map[string]any{"head": head})
 	}
 	return nil
+}
+
+// closeHandedOver writes the closing line of each handed-over integration
+// whose pull request is on record as merging at the handed-over head: the
+// syncer may have read it in the window before the hand-over was recorded,
+// and found nothing to close then.
+func (w *steps) closeHandedOver(ctx context.Context, sc workflow.StepContext, st *State) error {
+	if len(st.HandedOver) == 0 {
+		return nil
+	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return err
+	}
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		for _, p := range states {
+			if p.State != forge.StateOpen && p.State != forge.StateDraft ||
+				p.Mergeable != forge.MergeClean && p.Mergeable != forge.MergeBehind {
+				continue
+			}
+			if err := handOverMergedTx(ctx, tx, sc.OrganizationID, st, p.Repo, p.HeadSHA); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // integrationEventTx is integrationEvent for integration i. The type and

@@ -917,6 +917,12 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 // worked out mergeability, past the step's reads: left to the pull request
 // syncer. Under tell it is a person's Resolve conflicts.
 func (w *world) handedOver(tell bool) string {
+	return w.handedOverWith(tell, func() {})
+}
+
+// handedOverWith is handedOver, calling arm just before the step's last
+// read of GitHub.
+func (w *world) handedOverWith(tell bool, arm func()) string {
 	w.t.Helper()
 	w.toolsWithSync()
 	wi := w.reviewing()
@@ -941,6 +947,7 @@ func (w *world) handedOver(tell bool) string {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
 			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
 	})
+	arm()
 	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
 	w.until("left to the syncer", func() bool {
 		w.sync()
@@ -1012,6 +1019,79 @@ func TestAHandedOverIntegrationThatMergesIsCompleted(t *testing.T) {
 	}
 	if r := w.escalationReason(wi); r != "" {
 		t.Fatalf("escalated: %s", r)
+	}
+}
+
+const integrationCompleted = `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-completed'`
+
+// The syncer reads the pull request merging in the window between the
+// step forgetting GitHub's reading and its hand-over being recorded: it
+// finds nothing handed over then, and every reading after is clean on
+// clean. The workflow's next pass writes the closing line.
+func TestAHandOverTheSyncerReadsBeforeItIsRecordedIsCompleted(t *testing.T) {
+	w := newWorld(t)
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step == "openPullRequest" && next == "awaitPullRequest" {
+			once.Do(func() {
+				w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+				w.sync()
+			})
+		}
+	})
+	wi := w.handedOverWith(false, func() { armed.Store(true) })
+	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(integrationCompleted, wi); n != 1 {
+		t.Fatalf("completions %d", n)
+	}
+}
+
+// A person pushes a new head after the hand-over, and that head merges:
+// dude's integration is not what made it merge, so no closing line.
+func TestAHandedOverIntegrationOvertakenByAPersonIsNotCompleted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(false)
+	w.commitFileIn(w.gh.Repo, delivery.BranchFor(wi, 1), "THEIRS.md", "theirs\n", "A person's fix")
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	w.until("the new head read as merging", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id=$1 AND head_sha=$2 AND mergeable_state='clean'`,
+			wi, w.gh.SHA(delivery.BranchFor(wi, 1))) == 1
+	})
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(integrationCompleted, wi); n != 0 {
+		t.Fatalf("%d completions for a head dude did not integrate", n)
+	}
+}
+
+// Under tell, a person's Resolve conflicts integrated once. The base moves
+// into a conflict again: that is a person's to resolve, escalated, and no
+// integration starts by itself.
+func TestUnderTellAnIntegrationOnceAskedIsNotRepeatedUnasked(t *testing.T) {
+	w := newWorld(t)
+	wi := w.handedOver(true)
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1], s.Conflicting[1] = false, false })
+	w.until("the closing line", func() bool { w.sync(); return w.count(integrationCompleted, wi) == 1 })
+	before := w.count(escalations, wi)
+	w.gh.AdvanceBase("main", "Base moved again")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("the conflict escalation", func() bool {
+		w.sync()
+		return w.count(escalations, wi) == before+1 && w.escalationReason(wi) == "pull_request_conflict"
+	})
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
+		t.Fatalf("%d integration Runs, want the one asked for", n)
 	}
 }
 

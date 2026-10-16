@@ -162,6 +162,9 @@ type State struct {
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
 	authorizeGate bool
+	// The step handed an integration over: the wait after it takes one
+	// pass first (closeHandedOver). Never persisted.
+	handingOver bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -1044,6 +1047,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 					}
 					// Kept as it started, so its closing line names the same attempt.
 					st.HandedOver[after.pair()] = *st.Integration
+					st.handingOver = true
 				}
 				settled = false
 			}
@@ -1158,6 +1162,9 @@ func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepCon
 func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
+		return workflow.Result{}, err
+	}
+	if err := w.closeHandedOver(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	}
 	// Every signal of the batch is read before anything is decided: they are
@@ -1887,7 +1894,7 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 // waitForPR waits on the task's pull requests: what the forge says of
 // them, or a person's decision.
 func waitForPR(st *State) workflow.Result {
-	if len(st.PendingConflicts) > 0 {
+	if len(st.PendingConflicts) > 0 || st.handingOver {
 		return workflow.Result{Next: "awaitPullRequest", State: st}
 	}
 	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}

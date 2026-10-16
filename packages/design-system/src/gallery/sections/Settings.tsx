@@ -337,7 +337,7 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           <ReviewerDemo />
         </Panes>
       </Block>
-      <Block id="s-pr-conflict" title="PullRequestPanel: a conflict with its base" note="The base by name, in mono. For the owner the line ends in Resolve conflicts; while dude resolves it the line says so, attention-toned, and offers nothing; anyone else reads whom it waits on, as the escalation banner does.">
+      <Block id="s-pr-conflict" title="PullRequestPanel: a conflict with its base" note="The base by name, in mono. For the owner the line ends in Resolve conflicts; while dude resolves it the line says so, attention-toned, and offers nothing; anyone else reads whom it waits on.">
         <Panes mode={mode}>
           <ConflictDemo />
         </Panes>

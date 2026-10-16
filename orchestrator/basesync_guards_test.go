@@ -249,6 +249,17 @@ func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
 				'{"reason": "ci_stuck", "detail": {"repo": "target", "number": 1}}') WHERE task_id=$1`, wi)
 			return w.person("owner")
 		}, 409, "a decision about something else"},
+		// A pull request of an earlier attempt: this delivery waits on others.
+		"a pull request the delivery does not wait on": {func(w *world, wi string) string {
+			mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{pullRequestIds}', '["pr_earlier"]') WHERE task_id=$1`, wi)
+			return w.person("owner")
+		}, 409, "dude is not waiting on this pull request"},
+		// A conflict escalation about the task's other pull request.
+		"a conflict escalation about another pull request": {func(w *world, wi string) string {
+			mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{escalation}',
+				'{"reason": "pull_request_conflict", "detail": {"repo": "other", "number": 1}}') WHERE task_id=$1`, wi)
+			return w.person("owner")
+		}, 409, "a decision about something else"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w, wi, prID := setup(t)
