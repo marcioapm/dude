@@ -87,6 +87,7 @@ import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
+import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity } from "../pullRequests.ts";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { refusedBlockers } from "../api/client.ts";
@@ -1358,7 +1359,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
         const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
-        out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
+        out.push({ ...base, who, text, quote: line.quote ? <GitHubBody source={line.quote} /> : undefined, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }
     }
