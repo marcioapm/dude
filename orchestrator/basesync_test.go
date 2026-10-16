@@ -817,11 +817,27 @@ func (w *world) fetchBase(runID string) string {
 	return want
 }
 
+// failCompareOnce makes GitHub answer the first compare from base 502, as
+// a GitHub briefly down does; it answers whether that compare was asked.
+func (w *world) failCompareOnce(base string) func() bool {
+	var failed atomic.Bool
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/"+base+"...") && failed.CompareAndSwap(false, true) {
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	return failed.Load
+}
+
 // The base moves on GitHub while an implementer works, on the file it
-// changes; it fetched the base and never merged it. Then lux cannot reach
-// the Run's host for the accounting's exec. The publish is retried past the
-// outage, and the implementer completes with its own file.
-func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
+// changes; it fetched the base and never merged it. Then GitHub fails the
+// compare of the push with that base once. The publish is retried, the
+// fetched base is not in the push so every change counts, and the
+// implementer completes with its own file.
+func TestAPhasePublishSurvivesAMovedBaseAndAGitHubOutage(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldPushes = true
 	wi := w.task()
@@ -830,8 +846,7 @@ func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
 	})
 	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "someone else's\n", "Someone else's merge")
-	w.fetchBase(w.phaseRunOf(wi, "implement"))
-	w.lux.DropExecs("DUDE_ACCOUNTING", 1)
+	failed := w.failCompareOnce(w.fetchBase(w.phaseRunOf(wi, "implement")))
 	w.lux.HoldPushes = false
 	w.lux.ReleasePushes()
 	w.until("the implementer completed", func() bool {
@@ -840,7 +855,7 @@ func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 		}
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
-	if w.lux.DropExecs("", 0) != 0 {
+	if !failed() {
 		t.Fatal("the accounting never met the outage")
 	}
 	var paths string
@@ -850,17 +865,16 @@ func TestAPhasePublishSurvivesAMovedBaseAndALuxOutage(t *testing.T) {
 	}
 }
 
-// A conductor's publish whose accounting meets a lux that cannot reach its
-// host is tried again, not refused.
-func TestAConductorPublishWaitsOutALuxOutage(t *testing.T) {
+// A conductor's publish whose accounting meets a GitHub briefly down is
+// tried again, not refused.
+func TestAConductorPublishWaitsOutAGitHubOutage(t *testing.T) {
 	e, _ := newCommitted(t)
 	e.commitFileIn(e.gh.Repo, "main", "README.md", "# base\n", "Base moved")
-	e.fetchBase(e.cond)
-	e.lux.DropExecs("DUDE_ACCOUNTING", 1)
+	failed := e.failCompareOnce(e.fetchBase(e.cond))
 	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
 		t.Fatalf("publish %s: %s", status, why)
 	}
-	if e.lux.DropExecs("", 0) != 0 {
+	if !failed() {
 		t.Fatal("the accounting never met the outage")
 	}
 }

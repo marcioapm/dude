@@ -14,11 +14,31 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// The base a publish may leave out of the task's change. The checkout and
-// its refs are the agent's, so the base is never read there: it is the
-// commit lux reported fetching (git.sync's `to`, kept in runs.synced_bases
-// as the follower reads it), and GitHub's base branch must contain it.
-// Without both, nothing is left out: a full count over-counts, and is safe.
+// A publish is counted from GitHub's compares alone; nothing in the
+// checkout or its container is read. start is the task's head before the
+// publish (dude's), head the pushed commit (GitHub checked its objects on
+// the push), and T the trusted base: the commit lux reported fetching
+// (git.sync's `to`, kept in runs.synced_bases), which GitHub's base branch
+// must contain. With T an ancestor of head, a file of start...head counts
+// with GitHub's numbers unless its new name is a path T brought in
+// (start...T); such a file counts only as T...head shows it, the task's
+// change on top of the base it merged, so a pure import counts nothing.
+// No T, a T that head does not contain, or any compare refused or cut
+// short at GitHub's file cap counts start...head in full, Full saying why.
+
+// emptyBlob is git's blob of an empty file.
+const emptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+// accounting is what a publish counts as the task's own change.
+type accounting struct {
+	Paths []string
+	Lines int
+	// A file GitHub would not show in lines (a binary, or a diff too
+	// large): past any line limit.
+	Binary bool
+	// Why the count is start...head in full; "" when T's part was left out.
+	Full string
+}
 
 // recordSyncedBase keeps the commit of a git.sync lux reported for the
 // Run: runs.synced_bases[repo][ref]. A failed sync, or one without a
@@ -71,19 +91,13 @@ func verifyBase(ctx context.Context, gh *forge.GitHub, slug, branch, synced stri
 }
 
 // accountPublish is what a publish of start..head in one repository counts
-// as the task's own, with GitHub's compare of the two (task) as the truth
-// for every path the trusted base did not change. Only on paths the base
-// changed too (GitHub's compare start...trusted) does the checkout's
-// evidence decide, as the resolution of a base merge or a net diff: it can
-// narrow such a path's count, never drop a path the base left alone.
-// Without a trusted base (untrusted says why), with either compare cut
-// short at GitHub's file cap, or with no evidence, the count is GitHub's
-// whole compare and Full says why. An error is one that may pass: a
-// forge's (forge.Transient), or an errAccountingTransient.
-func accountPublish(ctx context.Context, evidence evidenceFunc, gh *forge.GitHub, slug, repo, baseBranch,
-	start, head, trusted, untrusted string, task forge.Comparison) (accounting, error) {
+// as the task's own, task being GitHub's compare start...head. trusted is
+// T, "" with untrusted saying why. The only error is a forge's that may
+// pass (forge.Transient).
+func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, head, trusted, untrusted string,
+	task forge.Comparison) (accounting, error) {
 	full := func(why string) (accounting, error) {
-		acc := fromComparison(task, nil, nil)
+		acc := counted(task.Files)
 		acc.Full = why
 		return acc, nil
 	}
@@ -102,80 +116,54 @@ func accountPublish(ctx context.Context, evidence evidenceFunc, gh *forge.GitHub
 	case base.Truncated():
 		return full(fmt.Sprintf("GitHub listed %d files of what %s brought in, its most", len(base.Files), baseBranch))
 	}
-	byBase := map[string]bool{}
-	for _, f := range base.Files {
-		byBase[f.Filename], byBase[f.PreviousFilename] = true, f.PreviousFilename != ""
-	}
-	delete(byBase, "")
-	shared := false
-	for _, f := range task.Files {
-		shared = shared || byBase[f.Filename] || byBase[f.PreviousFilename]
-	}
-	if !shared {
-		return fromComparison(task, nil, nil), nil
-	}
-	ev, err := evidence(ctx, start, head, trusted, repo)
+	onTop, err := gh.Compare(ctx, slug, trusted, head)
 	switch {
-	case accountingTransient(err):
+	case err != nil && forge.Transient(err):
 		return accounting{}, err
 	case err != nil:
-		return full("the checkout's evidence is unavailable: " + err.Error())
+		return full(fmt.Sprintf("GitHub could not compare the push with the fetched %s: %v", short(trusted), err))
+	case onTop.BehindBy > 0:
+		return full(fmt.Sprintf("the push does not contain the fetched %s of %s", short(trusted), baseBranch))
+	case onTop.Truncated():
+		return full(fmt.Sprintf("GitHub listed %d files of the push on top of %s, its most", len(onTop.Files), baseBranch))
 	}
-	return combine(task, byBase, ev), nil
+	byBase := map[string]bool{}
+	for _, f := range base.Files {
+		byBase[f.Filename] = true
+		if f.PreviousFilename != "" {
+			byBase[f.PreviousFilename] = true
+		}
+	}
+	ownOnTop := map[string]forge.ComparedFile{}
+	for _, f := range onTop.Files {
+		ownOnTop[f.Filename] = f
+	}
+	var own []forge.ComparedFile
+	for _, f := range task.Files {
+		if !byBase[f.Filename] {
+			own = append(own, f)
+		} else if g, changed := ownOnTop[f.Filename]; changed {
+			own = append(own, g)
+		}
+	}
+	return counted(own), nil
 }
 
-// fromComparison is GitHub's compare as an accounting, leaving out the
-// files skip names. A file added or modified with no lines counted is
-// taken for one GitHub cannot count in lines (a binary), unless text says
-// it is text; an empty file reads the same, and is over-counted.
-func fromComparison(c forge.Comparison, skip func(forge.ComparedFile) bool, text map[string]bool) accounting {
-	acc := accounting{ByPath: map[string]int{}}
-	seen := map[string]bool{}
-	for _, f := range c.Files {
-		if skip != nil && skip(f) {
-			continue
-		}
-		seen[f.Filename] = true
+// counted adds up GitHub's numbers for files, both names of a rename or
+// copy among the paths. A file with no patch is one GitHub would not show
+// in lines, whatever its status, unless it is the empty blob.
+func counted(files []forge.ComparedFile) accounting {
+	var acc accounting
+	paths := map[string]bool{}
+	for _, f := range files {
+		paths[f.Filename] = true
 		if f.PreviousFilename != "" {
-			seen[f.PreviousFilename] = true
+			paths[f.PreviousFilename] = true
 		}
 		acc.Lines += f.Additions + f.Deletions
-		acc.ByPath[f.Filename] += f.Additions + f.Deletions
-		if f.Additions+f.Deletions == 0 && (f.Status == "added" || f.Status == "modified") && !text[f.Filename] {
+		if f.Patch == "" && f.SHA != emptyBlob {
 			acc.Binary = true
 		}
-	}
-	acc.Paths = slices.Sorted(maps.Keys(seen))
-	return acc
-}
-
-// combine counts GitHub's compare for each file the base did not touch,
-// and the evidence for each path of a file both touched.
-func combine(task forge.Comparison, byBase map[string]bool, ev accounting) accounting {
-	touched := func(f forge.ComparedFile) bool { return byBase[f.Filename] || byBase[f.PreviousFilename] }
-	text := map[string]bool{}
-	for _, p := range ev.Paths {
-		text[p] = !ev.binary[p]
-	}
-	acc := fromComparison(task, touched, text)
-	decided := map[string]bool{}
-	for _, f := range task.Files {
-		if touched(f) {
-			decided[f.Filename], decided[f.PreviousFilename] = true, f.PreviousFilename != ""
-		}
-	}
-	paths := map[string]bool{}
-	for _, p := range acc.Paths {
-		paths[p] = true
-	}
-	for _, p := range ev.Paths {
-		if !decided[p] {
-			continue
-		}
-		paths[p] = true
-		acc.Lines += ev.ByPath[p]
-		acc.ByPath[p] += ev.ByPath[p]
-		acc.Binary = acc.Binary || ev.binary[p]
 	}
 	acc.Paths = slices.Sorted(maps.Keys(paths))
 	return acc

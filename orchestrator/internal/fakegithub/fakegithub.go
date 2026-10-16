@@ -1084,27 +1084,39 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	// As GitHub's: from the merge base (three dots), renames found, at most
-	// forge.CompareFileCap files.
+	// As GitHub's: from the merge base (three dots), renames and copies
+	// found, at most forge.CompareFileCap files, each with its status and
+	// blob sha (the old one for a file removed), and a patch only where
+	// lines changed and git can show them: none for a binary file, nor for
+	// one whose content did not change.
 	spec := base + "..." + head
-	out, err := s.git("diff", "-z", "-M", "--numstat", spec)
+	out, err := s.git("diff", "-z", "-M", "-C", "--numstat", spec)
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
-	names, _ := s.git("diff", "-z", "-M", "--name-status", spec)
-	status := map[string]string{}
-	for nt := strings.Split(names, "\x00"); len(nt) > 1; {
-		st := nt[0]
-		n := 2
-		if st != "" && (st[0] == 'R' || st[0] == 'C') {
-			n = 3
-		}
-		if len(nt) < n {
+	raw, _ := s.git("diff", "-z", "-M", "-C", "--raw", "--no-abbrev", spec)
+	status, sha := map[string]string{}, map[string]string{}
+	for rt := strings.Split(raw, "\x00"); len(rt) > 1; {
+		// ":<mode> <mode> <old sha> <new sha> <status>", then its paths.
+		f := strings.Fields(rt[0])
+		if len(f) != 5 {
 			break
 		}
-		status[nt[n-1]] = map[byte]string{'A': "added", 'D': "removed", 'M': "modified", 'R': "renamed", 'C': "copied", 'T': "changed"}[st[0]]
-		nt = nt[n:]
+		n := 2
+		if f[4][0] == 'R' || f[4][0] == 'C' {
+			n = 3
+		}
+		if len(rt) < n {
+			break
+		}
+		path := rt[n-1]
+		status[path] = map[byte]string{'A': "added", 'D': "removed", 'M': "modified", 'R': "renamed", 'C': "copied", 'T': "changed"}[f[4][0]]
+		sha[path] = f[3]
+		if f[4][0] == 'D' {
+			sha[path] = f[2]
+		}
+		rt = rt[n:]
 	}
 	files := []any{}
 	for tokens := strings.Split(out, "\x00"); len(tokens) > 0 && tokens[0] != ""; {
@@ -1121,9 +1133,12 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 		}
 		added, _ := strconv.Atoi(parts[0])
 		deleted, _ := strconv.Atoi(parts[1])
-		f := map[string]any{"filename": path, "status": status[path], "additions": added, "deletions": deleted}
+		f := map[string]any{"filename": path, "status": status[path], "sha": sha[path], "additions": added, "deletions": deleted}
 		if prev != "" {
 			f["previous_filename"] = prev
+		}
+		if added+deleted > 0 {
+			f["patch"] = fmt.Sprintf("@@ -1,%d +1,%d @@", deleted, added)
 		}
 		if len(files) < compareFileCap {
 			files = append(files, f)

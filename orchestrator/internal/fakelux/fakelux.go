@@ -670,17 +670,6 @@ type Server struct {
 	// next, 503 host_unreachable, as a luxd with no connection to the Run's
 	// host answers when several luxds share no sticky routing.
 	HostUnreachable int
-	// dropExecs: how many of the next execs whose command has dropExecsOf
-	// in it end their stream before any exit code (DropExecs).
-	dropExecs   int
-	dropExecsOf string
-	// hangExecs: likewise, those that hang (HangExecs).
-	hangExecs   int
-	hangExecsOf string
-	// ExecDir is where an exec runs, under the Run's /workspace ("" for
-	// /workspace itself), as a lux whose container's working directory is
-	// a checkout runs it there.
-	ExecDir string
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.

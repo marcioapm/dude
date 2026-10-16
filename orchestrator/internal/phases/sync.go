@@ -86,9 +86,6 @@ type Syncer struct {
 	// For tests: the budget of a sweep's stall reports for asking lux;
 	// zero is stallLuxBudget.
 	StallLuxBudget time.Duration
-	// For tests: the bound on a publish's accounting Exec; zero is
-	// accountingTimeout.
-	AccountingTimeout time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
 	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration
@@ -1716,15 +1713,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		var err error
 		if heads, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
-			// refusal (not a fast-forward, a bad push) will not. Accounting
-			// may wait for a container that is still running, never for one
-			// lux reports over.
-			switch {
-			case accountingTransient(err) && lux.Terminal(r.LuxState):
-				return true, s.failKept(ctx, r, delivery.RefusedUnaccounted)
-			case accountingTransient(err):
-				return true, s.accountingLater(ctx, r, err)
-			case forge.Transient(err):
+			// refusal (not a fast-forward, a bad push) will not.
+			if forge.Transient(err) {
 				return true, s.retryLater(ctx, r, err)
 			}
 			return true, s.fail(ctx, r, err.Error())
@@ -1866,8 +1856,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if baseBranch == "" {
 			baseBranch = repo.DefaultBranch
 		}
-		// GitHub's compare is the truth for what the push holds; the
-		// checkout's evidence only narrows paths a trusted base changed.
+		// Counted from GitHub's compares alone (accountPublish).
 		cmp, err := gh.Compare(ctx, slug, base, res.Commit)
 		if err != nil {
 			return nil, fmt.Errorf("comparing %s's push with where it started: %w", repo.Name, err)
@@ -1876,7 +1865,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if err != nil {
 			return nil, err
 		}
-		acc, accountErr := accountPublish(ctx, s.evidence(r.LuxRunID), gh, slug, repo.Name, baseBranch, base, res.Commit, trusted, untrusted, cmp)
+		acc, accountErr := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, trusted, untrusted, cmp)
 		if accountErr != nil {
 			return nil, fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, accountErr)
 		}
@@ -2987,26 +2976,6 @@ func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refus
 		return s.fail(ctx, r, fmt.Sprintf("%s: %s", refused, le.Message))
 	}
 	return s.retryLater(ctx, r, cause)
-}
-
-// Back-off of a phase Run's accounting that may pass: 5 s doubling with
-// each in a row (runs.accounting_waits), at most 5 min.
-const (
-	accountingBackoffBase = 5 * time.Second
-	accountingBackoffMax  = 5 * time.Minute
-)
-
-// accountingLater backs a Run's publish off after accounting that did not
-// complete, longer with each in a row: a hung Exec holds one sweep for its
-// bound, not every sweep.
-func (s *Syncer) accountingLater(ctx context.Context, r phaseRun, cause error) error {
-	s.Log.Info("publication accounting did not complete; retrying later", "run", r.ID, "error", cause)
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => LEAST($2 * power(2, accounting_waits), $3)),
-				accounting_waits = accounting_waits + 1
-			WHERE id = $1`, r.ID, accountingBackoffBase.Seconds(), accountingBackoffMax.Seconds())
-		return err
-	})
 }
 
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {

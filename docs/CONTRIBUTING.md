@@ -212,12 +212,15 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   else reads whom it waits on, and while dude resolves it the card says
   so) signals the waiting workflow or decides its conflict escalation, and
   creates no phase itself. Every publish, a phase Run's and a conductor's,
-  is accounted by exact commit in the Run's checkout
-  (`phases/accounting.go`): what the checkout's `lux/<base>` proves came
-  from the base (a fast-forward onto it, a base merge's automatic part) is
-  not counted, and with no `lux/<base>` every commit counts. A lux that
-  cannot answer is asked again; completed evidence that is bad fails the
-  Run or refuses the publish. The activity's integration lines name no
+  is counted from GitHub's compares alone (`phases/trustedbase.go`);
+  nothing in the checkout is read. The base left out is the commit lux
+  reported fetching (`runs.synced_bases`), only if GitHub's base contains
+  it and the push contains it: a file whose new name the base changed
+  counts as `compare base...push` shows it, so a pure import counts
+  nothing; any other file counts as `compare start...push` shows it. No
+  such base, or a compare refused or cut short at 300 files, counts
+  `start...push` in full. A file GitHub shows no patch for is binary
+  unless it is empty. The activity's integration lines name no
   resolved files, a decision: nothing records which ones conflicted.
   When a pull request merges, other conductors on that base are told once
   (`base_moved`); a parked one hears it with its next note. Design:

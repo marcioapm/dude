@@ -11,10 +11,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
-// The checkout and its container are the agent's: what is read there can
-// only narrow a count inside what lux and GitHub say. A forged ref or
-// merge never hides a change; GitHub's numbers decide every path the
-// trusted base did not change.
+// The checkout and its container are the agent's: nothing read there is
+// counted. A forged ref or merge never hides a change.
 
 // conflictMerged is a Run that committed mine.go and shared.txt, then
 // synced a base that changed base.go (300 lines) and shared.txt, and
@@ -64,8 +62,8 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 		git(t, a.work, "checkout", "-q", "--detach", mine+"~1")
 		git(t, a.work, "merge", "-q", "--no-edit", "--no-ff", forged)
 		acc := a.published()
-		samePaths(t, acc, "base.go", "big.txt")
-		if acc.Lines < 500 {
+		samePaths(t, acc, "big.txt")
+		if acc.Lines != 500 {
 			t.Fatalf("lines %d: the forged base hid big.txt", acc.Lines)
 		}
 	})
@@ -148,28 +146,4 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
 		}
 	})
-}
-
-// GitHub's numbers decide a path the base never changed, whatever the
-// evidence says of it, and a path GitHub lists that the evidence omits.
-func TestEvidenceNarrowsOnlyPathsTheBaseChanged(t *testing.T) {
-	task := forge.Comparison{Files: []forge.ComparedFile{
-		{Filename: "mine.go", Status: "modified", Additions: 40},
-		{Filename: "shared.txt", Status: "modified", Additions: 9, Deletions: 1},
-		{Filename: "base.go", Status: "added", Additions: 300},
-	}}
-	byBase := map[string]bool{"shared.txt": true, "base.go": true}
-	for name, ev := range map[string]accounting{
-		"evidence that omits mine.go": {Paths: []string{"shared.txt"}, ByPath: map[string]int{"shared.txt": 2}},
-		"evidence that counts mine.go as 0": {Paths: []string{"mine.go", "shared.txt"},
-			ByPath: map[string]int{"mine.go": 0, "shared.txt": 2}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			acc := combine(task, byBase, ev)
-			samePaths(t, acc, "mine.go", "shared.txt")
-			if acc.Lines != 42 {
-				t.Fatalf("lines %d, want mine.go's 40 from GitHub and shared.txt's 2", acc.Lines)
-			}
-		})
-	}
 }

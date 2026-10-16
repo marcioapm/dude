@@ -1208,7 +1208,7 @@ type Comparison struct {
 }
 
 // ComparedFile is one file of a Comparison; PreviousFilename is a rename's
-// other side.
+// or copy's other side.
 type ComparedFile struct {
 	Filename         string `json:"filename"`
 	PreviousFilename string `json:"previous_filename,omitempty"`
@@ -1216,6 +1216,11 @@ type ComparedFile struct {
 	Status    string `json:"status"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	// The file's blob.
+	SHA string `json:"sha"`
+	// The diff's text; GitHub omits it for a binary file, a change of no
+	// lines, and a diff too large to show.
+	Patch string `json:"patch,omitempty"`
 }
 
 // CompareFileCap is the most files GitHub's compare lists: at it, the list

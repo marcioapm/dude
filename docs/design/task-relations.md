@@ -511,11 +511,10 @@ forcing (`orchestrator/internal/delivery/integration.go`).
   with `integration: true`, offering retry or wait. Retry is one more
   attempt; nothing loops by itself. An integration Run spends none of the
   pull request's fix budget. Every publish, a phase Run's and a conductor's,
-  counts only the task's own changes by exact commit
-  (`phases/accounting.go`), against the base the checkout holds
-  (`lux/<base>`): without it every commit counts as the task's. A lux that
-  cannot answer is asked again; evidence that is bad fails the Run or
-  refuses the publish.
+  counts only the task's own changes from GitHub's compares alone
+  (`phases/trustedbase.go`): the base left out is the commit lux reported
+  fetching, once GitHub's base and the push both contain it; without it,
+  or with a compare refused or cut short, every change counts.
 - **Explicit, with `whenBehind` `tell`.** Nothing integrates by itself; the
   pull request card's **Resolve conflicts** (owner only) signals the
   workflow waiting on that pull request, or decides its conflict

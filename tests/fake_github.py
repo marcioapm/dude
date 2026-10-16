@@ -853,16 +853,31 @@ class FakeGitHub:
                     return self._send(200, [{"name": n, "commit": {"sha": self.github.branch_sha(n)},
                                              "protected": n in self.github.protected} for n in names])
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
-                    # As GitHub's: from the merge base (three dots).
-                    diff = self._git("diff", "--numstat", f"{m[1]}...{m[2]}")
+                    # As GitHub's: from the merge base (three dots), each file with its status
+                    # and blob, and a patch only where lines changed (none for a binary file).
+                    spec = f"{m[1]}...{m[2]}"
+                    diff = self._git("diff", "--numstat", spec)
                     if diff.returncode:
                         return self._send(404, {"message": "Not Found"})
+                    raw = self._git("diff", "--raw", "--no-abbrev", spec).stdout
+                    blob = {}
+                    for line in raw.splitlines():
+                        meta, _, name = line.partition("\t")
+                        fields = meta.split()
+                        if len(fields) == 5:
+                            kind = {"A": "added", "D": "removed", "M": "modified", "T": "changed"}.get(fields[4][0], "modified")
+                            blob[name] = (kind, fields[2] if kind == "removed" else fields[3])
                     files = []
                     for line in diff.stdout.splitlines():
                         parts = line.split("\t", 2)
                         if len(parts) == 3:
-                            files.append({"filename": parts[2], "additions": int(parts[0]) if parts[0].isdigit() else 0,
-                                          "deletions": int(parts[1]) if parts[1].isdigit() else 0})
+                            added = int(parts[0]) if parts[0].isdigit() else 0
+                            deleted = int(parts[1]) if parts[1].isdigit() else 0
+                            kind, sha = blob.get(parts[2], ("modified", ""))
+                            f = {"filename": parts[2], "status": kind, "sha": sha, "additions": added, "deletions": deleted}
+                            if added + deleted:
+                                f["patch"] = f"@@ -1,{deleted} +1,{added} @@"
+                            files.append(f)
                     # Commits on the base the head lacks: how far behind it is; and the reverse.
                     behind = self._git("rev-list", "--count", f"{m[2]}..{m[1]}").stdout.strip()
                     ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
