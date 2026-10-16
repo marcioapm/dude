@@ -10,22 +10,16 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
-	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// accountingRun is one running Run on a fake lux whose checkout of
-// "target" is a real clone of origin, a bare repository standing in for
-// GitHub, which a fake GitHub over origin compares.
+// accountingRun is a Run's checkout of "target": a clone of origin, a bare
+// repository standing in for GitHub, which a fake GitHub over origin
+// compares.
 type accountingRun struct {
 	t      *testing.T
-	fake   *fakelux.Server
-	client lux.Client
-	luxID  string
 	origin string
 	work   string
 	start  string
@@ -46,31 +40,9 @@ func newAccountingRun(t *testing.T) *accountingRun {
 	git(t, seed, "commit", "-qm", "seed")
 	origin := filepath.Join(dir, "origin.git")
 	git(t, dir, "clone", "-q", "--bare", seed, origin)
-	fake := fakelux.New(origin, "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
-	fake.Workspaces = dir
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(func() { srv.Close(); fake.Close() })
-	client := lux.New(srv.URL, "k")
-	spec := lux.Spec{Name: "t", Image: lux.Image{Ref: "img"}, Workload: lux.Workload{Adapter: "opencode", Prompt: "go"},
-		Git: &lux.Git{Repositories: []lux.Repository{{Name: "target", URL: "git://127.0.0.1/acme/target.git", Ref: "main"}}}}
-	lr, err := client.Submit(context.Background(), spec, "run_accounting")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if got, _ := client.Get(context.Background(), lr.ID); got.State == "running" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the fake lux Run did not start")
-		}
-	}
-	work, err := fake.Checkout(lr.ID, "target")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &accountingRun{t: t, fake: fake, client: client, luxID: lr.ID, origin: origin, work: work,
-		start: git(t, work, "rev-parse", "HEAD")}
+	work := filepath.Join(dir, "work")
+	git(t, dir, "clone", "-q", origin, work)
+	return &accountingRun{t: t, origin: origin, work: work, start: git(t, work, "rev-parse", "HEAD")}
 }
 
 // commit writes files in the checkout and commits them; "" deletes one.
