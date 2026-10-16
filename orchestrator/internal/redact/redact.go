@@ -52,6 +52,7 @@ type pattern struct{ from, name string }
 // Redactor redacts one Run's values. The zero value and nil redact nothing.
 type Redactor struct {
 	pats []pattern
+	m    *matcher
 }
 
 // Secret is one value to redact, under its secret's name. One name may
@@ -98,54 +99,52 @@ func FromList(list []Secret) *Redactor {
 	}
 	// Longest first: at one position the longer form wins.
 	sort.SliceStable(r.pats, func(i, j int) bool { return len(r.pats[i].from) > len(r.pats[j].from) })
+	if len(r.pats) > 0 {
+		r.m = newMatcher(r.pats)
+	}
 	return r
 }
 
 // Empty says whether r redacts nothing.
 func (r *Redactor) Empty() bool { return r == nil || len(r.pats) == 0 }
 
-// String is s with every form of every value replaced.
+// span is a match of pattern pat at s[start:end], or a run of touching or
+// overlapping matches named by the first one's (earliest start, then
+// longest) pattern.
+type span struct{ start, end, pat int }
+
+// before orders spans by start, then pattern index (longest first).
+func (a span) before(b span) bool { return a.start < b.start || a.start == b.start && a.pat < b.pat }
+
+// String is s with every form of every value replaced, in one pass.
 func (r *Redactor) String(s string) string {
 	if r.Empty() || s == "" {
 		return s
 	}
-	type span struct{ start, end, pat int }
-	var spans []span
-	for i, p := range r.pats {
-		for at := 0; ; {
-			j := strings.Index(s[at:], p.from)
-			if j < 0 {
-				break
+	// Matches arrive by end, so each new one can only join the merged runs
+	// at the top of the stack: those ending at or after its start.
+	var merged []span
+	r.m.scan(s, nil, func(sp span) {
+		for len(merged) > 0 && merged[len(merged)-1].end >= sp.start {
+			top := merged[len(merged)-1]
+			merged = merged[:len(merged)-1]
+			if top.before(sp) {
+				sp.start, sp.pat = top.start, top.pat
 			}
-			spans = append(spans, span{at + j, at + j + len(p.from), i})
-			at += j + 1
+			sp.end = max(sp.end, top.end)
 		}
-	}
-	if len(spans) == 0 {
+		merged = append(merged, sp)
+	})
+	if len(merged) == 0 {
 		return s
 	}
-	sort.Slice(spans, func(i, j int) bool {
-		if spans[i].start != spans[j].start {
-			return spans[i].start < spans[j].start
-		}
-		return spans[i].pat < spans[j].pat
-	})
 	var b strings.Builder
-	last, cur := 0, spans[0]
-	flush := func() {
-		b.WriteString(s[last:cur.start])
-		b.WriteString(Marker(r.pats[cur.pat].name))
-		last = cur.end
+	last := 0
+	for _, sp := range merged {
+		b.WriteString(s[last:sp.start])
+		b.WriteString(Marker(r.pats[sp.pat].name))
+		last = sp.end
 	}
-	for _, sp := range spans[1:] {
-		if sp.start <= cur.end {
-			cur.end = max(cur.end, sp.end)
-			continue
-		}
-		flush()
-		cur = sp
-	}
-	flush()
 	b.WriteString(s[last:])
 	return b.String()
 }
@@ -156,13 +155,19 @@ func (r *Redactor) Contains(s string) (string, bool) {
 	if r.Empty() {
 		return "", false
 	}
-	best, name := -1, ""
-	for _, p := range r.pats {
-		if i := strings.Index(s, p.from); i >= 0 && (best < 0 || i < best) {
-			best, name = i, p.name
+	best := span{pat: -1}
+	limit := len(s)
+	r.m.scan(s, &limit, func(sp span) {
+		if best.pat < 0 || sp.before(best) {
+			best = sp
+			// No match ending past here can start at or before best.
+			limit = min(limit, best.start+r.m.maxLen)
 		}
+	})
+	if best.pat < 0 {
+		return "", false
 	}
-	return name, best >= 0
+	return r.pats[best.pat].name, true
 }
 
 // Value is v, decoded JSON, with every string in it redacted, as a copy.
