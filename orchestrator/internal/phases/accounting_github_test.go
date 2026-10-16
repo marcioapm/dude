@@ -113,6 +113,32 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a deletion off the base's paths counts its lines", func(t *testing.T) {
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"old.txt": lines(400, "x")})
+		a.commit(map[string]string{"old.txt": lines(100, "x")}, "shrink")
+		a.advanceBase(map[string]string{"base.go": lines(30, "base")})
+		a.syncBase()
+		a.mergeBase(nil)
+		acc := a.published()
+		samePaths(t, acc, "old.txt")
+		if acc.Lines != 300 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want old.txt's 300 deleted", acc.Lines, acc.Full)
+		}
+	})
+	t.Run("a deletion on a path the base changed counts its lines", func(t *testing.T) {
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"old.txt": lines(400, "x")})
+		a.advanceBase(map[string]string{"old.txt": lines(400, "x") + lines(10, "base")})
+		a.syncBase()
+		a.mergeBase(nil)
+		a.commit(map[string]string{"old.txt": lines(100, "x") + lines(10, "base")}, "shrink")
+		acc := a.published()
+		samePaths(t, acc, "old.txt")
+		if acc.Lines != 300 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want old.txt's 300 deleted on top of the base", acc.Lines, acc.Full)
+		}
+	})
 	t.Run("a rename of a path the base rewrote counts its new name from the start", func(t *testing.T) {
 		// T...head pairs b.txt → z.txt (R100, no patch); from the start
 		// b.txt is removed and z.txt added, and z.txt is no base path.
