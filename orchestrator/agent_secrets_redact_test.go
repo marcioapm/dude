@@ -261,9 +261,9 @@ func TestARunsCopyIsTrimmedToTheNamesLuxAccepted(t *testing.T) {
 // lostFirstSubmit is a lux whose first submit answers with a retryable
 // error, as one whose answer was lost: with create, lux made the Run
 // anyway, and the retry is answered with it; without, the retry makes it.
-// between runs before that first answer, after the first lux call,
-// so the retry builds its spec from what it changed; created runs once the
-// Run exists, before dude reads the answer.
+// between runs before that first answer (with create, after lux made the
+// Run), so the retry builds its spec from what it changed; created runs
+// once the Run exists, before dude reads the answer.
 type lostFirstSubmit struct {
 	lux.Client
 	create   bool

@@ -125,41 +125,40 @@ func TestEachPhaseRunReceivesTheSecretsTickedForIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
-	for _, pr := range runs {
-		r := struct{ id, phase string }{pr.ID, pr.Phase}
-		names, ok := want[r.phase]
+	for _, r := range runs {
+		names, ok := want[r.Phase]
 		if !ok {
 			continue
 		}
-		seen[r.phase] = true
-		lr := w.luxRunFor(r.id)
+		seen[r.Phase] = true
+		lr := w.luxRunFor(r.ID)
 		if lr == nil {
-			t.Fatalf("no lux Run for %s", r.phase)
+			t.Fatalf("no lux Run for %s", r.Phase)
 		}
 		got := projectSecretsOf(submitted(t, lr))
 		if !slices.Equal(slices.Sorted(maps.Keys(got)), names) {
-			t.Errorf("%s declares %v, want %v", r.phase, slices.Sorted(maps.Keys(got)), names)
+			t.Errorf("%s declares %v, want %v", r.Phase, slices.Sorted(maps.Keys(got)), names)
 		}
 		for _, n := range names {
 			if got[n] != values[n] {
-				t.Errorf("%s got %s with another value", r.phase, n)
+				t.Errorf("%s got %s with another value", r.Phase, n)
 			}
 		}
-		if rec := w.givenNames(r.id); !slices.Equal(rec, names) {
-			t.Errorf("%s recorded %v, want %v", r.phase, rec, names)
+		if rec := w.givenNames(r.ID); !slices.Equal(rec, names) {
+			t.Errorf("%s recorded %v, want %v", r.Phase, rec, names)
 		}
-		evs := w.givenEvents(r.id)
+		evs := w.givenEvents(r.ID)
 		if len(evs) != 1 {
-			t.Fatalf("%s wrote %d run.secrets.given, want 1", r.phase, len(evs))
+			t.Fatalf("%s wrote %d run.secrets.given, want 1", r.Phase, len(evs))
 		}
 		var payload struct{ Names []string }
 		_ = json.Unmarshal([]byte(evs[0]), &payload)
 		if !slices.Equal(payload.Names, names) {
-			t.Errorf("%s event names %v, want %v", r.phase, payload.Names, names)
+			t.Errorf("%s event names %v, want %v", r.Phase, payload.Names, names)
 		}
 		for _, v := range values {
 			if strings.Contains(evs[0], v) {
-				t.Errorf("%s event carries a value: %s", r.phase, evs[0])
+				t.Errorf("%s event carries a value: %s", r.Phase, evs[0])
 			}
 		}
 	}
@@ -334,7 +333,7 @@ func TestTheConductorNeverReceivesAProjectSecret(t *testing.T) {
 		id, _, _ = w.conductor(task)
 		return id != "" && w.luxRunFor(id) != nil
 	})
-	assertNoProjectSecret(t, w.world(), id, string(w.luxRunFor(id).Spec))
+	assertNoProjectSecret(t, w, id, string(w.luxRunFor(id).Spec))
 }
 
 // Nor a session's brainstorm, whose session names the project.
@@ -346,8 +345,6 @@ func TestABrainstormNeverReceivesAProjectSecret(t *testing.T) {
 	id := s.started(session)
 	assertNoProjectSecret(t, s.world, id, s.luxRun(id).raw)
 }
-
-func (w *world) world() *world { return w }
 
 func assertNoProjectSecret(t *testing.T, w *world, runID, rawSpec string) {
 	t.Helper()
