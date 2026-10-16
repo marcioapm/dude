@@ -205,16 +205,24 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   `git show --remerge-diff` on the merge, then the policy's test; the
   conductor never runs tests. A pair already tried, or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
-  `integration: true` (retry or wait). With `whenBehind` `tell` nothing
+  `integration: true` (retry or wait). An integration Run spends none of
+  the pull request's fix budget. With `whenBehind` `tell` nothing
   integrates by itself; the PR card's **Resolve conflicts**
-  (`resolve-conflicts`, `delivery.ResolveConflictsTx`, owner only) signals
-  the waiting workflow or decides its conflict escalation, and creates no
-  phase itself. A conductor publish is accounted by exact commit
-  (`phases/accounting.go`): a base merge's own changes are not counted as
-  the conductor's, and anything it cannot verify refuses the publish.
-  When a pull request merges, other live conductors on that base are told
-  once (`base_moved`). Design: [`design/task-relations.md`](design/task-relations.md),
-  stacked tasks.
+  (`resolve-conflicts`, `delivery.ResolveConflictsTx`, owner only; anyone
+  else reads whom it waits on, and while dude resolves it the card says
+  so) signals the waiting workflow or decides its conflict escalation, and
+  creates no phase itself. Every publish, a phase Run's and a conductor's,
+  is accounted by exact commit in the Run's checkout
+  (`phases/accounting.go`): what the checkout's `lux/<base>` proves came
+  from the base (a fast-forward onto it, a base merge's automatic part) is
+  not counted, and with no `lux/<base>` every commit counts. A lux that
+  cannot answer is asked again; completed evidence that is bad fails the
+  Run or refuses the publish. The activity's integration lines name no
+  resolved files, a decision: nothing records which ones conflicted.
+  When a pull request merges, other conductors on that base are told once
+  (`base_moved`); a parked one hears it with its next note. Design:
+  [`design/task-relations.md`](design/task-relations.md), keeping a task
+  current with its base.
 - A re-review judges every open finding **a fixer has already attempted**:
   each goes to the reviewer of its category (the flavour of the review Run
   that reported it; the reviewer's own word is its `topic`), or, when this

@@ -482,16 +482,22 @@ What the design commits to:
 
 #### Keeping a task current with its base (built)
 
+Stacking is still unbuilt: no start takes a blocker's branch as its base.
+A dependant gets its blocker's work by integration once the blocker merges
+into the base they share.
+
 The rebase above is not what was built: every move of a task branch is a
 fast-forward, so a task takes its base in by **merging**, never rebasing or
 forcing (`orchestrator/internal/delivery/integration.go`).
 
 - **The tool.** Writers (implementer, fixer, simplifier, conductor) call
   `sync_base`: lux fetches the task's base — the repository's default, or
-  the stacked or continued base in `State.Bases` — into the checkout as
-  `lux/<base>`, and the agent runs `git merge lux/<base>`. When a pull
-  request merges, other live conductors on the same base are told once
-  (`base_moved`, a `chat.notice` and a `checkout` wake).
+  the base of the branch the task continues (`State.Bases`) — into the
+  checkout as `lux/<base>`, and the agent runs `git merge lux/<base>`. When
+  a pull request merges, other conductors on the same base are told once
+  (`base_moved`, a `chat.notice` and a `checkout` wake): one running hears
+  it at once; one parked hears it with its next note, and is not resumed
+  for it.
 - **Automatic, with `whenBehind` `update`.** Before a pull request opens,
   the workflow asks GitHub to merge the moved base into the branch (a
   `merge-base` line on the activity) and tests the new head again. A
@@ -503,9 +509,13 @@ forcing (`orchestrator/internal/delivery/integration.go`).
   (`State.IntegrationPairs`); a pair tried already, a failed Run, or a pull
   request still conflicting after it escalates `pull_request_conflict`
   with `integration: true`, offering retry or wait. Retry is one more
-  attempt; nothing loops by itself. A conductor's publish counts only its
-  own changes, by exact commit (`phases/accounting.go`); what cannot be
-  verified refuses the publish.
+  attempt; nothing loops by itself. An integration Run spends none of the
+  pull request's fix budget. Every publish, a phase Run's and a conductor's,
+  counts only the task's own changes by exact commit
+  (`phases/accounting.go`), against the base the checkout holds
+  (`lux/<base>`): without it every commit counts as the task's. A lux that
+  cannot answer is asked again; evidence that is bad fails the Run or
+  refuses the publish.
 - **Explicit, with `whenBehind` `tell`.** Nothing integrates by itself; the
   pull request card's **Resolve conflicts** (owner only) signals the
   workflow waiting on that pull request, or decides its conflict
