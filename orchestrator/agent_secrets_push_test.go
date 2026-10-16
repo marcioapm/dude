@@ -17,6 +17,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // committingImplementer makes the scripted implementer write content to
@@ -303,6 +304,49 @@ func TestAMissingCheckoutRefusesThePush(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, runID).Scan(&reason)
 	if !strings.Contains(reason, "cannot check the work for secrets") || !strings.Contains(reason, "ghost") {
 		t.Errorf("the reason does not say the ghost checkout went unchecked: %q", reason)
+	}
+}
+
+// skipsUnreadHistory is a container whose history script leaves out a
+// repository it cannot read and still exits 0, as a script that skipped a
+// missing checkout did: only dude's own check for each section remains.
+type skipsUnreadHistory struct{ lux.Client }
+
+func (c skipsUnreadHistory) Exec(ctx context.Context, runID string, command []string) (lux.ExecResult, error) {
+	res, err := c.Client.Exec(ctx, runID, command)
+	if err == nil && len(command) > 3 && command[3] == "dude-history" && res.ExitCode == 4 {
+		res.ExitCode, res.Stderr = 0, nil
+	}
+	return res, err
+}
+
+// The history read exits 0 but has no section for a repository the Run's
+// recorded bases name: the push is refused as unchecked, never made.
+func TestAHistoryMissingARepositorysSectionRefusesThePush(t *testing.T) {
+	w := newWorld(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	w.syncer.Lux = skipsUnreadHistory{w.syncer.Lux}
+	w.scriptedImplementer(writeCall("README.md", "configured"), commitCall("Configure"))
+	task := w.task()
+	w.deliver(task)
+	var runID, luxID, base string
+	w.until("the implementer's base recorded", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, lux_run_id, base_shas->>'target' FROM runs WHERE task_id = $1
+			AND phase = 'implement' AND base_shas ? 'target' AND status = 'running' AND lux_run_id IS NOT NULL`, task).Scan(&runID, &luxID, &base)
+		return luxID != ""
+	})
+	mustExec(t, w.owner, `UPDATE runs SET base_shas = base_shas || jsonb_build_object('ghost', $2::text) WHERE id = $1`, runID, base)
+	w.lux.EndTurn(luxID)
+	w.until("the implementer failed or pushed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 || w.luxRunFor(runID).Pushed
+	})
+	if lr := w.luxRunFor(runID); len(lr.PushCredentials) != 0 || lr.Pushed {
+		t.Fatalf("lux was asked to push %d times", len(lr.PushCredentials))
+	}
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, runID).Scan(&reason)
+	if want := "cannot check the work for secrets before pushing it: no history was read for ghost"; !strings.Contains(reason, want) {
+		t.Errorf("reason %q, want it to say %q", reason, want)
 	}
 }
 
