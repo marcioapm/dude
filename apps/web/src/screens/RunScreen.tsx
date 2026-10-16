@@ -72,6 +72,7 @@ import { NotFound } from "./NotFound.tsx";
 import { instant } from "../instant.ts";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
+import { useFeedbackFocus } from "../feedback.tsx";
 import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { AttachmentInfo } from "@dude/domain";
@@ -199,6 +200,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     setView(next);
   };
   const [run, setRun] = useState<RunDetail | null>(null);
+  // A jump to a comment on this Run's lines (the drafts tray, the Feedback tab) opens its Changes, all files shown.
+  const focus = useFeedbackFocus();
+  const [jumped, setJumped] = useState(0);
+  if (focus && focus.runId === runId && focus.n !== jumped) {
+    setJumped(focus.n);
+    setSelected(null);
+    setView("changes");
+  }
   const [missing, setMissing] = useState(false);
   // Who drives the task: only its owner answers its agents, so anyone else
   // sees the asks read-only, with whom they wait on. And the task's key

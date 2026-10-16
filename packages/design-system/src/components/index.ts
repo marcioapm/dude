@@ -29,8 +29,15 @@ export type { EventRowProps, EventStreamProps, EventActor, EventSeverity } from 
 export { SessionTreeNode, SessionTree } from "./SessionTreeNode.tsx";
 export type { SessionTreeNodeProps, SessionTreeProps, SessionNodeData } from "./SessionTreeNode.tsx";
 export { DiffView, DiffFile, parseUnifiedDiff } from "./DiffView.tsx";
-export { LiveDiff } from "./LiveDiff.tsx";
-export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange } from "./LiveDiff.tsx";
+export { LiveDiff, stretchRange } from "./LiveDiff.tsx";
+export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange, LiveDiffCommenting, DiffRange, DiffSide } from "./LiveDiff.tsx";
+export {
+  CommentEditor, DraftsTray, FeedbackAnchorLine, FeedbackCard, FeedbackEmpty, FeedbackExcerpt, FeedbackPreview, FeedbackStatusBadge, FeedbackThread,
+  SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
+} from "./FeedbackCard.tsx";
+export type {
+  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
+} from "./FeedbackCard.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
 export type { LogStreamProps, LogLine, LogLevel, LogChannel } from "./LogStream.tsx";

@@ -87,6 +87,7 @@ import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
+import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
@@ -98,6 +99,8 @@ import { SourceLine } from "./StartsFrom.tsx";
 import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
+import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
+import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -142,6 +145,11 @@ function changesRun(payload: unknown): boolean {
 
 /** Both ways to start a task look alike: no project or button prefers one. */
 const START_VARIANT = "secondary" as const;
+/** What changes the task's feedback, or where a batch submitted now would go. */
+const FEEDBACK_EVENTS: ReadonlySet<string> = new Set([
+  EventTypes.FeedbackSubmitted, EventTypes.FeedbackDelivered, EventTypes.FeedbackReplied, EventTypes.FeedbackResolved,
+  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
+]);
 
 /** Under the pull request the task took over: dude works on it and opened none of its own. */
 export const ADOPTED_PR_NOTE = "Existing pull request: dude pushes to it and opened none";
@@ -214,6 +222,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const sessionTask = useMemo(() => ({ owner: item?.owner ?? null }), [ownerId]); // eslint-disable-line react-hooks/exhaustive-deps -- `ownerId` stands for the owner
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
+  const [feedbackVersion, setFeedbackVersion] = useState(0);
   // The organization's merge method, read once for every pull request here.
   const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
   useEffect(() => {
@@ -224,9 +233,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // put back what a newer one replaced.
   const loads = useRef(0);
   const applied = useRef(0);
-  const load = useCallback(async () => {
+  // Set by a feedback event: the next stream re-read (throttled, so one per burst) re-reads feedback too.
+  const feedbackDirty = useRef(false);
+  // `byStream`: a re-read for the event stream, which re-reads feedback only after the events that change it;
+  // any other is the page's own action (start, mark done, a PR merged…), after which feedback is read too.
+  const load = useCallback(async (byStream = false) => {
     const seq = ++loads.current;
     setVersion((v) => v + 1);
+    if (!byStream || feedbackDirty.current) setFeedbackVersion((v) => v + 1);
+    feedbackDirty.current = false;
     // The ledger is for who did what and the plans; the page stands without
     // it. Only what is new since the last read is fetched, beside the rest.
     const since = ledger.current.at(-1)?.cursor ?? 0;
@@ -261,7 +276,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   }, [client, taskId]);
 
   useEffect(() => {
-    void load();
+    void load(true);
   }, [load]);
   const reload = useCallback(() => void load(), [load]);
   const driverControl = useDriverSwitch(client, taskId, reload);
@@ -276,7 +291,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
   const [relationsVersion, setRelationsVersion] = useState(0);
-  const stream = useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => {
+  // Feedback is re-read on its own events and on a Run starting or ending (which moves where a batch goes), not on every reload.
+  const stream = useReloadOnEvents({ client, taskId }, () => void load(true), undefined, (e) => {
+    if (FEEDBACK_EVENTS.has(e.eventType)) feedbackDirty.current = true;
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return !changesRun(e.payload);
@@ -290,7 +307,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   });
   const wasStream = useRef(stream);
   useEffect(() => {
-    if (cameBack(wasStream.current, stream)) setServersVersion((v) => v + 1);
+    if (cameBack(wasStream.current, stream)) {
+      setServersVersion((v) => v + 1);
+      setFeedbackVersion((v) => v + 1);
+    }
     wasStream.current = stream;
   }, [stream]);
   const servers = useServers(client, { taskId }, serversVersion);
@@ -345,6 +365,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
   const earlier = shown !== current;
 
+  // The current attempt's feedback: the tab, the tray, the header's chip and the open session's Changes share it.
+  const feedback = useTaskFeedbackPage({ client, taskId, task: item, current, version: feedbackVersion, people,
+    onShowInDiff: onOpenRun, onShowOnTab: () => latest.current.pickTab("feedback") });
+  // An earlier attempt's open session: only to read. One value per attempt shown, not one per frame.
+  const sessionFeedback = useMemo(() => (earlier
+    ? { ...feedback.onDiff, closed: `Attempt ${shown} was set aside: its diff is only to read.`, readOnly: true }
+    : feedback.onDiff), [feedback.onDiff, shown, earlier]);
   // A URL naming the current attempt, or one the task never had, says the task alone.
   useEffect(() => {
     if (item && urlAttempt !== undefined && !runId && (urlAttempt === current || !attempts.includes(urlAttempt))) {
@@ -577,6 +604,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {driver}
+            {!earlier ? <MergeHoldChip count={feedback.blocking} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -647,6 +675,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
             tooltip={many ? <>Attempt {shown}'s sessions{conductors.length > 0 ? ", and the task's conductor" : ""}</> : undefined}>Sessions</Tab>
+          <Tab value="feedback" count={!earlier && feedback.blocking > 0 ? feedback.blocking : undefined}
+            tooltip={!earlier && feedback.blocking > 0 ? `${plural(feedback.blocking, "item")} not yet handled: they hold the merge`
+              : many ? `Attempt ${shown}'s feedback` : undefined}>Feedback</Tab>
           <Tab value="files" count={mine.artifacts.length > 0 ? fileCount(mine.artifacts) : undefined}
             tooltip={many ? <>Attempt {shown}'s files; {othersSaid("files")}</> : undefined}>Files</Tab>
           <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
@@ -669,7 +700,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Goal</h2>
                   <div className="taskGoal">
                     {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
-                    <Markdown source={item.goal} breaks attachmentImage={taskImages.attachmentImage} />
+                    <Markdown data-testid="overview-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
                   </div>
                 </section>
               ) : null}
@@ -678,7 +709,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   <h2 className="ds-label">Acceptance criteria</h2>
                   <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
                     {item.acceptanceCriteria.map((c, i) => (
-                      <li key={i}><Markdown source={c} breaks attachmentImage={taskImages.attachmentImage} /></li>
+                      <li key={i}><Markdown data-testid="overview-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
                     ))}
                   </ul>
                 </section>
@@ -755,7 +786,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
-                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name}>
+                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name}
+                    feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
                         factActions={actions.facts} factUnder={actions.under} conflict={actions.conflict}
@@ -819,14 +851,25 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {sessions.length > 0 ? (
             <div className="taskSessions">
               {openRun ? (
-                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                  stopped={openStopped} titleSelector={sessionSelector} />
+                <FeedbackProvider value={sessionFeedback}>
+                  <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
+                    stopped={openStopped} titleSelector={sessionSelector} />
+                </FeedbackProvider>
               ) : null}
             </div>
           ) : (
             <div className="taskPane">
               <EmptyState compact icon="agent" title="No sessions yet" description="Each agent that works on the task has a session here, with its conversation." />
             </div>
+          )}
+        </TabPanel>
+
+        <TabPanel value="feedback" className="railPanel">
+          {earlier ? (
+            <EarlierFeedbackTab client={client} task={item} fb={feedback} shown={shown} current={current} version={feedbackVersion} onCurrent={() => pickAttempt(current)} />
+          ) : (
+            <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
+              onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined} />
           )}
         </TabPanel>
 
@@ -851,6 +894,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>
+      {/* The reader's drafts on the current attempt, on every tab while there are some. */}
+      {feedback.drafts.length > 0 ? (
+        <FeedbackTray client={client} task={item} fb={feedback} current={current} prs={allPrs.filter((pr) => prInAttempt(pr, current, byId, current, source))}
+          openBlockers={relations ? openBlockers(relations).length : 0} />
+      ) : null}
     </div>
   );
 }
@@ -1188,7 +1236,40 @@ function Activity({ events, people, runs, prs, source, current, many, shown, tas
   );
 }
 
-const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", task: "Task & relations" };
+const ACTIVITY_KINDS = { decisions: "Steers & decisions", sessions: "Sessions", prs: "Pull requests", work: "Findings & files", feedback: "Feedback", task: "Task & relations" };
+
+const countOf = (p: Record<string, unknown>) => (Array.isArray(p.itemIds) ? p.itemIds.length : 1);
+
+/**
+ * A feedback event in Activity's words: how many items and what became of
+ * them, never their words (the ledger holds none). `subject` is whether the
+ * words follow who did it (a person or an agent); dude's own acts stand
+ * alone. Null for an event not worth a line.
+ */
+export function feedbackLine(e: PersistedEvent, doer: (runId: string | null) => string): { subject: boolean; text: ReactNode } | null {
+  const p = e.payload;
+  const n = countOf(p);
+  const items = plural(n, "feedback item");
+  const routed = typeof p.routedTo === "string" && ROUTED_WORDS[p.routedTo] ? <span className="muted"> · {ROUTED_WORDS[p.routedTo]}</span> : null;
+  switch (e.eventType) {
+    case EventTypes.FeedbackSubmitted:
+      return { subject: true, text: <>submitted {items}{routed}</> };
+    case EventTypes.FeedbackDelivered:
+      return { subject: false, text: <>{items} {n === 1 ? "was" : "were"} given to the <b>{doer(e.runId)}</b></> };
+    case EventTypes.FeedbackReplied:
+      return { subject: true, text: <>answered {items}<span className="muted"> · it no longer holds the merge</span></> };
+    case EventTypes.FeedbackResolved:
+      if (p.verified === true) return { subject: false, text: <>The commit that resolved {items} was published<span className="muted"> · it no longer holds the merge</span></> };
+      if (p.accepted === true) return { subject: false, text: <>{items} accepted at the escalation</> };
+      return { subject: true, text: <>resolved {items}{typeof p.commit === "string"
+        ? <> in <code>{p.commit.slice(0, 7)}</code><span className="muted"> · counts once that commit is published</span></> : null}</> };
+    case EventTypes.FeedbackReopened:
+      if (typeof p.why === "string") return { subject: false, text: <>{items} opened again<span className="muted"> · the commit that resolved it was not published</span></> };
+      return { subject: true, text: <>reopened {items}{routed}</> };
+    default:
+      return null;
+  }
+}
 export function filterActivity(lines: readonly ActivityLine[], kinds: readonly string[], persons: readonly string[], attempts: readonly string[]) {
   return lines.filter((l) => inFacet(kinds, l.kind) && inFacet(persons, l.personId) && inFacet(attempts, String(l.attempt)));
 }
@@ -1355,6 +1436,29 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: <AgentAvatar role={(runs.find((r) => r.id === e.runId)?.role ?? DEFAULT_RUN_ROLE)} size="lg" />,
           text: <>The <b>{doer(e.runId)}</b> saved <span className="ds-mono">{String(p.name ?? "a file")}</span></>, open: { label: "Show file", tab: "files" }, attemptOnly: true });
         break;
+      case EventTypes.FeedbackSubmitted:
+      case EventTypes.FeedbackDelivered:
+      case EventTypes.FeedbackReplied:
+      case EventTypes.FeedbackResolved:
+      case EventTypes.FeedbackReopened: {
+        const line = feedbackLine(e, doer);
+        if (!line) break;
+        // Who did it leads the words when they name a doer; dude's own acts stand alone.
+        let who: ReactNode = <DudeMark size={32} />;
+        let text = line.text;
+        if (line.subject && by) {
+          who = face;
+          text = <>{person} {line.text}</>;
+        } else if (line.subject && e.actor.type === "agent") {
+          const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
+          who = <AgentAvatar role={run?.role ?? DEFAULT_RUN_ROLE} size="lg" />;
+          text = <>The <b>{doer(e.runId)}</b> {line.text}</>;
+        } else if (line.subject) {
+          text = <><b>{dude}</b> {line.text}</>;
+        }
+        out.push({ ...base, kind: "feedback", who, text, open: { label: "Show", tab: "feedback" } });
+        break;
+      }
       default: {
         // What happened to a pull request: by the GitHub login that did it,
         // or the person who did it from here, or dude, or GitHub.
@@ -1365,7 +1469,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
         const said = line.parts ? <MonoWords words={line.parts} /> : line.text;
         const text = line.actorId ? <>{person} {said}</> : line.byDude ? <><b>{dude}</b> {said}</> : said;
-        out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
+        out.push({ ...base, who, text, quote: line.quote ? <GitHubBody source={line.quote} /> : undefined, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }
     }

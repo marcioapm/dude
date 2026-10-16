@@ -29,8 +29,8 @@ export type Place =
   | { view: "brainstorm"; id: string };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
-export type TaskTab = "chat" | "findings" | "sessions" | "files" | "servers" | "activity";
-const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "files", "servers", "activity"];
+export type TaskTab = "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
+const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "feedback", "files", "servers", "activity"];
 
 /** An epic's page shows its board, or how its tasks' agents coordinate. */
 export type EpicView = "board" | "coordination";
