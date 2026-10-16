@@ -303,6 +303,26 @@ describe("a code anchor is pinned to the Run's stored diff", () => {
     expect((await draft(ana.key, "wi_fb", code({ excerpt: [{ text: "forged" }] }))).status).toBe(400);
   });
 
+  test("a repository lux checks out under another name is named by its own", async () => {
+    // lux refuses "Web" as a name: the Run's base_shas key it by lux_name('Web').
+    const [{ spec }] = await owner`SELECT lux_name('Web') AS spec`;
+    expect(spec).not.toBe("Web");
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+      ('repo_fb_web', ${ORG}, 'prj_fb', 'Web', 'https://github.com/acme/Web'),
+      ('repo_fb_api', ${ORG}, 'prj_fb', 'api', 'https://github.com/acme/api')`;
+    await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES
+      ('wi_fb2', 'repo_fb_web', ${ORG}, 'write'), ('wi_fb2', 'repo_fb_api', ${ORG}, 'write')`;
+    const files = [{ ...DIFF[0], path: `${spec}/src/vat.ts` }];
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, base_shas, heads) VALUES
+      ('run_web', ${ORG}, 'prj_fb', 'wi_fb2', 1, 'completed', 'fix', 'implementer', 'agent',
+       ${{ [spec]: "w0", api: "a0" }}::jsonb, '{"Web":{"sha":"w1"}}')`;
+    await owner`INSERT INTO run_diffs (run_id, organization_id, base, files, checksum) VALUES ('run_web', ${ORG}, 'w0', ${files}::jsonb, 'sum-web')`;
+    const res = await draft(ana.key, "wi_fb2", { body: "on Web", anchor: {
+      kind: "code", runId: "run_web", path: `${spec}/src/vat.ts`, side: "new", startLine: 11, endLine: 11 } });
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as Json).anchor).toMatchObject({ repo: "Web", path: "src/vat.ts", baseSha: "w0", headSha: "w1" });
+  });
+
   test("a range is one hunk's lines on one side", () => {
     const file = DIFF[0] as Json;
     expect(excerptOf(file, "new", 10, 13)?.map((l) => l.text)).toEqual([

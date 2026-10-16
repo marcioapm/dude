@@ -134,19 +134,24 @@ async function buildAnchor(scope: OrgScope, task: TaskRow, person: string, input
   if (!excerpt) throw badRequest(`lines ${input.startLine}-${input.endLine} (${input.side}) are not one range of ${input.path}'s diff`);
   // With several repositories the diff's paths name theirs first (phases.parseRunDiff).
   const repos = Object.keys(run.baseShas ?? {});
-  let repo = repos[0] ?? "";
+  let specRepo = repos[0] ?? "";
   let path = input.path;
   if (repos.length > 1) {
     const slash = input.path.indexOf("/");
-    repo = input.path.slice(0, slash);
+    specRepo = input.path.slice(0, slash);
     path = input.path.slice(slash + 1);
-    if (slash < 0 || !repos.includes(repo)) throw badRequest(`${input.path} names no repository of run ${input.runId}`);
+    if (slash < 0 || !repos.includes(specRepo)) throw badRequest(`${input.path} names no repository of run ${input.runId}`);
   }
+  // base_shas is keyed by the name lux checked the repository out under
+  // (lux_name, migration 093); the anchor, runs.heads and agents name it by its own.
+  const [named] = (await scope.sql`SELECT r.name FROM repositories r JOIN task_repositories tr ON tr.repository_id = r.id
+    WHERE tr.task_id = ${task.id} AND lux_name(r.name) = ${specRepo}`) as Array<{ name: string }>;
+  const repo = named?.name ?? specRepo;
   // A head only for what the Run published: lines of a live Run are uncommitted work.
   const head = run.status === "completed" ? run.heads?.[repo]?.sha ?? null : null;
   const anchor: FeedbackCodeAnchor = {
     kind: "code", runId: input.runId, repo, path, side: input.side, startLine: input.startLine, endLine: input.endLine,
-    baseSha: run.baseShas?.[repo] ?? run.base ?? "", headSha: head, diffChecksum: run.checksum, excerpt,
+    baseSha: run.baseShas?.[specRepo] ?? run.base ?? "", headSha: head, diffChecksum: run.checksum, excerpt,
   };
   return { kind: "code", runId: input.runId, anchor };
 }
