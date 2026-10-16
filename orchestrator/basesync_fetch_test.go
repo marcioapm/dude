@@ -111,10 +111,12 @@ func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
 	}
 }
 
-// lux reports the fetch sync_base asked for only after the call's bound
-// has passed, as a loaded runner does: the scripted integration fixer is
-// told the fetch is not reported yet ("asked"), and, as its brief and that
-// answer tell it, calls again until lux has fetched, then merges the moved
+// lux reports every fetch sync_base asks for only after that call's bound
+// has passed, as a slow but healthy runner does: the scripted integration
+// fixer is told the fetch is not reported yet ("asked") and calls again.
+// The reports held so far are released once, after the first "asked";
+// every later call's own report stays held. A later call answers fetched
+// from an earlier call's released report, and the fixer merges the moved
 // base and publishes the merge.
 func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 	w := newWorld(t)
@@ -149,7 +151,6 @@ func TestAnIntegrationWhoseFetchIsReportedLateMergesTheMovedBase(t *testing.T) {
 		!strings.Contains(brief, strings.SplitN(when, ".", 2)[0]) {
 		t.Fatalf("the brief and sync_base word the merge differently:\nbrief %s\nnext %s", brief, next)
 	}
-	w.lux.HoldSyncs = false
 	w.lux.ReleaseSyncs()
 	w.until("the base merged into the task branch", func() bool {
 		w.sync()
