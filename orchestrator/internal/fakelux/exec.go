@@ -255,6 +255,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	args := append([]string{open.Command[0]}, s.inWorkspace(run, open.Command[1:])...)
 	ps, fails := s.PS, s.ExecFails
+	dir = filepath.Join(dir, s.ExecDir)
 	drop := s.dropExecs > 0 && slices.ContainsFunc(open.Command, func(a string) bool { return strings.Contains(a, s.dropExecsOf) })
 	if drop {
 		s.dropExecs--

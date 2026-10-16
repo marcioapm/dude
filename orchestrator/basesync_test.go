@@ -65,12 +65,21 @@ func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
 	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
 	w.lux.Decide = nil
 	branch := delivery.BranchFor(wi, 1)
-	// A person brings the base in before choosing wait.
-	gitOut(t, w.gh.Repo, "update-ref", "refs/heads/"+branch, w.gh.SHA("main"))
+	// A person merges the base into the task branch, keeping its work.
+	tree := gitOut(t, w.gh.Repo, "merge-tree", "--write-tree", branch, "main")
+	merged := gitOut(t, w.gh.Repo, "-c", "user.name=Ana", "-c", "user.email=ana@example.com",
+		"commit-tree", tree, "-p", branch, "-p", "main", "-m", "Merge main")
+	gitOut(t, w.gh.Repo, "update-ref", "refs/heads/"+branch, merged)
 	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
 		t.Fatal(code, body)
 	}
 	w.until("PR after human wait", func() bool { return len(w.gh.Pulls()) == 1 })
+	if head := w.gh.SHA(branch); head != merged {
+		t.Fatalf("the pull request's branch is at %s, want the person's merge %s", head, merged)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'`, wi); n != 1 {
+		t.Fatalf("integration Runs %d after the person's wait", n)
+	}
 }
 
 func TestBeforePRTellDoesNotMergeBase(t *testing.T) {

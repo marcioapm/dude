@@ -677,6 +677,10 @@ type Server struct {
 	// hangExecs: likewise, those that hang (HangExecs).
 	hangExecs   int
 	hangExecsOf string
+	// ExecDir is where an exec runs, under the Run's /workspace ("" for
+	// /workspace itself), as a lux whose container's working directory is
+	// a checkout runs it there.
+	ExecDir string
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.

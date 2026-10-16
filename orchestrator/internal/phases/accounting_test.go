@@ -275,14 +275,19 @@ func TestAccountingCannotBeFooledByTheCheckout(t *testing.T) {
 		"info/attributes": func(a *accountingRun) {
 			write(t, filepath.Join(a.work, ".git", "info", "attributes"), "* -diff\n")
 		},
+		// The exec runs in the checkout, where a git reading the
+		// checkout's repository would take its .gitattributes.
 		"a committed .gitattributes": func(a *accountingRun) {
+			a.fake.ExecDir = "repos/target"
 			a.commit(map[string]string{".gitattributes": "* -diff\n"}, "attributes")
 			a.start = a.head()
 		},
-		"a diff driver and textconv in its config": func(a *accountingRun) {
+		// A driver that says binary changes numstat; textconv and
+		// diff.external do not (numstat and raw never run them), so the
+		// flags against those are kept without a test that could fail.
+		"a diff driver in its config": func(a *accountingRun) {
 			write(t, filepath.Join(a.work, ".git", "info", "attributes"), "* diff=hide\n")
-			git(t, a.work, "config", "diff.hide.textconv", "true")
-			git(t, a.work, "config", "diff.external", "true")
+			git(t, a.work, "config", "diff.hide.binary", "true")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -304,6 +309,24 @@ func TestAccountingCannotBeFooledByTheCheckout(t *testing.T) {
 			t.Fatal("a binary change was counted as 0 lines")
 		}
 	})
+}
+
+// A two-parent merge of a branch that is not the base is the task's work,
+// all of it: only a merge of the base counts as its resolution.
+func TestAccountingCountsAMergeOfAnotherBranchInFull(t *testing.T) {
+	a := newAccountingRun(t)
+	a.advanceBase(map[string]string{"base.go": "base\n"})
+	a.syncBase()
+	git(t, a.work, "checkout", "-q", "-b", "side")
+	a.commit(map[string]string{"side.txt": lines(500, "side")}, "side work")
+	git(t, a.work, "checkout", "-q", "main")
+	a.commit(map[string]string{"mine.txt": "mine\n"}, "mine")
+	git(t, a.work, "merge", "-q", "--no-ff", "--no-edit", "side")
+	acc := a.account()
+	samePaths(t, acc, "mine.txt", "side.txt")
+	if acc.Lines != 501 {
+		t.Fatalf("lines %d, want 501", acc.Lines)
+	}
 }
 
 // Paths are what git's raw records name, unquoted: both sides of a rename,
