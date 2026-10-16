@@ -575,6 +575,9 @@ func TestATransientFailureBeforeASiblingBranchIsCreatedStillOpensItsPullRequest(
 		w.sync()
 		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
 	})
+	if failed.Load() != 0 {
+		t.Errorf("web's task branch was PATCHed before it existed")
+	}
 	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
 		t.Fatalf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
 	}
@@ -630,5 +633,71 @@ func TestASiblingBranchCreatedBehindA502IsMovedWithoutWaiting(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
 		delivery.EvTaskBranchCreating); n != 1 {
 		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+}
+
+// Someone creating web's task branch between dude's read and its create
+// makes GitHub answer 422 "Reference already exists": the person's commit
+// stays, no pull request opens on web, and a person is asked.
+func TestASiblingBranchSomeoneCreatedFirstIsNeverOverwritten(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var pushed, candidate atomic.Value
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") || pushed.Load() != nil {
+				return 0
+			}
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var in struct{ Ref, SHA string }
+			_ = json.Unmarshal(body, &in)
+			if in.Ref != "refs/heads/"+branch {
+				return 0
+			}
+			out, err := exec.Command("git", "-C", w.web.Repo, "rev-parse", in.SHA+"^").Output()
+			if err != nil {
+				t.Errorf("parent of the candidate's head: %v", err)
+				return 0
+			}
+			parent := strings.TrimSpace(string(out))
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", in.Ref, parent, "").CombinedOutput(); err != nil {
+				t.Errorf("push web's branch: %v %s", err, out)
+			}
+			candidate.Store(in.SHA)
+			pushed.Store(parent)
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	person, _ := pushed.Load().(string)
+	checked, _ := candidate.Load().(string)
+	if person == "" {
+		t.Fatal("web's branch was never created through the API")
+	}
+	if s, r := w.taskStatus(wi), w.escalationReason(wi); s != "awaiting_input" || r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("status %s, escalated %q", s, r)
+	}
+	if at := w.web.SHA(branch); at != person {
+		t.Errorf("web's branch at %s, want the person's %s", at, person)
+	}
+	if n := len(w.web.Pulls()); n != 0 {
+		t.Errorf("%d pull requests on web", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi,
+		delivery.EvTaskBranchCreating); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+	var detail map[string]any
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["repo"] != "web" || detail["found"] != person || detail["candidate"] != checked {
+		t.Errorf("refusal %v, want web found at %s with candidate %s", detail, person, checked)
 	}
 }
