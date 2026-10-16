@@ -229,6 +229,29 @@ func TestAgentSearchIsGatedOnTheSearchLimit(t *testing.T) {
 	}
 }
 
+// At exactly delivery's share left, a read is refused at its entry, saying
+// how many requests are left and until when, before any request.
+func TestAgentReadAtTheReserveIsRefusedAtEntry(t *testing.T) {
+	calls := 0
+	reset := time.Now().Add(time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"number":1}`))
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	rateReadings.Store(rateKey(srv.URL, "Bearer "+t.Name(), "core"), rateReading{remaining: 20, limit: 100, reset: reset})
+	_, err := gh.Issue(context.Background(), "acme/allowed", 1, 50)
+	want := "GitHub's core rate limit has 20 of 100 requests left until " + reset.UTC().Format(time.RFC3339)
+	if !RateLimited(err) || !strings.Contains(err.Error(), want) || calls != 0 {
+		t.Fatalf("err=%v calls=%d, want %q before any request", err, calls, want)
+	}
+	rateReadings.Store(rateKey(srv.URL, "Bearer "+t.Name(), "core"), rateReading{remaining: 21, limit: 100, reset: reset})
+	if _, err := gh.Issue(context.Background(), "acme/allowed", 1, 50); err != nil || calls != 1 {
+		t.Fatalf("one above the reserve: err=%v calls=%d", err, calls)
+	}
+}
+
 func TestAgentReadRechecksReserveBetweenRequests(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

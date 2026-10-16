@@ -1860,7 +1860,7 @@ func (g *GitHub) openThreads(ctx context.Context, slug string, number int) ([]Th
 }
 
 // The share of a token's hourly limit kept for delivery: once GitHub says
-// fewer requests than limit/agentReadReserve are left, an agent's read is
+// no more than limit/agentReadReserve are left, an agent's read is
 // refused until the limit resets. Delivery opens, reads back and fixes
 // pull requests on the same App installation; an agent reading issues
 // must never be what leaves it none.
@@ -1934,7 +1934,7 @@ func noteRate(target, authorization string, h http.Header) {
 }
 
 // readBudget refuses an agent's read, before any request, while the token
-// for scope has less of a resource left than delivery's reserve: a 429
+// for scope has no more of a resource left than delivery's reserve: a 429
 // *Error carrying the wait, as GitHub's own limit would be.
 func (g *GitHub) readBudget(ctx context.Context, scope string, resources ...string) error {
 	token, err := g.Token(ctx, scope)
@@ -1948,7 +1948,7 @@ func (g *GitHub) readBudget(ctx context.Context, scope string, resources ...stri
 			continue
 		}
 		r := v.(rateReading)
-		if r.reset.After(now) && r.remaining < r.limit/agentReadReserve {
+		if r.reset.After(now) && r.remaining <= r.limit/agentReadReserve {
 			return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
 				Message: fmt.Sprintf("GitHub's %s rate limit has %d of %d requests left until %s: they are kept for delivery",
 					resource, r.remaining, r.limit, r.reset.UTC().Format(time.RFC3339))}
