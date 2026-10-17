@@ -1,10 +1,8 @@
 # What dude tells agents
 
-Every word dude sends an agent is in these files: prompts and briefings,
-tool descriptions, what the tools answer and refuse, the conductor's wake
-lines, steer and peer messages, nudges and the replay. They are compiled
-into the orchestrator with `go:embed`. Edit them here; Go decides only
-which sections a Run gets and fills in the data.
+The catalogue contains the migrated agent-facing text. Some fixed protocol identifiers and
+unreachable legacy branches remain in Go; they are listed below. Go decides only which
+sections a Run gets and fills in the data.
 
 | Directory | What it holds |
 | --- | --- |
@@ -16,7 +14,7 @@ which sections a Run gets and fills in the data.
 | `refusals/` | What a tool refuses, as Go `printf` formats: one `{{define}}` per refusal, in a file named after the Go file that refuses (`tools/` for `agenttools`, `delivery/` for the delivery's `refusef`, `domain/` for the feedback, steer, escalation, attachment, message, note and relation refusals, which a person's API call can meet too). Go fills the verbs (`%s`, `%d`, `%q`) in the order they appear; keep them. `words.md` holds the publish refusals and the shared words refusals are built of. |
 | `wakes/` | The reasons dude wakes the conductor with, one line each, and the note they are delivered in (`note.md`); `facts.md` holds the facts a decision's reason carries (a Run's outcome, a review round, a checkout's sync, a test's verdict, people's open feedback) and the decision points' names. |
 | `notices/` | What dude tells a Run outside its prompt: a peer's message and its notices, epic note changes, a nudge (`idle`, `resumed`, `stuck-turn`, `host-moved`), a machine move's words, a repository linked or failing to check out, and in `told.md` a person's answer, a restart, a changed task, a mention on GitHub, the external-text notes and Talk it through. |
-| `testdata/` | The golden files: every prompt, briefing, tool, result, refusal, wake and notice as an agent receives it. |
+| `testdata/` | The golden files: migrated prompt, briefing, tool, result, refusal, wake and notice text. Refusal goldens pin the generated `printf` formats; the generated Go constants restore compile-time format checking at call sites. The remaining Go-side protocol identifiers and unreachable legacy text are not claimed to be catalogue entries. |
 
 Where each is used: `prompts.go` (`Prompt`, `ConductorPrompt`),
 `session.go` (`BrainstormPrompt`, the session briefing), `briefing.go`,
@@ -29,6 +27,20 @@ and the files that record each wake. Other packages render through
 `MustText` (a handle resolved at init), `ToolText` and `ToolParameter`:
 `agenttools` (descriptions, results, refusals, GitHub words) and `phases`
 (nudges, move and checkout notices).
+
+The generator keeps a small manifest of existing Go handle names and Markdown keys. Regenerate
+with `go -C orchestrator generate ./internal/refusalgen`; the generated files are marked and
+must not be edited. `internal/refusalgen`'s ordinary test compares rendered bytes with the
+checked-in files, so stale generated files fail even if text goldens are updated. The generator
+is deliberately independent of delivery and does not duplicate call-site argument types.
+
+`DismissedByConductor` is a persisted resolution prefix parsed by `AcceptedBy`, so it remains a
+fixed Go protocol marker; JSON enum and state identifiers likewise remain Go data. The
+`checkout-kept-as-is` notice is unreachable after the earlier off-branch return and is left
+without an impossible fixture. Other remaining candidates are the API handover sentence,
+image-reference labels, feedback page-line labels, coordination labels, read-only causes,
+blocker-state words, unblock `howLabel`, escalation banner wording and agent-facing HTTP error
+bodies; these are known Go-side text and are not claimed to be migrated.
 
 ## Editing
 
