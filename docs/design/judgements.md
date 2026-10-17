@@ -47,6 +47,9 @@ its own fallback.
    **It fails closed:** any error is a zero `Judgement` and the caller does
    what it does without one. The tier is read in one transaction and the
    call recorded in another; no transaction is held while the model thinks.
+   The record is written under a 5 s bound of its own, detached from the
+   caller's context, so a call sent is recorded even when the caller's
+   deadline ends first.
 
 ## The setting
 

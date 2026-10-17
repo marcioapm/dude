@@ -336,6 +336,29 @@ func TestATimeoutIsRecorded(t *testing.T) {
 	}
 }
 
+// A call sent is recorded even when the caller's ctx ends before the model answers.
+func TestACallerDeadlineStillRecordsTheCall(t *testing.T) {
+	release := make(chan struct{})
+	w := setup(t, func(http.ResponseWriter) { <-release }, true)
+	t.Cleanup(func() { close(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	j, err := w.svc.Judge(ctx, w.org, ask)
+	if err == nil || !strings.HasPrefix(err.Error(), "no answer from the LLM proxy in ") || j != (Judgement{}) {
+		t.Errorf("judgement = %+v, err = %v", j, err)
+	}
+	if n := w.proxy.count(); n != 1 {
+		t.Errorf("%d requests sent", n)
+	}
+	got := w.calls(t)
+	if len(got) != 1 {
+		t.Fatalf("recorded %d", len(got))
+	}
+	if c := got[0]; c.Status != "error" || c.Error == nil || !strings.HasPrefix(*c.Error, "no answer from the LLM proxy") || c.HTTPStatus != nil {
+		t.Errorf("recorded %+v", c)
+	}
+}
+
 // The test question goes the same way and is not recorded.
 func TestTheTestQuestionIsNotRecorded(t *testing.T) {
 	w := setup(t, answering(`{"decision":"yes","confidence":0.99,"reasoning":"Rayleigh scattering."}`), false)

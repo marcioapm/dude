@@ -82,6 +82,9 @@ Read the question and its context, then answer with only a JSON object, nothing 
 
 confidence is how sure you are of your decision. Answer "unsure" when the context does not settle the question.`
 
+// recordTimeout bounds the write of a call's record, apart from the caller's ctx.
+const recordTimeout = 5 * time.Second
+
 // maxTokens bounds one judgement's answer, with room for a reasoning model's thinking.
 const maxTokens = 1024
 
@@ -157,7 +160,9 @@ func redactor(ctx context.Context, tx pgx.Tx, taskID *string, headers map[string
 
 // Judge asks the organisation's judgement tier ask's question, once, and
 // records the call. The tier is read in one transaction and the call
-// recorded in another: no transaction is held while the model thinks.
+// recorded in another: no transaction is held while the model thinks. The
+// record is written under its own 5s bound, so a call sent is recorded
+// even when ctx ends first.
 func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, error) {
 	var (
 		tier Tier
@@ -181,9 +186,12 @@ func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, err
 	if askErr == nil {
 		rec.Result = j
 	}
+	// A call that was sent is recorded even when ctx ended while the model ran.
+	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
 	var id string
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		id, err = modelcalls.Record(ctx, tx, red, rec)
+	if err := s.DB.InOrg(recCtx, org, func(tx pgx.Tx) (err error) {
+		id, err = modelcalls.Record(recCtx, tx, red, rec)
 		return err
 	}); err != nil {
 		return Judgement{}, fmt.Errorf("record the judgement: %w", err)
