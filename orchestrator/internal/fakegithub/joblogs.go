@@ -8,11 +8,6 @@ import (
 	"strings"
 )
 
-// GitHub Actions jobs as GitHub reports them: a check run of the
-// github-actions app whose output is empty and whose only annotation is the
-// exit code, and a log GitHub answers with a redirect to a short-lived
-// download URL on another host (Logs, served by LogDownloads).
-
 // CheckRun is how GitHub reports one check run, when a test sets one.
 type CheckRun struct {
 	App                  string

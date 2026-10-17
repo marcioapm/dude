@@ -102,14 +102,9 @@ func (g *GitHub) CheckOutput(ctx context.Context, slug string, runID int64, limi
 	if err != nil {
 		return "", err
 	}
-	if run.app == ActionsApp && run.generic {
-		tail, err := g.JobLogTail(ctx, slug, runID, limit)
-		switch {
-		case err == nil && tail != "":
-			return tail, nil
-		case err != nil && !logGone(err):
-			return "", err
-		}
+	if run.generic {
+		log, err := g.checkLogResult(ctx, slug, runID, run, limit)
+		return log.Text, err
 	}
 	return truncate(run.said, limit), nil
 }
@@ -135,6 +130,10 @@ func (g *GitHub) CheckLog(ctx context.Context, slug string, runID int64, limit i
 	if err != nil {
 		return CheckLogRead{}, err
 	}
+	return g.checkLogResult(ctx, slug, runID, run, limit)
+}
+
+func (g *GitHub) checkLogResult(ctx context.Context, slug string, runID int64, run checkRun, limit int) (CheckLogRead, error) {
 	out := CheckLogRead{Source: "check_run", Actions: run.app == ActionsApp}
 	if out.Actions {
 		tail, err := g.JobLogTail(ctx, slug, runID, limit)

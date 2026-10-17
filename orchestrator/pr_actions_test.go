@@ -177,10 +177,8 @@ func (w *world) rerunRefusedWith(status *atomic.Int32) *atomic.Int32 {
 	return asked
 }
 
-// GitHub refusing a rerun outright (a workflow still running) reruns
-// nothing, so the head's one rerun is not spent: asked again, dude asks
-// GitHub again, and that rerun, once it happens, is the head's.
-func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
+func rerunWorld(t *testing.T) (*world, string) {
+	t.Helper()
 	w := conducting(t)
 	task := w.reviewing()
 	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
@@ -188,6 +186,14 @@ func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
 	}
 	w.gh.SetChecks("run:failure")
 	w.sync()
+	return w, task
+}
+
+// GitHub refusing a rerun outright (a workflow still running) reruns
+// nothing, so the head's one rerun is not spent: asked again, dude asks
+// GitHub again, and that rerun, once it happens, is the head's.
+func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
+	w, task := rerunWorld(t)
 	var status atomic.Int32
 	status.Store(http.StatusConflict)
 	asked := w.rerunRefusedWith(&status)
@@ -214,13 +220,7 @@ func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
 // A rerun whose outcome is unknown (GitHub failing, not refusing) keeps the
 // head's claim: it may have happened, and is not asked again.
 func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
-	w := conducting(t)
-	task := w.reviewing()
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.gh.SetChecks("run:failure")
-	w.sync()
+	w, task := rerunWorld(t)
 	var status atomic.Int32
 	status.Store(http.StatusBadGateway)
 	asked := w.rerunRefusedWith(&status)
@@ -233,13 +233,7 @@ func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
 }
 
 func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
-	w := conducting(t)
-	task := w.reviewing()
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.gh.SetChecks("run:failure")
-	w.sync()
+	w, task := rerunWorld(t)
 	checks, err := json.Marshal([]forge.Check{
 		{Name: "first", RunID: 77, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
 		{Name: "second", RunID: 78, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
