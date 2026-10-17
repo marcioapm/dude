@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
@@ -183,7 +184,7 @@ func (s *Server) archiveEpic(w http.ResponseWriter, r *http.Request, org string)
 			}
 			return fail(http.StatusForbidden, "not_owner", "Only the owner of %s, or an admin, can archive it", t.Key)
 		})
-		out = map[string]any{"epicId": epicID, "archived": archived, "tasks": tasksOrEmpty(tasks)}
+		out = map[string]any{"epicId": epicID, "archived": archived, "tasks": db.NonNil(tasks)}
 		return err
 	})
 	if err != nil {
@@ -216,7 +217,7 @@ func (s *Server) unarchiveEpic(w http.ResponseWriter, r *http.Request, org strin
 			}
 		}
 		tasks, err := delivery.UnarchiveEpicTx(r.Context(), tx, org, epicID, a)
-		out = map[string]any{"epicId": epicID, "tasks": tasksOrEmpty(tasks)}
+		out = map[string]any{"epicId": epicID, "tasks": db.NonNil(tasks)}
 		return err
 	})
 	if err != nil {
@@ -225,11 +226,4 @@ func (s *Server) unarchiveEpic(w http.ResponseWriter, r *http.Request, org strin
 	s.kick()
 	write(w, http.StatusOK, out)
 	return nil
-}
-
-func tasksOrEmpty(keys []string) []string {
-	if keys == nil {
-		return []string{}
-	}
-	return keys
 }
