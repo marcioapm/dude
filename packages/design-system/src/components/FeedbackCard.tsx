@@ -90,7 +90,10 @@ export function FeedbackAnchorLine({ anchor, onJump, jumpLabel }: { readonly anc
     } catch {
       // Stored as given: shown as given.
     }
-    return <span className={styles["anchor"]}><Icon name="globe" size={14} /><b>Preview</b><span className={cx(styles["mono"], styles["muted"], styles["clip"])} title={anchor.url}>{where}</span></span>;
+    const inner = <><Icon name="globe" size={14} /><b>Preview</b><span className={cx(styles["mono"], styles["muted"], styles["clip"])} title={anchor.url}>{where}</span></>;
+    return onJump ? (
+      <button type="button" className={cx(styles["anchor"], styles["anchorLink"])} onClick={onJump} aria-label={jumpLabel ?? `Show it on the preview, ${where}`}>{inner}</button>
+    ) : <span className={styles["anchor"]}>{inner}</span>;
   }
   const body = (
     <>
@@ -286,6 +289,10 @@ export interface FeedbackCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
   readonly readOnly?: boolean | undefined;
   /** The page an item points at, when the app has its picture. */
   readonly imageUrl?: string | undefined;
+  /**
+   * Back to where it is: a code item's lines in the diff (Show in diff), a
+   * preview item's element on the page (Show on preview, drafts too).
+   */
   readonly onJump?: (() => void) | undefined;
   /** Each resolves true when done, false (or throws) to keep what was written. */
   readonly onReply?: ((body: string) => Promise<unknown>) | undefined;
@@ -322,7 +329,8 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
   const draft = item.status === "draft";
   const pending = item.status === "resolved" && item.resolutionPending;
   const a = item.anchor;
-
+  const showOnPreview = onJump && a.kind === "preview"
+    ? <Button size="sm" variant="quiet" leadingIcon="eye" onClick={onJump} data-testid="fb-show-on-preview">Show on preview</Button> : null;
   const act = async (what: string, run: () => Promise<unknown>, after?: () => void) => {
     setBusy(what);
     setProblem(null);
@@ -353,7 +361,7 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
         {placement === "outdated" ? <Badge tone="neutral" icon="file-diff" size="sm">Lines changed since</Badge> : null}
         <FeedbackStatusBadge status={item.status} pending={item.resolutionPending} withWhom={item.withWhom} />
       </header>
-      {inline ? null : <div className={styles["anchorRow"]}><FeedbackAnchorLine anchor={a} onJump={a.kind === "code" ? onJump : undefined} /></div>}
+      {inline ? null : <div className={styles["anchorRow"]}><FeedbackAnchorLine anchor={a} onJump={a.kind === "general" ? undefined : onJump} /></div>}
       {a.kind === "code" && (!inline || placement) ? <FeedbackExcerpt anchor={a} note={placement ? PLACEMENT_WORDS[placement] : undefined} /> : null}
       {a.kind === "preview" ? <FeedbackPreview anchor={a} imageUrl={imageUrl} /> : null}
       {draft && editing && onSaveDraft ? (
@@ -394,12 +402,14 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
             <>
               <span className={styles["muted"]}><Icon name="lock" size={12} /> Only you see this until you submit.</span>
               <span className={styles["spacer"]} />
+              {showOnPreview}
               {onSaveDraft ? <Button size="sm" variant="quiet" leadingIcon="edit" onClick={() => { setText(item.body); setEditing(true); }}>Edit</Button> : null}
               {onDelete ? <Button size="sm" variant="danger" leadingIcon="close" disabled={busy !== null} onClick={() => void act("delete", onDelete)}>Delete</Button> : null}
             </>
           ) : (
             <>
               {inline || !onJump || a.kind !== "code" ? null : <Button size="sm" variant="quiet" leadingIcon="file-diff" onClick={onJump}>Show in diff</Button>}
+              {showOnPreview}
               <span className={styles["spacer"]} />
               {onReply && !replying ? (
                 pending ? (

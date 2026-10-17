@@ -55,6 +55,8 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
   readonly onRestart?: (() => void) | undefined;
   /** The row's overflow menu (the app's RowMenu). */
   readonly menu?: ReactNode;
+  /** Right after Preview: another way to open the page (Comment), or why there is none. */
+  readonly besidePreview?: ReactNode;
   readonly logs?: ServerLogs | undefined;
   /** An action is in flight: the buttons wait. */
   readonly busy?: boolean | undefined;
@@ -67,7 +69,7 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
  * Its log folds open under the row, titled `server:<name>`.
  */
 export function ServerRow({
-  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, logs, busy, className, ...rest
+  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, besidePreview, logs, busy, className, ...rest
 }: ServerRowProps) {
   const live = state === "ready";
   const href = safeServerUrl(url);
@@ -98,6 +100,7 @@ export function ServerRow({
           {live && href ? (
             <LinkButton href={href} size="sm" variant="secondary" leadingIcon="eye" external={false} target="_blank" rel="noopener noreferrer" title="Opens in a new tab" data-testid="server-preview">Preview</LinkButton>
           ) : null}
+          {besidePreview}
           {logs ? (
             <Button size="sm" variant="quiet" trailingIcon={logs.open ? "chevron-up" : "chevron-down"} aria-expanded={logs.open} onClick={logs.onToggle} data-testid="server-logs">
               Logs

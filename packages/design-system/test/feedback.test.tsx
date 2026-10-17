@@ -394,4 +394,26 @@ describe("FeedbackCard", () => {
     await rerender(<FeedbackCard item={item({ anchor: preview })} imageUrl="blob:x" />);
     expect(host!.querySelectorAll("[data-testid=fb-preview] img").length).toBe(1);
   });
+
+  test("a preview item's jump is Show on preview, on a submitted item and a draft alike; none without onJump", async () => {
+    const preview = { kind: "preview" as const, url: "https://wi.preview.dev/cart", selector: "button.pay" };
+    let jumps = 0;
+    const el = await mount(<FeedbackCard item={item({ anchor: preview })} onReply={async () => true} onJump={() => jumps++} />);
+    const show = byRole(el, "button", "Show on preview");
+    await act(async () => (show as HTMLElement).click());
+    expect(jumps).toBe(1);
+    // The anchor line is the same way back.
+    await act(async () => (byRole(el, "button", "Show it on the preview, /cart") as HTMLElement).click());
+    expect(jumps).toBe(2);
+    expect(allByRole(el, "button").filter((b) => accessibleName(b) === "Show in diff").length).toBe(0);
+    await rerender(<FeedbackCard item={item({ anchor: preview, status: "draft" })} onSaveDraft={async () => true} onDelete={async () => true} onJump={() => jumps++} />);
+    await act(async () => (byRole(host!, "button", "Show on preview") as HTMLElement).click());
+    expect(jumps).toBe(3);
+    await rerender(<FeedbackCard item={item({ anchor: preview })} onReply={async () => true} />);
+    expect(host!.querySelectorAll("[data-testid=fb-show-on-preview]").length).toBe(0);
+    // A general item has nowhere to go back to.
+    await rerender(<FeedbackCard item={item({ anchor: { kind: "general" } })} onReply={async () => true} onJump={() => jumps++} />);
+    expect(host!.querySelectorAll("[data-testid=fb-show-on-preview]").length).toBe(0);
+    expect(allByRole(host!, "button").filter((b) => /Show/.test(accessibleName(b))).length).toBe(0);
+  });
 });
