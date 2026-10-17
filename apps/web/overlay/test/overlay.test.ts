@@ -319,6 +319,53 @@ test("a route change in the app tells dude, and the pins wait for that page's", 
   expect(count('[data-testid="ov-pin"]')).toBe(0);
 });
 
+test("a route change before dude's session is told to dude, and the session for the page it is on now connects", () => {
+  boot();
+  win.history.replaceState({}, "", "/home");
+  expect(sent().map((m) => m.type)).toEqual(["hello", "navigated"]);
+  expect(sent().at(-1)).toEqual({ type: "navigated", v: 1, url: "https://web-wi-1-shop.preview.example.test/home" });
+  // dude's answer to the first hello names /cart: not this page's.
+  connect();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: "https://web-wi-1-shop.preview.example.test/home", drafts: 0, showPins: true,
+    pins: [{ id: "h", n: 1, status: "open", author: "Ana", mine: false, body: "x", selector: "button.pay", when: "", replies: [] }] });
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect([...root.querySelectorAll('[data-testid="ov-pin"]')].map((p) => p.getAttribute("data-id"))).toEqual(["h"]);
+});
+
+/** Comment, then a pick of the Pay button, then words in the box. */
+async function writeOnPay(words: string): Promise<HTMLTextAreaElement> {
+  tid("ov-comment")!.click();
+  const pay = sized(win.document.querySelector("button.pay")!);
+  hover(pay);
+  pay.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await tick();
+  const field = q("textarea") as HTMLTextAreaElement;
+  field.value = words;
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  return field;
+}
+
+test("a save dude never answers is given up on: the reason, Copy text, Save again, and the words kept through a reconnect", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  await writeOnPay("Half a thought");
+  tid("ov-save")!.click();
+  expect(tid("ov-save")!.textContent).toBe("Saving…");
+  await tick(100);
+  expect(tid("ov-problem")!.textContent).toContain("dude didn't answer");
+  expect(count('[data-testid="ov-copy"]')).toBe(1);
+  expect((tid("ov-save") as HTMLButtonElement).disabled).toBe(false);
+  expect(tid("ov-save")!.textContent).toBe("Save draft");
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  // It said hello again; the dude tab back on the task answers, and the box is as it was.
+  expect(sent().at(-1)).toEqual({ type: "hello", v: 1, url: PAGE });
+  connect();
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  expect(count('[data-testid="ov-problem"]')).toBe(0);
+});
+
 test("the overlay's root is closed and the page's CSS doesn't reach into it", () => {
   const style = win.document.createElement("style");
   style.textContent = "button { color: rgb(255, 0, 0) !important; display: none !important } * { font-size: 40px !important }";

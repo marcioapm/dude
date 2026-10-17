@@ -109,6 +109,34 @@ test("a message from an origin that is not one of this task's previews is ignore
   expect(createDraft).not.toHaveBeenCalled();
 });
 
+test("the window dude opened, once its origin is not one of the task's previews any more, is told to open it again", async () => {
+  c.open(`${WEB}/cart`, "web");
+  data = servers([server("web", WEB)], "agent");
+  post({ type: "draft", v: 1, nonce: "n9", body: "x", anchor: anchor() });
+  await tick();
+  expect(createDraft).not.toHaveBeenCalled();
+  expect(told()).toEqual([{ type: "refused", v: 1, nonce: "n9", reason: "This preview isn't the one at work any more — open it again from dude." }]);
+  // Another window at that origin still hears nothing.
+  const other = { postMessage: mock(() => {}), closed: false };
+  post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor() }, WEB, other);
+  expect(other.postMessage).not.toHaveBeenCalled();
+  expect(told().length).toBe(1);
+});
+
+test("a dude tab that reloaded takes back the window it had opened, by that window's opener, and answers it", async () => {
+  // A fresh handler, as after a reload: it holds no window.
+  const reopened = { ...popup, opener: window };
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, reopened);
+  expect(popup.postMessage.mock.calls.map((x) => (x[0] as DudeToOverlay).type)).toEqual(["session"]);
+  expect(popup.postMessage.mock.calls[0]![1]).toBe(WEB);
+  // A window someone else opened is not taken.
+  c.dispose();
+  boot();
+  const stranger = { postMessage: mock(() => {}), closed: false, opener: null };
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, stranger);
+  expect(stranger.postMessage).not.toHaveBeenCalled();
+});
+
 test("a message from a window other than the one dude opened is ignored", async () => {
   c.open(`${WEB}/cart`, "web");
   const other = { postMessage: mock(() => {}), closed: false };

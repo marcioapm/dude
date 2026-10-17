@@ -78,11 +78,22 @@ export type Checked =
   /** Not from the window dude opened at one of the task's origins: not answered at all. */
   | { readonly ok: false; readonly why: "origin" | "source" }
   /** From the right window, refused with words for its box. */
-  | { readonly ok: false; readonly why: "size" | "invalid"; readonly reason: string };
+  | { readonly ok: false; readonly why: "size" | "invalid" | "moved"; readonly reason: string };
 
-/** The guards, in order: origin, source window, size, then the schema and the anchor's own origin. */
-export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">, opened: Window | null, origins: ReadonlySet<string>): Checked {
-  if (!origins.has(e.origin)) return { ok: false, why: "origin" };
+export const PREVIEW_MOVED = "This preview isn't the one at work any more — open it again from dude.";
+
+/**
+ * The guards, in order: origin, source window, size, then the schema and
+ * the anchor's own origin. `openedAt` is the origin dude opened the window
+ * at: that window, still there but no longer at one of `origins` (the task's
+ * read moved to an agent Run, or the task changed), is told so instead of
+ * being left unanswered.
+ */
+export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">, opened: Window | null, origins: ReadonlySet<string>, openedAt: string | null = null): Checked {
+  if (!origins.has(e.origin)) {
+    const ours = opened !== null && e.source === opened && openedAt !== null && e.origin === openedAt;
+    return ours ? { ok: false, why: "moved", reason: PREVIEW_MOVED } : { ok: false, why: "origin" };
+  }
   if (opened === null || e.source !== opened) return { ok: false, why: "source" };
   if (overSize(e.data, OVERLAY_LIMITS.message)) return { ok: false, why: "size", reason: "That is too much to send: try without the picture, or a smaller element." };
   const parsed = overlayMessageSchema.safeParse(e.data);
@@ -334,9 +345,10 @@ export class PreviewCommenting {
   }
 
   readonly onMessage = (e: MessageEvent): void => {
-    const checked = checkMessage(e, this.#win, this.#d.read().origins);
+    this.#adopt(e);
+    const checked = checkMessage(e, this.#win, this.#d.read().origins, originOf(this.#url));
     if (!checked.ok) {
-      if (checked.why === "size" || checked.why === "invalid") {
+      if ("reason" in checked) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
         this.#post({ type: "refused", v: OVERLAY_PROTOCOL, ...(typeof nonce === "string" && nonce.length <= 100 ? { nonce } : {}), reason: checked.reason });
       }
@@ -375,6 +387,31 @@ export class PreviewCommenting {
         void this.#save(msg);
     }
   };
+
+  /**
+   * A tab that reloaded, or came back to the task, holds no handle on the
+   * window it opened. A hello from one of this task's preview origins whose
+   * sender's opener is this very window (the browser says so; a page can't
+   * forge it) is that window: it is taken back, so the overlay reconnects
+   * with its half-written comment in place.
+   */
+  #adopt(e: MessageEvent): void {
+    if (this.#win !== null && !this.#win.closed) return;
+    const m = e.data as { type?: unknown; url?: unknown } | null;
+    if (!m || typeof m !== "object" || m.type !== "hello" && m.type !== "navigated" || typeof m.url !== "string") return;
+    if (!this.#d.read().origins.has(e.origin) || originOf(m.url) !== e.origin) return;
+    const source = e.source as Window | null;
+    let opener: unknown;
+    try {
+      opener = source?.opener;
+    } catch {
+      return;
+    }
+    if (!source || opener !== this.#d.win) return;
+    this.#win = source;
+    this.#url = m.url;
+    this.#saved = 0;
+  }
 
   async #save(msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {
     let attachmentId: string | undefined;

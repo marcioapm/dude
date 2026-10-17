@@ -25,6 +25,11 @@ import { PictureError, drawPicture, tooBig } from "./picture.ts";
 /** How long dude has to answer hello before the overlay says to open the preview from dude. */
 export const SESSION_WAIT_MS = 3_000;
 
+/** How long dude has to answer a draft with saved or refused before the box says it didn't. */
+export const SAVE_WAIT_MS = 15_000;
+
+export const SAVE_UNANSWERED = "dude didn't answer: its tab may have reloaded or left this task. Copy your words, or try Save again.";
+
 type Connection = "waiting" | "connected" | "none" | "closed";
 type Toast = { drafts: number; picture: "attached" | "none" | "failed"; why?: string };
 type Picture = { state: "drawing" } | { state: "ready"; url: string } | { state: "failed"; why: string } | { state: "off"; why?: string };
@@ -35,6 +40,7 @@ export interface OverlayOptions {
   /** Stand-in for drawPicture (tests: happy-dom has no layout or canvas). */
   readonly draw?: (el: Element, win: Window) => Promise<string>;
   readonly sessionWaitMs?: number;
+  readonly saveWaitMs?: number;
 }
 
 const GLYPH: Record<string, string> = {
@@ -90,6 +96,9 @@ export class Overlay {
   #attach = true;
   #field: HTMLTextAreaElement | null = null;
   #saving: string | null = null;
+  #saveTimer = 0;
+  // A save went unanswered: Copy text is offered beside Save.
+  #unanswered = false;
   #problem: string | null = null;
   #panel: "pins" | null = null;
   #toast: Toast | null = null;
@@ -145,6 +154,7 @@ export class Overlay {
 
   stop(): void {
     this.#stopped = true;
+    this.#win.clearTimeout(this.#saveTimer);
     for (const t of this.#timers) { this.#win.clearTimeout(t); this.#win.clearInterval(t); }
     this.#win.removeEventListener("message", this.#onMessage);
     for (const t of ["mouseover", "mousemove", "focusin"]) this.#win.removeEventListener(t, this.#onHover, true);
@@ -180,7 +190,7 @@ export class Overlay {
     this.#connection = to;
     this.#picking = false;
     this.#hover = null;
-    this.#saving = null;
+    this.#saveDone();
     this.#render();
   }
 
@@ -196,17 +206,22 @@ export class Overlay {
         this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
+        if (this.#unanswered) {
+          // dude's tab is back: the box keeps its words, and Save is for it again.
+          this.#unanswered = false;
+          this.#problem = null;
+        }
         break;
       case "saved":
         if (m.nonce !== this.#saving) return;
-        this.#saving = null;
+        this.#saveDone();
         this.#drafts = Number(m.drafts) || this.#drafts;
         this.#toast = { drafts: this.#drafts, picture: m.picture, ...(this.#picture.state === "failed" ? { why: this.#picture.why } : {}) };
         this.#closeBox(false);
         break;
       case "refused":
         if (m.nonce !== undefined && m.nonce !== this.#saving) return;
-        this.#saving = null;
+        this.#saveDone();
         this.#problem = String(m.reason).slice(0, 500);
         break;
       case "highlight":
@@ -243,7 +258,8 @@ export class Overlay {
     this.#page = page;
     this.#pins = [];
     this.#popover = null;
-    if (this.#connection === "connected") this.#post({ type: "navigated", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
+    // Before a session, too: dude's answer to the first hello names a page this one has left.
+    if (this.#connection === "connected" || this.#connection === "waiting") this.#post({ type: "navigated", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
     this.#render();
   };
 
@@ -379,7 +395,7 @@ export class Overlay {
   #closeBox(backToPicking: boolean): void {
     this.#picked = null;
     this.#field = null;
-    this.#saving = null;
+    this.#saveDone();
     this.#problem = null;
     this.#picture = { state: "off" };
     this.#hover = null;
@@ -407,6 +423,27 @@ export class Overlay {
     }
     this.#saving = nonce;
     this.#problem = null;
+    this.#saveTimer = this.#win.setTimeout(() => this.#saveUnanswered(nonce), this.#opts.saveWaitMs ?? SAVE_WAIT_MS);
+    this.#render();
+  }
+
+  #saveDone(): void {
+    this.#saving = null;
+    this.#unanswered = false;
+    this.#win.clearTimeout(this.#saveTimer);
+  }
+
+  /**
+   * No saved or refused in time: dude's tab reloaded or left the task, and
+   * the opener is another document now. The box keeps the words, offers
+   * Copy text, and says hello again so a dude tab on this task can answer.
+   */
+  #saveUnanswered(nonce: string): void {
+    if (this.#saving !== nonce || this.#stopped) return;
+    this.#saving = null;
+    this.#unanswered = true;
+    this.#problem = SAVE_UNANSWERED;
+    this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
     this.#render();
   }
 
@@ -656,7 +693,9 @@ export class Overlay {
         this.#h("span", { class: "sp" }),
         connected
           ? this.#h("button", { type: "button", "data-k": "cancel", onclick: () => this.#closeBox(false) }, "Cancel")
-          : this.#h("button", { type: "button", "data-k": "copy", "data-testid": "ov-copy", onclick: () => void this.#copy() }, "Copy text"),
+          : null,
+        !connected || this.#unanswered
+          ? this.#h("button", { type: "button", "data-k": "copy", "data-testid": "ov-copy", onclick: () => void this.#copy() }, "Copy text") : null,
         connected ? this.#h("button", { type: "button", class: "primary", "data-k": "save", "data-testid": "ov-save", disabled: !canSave, onclick: () => this.#save() },
           this.#saving ? "Saving…" : "Save draft") : null)));
     return out;

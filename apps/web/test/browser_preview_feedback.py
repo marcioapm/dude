@@ -17,6 +17,7 @@ Requires installed Playwright and Chrome (system Chrome, or Playwright's cached 
 """
 import os
 import re
+import socket
 import unittest
 from pathlib import Path
 
@@ -24,7 +25,15 @@ from playwright.sync_api import sync_playwright, expect
 
 from vite_server import start_vite, stop_vite
 
-PORT = 5197
+
+def free_port():
+    """A port nothing listens on now: the other browser checks keep their fixed ones."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PORT = free_port()
 DUDE = f"http://127.0.0.1:{PORT}"
 PREVIEW = "https://web-shop.preview.test"
 TASK = "tsk_01j9x4kqf8b2m7e3"
@@ -243,6 +252,25 @@ class CommentingOnAPreview(unittest.TestCase):
     def center(self, page, selector):
         b = page.locator(selector).bounding_box()
         return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+
+    def test_an_app_that_redirects_before_dude_answers_still_connects(self):
+        ctx, page = self.context()
+        self.watch(page)
+        # The app's router moves / to /home as soon as the overlay is on the page, before dude's session can arrive.
+        ctx.add_init_script(f"""if (location.origin === '{PREVIEW}') new MutationObserver((_, o) => {{
+          if (document.querySelector('dude-preview-overlay')) {{ o.disconnect(); history.replaceState({{}}, '', '/home'); }}
+        }}).observe(document, {{ childList: true, subtree: true }})""")
+        comment = page.get_by_test_id("comment-on-server").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(pv.evaluate("() => location.pathname"), "/home")
+        expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        # Ana's comment is on /, not /home: no pin here.
+        self.assertEqual(ov_count(pv, "ov-pin"), 0)
+        self.assertEqual(self.errors, [])
 
     def test_a_preview_opened_directly_says_to_open_it_from_dude(self):
         ctx, page = self.context()
