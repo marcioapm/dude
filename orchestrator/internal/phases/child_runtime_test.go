@@ -166,6 +166,44 @@ func TestChildTerminalGoneOutput(t *testing.T) {
 		t.Fatalf("gone output did not settle: %v %v", pending, err)
 	}
 }
+
+func TestChildOldFollowerCannotAppendAfterDrain(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}',phase='investigate',role='investigator' WHERE id=$1`, w.run.ID)
+	oldOpened, release := make(chan struct{}), make(chan struct{})
+	old := newStreamLux(w.lux)
+	oldSync := &Syncer{DB: w.s.DB, Lux: old, Log: w.s.Log}
+	r := w.run
+	r.SourceKind = "task_conductor"
+	ctx, cancel := context.WithCancel(w.ctx)
+	defer cancel()
+	oldDone := make(chan error, 1)
+	go func() { close(oldOpened); oldDone <- oldSync.followOutput(ctx, r) }()
+	<-oldOpened
+	<-old.opened
+	fresh := &childTerminalLux{sweepLux: &sweepLux{}, frames: []lux.Frame{spoke(1), record(1, "lux.activity", map[string]any{"activity": "idle"})}}
+	newSync := &Syncer{DB: w.s.DB, Lux: fresh, Log: w.s.Log}
+	if err := newSync.followOutput(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	go func() { old.frames <- cursorFrame(spoke(1), "stale"); close(release) }()
+	<-release
+	// EOF is deliberately absent from the old stream; its stale batch must end it.
+	select {
+	case err := <-oldDone:
+		if err == nil {
+			t.Fatal("stale follower succeeded")
+		}
+	case <-time.After(time.Second):
+		cancel()
+		<-oldDone
+		t.Fatal("stale follower remained active after replacement")
+	}
+	var cursor string
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(lux_cursor,'') FROM runs WHERE id=$1`, r.ID).Scan(&cursor); err != nil || cursor == "stale" {
+		t.Fatalf("stale cursor committed %q %v", cursor, err)
+	}
+}
 func (f *childTerminalLux) Cost(context.Context, string) (lux.RunCost, error) {
 	return lux.RunCost{}, &lux.Error{Status: 404, Code: "not_found"}
 }

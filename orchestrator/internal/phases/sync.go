@@ -1728,6 +1728,17 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 	var afterEvent int64
 	t := &translator{run: r}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `UPDATE runs SET child_output_generation=child_output_generation+1
+			WHERE id=$1 AND source_kind IS NOT NULL AND NOT child_output_closed RETURNING child_output_generation`, r.ID).Scan(&t.childOutputGeneration); err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		var closed bool
+		if err := tx.QueryRow(ctx, `SELECT child_output_closed FROM runs WHERE id=$1`, r.ID).Scan(&closed); err != nil {
+			return err
+		}
+		if closed {
+			return fmt.Errorf("child output is already collected")
+		}
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), lux_after_event FROM runs WHERE id = $1`, r.ID).
 			Scan(&cursor, &afterEvent); err != nil {
 			return err
@@ -1807,6 +1818,15 @@ func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Fram
 		// save updates the row at the batch's end anyway.
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID); err != nil {
 			return err
+		}
+		if t.childOutputGeneration != 0 {
+			var owns bool
+			if err := tx.QueryRow(ctx, `SELECT child_output_generation=$2 AND NOT child_output_closed FROM runs WHERE id=$1`, t.run.ID, t.childOutputGeneration).Scan(&owns); err != nil {
+				return err
+			}
+			if !owns {
+				return fmt.Errorf("child output follower was superseded")
+			}
 		}
 		var cursor string
 		var afterEvent int64

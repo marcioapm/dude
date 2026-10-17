@@ -59,7 +59,8 @@ const (
 // cursor or rebuilt from the database when following starts, so a restart
 // neither repeats nor loses anything.
 type translator struct {
-	run phaseRun
+	childOutputGeneration int64
+	run                   phaseRun
 	// The placement whose agent session is established. A resumed agent
 	// replays its conversation while it loads, and that replay is already in
 	// the ledger.

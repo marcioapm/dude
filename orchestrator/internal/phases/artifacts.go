@@ -256,6 +256,11 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 			}
 			// An ended Run's output is all in: the values it was given are
 			// no longer needed to redact or scan it.
+			if child {
+				if _, err := tx.Exec(ctx, `UPDATE runs SET child_output_closed=true WHERE id=$1`, r.ID); err != nil {
+					return err
+				}
+			}
 			_, err = tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
 				WHERE s.run_id = $1 AND r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')`, r.ID)
 			return err
