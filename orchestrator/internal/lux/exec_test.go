@@ -111,11 +111,14 @@ func TestAnExecLuxNeverAnswersEndsAtADeadline(t *testing.T) {
 		t.Errorf("returned after %v, want about 300ms", took)
 	}
 
+	// Exec's own deadline far past the caller's, so the two cannot be
+	// mistaken for each other.
+	client = lux.New(url, "k").WithExecTimeout(5 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start = time.Now()
 	_, err = client.Exec(ctx, "run_1", []string{"true"})
-	if took := time.Since(start); took > 250*time.Millisecond {
+	if took := time.Since(start); took > time.Second {
 		t.Errorf("returned after %v, past the caller's 50ms", took)
 	}
 	if e, ok := lux.AsError(err); ok && e.Code == "timeout" {
@@ -123,5 +126,29 @@ func TestAnExecLuxNeverAnswersEndsAtADeadline(t *testing.T) {
 	}
 	if ctx.Err() == nil || err == nil {
 		t.Errorf("got %v with the caller's ctx %v", err, ctx.Err())
+	}
+}
+
+// A caller's deadline longer than Exec's own replaces it: a command that
+// answers after Exec's own deadline but within the caller's succeeds.
+func TestACallersLongerDeadlineWinsOverExecsOwn(t *testing.T) {
+	url := execServer(t, func(ctx context.Context, ws *websocket.Conn, _ []string) {
+		select {
+		case <-time.After(600 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+		_ = wsjson.Write(ctx, ws, map[string]any{"exitCode": 3})
+		_ = ws.Close(websocket.StatusNormalClosure, "")
+	})
+	client := lux.New(url, "k").WithExecTimeout(300 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := client.Exec(ctx, "run_1", []string{"true"})
+	if err != nil {
+		t.Fatalf("got %v, want the command's exit code within the caller's 5s", err)
+	}
+	if res.ExitCode != 3 {
+		t.Errorf("exit code %d, want 3", res.ExitCode)
 	}
 }
