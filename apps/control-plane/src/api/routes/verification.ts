@@ -3,9 +3,14 @@
  * test Run, recorded by the orchestrator (acceptance_verdicts). Read only:
  * a waiver or acceptance is an escalation decision (POST /v1/tasks/:id/decide).
  *
- * A verdict covers the heads it tested. `stale` says the task's delivery
- * of that attempt has moved past them since (the simplifier, a pull
- * request fix): what was shown working is not what the branch holds now.
+ * A verdict covers the heads it tested. `stale` says what the branch
+ * holds has moved past them since (the simplifier, a pull request fix):
+ * what was shown working is not what the branch holds now. While a pull
+ * request's fix is checked on its candidate branch (the delivery state's
+ * `candidate`), the pull requests still hold the heads it started from
+ * (`candidate.from`): staleness is measured against those, and a verdict
+ * at the candidate's own heads is `candidate`, neither stale nor the pull
+ * request's.
  */
 
 import { withOrg } from "../../db/client.ts";
@@ -15,13 +20,17 @@ import type { RequestContext, Router } from "../router.ts";
 async function listVerification(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.params.id!;
   const rows = await withOrg(ctx.principal.organizationId, async (scope) => (await scope.sql`
-    SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt",
-      COALESCE((SELECT w.state->'heads' FROM workflow_runs w WHERE w.task_id = v.task_id
-        AND COALESCE((w.state->>'attempt')::int, r.attempt) = r.attempt ORDER BY w.created_at DESC LIMIT 1), '{}') AS "now",
+    SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt", wk.work AS "work",
       v.criterion, v.text, v.status, v.evidence, v.observed, v.problem, v.decision,
       CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object('id', p.id, 'name', p.name) END AS "decidedBy",
       v.decision_note AS "decisionNote"
-    FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id LEFT JOIN people p ON p.id = v.decided_by
+    FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id
+    -- Lateral rather than a scalar subquery: the planner memoizes it per (task, attempt).
+    LEFT JOIN LATERAL (
+      SELECT jsonb_build_object('heads', w.state->'heads', 'from', w.state->'candidate'->'from') AS work FROM workflow_runs w
+      WHERE w.task_id = v.task_id AND COALESCE((w.state->>'attempt')::int, r.attempt) = r.attempt
+      ORDER BY w.created_at DESC LIMIT 1) wk ON true
+    LEFT JOIN people p ON p.id = v.decided_by
     WHERE v.task_id = ${taskId}
     ORDER BY v.created_at DESC, v.run_id, v.criterion
     LIMIT 500`) as Array<Record<string, unknown>>);
@@ -32,8 +41,8 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     let v = byRun.get(runId);
     if (!v) {
       const heads = (row.heads ?? {}) as Record<string, string>;
-      const now = (row.now ?? {}) as Record<string, string>;
-      v = { runId, attempt: row.attempt, heads, stale: isStale(heads, now), createdAt: row.createdAt, criteria: [] };
+      const { stale, candidate } = standing(heads, (row.work ?? {}) as Work);
+      v = { runId, attempt: row.attempt, heads, stale, candidate, createdAt: row.createdAt, criteria: [] };
       byRun.set(runId, v);
     }
     v.criteria.push({
@@ -42,6 +51,18 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     });
   }
   return json({ verifications: [...byRun.values()] });
+}
+
+/** The delivery's working heads, and the pull requests' while a candidate is checked. */
+type Work = { heads?: Record<string, string> | null; from?: Record<string, string> | null };
+
+/** A verdict against what the branch holds: `heads`, or `from` while a candidate is checked (see the file doc). */
+export function standing(tested: Record<string, string>, work: Work): { stale: boolean; candidate: boolean } {
+  const now = work.heads ?? {};
+  if (!work.from) return { stale: isStale(tested, now), candidate: false };
+  // At the candidate's own heads, once it has moved off the pull request's.
+  const candidate = isStale(work.from, now) && !isStale(tested, now);
+  return { stale: !candidate && isStale(tested, work.from), candidate };
 }
 
 /** The work has moved past a verdict: a repository at another commit, or changed and never tested. */

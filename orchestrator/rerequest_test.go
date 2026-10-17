@@ -1,14 +1,18 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -443,5 +447,245 @@ func TestReviewersAreAskedBeforeASiblingPullRequestOpens(t *testing.T) {
 	}
 	if e := w.rerequests(wi); len(e) != 1 || e[0]["head"] != head || e[0]["repo"] != "target" {
 		t.Errorf("recorded %v", e)
+	}
+}
+
+// siblingFixWorld is a task whose pull request on target is reviewed by
+// jerv, and whose next fix changes web, which has no task branch yet:
+// promoting it creates web's branch and opens web's pull request.
+func siblingFixWorld(t *testing.T) (*world, string) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			b.Commit = map[string]string{"target:FACTORY.md": "implemented\n"}
+		case labels["dude.phase"] == "fix" && len(w.gh.Pulls()) == 1:
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	w.askingFor("jerv")
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("target's pull request in review", func() bool {
+		return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review"
+	})
+	w.gh.Review(1, "jerv", "COMMENTED")
+	return w, wi
+}
+
+// lastQuestionDetail is the detail of the last question asked on wi.
+func lastQuestionDetail(t *testing.T, w *world, wi string) map[string]any {
+	t.Helper()
+	var detail map[string]any
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	return detail
+}
+
+func branchCreatingEvents(w *world, wi string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvTaskBranchCreating)
+}
+
+// createRefSHA is the SHA a create-ref POST for branch asks for, ok false
+// for any other request. The body is restored for the fake to read.
+func createRefSHA(r *http.Request, branch string) (sha string, ok bool) {
+	if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/git/refs") {
+		return "", false
+	}
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var in struct{ Ref, SHA string }
+	_ = json.Unmarshal(body, &in)
+	return in.SHA, in.Ref == "refs/heads/"+branch
+}
+
+// The promotion created web's task branch, then opening web's pull request
+// failed, and a person deleted the branch before the step ran again: the
+// retry does not create it a second time, and stops for a person with the
+// checked head.
+func TestASiblingBranchDeletedWhileItsPullRequestRetriesIsNotRecreated(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var deleted atomic.Bool
+	var creates atomic.Int32
+	var created atomic.Value
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if deleted.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs") {
+				creates.Add(1)
+			}
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls") {
+				if !deleted.Load() {
+					created.Store(w.web.SHA(branch))
+					if err := w.web.DeleteBranch(branch); err != nil {
+						t.Errorf("delete web's branch: %v", err)
+					}
+					deleted.Store(true)
+				}
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's branch deleted on its pull request's first open, then a person asked or it was created again", func() bool {
+		w.sync()
+		return deleted.Load() && (w.taskStatus(wi) == "awaiting_input" || creates.Load() > 0)
+	})
+	checked, _ := created.Load().(string)
+	if checked == "" {
+		t.Fatal("web's branch was not created before its pull request was opened")
+	}
+	if n := creates.Load(); n != 0 {
+		t.Errorf("%d create-ref POSTs on web after the deletion", n)
+	}
+	if at := w.web.SHA(branch); at != "" {
+		t.Errorf("deleted web branch recreated at %s", at)
+	}
+	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q", r)
+	}
+	detail := lastQuestionDetail(t, w, wi)
+	if detail["repo"] != "web" || detail["found"] != "" || detail["expected"] != "" || detail["candidate"] != checked ||
+		detail["branch"] != delivery.CandidateBranch(wi, 1) {
+		t.Errorf("refusal %v, want web missing with candidate %s", detail, checked)
+	}
+}
+
+// GitHub failing a request on web's task branch before the create is sent
+// leaves nothing to mistake for a deletion: the step runs again, creates
+// the branch and opens web's pull request.
+func TestATransientFailureBeforeASiblingBranchIsCreatedStillOpensItsPullRequest(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var failed atomic.Int32
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+branch) && failed.Add(1) == 1 {
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	if failed.Load() != 0 {
+		t.Errorf("web's task branch was PATCHed before it existed")
+	}
+	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
+		t.Fatalf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
+	}
+	if n := branchCreatingEvents(w, wi); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+}
+
+// GitHub creates web's branch, then answers 502: the branch at the
+// candidate's head is the create landing, moved in the same step, never a
+// wait and never a person's deletion.
+func TestASiblingBranchCreatedBehindA502IsMovedWithoutWaiting(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var failed atomic.Int32
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			sha, ok := createRefSHA(r, branch)
+			if !ok || failed.Add(1) != 1 {
+				return 0
+			}
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", "refs/heads/"+branch, sha, "").CombinedOutput(); err != nil {
+				t.Errorf("create web's branch: %v %s", err, out)
+			}
+			return http.StatusBadGateway
+		}
+	})
+	var waited atomic.Bool
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND last_error LIKE '%502%'`, wi) > 0 {
+			waited.Store(true)
+		}
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	if failed.Load() == 0 {
+		t.Fatal("web's branch was never created through the API")
+	}
+	if waited.Load() {
+		t.Error("the step waited on a create that landed")
+	}
+	if r := w.escalationReason(wi); r != "" || len(w.web.Pulls()) != 1 {
+		t.Errorf("escalated %q, %d pull requests on web", r, len(w.web.Pulls()))
+	}
+	if n := branchCreatingEvents(w, wi); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+}
+
+// Someone creating web's task branch between dude's read and its create
+// makes GitHub answer 422 "Reference already exists": the person's commit
+// stays, no pull request opens on web, and a person is asked.
+func TestASiblingBranchSomeoneCreatedFirstIsNeverOverwritten(t *testing.T) {
+	w, wi := siblingFixWorld(t)
+	branch := w.gh.Pull(1).Head
+	var pushed, candidate atomic.Value
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if pushed.Load() != nil {
+				return 0
+			}
+			sha, ok := createRefSHA(r, branch)
+			if !ok {
+				return 0
+			}
+			out, err := exec.Command("git", "-C", w.web.Repo, "rev-parse", sha+"^").Output()
+			if err != nil {
+				t.Errorf("parent of the candidate's head: %v", err)
+				return 0
+			}
+			parent := strings.TrimSpace(string(out))
+			if out, err := exec.Command("git", "-C", w.web.Repo, "update-ref", "refs/heads/"+branch, parent, "").CombinedOutput(); err != nil {
+				t.Errorf("push web's branch: %v %s", err, out)
+			}
+			candidate.Store(sha)
+			pushed.Store(parent)
+			return 0
+		}
+	})
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("web's pull request in review, or a person asked", func() bool {
+		w.sync()
+		return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" || w.taskStatus(wi) == "awaiting_input"
+	})
+	person, _ := pushed.Load().(string)
+	checked, _ := candidate.Load().(string)
+	if person == "" {
+		t.Fatal("web's branch was never created through the API")
+	}
+	if s, r := w.taskStatus(wi), w.escalationReason(wi); s != "awaiting_input" || r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("status %s, escalated %q", s, r)
+	}
+	if at := w.web.SHA(branch); at != person {
+		t.Errorf("web's branch at %s, want the person's %s", at, person)
+	}
+	if n := len(w.web.Pulls()); n != 0 {
+		t.Errorf("%d pull requests on web", n)
+	}
+	if n := branchCreatingEvents(w, wi); n != 1 {
+		t.Errorf("%d %s events, want 1", n, delivery.EvTaskBranchCreating)
+	}
+	detail := lastQuestionDetail(t, w, wi)
+	if detail["repo"] != "web" || detail["found"] != person || detail["candidate"] != checked {
+		t.Errorf("refusal %v, want web found at %s with candidate %s", detail, person, checked)
 	}
 }

@@ -18,7 +18,7 @@ import json
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, query, sign_in, wait_until
+from helpers import ApiClient, finish_simplifier_review, query, sign_in, wait_until
 
 
 def _said(client: ApiClient, run_id: str) -> list[str]:
@@ -94,6 +94,8 @@ def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str,
 
     # Straight to the gate: refused until a review Run finishes on the head.
     _say(client, task["id"], "Simplify, then ask me.", _tool("start_phase", {"phase": "simplify"}))
+    # The simplifier's diff is reviewed whoever decides; the conductor triages that round.
+    finish_simplifier_review(client, owner_dsn, task["id"])
     wait_until(lambda: _point(client, task["id"]) == "before_pull_request", timeout=120, message="never reached the gate")
     # The simplifier's head: the conductor's commit is under it, reviewed or not; publish again on top.
     _say(client, task["id"], "One more nit.",
@@ -116,6 +118,8 @@ def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str,
     wait_until(lambda: not query(owner_dsn, "SELECT id FROM review_findings WHERE task_id = %s AND status = 'open'", (task["id"],)),
                timeout=60, message="the finding was never dismissed")
     _say(client, task["id"], "On.", _tool("decide", {"action": "next"}))
+    # Past the review the simplifier runs again, and its diff is reviewed.
+    finish_simplifier_review(client, owner_dsn, task["id"])
     wait_until(lambda: _point(client, task["id"]) == "before_pull_request", timeout=120, message="never back at the gate")
     _say(client, task["id"], "Shall we open it now?", _tool("decide", {"action": "ask_person"}))
     wait_until(lambda: query(owner_dsn, "SELECT id FROM questions WHERE task_id = %s AND pr_gate_heads IS NOT NULL", (task["id"],)),

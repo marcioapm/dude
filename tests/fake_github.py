@@ -596,6 +596,7 @@ class FakeGitHub:
                     "mergeable": not self.github._conflicting(pr),
                     "mergeable_state": "dirty" if self.github._conflicting(pr) else "clean",
                     "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
+                    "body": pr.body,
                     "user": {"login": pr.author, "type": "Bot" if pr.author.endswith("[bot]") else "User"},
                 }
 
@@ -620,6 +621,17 @@ class FakeGitHub:
                                     c["body"], c["updated_at"] = body.get("body", ""), _now()
                                     return self._send(200, c)
                     return self._send(404, {"message": "Not Found"})
+                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/(?:pulls|issues)/(\d+)", self.path):
+                    # An edit of the pull request: its description, as both endpoints take it, or closing it.
+                    body, pr = self._body(), self.github.pulls.get(int(m[1]))
+                    if pr is None:
+                        return self._send(404, {"message": "Not Found"})
+                    with self.github._lock:
+                        if "body" in body:
+                            pr.body = body["body"]
+                        if body.get("state") == "closed" and pr.merged_at is None:
+                            pr.state = "closed"
+                    return self._send(200, self._pull_json(pr))
                 if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/hooks/(\d+)", self.path):
                     body = self._body()
                     with self.github._lock:
@@ -862,6 +874,11 @@ class FakeGitHub:
                     return self._send(200, {"total_count": len(runs), "workflow_runs": runs})
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
+                if path.startswith(f"{prefix}/git/ref/heads/"):
+                    sha = self.github.branch_sha(path[len(f"{prefix}/git/ref/heads/"):])
+                    if not sha:
+                        return self._send(404, {"message": "Not Found"})
+                    return self._send(200, {"ref": path[len(f"{prefix}/git/ref/"):], "object": {"sha": sha, "type": "commit"}})
                 if path == f"{prefix}/branches":
                     # As GitHub lists them: by name, a page at a time, and an empty page past the last.
                     from urllib.parse import parse_qs

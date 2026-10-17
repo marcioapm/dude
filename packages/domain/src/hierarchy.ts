@@ -675,6 +675,17 @@ export const runSchema = z.object({
   /** The Run that replaced it when it was restarted; null for none. */
   replacedBy: z.string().nullable().default(null),
   /**
+   * The findings the workflow chose for it: those a fix addresses, or
+   * those a re-review or a test judges.
+   */
+  findingIds: z.array(z.string()).default([]),
+  /**
+   * A review limited to a range: what it checks — "simplify" (the
+   * simplifier's diff) or "pull_request_fix" (a fix for an open pull
+   * request, on its candidate branch). Null reviews the whole branch.
+   */
+  reviewOf: z.enum(["simplify", "pull_request_fix"]).nullable().catch(null).default(null),
+  /**
    * Where its start is while it starts, from its latest `run.stage`: lux's
    * stage, since when, and the placement's epoch. Null once lux reports it
    * running, when it is not live, or from a lux that reports no stages.
@@ -840,13 +851,17 @@ export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 
 /**
  * A test Run's verdict: the heads (repository → commit) it tested, and
- * whether the task's work has moved past them since (`stale`).
+ * whether what the branch holds has moved past them since (`stale`).
+ * While a pull request's fix is checked on its candidate branch, the
+ * candidate's own verdict is `candidate`: not on the pull request yet,
+ * and never stale for it.
  */
 export const verificationSchema = z.object({
   runId: z.string(),
   attempt: z.number().int(),
   heads: z.record(z.string(), z.string()),
   stale: z.boolean(),
+  candidate: z.boolean().optional(),
   createdAt: z.string(),
   criteria: z.array(criterionVerdictSchema),
 });
