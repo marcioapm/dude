@@ -103,7 +103,8 @@ func TestGoldenToolLists(t *testing.T) {
 	golden(t, "tool-server-instructions", serverInstructionsGolden(t))
 }
 
-// serverInstructions is what the MCP server tells a client on initialize.
+// serverInstructionsGolden is the instructions an MCP client receives on
+// initialize, read through a real connection to the server.
 func serverInstructionsGolden(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
