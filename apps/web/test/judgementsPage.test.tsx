@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { JudgementCall, JudgementCallDetail, JudgementCallsResponse, JudgementSettings, JudgementTestResult } from "@dude/domain";
-import { act, click, mount, until } from "./dom.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { MODEL_TIERS } from "../src/fixtures/data.ts";
 import { JudgementsPage, useJudgementSettings } from "../src/screens/JudgementsSettings.tsx";
@@ -214,6 +214,88 @@ describe("the Judgements page", () => {
     expect(picker.disabled).toBe(true);
     expect(container.querySelectorAll("[data-testid=judgement-test]").length).toBe(0);
     expect(container.querySelector("[data-testid=judgement-tier-requests]")).not.toBeNull();
+  });
+});
+
+describe("Recent judgements' filter and paging", () => {
+  type Query = Parameters<FixtureClient["judgements"]>[0];
+  const ESCALATION: JudgementCall = { ...CALL, id: "mcl_e", asker: "delivery.escalation", question: "Does this question need a person?" };
+  const OLDER: JudgementCall = { ...CALL, id: "mcl_old", question: "An older question?" };
+  const page = (calls: JudgementCall[], next: string | null, first = true): JudgementCallsResponse => ({
+    calls, next,
+    summary: first ? { calls: 3, since: new Date().toISOString() } : null,
+    askers: first ? ["delivery.comment", "delivery.escalation"] : null,
+  });
+
+  /** Answers each query when the test says, so responses can land out of order. */
+  class Paging extends Judging {
+    queries: Query[] = [];
+    pending: Array<{ query: Query; answer: (r: JudgementCallsResponse) => void }> = [];
+    override judgements(query: Query = {}): Promise<JudgementCallsResponse> {
+      this.queries.push(query);
+      return new Promise((answer) => this.pending.push({ query, answer }));
+    }
+    async answer(at: number, r: JudgementCallsResponse) {
+      await act(async () => {
+        this.pending[at]!.answer(r);
+        await Promise.resolve();
+      });
+    }
+  }
+
+  const rowIds = (container: HTMLElement) =>
+    [...container.querySelectorAll<HTMLElement>("[data-testid=judgement-row]")].map((r) => r.getAttribute("data-call"));
+
+  async function pickAsker(container: HTMLElement, value: string) {
+    await press(container.querySelector("[aria-label='Asked by']")!);
+    await click(await until(() => document.querySelector<HTMLElement>(`[role=option][data-value="${value}"]`), value));
+  }
+
+  test("picking an asker asks for that asker's calls and shows them", async () => {
+    const client = new Paging("a");
+    const container = await show(client);
+    await until(() => (client.pending.length === 1 ? true : null), "the first query");
+    await client.answer(0, page([CALL, ESCALATION], null));
+    await until(() => (rowIds(container).length === 2 ? true : null), "both rows");
+    await pickAsker(container, "delivery.escalation");
+    await until(() => (client.pending.length === 2 ? true : null), "the filtered query");
+    expect(client.queries[1]).toEqual({ asker: "delivery.escalation", before: undefined });
+    await client.answer(1, page([ESCALATION], null));
+    await until(() => (rowIds(container).length === 1 ? true : null), "the filtered rows");
+    expect(rowIds(container)).toEqual(["mcl_e"]);
+    expect(container.textContent).toContain("Last 7 days · 3 calls");
+  });
+
+  test("Show older asks for the page before the last row, and appends it, keeping the summary", async () => {
+    const client = new Paging("a");
+    const container = await show(client);
+    await until(() => (client.pending.length === 1 ? true : null), "the first query");
+    await client.answer(0, page([CALL, ESCALATION], "mcl_e"));
+    const older = await until(() => [...container.querySelectorAll("button")].find((b) => b.textContent === "Show older"), "Show older");
+    await click(older);
+    expect(client.queries[1]).toEqual({ asker: undefined, before: "mcl_e" });
+    await client.answer(1, page([OLDER], null, false));
+    await until(() => (rowIds(container).length === 3 ? true : null), "the appended rows");
+    expect(rowIds(container)).toEqual(["mcl_1", "mcl_e", "mcl_old"]);
+    expect(container.textContent).toContain("Last 7 days · 3 calls");
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Show older")).toBe(false);
+  });
+
+  test("a response for an earlier filter that lands last is ignored", async () => {
+    const client = new Paging("a");
+    const container = await show(client);
+    await until(() => (client.pending.length === 1 ? true : null), "the first query");
+    await client.answer(0, page([CALL, ESCALATION], null));
+    await until(() => (rowIds(container).length === 2 ? true : null), "both rows");
+    await pickAsker(container, "delivery.comment");
+    await until(() => (client.pending.length === 2 ? true : null), "the comment query");
+    await pickAsker(container, "delivery.escalation");
+    await until(() => (client.pending.length === 3 ? true : null), "the escalation query");
+    await client.answer(2, page([ESCALATION], null));
+    await until(() => (rowIds(container).join() === "mcl_e" ? true : null), "the escalation rows");
+    await client.answer(1, page([CALL], null));
+    await settle();
+    expect(rowIds(container)).toEqual(["mcl_e"]);
   });
 });
 

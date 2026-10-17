@@ -4,7 +4,7 @@
  * and every judgement call it has made in the last 7 days.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Duration,
   EntityLine,
@@ -212,14 +212,22 @@ function RecentJudgements({ client }: { client: ApiClient }) {
   const [data, setData] = useState<Shown | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<JudgementCall | null>(null);
+  // Bumped whenever the filter changes: a response asked for under an earlier one is dropped.
+  const generation = useRef(0);
   const load = useCallback((before?: string) => {
+    const asked = generation.current;
     client.judgements({ asker: asker === EVERYONE ? undefined : asker, before }).then(
-      (next) => setData((have) => (before && have
+      (next) => asked === generation.current && setData((have) => (before && have
         ? { ...have, calls: [...have.calls, ...next.calls], next: next.next }
         : { ...next, summary: next.summary ?? { calls: next.calls.length, since: "" }, askers: next.askers ?? [] })),
-      (err: unknown) => setProblem(errorText(err)));
+      (err: unknown) => asked === generation.current && setProblem(errorText(err)));
   }, [client, asker]);
-  useEffect(() => load(), [load]);
+  useEffect(() => {
+    load();
+    return () => {
+      generation.current++;
+    };
+  }, [load]);
 
   let body;
   if (problem) body = <Callout tone="danger">{problem}</Callout>;
