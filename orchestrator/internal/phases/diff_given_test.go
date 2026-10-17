@@ -170,6 +170,39 @@ func TestTheDiffIgnoresCheckoutReplacementObjects(t *testing.T) {
 	}
 }
 
+func TestTheFinalHookIgnoresCheckoutReplacementObjects(t *testing.T) {
+	g := newGivenRepo(t, "task")
+	s := g.startedAt
+	m := g.someoneCommits("main", "m.txt", "merged base\n")
+	g.git("merge", "-q", "--no-edit", "lux/main")
+	a := g.commit(g.dir, "own.txt", "the run's work\n", "A")
+	tree := g.git("rev-parse", a+"^{tree}")
+	r := g.in(g.dir, "commit-tree", tree, "-p", s, "-m", "replacement")
+	g.git("replace", m, r)
+
+	// Stand in only for the authenticated endpoint, not its returned SHA
+	// or any of the hook's Git operations.
+	dir := t.TempDir()
+	dude := filepath.Join(dir, "dude")
+	if err := os.WriteFile(dude, []byte("#!/bin/sh\nprintf 'target "+m+"\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(diffScript, "/usr/local/bin/dude", dude)
+	artifacts := filepath.Join(dir, "artifacts")
+	cmd := exec.Command("sh", "-c", script, "dude-diff", "artifacts", "target", g.dir, "task")
+	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS="+artifacts)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("hook: %v %s", err, out)
+	}
+	patch, err := os.ReadFile(filepath.Join(artifacts, finalDiffDir, "target.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := diffPaths(string(patch)); !slices.Equal(got, []string{"own.txt"}) {
+		t.Fatalf("replacement hid the Run's final work: %v\n%s", got, patch)
+	}
+}
+
 // What cannot be folded in leaves the diff as it is today, byte for byte:
 // a given commit the checkout lacks, or a ref it never had; one fetched but
 // not merged; a merge of the start with it that conflicts; and a git
