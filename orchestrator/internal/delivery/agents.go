@@ -196,8 +196,12 @@ func render(t *template.Template, data any) string {
 // agentTexts renders each template under prefix ("contracts/review-focus/")
 // once, keyed by the rest of its name. Each of want must be among them.
 func agentTexts(prefix string, want ...string) map[string]string {
+	return agentTextsIn(agentTemplates, prefix, want...)
+}
+
+func agentTextsIn(set *template.Template, prefix string, want ...string) map[string]string {
 	out := map[string]string{}
-	for _, t := range agentTemplates.Templates() {
+	for _, t := range set.Templates() {
 		if key, ok := strings.CutPrefix(t.Name(), prefix); ok {
 			out[key] = render(t, nil)
 		}

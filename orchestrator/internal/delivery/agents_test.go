@@ -72,6 +72,23 @@ func TestAMissingIncludeNamesItsFile(t *testing.T) {
 	}
 }
 
+// A key Go needs under a prefix that has no file panics, naming the file.
+func TestAMissingAgentTextNamesItsFile(t *testing.T) {
+	set, err := parseAgentTemplates(fstest.MapFS{"agents/contracts/review-range/simplify.md": {Data: []byte("Simplify.\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := agentTextsIn(set, "contracts/review-range/", "simplify"); got["simplify"] != "Simplify." {
+		t.Errorf("agentTexts of a present key: %q", got)
+	}
+	defer func() {
+		if r := recover(); fmt.Sprint(r) != "agents/contracts/review-range/pull-request-fix.md is missing" {
+			t.Errorf("agentTexts without a wanted key: %v", r)
+		}
+	}()
+	agentTextsIn(set, "contracts/review-range/", "simplify", "pull-request-fix")
+}
+
 // A name Go renders that has no file panics, naming the file.
 func TestAMissingTemplateNamesItsFile(t *testing.T) {
 	defer func() {
