@@ -96,6 +96,8 @@ const NO_PSEUDO = new Set(["img", "input", "textarea", "select", "br", "hr", "wb
 function pseudoSpan(el: Element, which: "::before" | "::after", win: Window, count: () => void): Element | null {
   const cs = win.getComputedStyle(el, which);
   const content = cs.getPropertyValue("content");
+  // fetchedUrl, not only contentParts: contentParts stops at the first top-level `/` it reads, and a `/` inside
+  // a function, as in `oklch(0.5 0.1 30 / 0.5)`, ends it before a remote url() later in the value.
   if (!content || content === "none" || content === "normal" || fetchedUrl(content)) return null;
   const parts = contentParts(content, el, cs.getPropertyValue("quotes") || "auto");
   // `content` is dropped from the span's style: on an element, a url() there would replace it.

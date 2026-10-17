@@ -193,3 +193,11 @@ test("a pseudo whose content names a remote url() with a quote in it is left out
   const win = page(`<p id="it">a</p>`, { "#it|::before": `content: url("https://cdn.test/a'b.png")` });
   expect((await clone(win)).querySelectorAll("span").length).toBe(0);
 });
+
+test("a pseudo whose remote url() follows a `/` inside a function is left out", async () => {
+  // As Chrome computes it: contentParts would stop at the `/` in oklch() and return only "a".
+  const win = page(`<p id="it">a</p>`, {
+    "#it|::before": `content: "a" linear-gradient(oklch(0.5 0.1 30 / 0.5), red) "b" url("https://cdn.test/x.png")`,
+  });
+  expect((await clone(win)).querySelectorAll("span").length).toBe(0);
+});
