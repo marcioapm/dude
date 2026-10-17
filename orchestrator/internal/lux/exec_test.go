@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -87,5 +88,40 @@ func TestAStreamThatEndsWithAnErrorIsAnError(t *testing.T) {
 	_, err := lux.New(url, "k").Exec(context.Background(), "run_1", []string{"true"})
 	if err == nil || !strings.Contains(err.Error(), "host disconnected") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// An exec lux accepts and never answers ends at Exec's own deadline when
+// its caller set none, as a retryable error; a caller's shorter deadline
+// governs instead.
+func TestAnExecLuxNeverAnswersEndsAtADeadline(t *testing.T) {
+	url := execServer(t, func(ctx context.Context, ws *websocket.Conn, _ []string) {
+		<-ctx.Done()
+	})
+	client := lux.New(url, "k").WithExecTimeout(300 * time.Millisecond)
+
+	start := time.Now()
+	_, err := client.Exec(context.Background(), "run_1", []string{"true"})
+	took := time.Since(start)
+	e, ok := lux.AsError(err)
+	if !ok || e.Code != "timeout" || !e.Retryable() || !strings.Contains(e.Message, "timed out after 300ms") {
+		t.Errorf("got %v, want a retryable timeout", err)
+	}
+	if took < 300*time.Millisecond || took > 5*time.Second {
+		t.Errorf("returned after %v, want about 300ms", took)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start = time.Now()
+	_, err = client.Exec(ctx, "run_1", []string{"true"})
+	if took := time.Since(start); took > 250*time.Millisecond {
+		t.Errorf("returned after %v, past the caller's 50ms", took)
+	}
+	if e, ok := lux.AsError(err); ok && e.Code == "timeout" {
+		t.Errorf("the caller's deadline was reported as Exec's own: %v", err)
+	}
+	if ctx.Err() == nil || err == nil {
+		t.Errorf("got %v with the caller's ctx %v", err, ctx.Err())
 	}
 }
