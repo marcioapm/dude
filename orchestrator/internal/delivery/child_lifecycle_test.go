@@ -487,22 +487,28 @@ func TestChildParentFenceIsFamilySelective(t *testing.T) {
 		('wi_two',$1,'prj_other',1,'Two','G','running')`, w.org)
 	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES
 		('parent_two',$1,'prj_other','wi_two',1,'conductor','completed')`, w.org)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES
+		('parent_same_task',$1,'prj_life','wi_life',1,'conductor','completed')`, w.org)
 	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role,source_kind,parent_run_id,child_profile,child_capabilities) VALUES
 		('child_one',$1,'prj_life','wi_life',1,'running','investigate','investigator','task_conductor','run_parent','investigator','{}'),
+		('child_same_task',$1,'prj_life','wi_life',1,'running','investigate','investigator','task_conductor','parent_same_task','investigator','{}'),
 		('child_two',$1,'prj_other','wi_two',1,'running','investigate','investigator','task_conductor','parent_two','investigator','{}'),
 		('child_unrelated',$1,'prj_other','wi_two',1,'running','investigate','investigator','task_conductor','parent_two','investigator','{}')`, w.org)
 	if err := w.s.EndChildParent(w.ctx, w.org, "wi_life", "run_parent"); err != nil {
 		t.Fatal(err)
 	}
-	var one, two, unrelated string
+	var one, same, two, unrelated string
 	if err := w.owner.QueryRow(w.ctx, `SELECT child_stop_reason FROM runs WHERE id='child_one'`).Scan(&one); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason,'') FROM runs WHERE id='child_same_task'`).Scan(&same); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason,''),COALESCE((SELECT child_stop_reason FROM runs WHERE id='child_unrelated'),'') FROM runs WHERE id='child_two'`).Scan(&two, &unrelated); err != nil {
 		t.Fatal(err)
 	}
-	if one != "parent-ended" || two != "" || unrelated != "" {
-		t.Fatalf("family fence %q %q %q", one, two, unrelated)
+	if one != "parent-ended" || same != "" || two != "" || unrelated != "" {
+		t.Fatalf("family fence %q %q %q %q", one, same, two, unrelated)
 	}
 }
 
