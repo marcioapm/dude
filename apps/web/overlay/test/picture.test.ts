@@ -80,26 +80,26 @@ test("a data: image in content is drawn; an image only a request could get leave
   expect(out.querySelectorAll("img").length).toBe(1);
 });
 
+// A page whose #it holds n empty <i> elements.
+const items = (n: number, pseudos?: Record<string, string>) => page(`<div id="it">${"<i></i>".repeat(n)}</div>`, pseudos);
+
 test("pseudo spans count against the 2,000-node cap", async () => {
-  const items = "<i></i>".repeat(1_998);
-  const plain = page(`<div id="it">${items}</div>`);
-  expect((await clone(plain)).childElementCount).toBe(1_998);
-  const marked = page(`<div id="it">${items}</div>`, { "i|::before": `content: "•"` });
+  expect((await clone(items(1_998))).childElementCount).toBe(1_998);
+  const marked = items(1_998, { "i|::before": `content: "•"` });
   await expect(clone(marked)).rejects.toThrow(new PictureError("it is too large to draw"));
 });
 
 test("a pseudo's data: images count against the cap too", async () => {
   // 1 + 999 elements + 999 spans is under 2,000; their 999 images take it over.
-  const items = "<i></i>".repeat(999);
-  const text = page(`<div id="it">${items}</div>`, { "i|::before": `content: "•"` });
+  const text = items(999, { "i|::before": `content: "•"` });
   expect((await clone(text)).querySelectorAll("span").length).toBe(999);
-  const icons = page(`<div id="it">${items}</div>`, { "i|::before": `content: url("${DATA}")` });
+  const icons = items(999, { "i|::before": `content: url("${DATA}")` });
   await expect(clone(icons)).rejects.toThrow(new PictureError("it is too large to draw"));
 });
 
 test("the walk yields to the page every 200 counted nodes, pseudo spans included", async () => {
   // 1 + 600 × (element, ::before, ::after) = 1,801 counted nodes: at least 8 pauses.
-  const win = page(`<div id="it">${"<i></i>".repeat(600)}</div>`, { "i|::before": `content: "a"`, "i|::after": `content: "b"` });
+  const win = items(600, { "i|::before": `content: "a"`, "i|::after": `content: "b"` });
   let frames = 0;
   win.requestAnimationFrame = (cb: () => void) => { frames++; return win.setTimeout(cb, 0); };
   expect((await clone(win)).querySelectorAll("span").length).toBe(1_200);
