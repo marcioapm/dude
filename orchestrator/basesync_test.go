@@ -291,7 +291,8 @@ func TestIntegrationRejectsAStaleConflictAndKeepsFeedback(t *testing.T) {
 // A sync can read a pull request as behind while it already conflicts: its
 // mergeability and its distance from the base are two reads, and the base
 // may move between them. GitHub refuses that update (422); the refusal is
-// recorded once and the next sync, reading the conflict, integrates.
+// recorded once, later syncs of that head ask for no second update, and
+// the sync that reads the conflict integrates.
 func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
@@ -305,11 +306,34 @@ func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 			return 0
 		}
 	})
-	w.until("integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
-		AND payload->>'action' = 'update-branch' AND payload->>'refused' LIKE '%merge conflict%'`, wi); n != 1 {
+	refused := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'update-branch' AND payload->>'refused' LIKE '%merge conflict%'`
+	w.until("the refused update", func() bool { w.sync(); return w.count(refused, wi) == 1 })
+	branch := w.gh.Pull(1).Head
+	head := w.gh.SHA(branch)
+	// Unpumped, the workflow stays at awaitPullRequest on the refused head.
+	// Read clean again, each sync sees it behind, as the refused one did,
+	// and must not ask GitHub a second time.
+	for range 2 {
+		w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+		w.sync()
+	}
+	var updates int
+	w.gh.Set(func(s *fakegithub.Server) {
+		for _, n := range s.Updates {
+			if n == 1 {
+				updates++
+			}
+		}
+	})
+	if updates != 1 || w.gh.SHA(branch) != head {
+		t.Fatalf("%d update-branch requests for head %s (now %s), want 1", updates, head, w.gh.SHA(branch))
+	}
+	if n := w.count(refused, wi); n != 1 {
 		t.Fatalf("%d refused updates recorded", n)
 	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
 	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
 	w.until("integrated and waiting again", func() bool {
 		w.sync()
