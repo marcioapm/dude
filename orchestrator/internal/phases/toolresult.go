@@ -99,19 +99,29 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 			continue
 		}
 		if out["withheld"] == true {
-			n, _ := out["bytes"].(int)
-			size += n
+			size += byteCount(out["bytes"])
 			continue
 		}
 		head, _ := out["head"].(string)
 		tail, _ := out["tail"].(string)
-		omitted, _ := out["omittedBytes"].(int)
-		size += len(head) + len(tail) + omitted
+		size += len(head) + len(tail) + byteCount(out["omittedBytes"])
 	}
 	for _, k := range []string{"output", "stdout", "stderr"} {
 		delete(payload, k)
 	}
 	payload["output"] = map[string]any{"bytes": size, "withheld": true, "withheldBy": "name"}
+}
+
+// byteCount is a recorded byte count: an int as capOutput writes it, a
+// float64 as a payload decoded from JSON has it.
+func byteCount(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 // capOutput keeps output whole up to the limit, and otherwise its first and
