@@ -16,6 +16,21 @@
 -- or task impossible, whatever the policy lets a transaction write. Tasks
 -- are in tasks (work_items before 026). 139 and 140 built the unique
 -- indexes concurrently; attaching one holds the table's lock only briefly.
+-- A build interrupted mid-way leaves its index INVALID, which IF NOT EXISTS
+-- then skips on a retry and UNIQUE USING INDEX refuses: rebuild it here, in
+-- this transaction, under a SHARE lock (reads go on, writes wait). Only a
+-- crashed 139 or 140 takes this path.
+DO $$
+DECLARE
+  name text;
+BEGIN
+  FOREACH name IN ARRAY ARRAY['tasks_id_organization_id_key', 'model_tiers_id_organization_id_key'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = to_regclass(name) AND NOT indisvalid) THEN
+      EXECUTE format('REINDEX INDEX %I', name);
+    END IF;
+  END LOOP;
+END
+$$;
 ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_id_organization_id_key UNIQUE USING INDEX model_tiers_id_organization_id_key;
 ALTER TABLE tasks ADD CONSTRAINT tasks_id_organization_id_key UNIQUE USING INDEX tasks_id_organization_id_key;
 

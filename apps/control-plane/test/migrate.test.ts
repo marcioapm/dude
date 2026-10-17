@@ -716,6 +716,41 @@ test("139 and 140 build tasks' and tiers' (id, organization_id) keys outside a t
   }
 }, 120_000);
 
+test("141 rebuilds a key an interrupted 139 left invalid, and 139 and 140 run again after a crash before their record", async () => {
+  const { url, sql } = await migratedBefore("141");
+  const builder = await sql.reserve();
+  const holder = await sql.reserve();
+  try {
+    // A concurrent build waits out every older snapshot; cancelled while it
+    // waits, it leaves its index in the catalog, INVALID, as a killed 139 does.
+    await sql`DROP INDEX tasks_id_organization_id_key`;
+    await holder`BEGIN ISOLATION LEVEL REPEATABLE READ`;
+    await holder`SELECT count(*) FROM tasks`;
+    await builder`SET statement_timeout = '500ms'`;
+    const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
+    expect(await refusal(async () => await builder`CREATE UNIQUE INDEX CONCURRENTLY tasks_id_organization_id_key ON tasks (id, organization_id)`))
+      .toContain("statement timeout");
+    await holder`COMMIT`;
+    const validity = async () => [...await sql`SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname IN ('tasks_id_organization_id_key', 'model_tiers_id_organization_id_key') ORDER BY 1`];
+    expect(await validity()).toEqual([{ name: "model_tiers_id_organization_id_key", valid: true }, { name: "tasks_id_organization_id_key", valid: false }]);
+
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["141_model_calls.sql"]);
+    const keys = async () => [...await sql`SELECT c.conname AS name, i.indisvalid AS valid FROM pg_constraint c JOIN pg_index i ON i.indexrelid = c.conindid
+      WHERE c.contype = 'u' AND c.conname IN ('tasks_id_organization_id_key', 'model_tiers_id_organization_id_key') ORDER BY 1`];
+    const attached = [{ name: "model_tiers_id_organization_id_key", valid: true }, { name: "tasks_id_organization_id_key", valid: true }];
+    expect(await keys()).toEqual(attached);
+
+    await sql`DELETE FROM schema_migrations WHERE version IN ('139', '140')`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["139_tasks_id_org_idx.sql", "140_model_tiers_id_org_idx.sql"]);
+    expect(await keys()).toEqual(attached);
+  } finally {
+    builder.release();
+    holder.release();
+    await sql.end();
+  }
+}, 120_000);
+
 test("108 leaves a valid index on the directives that resend another, and only those, outside a transaction", async () => {
   const file = (await listMigrationFiles()).find((f) => f.version === "108");
   expect(file && outsideTransaction(await file.contents())).toBe(true);
