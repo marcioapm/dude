@@ -207,11 +207,6 @@ class CommentingOnAPreview(unittest.TestCase):
         pv.hover("button.greet")
         wait_ov(pv, "ov-label")
         self.assertIn("<GreetButton>", ov_text(pv, "ov-label"))
-        for drawn_theme in ("dark", "light"):
-            ov(pv, "(r, t) => r.querySelector('[data-overlay]').setAttribute('data-theme', t)", drawn_theme)
-            self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-highlight]')).borderTopColor"), ACCENT[drawn_theme])
-            self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-label]')).backgroundColor"), ACCENT[drawn_theme])
-        ov(pv, "r => r.querySelector('[data-overlay]').setAttribute('data-theme', 'dark')")
         shoot(pv, "overlay-hover", themes=False)
         # The narrow shot moved the pointer's element: back over the button.
         pv.hover("header.app-header")
@@ -388,13 +383,28 @@ class CommentingOnAPreview(unittest.TestCase):
         pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'dark'", timeout=10_000)
         self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor"), ACCENT["dark"])
+        # The picked element's outline and label take the accent of the theme dude sent, before and after dude switches.
+        ov_click(pv, "ov-comment")
+        wait_ov(pv, "ov-hint")
+        pv.hover("button.greet")
+        wait_ov(pv, "ov-label")
+        picked = lambda p: (  # noqa: E731
+            ov(p, "r => getComputedStyle(r.querySelector('[data-testid=ov-highlight]')).borderTopColor"),
+            ov(p, "r => getComputedStyle(r.querySelector('[data-testid=ov-label]')).backgroundColor"),
+        )
+        self.assertEqual(picked(pv), (ACCENT["dark"], ACCENT["dark"]))
         page.emulate_media(color_scheme="light")
         pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'light'", timeout=10_000)
+        self.assertEqual(picked(pv), (ACCENT["light"], ACCENT["light"]))
+        pv.keyboard.press("Escape")
+        pv.wait_for_function("() => !window.__ovRoot.querySelector('[data-testid=ov-hint]')")
         self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor"), ACCENT["light"])
         # The preview's own OS switching no longer moves it: dude decides now.
+        # Wait until the page has seen the change, then one frame for any listener's work to land.
         before_requests = list(self.overlay_requests)
         pv.emulate_media(color_scheme="dark")
-        pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'light'", timeout=2_000)
+        pv.wait_for_function("() => window.matchMedia('(prefers-color-scheme: dark)').matches === true", timeout=2_000)
+        pv.evaluate("() => new Promise((r) => requestAnimationFrame(() => r()))")
         self.assertEqual(theme(pv), "light")
         self.assertEqual(self.overlay_requests, before_requests)
         self.assertEqual(self.errors, [])
