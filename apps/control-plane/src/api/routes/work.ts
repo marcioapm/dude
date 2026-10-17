@@ -55,6 +55,12 @@ const TASK_SELECT = `
       'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
+  -- Lifecycle (migration 139): why a person ended it, and whether it is put away.
+  resolution, archived_at AS "archivedAt",
+  (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",
+  (SELECT person_ref(p) FROM people p WHERE p.id = tasks.archived_by) AS "archivedBy",
+  (SELECT cp.key_prefix || '-' || c.number FROM task_relations r JOIN tasks c ON c.id = r.to_task_id JOIN projects cp ON cp.id = c.project_id
+    WHERE r.from_task_id = tasks.id AND r.kind = 'duplicates') AS "duplicateOf",
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
@@ -361,13 +367,18 @@ async function recoverTask(ctx: RequestContext): Promise<Response> {
 async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
+  // Archived work is out of every everyday view: `archived=1` lists only it,
+  // newest archived first. TODO(tracking-work.md, "GET /v1/tasks"): the
+  // rest of the filters and keyset paging are Epic 3's.
+  const archived = ctx.url.searchParams.get("archived") === "1";
 
   const tasks = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks
       WHERE (${projectId}::text IS NULL OR project_id = ${projectId})
         AND (${status}::text IS NULL OR status::text = ${status})
-      ORDER BY created_at DESC
+        AND (archived_at IS NOT NULL) = ${archived}
+      ORDER BY ${archived ? scope.sql`archived_at DESC` : scope.sql`created_at DESC`}
       LIMIT 200`) as Array<Record<string, unknown>>;
   });
   return json({ tasks });

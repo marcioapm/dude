@@ -100,7 +100,7 @@ async function getRelations(ctx: RequestContext): Promise<Response> {
 interface EdgeRow {
   fromId: string;
   toId: string;
-  kind: "blocks" | "related";
+  kind: "blocks" | "related" | "duplicates";
   why: string | null;
   createdAt: string;
   person: string | null;
@@ -127,14 +127,15 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
     FROM tasks t JOIN projects p ON p.id = t.project_id ${scope.sql.unsafe(OWNER_JOIN)}
     WHERE t.id = ANY(${scope.sql.array(others, "text")}::text[])`) as Array<TaskRow & { title: string; projectName: string; merged: boolean }>;
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const out: TaskRelations = { blockedBy: [], blocks: [], related: [], autoStart: null,
+  const out: TaskRelations = { blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null,
     owner: here.ownerId ? { id: here.ownerId, name: here.ownerName ?? "" } : null };
   for (const e of edges) {
     const other = byId.get(e.fromId === here.id ? e.toId : e.fromId);
     if (!other) continue;
     const from = e.fromId === here.id ? here : other;
     const to = e.toId === here.id ? here : other;
-    const may = removal(e.kind, from, to, here, person);
+    // A duplicates edge is Close's and Reopen's: nobody removes it here.
+    const may = e.kind === "duplicates" ? { can: false, by: null } : removal(e.kind, from, to, here, person);
     const view: TaskRelationView = {
       task: { id: other.id, key: other.key, title: other.title, status: other.status,
         project: other.projectId !== here.projectId ? other.projectName : null,
@@ -144,8 +145,19 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
       createdAt: e.createdAt, why: e.why, canRemove: may.can, removableBy: may.by,
     };
     if (e.kind === "related") out.related.push(view);
+    else if (e.kind === "duplicates") (e.fromId === here.id ? out.duplicateOf : out.duplicatedBy).push(view);
     else if (e.toId === here.id) out.blockedBy.push(view);
     else out.blocks.push(view);
+  }
+  // What each task closed as a duplicate of this one blocked: it waits on this task now.
+  if (out.duplicatedBy.length > 0) {
+    const ids = out.duplicatedBy.map((d) => d.task.id);
+    const handed = (await scope.sql`
+      SELECT f.from_task_id AS "dupId", p.key_prefix || '-' || t.number AS key
+      FROM task_relations f JOIN tasks t ON t.id = f.to_task_id JOIN projects p ON p.id = t.project_id
+      WHERE f.kind = 'blocks' AND f.from_task_id = ANY(${scope.sql.array(ids, "text")}::text[])
+      ORDER BY t.project_id, t.number`) as Array<{ dupId: string; key: string }>;
+    for (const d of out.duplicatedBy) d.handedOver = handed.filter((h) => h.dupId === d.task.id).map((h) => h.key);
   }
   const auto = (await scope.sql`
     SELECT a.how, a.set_at AS at, p.id, p.name FROM task_auto_starts a JOIN people p ON p.id = a.set_by_person

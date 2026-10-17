@@ -290,6 +290,26 @@ func TestArchiveAndCloseAndArchive(t *testing.T) {
 	}
 }
 
+// A merge of the canonical task releases what its duplicate blocked: the
+// blocking it was handed is released by its merge, as its own would be.
+func TestTheCanonicalTasksMergeReleasesItsDuplicatesDependant(t *testing.T) {
+	w := newWorld(t)
+	canonical, dup, waiting := w.task(), w.task(), w.task()
+	w.blocks(dup, waiting)
+	ana := w.ownedBy(dup, "Ana")
+	if status, body := w.callAs(ana, "/internal/tasks/"+dup+"/close", map[string]any{"resolution": "duplicate", "duplicateOf": w.keyOf(canonical)}); status != 200 {
+		t.Fatalf("close as duplicate: %d %v", status, body)
+	}
+	w.mergeFor(canonical)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.unblocked' AND payload->>'by' = $2`,
+		waiting, w.keyOf(canonical)); n != 1 {
+		t.Fatalf("task.unblocked on the duplicate's dependant: %d", n)
+	}
+	if status, body := w.call("/internal/tasks/"+waiting+"/deliver", map[string]any{}); status != 201 {
+		t.Fatalf("deliver once the canonical task merged: %d %v", status, body)
+	}
+}
+
 // Who: the owner or an admin; another member 403 in the menu's words; a
 // request with no person (an agent's, a service's) 403.
 func TestOnlyTheOwnerOrAnAdminClosesOrArchives(t *testing.T) {

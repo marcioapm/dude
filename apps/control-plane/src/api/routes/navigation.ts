@@ -20,7 +20,7 @@
 import { peopleJson } from "./people.ts";
 import { escalationJson } from "./work.ts";
 import { DEFAULT_RUN_ROLE, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, isConductor, runLabel } from "@dude/domain";
-import type { Escalation, PersonRef, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
+import type { Escalation, PersonRef, RunStatus, SessionStatus, TaskResolution, TaskStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -48,6 +48,8 @@ interface TaskRow {
   epicId: string | null;
   title: string;
   status: string;
+  /** Why a person ended it, beside the status; null while it hasn't. */
+  resolution: TaskResolution | null;
   /** Everyone on it, the owner first. */
   people: PersonRef[];
   statusSince: string;
@@ -116,7 +118,7 @@ function sessionStatus(r: RunRow): SessionStatus {
 interface EdgeRow {
   fromId: string;
   toId: string;
-  kind: "blocks" | "related";
+  kind: "blocks" | "related" | "duplicates";
   fromKey: string;
   fromTitle: string;
   fromStatus: TaskStatus;
@@ -128,6 +130,7 @@ interface EdgeRow {
   toStatus: TaskStatus;
   toProject: string;
   toProjectName: string;
+  toMerged: boolean;
 }
 
 interface Related {
@@ -142,27 +145,44 @@ interface Related {
  * Each task's relations, from both ends of every edge: its blockers (open
  * unless merged), the tasks it blocks (open while they have not started),
  * and the keys it is related to. A task of another project is named with
- * its project; done with nothing merged is said.
+ * its project; done with nothing merged is said. A blocker closed as a
+ * duplicate is read as the task it duplicates, as task_blocked_by reads it
+ * (migration 140): that task's state, merged or not, is what holds.
  */
 function relationsByTask(edges: EdgeRow[]) {
-  const out = new Map<string, { blockedBy: Array<{ task: Related; open: boolean }>; blocks: Array<{ task: Related; open: boolean }>; related: string[] }>();
+  const out = new Map<string, { blockedBy: Array<{ task: Related; open: boolean }>; blocks: Array<{ task: Related; open: boolean }>; related: string[];
+    duplicateOf: string | null; duplicatedBy: string[] }>();
   const of = (id: string) => {
     let r = out.get(id);
-    if (!r) out.set(id, (r = { blockedBy: [], blocks: [], related: [] }));
+    if (!r) out.set(id, (r = { blockedBy: [], blocks: [], related: [], duplicateOf: null, duplicatedBy: [] }));
     return r;
   };
+  // The canonical task of each duplicate, as the edge's `to` end.
+  const canonical = new Map<string, EdgeRow>();
   for (const e of edges) {
+    if (e.kind !== "duplicates") continue;
+    canonical.set(e.fromId, e);
+    of(e.fromId).duplicateOf = e.toKey;
+    of(e.toId).duplicatedBy.push(e.fromKey);
+  }
+  for (const e of edges) {
+    if (e.kind === "duplicates") continue;
     if (e.kind === "related") {
       of(e.fromId).related.push(e.toKey);
       of(e.toId).related.push(e.fromKey);
       continue;
     }
-    const from: Related = { key: e.fromKey, title: e.fromTitle, status: e.fromStatus,
-      ...(e.fromProject !== e.toProject ? { project: e.fromProjectName } : {}),
-      ...(e.fromStatus === "done" && !e.fromMerged ? { unmerged: true } : {}) };
+    const c = canonical.get(e.fromId);
+    const blocker = c
+      ? { key: c.toKey, title: c.toTitle, status: c.toStatus, project: c.toProject, projectName: c.toProjectName, merged: c.toMerged }
+      : { key: e.fromKey, title: e.fromTitle, status: e.fromStatus, project: e.fromProject, projectName: e.fromProjectName, merged: e.fromMerged };
+    const from: Related = { key: blocker.key, title: blocker.title, status: blocker.status,
+      ...(blocker.project !== e.toProject ? { project: blocker.projectName } : {}),
+      ...(blocker.status === "done" && !blocker.merged ? { unmerged: true } : {}) };
     const to: Related = { key: e.toKey, title: e.toTitle, status: e.toStatus,
       ...(e.fromProject !== e.toProject ? { project: e.toProjectName } : {}) };
-    of(e.toId).blockedBy.push({ task: from, open: !e.fromMerged });
+    const waiting = of(e.toId).blockedBy;
+    if (!waiting.some((b) => b.task.key === from.key)) waiting.push({ task: from, open: !blocker.merged });
     of(e.fromId).blocks.push({ task: to, open: NOT_STARTED_STATUSES.includes(e.toStatus) });
   }
   return out;
@@ -188,8 +208,11 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
       SELECT id, name, ${sql.unsafe(PROJECT_IMAGE_URL)} AS "imageUrl" FROM projects ORDER BY name`) as ProjectRow[];
     if (projects.length === 0) return [];
 
+    // Archived epics and tasks are put away: out of the tree, the board and
+    // every count (tracking-work.md, "Archive"). Their edges still count
+    // below: an archived blocker still blocks.
     const epics = (await sql`
-      SELECT id, project_id AS "projectId", title FROM epics
+      SELECT id, project_id AS "projectId", title FROM epics WHERE archived_at IS NULL
       ORDER BY position, created_at`) as EpicRow[];
 
     // `statusSince` is when the task last changed status, read from the
@@ -197,7 +220,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // reasons that are not a column change.
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
-             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
+             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution,
              ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
@@ -215,7 +238,12 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              EXISTS (SELECT 1 FROM runs c WHERE c.task_id = w.id AND c.role = 'conductor' AND c.phase IS NULL
                AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')) AS "conductorLive"
       FROM tasks w JOIN projects p ON p.id = w.project_id
+      WHERE w.archived_at IS NULL
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
+    // The board's quiet "N archived", per project.
+    const archivedCounts = (await sql`
+      SELECT project_id AS "projectId", count(*)::int AS n FROM tasks WHERE archived_at IS NOT NULL
+      GROUP BY project_id`) as Array<{ projectId: string; n: number }>;
 
     const runs = (await sql`
       SELECT id, "taskId", attempt, status, phase, role, category,
@@ -272,7 +300,8 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         fp.name AS "fromProjectName",
         f.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = f.id AND pr.state = 'merged') AS "fromMerged",
         tp.key_prefix || '-' || t.number AS "toKey", t.title AS "toTitle", t.status AS "toStatus", t.project_id AS "toProject",
-        tp.name AS "toProjectName"
+        tp.name AS "toProjectName",
+        t.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged') AS "toMerged"
       FROM task_relations r
       JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id
       JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id
@@ -284,6 +313,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // -- assemble ----------------------------------------------------------
 
     const costByTask = new Map(costs.map((c) => [c.taskId, c.costUsd]));
+    const archivedByProject = new Map(archivedCounts.map((a) => [a.projectId, a.n]));
     const relations = relationsByTask(edges);
     const autoByTask = new Map(autoStarts.map((a) => [a.taskId, a]));
     const runsByTask = groupBy(runs, (r) => r.taskId);
@@ -307,6 +337,8 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         key: w.key,
         title: w.title,
         status: w.status,
+        ...(w.resolution ? { resolution: w.resolution } : {}),
+        ...(rel?.duplicateOf ? { duplicateOf: rel.duplicateOf } : {}),
         statusSince: w.statusSince,
         costUsd: costByTask.get(w.id) ?? 0,
         // Who is on it, the owner first: the person it waits on when an
@@ -322,7 +354,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         // What it holds up: not-started dependants, while it has not merged.
         blocks: w.merged ? [] : blocks,
         edges: { blockedBy: (rel?.blockedBy ?? []).map((b) => b.task.key), blocks: (rel?.blocks ?? []).map((b) => b.task.key),
-          related: rel?.related ?? [] },
+          related: rel?.related ?? [], ...(rel?.duplicatedBy.length ? { duplicatedBy: rel.duplicatedBy } : {}) },
         startable: notStarted && blockedBy.length === 0,
         autoStart: notStarted && auto ? { how: auto.how, by: auto.by, at: auto.at } : null,
         // Any member may start a task (the deliver and talk routes' callers).
@@ -357,6 +389,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         tasks: (tasksByEpic.get(e.id) ?? []).map(buildTask),
       })),
       tasks: (tasksByProject.get(p.id) ?? []).map(buildTask),
+      archivedCount: archivedByProject.get(p.id) ?? 0,
     }));
   });
 

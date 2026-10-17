@@ -17,7 +17,7 @@ import { blockedRefusal, blockerList, neverMergesRefusal, type AutoStartHow, typ
 import { ApiError, refusedBlockers, type ApiClient, type StartAnyway } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
-const NONE: TaskRelations = { blockedBy: [], blocks: [], related: [], autoStart: null, owner: null };
+const NONE: TaskRelations = { blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null, owner: null };
 
 /** A task's relations, read again whenever `version` moves. Null until the first read. */
 export function useRelations(client: ApiClient, taskId: string, version: number): { relations: TaskRelations | null; reload: () => void } {

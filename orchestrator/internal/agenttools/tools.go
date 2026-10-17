@@ -138,6 +138,8 @@ type listTasksIn struct {
 	Text      string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
 	Peers     bool   `json:"peers,omitempty" jsonschema:"your peers instead: the other tasks on your epic, each with its phase, live or parked, branch and head, files changed, its agent's last words and the messages it has waiting for you; your own task is marked self"`
 	Startable bool   `json:"startable,omitempty" jsonschema:"only tasks not started with nothing unmerged in front of them"`
+	Archived  bool   `json:"archived,omitempty" jsonschema:"include archived tasks, which are left out otherwise; each is marked archived"`
+	Closed    bool   `json:"closed,omitempty" jsonschema:"only tasks a person closed (won't do, duplicate, can't reproduce)"`
 }
 
 type taskOut struct {
@@ -145,7 +147,11 @@ type taskOut struct {
 	Key    string `json:"key"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
-	Epic   string `json:"epic,omitempty"`
+	// Why a person ended it: wont_do, duplicate, cant_reproduce, or
+	// nothing_to_merge (done, nothing merged); empty while it hasn't.
+	Resolution string `json:"resolution,omitempty"`
+	Archived   bool   `json:"archived,omitempty"`
+	Epic       string `json:"epic,omitempty"`
 	// "person", or the key of the task whose agent created it.
 	CreatedBy string `json:"createdBy"`
 	// This task is the caller's own.
@@ -164,17 +170,17 @@ type listTasksOut struct {
 // listTasks is the project's work, or with peers the caller's peers.
 func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (any, error) {
 	if in.Peers {
-		if strings.TrimSpace(in.Text) != "" || in.Startable {
-			return nil, refuse("peers lists your peers whole: leave text and startable out")
+		if strings.TrimSpace(in.Text) != "" || in.Startable || in.Archived || in.Closed {
+			return nil, refuse("peers lists your peers whole: leave text, startable, archived and closed out")
 		}
 		return listPeers(ctx, tx, c)
 	}
-	return projectTasks(ctx, tx, c, in.Text, in.Startable)
+	return projectTasks(ctx, tx, c, in)
 }
 
-func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, text string, startable bool) (listTasksOut, error) {
+func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTasksOut, error) {
 	out := listTasksOut{Epics: []string{}, Tasks: []taskOut{}}
-	rows, err := tx.Query(ctx, `SELECT title FROM epics WHERE project_id = $1 ORDER BY position, created_at`, c.ProjectID)
+	rows, err := tx.Query(ctx, `SELECT title FROM epics WHERE project_id = $1 AND archived_at IS NULL ORDER BY position, created_at`, c.ProjectID)
 	if err != nil {
 		return out, err
 	}
@@ -182,20 +188,23 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, text string, startab
 		return out, err
 	}
 	rows, err = tx.Query(ctx, `
-		SELECT w.id, p.key_prefix || '-' || w.number, w.title, w.status::text, COALESCE(e.title, ''),
+		SELECT w.id, p.key_prefix || '-' || w.number, w.title, w.status::text, COALESCE(w.resolution::text, ''), w.archived_at IS NOT NULL,
+		       COALESCE(e.title, ''),
 		       COALESCE((SELECT p.key_prefix || '-' || src.number FROM runs r JOIN tasks src ON src.id = r.task_id
 		                 WHERE r.id = w.created_by_run_id), 'person'),
 		       w.id = $2
 		FROM tasks w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
 		WHERE w.project_id = $1
 		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
-		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(text)))
+		  AND ($4 OR w.archived_at IS NULL)
+		  AND (NOT $5 OR (w.resolution IS NOT NULL AND w.resolution <> 'nothing_to_merge'))
+		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(in.Text)), in.Archived, in.Closed)
 	if err != nil {
 		return out, err
 	}
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (taskOut, error) {
 		var t taskOut
-		err := r.Scan(&t.ID, &t.Key, &t.Title, &t.Status, &t.Epic, &t.CreatedBy, &t.Yours)
+		err := r.Scan(&t.ID, &t.Key, &t.Title, &t.Status, &t.Resolution, &t.Archived, &t.Epic, &t.CreatedBy, &t.Yours)
 		return t, err
 	})
 	if err != nil {
@@ -211,10 +220,17 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, text string, startab
 	}
 	for _, t := range all {
 		t.TaskRelationsOut = rels[t.ID]
-		if startable && (t.TaskRelationsOut == nil || !t.Startable) {
+		if in.Startable && (t.TaskRelationsOut == nil || !t.Startable) {
 			continue
 		}
-		t.Line = strings.TrimSuffix(t.Key+" · "+t.Status+" · "+delivery.RelationLine(t.TaskRelationsOut), " · ")
+		head := t.Key + " · " + t.Status
+		if t.Resolution != "" {
+			head += " (" + strings.ToLower(delivery.ResolutionLabel[t.Resolution]) + ")"
+		}
+		if t.Archived {
+			head += " · archived"
+		}
+		t.Line = strings.TrimSuffix(head+" · "+delivery.RelationLine(t.TaskRelationsOut), " · ")
 		out.Tasks = append(out.Tasks, t)
 	}
 	return out, nil

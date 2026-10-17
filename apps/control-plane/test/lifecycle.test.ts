@@ -141,6 +141,58 @@ test("what Close could never accept is refused before the orchestrator is asked"
   expect(forwarded).toEqual([]);
 });
 
+type NavTask = { key: string; resolution?: string; duplicateOf?: string; blockedBy: Array<{ key: string }>; edges: { duplicatedBy?: string[] } };
+type NavTree = { projects: Array<{ id: string; archivedCount: number; tasks: NavTask[]; epics: Array<{ id: string; tasks: NavTask[] }> }> };
+
+test("archived tasks and epics are out of the navigation tree, counted for the board's hint; closed ones carry their resolution", async () => {
+  await owner`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_lc_a', ${ORG}, ${PROJECT}, 'Put away')`;
+  const inEpic = await task("aborted", "epc_lc_a");
+  await owner`UPDATE tasks SET resolution = 'wont_do', archived_at = now() WHERE id = ${inEpic}`;
+  await owner`UPDATE epics SET archived_at = now() WHERE id = 'epc_lc_a'`;
+  const archived = await task("done");
+  await owner`UPDATE tasks SET resolution = 'nothing_to_merge', archived_at = now() WHERE id = ${archived}`;
+  const closed = await task("aborted");
+  await owner`UPDATE tasks SET resolution = 'cant_reproduce' WHERE id = ${closed}`;
+  // An archived blocker still blocks; a duplicate's blocking is its canonical task's.
+  const waiting = await task();
+  await blocks(archived, waiting);
+  const canonical = await task();
+  const dup = await task("aborted");
+  await owner`UPDATE tasks SET resolution = 'duplicate' WHERE id = ${dup}`;
+  await owner`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+    VALUES (${ORG}, ${dup}, ${canonical}, 'duplicates', ${ana.personId})`;
+  const handed = await task();
+  await blocks(dup, handed);
+
+  const tree = (await (await call("GET", "/v1/navigation")).json()) as NavTree;
+  const project = tree.projects.find((p) => p.id === PROJECT)!;
+  const all = [...project.tasks, ...project.epics.flatMap((e) => e.tasks)];
+  const keys = all.map((t) => t.key);
+  expect(keys).not.toContain(key(archived));
+  expect(keys).not.toContain(key(inEpic));
+  expect(project.epics.map((e) => e.id)).not.toContain("epc_lc_a");
+  expect(project.archivedCount).toBe(2);
+  expect(all.find((t) => t.key === key(closed))!.resolution).toBe("cant_reproduce");
+  expect(all.find((t) => t.key === key(waiting))!.blockedBy.map((b) => b.key)).toEqual([key(archived)]);
+  expect(all.find((t) => t.key === key(handed))!.blockedBy.map((b) => b.key)).toEqual([key(canonical)]);
+  expect(all.find((t) => t.key === key(dup))!.duplicateOf).toBe(key(canonical));
+  expect(all.find((t) => t.key === key(canonical))!.edges.duplicatedBy).toEqual([key(dup)]);
+
+  // GET /v1/tasks leaves archived out; archived=1 lists only them.
+  const list = async (q: string) => ((await (await call("GET", `/v1/tasks?projectId=${PROJECT}${q}`)).json()) as { tasks: Array<{ key: string; resolution: string | null; archivedAt: string | null; duplicateOf: string | null }> }).tasks;
+  const everyday = await list("");
+  expect(everyday.map((t) => t.key)).not.toContain(key(archived));
+  expect(everyday.find((t) => t.key === key(dup))!.duplicateOf).toBe(key(canonical));
+  const put = await list("&archived=1");
+  expect(put.map((t) => t.key).sort()).toEqual([key(archived), key(inEpic)].sort());
+  expect(put.every((t) => t.archivedAt !== null)).toBe(true);
+
+  // The project page leaves the archived epic out of its list and names it apart.
+  const overview = (await (await call("GET", `/v1/projects/${PROJECT}/overview`)).json()) as { epics: Array<{ id: string }>; archivedEpics: Array<{ id: string }> };
+  expect(overview.epics.map((e) => e.id)).not.toContain("epc_lc_a");
+  expect(overview.archivedEpics.map((e) => e.id)).toEqual(["epc_lc_a"]);
+});
+
 test("path 8: a closed task's bare Run is refused as closed before its blockers, and allowed once reopened", async () => {
   const blocker = await task();
   const t = await task();

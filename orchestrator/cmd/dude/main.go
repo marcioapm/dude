@@ -2,8 +2,11 @@
 // part of, and dude's tools, from a shell — for the agent, and for any
 // script it runs.
 //
-//	dude task list [--text T] [--startable]
+//	dude task list [--text T] [--startable] [--archived | --closed]
 //	                                      the project's tasks, with their relations
+//	dude task close --resolution R [--duplicate-of KEY] [--remove-relations]
+//	dude task reopen | archive | unarchive
+//	                                      a person's decisions: say whose they are
 //	dude epic list                        the project's epics
 //	dude repo list | request NAME --reason R [--write]
 //	dude task create --title T --goal G [--epic E] [--criterion C]...
@@ -136,17 +139,33 @@ func run(args []string, out io.Writer) error {
 		text := fs.String("text", "", "only work mentioning this")
 		peers := fs.Bool("peers", false, "your peers: the other tasks on your epic, and what each is doing")
 		startable := fs.Bool("startable", false, "only tasks that can start: not started, nothing unmerged in front of them")
+		archived := fs.Bool("archived", false, "archived tasks too, which are left out otherwise")
+		closed := fs.Bool("closed", false, "only tasks a person closed: won't do, duplicate, can't reproduce")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		body := map[string]any{"text": *text}
-		if *peers {
-			body["peers"] = true
-		}
-		if *startable {
-			body["startable"] = true
+		for name, on := range map[string]bool{"peers": *peers, "startable": *startable, "archived": *archived, "closed": *closed} {
+			if on {
+				body[name] = true
+			}
 		}
 		return show(out, *asJSON, call("list_tasks", body))
+	case "task close", "task reopen", "task archive", "task unarchive":
+		// Not agent tools (tracking-work.md, "Agents and CLI"): closing and
+		// archiving are a person's decisions. The commands exist so an agent
+		// that reaches for them is told whose they are, without a call.
+		resolution := fs.String("resolution", "", "wont_do, duplicate or cant_reproduce")
+		fs.String("duplicate-of", "", "the task it duplicates, for a duplicate")
+		fs.Bool("remove-relations", false, "delete the blocks edges from it as it closes")
+		if _, err := parse(fs, rest); err != nil {
+			return err
+		}
+		verb := strings.TrimPrefix(cmd, "task ")
+		if verb == "close" && *resolution == "" {
+			return errors.New("usage: dude task close --resolution wont_do|duplicate|cant_reproduce [--duplicate-of KEY] [--remove-relations]")
+		}
+		return fmt.Errorf("%s is a person's decision, not an agent's: tell the task's owner what you found and why, and let them %s it from its page", verb, verb)
 	case "epic list":
 		if err := fs.Parse(rest); err != nil {
 			return err
@@ -846,7 +865,10 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
-  dude task list [--text T] [--startable]    the project's tasks, each with its relations on its line
+  dude task list [--text T] [--startable] [--archived | --closed]
+                                             the project's tasks, each with its relations on its line
+  dude task close --resolution R [--duplicate-of KEY] [--remove-relations] | reopen | archive | unarchive
+                                             a person's decisions: says whose they are
   dude epic list                             the project's epics, in priority order
   dude task create --title T --goal G [--epic E] [--criterion C]...
                    [--blocked-by KEY]... [--blocks KEY]... [--related KEY]...

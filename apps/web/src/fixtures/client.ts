@@ -457,7 +457,7 @@ export class FixtureClient extends ApiClient {
   }
   // The mockups' world has no relations; a test's client adds its own.
   override relations(): Promise<TaskRelations> {
-    return Promise.resolve({ blockedBy: [], blocks: [], related: [], autoStart: null, owner: null });
+    return Promise.resolve({ blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null, owner: null });
   }
   override recentPullRequests() {
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
