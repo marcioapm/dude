@@ -84,18 +84,13 @@ func maskNow(t *testing.T, s string, now time.Time) string {
 	return goldenNow.ReplaceAllString(s, "→ NOW UTC)")
 }
 
-// requireTestDatabase fails where dbtest.Open would skip: under -update a
-// skipped briefing golden would be left as it was while the run reports ok.
-func requireTestDatabase(t *testing.T) {
-	t.Helper()
-	if err := dbtest.Reachable(context.Background()); err != nil {
-		t.Fatalf("-update needs the test database to rewrite the briefing goldens: %v", err)
-	}
-}
-
 func newGoldenWorld(t *testing.T) goldenWorld {
+	// dbtest.Open skips without a database: under -update a skipped briefing
+	// golden would be left as it was while the run reports ok.
 	if *updateGoldens {
-		requireTestDatabase(t)
+		if err := dbtest.Reachable(context.Background()); err != nil {
+			t.Fatalf("-update needs the test database to rewrite the briefing goldens: %v", err)
+		}
 	}
 	app, owner := dbtest.Open(t)
 	w := goldenWorld{app: app, owner: owner, org: dbtest.Org(t, owner)}
