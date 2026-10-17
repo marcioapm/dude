@@ -335,3 +335,16 @@ func childResultText(summary []byte) (string, error) {
 	err := mustTemplate("contracts/child-result").Execute(&out, string(summary))
 	return out.String(), err
 }
+
+// The caller holds Chat before the parent Run and task rows.
+func MarkChildParentEndedTx(ctx context.Context, tx pgx.Tx, taskID, parentID string) error {
+	if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id=$1 AND task_id=$2 FOR UPDATE`, parentID, taskID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM tasks WHERE id=$1 FOR UPDATE`, taskID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false
+		WHERE parent_run_id=$1 AND task_id=$2 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, parentID, taskID)
+	return err
+}

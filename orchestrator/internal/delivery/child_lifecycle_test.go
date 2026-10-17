@@ -459,6 +459,67 @@ func TestChildNotificationStaysWithParent(t *testing.T) {
 	}
 }
 
+func TestChildHandOverFencesFamily(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("handover")
+	w.exec(`UPDATE runs SET status='failed' WHERE id='run_parent'`)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if err := LockChat(w.ctx, tx, "wi_life"); err != nil {
+			return err
+		}
+		_, err := HandOver(w.ctx, tx, w.in.Parent.Run, true)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason,'') FROM runs WHERE id=$1`, id).Scan(&reason); err != nil || reason != "parent-ended" {
+		t.Fatalf("handover left child live: %q %v", reason, err)
+	}
+}
+
+func TestChildTransportRecovery(t *testing.T) {
+	for _, state := range []string{"expired", "stale", "rollback"} {
+		t.Run(state, func(t *testing.T) {
+			w := newChildWorld(t)
+			id := w.child("recover")
+			if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+				t.Fatal(err)
+			}
+			switch state {
+			case "expired":
+				w.exec(`UPDATE child_result_outbox SET claimed_by='dead-worker',claimed_until=now()-interval '1 minute'`)
+			case "stale":
+				w.exec(`UPDATE runs SET replaced_by=id WHERE id='run_parent'`)
+			case "rollback":
+				w.exec(`CREATE FUNCTION reject_child_receipt() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''receipt unavailable''; END'`)
+				w.exec(`CREATE TRIGGER reject_receipt BEFORE UPDATE OF consumed_at ON child_result_outbox FOR EACH ROW EXECUTE FUNCTION reject_child_receipt()`)
+			}
+			n, err := (&Store{DB: w.s.DB}).EnqueueChildResults(w.ctx)
+			if state == "rollback" {
+				if err == nil || w.count("directives") != 0 {
+					t.Fatalf("rollback %d %v directives %d", n, err, w.count("directives"))
+				}
+				var untouched bool
+				if err := w.owner.QueryRow(w.ctx, `SELECT consumed_at IS NULL AND claimed_by IS NULL FROM child_result_outbox`).Scan(&untouched); err != nil || !untouched {
+					t.Fatalf("partial receipt %v %v", untouched, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if state == "stale" {
+				want = 0
+			}
+			if n != want || w.count("directives") != want {
+				t.Fatalf("%s enqueues %d directives %d", state, n, w.count("directives"))
+			}
+		})
+	}
+}
+
 func TestChildEndedParentRestart(t *testing.T) {
 	w := newChildWorld(t)
 	id := w.child("ended-parent")

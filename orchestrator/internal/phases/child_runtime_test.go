@@ -67,6 +67,35 @@ func TestChildParentEndCancellation(t *testing.T) {
 	}
 }
 
+func TestChildCancelReleasesLocks(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}',control='abort',status='running' WHERE id=$1`, w.run.ID)
+	entered, release := make(chan struct{}), make(chan struct{})
+	fake := w.onCallLux(nil)
+	fake.onCancel = func() { close(entered); <-release }
+	r := w.run
+	r.SourceKind = "task_conductor"
+	r.Status = "running"
+	r.Control = "abort"
+	done := make(chan error, 1)
+	go func() { _, err := w.s.advance(w.ctx, r); done <- err }()
+	<-entered
+	probe, err := w.owner.Begin(w.ctx)
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	_, probeErr := probe.Exec(w.ctx, `SELECT id FROM runs WHERE id=$1 FOR UPDATE NOWAIT`, r.ID)
+	_ = probe.Rollback(w.ctx)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if probeErr != nil {
+		t.Fatalf("cancel held child DB lock: %v", probeErr)
+	}
+}
+
 type childTerminalLux struct {
 	*sweepLux
 	frames []lux.Frame
@@ -119,6 +148,8 @@ func TestChildReportSpec(t *testing.T) {
 		t.Run(profile, func(t *testing.T) {
 			w := newResumeWorld(t)
 			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			w.s.Agent.ToolsURL = "http://tools.test"
+			w.s.Agent.ToolsService = true
 			phase := delivery.PhaseForPromptRole(profile)
 			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,phase=$2::run_phase,role=$3::agent_role,
 			child_profile=$4,child_capabilities='{}',child_prompt='Investigate the exact regression.',lux_run_id=NULL WHERE id=$1`, w.run.ID, phase, delivery.RoleForPhase[phase], profile)
@@ -139,6 +170,11 @@ func TestChildReportSpec(t *testing.T) {
 			}
 			if spec.Git != nil && spec.Git.Push != nil {
 				t.Fatal("report child got push authority")
+			}
+			for _, forbidden := range []string{"ask_person", "request_repository", "request_machine", "create_task"} {
+				if strings.Contains(spec.Workload.Prompt, forbidden) {
+					t.Fatalf("child prompt advertises %s", forbidden)
+				}
 			}
 		})
 	}

@@ -323,6 +323,9 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 // handOver is HandOver; a new conductor it starts names retries in its
 // run.created (startConductor).
 func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries string) (string, error) {
+	if err := MarkChildParentEndedTx(ctx, tx, ref.TaskID, ref.RunID); err != nil {
+		return "", err
+	}
 	// The wake note it was started with and never heard is told again.
 	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
 		return "", err

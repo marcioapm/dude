@@ -13,6 +13,7 @@ import (
 // ledger already knows, rather than a model summarising work another model
 // already did.
 type PromptInput struct {
+	Child              bool
 	Title              string
 	Goal               string
 	AcceptanceCriteria []string
@@ -488,7 +489,10 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseTest:
 		add(lead...)
-		add(testerContract, testerTools)
+		add(testerContract)
+		if !in.Child {
+			add(testerTools)
+		}
 		add(in.task(), findingFormat)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
@@ -519,11 +523,14 @@ func Prompt(phase string, in PromptInput) string {
 	if phase == PhaseReview && in.Adopted != nil {
 		add(in.Adopted.note())
 	}
-	if in.Tools {
+	if in.Tools && !in.Child {
 		add(toolsNote)
 	}
-	if in.CLI {
+	if in.CLI && !in.Child {
 		add(cliNote)
+	}
+	if in.Child {
+		add(render(mustTemplate("contracts/child-tools"), in))
 	}
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {

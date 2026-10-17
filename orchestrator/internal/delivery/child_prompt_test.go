@@ -19,3 +19,14 @@ func TestChildResultPromptGolden(t *testing.T) {
 		t.Fatalf("result directive differs from golden:\n%s", got)
 	}
 }
+
+func TestChildToolsContractGolden(t *testing.T) {
+	got := render(mustTemplate("contracts/child-tools"), PromptInput{Child: true, Tools: true, CLI: true})
+	want, err := os.ReadFile("testdata/child-tools.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.TrimSuffix(string(want), "\n") {
+		t.Fatalf("child tools contract differs:\n%s", got)
+	}
+}

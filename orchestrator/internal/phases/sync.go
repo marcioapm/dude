@@ -1447,6 +1447,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
+		Child: r.SourceKind != "",
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, Feedback: peopleFeedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
@@ -1469,7 +1470,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	if stored == nil {
 		// A resume sends no prompt: only a submit's says where it runs.
-		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI)
+		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI && !promptIn.Child)
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
@@ -3214,6 +3215,14 @@ func (s *Syncer) failKept(ctx context.Context, r phaseRun, reason string) error 
 
 func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep bool) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if r.conductor() {
+			if err := delivery.LockChat(ctx, tx, r.TaskID); err != nil {
+				return err
+			}
+			if err := delivery.MarkChildParentEndedTx(ctx, tx, r.TaskID, r.ID); err != nil {
+				return err
+			}
+		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason, keep)
 		if err != nil || tag.RowsAffected() == 0 {
