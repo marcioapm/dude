@@ -488,7 +488,10 @@ export class Overlay {
 
   #drawFor(el: Element): void {
     this.#picture = { state: "drawing" };
-    const draw = this.#opts.draw ?? drawPicture;
+    const draw = this.#opts.draw ?? ((target: Element, win: Window) => {
+      const style = win.getComputedStyle(this.#top);
+      return drawPicture(target, win, { outline: style.getPropertyValue("--ds-color-accent").trim(), background: style.getPropertyValue("--ds-color-surface").trim() });
+    });
     draw(el, this.#win).then((url) => {
       if (this.#picked?.el !== el) return;
       this.#picture = { state: "ready", url };
