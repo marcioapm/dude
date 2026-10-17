@@ -725,15 +725,27 @@ test("once dude's session names a theme it follows dude's, not the OS, and a new
   expect(drawn()).toBe("light");
 });
 
-test("a session with no theme (an older dude) or one it doesn't know leaves the theme as it was", () => {
+test("a legacy session resumes following the OS, and malformed sessions leave state unchanged", () => {
   const os = osScheme("light");
   boot();
-  connect();
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "dark" });
+  expect(drawn()).toBe("dark");
+  const before = { theme: drawn(), connection: tid("ov-conn")!.textContent, pins: count('[data-testid="ov-pin"]') };
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: {}, drafts: 0, showPins: true, theme: 7 } as never);
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, extra: true } as never);
+  expect({ theme: drawn(), connection: tid("ov-conn")!.textContent, pins: count('[data-testid="ov-pin"]') }).toEqual(before);
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true });
   expect(drawn()).toBe("light");
   os.set("dark");
   expect(drawn()).toBe("dark");
+});
+
+test("a session with an invalid theme is rejected", () => {
+  osScheme("light");
+  boot();
+  connect();
   fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "sepia" as "light" });
-  expect(drawn()).toBe("dark");
+  expect(drawn()).toBe("light");
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 

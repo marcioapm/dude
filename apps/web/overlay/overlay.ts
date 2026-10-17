@@ -116,6 +116,48 @@ const asElement = (t: EventTarget | null): Element | null => (t !== null && (t a
 
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
+const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme"]);
+const PIN_STATUSES = new Set(["draft", "open", "delivered", "resolved", "replied"]);
+const REPLY_KINDS = new Set(["reply", "resolve", "reopen"]);
+
+function plainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function boundedString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length <= max;
+}
+
+function validPin(value: unknown): value is OverlayPin {
+  if (!plainObject(value) || !Object.keys(value).every((key) => ["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"].includes(key))) return false;
+  if (!boundedString(value.id, 100) || value.id.length === 0 || typeof value.n !== "number" || !Number.isInteger(value.n) || value.n < 1
+    || typeof value.status !== "string" || !PIN_STATUSES.has(value.status) || !boundedString(value.author, 200) || typeof value.mine !== "boolean"
+    || !boundedString(value.body, OVERLAY_LIMITS.pinBody) || !boundedString(value.selector, 2_000) || !boundedString(value.when, 200)
+    || !Array.isArray(value.replies) || value.replies.length > OVERLAY_LIMITS.replies) return false;
+  return value.replies.every((reply) => plainObject(reply)
+    && Object.keys(reply).every((key) => ["who", "kind", "body"].includes(key))
+    && boundedString(reply.who, 200)
+    && typeof reply.kind === "string" && REPLY_KINDS.has(reply.kind)
+    && boundedString(reply.body, OVERLAY_LIMITS.replyBody));
+}
+
+function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "session" }> {
+  if (!plainObject(value) || !Object.keys(value).every((key) => SESSION_KEYS.has(key))
+    || value.type !== "session" || value.v !== OVERLAY_PROTOCOL || !boundedString(value.task, 100)
+    || typeof value.url !== "string" || value.url.length > 2_048 || !Array.isArray(value.pins)
+    || value.pins.length > OVERLAY_LIMITS.pins || typeof value.drafts !== "number" || !Number.isInteger(value.drafts)
+    || value.drafts < 0 || typeof value.showPins !== "boolean" || (value.theme !== undefined && value.theme !== "light" && value.theme !== "dark")) return false;
+  try {
+    const url = new URL(value.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  } catch {
+    return false;
+  }
+  return value.pins.every(validPin);
+}
+
 export class Overlay {
   readonly host: HTMLElement;
   readonly #root: ShadowRoot;
@@ -289,17 +331,14 @@ export class Overlay {
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
     switch (m.type) {
       case "session":
-        if (overlayPage(m.url) !== this.#page) return;
+        if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
         this.#connection = "connected";
         this.#task = String(m.task).slice(0, 40);
         this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
-        // Only the two names: another value (a newer dude's) leaves the theme as it was.
-        if (m.theme === "light" || m.theme === "dark") {
-          this.#dudeTheme = m.theme;
-          this.#applyTheme();
-        }
+        this.#dudeTheme = m.theme ?? null;
+        this.#applyTheme();
         if (this.#unanswered) {
           // dude's tab is back: the box keeps its words, and Save is for it again.
           this.#unanswered = false;
