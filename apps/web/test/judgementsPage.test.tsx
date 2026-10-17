@@ -325,6 +325,23 @@ describe("Recent judgements' filter and paging", () => {
     expect(container.querySelectorAll("[data-tone=danger]").length).toBe(0);
   });
 
+  test("a successful filter reload clears the current request's danger callout", async () => {
+    const client = new Paging("a");
+    const container = await show(client);
+    await until(() => (client.pending.length === 1 ? true : null), "the first query");
+    await client.answer(0, page([CALL, ESCALATION], null));
+    await until(() => (rowIds(container).length === 2 ? true : null), "both rows");
+    await pickAsker(container, "delivery.comment");
+    await until(() => (client.pending.length === 2 ? true : null), "the comment query");
+    await client.reject(1, new Error("temporary failure"));
+    await until(() => (container.querySelectorAll("[data-tone=danger]").length ? true : null), "the failure");
+    await pickAsker(container, "delivery.escalation");
+    await until(() => (client.pending.length === 3 ? true : null), "the escalation query");
+    await client.answer(2, page([ESCALATION], null));
+    await until(() => (rowIds(container).join() === "mcl_e" ? true : null), "the recovered rows");
+    expect(container.querySelectorAll("[data-tone=danger]").length).toBe(0);
+  });
+
   test("a response for an earlier filter that lands last is ignored", async () => {
     const client = new Paging("a");
     const container = await show(client);
