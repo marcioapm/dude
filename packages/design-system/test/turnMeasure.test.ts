@@ -63,3 +63,11 @@ describe("a chat turn spans its column", () => {
       .toEqual([[".main", "max-width", "720px"]]);
   });
 });
+
+describe("a question's answer controls keep a readable track", () => {
+  test("QuestionCard .form is bounded by the message measure", () => {
+    const css = outsideQueries(readFileSync(`${ROOT}/${DIR}/QuestionCard.module.css`, "utf8"));
+    expect(declarations(css, /^max-width$/).filter(([sel]) => sel === ".form").map(([, , value]) => value))
+      .toEqual(["var(--ds-measure-message)"]);
+  });
+});
