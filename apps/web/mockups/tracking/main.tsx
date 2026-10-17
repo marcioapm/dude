@@ -26,15 +26,16 @@ import { EpicGlyphs, EpicVariantsPage, SIDEBAR_EXPANDED, SidebarEpicsPage } from
 import { FIND_QUERY, FindWorkPane, MeaningPage } from "./Finding.tsx";
 import { ActivityLines, TaskPage, type Overlay, type TaskView } from "./TaskPage.tsx";
 import { TasksList, type View } from "./TasksList.tsx";
-import { ROLE, YOU, keyOf, world } from "./data.ts";
+import { ROLE, YOU, keyOf, world, type Resolution } from "./data.ts";
 import pageStyles from "./pages.module.css";
 
 export const SCREENS = {
   meaning: "0 · What the words mean",
-  "close-dialog": "1 · Close, as a duplicate",
+  "close-dialog": "1 · Close: Won't do, and what waits on it (&why=duplicate: as a duplicate)",
   "closed-wontdo": "1 · Closed: Won't do",
   "closed-duplicate": "1 · Closed: Duplicate (both tasks)",
-  "archive-task": "1 · Archive a task",
+  "archive-task": "1 · Archive an ended task",
+  "archive-open-task": "1 · Archive a task in Backlog: close and archive",
   "archive-epic-refused": "1 · Archive an epic: refused",
   "archived-view": "1 · Archived",
   "activity-lifecycle": "1 · Activity, every new line",
@@ -51,7 +52,7 @@ export const SCREENS = {
   "board-filters": "3 · Board filters",
   narrow: "4 · A bug at 390px",
   "sidebar-epics": "5 · Sidebar: epic rows with the layers glyph",
-  "sidebar-epic-variants": "5 · Sidebar: epic row, (a) or (b)",
+  "sidebar-epic-variants": "5 · Sidebar: epic row, what was considered",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
@@ -60,7 +61,7 @@ const first = (params.get("screen") ?? params.get("s") ?? "board-kinds") as Scre
 
 type Place =
   | { view: "board"; filters: BoardFilters; chips: boolean; overlay?: "archive-epic" | "task-dialog" | undefined }
-  | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined; before?: boolean | undefined }
+  | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined; before?: boolean | undefined; closeAs?: Resolution | undefined }
   | { view: "list"; list: View }
   | { view: "activity" }
   | { view: "other"; screen: Screen };
@@ -70,10 +71,12 @@ const page = (key: string, o: Partial<Extract<Place, { view: "task" }>> = {}): P
 
 function placeOf(s: Screen): Place {
   switch (s) {
-    case "close-dialog": return page("CP-63", { overlay: "close", before: true });
+    // `&why=duplicate` opens the same dialog on Duplicate, with its picker and the handover.
+    case "close-dialog": return page("CP-63", { overlay: "close", before: true, closeAs: params.get("why") === "duplicate" ? "duplicate" : "wont_do" });
     case "closed-wontdo": return page("CP-46");
     case "closed-duplicate": return page("CP-63", { split: "CP-62" });
     case "archive-task": return page("CP-46", { overlay: "archive" });
+    case "archive-open-task": return page("CP-44", { overlay: "close-archive" });
     case "archive-epic-refused": return board({ overlay: "archive-epic" });
     case "archived-view": return { view: "list", list: "archived" };
     case "activity-lifecycle": return { view: "activity" };
@@ -121,7 +124,7 @@ function Mock() {
     const p = place;
     selected = { kind: "task", id: `t_${p.key}` };
     const one = (k: string) => (
-      <TaskPage key={k} k={k} view={p.tab} onView={(tab) => setPlace({ ...p, tab })} overlay={k === p.key ? p.overlay : null} beforeClose={k === p.key && p.before}
+      <TaskPage key={k} k={k} view={p.tab} onView={(tab) => setPlace({ ...p, tab })} overlay={k === p.key ? p.overlay : null} beforeClose={k === p.key && p.before} closeAs={k === p.key ? p.closeAs : undefined}
         onOverlay={(overlay) => setPlace({ ...p, overlay })} onOpen={openTask} onBoard={toBoard} />
     );
     main = p.split ? <div className={pageStyles["split"]}>{one(p.key)}{one(p.split)}</div> : one(p.key);
@@ -164,7 +167,7 @@ function Mock() {
           options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
       </div>
       <div className="mocknote">
-        Reading as {YOU.name} ({ROLE}). Close is a person's decision with a resolution; Archive takes finished work out of everyday views. Epic rows in the sidebar carry the layers glyph.
+        Reading as {YOU.name} ({ROLE}). Close is a person's decision with a resolution; Archive takes ended work out of everyday views, closing it first when it hasn't ended. Epic rows in the sidebar carry the layers glyph.
       </div>
       <div className={`shell ${finding ? pageStyles["finding"] : ""}`} style={{ flex: 1, minHeight: 0 }}>
         <Sidebar projects={[world()]} title="dude" you={YOU.id} selected={selected}

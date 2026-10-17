@@ -125,7 +125,7 @@ the head. Check it out at that commit and run it. No such test, a
 test that passes before the fix, or one that tests something else
 than the steps describe, is a blocking finding: "No failing test
 for CP-62".`}</span></pre>
-            <p className={styles["source"]}>new: reviewFocus["tests"] + bugGate(task) when kind = bug · finding category "tests"</p>
+            <p className={styles["source"]}>new: reviewFocus["tests"] + bugGate(task) when kind = bug · finding category "tests" · when tests isn't among the project's required reviewers, the same paragraph is added to reviewFocus["correctness"], so a bug is never delivered without its failing test</p>
           </div>
         </div>
 

@@ -124,19 +124,20 @@ export function SidebarEpicsPage() {
   );
 }
 
-/** sidebar-epic-variants: (a) glyph only, (b) glyph and the roll-up word, side by side. */
+/** sidebar-epic-variants: what was considered, (a) glyph only (chosen) beside (b) glyph and the roll-up word. */
 export function EpicVariantsPage() {
   return (
     <div className={styles["doc"]} data-testid="epic-variants">
       <div className={styles["docInner"]}>
-        <h1>Epic rows in the sidebar: two ways</h1>
+        <h1>Epic rows in the sidebar: what was considered</h1>
         <p className={styles["lede"]}>
-          Both draw the layers glyph, 14px, right after the chevron: an epic's title starts where a task's key starts one
-          level up, and the two rows differ by glyph. (b) adds the epic's roll-up word before its total. Reading as {YOU.name}.
+          Both draw the layers glyph, 14px, right after the chevron. (a) was chosen: the glyph alone tells an epic from a
+          task. (b), which adds the roll-up word, was rejected: nearly every epic in the tree is Active, so the word repeats
+          on every row and crowds the needs-you count. Reading as {YOU.name}.
         </p>
         <div className={styles["variants"]}>
-          <Column variant="glyph" label="(a) Glyph only" lead="The README's rule as written: the layers glyph and a total. Recommended." />
-          <Column variant="glyph-state" label="(b) Glyph and roll-up" lead="Adds Planned, Active or Done after the title, as the Epics page groups them." />
+          <Column variant="glyph" label="(a) Glyph only · chosen" lead="The README's rule as written: the layers glyph and a total." />
+          <Column variant="glyph-state" label="(b) Glyph and roll-up · rejected" lead="Planned, Active or Done after the title, as the Epics page groups them." />
         </div>
       </div>
     </div>

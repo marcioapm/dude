@@ -1,6 +1,7 @@
 /*
- * The lifecycle dialogs (close-dialog, archive-task, archive-epic-refused)
- * and the task dialog's kind, priority and bug fields (task-dialog-bug).
+ * The lifecycle dialogs (close-dialog, archive-open-task, archive-task,
+ * archive-epic-refused) and the task dialog's kind, priority and bug fields
+ * (task-dialog-bug).
  * Every one is the design system's `Dialog` with its own fields:
  * ChoiceList for a decision whose options need a sentence, SearchPicker
  * for the duplicate, Textarea for a note, MarkdownEditor for the goal and
@@ -9,7 +10,7 @@
 
 import { useCallback, useState } from "react";
 import { Breadcrumb, RefLead, SearchPicker, StatusMark } from "@dude/design-system/components";
-import { Button, Callout, ChoiceList, Dialog, Fieldset, FormStack, Input, KeyHint, MarkdownEditor, Select, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Checkbox, ChoiceList, Dialog, Fieldset, FormStack, Input, KeyHint, MarkdownEditor, Select, Textarea, type CheckedState } from "@dude/design-system/primitives";
 import { EPICS, FINISHED, KIND, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, task, type Kind, type Priority, type Resolution, type Task } from "./data.ts";
 import { KindMark } from "./Marks.tsx";
 import { DisabledWithHint } from "./TaskPage.tsx";
@@ -23,9 +24,15 @@ const context = (t: Task) => (
 // close-dialog
 // ---------------------------------------------------------------------------
 
-export function CloseDialog({ open, onOpenChange, t, initial = "duplicate" }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly t: Task; readonly initial?: Resolution }) {
-  const [why, setWhy] = useState<Resolution>(initial);
-  const [dup, setDup] = useState<Task | null>(initial === "duplicate" ? task("CP-62") : null);
+/**
+ * Close, and Close and archive: Archive… on a task that hasn't ended opens
+ * this same dialog with `andArchive`, no resolution chosen, and one primary
+ * that does both in one transaction.
+ */
+export function CloseDialog({ open, onOpenChange, t, initial = "duplicate", andArchive = false, refused }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly t: Task; readonly initial?: Resolution | null | undefined; readonly andArchive?: boolean; readonly refused?: string | undefined }) {
+  const [why, setWhy] = useState<Resolution | null>(andArchive ? null : initial);
+  const [dup, setDup] = useState<Task | null>(why === "duplicate" ? task("CP-62") : null);
+  const [unrelate, setUnrelate] = useState<CheckedState>(false);
   const find = useCallback(async (q: string) => {
     const w = q.trim().toLowerCase();
     return TASKS.filter((x) => !x.archived && (!w || x.key.toLowerCase().includes(w) || x.title.toLowerCase().includes(w))).slice(0, 8);
@@ -33,13 +40,23 @@ export function CloseDialog({ open, onOpenChange, t, initial = "duplicate" }: { 
   // What waits on it: CP-47 waited on CP-63 until it was closed.
   const waiting = t.key === "CP-63" ? [task("CP-47")] : TASKS.filter((x) => (x.blockedBy ?? []).includes(t.key));
   const isBug = t.kind === "bug";
+  const waits = waiting.map((w) => w.key).join(", ");
+  const one = waiting.length === 1;
+  const label = andArchive ? "Close and archive"
+    : why === "duplicate" && dup ? `Close as duplicate of ${dup.key}`
+    : why ? `Close as ${RESOLUTION[why].label}` : "Close";
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} size="md" context={context(t)} title={`Close ${t.key}`}
-      description="Closing says nobody will work on it, and why. It never ran, or it stopped: either way it ends here. Reopen brings it back to Backlog."
+    <Dialog open={open} onOpenChange={onOpenChange} size="md" context={context(t)} title={andArchive ? `Close and archive ${t.key}` : `Close ${t.key}`}
+      description={andArchive
+        ? `${t.key} hasn't ended, so archiving it closes it first: say why. Both happen at once. To bring it back, Unarchive it, then Reopen it.`
+        : "Closing says nobody will work on it, and why. It never ran, or it stopped: either way it ends here. Reopen brings it back to Backlog."}
+      footerStart={refused ? <span className={styles["muted"]}>{refused}.</span> : undefined}
       footer={<><Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button variant="primary" disabled={why === "duplicate" && !dup} data-testid="close-confirm">{why === "duplicate" && dup ? `Close as duplicate of ${dup.key}` : `Close as ${RESOLUTION[why].label}`}</Button></>}>
+        {refused
+          ? <DisabledWithHint label={label} icon={andArchive ? "archive" : undefined} hint={refused} />
+          : <Button variant="primary" leadingIcon={andArchive ? "archive" : undefined} disabled={!why || (why === "duplicate" && !dup)} data-testid="close-confirm">{label}</Button>}</>}>
       <FormStack>
-        <ChoiceList label="Why it is closed" value={why} onChange={setWhy} data-testid="close-why"
+        <ChoiceList<Resolution> label="Why it is closed" value={why ?? ("" as Resolution)} onChange={(r) => { setWhy(r); if (r === "duplicate" && !dup && !andArchive) setDup(task("CP-62")); }} data-testid="close-why"
           options={[
             { value: "wont_do", label: RESOLUTION.wont_do.label, icon: "circle-x", description: RESOLUTION.wont_do.description },
             { value: "duplicate", label: RESOLUTION.duplicate.label, icon: "copy", description: RESOLUTION.duplicate.description },
@@ -82,10 +99,19 @@ export function CloseDialog({ open, onOpenChange, t, initial = "duplicate" }: { 
             ) : null}
           </div>
         ) : null}
-        {why === "wont_do" && waiting.length ? (
-          <Callout tone="attention">{waiting.map((w) => w.key).join(", ")} {waiting.length === 1 ? "waits" : "wait"} on {t.key} and will keep waiting: a task closed without merging releases nothing. Remove the relation if it no longer matters.</Callout>
+        {why && why !== "duplicate" && waiting.length ? (
+          <Callout tone="attention" data-testid="waits-on">
+            <span className={styles["callTitle"]}>{waits} {one ? "waits" : "wait"} on this.</span>{" "}
+            {unrelate === true
+              ? <>Closing also removes the relation, so {one ? "it" : "they"} can start without {t.key}.</>
+              : <>{one ? "It" : "They"} will keep waiting: a task closed without merging releases nothing.</>}
+            <div className={styles["callActions"]} data-testid="remove-relations">
+              <Checkbox checked={unrelate} onCheckedChange={setUnrelate}
+                label="Remove the relation" description={`${waits} no longer ${one ? "waits" : "wait"} on ${t.key}; said in ${one ? "its" : "their"} Activity.`} />
+            </div>
+          </Callout>
         ) : null}
-        <Textarea label="Note (optional)" rows={2} placeholder="Said in Activity beside the close." />
+        <Textarea label="Note (optional)" rows={2} placeholder={andArchive ? "Said in Activity beside the close and the archive." : "Said in Activity beside the close."} />
       </FormStack>
     </Dialog>
   );

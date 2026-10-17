@@ -15,13 +15,13 @@ import {
 import { Icon } from "@dude/design-system";
 import { Button, Callout, RowMenu, Tab, TabList, TabPanel, Tabs, Tooltip, type RowMenuItem } from "@dude/design-system/primitives";
 import relStyles from "../../../../packages/design-system/src/components/Relations.module.css";
-import { EPICS, FINISHED, KIND, NOT_STARTED, P, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, isOwner, task, type Task } from "./data.ts";
+import { EPICS, IN_REVIEW, KIND, LIVE, NOT_STARTED, P, PRIORITY, RESOLUTION, ROLE, TASKS, ended, firstName, isOwner, task, type Resolution, type Task } from "./data.ts";
 import { ArchivedMark, IntroducedByChip, KindMark, PriorityMark, ResolutionMark } from "./Marks.tsx";
 import { ArchiveDialog, CloseDialog } from "./Dialogs.tsx";
 import styles from "./pages.module.css";
 
 export type TaskView = "overview" | "activity";
-export type Overlay = null | "close" | "archive" | "archive-epic";
+export type Overlay = null | "close" | "close-archive" | "archive" | "archive-epic";
 
 /** Who may close and archive: the owner, or an org admin. Ana is the owner of most; Márcio is a member. */
 const mayManage = (t: Task) => ROLE === "owner" && isOwner(t);
@@ -31,15 +31,20 @@ const notYours = (t: Task) => `Only ${firstName(t.owner)}, the owner, or an admi
 export function lifecycleMenu(t: Task, open: (o: Overlay) => void): RowMenuItem[] {
   const may = mayManage(t);
   const why = may ? undefined : notYours(t);
-  const live = t.status === "running" || t.status === "awaiting_input";
-  const finished = FINISHED.has(t.status);
+  // Running and in review refuse Close and Archive alike, with the same words.
+  const busy = LIVE.has(t.status) ? "Stop its agents first" : IN_REVIEW.has(t.status) ? "It has a pull request open" : undefined;
+  const done = ended(t);
+  const close: RowMenuItem = t.resolution
+    ? { id: "reopen", label: "Reopen", icon: "retry", disabled: !may || Boolean(t.archived), disabledReason: why ?? (t.archived ? "Unarchive it first, then reopen it" : undefined) }
+    : { id: "close", label: done ? "Closed" : "Close…", icon: "circle-x", disabled: !may || Boolean(busy) || done, disabledReason: why ?? busy ?? (done ? "Already ended" : undefined), onSelect: () => open("close") };
   return [
     { id: "edit", label: "Edit", icon: "edit" },
     { kind: "separator" },
-    { id: "close", label: finished ? "Closed" : "Close…", icon: "circle-x", disabled: !may || live || finished, disabledReason: why ?? (live ? "Stop its agents first, then close it" : finished ? "Already ended" : undefined), onSelect: () => open("close") },
+    close,
     t.archived
       ? { id: "unarchive", label: "Unarchive", icon: "archive", disabled: !may, disabledReason: why }
-      : { id: "archive", label: "Archive…", icon: "archive", disabled: !may || !finished, disabledReason: why ?? (!finished ? (live ? "Stop its agents first, then close it" : "Close it first: only ended tasks are archived") : undefined), onSelect: () => open("archive") },
+      // Archive… on a task that hasn't ended closes it on the way: the Close dialog, as "Close and archive".
+      : { id: "archive", label: "Archive…", icon: "archive", disabled: !may || Boolean(busy), disabledReason: why ?? busy, onSelect: () => open(done ? "archive" : "close-archive") },
   ];
 }
 
@@ -55,9 +60,11 @@ export interface TaskPageProps {
   readonly menuOpen?: boolean | undefined;
   /** The task as it was before it was closed: the close dialog opens on that. */
   readonly beforeClose?: boolean | undefined;
+  /** The resolution the close dialog opens on. */
+  readonly closeAs?: Resolution | undefined;
 }
 
-export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard, menuOpen, beforeClose }: TaskPageProps) {
+export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard, menuOpen, beforeClose, closeAs }: TaskPageProps) {
   const t0 = task(k);
   const t: Task = beforeClose ? { ...t0, status: "received", resolution: undefined, duplicateOf: undefined, blockedBy: undefined } : t0;
   const may = mayManage(t);
@@ -87,7 +94,7 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
         <span className="taskTopActions">
           {actions}
           <Button variant="quiet" leadingIcon="edit">Edit</Button>
-          <RowMenu label={`Actions for ${t.key}`} items={items} align="end" defaultOpen={menuOpen || (!may && overlay !== null)} />
+          <RowMenu label={`Actions for ${t.key}`} items={items} align="end" defaultOpen={menuOpen || (!may && overlay !== null && overlay !== "close-archive")} />
         </span>
       </header>
 
@@ -139,7 +146,10 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
         </TabPanel>
       </Tabs>
 
-      <CloseDialog open={may && overlay === "close"} onOpenChange={(o) => onOverlay(o ? "close" : null)} t={t} />
+      <CloseDialog open={may && overlay === "close"} onOpenChange={(o) => onOverlay(o ? "close" : null)} t={t} initial={closeAs} />
+      {/* Close and archive opens for a member too, so the screen shows whose decision it is. */}
+      <CloseDialog key={`${t.key}-archive`} open={overlay === "close-archive"} onOpenChange={(o) => onOverlay(o ? "close-archive" : null)} t={t} andArchive
+        refused={may ? undefined : `Only ${firstName(t.owner)}, the owner, or an admin can close and archive this`} />
       <ArchiveDialog open={may && overlay === "archive"} onOpenChange={(o) => onOverlay(o ? "archive" : null)} t={t} />
     </div>
   );
@@ -185,7 +195,8 @@ function Notices({ t, may, onOpen }: { readonly t: Task; readonly may: boolean; 
             , which stays open. What waited on {t.key} now waits on {dup.key}.</>
         ) : null}
         <div className={styles["callActions"]}>
-          {may ? <Button size="sm" variant="secondary" leadingIcon="retry" data-lifecycle-action="">Reopen</Button>
+          {t.archived ? <span className={styles["muted"]}>Unarchive it first to reopen it.</span>
+            : may ? <Button size="sm" variant="secondary" leadingIcon="retry" data-lifecycle-action="">Reopen</Button>
             : <DisabledWithHint label="Reopen" hint={`Only ${firstName(t.owner)}, the owner, or an admin can reopen this`} />}
           {may && !t.archived ? <Button size="sm" variant="quiet" leadingIcon="archive" data-lifecycle-action="">Archive</Button> : null}
         </div>
@@ -322,6 +333,9 @@ export function ActivityLines({ k }: { readonly k: string }) {
         </TimelineItem>
         <TimelineItem who={ana} when="5d" data-testid="line-closed-wontdo" quote="The footer is going away in the new shell.">
           <b>Ana</b> closed <b>CP-46</b> as Won't do
+        </TimelineItem>
+        <TimelineItem who={ana} when="5d" data-testid="line-closed-archived" quote="Folded into the new billing page.">
+          <b>Ana</b> closed <b>CP-44</b> as Won't do and archived it
         </TimelineItem>
         <TimelineItem who={ana} when="6d" data-testid="line-reopened">
           <b>Ana</b> reopened <b>CP-59</b> (was Can't reproduce)

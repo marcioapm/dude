@@ -71,7 +71,7 @@ export const TASKS: readonly Task[] = [
   { key: "CP-41", title: "Meter usage per organisation, hourly", status: "review", kind: "feature", priority: "P1", epic: "billing", owner: P.ana, hoursInStatus: 5, costUsd: 9.1, pr: { number: 431, state: "open" } },
   { key: "CP-43", title: "Sync Stripe customers to organisations", status: "running", kind: "feature", priority: "P2", epic: "billing", owner: P.tom, agent: { role: "implementer", activity: "Running bun test" }, hoursInStatus: 2, costUsd: 3.2 },
   { key: "CP-42", title: "Invoice line items from metered usage", status: "received", kind: "feature", priority: "P1", epic: "billing", owner: P.ana, hoursInStatus: 20, blockedBy: ["CP-41"] },
-  { key: "CP-44", title: "Billing page: usage this month and projected invoice", status: "received", kind: "feature", priority: "P2", epic: "billing", owner: P.marcio, hoursInStatus: 30 },
+  { key: "CP-44", title: "Billing page: usage this month and projected invoice", status: "received", kind: "feature", priority: "P2", epic: "billing", owner: P.ana, hoursInStatus: 30 },
   { key: "CP-47", title: "Export usage as CSV", status: "received", kind: "feature", priority: "P3", epic: "billing", owner: P.ana, hoursInStatus: 50, blockedBy: ["CP-62"] },
   { key: "CP-37", title: "Spike: price per unit or per tier?", status: "done", kind: "spike", priority: "P2", epic: "billing", owner: P.ana, hoursInStatus: 30, costUsd: 2.6, resolution: "nothing_to_merge" },
   { key: "CP-38", title: "Spike: Stripe Tax for EU VAT", status: "failed", kind: "spike", priority: "P2", epic: "billing", owner: P.tom, hoursInStatus: 40, costUsd: 4.7 },
@@ -109,6 +109,10 @@ export const task = (key: string): Task => {
 
 export const NOT_STARTED: ReadonlySet<TaskStatus> = new Set(["received", "intake", "awaiting_confirmation", "queued"]);
 export const FINISHED: ReadonlySet<TaskStatus> = new Set(["done", "failed", "aborted"]);
+export const IN_REVIEW: ReadonlySet<TaskStatus> = new Set(["review", "ready_to_merge"]);
+export const LIVE: ReadonlySet<TaskStatus> = new Set(["running", "awaiting_input"]);
+/** Ended, for Archive: done, or closed with a resolution. A stop without one is closed on the way. */
+export const ended = (t: Task) => t.status === "done" || Boolean(t.resolution);
 export const merged = (t: Task) => t.status === "done" && t.pr?.state === "merged";
 export const isOwner = (t: Task) => t.owner.id === YOU.id;
 

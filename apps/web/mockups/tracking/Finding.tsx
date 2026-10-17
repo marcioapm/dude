@@ -115,7 +115,7 @@ export function MeaningPage() {
           <dt>Resolution</dt><dd>
             {(Object.keys(RESOLUTION) as Resolution[]).map((r) => <span key={r} style={{ display: "block" }}><ResolutionMark resolution={r} /> {RESOLUTION[r].description}</span>)}
           </dd>
-          <dt><Icon name="archive" size={14} /> Archive</dt><dd>Take an ended task, or an epic whose tasks have all ended, out of the board, the sidebar, the counts and Find work. A link still opens it; the Archived view lists it; <b>Unarchive</b> puts it back. Nothing is deleted.</dd>
+          <dt><Icon name="archive" size={14} /> Archive</dt><dd>Take a task, or an epic whose tasks have all ended, out of the board, the sidebar, the counts and Find work. A task that hasn't ended is closed on the way: Archive asks why, as Close does, and does both at once (<b>Close and archive</b>). A running task, or one with a pull request open, can't be archived. A link still opens it; the Archived view lists it; <b>Unarchive</b> puts it back, and Reopen comes after that. Nothing is deleted.</dd>
         </dl>
 
         <h2>Classification</h2>
