@@ -112,6 +112,27 @@ test("a value is fetched when any url() in it is not data:, read token by token"
   expect(fetchedUrl(`image-set(url("${REMOTE}") 1dppx)`)).toBe(true);
   expect(fetchedUrl(`url("${DATA}"), url(`)).toBe(true);
   expect(fetchedUrl(`linear-gradient(red, blue)`)).toBe(false);
+  expect(fetchedUrl(`url("${REMOTE}"), ${svg}`)).toBe(true);
+  expect(fetchedUrl(`url("${DATA}"), url("${REMOTE}")`)).toBe(true);
+  expect(fetchedUrl(`url(  "${DATA}"  ) url(" ${DATA}")`)).toBe(false);
+  expect(fetchedUrl(`url("data:x\\"y")`)).toBe(false);
+  expect(fetchedUrl(`url(`)).toBe(true);
+  expect(fetchedUrl(`url()`)).toBe(true);
+  expect(fetchedUrl(`url( "data:a" x)`)).toBe(true);
+  expect(fetchedUrl(`URL(${REMOTE})`)).toBe(true);
+  expect(fetchedUrl(`url(${REMOTE})`)).toBe(true);
+  expect(fetchedUrl(`"a" none`)).toBe(false);
+});
+
+test.each([
+  ["url( + 20,000 spaces", "url(" + " ".repeat(20_000)],
+  ["url( × 25,000", "url(".repeat(25_000)],
+  [`url("a" × 8,000`, 'url("a" '.repeat(8_000)],
+  ["url( + 100,000 spaces + x", "url(" + " ".repeat(100_000) + "x"],
+])("a hostile value is read in linear time and fails closed: %s", (_, v) => {
+  const t = performance.now();
+  expect(fetchedUrl(v)).toBe(true);
+  expect(performance.now() - t).toBeLessThan(200);
 });
 
 test("a pseudo whose second background layer is remote is left out", async () => {
