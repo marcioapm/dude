@@ -39,6 +39,8 @@ const (
 	FeedbackBatch = "fbt"
 	FeedbackItem  = "fbi"
 	FeedbackReply = "fbr"
+	// A call dude sent a model directly (migration 139).
+	ModelCall = "mcl"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.
