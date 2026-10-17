@@ -16,9 +16,10 @@ merges of real branches, not flags.
 from __future__ import annotations
 
 import pytest
+import requests
 from playwright.sync_api import Page, expect
 
-from fake_github import FakeGitHub
+from fake_github import FakeGitHub, PullRequest
 from helpers import ApiClient, query, sign_in, wait_for_escalation, wait_until
 
 
@@ -115,6 +116,32 @@ def conflicting(client: ApiClient, forge_project: dict, fake_github: FakeGitHub)
         return a, b
 
     return start
+
+
+def test_the_fake_updates_a_branch_only_as_github_does(fake_github: FakeGitHub):
+    """dude can read a conflicting pull request as behind (its mergeability
+    and its distance are two reads, and main may move between them) and ask
+    for an update. GitHub refuses that one; a clean one gets the base's
+    changes in a merge commit."""
+    fake_github.mergeability_from_git = True
+    for number, branch in ((1, "a"), (2, "b"), (3, "c")):
+        fake_github.push_branch(branch)
+        fake_github.pulls[number] = PullRequest(number=number, head=branch, base="main", title=branch, body="", draft=False)
+    fake_github.commit_file("a", "FACTORY.md", "A intent\n", "A's intent")
+    fake_github.commit_file("b", "FACTORY.md", "B intent\n", "B's intent")
+    fake_github.merge_into_base(1)
+    update = f"{fake_github.api_url}/repos/{fake_github.owner}/{fake_github.repo}/pulls/%d/update-branch"
+
+    head = fake_github.branch_sha("b")
+    resp = requests.put(update % 2, json={"expected_head_sha": head}, timeout=10)
+    assert resp.status_code == 422 and "merge conflict" in resp.json()["message"], resp.text
+    assert fake_github.branch_sha("b") == head
+
+    fake_github.commit_file("c", "C.md", "c\n", "c's file")
+    resp = requests.put(update % 3, json={"expected_head_sha": fake_github.branch_sha("c")}, timeout=10)
+    assert resp.status_code == 202, resp.text
+    assert fake_github.file_at("c", "FACTORY.md") == "A intent\n" and fake_github.file_at("c", "C.md") == "c\n"
+    assert fake_github.branch_log("c")[0] == "Merge branch 'main' into c"
 
 
 def test_a_conflict_after_another_task_merges_is_resolved_by_dude(
