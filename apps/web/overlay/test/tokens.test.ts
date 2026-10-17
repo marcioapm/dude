@@ -23,7 +23,7 @@ describe("the overlay's tokens", () => {
     for (const mode of ["dark", "light"] as const) {
       const block = TOKENS_CSS.split("\n").find((l) => l.startsWith(mode === "dark" ? ".root,.root[data-theme=dark]" : ".root[data-theme=light]"))!;
       const all = flattenTheme(mode);
-      for (const k of OVERLAY_THEME_TOKENS) expect(block).toContain(`--ds-${k}:${all[k]};`.replace(/;$/, ""));
+      for (const k of OVERLAY_THEME_TOKENS) expect(block).toContain(`--ds-${k}:${all[k]}`);
     }
   });
 
