@@ -77,13 +77,14 @@ export interface JudgementCallDetail extends JudgementCall {
 /** `GET /v1/judgements`. */
 export interface JudgementCallsResponse {
   calls: JudgementCall[];
+  /** null on a later page (`before` set): the first page's still holds. */
   summary: {
     /** Calls in the window, whatever the filter. */
     calls: number;
     since: string;
-  };
-  /** Every asker in the window, for the filter. */
-  askers: string[];
+  } | null;
+  /** Every asker in the window, for the filter; null on a later page, as summary is. */
+  askers: string[] | null;
   /** Pass as `before` for the next page; null on the last. */
   next: string | null;
 }

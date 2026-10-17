@@ -214,8 +214,27 @@ describe("recent judgements", () => {
     const page2 = await body(await call(memberKey, "GET", `/v1/judgements?limit=2&before=${page1.next}`));
     expect(page2.calls.map((c: Json) => c.id)).toEqual(["mcl_c"]);
     expect(page2.next).toBeNull();
+    expect(page2.summary).toBeNull();
+    expect(page2.askers).toBeNull();
+    expect((await body(await call(memberKey, "GET", "/v1/judgements?before=mcl_nope"))).calls).toEqual([]);
     expect((await call(memberKey, "GET", "/v1/judgements?limit=0")).status).toBe(400);
     expect((await call(memberKey, "GET", "/v1/judgements?limit=101")).status).toBe(400);
+  });
+
+  test("the summary counts every asker's calls in the window, once each asker, whatever the filter", async () => {
+    await recordCall(ORG, "mcl_s1", { minutesAgo: 30, asker: "ci.flake" });
+    await recordCall(ORG, "mcl_s2", { minutesAgo: 31, asker: "ci.flake" });
+    await recordCall(ORG, "mcl_s_old", { minutesAgo: 8 * 24 * 60, asker: "ci.ancient" });
+    try {
+      for (const q of ["", "?asker=ci.flake", "?asker=delivery.comment&limit=1"]) {
+        const res = await body(await call(memberKey, "GET", `/v1/judgements${q}`));
+        expect(res.summary.calls).toBe(5);
+        expect(res.askers).toEqual(["ci.flake", "delivery.comment", "delivery.escalation"]);
+      }
+      expect((await body(await call(otherKey, "GET", "/v1/judgements"))).summary.calls).toBe(1);
+    } finally {
+      await owner`DELETE FROM model_calls WHERE id IN ('mcl_s1', 'mcl_s2', 'mcl_s_old')`;
+    }
   });
 
   test("another organisation sees only its own", async () => {

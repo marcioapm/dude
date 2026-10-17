@@ -198,14 +198,22 @@ function TestOutcome({ test }: { test: { result: JudgementTestResult } | { error
   );
 }
 
+/** What Recent judgements shows: the first page's summary and askers, and every page's calls. */
+type Shown = Omit<JudgementCallsResponse, "summary" | "askers"> & {
+  summary: NonNullable<JudgementCallsResponse["summary"]>;
+  askers: string[];
+};
+
 function RecentJudgements({ client }: { client: ApiClient }) {
   const [asker, setAsker] = useState(EVERYONE);
-  const [data, setData] = useState<JudgementCallsResponse | null>(null);
+  const [data, setData] = useState<Shown | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<JudgementCall | null>(null);
   const load = useCallback((before?: string) => {
     client.judgements({ asker: asker === EVERYONE ? undefined : asker, before }).then(
-      (next) => setData((have) => (before && have ? { ...next, calls: [...have.calls, ...next.calls] } : next)),
+      (next) => setData((have) => (before && have
+        ? { ...have, calls: [...have.calls, ...next.calls], next: next.next }
+        : { ...next, summary: next.summary ?? { calls: next.calls.length, since: "" }, askers: next.askers ?? [] })),
       (err: unknown) => setProblem(errorText(err)));
   }, [client, asker]);
   useEffect(() => load(), [load]);

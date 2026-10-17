@@ -75,8 +75,7 @@ async function listCalls(scope: OrgScope, url: URL): Promise<JudgementCallsRespo
   const limit = intParam(url, "limit", { min: 1, max: JUDGEMENT_PAGE_MAX }) ?? 50;
   const asker = url.searchParams.get("asker") || null;
   const before = url.searchParams.get("before") || null;
-  const [window] = (await scope.sql`SELECT now() - make_interval(days => ${JUDGEMENT_WINDOW_DAYS}) AS since`) as Array<{ since: Date }>;
-  const since = window!.since;
+  const since = new Date(Date.now() - JUDGEMENT_WINDOW_DAYS * 24 * 3600_000);
   // One more than asked, to know whether there is a next page.
   const rows = (await scope.sql`
     SELECT ${scope.sql.unsafe(CALL_COLUMNS)} FROM model_calls c
@@ -85,17 +84,19 @@ async function listCalls(scope: OrgScope, url: URL): Promise<JudgementCallsRespo
       AND (${before}::text IS NULL OR (c.created_at, c.id) < (SELECT created_at, id FROM model_calls WHERE id = ${before}))
     ORDER BY c.created_at DESC, c.id DESC
     LIMIT ${limit + 1}`) as JudgementCall[];
-  const [count] = (await scope.sql`
-    SELECT count(*)::int AS calls FROM model_calls WHERE purpose = 'judgement' AND created_at >= ${since}`) as Array<{ calls: number }>;
-  const askers = (await scope.sql`
-    SELECT DISTINCT asker FROM model_calls WHERE purpose = 'judgement' AND created_at >= ${since} ORDER BY asker`)
-    .map((r: { asker: string }) => r.asker) as string[];
   const page = rows.slice(0, limit);
+  const next = rows.length > limit ? page.at(-1)!.id : null;
+  // Neither the count nor the askers depend on asker or before; a later page keeps the first page's.
+  if (before) return { calls: page, summary: null, askers: null, next };
+  const byAsker = (await scope.sql`
+    SELECT asker, count(*)::int AS calls FROM model_calls
+    WHERE purpose = 'judgement' AND created_at >= ${since}
+    GROUP BY asker ORDER BY asker`) as Array<{ asker: string; calls: number }>;
   return {
     calls: page,
-    summary: { calls: count!.calls, since: since.toISOString() },
-    askers,
-    next: rows.length > limit ? page.at(-1)!.id : null,
+    summary: { calls: byAsker.reduce((n, r) => n + r.calls, 0), since: since.toISOString() },
+    askers: byAsker.map((r) => r.asker),
+    next,
   };
 }
 
