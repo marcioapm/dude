@@ -197,6 +197,8 @@
 .form {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: var(--ds-measure-message);
   min-width: 0;
   container-type: inline-size;
 }

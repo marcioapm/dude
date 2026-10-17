@@ -23,6 +23,7 @@ const TURNS = [
 
 /** `file` → selectors whose fixed cap is on an element inside a turn, and why. */
 const ALLOWED: Record<string, Record<string, string>> = {
+  QuestionCard: { ".form": "the bounded answer controls inside the full-width question turn" },
   StartProgress: { ".steps": "the stepper's columns, not the turn's text" },
   Brainstorm: { ".card": "the open proposal: a raised form inside the agent's turn, with its File footer" },
 };
