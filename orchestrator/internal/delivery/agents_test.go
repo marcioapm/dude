@@ -45,9 +45,30 @@ func TestEveryAgentTemplateParses(t *testing.T) {
 	if _, err := loadRoles(fstest.MapFS{"agents/roles/fixer.md": {Data: []byte("  \n")}}); err == nil {
 		t.Error("an empty role file loads")
 	}
-	including := fstest.MapFS{"agents/contracts/a.md": {Data: []byte("x{{if .}}{{template \"contracts/gone\"}}{{end}}\n")}}
-	if _, err := parseAgentTemplates(including); err == nil || !strings.Contains(err.Error(), "agents/contracts/gone.md") {
-		t.Errorf("a template including a missing one loads: %v", err)
+}
+
+// A file that includes a missing one is an error at load, naming both,
+// wherever in the file the {{template}} sits.
+func TestAMissingIncludeNamesItsFile(t *testing.T) {
+	const gone = `{{template "contracts/gone"}}`
+	for _, c := range []struct{ name, src, includer string }{
+		{"if", `x{{if .}}` + gone + `{{end}}`, "contracts/a"},
+		{"if-else", `x{{if .}}{{else}}` + gone + `{{end}}`, "contracts/a"},
+		{"range", `x{{range .}}` + gone + `{{end}}`, "contracts/a"},
+		{"range-else", `x{{range .}}{{else}}` + gone + `{{end}}`, "contracts/a"},
+		{"with", `x{{with .}}` + gone + `{{end}}`, "contracts/a"},
+		{"with-else", `x{{with .}}{{else}}` + gone + `{{end}}`, "contracts/a"},
+		// define and block bodies are templates of their own in the set.
+		{"define", `x{{define "inner"}}` + gone + `{{end}}`, "inner"},
+		{"block", `x{{block "inner" .}}` + gone + `{{end}}`, "inner"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := parseAgentTemplates(fstest.MapFS{"agents/contracts/a.md": {Data: []byte(c.src + "\n")}})
+			want := "agents/" + c.includer + ".md includes agents/contracts/gone.md, which is missing"
+			if err == nil || err.Error() != want {
+				t.Errorf("%s: got %v, want %q", c.src, err, want)
+			}
+		})
 	}
 }
 
