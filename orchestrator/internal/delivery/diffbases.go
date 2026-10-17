@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -24,8 +25,9 @@ func DiffGivens(ctx context.Context, tx pgx.Tx, runID, taskID string, attempt in
 			history[repo] = map[string][]string{}
 		}
 		for ref, sha := range refs {
-			if !slices.Contains(history[repo][ref], sha) {
-				history[repo][ref] = append(history[repo][ref], sha)
+			commits := history[repo][ref]
+			if !slices.Contains(commits, sha) {
+				history[repo][ref] = append(commits, sha)
 			}
 		}
 	}
@@ -39,10 +41,7 @@ func DiffGivens(ctx context.Context, tx pgx.Tx, runID, taskID string, attempt in
 	}
 	out := map[string][]string{}
 	for _, repo := range repos {
-		branch := tb.Bases[repo.Name]
-		if branch == "" {
-			branch = repo.DefaultBranch
-		}
+		branch := cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
 		branches := []string{branch}
 		if conductor {
 			branches = append([]string{tb.Branch}, branches...)
