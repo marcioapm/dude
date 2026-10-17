@@ -249,14 +249,20 @@ describe("Recent judgements' filter and paging", () => {
   /** Answers each query when the test says, so responses can land out of order. */
   class Paging extends Judging {
     queries: Query[] = [];
-    pending: Array<{ query: Query; answer: (r: JudgementCallsResponse) => void }> = [];
+    pending: Array<{ query: Query; answer: (r: JudgementCallsResponse) => void; reject: (err: unknown) => void }> = [];
     override judgements(query: Query = {}): Promise<JudgementCallsResponse> {
       this.queries.push(query);
-      return new Promise((answer) => this.pending.push({ query, answer }));
+      return new Promise((answer, reject) => this.pending.push({ query, answer, reject }));
     }
     async answer(at: number, r: JudgementCallsResponse) {
       await act(async () => {
         this.pending[at]!.answer(r);
+        await Promise.resolve();
+      });
+    }
+    async reject(at: number, err: unknown) {
+      await act(async () => {
+        this.pending[at]!.reject(err);
         await Promise.resolve();
       });
     }
@@ -298,6 +304,25 @@ describe("Recent judgements' filter and paging", () => {
     expect(rowIds(container)).toEqual(["mcl_1", "mcl_e", "mcl_old"]);
     expect(container.textContent).toContain("Last 7 days · 3 calls");
     expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Show older")).toBe(false);
+  });
+
+
+  test("a rejected earlier filter does not replace later rows with a danger callout", async () => {
+    const client = new Paging("a");
+    const container = await show(client);
+    await until(() => (client.pending.length === 1 ? true : null), "the first query");
+    await client.answer(0, page([CALL, ESCALATION], null));
+    await until(() => (rowIds(container).length === 2 ? true : null), "both rows");
+    await pickAsker(container, "delivery.comment");
+    await until(() => (client.pending.length === 2 ? true : null), "the comment query");
+    await pickAsker(container, "delivery.escalation");
+    await until(() => (client.pending.length === 3 ? true : null), "the escalation query");
+    await client.answer(2, page([ESCALATION], null));
+    await until(() => (rowIds(container).join() === "mcl_e" ? true : null), "the escalation rows");
+    await client.reject(1, new Error("old request failed"));
+    await settle();
+    expect(rowIds(container)).toEqual(["mcl_e"]);
+    expect(container.querySelectorAll("[data-tone=danger]").length).toBe(0);
   });
 
   test("a response for an earlier filter that lands last is ignored", async () => {

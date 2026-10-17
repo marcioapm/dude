@@ -41,7 +41,7 @@ type Call struct {
 // Record inserts c in tx's organisation and returns its id. The request,
 // the answer, the result and the error go through red first (nil redacts
 // nothing). Each message's content is stored to MaxContentBytes, and the
-// question is the first user message's first line, to MaxQuestionChars.
+// question is the first user message's first line, to maxQuestionChars.
 func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (string, error) {
 	body := c.Sent.Body()
 	stored := make([]llm.Message, len(c.Sent.Messages))
@@ -95,33 +95,31 @@ func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (strin
 }
 
 const (
-	// MaxContentBytes is the most of one message's content stored; what is
-	// sent is not cut.
-	MaxContentBytes = 64 << 10
-	// MaxQuestionChars bounds model_calls.question (its CHECK).
-	MaxQuestionChars = 500
+	maxContentBytes = 64 << 10
+	// maxQuestionChars bounds model_calls.question (its CHECK).
+	maxQuestionChars = 500
 	// truncatedMark ends a stored content that was cut.
 	truncatedMark = "\n[… truncated: %d bytes not stored]"
 )
 
 // truncateBytes is s to MaxContentBytes, cut on a rune boundary and marked.
 func truncateBytes(s string) string {
-	if len(s) <= MaxContentBytes {
+	if len(s) <= maxContentBytes {
 		return s
 	}
-	cut := MaxContentBytes
+	cut := maxContentBytes
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + fmt.Sprintf(truncatedMark, len(s)-cut)
 }
 
-// firstLine is s's first non-blank line, trimmed, to MaxQuestionChars characters.
+// firstLine is s's first non-blank line, trimmed, to maxQuestionChars characters.
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	line = strings.TrimSpace(line)
-	if r := []rune(line); len(r) > MaxQuestionChars {
-		line = string(r[:MaxQuestionChars-1]) + "…"
+	if r := []rune(line); len(r) > maxQuestionChars {
+		line = string(r[:maxQuestionChars-1]) + "…"
 	}
 	return line
 }

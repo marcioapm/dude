@@ -217,9 +217,9 @@ function RecentJudgements({ client }: { client: ApiClient }) {
   const load = useCallback((before?: string) => {
     const asked = generation.current;
     client.judgements({ asker: asker === EVERYONE ? undefined : asker, before }).then(
-      (next) => asked === generation.current && setData((have) => (before && have
+      (next) => asked === generation.current && (setProblem(null), setData((have) => (before && have
         ? { ...have, calls: [...have.calls, ...next.calls], next: next.next }
-        : { ...next, summary: next.summary ?? { calls: next.calls.length, since: "" }, askers: next.askers ?? [] })),
+        : { ...next, summary: next.summary ?? { calls: next.calls.length, since: "" }, askers: next.askers ?? [] }))),
       (err: unknown) => asked === generation.current && setProblem(errorText(err)));
   }, [client, asker]);
   useEffect(() => {
@@ -309,7 +309,7 @@ function JudgementDialog({ client, call, onClose }: { client: ApiClient; call: J
       <FormStack>
         {call.status === "error" || !call.decision ? (
           <Callout tone="danger" data-testid="judgement-failed">
-            {saysNoAnswer(call.error) ? <b>{errorSentence(call.error!)}</b> : <><b>No answer.</b> {errorSentence(call.error ?? "")}</>}
+            {saysNoAnswer(call.error) ? <b>{errorSentence(call.error!)}</b> : <><b>No answer.</b>{call.error ? " " : ""}{errorSentence(call.error ?? "")}</>}
             {" "}The caller fell back to what it does without a judgement.
           </Callout>
         ) : (

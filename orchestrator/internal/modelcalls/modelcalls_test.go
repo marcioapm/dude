@@ -118,13 +118,13 @@ func TestAFailedCallIsRecordedAsAnError(t *testing.T) {
 }
 
 // A call stores its question's first line, short, and each message's
-// content to MaxContentBytes, marked where it was cut.
+// content to maxContentBytes, marked where it was cut.
 func TestACallKeepsItsQuestionAndALongContentCut(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	ctx := context.Background()
 	org := dbtest.Org(t, owner)
-	long := strings.Repeat("é", MaxContentBytes) // 2 bytes each
-	question := "  " + strings.Repeat("q", MaxQuestionChars+20) + "\nsecond line"
+	long := "x" + strings.Repeat("é", (maxContentBytes-1)/2+1) // cut lands inside a 2-byte rune
+	question := "  " + strings.Repeat("q", maxQuestionChars+20) + "\nsecond line"
 	sent := llm.Call{Model: "m", Messages: []llm.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: question}, {Role: "user", Content: long}}}
 	var id string
 	if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
@@ -138,7 +138,7 @@ func TestACallKeepsItsQuestionAndALongContentCut(t *testing.T) {
 	if err := owner.QueryRow(ctx, `SELECT question, request FROM model_calls WHERE id = $1`, id).Scan(&stored, &request); err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Repeat("q", MaxQuestionChars-1) + "…"; stored != want {
+	if want := strings.Repeat("q", maxQuestionChars-1) + "…"; stored != want {
 		t.Errorf("question = %q", stored)
 	}
 	var body struct{ Messages []llm.Message }
@@ -149,12 +149,12 @@ func TestACallKeepsItsQuestionAndALongContentCut(t *testing.T) {
 		t.Fatalf("messages = %v", body.Messages[:2])
 	}
 	got := body.Messages[2].Content
-	want := strings.Repeat("é", MaxContentBytes/2) + "\n[… truncated: 65536 bytes not stored]"
+	want := "x" + strings.Repeat("é", (maxContentBytes-1)/2) + "\n[… truncated: 2 bytes not stored]"
 	if got != want {
 		t.Errorf("content: %d bytes, ends %q", len(got), got[len(got)-60:])
 	}
 	// What is sent is not cut.
-	if len(sent.Messages[2].Content) != 2*MaxContentBytes {
+	if len(sent.Messages[2].Content) != len(long) {
 		t.Errorf("sent cut to %d", len(sent.Messages[2].Content))
 	}
 }
