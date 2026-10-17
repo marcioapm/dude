@@ -249,6 +249,17 @@ describe("a brainstorm session's page", () => {
     expect(notice!.querySelector('[data-icon="warning"]')).not.toBeNull();
   });
 
+  test("a turn stopped for its model's silence says so, naming no tool", async () => {
+    const client = new SessionClient(detail("read"), [
+      ev("session.turn_stopped", { runId: RUN, silentSecs: 660, directiveId: "dir_silent" }),
+    ]);
+    const page = await sessionPage(client);
+    await settle();
+    const notice = page.querySelector('[data-kind="stopped"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("Stopped Brainstorm's turn: its model gave no answer for 10\u00a0min.");
+  });
+
   test("its conversation: each member's message signed, dude's briefing without the first message, the agent's answer", async () => {
     const client = new SessionClient(detail("owner"), [
       ev("chat.message", { text: "Can the meter take a run event?" }, { type: "human", id: YOU }),
