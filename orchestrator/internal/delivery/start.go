@@ -141,10 +141,10 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	fresh := Reopened(d)
 	if fresh {
 		// Reopened after it ran: a fresh attempt, keyed as Start over keys
-		// one, so the start never joins the delivery that ended. Past the
-		// ended delivery's own attempt too: one that parked before any phase
-		// Run left max(runs.attempt) where it was.
-		attempt = max(attempt, d.State.Attempt) + 1
+		// one, so the start never joins the delivery that ended.
+		if attempt, err = NextAttemptTx(ctx, tx, in.TaskID, d.State.Attempt); err != nil {
+			return out, err
+		}
 		key = fmt.Sprintf("delivery:%s:attempt-%d", in.TaskID, attempt)
 	}
 	st, err := NewState(ctx, tx, in.TaskID, projectID, policy, attempt)
@@ -178,4 +178,16 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 		out.ConductorRunID, err = StartConductor(ctx, tx, in.Org, projectID, in.TaskID, in.Writer, in.Message)
 	}
 	return out, err
+}
+
+// NextAttemptTx is a fresh attempt's number, for a Reopen's start and for
+// Start over: past every agent Run's attempt and past the latest
+// delivery's own, since one that ended before any phase Run (parked, or
+// escalated in adopt) left the Runs' maximum where it was. Agent Runs
+// only, as attempt metrics count them (migration 073): a preview takes the
+// attempt it shows and never starts one.
+func NextAttemptTx(ctx context.Context, tx pgx.Tx, taskID string, deliveryAttempt int) (int, error) {
+	var runs int
+	err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, taskID).Scan(&runs)
+	return max(runs, deliveryAttempt) + 1, err
 }

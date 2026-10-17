@@ -292,7 +292,9 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		}
 		switch body.Action {
 		case "restart":
-			attempt = t.Attempt + 1
+			if attempt, err = delivery.NextAttemptTx(r.Context(), tx, taskID, t.State.Attempt); err != nil {
+				return err
+			}
 			st := t.State
 			if wfID, err = s.startOver(r.Context(), tx, org, taskID, t.ProjectID, st.Policy, attempt, override != nil); err != nil {
 				return err

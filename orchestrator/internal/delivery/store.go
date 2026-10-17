@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -169,6 +170,30 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 	return runID, err
 }
 
+// ErrDeliveryEnded refuses an implementer whose delivery a Close or
+// Archive ended, or whose task is closed or archived.
+var ErrDeliveryEnded = errors.New("the delivery has ended: its task was closed or archived")
+
+// refuseEndedDeliveryTx is ErrDeliveryEnded when the task's delivery
+// (already locked by the caller) is no longer live or RefuseLifecycleTx
+// refuses the task.
+func refuseEndedDeliveryTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	d, err := LoadDelivery(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if d != nil && !d.Live() {
+		return ErrDeliveryEnded
+	}
+	if err := RefuseLifecycleTx(ctx, tx, taskID); err != nil {
+		if IsLifecycleRefusal(err) {
+			return ErrDeliveryEnded
+		}
+		return err
+	}
+	return nil
+}
+
 func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (string, error) {
 	var runID string
 	if in.Key != "" {
@@ -181,6 +206,13 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		// A writer waits for the conductor's publish moving the task
 		// branch.
 		if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
+			return "", err
+		}
+	}
+	if in.Phase == PhaseImplement {
+		// Path 5: with the delivery locked, a Close or Archive committed
+		// since the step's own check makes no implementer.
+		if err := refuseEndedDeliveryTx(ctx, tx, in.TaskID); err != nil {
 			return "", err
 		}
 	}

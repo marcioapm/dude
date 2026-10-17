@@ -590,6 +590,10 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseImplement, k, func(p *PhaseRun) { p.FeedbackItemIDs = feedback; d.apply(p) })
+	if errors.Is(err, ErrDeliveryEnded) {
+		return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
+			SleepUntil: time.Now().Add(blockedRecheck)}, nil
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
