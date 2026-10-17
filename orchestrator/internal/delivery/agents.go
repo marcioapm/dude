@@ -17,7 +17,7 @@ import (
 // when the package initialises: one that is missing or fails to parse
 // stops the process at startup, never renders empty.
 //
-//go:embed agents/roles/*.md agents/contracts
+//go:embed agents/roles/*.md agents/contracts agents/briefings
 var agentFiles embed.FS
 
 var agentTemplates = mustParse(parseAgentTemplates(agentFiles))

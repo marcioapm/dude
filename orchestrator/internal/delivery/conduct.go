@@ -615,10 +615,11 @@ const DismissedByConductor = "Dismissed by the conductor: "
 // AcceptedBy says who left an accepted finding as it is, from its
 // resolution note: the conductor, with its reason, or a person.
 func AcceptedBy(note string) string {
-	if reason, ok := strings.CutPrefix(note, DismissedByConductor); ok {
-		return "dismissed by the conductor: " + clip(reason, 120)
-	}
-	return "accepted by a person"
+	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
+	return render("briefings/finding-accepted", struct {
+		Conductor bool
+		Reason    string
+	}{conductor, reason})
 }
 
 // TaskSpec is update_task: a goal, acceptance criteria, or both; nil

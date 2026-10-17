@@ -277,7 +277,7 @@ func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) 
 	if replay != "" {
 		about += "\n\n" + replay
 	}
-	return about + "\n\n## The first message\n\n" + message, nil
+	return about + "\n\n" + render("briefings/session-first-message", message), nil
 }
 
 // sessionAbout is the session as its agent is briefed on it: its name,
@@ -287,27 +287,29 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	if err := tx.QueryRow(ctx, `SELECT title, titled_by FROM sessions WHERE id = $1`, sessionID).Scan(&title, &titledBy); err != nil {
 		return "", fmt.Errorf("briefing: the session: %w", err)
 	}
-	var b strings.Builder
-	switch {
-	case title == nil:
-		b.WriteString("Brainstorm, this is a new session, not named yet.")
-	case titledBy != nil && *titledBy == "person":
-		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as a member named it: keep that name.", oneLine(*title))
-	default:
-		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as you named it.", oneLine(*title))
+	type repo struct{ Name, Path, DefaultBranch string }
+	type project struct {
+		Key, Name string
+		Repos     []repo
 	}
-	b.WriteString(" You think with its members about their projects: read, ask, propose. Below is what dude knows; " +
-		"read more with your tools.")
+	type person struct{ Name, Role string }
+	data := struct {
+		Title         string
+		NamedByPerson bool
+		People        []person
+		Projects      []project
+	}{NamedByPerson: titledBy != nil && *titledBy == "person"}
+	if title != nil {
+		data.Title = *title
+	}
 	people, err := SessionMembers(ctx, tx, sessionID)
 	if err != nil {
 		return "", err
 	}
-	b.WriteString("\n\n## People\n")
 	for _, p := range people {
-		if !p.Accepted {
-			continue
+		if p.Accepted {
+			data.People = append(data.People, person{p.Name, sessionRoleWords[p.Role]})
 		}
-		fmt.Fprintf(&b, "\n- %s (%s)", p.Name, sessionRoleWords[p.Role])
 	}
 	projects, err := SessionProjects(ctx, tx, sessionID)
 	if err != nil {
@@ -317,19 +319,16 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	if err != nil {
 		return "", err
 	}
-	b.WriteString("\n\n## Linked projects\n")
-	if len(projects) == 0 {
-		b.WriteString("\nNone yet: you can talk and search memory; a member links projects when the idea is concrete.")
-	}
 	for _, p := range projects {
-		fmt.Fprintf(&b, "\n- %s (%s)", p.Key, p.Name)
+		linked := project{Key: p.Key, Name: p.Name}
 		for _, r := range repos {
 			if r.ProjectID == p.ID {
-				fmt.Fprintf(&b, "\n  - `%s` at `%s`, %s", r.Name, SessionRepoPath(r.Key, r.Name), r.DefaultBranch)
+				linked.Repos = append(linked.Repos, repo{r.Name, SessionRepoPath(r.Key, r.Name), r.DefaultBranch})
 			}
 		}
+		data.Projects = append(data.Projects, linked)
 	}
-	return b.String(), nil
+	return render("briefings/session", data), nil
 }
 
 var sessionRoleWords = map[string]string{SessionOwner: "owner", SessionChat: "can chat", SessionRead: "can read"}
@@ -536,8 +535,7 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 			map[string]any{"questionId": q.ID, "by": "withdrawn"})); err != nil {
 			return err
 		}
-		if err := TellBrainstorm(ctx, tx, org, sessionID, fmt.Sprintf("Your question to %s is withdrawn: they can no longer answer "+
-			"in this session. Nobody answered %q; ask someone else if you still need it decided.", name, oneLine(q.Prompt))); err != nil {
+		if err := TellBrainstorm(ctx, tx, org, sessionID, render("briefings/question-withdrawn", struct{ Name, Prompt string }{name, q.Prompt})); err != nil {
 			return err
 		}
 	}

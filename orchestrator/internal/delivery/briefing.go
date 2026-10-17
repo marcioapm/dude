@@ -17,13 +17,13 @@ import (
 // It never carries a diff, a file list or a finding's text; the conductor
 // reads those with its tools (run_diff, findings, pull_requests).
 const (
-	briefGoalChars      = 4000
-	briefCriteria       = 20
-	briefCriterionChars = 300
-	briefRuns           = 20
-	briefRunLineChars   = 160
-	briefFindings       = 20
-	briefPullRequests   = 10
+	briefGoalChars       = 4000
+	briefCriteria        = 20
+	briefCriterionChars  = 300
+	briefRunsMax         = 20
+	briefRunLineChars    = 160
+	briefFindingsMax     = 20
+	briefPullRequestsMax = 10
 )
 
 // RepoHead is where a task stands in one repository: the commit its
@@ -77,9 +77,7 @@ const (
 
 // lostConversation is dude's message in a talker's briefing again, after
 // its harness restarted without the conversation (Rebriefing).
-const lostConversation = "Your agent session restarted without its earlier conversation: you no longer hold what was said " +
-	"before this. This is your briefing again, as things stand now, with the conversation so far as dude recorded it. " +
-	"Read again with your tools what you need, and answer the messages that follow, or that just came before this one."
+var lostConversation = render("briefings/lost-conversation", nil)
 
 // Rebriefing is the briefing of a talker whose harness restarted without
 // its conversation (lux started a blank session on resume), in dude's own
@@ -92,7 +90,7 @@ const lostConversation = "Your agent session restarted without its earlier conve
 func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (string, error) {
 	message := lostConversation
 	if reason != "" {
-		message += "\n\n(lux: " + oneLine(reason) + ")"
+		message += "\n\n" + render("briefings/lost-conversation-reason", reason)
 	}
 	if ref.SessionID != "" {
 		about, err := sessionAbout(ctx, tx, ref.SessionID)
@@ -106,7 +104,7 @@ func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (stri
 		if replay != "" {
 			about += "\n\n" + replay
 		}
-		return "## Your earlier conversation is lost\n\n" + message + "\n\n" + about, nil
+		return render("briefings/rebrief-session", message+"\n\n"+about), nil
 	}
 	return briefing(ctx, tx, ref.TaskID, ref.RunID, "dude", message, rebrief)
 }
@@ -121,43 +119,28 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 		Scan(&key, &title, &goal, &status, &criteria); err != nil {
 		return "", fmt.Errorf("briefing: the task: %w", err)
 	}
-	var b strings.Builder
-	who := person
-	if who == "" {
-		who = "Someone"
+	b := conductorBrief{Key: key, TaskID: taskID, Title: oneLine(title), Status: status, Goal: briefGoal(goal),
+		Who: person, Message: message, Why: map[briefedFor]string{byPerson: "person", byWake: "wake", rebrief: "rebrief"}[why]}
+	if b.Who == "" {
+		b.Who = "Someone"
 	}
-	switch why {
-	case byWake:
-		who = "dude"
-		fmt.Fprintf(&b, "Conductor, dude woke you about %s, %q: a decision is yours. You are this task's conductor. "+
-			"Below is what dude knows about the task, in short; read more with your tools.", key, oneLine(title))
-	case rebrief:
-		who = "dude"
-		fmt.Fprintf(&b, "Conductor, dude is briefing you again on %s, %q. You are this task's conductor. "+
-			"Below is what dude knows about the task, in short; read more with your tools.", key, oneLine(title))
-	default:
-		fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
-			"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
+	if why != byPerson {
+		b.Who = "dude"
 	}
-	fmt.Fprintf(&b, "\n\n## The task\n\n%s · %s · status %s", key, taskID, status)
-	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", briefGoal(goal))
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
-	if len(ac) > 0 {
-		b.WriteString("\n\nAcceptance criteria:")
-		for i, c := range ac {
-			if i == briefCriteria {
-				fmt.Fprintf(&b, "\n- … and %d more", len(ac)-briefCriteria)
-				break
-			}
-			fmt.Fprintf(&b, "\n- %s", clipTaskText(oneLine(c), briefCriterionChars))
+	for i, c := range ac {
+		if i == briefCriteria {
+			b.MoreCriteria = len(ac) - briefCriteria
+			break
 		}
+		b.Criteria = append(b.Criteria, clipTaskText(oneLine(c), briefCriterionChars))
 	}
-
-	if err := briefRunsSection(ctx, tx, &b, taskID, conductorRunID); err != nil {
+	var err error
+	if b.Runs, err = briefRuns(ctx, tx, taskID, conductorRunID); err != nil {
 		return "", err
 	}
-	if err := briefFindingsSection(ctx, tx, &b, taskID); err != nil {
+	if b.Findings, err = briefFindings(ctx, tx, taskID); err != nil {
 		return "", err
 	}
 	// The epic it is on, and what its peers did since it last looked:
@@ -166,85 +149,83 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, taskID).Scan(&org); err != nil {
 		return "", err
 	}
-	digest, err := ConductorDigestTx(ctx, tx, org, taskID, conductorRunID, "briefing")
-	if err != nil {
+	if b.Digest, err = ConductorDigestTx(ctx, tx, org, taskID, conductorRunID, "briefing"); err != nil {
 		return "", err
 	}
-	if digest != "" {
-		b.WriteString("\n\n" + digest)
-	}
-	if err := briefPullRequestsSection(ctx, tx, &b, taskID); err != nil {
+	if b.PullRequests, err = briefPullRequests(ctx, tx, taskID); err != nil {
 		return "", err
 	}
-	heads, err := TaskHeads(ctx, tx, taskID)
-	if err != nil {
+	if b.Heads, err = TaskHeads(ctx, tx, taskID); err != nil {
 		return "", err
 	}
-	b.WriteString("\n\n## Head\n")
-	if len(heads) == 0 {
-		b.WriteString("\nThe task names no repository: it changes no code.")
-	}
-	for _, h := range heads {
-		switch {
-		case h.SHA == "":
-			fmt.Fprintf(&b, "\n- %s: the default branch (nothing published yet)", h.Repo)
-		case h.Branch != "":
-			fmt.Fprintf(&b, "\n- %s: %s on %s", h.Repo, short(h.SHA), h.Branch)
-		default:
-			fmt.Fprintf(&b, "\n- %s: %s", h.Repo, short(h.SHA))
-		}
-	}
-	b.WriteString("\n\nYour checkout is at that head.")
-	if err := briefDeciderSection(ctx, tx, &b, taskID); err != nil {
+	if err := briefDecider(ctx, tx, &b, taskID); err != nil {
 		return "", err
 	}
-	epic, err := EpicBriefing(ctx, tx, org, taskID, "", RoleConductor)
-	if err != nil {
+	if b.Epic, err = EpicBriefing(ctx, tx, org, taskID, "", RoleConductor); err != nil {
 		return "", err
-	}
-	if epic != "" {
-		b.WriteString("\n\n" + epic)
 	}
 	// What the task's conductors were told and said before: none before
 	// its first. A message handed over is not in it (never read): it is
 	// this briefing's message.
-	replay, err := Replay(ctx, tx, Talker{TaskID: taskID})
-	if err != nil {
+	if b.Replay, err = Replay(ctx, tx, Talker{TaskID: taskID}); err != nil {
 		return "", err
 	}
-	if replay != "" {
-		b.WriteString("\n\n" + replay)
-	}
-	fmt.Fprintf(&b, "\n\n## %s's message\n\n%s", who, message)
-	return b.String(), nil
+	return render("briefings/conductor", b), nil
 }
 
-// briefDeciderSection says who takes the task's decisions, and the one
-// its delivery waits on.
-func briefDeciderSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID string) error {
+// conductorBrief is what briefings/conductor.md is written from.
+type conductorBrief struct {
+	Why, Who, Message          string
+	Key, TaskID, Title, Status string
+	Goal                       string
+	Criteria                   []string
+	MoreCriteria               int
+	Runs, Findings             briefLines
+	Digest, Epic, Replay       string
+	PullRequests               []briefPullRequest
+	Heads                      []RepoHead
+	Decider, Waiting, Step     string
+}
+
+// briefLines is a bounded list: its total, and the lines shown.
+type briefLines struct {
+	Total    int
+	ByStatus string
+	Lines    []string
+}
+
+type briefPullRequest struct {
+	Repo                        string
+	Number                      int
+	State, Head, Checks, Review string
+	Feedback                    int
+}
+
+// briefDecider says who takes the task's decisions, and the one its
+// delivery waits on.
+func briefDecider(ctx context.Context, tx pgx.Tx, b *conductorBrief, taskID string) error {
 	d, err := ReadDelivery(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
-	b.WriteString("\n\n## Decisions\n\n")
 	switch {
 	case d == nil || !d.Live() || Ended(d.TaskStatus):
-		b.WriteString("No delivery is in progress: you are read-only.")
+		b.Decider = "none"
 	case !d.State.conducted():
-		b.WriteString("Deliver takes this task's decisions: you are read-only.")
+		b.Decider = "deliver"
 	case d.State.Decision != nil && d.State.Decision.Taken == nil:
-		fmt.Fprintf(b, "You take this task's decisions. The delivery waits on one now: %s.", pointLabel[d.State.Decision.Point])
+		b.Decider, b.Waiting = "conductor", pointLabel[d.State.Decision.Point]
 	default:
-		fmt.Fprintf(b, "You take this task's decisions. The delivery is at %s; you are woken at its next decision.", d.Step)
+		b.Decider, b.Step = "conductor", d.Step
 	}
 	return nil
 }
 
-func briefRunsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID, self string) error {
-	var total int
+func briefRuns(ctx context.Context, tx pgx.Tx, taskID, self string) (briefLines, error) {
+	var out briefLines
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent' AND id <> $2`,
-		taskID, self).Scan(&total); err != nil {
-		return err
+		taskID, self).Scan(&out.Total); err != nil {
+		return out, err
 	}
 	// The newest, then shown oldest first; each with its outcome in a line:
 	// its error, or the first line of its last message.
@@ -253,69 +234,48 @@ func briefRunsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID
 			COALESCE((SELECT e.payload->>'text' FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.message'
 				ORDER BY e.cursor DESC LIMIT 1), '')
 		FROM (SELECT * FROM runs WHERE task_id = $1 AND kind = 'agent' AND id <> $2 ORDER BY created_at DESC LIMIT $3) r
-		ORDER BY created_at`, taskID, self, briefRuns)
+		ORDER BY created_at`, taskID, self, briefRunsMax)
 	if err != nil {
-		return err
+		return out, err
 	}
 	type run struct{ ID, Phase, Role, Category, Status, Error, Said string }
 	runs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[run])
 	if err != nil {
-		return err
-	}
-	fmt.Fprintf(b, "\n\n## Runs (%d)\n", total)
-	if total == 0 {
-		b.WriteString("\nNone yet: the task has not been delivered.")
-		return nil
-	}
-	if total > len(runs) {
-		fmt.Fprintf(b, "\nThe latest %d; the rest are older.", len(runs))
+		return out, err
 	}
 	for _, r := range runs {
 		what := r.Phase
 		if r.Category != "" {
 			what += " · " + r.Category
 		}
-		if what == "" {
-			what = "agent"
-		}
 		outcome := r.Error
 		if outcome == "" {
 			outcome = firstLine(r.Said)
 		}
-		line := fmt.Sprintf("%s · %s · %s · %s", r.ID, what, r.Role, r.Status)
-		if outcome != "" {
-			line += " · " + outcome
-		}
-		fmt.Fprintf(b, "\n- %s", clip(line, briefRunLineChars))
+		line := render("briefings/run-line", struct{ ID, What, Role, Status, Outcome string }{r.ID, what, r.Role, r.Status, outcome})
+		out.Lines = append(out.Lines, clip(line, briefRunLineChars))
 	}
-	return nil
+	return out, nil
 }
 
-func briefFindingsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID string) error {
-	var total int
-	var byStatus string
+func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, error) {
+	var out briefLines
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(n), 0)::int, COALESCE(string_agg(n || ' ' || status, ', ' ORDER BY status), '')
 		FROM (SELECT status::text, count(*) AS n FROM review_findings WHERE task_id = $1 GROUP BY status) s`,
-		taskID).Scan(&total, &byStatus); err != nil {
-		return err
+		taskID).Scan(&out.Total, &out.ByStatus); err != nil {
+		return out, err
 	}
-	fmt.Fprintf(b, "\n\n## Findings (%d", total)
-	if byStatus != "" {
-		fmt.Fprintf(b, ": %s", byStatus)
-	}
-	b.WriteString(")\n")
-	if total == 0 {
-		b.WriteString("\nNone.")
-		return nil
+	if out.Total == 0 {
+		return out, nil
 	}
 	// Open first, most severe first: what a person most likely asks about.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(file, ''), COALESCE(line, 0), status::text,
 			COALESCE(resolved_by_run_id, ''), fix_attempts, COALESCE(resolution_note, '')
 		FROM review_findings WHERE task_id = $1
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
-		LIMIT $2`, taskID, briefFindings)
+		LIMIT $2`, taskID, briefFindingsMax)
 	if err != nil {
-		return err
+		return out, err
 	}
 	type finding struct {
 		ID, Severity, Category, File string
@@ -326,73 +286,40 @@ func briefFindingsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, ta
 	}
 	fs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[finding])
 	if err != nil {
-		return err
-	}
-	if total > len(fs) {
-		fmt.Fprintf(b, "\nThe first %d, open and most severe first.", len(fs))
+		return out, err
 	}
 	for _, f := range fs {
 		where := f.File
 		if where != "" && f.Line > 0 {
 			where = fmt.Sprintf("%s:%d", f.File, f.Line)
 		}
-		line := fmt.Sprintf("%s · %s · %s", f.ID, f.Severity, f.Category)
-		if where != "" {
-			line += " · " + clip(where, 80)
-		}
-		line += " · " + settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)
-		fmt.Fprintf(b, "\n- %s", line)
+		out.Lines = append(out.Lines, render("briefings/finding-line", struct{ ID, Severity, Category, Where, Settled string }{
+			f.ID, f.Severity, f.Category, where, settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)}))
 	}
-	return nil
+	return out, nil
 }
 
 // settled says how a finding stands, in a few words.
 func settled(status, by string, attempts int, note string) string {
-	switch status {
-	case "resolved":
-		if by != "" {
-			return "fixed, by " + by
-		}
-		return "fixed"
-	case "accepted":
+	if status == "accepted" {
 		return AcceptedBy(note)
-	case "superseded":
-		return "superseded"
 	}
-	if attempts > 0 {
-		return fmt.Sprintf("open, %d fix attempts", attempts)
-	}
-	return "open"
+	return render("briefings/finding-settled", struct {
+		Status, By string
+		Attempts   int
+	}{status, by, attempts})
 }
 
-func briefPullRequestsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID string) error {
+func briefPullRequests(ctx context.Context, tx pgx.Tx, taskID string) ([]briefPullRequest, error) {
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.state::text, COALESCE(pr.head_sha, ''), pr.checks::text, pr.review::text,
 			(SELECT count(*) FROM events e WHERE e.task_id = pr.task_id AND e.event_type = 'pull_request.commented'
 				AND (e.payload->>'number')::int = pr.number AND e.payload->>'repo' = repo.name)
 		FROM pull_requests pr JOIN repositories repo ON repo.id = pr.repository_id
-		WHERE pr.task_id = $1 ORDER BY pr.created_at LIMIT $2`, taskID, briefPullRequests)
+		WHERE pr.task_id = $1 ORDER BY pr.created_at LIMIT $2`, taskID, briefPullRequestsMax)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	type pr struct {
-		Repo                        string
-		Number                      int
-		State, Head, Checks, Review string
-		Feedback                    int
-	}
-	prs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[pr])
-	if err != nil {
-		return err
-	}
-	b.WriteString("\n\n## Pull requests\n")
-	if len(prs) == 0 {
-		b.WriteString("\nNone.")
-	}
-	for _, p := range prs {
-		fmt.Fprintf(b, "\n- %s#%d · %s · head %s · checks %s · review %s · %d feedback items",
-			p.Repo, p.Number, p.State, short(p.Head), p.Checks, p.Review, p.Feedback)
-	}
-	return nil
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[briefPullRequest])
 }
 
 // clip cuts s to n characters, saying so.
