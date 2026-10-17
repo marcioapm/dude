@@ -143,7 +143,38 @@ func TestACompletionIsBounded(t *testing.T) {
 	}
 }
 
-// A 2xx with no choices is an error, keeping status and usage.
+// A call-owned timeout remains the cause when the caller is cancelled before
+// the transport finishes unwinding.
+func TestACompletionKeepsCallTimeoutOwnershipDuringTransportUnwind(t *testing.T) {
+	timerFired := make(chan struct{})
+	release := make(chan struct{})
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		close(timerFired)
+		<-release
+		return nil, req.Context().Err()
+	})
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (Client{URL: "https://proxy.test", HTTP: &http.Client{Transport: transport}}).Complete(parent, Call{Model: "m", Timeout: time.Millisecond})
+		done <- err
+	}()
+	<-timerFired
+	cancel()
+	close(release)
+	if err := <-done; err == nil || err.Error() != "no answer from the LLM proxy in 1ms" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestACompletionWithNoChoicesIsAnError(t *testing.T) {
 	f := &fakeProxy{}
 	srv := f.serve(t, func(w http.ResponseWriter, _ seen) {

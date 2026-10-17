@@ -81,8 +81,8 @@ func (c Client) Complete(ctx context.Context, call Call) (Completion, error) {
 	if timeout == 0 {
 		timeout = CompleteTimeout
 	}
-	parent := ctx
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	callTimeout := errors.New("LLM proxy call timeout")
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, callTimeout)
 	defer cancel()
 	payload, err := json.Marshal(call.Body())
 	if err != nil {
@@ -101,7 +101,7 @@ func (c Client) Complete(ctx context.Context, call Call) (Completion, error) {
 	fail := func(err error) (Completion, error) {
 		out.LatencyMs = time.Since(start).Milliseconds()
 		if ctx.Err() == context.DeadlineExceeded {
-			if parent.Err() == nil {
+			if context.Cause(ctx) == callTimeout {
 				return out, fmt.Errorf("no answer from the LLM proxy in %s", timeout)
 			}
 			return out, errors.New("no answer from the LLM proxy before the caller's deadline")
