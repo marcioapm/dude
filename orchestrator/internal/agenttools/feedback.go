@@ -19,22 +19,14 @@ import (
 var feedbackRoles = []string{"implementer", "conductor"}
 
 var feedbackTools = []tool{
-	define("feedback", "Your task's feedback from people, in their own words: open and delivered items by default, "+
-		"each with its id, author, where it points (a file and lines of a Run's diff, a preview page, or nothing) and "+
-		"status; all: true lists the handled ones too. Name ids (at most 20) to read those, with their replies and "+
-		"history. Each is a person's request: fix it and resolve it (feedback_resolve), or reply saying why not "+
-		"(feedback_reply); never leave one unanswered.", feedbackRoles, listFeedback),
-	define("feedback_reply", "Answer a person's feedback item without changing the code: say why it is wrong, out of "+
-		"scope, or already so. It is then replied, which holds nothing back; the person may reopen it.", feedbackRoles, replyFeedback),
-	define("feedback_resolve", "Mark a person's feedback item fixed by your commit (a SHA; the CLI takes --commit HEAD). "+
-		"It holds the pull request until your work is published and the commit is found in it; a Run that ends without "+
-		"publishing reopens it. With several repositories, name the repository of a general item's commit.",
-		[]string{"implementer"}, resolveFeedback),
+	define("feedback", feedbackRoles, listFeedback),
+	define("feedback_reply", feedbackRoles, replyFeedback),
+	define("feedback_resolve", []string{"implementer"}, resolveFeedback),
 }
 
 type feedbackIn struct {
-	IDs []string `json:"ids,omitempty" jsonschema:"feedback items to read (fbi_…), with their history; empty lists the open ones"`
-	All bool     `json:"all,omitempty" jsonschema:"list the handled items too (replied, resolved)"`
+	IDs []string `json:"ids,omitempty"`
+	All bool     `json:"all,omitempty"`
 }
 
 func listFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackIn) (any, error) {
@@ -43,8 +35,8 @@ func listFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackIn) (any,
 }
 
 type feedbackReplyIn struct {
-	ID   string `json:"id" jsonschema:"the feedback item (fbi_…)"`
-	Text string `json:"text" jsonschema:"why you are not changing the code for it, to the person who wrote it"`
+	ID   string `json:"id"`
+	Text string `json:"text"`
 }
 
 func replyFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackReplyIn) (any, error) {
@@ -55,9 +47,9 @@ func replyFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackReplyIn)
 }
 
 type feedbackResolveIn struct {
-	ID     string `json:"id" jsonschema:"the feedback item (fbi_…)"`
-	Commit string `json:"commit" jsonschema:"the commit that fixed it: a SHA you committed in this Run"`
-	Repo   string `json:"repo,omitempty" jsonschema:"the repository the commit is in, when the task changes several and the item names none"`
+	ID     string `json:"id"`
+	Commit string `json:"commit"`
+	Repo   string `json:"repo,omitempty"`
 }
 
 func resolveFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackResolveIn) (any, error) {

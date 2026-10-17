@@ -252,8 +252,7 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 // each bound to it.
 func (s *Server) serverFor(c Caller) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "dude", Version: "1"}, &mcp.ServerOptions{
-		Instructions: "Tools for the work you are doing in dude, the software factory that started you: " +
-			"see and add to the project's work. What you create is marked as yours and waits for a person.",
+		Instructions: delivery.ToolText("common/server-instructions", nil),
 	})
 	for _, t := range allTools() {
 		if !t.allowed(c.Role) {
@@ -397,14 +396,18 @@ func allTools() []tool {
 }
 
 // define makes a tool from a typed function: its input schema from In,
-// its arguments decoded strictly into In.
-func define[In, Out any](name, description string, roles []string,
+// its arguments decoded strictly into In. Its description and its
+// parameters' are delivery/agents/tools/<name>.md's (a session agent's,
+// tools/session/<name>.md).
+func define[In, Out any](name string, roles []string,
 	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
 		panic(fmt.Sprintf("tool %s: %v", name, err))
 	}
-	return tool{name: name, description: description, roles: roles, schema: schema,
+	key := toolKey(name, roles)
+	describeParameters(key, schema)
+	return tool{name: name, description: delivery.ToolText(key, toolTextData), roles: roles, schema: schema,
 		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
 			var in In
 			if len(args) > 0 && string(args) != "null" {
@@ -416,6 +419,47 @@ func define[In, Out any](name, description string, roles []string,
 			}
 			return do(ctx, tx, c, in)
 		}}
+}
+
+// toolTextData is what a tool's description may name: create_task's GoalMin.
+var toolTextData = struct{ GoalMin int }{GoalMin}
+
+// toolKey is the name of a tool's text: a session agent's tools share their
+// names with the task agents', so theirs are under session/.
+func toolKey(name string, roles []string) string {
+	if slices.Equal(roles, brainstorms) {
+		return "session/" + name
+	}
+	return name
+}
+
+// describeParameters gives schema's properties their descriptions from the
+// tool's text, each by its path ("questions.header" for a field of the
+// items of questions). A description naming no property panics: the
+// parameter was renamed and its text left behind.
+func describeParameters(key string, schema *jsonschema.Schema) {
+	used := map[string]bool{}
+	var walk func(prefix string, s *jsonschema.Schema)
+	walk = func(prefix string, s *jsonschema.Schema) {
+		if s == nil {
+			return
+		}
+		walk(prefix, s.Items)
+		for name, p := range s.Properties {
+			path := prefix + name
+			if text, ok := delivery.ToolParameter(key, path); ok {
+				p.Description = text
+				used[path] = true
+			}
+			walk(path+".", p)
+		}
+	}
+	walk("", schema)
+	for _, path := range delivery.ToolParameters(key) {
+		if !used[path] {
+			panic(fmt.Sprintf("agents/tools/%s.md describes %s, which the tool has no parameter called", key, path))
+		}
+	}
 }
 
 // limit caps how many calls a Run may make to the tool in its lifetime.

@@ -23,34 +23,17 @@ import (
 var coordinators = []string{"implementer", "investigator", "conductor"}
 
 var coordinationTools = []tool{
-	define("message", messageDescription, coordinators, message),
-	define("wait_for_reply", "End your turn until the reply to one of your messages comes. Use it only when the next thing "+
-		"you must do depends on that answer and nothing else is left that doesn't. Your Run parks if no reply comes within "+
-		"the project's grace (10 minutes by default); the reply resumes it. If the reply has already come, it is returned "+
-		"at once and you carry on.", coordinators, waitForReply),
-	define("note", "Pin a note on your epic: a short working fact every agent on the epic must follow — a contract, a "+
-		"decision, where the docs are. Every agent on the epic is told at its next step, and every Run that starts there "+
-		"reads it in its briefing, reviewers included. Notes are never edited: replaces N pins a new note in note N's place. "+
-		"At most 10 current notes, at most 2,000 characters each; a replace never counts against the limit.",
-		coordinators, note),
+	define("message", coordinators, message),
+	define("wait_for_reply", coordinators, waitForReply),
+	define("note", coordinators, note),
 }
-
-const messageDescription = "Send a short message to one of your peers (a task on your epic), delivered at its agent's " +
-	"next step. Use it only when you need a decision or a fact that only that task's agent has. First look: list_tasks " +
-	"with peers: true shows each peer's phase, branch, files and last words; run_diff with task reads its changes; the " +
-	"epic notes in your briefing are what is settled. This never blocks: it returns at once and the reply lands at your " +
-	"next step. Ask as early as you know you need the answer, then keep working on whatever doesn't depend on it. Call " +
-	"wait_for_reply only at the point where you can't go on without the answer; a turn that ends with your question " +
-	"unanswered waits on it too. If you go ahead on an assumption instead, reply to your own question saying what you " +
-	"assumed. Never use it to report progress or to tell every task something: pin a note instead. A Run may send at " +
-	"most 5 messages an hour."
 
 // ---- message -------------------------------------------------------------------
 
 type messageIn struct {
-	To      string `json:"to" jsonschema:"the peer task's key, like ABS-2: one task, never a Run"`
-	Text    string `json:"text" jsonschema:"what you need from it, or your answer"`
-	ReplyTo string `json:"replyTo,omitempty" jsonschema:"the message this answers (pm_…); your own message, to close your question with what you assumed"`
+	To      string `json:"to"`
+	Text    string `json:"text"`
+	ReplyTo string `json:"replyTo,omitempty"`
 }
 
 func message(ctx context.Context, tx pgx.Tx, c Caller, in messageIn) (delivery.Sent, error) {
@@ -83,7 +66,7 @@ func message(ctx context.Context, tx pgx.Tx, c Caller, in messageIn) (delivery.S
 // ---- wait_for_reply ------------------------------------------------------------
 
 type waitIn struct {
-	Message string `json:"message" jsonschema:"one of your own messages (pm_…) whose reply you cannot go on without"`
+	Message string `json:"message"`
 }
 
 type waitOut struct {
@@ -142,8 +125,8 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 // ---- note ----------------------------------------------------------------------
 
 type noteIn struct {
-	Text     string `json:"text" jsonschema:"the note: a short working fact every agent on the epic must follow (at most 2,000 characters)"`
-	Replaces int    `json:"replaces,omitempty" jsonschema:"the number of the current note this one replaces"`
+	Text     string `json:"text"`
+	Replaces int    `json:"replaces,omitempty"`
 }
 
 func note(ctx context.Context, tx pgx.Tx, c Caller, in noteIn) (delivery.Pinned, error) {

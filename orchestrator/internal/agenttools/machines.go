@@ -27,8 +27,8 @@ var machineRoles = delivery.PromptRoles
 const machineMovesPerRun = 3
 
 type requestMachineIn struct {
-	Size   string `json:"size" jsonschema:"one of the sizes listed in this tool's description, by name (Large)"`
-	Reason string `json:"reason" jsonschema:"what ran out: the command, its exit or error, the workers or threads it used"`
+	Size   string `json:"size"`
+	Reason string `json:"reason"`
 }
 
 type requestMachineOut struct {

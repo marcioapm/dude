@@ -53,21 +53,21 @@ const (
 const cutMark = "…cut"
 
 type githubSearchIn struct {
-	Repo  string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Query string `json:"query,omitempty" jsonschema:"words to find in titles and bodies, and GitHub qualifiers (label:bug, author:ana); the repository is repo's, never one named here"`
-	Kind  string `json:"kind" jsonschema:"issue or pr"`
-	State string `json:"state,omitempty" jsonschema:"open, closed or all (default all)"`
+	Repo  string `json:"repo"`
+	Query string `json:"query,omitempty"`
+	Kind  string `json:"kind"`
+	State string `json:"state,omitempty"`
 }
 
 type githubIssueIn struct {
-	Repo   string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Number int    `json:"number" jsonschema:"the issue's number (a pull request's reads its conversation)"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
 }
 
 type githubPullRequestIn struct {
-	Repo   string   `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Number int      `json:"number" jsonschema:"the pull request's number"`
-	Files  []string `json:"files,omitempty" jsonschema:"paths of changed files whose diff to read (at most 20); none reads no diff"`
+	Repo   string   `json:"repo"`
+	Number int      `json:"number"`
+	Files  []string `json:"files,omitempty"`
 }
 
 // githubRead is a read checked in the call's transaction: what to ask
@@ -666,19 +666,10 @@ func (w wrapper) recut(s string, n int) string {
 }
 
 var githubReadTools = []tool{
-	around(define("github_search", "Search one of your projects' GitHub repositories for issues or pull requests (kind), "+
-		"by words and GitHub qualifiers, open, closed or all: up to 30, most recently updated first, each with its number, "+
-		"title, author, state, labels, last update and URL. Read only; dude reads it, and what people wrote comes "+
-		"marked as external text.", githubReaders, searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_search", githubReaders, searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_issue", "Read an issue of one of your projects' GitHub repositories: its title, body, author, "+
-		"state and labels, and its comments in order (the first 50). Read only; what people wrote comes marked as "+
-		"external text.", githubReaders, readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_issue", githubReaders, readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_pull_request", "Read a pull request of one of your projects' GitHub repositories: its title, "+
-		"body, author, state, draft, head and base; its reviews; the review threads nobody resolved; its checks; the "+
-		"files it changes with their line counts; and, for the paths you name in files, their diff. Read only: reading "+
-		"a pull request lets you do nothing on it. What people wrote comes marked as external text.",
-		githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_pull_request", githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 }

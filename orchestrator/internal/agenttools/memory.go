@@ -21,9 +21,9 @@ const remembersPerRun = 20
 // ---- search_memory -----------------------------------------------------------
 
 type searchMemoryIn struct {
-	Query string   `json:"query" jsonschema:"what you want to know, in words: a question or the terms you would expect"`
-	Types []string `json:"types,omitempty" jsonschema:"only these: memory, task, epic, project (default all)"`
-	Limit int      `json:"limit,omitempty" jsonschema:"how many results, 1 to 20 (default 8)"`
+	Query string   `json:"query"`
+	Types []string `json:"types,omitempty"`
+	Limit int      `json:"limit,omitempty"`
 }
 
 type searchHit struct {
@@ -80,7 +80,7 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 // ---- get_memory --------------------------------------------------------------
 
 type getMemoryIn struct {
-	ID string `json:"id" jsonschema:"a memory's id, as search_memory gives it (mem_…)"`
+	ID string `json:"id"`
 }
 
 func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
@@ -102,11 +102,11 @@ func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory
 // ---- remember ----------------------------------------------------------------
 
 type rememberIn struct {
-	Title   string   `json:"title" jsonschema:"one line that says what it is, as another agent would scan it in a list"`
-	Content string   `json:"content" jsonschema:"the fact, procedure or note, in Markdown: what, and why it holds"`
-	Kind    string   `json:"kind,omitempty" jsonschema:"fact (default), procedure (steps that work) or note"`
-	About   []string `json:"about,omitempty" jsonschema:"task keys (TEXT-12) or epic titles this is about, in this project"`
-	Scope   string   `json:"scope,omitempty" jsonschema:"project (default): this project only; organization: true in every project"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Kind    string   `json:"kind,omitempty"`
+	About   []string `json:"about,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
 }
 
 type rememberOut struct {

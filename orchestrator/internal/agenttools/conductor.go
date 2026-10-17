@@ -32,7 +32,7 @@ const (
 // ---- findings ------------------------------------------------------------------
 
 type findingsIn struct {
-	IDs []string `json:"ids,omitempty" jsonschema:"findings to read in full (fnd_…), with their text; empty lists the task's findings without it"`
+	IDs []string `json:"ids,omitempty"`
 }
 
 type findingOut struct {
@@ -270,10 +270,10 @@ func conducted[T any](out T, err error) (T, error) {
 }
 
 type startPhaseIn struct {
-	Phase      string   `json:"phase" jsonschema:"implement, review, fix, simplify or test"`
-	Categories []string `json:"categories,omitempty" jsonschema:"review: the reviewers to run (correctness, tests, security, database, api, frontend, performance); none runs those the change warrants"`
-	Findings   []string `json:"findings,omitempty" jsonschema:"fix: the open findings to fix (fnd_…); none fixes every open one"`
-	Note       string   `json:"note,omitempty" jsonschema:"what you ask of the Run, added to its prompt"`
+	Phase      string   `json:"phase"`
+	Categories []string `json:"categories,omitempty"`
+	Findings   []string `json:"findings,omitempty"`
+	Note       string   `json:"note,omitempty"`
 }
 
 func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[string]any, error) {
@@ -283,8 +283,8 @@ func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[
 }
 
 type decideIn struct {
-	Action string `json:"action" jsonschema:"next, ask_person, wait or open_pull_request"`
-	Note   string `json:"note,omitempty" jsonschema:"why; for ask_person, the question"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
 }
 
 func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]any, error) {
@@ -292,8 +292,8 @@ func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]a
 }
 
 type dismissIn struct {
-	ID     string `json:"id" jsonschema:"the finding (fnd_…)"`
-	Reason string `json:"reason" jsonschema:"why it is left as it is, shown with the finding"`
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map[string]any, error) {
@@ -302,8 +302,8 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 }
 
 type decideEscalationIn struct {
-	Action string `json:"action" jsonschema:"one of the escalation's actions: retry, accept, resume, done, wait or stop"`
-	Note   string `json:"note,omitempty" jsonschema:"what you decided and why, kept with the task for every agent from here on"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
 }
 
 func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalationIn) (map[string]any, error) {
@@ -315,10 +315,10 @@ func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalat
 }
 
 type steerIn struct {
-	Run         string   `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
-	Text        string   `json:"text,omitempty" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
-	Interrupt   bool     `json:"interrupt,omitempty" jsonschema:"stop its current turn so it hears this now; only when the work it is doing is wasted"`
-	FeedbackIDs []string `json:"feedbackIds,omitempty" jsonschema:"people's open feedback items (fbi_…) to pass to an implementer or fixer: dude adds their own words, never a summary"`
+	Run         string   `json:"run"`
+	Text        string   `json:"text,omitempty"`
+	Interrupt   bool     `json:"interrupt,omitempty"`
+	FeedbackIDs []string `json:"feedbackIds,omitempty"`
 }
 
 func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any, error) {
@@ -338,9 +338,9 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 }
 
 type restartRunIn struct {
-	Run  string `json:"run" jsonschema:"the phase Run to restart (run_…): one of this task's that the delivery waits on, still live"`
-	Note string `json:"note" jsonschema:"why, and what to do differently: told to the new Run"`
-	Tier string `json:"tier,omitempty" jsonschema:"a model tier of the organization's (its id or name) to run the new Run on; none keeps the role's"`
+	Run  string `json:"run"`
+	Note string `json:"note"`
+	Tier string `json:"tier,omitempty"`
 }
 
 // restartRun is restart_run: a fresh Run in the stuck one's slot. Under the
@@ -370,9 +370,9 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 }
 
 type replyIn struct {
-	PR        string `json:"pr" jsonschema:"the pull request: its number, or repo#number, one of your task's"`
-	Text      string `json:"text" jsonschema:"what to post, in Markdown, as you would say it in Chat"`
-	InReplyTo string `json:"in_reply_to,omitempty" jsonschema:"the comment you answer (issue-comment-…, line-comment-… or review-…): a line comment is answered in its thread; anything else is quoted"`
+	PR        string `json:"pr"`
+	Text      string `json:"text"`
+	InReplyTo string `json:"in_reply_to,omitempty"`
 }
 
 // forgeFor resolves the caller's organization's GitHub client before the
@@ -422,7 +422,7 @@ func recordReply(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.ReplyPost,
 }
 
 type publishIn struct {
-	Message string `json:"message,omitempty" jsonschema:"what the commits do, in a line, for Chat; your commit messages stay as they are"`
+	Message string `json:"message,omitempty"`
 }
 
 func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string]any, error) {
@@ -438,16 +438,16 @@ func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string
 }
 
 type updateTaskIn struct {
-	Goal               *string      `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
-	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
-	AddRelations       []relationIn `json:"addRelations,omitempty" jsonschema:"relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related"`
-	RemoveRelations    []relationIn `json:"removeRelations,omitempty" jsonschema:"relations to remove: only ones this task's agents added"`
+	Goal               *string      `json:"goal,omitempty"`
+	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty"`
+	AddRelations       []relationIn `json:"addRelations,omitempty"`
+	RemoveRelations    []relationIn `json:"removeRelations,omitempty"`
 }
 
 type relationIn struct {
-	Kind string `json:"kind" jsonschema:"blocked_by, blocks or related, read from this task"`
-	Task string `json:"task" jsonschema:"the other task's key (CP-41)"`
-	Why  string `json:"why,omitempty" jsonschema:"why, shown quoted in the task's history"`
+	Kind string `json:"kind"`
+	Task string `json:"task"`
+	Why  string `json:"why,omitempty"`
 }
 
 // edgesOf resolves update_task's relations to edges of the caller's task.

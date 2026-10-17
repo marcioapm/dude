@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings
+//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -198,6 +198,37 @@ func render(t *template.Template, data any) string {
 // once, keyed by the rest of its name. Each of want must be among them.
 func agentTexts(prefix string, want ...string) map[string]string {
 	return agentTextsIn(agentTemplates, prefix, want...)
+}
+
+// ToolText is agents/tools/<key>.md rendered with data: a tool's
+// description ("list_tasks", "session/list_tasks"), or the tools' shared
+// text ("common/server-instructions"). A missing file panics.
+func ToolText(key string, data any) string {
+	return render(mustTemplate("tools/"+key), data)
+}
+
+// ToolParameter is the description of the parameter at path ("questions",
+// "questions.header" for a field of its items) of the tool whose text is
+// key: the template "tools/<key>/<path>" its file defines. ok is false
+// when the file defines none.
+func ToolParameter(key, path string) (text string, ok bool) {
+	t := agentTemplates.Lookup("tools/" + key + "/" + path)
+	if t == nil {
+		return "", false
+	}
+	return render(t, nil), true
+}
+
+// ToolParameters are the parameter paths the tool whose text is key has
+// descriptions for.
+func ToolParameters(key string) []string {
+	var out []string
+	for _, t := range agentTemplates.Templates() {
+		if path, ok := strings.CutPrefix(t.Name(), "tools/"+key+"/"); ok {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func agentTextsIn(set *template.Template, prefix string, want ...string) map[string]string {

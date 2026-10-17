@@ -26,12 +26,12 @@ const (
 )
 
 type runDiffIn struct {
-	Run        string   `json:"run,omitempty" jsonschema:"a Run of this task (run_…); empty is your own"`
-	Task       string   `json:"task,omitempty" jsonschema:"a peer's key (like ABS-2) instead of a Run: its current Run's stored diff, or its latest if none is going"`
-	Paths      []string `json:"paths,omitempty" jsonschema:"files to show the changes of, as the list names them (exact); empty lists the files"`
-	NameStatus bool     `json:"nameStatus,omitempty" jsonschema:"list only each file's path and status (M, A, D, R): the cheapest form"`
-	Limit      int      `json:"limit,omitempty" jsonschema:"files per page of the list, 1 to 1000 (default 200)"`
-	Offset     int      `json:"offset,omitempty" jsonschema:"files of the list to skip, for the next page"`
+	Run        string   `json:"run,omitempty"`
+	Task       string   `json:"task,omitempty"`
+	Paths      []string `json:"paths,omitempty"`
+	NameStatus bool     `json:"nameStatus,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+	Offset     int      `json:"offset,omitempty"`
 }
 
 // diffHeader opens every answer: which snapshot, and its size in all.

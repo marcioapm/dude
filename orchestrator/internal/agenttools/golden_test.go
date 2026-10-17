@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -117,4 +118,20 @@ func serverInstructions(t *testing.T) string {
 	}
 	defer cs.Close()
 	return cs.InitializeResult().Instructions + "\n"
+}
+
+// A parameter description whose parameter is gone stops the server at
+// startup, naming the file it is in.
+func TestAMissingToolParameterNamesItsFile(t *testing.T) {
+	defer func() {
+		msg := fmt.Sprint(recover())
+		if !strings.Contains(msg, "agents/tools/ask_person.md") {
+			t.Errorf("panic %q does not name the file", msg)
+		}
+	}()
+	schema, err := jsonschema.For[struct{}](nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	describeParameters("ask_person", schema)
 }

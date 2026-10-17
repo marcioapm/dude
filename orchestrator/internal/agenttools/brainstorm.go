@@ -28,46 +28,25 @@ import (
 var brainstorms = []string{delivery.RoleBrainstorm}
 
 var brainstormTools = []tool{
-	define("list_tasks", "A linked project's epics and tasks, with their keys (like BL-12), status and who asked for "+
-		"them — optionally only those mentioning some text.", brainstorms, sessionListTasks),
-	define("list_epics", "A linked project's epics, in priority order, with how many tasks each has and how many are "+
-		"still open.", brainstorms, sessionListEpics),
-	define("list_repositories", "A linked project's repositories: which are checked out for this session (read only, "+
-		"and where), and which are not.", brainstorms, sessionListRepositories),
-	define("pull_requests", "A linked project's pull requests: with task, that task's in full (checks, reviews, "+
-		"feedback); without, the project's latest, one line each.", brainstorms, sessionPullRequests),
-	define("findings", "Review findings in a linked project: with task, that task's (name ids to read some in full); "+
-		"without, the project's open findings, one line each.", brainstorms, sessionFindings),
-	define("search_memory", "Search what is known in a linked project — memories, tasks, epics — and the "+
-		"organisation's own memories, by words and by meaning, best first.", brainstorms, sessionSearchMemory).before(embedQuery),
-	define("get_memory", "Read one memory in full, by the id search_memory gave.", brainstorms, sessionGetMemory),
-	define("remember", "Save something worth knowing next time, for this session: only its members and its agent "+
-		"will find it. A fact that holds, a procedure that works, a trap and its way around. Search first.",
-		brainstorms, sessionRemember).limit(remembersPerRun),
-	define("propose", "Put work on the session's proposal card, for a member to file with a click, as themselves: "+
-		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task, "+
-		"and notes for an epic: a new epic's notes, or a note on an existing one. A note is a short working fact every "+
-		"agent on the epic must follow (a contract, a decision, where the docs are); you never pin one yourself. "+
-		"A task item may say what it waits on and holds up (blockedBy, blocks, related): an existing task as "+
-		"{\"key\": \"BL-41\"}, or another item of this proposal as {\"item\": 1}, numbered from 1 as the card numbers "+
-		"them. Work out the order: filing a task files what it waits on with it. "+
-		"You never create, edit or comment yourself. A new proposal replaces the card.",
-		brainstorms, propose).limit(createsPerRun),
-	define("relate", "Propose a relation between two existing tasks of linked projects, for a member to file: "+
-		"from blocks to (to can't start until from is merged), or related. You never write it yourself.",
-		brainstorms, relate).limit(createsPerRun),
-	define("ask_person", askDescription+" Then end your turn: the answers are your next message. With to (a member's "+
-		"name), only that member can answer; what others say meanwhile reaches you with the answer.", brainstorms, sessionAsk),
-	define("name_session", "Name this session: one line of plain words, at most 60 characters, once its subject is "+
-		"clear. Name it again only if the subject clearly changes. Refused once a member has named it.",
-		brainstorms, nameSession).limit(namesPerRun),
+	define("list_tasks", brainstorms, sessionListTasks),
+	define("list_epics", brainstorms, sessionListEpics),
+	define("list_repositories", brainstorms, sessionListRepositories),
+	define("pull_requests", brainstorms, sessionPullRequests),
+	define("findings", brainstorms, sessionFindings),
+	define("search_memory", brainstorms, sessionSearchMemory).before(embedQuery),
+	define("get_memory", brainstorms, sessionGetMemory),
+	define("remember", brainstorms, sessionRemember).limit(remembersPerRun),
+	define("propose", brainstorms, propose).limit(createsPerRun),
+	define("relate", brainstorms, relate).limit(createsPerRun),
+	define("ask_person", brainstorms, sessionAsk),
+	define("name_session", brainstorms, nameSession).limit(namesPerRun),
 }
 
 // namesPerRun bounds how often one Run renames its session.
 const namesPerRun = 20
 
 type nameSessionIn struct {
-	Title string `json:"title" jsonschema:"the session's name: one line, at most 60 characters, plain words"`
+	Title string `json:"title"`
 }
 
 type nameSessionOut struct {
@@ -124,12 +103,12 @@ func inProject(c Caller, projectID string) Caller {
 }
 
 type projectIn struct {
-	Project string `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
+	Project string `json:"project,omitempty"`
 }
 
 type sessionListTasksIn struct {
-	Project string `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
-	Text    string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this"`
+	Project string `json:"project,omitempty"`
+	Text    string `json:"text,omitempty"`
 }
 
 func sessionListTasks(ctx context.Context, tx pgx.Tx, c Caller, in sessionListTasksIn) (listTasksOut, error) {
@@ -172,9 +151,9 @@ func sessionListRepositories(ctx context.Context, tx pgx.Tx, c Caller, in projec
 
 // taskIn names a task of a linked project.
 type taskIn struct {
-	Project string   `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
-	Task    string   `json:"task,omitempty" jsonschema:"a task's key (like BL-58) in that project"`
-	IDs     []string `json:"ids,omitempty" jsonschema:"findings: with task, those to read in full (fnd_…)"`
+	Project string   `json:"project,omitempty"`
+	Task    string   `json:"task,omitempty"`
+	IDs     []string `json:"ids,omitempty"`
 }
 
 // taskOf is the task a tool names in a linked project, as a caller of the
@@ -257,10 +236,10 @@ func sessionFindings(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, 
 }
 
 type sessionSearchIn struct {
-	Project string   `json:"project,omitempty" jsonschema:"a linked project's key; optional when only one is linked"`
-	Query   string   `json:"query" jsonschema:"what you want to know, in words"`
-	Types   []string `json:"types,omitempty" jsonschema:"only these: memory, task, epic, project (default all)"`
-	Limit   int      `json:"limit,omitempty" jsonschema:"how many results, 1 to 20 (default 8)"`
+	Project string   `json:"project,omitempty"`
+	Query   string   `json:"query"`
+	Types   []string `json:"types,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
 }
 
 // sessionSearchMemory searches a linked project and its organisation; with
@@ -304,10 +283,10 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 // organisation's or a project's — that would export a private
 // conversation without anyone choosing to.
 type sessionRememberIn struct {
-	Title   string   `json:"title" jsonschema:"one line that says what it is"`
-	Content string   `json:"content" jsonschema:"the fact, procedure or note, in Markdown"`
-	Kind    string   `json:"kind,omitempty" jsonschema:"fact (default), procedure or note"`
-	About   []string `json:"about,omitempty" jsonschema:"task keys in a linked project, or epic titles there (project:Title when more than one is linked)"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Kind    string   `json:"kind,omitempty"`
+	About   []string `json:"about,omitempty"`
 }
 
 func sessionRemember(ctx context.Context, tx pgx.Tx, c Caller, in sessionRememberIn) (rememberOut, error) {
@@ -366,7 +345,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory
 }
 
 type proposeIn struct {
-	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description, notes?: [text]} (notes pinned when filed); {kind: task, project, epic?, title, goal, acceptanceCriteria, blockedBy?, blocks?, related?}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}; {kind: note, project, epic, text, replaces?} (replaces: a current note's number)"`
+	Items []delivery.ProposalItem `json:"items"`
 }
 
 type proposeOut struct {
@@ -591,10 +570,10 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 // ---- relate (brainstorm) ----------------------------------------------
 
 type relateIn struct {
-	From string `json:"from" jsonschema:"an existing task's key (BL-41) in a linked project"`
-	To   string `json:"to" jsonschema:"another existing task's key in a linked project"`
-	Kind string `json:"kind" jsonschema:"blocks (from can't let to start until from is merged) or related"`
-	Why  string `json:"why,omitempty" jsonschema:"why, for the member who files it and the tasks' history"`
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+	Why  string `json:"why,omitempty"`
 }
 
 // relate proposes a relation between existing tasks, as a card item a
@@ -664,10 +643,10 @@ func checkTaskText(goal *string, criteria *[]string, goalGiven bool) error {
 }
 
 type sessionAskIn struct {
-	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
-	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer"`
-	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; answered all at once"`
-	To        string      `json:"to,omitempty" jsonschema:"a member's name: only they answer; others' messages meanwhile come with the answer"`
+	Question  string      `json:"question,omitempty"`
+	Choices   []string    `json:"choices,omitempty"`
+	Questions []askItemIn `json:"questions,omitempty"`
+	To        string      `json:"to,omitempty"`
 }
 
 // sessionAsk records a question — or up to four — for the session's
