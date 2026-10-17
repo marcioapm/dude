@@ -27,6 +27,8 @@ type Refusal struct {
 	// A start refused as blocked (path 4): the caller records it
 	// (task.start_refused) after the refused call rolls back.
 	Blocked *BlockedError
+	// A start refused as archived or closed (path 4), recorded likewise.
+	Lifecycle string
 }
 
 func (r Refusal) Error() string { return r.Msg }
@@ -103,6 +105,13 @@ func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
 		}
 	} else {
 		status = d.TaskStatus
+	}
+	if Ended(status) && d != nil && d.State.Decision != nil && d.State.Decision.Point == PointStart {
+		// Path 4 on a task a person closed or archived while it waited at
+		// its start: the rule's words, recorded as a refused start.
+		if err := refuseLifecycleStart(ctx, tx, taskID); err != nil {
+			return nil, err
+		}
 	}
 	switch {
 	case Ended(status):

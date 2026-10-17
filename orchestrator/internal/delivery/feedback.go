@@ -347,6 +347,12 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 	if out, found, err := repeatedSubmit(ctx, tx, in); found || err != nil {
 		return out, err
 	}
+	if err := RefuseLifecycleTx(ctx, tx, in.TaskID); IsLifecycleRefusal(err) {
+		// Closed or archived (path 12): the rule's words, not a recovery's.
+		return Submitted{}, feedbackErr("conflict", "%s Your drafts are kept.", err.Error())
+	} else if err != nil {
+		return Submitted{}, err
+	}
 	if err := refuseEnded(status); err != nil {
 		return Submitted{}, err
 	}
@@ -605,8 +611,8 @@ func recordGivenTx(ctx context.Context, tx pgx.Tx, runID, directiveID string, it
 }
 
 // startForFeedbackTx starts a task never delivered, as Deliver would
-// (StartTx, its blocker guard included), in a savepoint: refused as
-// blocked, the batch stands and waits for the task's first Run.
+// (StartTx, its start guard included), in a savepoint: refused as blocked,
+// closed or archived, the batch stands and waits for the task's first Run.
 func startForFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, w Writer, out *Submitted) error {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
@@ -616,6 +622,10 @@ func startForFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, 
 		_ = sp.Rollback(ctx)
 		if blocked, ok := AsBlocked(err); ok {
 			out.Waiting = blocked.Error() + " Its first implementer is given them once it starts."
+			return nil
+		}
+		if IsLifecycleRefusal(err) {
+			out.Waiting = err.Error() + " Its first implementer is given them once it starts."
 			return nil
 		}
 		return err

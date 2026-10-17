@@ -89,10 +89,16 @@ type PolicyError struct{ Err error }
 
 func (e PolicyError) Error() string { return "policy: " + e.Err.Error() }
 
-// StartTx starts the task's delivery, in tx: refused while it is blocked
-// (RefuseBlockedTx) unless a person overrides; then its policy, its only
-// repository named, and the delivery — decided by Deliver's policy, or for
-// a talk by the conductor, parked on its first decision.
+// Reopened says the task's latest delivery ended and the task is back
+// before any start: a person reopened it (ReopenTx). Its next start is a
+// new attempt.
+func Reopened(d *Delivery) bool { return d != nil && !d.Live() && NotStarted(d.TaskStatus) }
+
+// StartTx starts the task's delivery, in tx: refused for an archived or
+// closed task, and while it is blocked unless a person overrides
+// (RefuseStartTx); then its policy, its only repository named, and the
+// delivery — decided by Deliver's policy, or for a talk by the conductor,
+// parked on its first decision.
 func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started, error) {
 	var out Started
 	if in.How == HowTalk && in.Message != "" {
@@ -131,16 +137,27 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, in.TaskID).Scan(&attempt); err != nil {
 		return out, err
 	}
+	key := "delivery:" + in.TaskID
+	fresh := Reopened(d)
+	if fresh {
+		// Reopened after it ran: a fresh attempt, keyed as Start over keys
+		// one, so the start never joins the delivery that ended.
+		attempt++
+		key = fmt.Sprintf("delivery:%s:attempt-%d", in.TaskID, attempt)
+	}
 	st, err := NewState(ctx, tx, in.TaskID, projectID, policy, attempt)
 	if err != nil {
 		return out, err
+	}
+	if fresh {
+		st.Attempt = attempt
 	}
 	st.Overridden = in.Override != nil
 	if in.How == HowTalk {
 		st.Decider = DeciderConductor
 	}
 	if out.WorkflowID, out.Joined, err = rt.StartInTx(ctx, tx, workflow.StartOptions{Type: WorkflowType, OrganizationID: in.Org,
-		IdempotencyKey: "delivery:" + in.TaskID, TaskID: in.TaskID, Input: st}); err != nil {
+		IdempotencyKey: key, TaskID: in.TaskID, Input: st}); err != nil {
 		return out, err
 	}
 	// Any start consumes a start when unblocked.

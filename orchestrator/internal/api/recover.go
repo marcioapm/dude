@@ -191,14 +191,25 @@ func (t stoppedTask) actions() []string {
 func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org string) error {
 	taskID := r.PathValue("id")
 	var t stoppedTask
+	var refused *string
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) (err error) {
-		t, err = loadStopped(r.Context(), tx, taskID, false)
-		return err
+		if t, err = loadStopped(r.Context(), tx, taskID, false); err != nil {
+			return err
+		}
+		return tx.QueryRow(r.Context(), `SELECT task_start_refusal($1)`, taskID).Scan(&refused)
 	}); err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(t.actions()),
-		"attempt": t.Attempt, "keptUntil": t.KeptUntil})
+	actions := t.actions()
+	// A closed or archived task is picked back up by none of them: the
+	// page offers Reopen or Unarchive instead (refused says which).
+	if refused != nil && *refused != delivery.RefusedBlocked {
+		actions = nil
+	} else {
+		refused = nil
+	}
+	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(actions),
+		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused})
 	return nil
 }
 
@@ -247,15 +258,21 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		}
 		// Starting over is a fresh attempt from the default branch: a start,
 		// guarded as one (path 6). Resume and Try again carry on the same
-		// attempt and are not.
+		// attempt: blockers don't hold them, a person's Close or Archive
+		// does (path 7).
 		if body.Action == "restart" {
 			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
 				return err
 			}
-		} else if src := t.State.Source; src != nil {
-			// The adopted branch was released when the task stopped.
-			if err := delivery.HoldBranchTx(r.Context(), tx, taskID, src); err != nil {
-				return err
+		} else {
+			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
+				return pickUpRefusal(err)
+			}
+			if src := t.State.Source; src != nil {
+				// The adopted branch was released when the task stopped.
+				if err := delivery.HoldBranchTx(r.Context(), tx, taskID, src); err != nil {
+					return err
+				}
 			}
 		}
 		// Out of aborted, the one way: the status change says who and why.
@@ -296,7 +313,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
 	}
 	if err != nil {
-		return s.refusedStart(r.Context(), org, taskID, "start_over", principalOf(r), err)
+		path := "start_over"
+		if body.Action != "restart" {
+			path = body.Action
+		}
+		return s.refusedStart(r.Context(), org, taskID, path, principalOf(r), err)
 	}
 	// The last attempt's pull requests are closed after: best effort, as a
 	// person can close one on GitHub, and the new attempt does not wait on it.
@@ -304,6 +325,16 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 	s.kick()
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "action": body.Action, "workflowRunId": wfID})
 	return nil
+}
+
+// pickUpRefusal words a closed task's refusal for Resume and Try again.
+func pickUpRefusal(err error) error {
+	var closed delivery.ClosedError
+	if errors.As(err, &closed) {
+		closed.PickUp = true
+		return closed
+	}
+	return err
 }
 
 // reopenTask takes a stopped task out of aborted (or failed): the one move

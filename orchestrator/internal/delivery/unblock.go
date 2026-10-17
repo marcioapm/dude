@@ -176,7 +176,8 @@ func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by st
 
 // EndAutoStartTx ends the task's start when unblocked without firing it,
 // saying why (task.auto_start_cancelled): "owner", "started",
-// "owner_changed", "unblocked_by_removal", "failed". Nothing when none is set.
+// "owner_changed", "unblocked_by_removal", "failed", "closed", "archived".
+// Nothing when none is set.
 func EndAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, why, actorType, actorID string) error {
 	_, err := endAutoStartTx(ctx, tx, org, taskID, "", why, actorType, actorID, nil)
 	return err
@@ -355,15 +356,18 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		return err
 	}
 	*claimed = generation
-	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text FROM tasks t
-		JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status); err != nil {
+	var put bool
+	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text,
+			t.archived_at IS NOT NULL OR (t.resolution IS NOT NULL AND t.resolution <> 'nothing_to_merge')
+		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status, &put); err != nil {
 		return err
 	}
 	event := func(typ string, payload map[string]any) error {
 		return dudeEventTx(ctx, tx, org, projectID, taskID, typ, payload)
 	}
-	if !NotStarted(status) {
-		// Started some other way since: the request was consumed.
+	if !NotStarted(status) && !put {
+		// Started some other way since: the request was consumed. A closed
+		// or archived one is the guard's below, which says so.
 		return EndAutoStartTx(ctx, tx, org, taskID, "started", "", "")
 	}
 	by, pr, err := lastUnblock(ctx, tx, taskID)
@@ -384,7 +388,15 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
 		return err
 	}
-	err = RefuseBlockedTx(ctx, tx, taskID)
+	err = RefuseStartTx(ctx, tx, taskID)
+	if refused := lifecycleRefusal(err); refused != nil {
+		// A person closed or archived it: no request outlives that.
+		reason := StartRefusalReason(refused)
+		if err := RecordLifecycleRefusedTx(ctx, tx, org, taskID, "auto_start", reason, ledger.ActorSystem, "dude"); err != nil {
+			return err
+		}
+		return EndAutoStartTx(ctx, tx, org, taskID, reason, "", "")
+	}
 	if blocked, ok := AsBlocked(err); ok {
 		if _, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = NULL WHERE task_id = $1`, taskID); err != nil {
 			return err

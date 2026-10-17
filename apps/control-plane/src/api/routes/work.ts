@@ -10,10 +10,10 @@ import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
   BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
-  resolveAgentModel, resolveTier,
+  resolveAgentModel, resolveTier, startRefusalWords,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy, taskSourceInputSchema,
 } from "@dude/domain";
-import type { AgentModels, BlockerRef } from "@dude/domain";
+import type { AgentModels, BlockerRef, TaskResolution } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, badRequest, conflict, json, notFound, parseBody } from "../http.ts";
@@ -375,10 +375,20 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     const task = tasks[0];
     if (!task) return { missing: true as const };
 
-    // Path 8: a bare Run is a start, refused while the task waits on unmerged
-    // work. The rule is task_blocked_by's (migration 111), the one the
-    // orchestrator's RefuseBlockedTx reads; the row is locked as it does.
+    // Path 8: a bare Run is a start, refused as the orchestrator's
+    // RefuseStartTx refuses one: archived, then closed (neither ever
+    // overridden), then blocked. The order is task_start_refusal's
+    // (migration 140), the blockers task_blocked_by's; the row is locked as
+    // RefuseStartTx locks it.
     await scope.sql`SELECT 1 FROM tasks WHERE id = ${taskId} FOR NO KEY UPDATE`;
+    const [refusal] = (await scope.sql`
+      SELECT task_start_refusal(t.id) AS refusal, p.key_prefix || '-' || t.number AS key, t.resolution
+      FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ${taskId}`) as Array<{
+      refusal: "archived" | "closed" | "blocked" | null; key: string; resolution: TaskResolution | null;
+    }>;
+    if (refusal?.refusal === "archived" || refusal?.refusal === "closed") {
+      return { refused: refusal.refusal, message: startRefusalWords(refusal.refusal, refusal.key, refusal.resolution) };
+    }
     const blockers = (await scope.sql`SELECT key, status FROM task_blocked_by(${taskId})`) as BlockerRef[];
     if (blockers.length > 0) return { blocked: blockers };
 
@@ -420,7 +430,27 @@ async function createRun(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`task ${taskId} not found`);
   if ("raced" in result) throw conflict("a run for this attempt was created concurrently; retry");
   if ("blocked" in result) throw await refusedStart(ctx, taskId, "create_run", result.blocked);
+  if ("refused" in result) throw await refusedLifecycleStart(ctx, taskId, "create_run", result.refused, result.message);
   return json(result.run, 201);
+}
+
+/**
+ * A start refused because a person closed or archived the task: recorded
+ * (task.start_refused {path, reason}) and answered as the orchestrator
+ * answers it, 409 `archived` or `closed`, the same words.
+ */
+async function refusedLifecycleStart(ctx: RequestContext, taskId: string, path: string, reason: "archived" | "closed", message: string): Promise<HttpError> {
+  const { organizationId } = ctx.principal;
+  await withOrg(organizationId, async (scope) => {
+    const [row] = (await scope.sql`SELECT project_id AS "projectId" FROM tasks WHERE id = ${taskId}`) as Array<{ projectId: string }>;
+    const actor = auditActor(ctx.principal);
+    await appendInScope(scope, {
+      eventType: EventTypes.TaskStartRefused, organizationId, projectId: row!.projectId, taskId,
+      actor: { type: actor.kind, id: actor.id }, source: "control-plane", correlationId: taskId,
+      payload: { path, reason },
+    });
+  });
+  return new HttpError(409, message, reason);
 }
 
 /**

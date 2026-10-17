@@ -82,7 +82,7 @@ export type AutoStartHow = "deliver" | "talk";
 export const AUTO_START_HOW_LABEL: Record<AutoStartHow, string> = { deliver: "Deliver", talk: "Talk it through" };
 
 /** Why a start when unblocked ended without firing (task.auto_start_cancelled's `why`); `failed` carries `error`. */
-export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal" | "failed";
+export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal" | "failed" | "closed" | "archived";
 
 /** One relation as `GET /v1/tasks/:id/relations` lists it. */
 export interface TaskRelationView {
