@@ -55,6 +55,22 @@ func creates(calls []string) int {
 	return n
 }
 
+// runningPreview declares a wakeable preview of one server, web, made
+// under origin ("" none) by a lux whose servers take inject, and wakes it
+// until web serves.
+func (w *world) runningPreview(origin string) (task, runID, web string) {
+	w.t.Helper()
+	w.wakeable()
+	w.luxsWakeTimeout()
+	w.commenting(true, origin)
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	task, runID = w.declare()
+	web = w.serverID(runID, "web")
+	w.running(runID, "web")
+	w.until("web ready", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+	return task, runID, web
+}
+
 // A server is created with the snippet only when both hold; otherwise its
 // create names no inject at all (an older lux refuses the property).
 func TestAPreviewServerIsCreatedWithTheOverlayOnlyWhenCommentingIsAvailable(t *testing.T) {
@@ -138,10 +154,6 @@ func TestTheRecipeSyncPutsTheCurrentOverlayOnAServer(t *testing.T) {
 			w.commenting(tc.before != "", tc.before)
 			_, web := w.asleepPreview()
 			w.commenting(tc.serverInject, tc.publicURL)
-			if !tc.serverInject {
-				// What the server holds is lux's; an older lux reports none.
-				w.lux.ServerInject = false
-			}
 			mark, marks := len(w.lux.TenantCalls()), len(w.lux.TenantBodies())
 			w.lux.RequestServer(web, "/")
 			w.until("web served again", func() bool {
@@ -232,14 +244,7 @@ func TestARunningServerWithoutTheCurrentOverlayNeedsARestart(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
-			w.wakeable()
-			w.luxsWakeTimeout()
-			w.commenting(true, tc.before)
-			w.recipe("web", 3000, "npm run dev", "", nil, true)
-			task, runID := w.declare()
-			web := w.serverID(runID, "web")
-			w.running(runID, "web")
-			w.until("web ready", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+			task, runID, web := w.runningPreview(tc.before)
 			w.commenting(true, dudeOrigin)
 
 			commenting, needsRestart := w.serverFacts(task, "web")
@@ -274,14 +279,7 @@ func TestARunningServerWithoutTheCurrentOverlayNeedsARestart(t *testing.T) {
 // person's start of one does.
 func TestStartAllPutsTheCurrentOverlayOnAServer(t *testing.T) {
 	w := newWorld(t)
-	w.wakeable()
-	w.luxsWakeTimeout()
-	w.commenting(true, "")
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	_, runID := w.declare()
-	web := w.serverID(runID, "web")
-	w.running(runID, "web")
-	w.until("web ready", func() bool { sv, _ := w.lux.TenantServer(web); return sv.State == lux.SrvReady })
+	_, runID, web := w.runningPreview("")
 	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/stop", nil); code != 200 {
 		t.Fatalf("stop = %d %v", code, out)
 	}

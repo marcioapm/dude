@@ -139,22 +139,28 @@ func (s *Service) inject() string {
 	return OverlaySnippet(s.PublicURL)
 }
 
-// injectPatch is the inject to PATCH onto cur, nil when it has it already
-// or commenting is off: an inject set while it was on is left as it is.
+// lacksInject: ts does not have want, the overlay snippet wanted now. With
+// commenting off (want "") none lacks it: an inject set while it was on is
+// left as it is, never cleared.
+func lacksInject(ts lux.TenantServer, want string) bool {
+	return want != "" && ts.Inject != want
+}
+
+// injectPatch is the inject to PATCH onto cur, nil when it lacks none.
 func (s *Service) injectPatch(cur lux.TenantServer) *string {
 	want := s.inject()
-	if want == "" || cur.Inject == want {
+	if !lacksInject(cur, want) {
 		return nil
 	}
 	return &want
 }
 
 // needsRestart: a preview server whose Run is up serves its pages without
-// the overlay snippet wanted now (want, "" when commenting is off): made
-// before commenting, or for another origin. One asleep is not: its next
-// wake syncs it before lux starts it (updateServer).
+// the overlay snippet wanted now: made before commenting, or for another
+// origin. One asleep is not: its next wake syncs it before lux starts it
+// (updateServer).
 func needsRestart(ts lux.TenantServer, want string) bool {
-	if want == "" || ts.Inject == want {
+	if !lacksInject(ts, want) {
 		return false
 	}
 	switch ts.RunState {
@@ -164,11 +170,12 @@ func needsRestart(ts lux.TenantServer, want string) bool {
 	return false
 }
 
-// syncInject puts the overlay snippet wanted now on one of a wakeable
-// preview's servers, before a person's start or restart of it: the
-// restart that needsRestart asks for. lux applies it to the next request.
+// syncInject puts the overlay snippet wanted now on one of r's servers
+// when r is a wakeable preview, before a person's start or restart of it:
+// the restart that needsRestart asks for. lux applies it to the next
+// request.
 func (s *Service) syncInject(ctx context.Context, r runRow, name string) error {
-	if s.inject() == "" {
+	if !r.Wakeable || s.inject() == "" {
 		return nil
 	}
 	list, err := s.Lux.ListServers(ctx, "", "dude.preview="+r.ID)

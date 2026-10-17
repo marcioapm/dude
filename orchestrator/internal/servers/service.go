@@ -613,7 +613,7 @@ func (s *Service) Action(ctx context.Context, org, runID, name, action string) (
 	if woke, err := s.wakeOnStart(ctx, org, runID, action, err); woke || err != nil {
 		return lux.Server{Name: name}, err
 	}
-	if r.Wakeable && action != "stop" {
+	if action != "stop" {
 		if err := s.syncInject(ctx, r, name); err != nil {
 			return lux.Server{Name: name}, err
 		}
@@ -695,7 +695,7 @@ func (s *Service) All(ctx context.Context, org, runID, action string) (TaskServe
 	default:
 		for _, name := range names {
 			// As Action does: a server started gets the overlay snippet wanted now.
-			if r.Wakeable && action == "start" {
+			if action == "start" {
 				err = s.syncInject(ctx, r, name)
 			}
 			if err == nil {

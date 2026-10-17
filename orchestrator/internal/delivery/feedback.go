@@ -163,6 +163,15 @@ func (a FeedbackAnchor) PageLine() string {
 
 func px(v float64) int { return int(math.Round(v)) }
 
+// pictureID is the upload a preview item's anchor names as its picture;
+// "" for none and for any other kind of item.
+func (a FeedbackAnchor) pictureID() string {
+	if a.Kind != "preview" {
+		return ""
+	}
+	return a.AttachmentID
+}
+
 // FeedbackItem is a submitted item as an agent is shown it: the person's
 // own words, never a summary.
 type FeedbackItem struct {
@@ -576,8 +585,8 @@ func steerFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemIDs []strin
 func feedbackPicturesTx(ctx context.Context, tx pgx.Tx, taskID string, items []FeedbackItem, unsent bool, room int, roomBytes int64) ([]SentAttachment, error) {
 	var ids []string
 	for _, it := range items {
-		if it.Anchor.Kind == "preview" && it.Anchor.AttachmentID != "" && !slices.Contains(ids, it.Anchor.AttachmentID) {
-			ids = append(ids, it.Anchor.AttachmentID)
+		if id := it.Anchor.pictureID(); id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
 		}
 	}
 	if len(ids) == 0 || room <= 0 {
@@ -609,11 +618,12 @@ func feedbackPicturesTx(ctx context.Context, tx pgx.Tx, taskID string, items []F
 func MarkPictures(items []FeedbackItem, sent []SentAttachment) {
 	for i := range items {
 		items[i].Picture = ""
-		if items[i].Anchor.Kind != "preview" || items[i].Anchor.AttachmentID == "" {
+		id := items[i].Anchor.pictureID()
+		if id == "" {
 			continue
 		}
 		for _, a := range sent {
-			if a.ID == items[i].Anchor.AttachmentID {
+			if a.ID == id {
 				items[i].Picture = a.Name
 			}
 		}

@@ -28,7 +28,7 @@ func (w *world) previewFeedback(key, wi, id, body, picture string) (int, map[str
 	return w.callAs(key, "/internal/tasks/"+wi+"/feedback/submit", map[string]any{"draftIds": []string{id}, "submissionKey": "k-" + id})
 }
 
-// steerTo is the text and images of the directive carrying item to the Run.
+// steerTo is the directive carrying item to the Run.
 func (w *world) steerTo(item string) (directive string) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(directive_id, '') FROM feedback_items WHERE id = $1`, item).Scan(&directive)
 	return directive
