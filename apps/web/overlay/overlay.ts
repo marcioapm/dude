@@ -133,12 +133,12 @@ function boundedString(value: unknown, max: number): value is string {
 function validPin(value: unknown): value is OverlayPin {
   if (!plainObject(value) || !Object.keys(value).every((key) => ["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"].includes(key))) return false;
   if (!boundedString(value.id, 100) || value.id.length === 0 || typeof value.n !== "number" || !Number.isInteger(value.n) || value.n < 1
-    || typeof value.status !== "string" || !PIN_STATUSES.has(value.status) || !boundedString(value.author, 200) || typeof value.mine !== "boolean"
-    || !boundedString(value.body, OVERLAY_LIMITS.pinBody) || !boundedString(value.selector, 2_000) || !boundedString(value.when, 200)
+    || typeof value.status !== "string" || !PIN_STATUSES.has(value.status) || !boundedString(value.author, OVERLAY_LIMITS.name) || typeof value.mine !== "boolean"
+    || !boundedString(value.body, OVERLAY_LIMITS.pinBody) || !boundedString(value.selector, 2_000) || !boundedString(value.when, OVERLAY_LIMITS.name)
     || !Array.isArray(value.replies) || value.replies.length > OVERLAY_LIMITS.replies) return false;
   return value.replies.every((reply) => plainObject(reply)
     && Object.keys(reply).every((key) => ["who", "kind", "body"].includes(key))
-    && boundedString(reply.who, 200)
+    && boundedString(reply.who, OVERLAY_LIMITS.name)
     && typeof reply.kind === "string" && REPLY_KINDS.has(reply.kind)
     && boundedString(reply.body, OVERLAY_LIMITS.replyBody));
 }

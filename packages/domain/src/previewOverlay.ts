@@ -34,9 +34,9 @@ export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUni
 ]) as z.ZodType<OverlayToDude>;
 
 const overlayPinSchema = z.object({
-  id: z.string().min(1).max(100), n: z.number().int().positive(), status: z.enum(FEEDBACK_STATUSES), author: z.string().max(200),
-  mine: z.boolean(), body: z.string().max(OVERLAY_LIMITS.pinBody), selector: z.string().max(2_000), when: z.string().max(200),
-  replies: z.array(z.object({ who: z.string().max(200), kind: z.enum(["reply", "resolve", "reopen"]), body: z.string().max(OVERLAY_LIMITS.replyBody) }).strict())
+  id: z.string().min(1).max(100), n: z.number().int().positive(), status: z.enum(FEEDBACK_STATUSES), author: z.string().max(OVERLAY_LIMITS.name),
+  mine: z.boolean(), body: z.string().max(OVERLAY_LIMITS.pinBody), selector: z.string().max(2_000), when: z.string().max(OVERLAY_LIMITS.name),
+  replies: z.array(z.object({ who: z.string().max(OVERLAY_LIMITS.name), kind: z.enum(["reply", "resolve", "reopen"]), body: z.string().max(OVERLAY_LIMITS.replyBody) }).strict())
     .max(OVERLAY_LIMITS.replies),
 }).strict();
 

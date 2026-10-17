@@ -153,13 +153,13 @@ export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: st
       id: i.id,
       n: k + 1,
       status: i.status,
-      author: i.author?.name.split(" ")[0] ?? "Someone",
+      author: clip(i.author?.name.split(" ")[0] ?? "Someone", OVERLAY_LIMITS.name),
       mine: i.author?.id === you,
       body: clip(i.body, OVERLAY_LIMITS.pinBody),
       selector: i.anchor.kind === "preview" ? i.anchor.selector ?? "" : "",
-      when: `${i.status === "draft" ? "drafted" : "submitted"} ${ago(i.submittedAt ?? i.createdAt, now)}`,
+      when: clip(`${i.status === "draft" ? "drafted" : "submitted"} ${ago(i.submittedAt ?? i.createdAt, now)}`, OVERLAY_LIMITS.name),
       replies: i.history.slice(-OVERLAY_LIMITS.replies).map((h) => ({
-        who: h.personId ? name(h.personId) : "The agent", kind: h.kind, body: clip(h.body, OVERLAY_LIMITS.replyBody),
+        who: clip(h.personId ? name(h.personId) : "The agent", OVERLAY_LIMITS.name), kind: h.kind, body: clip(h.body, OVERLAY_LIMITS.replyBody),
       })),
     }));
 }

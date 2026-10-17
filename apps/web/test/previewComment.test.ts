@@ -341,6 +341,19 @@ test("pins carry only the page's preview items that name a selector, each no lon
   expect(pins[2]).toMatchObject({ mine: true, status: "draft", n: 3 });
 });
 
+test("a 300-character first name or display name still makes a session the overlay accepts", () => {
+  const long = "N".repeat(300);
+  const list = [item("a", {
+    author: { id: "per_ana", name: `${long} Ribeiro` },
+    history: [{ id: "h1", kind: "reply", body: "seen", commit: null, personId: "per_ana", runId: null, createdAt: new Date().toISOString() }],
+  })];
+  const pins = pinsFor(list, `${WEB}/cart`, null, () => long);
+  const session = { type: "session", v: 1, task: "SHOP-1", url: `${WEB}/cart`, pins, drafts: 0, showPins: true };
+  expect(overlaySessionSchema.safeParse(session).success).toBe(true);
+  expect(pins[0]!.author.length).toBe(OVERLAY_LIMITS.name);
+  expect(pins[0]!.replies[0]!.who.length).toBe(OVERLAY_LIMITS.name);
+});
+
 test("Stop commenting tells the window to take the overlay off, and the view is idle", () => {
   c.open(`${WEB}/cart`, "web");
   post({ type: "hello", v: 1, url: `${WEB}/cart` });

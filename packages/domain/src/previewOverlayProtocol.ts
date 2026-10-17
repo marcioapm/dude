@@ -32,6 +32,8 @@ export const OVERLAY_LIMITS = {
   pinBody: 600,
   replyBody: 400,
   replies: 5,
+  /** A pin's author, a reply's author and a pin's when, as the overlay shows them. */
+  name: 200,
   /** Pins sent for one page. */
   pins: 200,
   /** FEEDBACK_LIMITS' own, repeated so the overlay bundles no zod (a test holds them equal). */
