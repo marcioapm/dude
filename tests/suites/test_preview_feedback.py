@@ -28,7 +28,7 @@ import requests
 from playwright.sync_api import BrowserType, Page, expect
 
 from env import FAKE_PUBLIC_URL
-from helpers import ApiClient, provision_person, query, sign_in, wait_until
+from helpers import ApiClient, provision_person, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -131,18 +131,12 @@ def _open_comment(ctx, page: Page) -> Page:
     return pv
 
 
-def _escalated_on(client: ApiClient, env, task: dict, item_id: str) -> bool:
-    """The delivery stopped for a person because the fixers left the item open: the task awaiting input, and its
-    workflow at decide, waiting on the person's decision, the review loop's "stuck" exit naming the item."""
-    if client.get(f"/v1/tasks/{task['id']}").json()["status"] != "awaiting_input":
-        return False
-    rows = query(env.owner_dsn, """SELECT step, status::text AS status, awaiting_signals, state->'escalation' AS escalation
-                                   FROM workflow_runs WHERE task_id = %s""", (task["id"],))
-    if len(rows) != 1:
-        return False
-    wf, esc = rows[0], rows[0]["escalation"] or {}
-    return (wf["step"] == "decide" and wf["status"] == "waiting" and wf["awaiting_signals"] == ["human.decision"]
-            and esc.get("reason") == "stuck" and (esc.get("detail") or {}).get("feedbackIds") == [item_id])
+def _escalated_on(client: ApiClient, task: dict, item_id: str) -> bool:
+    """The delivery stopped for a person on the item the fixers left open: the task's escalation is the review
+    loop's "stuck" exit naming it. The API shows an escalation only while the task awaits input and nothing has
+    decided it, and the orchestrator writes it with that status, after which no Run starts until a decision."""
+    e = client.get(f"/v1/tasks/{task['id']}").json().get("escalation") or {}
+    return e.get("reason") == "stuck" and (e.get("detail") or {}).get("feedbackIds") == [item_id]
 
 
 def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> dict:
@@ -156,7 +150,7 @@ def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> di
     # Between two of the delivery's Runs the read is briefly the preview's again, so wait for where it ends: the
     # scripted fixer never answers the item, and after MaxAttemptsPerFinding fixes the review loop escalates it as
     # stuck (workflow.go escalate), the only state here that starts no further Run until a person decides.
-    wait_until(lambda: _escalated_on(client, env, task, item_id),
+    wait_until(lambda: _escalated_on(client, task, item_id),
                timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
                       timeout=60, message="the servers read never came back to the preview after the delivery rested")
