@@ -457,10 +457,17 @@ func describeParameters(key string, schema *jsonschema.Schema) {
 		}
 	}
 	walk("", schema)
+	var unused []string
 	for _, path := range delivery.ToolParameters(key) {
 		if !used[path] {
-			panic(fmt.Sprintf("agents/tools/%s.md describes %s, which the tool has no parameter called", key, path))
+			unused = append(unused, path)
 		}
+	}
+	if len(unused) > 0 {
+		// Sorted: ToolParameters comes from a map, and the panic must name the same paths every run.
+		slices.Sort(unused)
+		panic(fmt.Sprintf("agents/tools/%s.md describes %s, which the tool has no parameter called",
+			key, strings.Join(unused, ", ")))
 	}
 }
 

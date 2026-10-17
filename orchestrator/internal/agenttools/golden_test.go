@@ -131,10 +131,14 @@ func TestAMissingToolParameterNamesItsFile(t *testing.T) {
 			t.Errorf("panic %q, want %q", msg, want)
 		}
 	}()
-	schema, err := jsonschema.For[struct{}](nil)
+	schema, err := jsonschema.For[askIn](nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := schema.Properties["actions"]; !ok {
+		t.Fatal("askIn has no actions parameter to remove")
+	}
+	delete(schema.Properties, "actions")
 	describeParameters("ask_person", schema)
 }
 
