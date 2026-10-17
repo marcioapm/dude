@@ -391,6 +391,23 @@ func TestAnEchoedKeyInAProxyErrorIsRedacted(t *testing.T) {
 	}
 }
 
+// The test question is bounded by the client's Timeout when it names one.
+func TestTheTestQuestionIsBoundedByTheClientsTimeout(t *testing.T) {
+	release := make(chan struct{})
+	w := setup(t, func(http.ResponseWriter) { <-release }, false)
+	t.Cleanup(func() { close(release) })
+	c := w.svc.LLM
+	c.Timeout = 200 * time.Millisecond
+	start := time.Now()
+	_, _, err := Test(context.Background(), c, Tier{ID: w.tierID, Name: "Fast", Model: "gpt-6-sol-mini"})
+	if err == nil || err.Error() != "no answer from the LLM proxy in 200ms" {
+		t.Errorf("err = %v", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("took %s", took)
+	}
+}
+
 // The test question goes the same way and is not recorded.
 func TestTheTestQuestionIsNotRecorded(t *testing.T) {
 	w := setup(t, answering(`{"decision":"yes","confidence":0.99,"reasoning":"Rayleigh scattering."}`), false)

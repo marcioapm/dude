@@ -91,7 +91,10 @@ type Client struct {
 	Timeout time.Duration
 }
 
-// TestTimeout bounds one test message.
+// TestTimeout bounds one test message, and judge.Test's test question. It
+// must stay below the backend's wait for either (testMessageMs, 35 s, in
+// apps/control-plane/src/config.ts), so a slow proxy is reported from here
+// rather than as the backend giving up.
 const TestTimeout = 30 * time.Second
 
 // testMaxTokens keeps a test message tiny: it checks the model answers,
