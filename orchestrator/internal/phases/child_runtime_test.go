@@ -88,6 +88,12 @@ func TestChildCancelReleasesLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, probeErr := probe.Exec(w.ctx, `SELECT id FROM runs WHERE id=$1 FOR UPDATE NOWAIT`, r.ID)
+	_, parentErr := probe.Exec(w.ctx, `SELECT id FROM runs WHERE id=$1 FOR UPDATE NOWAIT`, "run_parent")
+	_, taskErr := probe.Exec(w.ctx, `SELECT id FROM tasks WHERE id=$1 FOR UPDATE NOWAIT`, r.TaskID)
+	var chatOK bool
+	if err := probe.QueryRow(w.ctx, `SELECT pg_try_advisory_xact_lock(hashtext('chat:'||$1))`, r.TaskID).Scan(&chatOK); err != nil {
+		t.Fatal(err)
+	}
 	_ = probe.Rollback(w.ctx)
 	close(release)
 	if err := <-done; err != nil {
@@ -95,6 +101,9 @@ func TestChildCancelReleasesLocks(t *testing.T) {
 	}
 	if probeErr != nil {
 		t.Fatalf("cancel held child DB lock: %v", probeErr)
+	}
+	if parentErr != nil || taskErr != nil || !chatOK {
+		t.Fatalf("cancel held parent/task/chat lock: %v %v %v", parentErr, taskErr, chatOK)
 	}
 }
 

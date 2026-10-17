@@ -215,6 +215,7 @@ func TestChildStaleResults(t *testing.T) {
 	}
 	// A valid pending result becomes non-actionable if the parent ends before consumption.
 	w := newChildWorld(t)
+	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
 	id := w.child("pending")
 	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
 		t.Fatal(err)
@@ -475,6 +476,33 @@ func TestChildHandOverFencesFamily(t *testing.T) {
 	var reason string
 	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason,'') FROM runs WHERE id=$1`, id).Scan(&reason); err != nil || reason != "parent-ended" {
 		t.Fatalf("handover left child live: %q %v", reason, err)
+	}
+}
+
+func TestChildParentFenceIsFamilySelective(t *testing.T) {
+	w := newChildWorld(t)
+	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
+	w.exec(`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_other',$1,'Q','q','Q')`, w.org)
+	w.exec(`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES
+		('wi_two',$1,'prj_other',1,'Two','G','running')`, w.org)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES
+		('parent_two',$1,'prj_other','wi_two',1,'conductor','completed')`, w.org)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role,source_kind,parent_run_id,child_profile,child_capabilities) VALUES
+		('child_one',$1,'prj_life','wi_life',1,'running','investigate','investigator','task_conductor','run_parent','investigator','{}'),
+		('child_two',$1,'prj_other','wi_two',1,'running','investigate','investigator','task_conductor','parent_two','investigator','{}'),
+		('child_unrelated',$1,'prj_other','wi_two',1,'running','investigate','investigator','task_conductor','parent_two','investigator','{}')`, w.org)
+	if err := w.s.EndChildParent(w.ctx, w.org, "wi_life", "run_parent"); err != nil {
+		t.Fatal(err)
+	}
+	var one, two, unrelated string
+	if err := w.owner.QueryRow(w.ctx, `SELECT child_stop_reason FROM runs WHERE id='child_one'`).Scan(&one); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason,''),COALESCE((SELECT child_stop_reason FROM runs WHERE id='child_unrelated'),'') FROM runs WHERE id='child_two'`).Scan(&two, &unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if one != "parent-ended" || two != "" || unrelated != "" {
+		t.Fatalf("family fence %q %q %q", one, two, unrelated)
 	}
 }
 
