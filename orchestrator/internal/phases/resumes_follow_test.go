@@ -553,8 +553,9 @@ func TestBestEffortAppliesTheRunsDeadlineBudget(t *testing.T) {
 	}
 }
 
-// A timing statement waiting on a lock uses its own budget, leaving the Run's
-// transaction usable for its update.
+// A timing statement waiting on a lock fails on its own budget, leaving the
+// Run's transaction usable for its update. The deadline is generous so that
+// only that budget, never host load, can end the wait.
 func TestATimingLockWaitInsideTheRunsDeadlineLeavesTheRunsTransactionUsable(t *testing.T) {
 	w := newResumeWorld(t)
 	w.resume(stoppedOnHost1(time.Now()))
