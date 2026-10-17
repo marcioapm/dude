@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -252,33 +253,54 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 
 // githubRefusal says why GitHub did not answer a read, for the agent, and
 // records it as a github.read event naming the refusal's kind and HTTP
-// status, never GitHub's words.
+// status. Both are in dude's words only: forge.Error.Message may hold
+// GitHub's, and reaches neither the agent nor the ledger.
 func githubRefusal(read githubRead, err error) error {
 	what := read.Slug
 	if read.Number > 0 {
 		what = fmt.Sprintf("%s#%d", read.Slug, read.Number)
 	}
 	var e *forge.Error
-	errors.As(err, &e)
-	var msg string
-	switch {
-	case forge.Moved(err):
-		msg = fmt.Sprintf("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
-	case e != nil && e.Refusal == forge.RefusalMovedItem:
-		msg = fmt.Sprintf("GitHub says %s has moved (renamed repository or transferred issue)", what)
-	case forge.RateLimited(err):
-		msg = fmt.Sprintf("GitHub is rate limiting dude (%v): read %s later", err, what)
-	case e != nil && e.NotFound():
-		msg = fmt.Sprintf("GitHub has no %s, or dude cannot see it", what)
-	case forge.Refused(err):
-		msg = fmt.Sprintf("GitHub refused reading %s: %v", what, err)
-	case forge.Transient(err):
-		msg = fmt.Sprintf("GitHub did not answer reading %s (%v): try again later", what, err)
-	default:
+	var u *forge.Unreachable
+	if !errors.As(err, &e) && !errors.As(err, &u) {
 		return err
 	}
+	status := 0
+	if e != nil {
+		status = e.Status
+	}
+	later := "later"
+	if wait := forge.RetryAfter(err); wait > 0 {
+		later = "in " + wait.Round(time.Minute).String()
+	}
+	kind := refusalKind(err)
+	var msg string
+	switch kind {
+	case forge.RefusalMoved:
+		msg = fmt.Sprintf("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
+	case forge.RefusalMovedItem:
+		msg = fmt.Sprintf("GitHub says %s has moved (renamed repository or transferred issue)", what)
+	case forge.RefusalRedirect:
+		msg = fmt.Sprintf("GitHub answered reading %s with a redirect (HTTP %d), which dude does not follow", what, status)
+	case forge.RefusalTooLarge:
+		msg = fmt.Sprintf("GitHub's answer reading %s is past the 4 MiB an agent's read may take", what)
+	case forge.RefusalRateReserve:
+		msg = fmt.Sprintf("the rest of GitHub's rate limit is kept for delivery: read %s %s, or work with what you read", what, later)
+	case "rate_limited":
+		msg = fmt.Sprintf("GitHub is rate limiting dude (HTTP %d): read %s %s", status, what, later)
+	case "not_found":
+		msg = fmt.Sprintf("GitHub has no %s, or dude cannot see it", what)
+	case "unavailable":
+		if status == 0 {
+			msg = fmt.Sprintf("GitHub did not answer reading %s: try again later", what)
+		} else {
+			msg = fmt.Sprintf("GitHub did not answer reading %s (HTTP %d): try again later", what, status)
+		}
+	default:
+		msg = fmt.Sprintf("GitHub refused reading %s (HTTP %d)", what, status)
+	}
 	payload := readPayload(read)
-	payload["refused"] = refusalKind(err)
+	payload["refused"] = kind
 	if e != nil {
 		payload["status"] = e.Status
 	}

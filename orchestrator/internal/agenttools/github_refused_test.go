@@ -52,6 +52,15 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 			w.Header().Set("X-RateLimit-Limit", "100")
 			w.Header().Set("X-RateLimit-Reset", reset)
 			_, _ = w.Write([]byte(`{"number":6,"title":"` + canary + `","comments":3}`))
+		case "/repos/acme/target/issues/7":
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(message))
+		case "/repos/acme/target/issues/8":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(message))
+		case "/repos/acme/target/issues/9":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(message))
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
 			w.WriteHeader(http.StatusTeapot)
@@ -63,17 +72,23 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'target', 'https://github.com/acme/target.git', 'main')`, "repo_"+f.org, f.org, f.project)
 	token := f.conductor(t)
+	// rate_reserve last: it leaves the token at delivery's reserve.
 	want := []struct {
 		number int
 		kind   string
 		status int
 	}{
 		{1, "moved", 301}, {2, "redirect", 302}, {3, "not_found", 404}, {4, "too_large", 413}, {5, "forbidden", 403},
-		{6, "rate_reserve", 429},
+		{7, "rate_limited", 429}, {8, "unavailable", 502}, {9, "refused", 422}, {6, "rate_reserve", 429},
 	}
 	for _, w := range want {
-		if status, out := f.post(t, token, "github_issue", fmt.Sprintf(`{"repo":"acme/target","number":%d}`, w.number)); status != 422 {
+		status, out := f.post(t, token, "github_issue", fmt.Sprintf(`{"repo":"acme/target","number":%d}`, w.number))
+		if status != 422 {
 			t.Errorf("issue %d: %d %v, want refused", w.number, status, out)
+		}
+		// What the agent is told is dude's: nothing GitHub wrote.
+		if told, _ := json.Marshal(out); strings.Contains(string(told), canary) || strings.Contains(string(told), "docs.github.test") {
+			t.Errorf("issue %d: GitHub's text reached the agent: %s", w.number, told)
 		}
 	}
 	rows, err := f.owner.Query(context.Background(), `SELECT payload FROM events WHERE run_id = 'run_cond' AND event_type = 'github.read'
