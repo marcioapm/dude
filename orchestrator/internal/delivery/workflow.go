@@ -996,7 +996,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	// The people's feedback still to be handled goes with every fix, the
 	// conductor's included, whatever findings it named: its words are
 	// dude's to give, and no decision leaves an item out. Not an
-	// integration's: it publishes with no candidate (prFix).
+	// integration's: they go to the fix after its promotion (prFix).
 	var feedback []string
 	if st.Integration == nil {
 		if feedback, err = w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st); err != nil {
@@ -1679,16 +1679,16 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.Integration.Published = false
 		st.Integration.Polls = 0
 	}
-	// PR feedback fixes are checked on a candidate before promotion.
-	if st.Integration == nil {
+	// PR feedback fixes, and an open pull request's integration, are checked
+	// on a candidate before promotion. One before the pull request opened
+	// has no pull request to keep its merge from.
+	if st.Integration == nil || !st.Integration.BeforePR {
 		st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
 	}
 	d := directed(st, PhaseFix)
-	// An integration fixer publishes to the pull request's branch with no
-	// candidate, so what it resolved would hold before its review and test:
-	// it is given its brief alone. The pull request comments stay in
-	// st.PRFeedback and the people's items stay open, for the candidate fix
-	// openPullRequest starts once the integration is checked.
+	// An integration fixer is given its brief alone: the pull request
+	// comments stay in st.PRFeedback and the people's items stay open, for
+	// the fix openPullRequest starts once the integration is promoted.
 	prFeedback := st.PRFeedback
 	var feedback []string
 	if st.Integration != nil {
@@ -1779,7 +1779,8 @@ func feedbackRepos(feedback []forge.ActionableFeedback) []string {
 // refreshPRWaitHeads starts a review or test the conductor asked for while
 // the pull requests waited from GitHub's heads: a person may have pushed.
 func (w *steps) refreshPRWaitHeads(ctx context.Context, sc workflow.StepContext, st *State) error {
-	if !st.ActingOnPR {
+	// A candidate's heads are ahead of the pull request's until promotion.
+	if !st.ActingOnPR || st.Candidate != nil {
 		return nil
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
@@ -1853,7 +1854,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		st.PendingRunIDs, st.Heads, st.ChangedPaths = nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
 		// Nothing published to the conflicting repository is no merge: its
 		// review and test would judge the head that conflicts. A push to
-		// another repository is still where that one's work stands.
+		// another repository stays on the candidate, never promoted.
 		if _, merged := out.Heads[st.Integration.Repo]; !merged {
 			return w.integrationFailure(ctx, sc, st, causeNoMerge, reasonNoMerge)
 		}
@@ -2066,6 +2067,13 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
 	}
+	// A person's push refused an integration candidate; close its live
+	// resolving-conflicts activity before escalating the moved pull request.
+	if st.Integration != nil {
+		if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": ReasonPullRequestMoved}); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	// What the pull request shows is what the delivery stands on now; a
 	// retry fixes the same feedback again from there.
 	st.Heads = maps.Clone(c.From)
@@ -2093,7 +2101,11 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 // verification brought up to the commit they show, and back to waiting.
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
-	st.Candidate, st.PRFeedback = nil, nil
+	st.Candidate = nil
+	if st.Integration == nil {
+		// An integration's comments are the fix's after it (openPullRequest).
+		st.PRFeedback = nil
+	}
 	if len(heads) > 0 && !promoted {
 		// The adopted pull request's verdict comment, stale past a fix from
 		// before candidates, pushed unchecked. A promoted one's is refreshPromoted's.
@@ -2147,6 +2159,11 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 // or closed, or be approved with green checks already), weighed now
 // rather than waited for.
 func (w *steps) prFixLanded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
+	if st.Integration != nil {
+		// A promoted integration: whether the pull request merges now is
+		// read only once it shows the merge (openPullRequest).
+		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	}
 	res, finished, err := w.pullRequestEnded(ctx, sc, st)
 	if err != nil || finished {
 		return res, err
@@ -2408,8 +2425,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
-		if e.Reason == ReasonPullRequestMoved {
+		if e.Reason == ReasonPullRequestMoved && st.Integration == nil {
 			// The fix stays on its candidate branch: not the pull request's.
+			// An integration's comments were never its fixer's: kept.
 			st.PRFeedback = nil
 		}
 		// Items the refused candidate reopened, or that waited out an
@@ -2453,7 +2471,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			// The round goes on without the reviewers that failed: its
 			// findings are what the others reported.
 			st.ReviewRunIDs = nil
-			if st.checkingCandidate() {
+			if st.Candidate != nil {
 				st.Candidate.Accepted = maps.Clone(st.Heads)
 			}
 			return workflow.Result{Next: "awaitReview", State: st}, nil
