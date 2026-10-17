@@ -160,6 +160,14 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   requested. A role on no
   tier, or on one with no model, fails its Run saying so. Design:
   [`design/model-tiers.md`](design/model-tiers.md).
+- **dude can also call a model directly**, with no agent and no tools:
+  `llm.Client.Complete` sends one OpenAI-compatible Chat Completions
+  request to the proxy (`/chat/completions`, the same for every provider),
+  and every such call is recorded, redacted and without its headers, in
+  `model_calls`. On it, `internal/judge` asks the organisation's judgement
+  tier (`organizations.judgement_tier_id`, Off by default) one question
+  and reads back yes, no or unsure with a confidence, failing closed.
+  Nothing calls it yet. Design: [`design/judgements.md`](design/judgements.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
 - **Project secrets reach the phases each names** (`phases/projectsecrets.go`),
@@ -266,7 +274,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
   resolve keeping both sides' intent, then an internal review that runs
   `git show --remerge-diff` on the merge, then the policy's test; the
-  conductor never runs tests. A pair already tried, an integration Run
+  conductor never runs tests. On an open pull request the integration is
+  checked as a pull request fix is: the integration Run, and every fix of
+  its review and test, publish to the candidate branch, and
+  `promoteCandidate` fast-forwards the pull request to the merge only once
+  its review (and the policy's test) passed; whether it still conflicts is
+  read after that. A pair already tried, an integration Run
   that finishes without publishing to the conflicting repository (no
   merge: nothing to review), or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
@@ -641,7 +654,7 @@ The `go`, `ts` and `e2e` jobs each have their own
 
 | Job | Runs |
 | --- | --- |
-| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone took about 9.5 minutes on CI, close to go test's default 10-minute limit per binary), then `go test -race -count=1 ./internal/forge` (forge's concurrency tests assert only under the race detector). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
+| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone took about 9.5 minutes on CI, close to go test's default 10-minute limit per binary), then `go test -race -count=1 ./internal/forge ./internal/phases` (forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
 | `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
 | `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
 | `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |

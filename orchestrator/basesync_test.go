@@ -288,6 +288,77 @@ func TestIntegrationRejectsAStaleConflictAndKeepsFeedback(t *testing.T) {
 	}
 }
 
+// A sync can read a pull request as behind while it already conflicts: its
+// mergeability and its distance from the base are two reads, and the base
+// may move between them. GitHub refuses that update (422); the refusal is
+// recorded once, later syncs of that head ask for no second update, and
+// the sync that reads the conflict integrates.
+func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.gh.AdvanceBase("main", "Base moved")
+	var reads atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.HasSuffix(r.URL.Path, "/update-branch") {
+				w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+			}
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls/1") {
+				reads.Add(1)
+			}
+			return 0
+		}
+	})
+	refused := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'update-branch' AND payload->>'refused' LIKE '%merge conflict%'`
+	w.until("the refused update", func() bool { w.sync(); return w.count(refused, wi) == 1 })
+	branch := w.gh.Pull(1).Head
+	head := w.gh.SHA(branch)
+	// Unpumped, the workflow stays at awaitPullRequest on the refused head.
+	// Read clean again, each sync sees it behind, as the refused one did,
+	// and must not ask GitHub a second time.
+	reads.Store(0)
+	for range 2 {
+		w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+		w.sync()
+	}
+	if n := reads.Load(); n < 2 {
+		t.Fatalf("the later syncs read the pull request %d times, want at least 2", n)
+	}
+	var updates int
+	w.gh.Set(func(s *fakegithub.Server) {
+		for _, n := range s.Updates {
+			if n == 1 {
+				updates++
+			}
+		}
+	})
+	if updates != 1 {
+		t.Fatalf("%d update-branch requests for head %s, want 1", updates, head)
+	}
+	if now := w.gh.SHA(branch); now != head {
+		t.Fatalf("the refused head %s moved to %s before the integration", head, now)
+	}
+	if n := w.count(refused, wi); n != 1 {
+		t.Fatalf("%d refused updates recorded", n)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1], s.Intercept = false, nil })
+	w.until("integrated and waiting again", func() bool {
+		w.sync()
+		return w.count(integrationCompleted, wi) == 1 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'`, wi) == 1
+	})
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatal(r)
+	}
+	if out := gitOut(t, w.gh.Repo, "rev-list", "--count", w.gh.Pull(1).Head+"..main"); out != "0" {
+		t.Fatal("base not integrated", out)
+	}
+}
+
 func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
@@ -360,7 +431,7 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if w.escalationReason(wi) != "" {
 		t.Fatal(w.escalationReason(wi))
 	}
-	// Kept past the integration, whose fixer has no candidate: the fix on
+	// An integration fixer publishes on the candidate. A person's item stays
 	// the candidate after it is given the comment.
 	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
 		t.Fatal("the integration fixer was given the comment")
@@ -1067,7 +1138,7 @@ func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
 }
 
 // The people's open feedback waits out an integration: its fixer, which
-// publishes with no candidate, is not given the items, they hold no merge
+// publishes on a candidate, is not given the items, they hold no merge
 // of the base, and once the integration is done they go to ordinary pull
 // request fixes, which have all of the pull request's budget.
 func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
@@ -1139,12 +1210,11 @@ func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
 	}
 }
 
-// An integration fixer publishes to the pull request's branch with no
-// candidate. A person's item open during it, and a comment that came with
-// the conflict, are neither given to it nor settled by its publish: the
-// fix after the integration's review and test takes them up on a
-// candidate, and the item's resolution holds once that candidate is
-// promoted.
+// An integration fixer publishes on the candidate. A person's item open
+// during it, and a comment that came with the conflict, are neither given
+// to it nor settled by its publish: the fix after the integration's review
+// and test takes them up on a candidate, and the item's resolution holds
+// once that candidate is promoted.
 func TestAnIntegrationLeavesTheOpenFeedbackToTheNextCheckedFix(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()

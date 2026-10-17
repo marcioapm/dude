@@ -1395,7 +1395,9 @@ here.
 - **EntityLine** is something named in a row: a face or glyph, its name in
   strong ink (`--ds-color-text-strong`: the one ink stronger than primary,
   for a name) over one muted line of detail, and badges at the end. A
-  member in a table, a memory in a list. `PersonLine` is it with a face;
+  member in a table, a memory in a list. `wrap` lets name and detail run
+  onto more lines instead of ending in an ellipsis, for a sentence (a
+  judgement's question) rather than a name. `PersonLine` is it with a face;
   **AuthorLine** is whoever wrote something: a person as themselves, an
   agent as the person it worked for with its role's tile on their face and
   "Role on KEY" beneath, and dude as the `system` avatar and why it wrote
@@ -2552,7 +2554,14 @@ an ordinary completed step, and review follows on the unchanged head.
 - Drag-and-drop on the board. The workflow owns every lane transition; see
   the Board rules.
 
-### People's feedback
+## Preview overlay
+
+The preview feedback overlay is a non-React consumer of this design system. It runs in a closed shadow root on pages dude does not own and cannot load `tokens.css`, so `apps/web/overlay/build-tokens.ts` generates the small set of `--ds-*` properties it uses from this package's `themes.ts` and `scale.ts`; `apps/web/overlay/build.ts` regenerates that module before every IIFE build. The committed copy has a staleness test. This keeps the overlay self-contained and keeps its surfaces, text ladder, tones, accent, focus ring, type, radii and shadows on the same source of truth.
+
+The overlay maps the picked element to the **accent** role: the README defines accent as interaction, focus and selection, and a picked element is a selection. Its outline and primary action use `color-accent`, its focus uses `color-focus-ring`, and its selection wash uses `color-selection`; status words and pins use the success, attention, danger, info and neutral tone roles. It never uses a role colour or merged violet for interaction. Its panel, toolbar, field and disclosure follow the same overlay/chrome/field primitives as the app, without importing React.
+
+Before dude answers, the overlay follows `prefers-color-scheme` and updates when that preference changes. A `session` message may then carry dude's resolved `theme`; once present, that explicit light/dark value wins over the preview page's OS preference. The field is optional for one-release compatibility with older overlay/dude pairs. The overlay keeps the existing origin, source, size and strict-schema guards and makes no network request.
+
 
 `src/components/FeedbackCard.tsx`, and `LiveDiff`'s `commenting` prop.
 Gallery: *People's feedback* (`#fb-diff`, `#fb-cards`, `#fb-editor`,

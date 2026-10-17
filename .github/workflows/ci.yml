@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+      - name: Build and vet natively on macOS
+        working-directory: orchestrator
+        run: |
+          go build ./...
+          go vet ./...
+      # Compile every test binary without starting DB/container integration tests.
+      # Those execute in the Linux jobs; this job guards Darwin build compatibility.
+      - name: Compile every test package
+        working-directory: orchestrator
+        run: go test -exec /usr/bin/true ./...
+
   go:
     runs-on: ubuntu-26.04
     timeout-minutes: 40
@@ -73,10 +93,10 @@ jobs:
             exit 1
           fi
 
-      # forge's concurrency tests assert only under the race detector.
-      - name: go test -race, forge
+      # forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own.
+      - name: go test -race, forge and phases
         working-directory: orchestrator
-        run: go test -race -count=1 ./internal/forge
+        run: go test -race -count=1 ./internal/forge ./internal/phases
 
       - name: Upload the go test log
         if: failure()

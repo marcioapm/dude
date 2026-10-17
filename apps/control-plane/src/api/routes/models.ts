@@ -69,12 +69,15 @@ export async function checkTiers(scope: OrgScope, models: Record<string, { tier?
 }
 
 /**
- * Who names each tier: the organization's roles and each project's
- * overrides. A fixer that names none of its own runs on the implementer's
- * (resolveTier), and is listed under the layer whose implementer it takes.
+ * Who names each tier: the organization's roles, each project's
+ * overrides, and the organization's judgements. A fixer that names none of
+ * its own runs on the implementer's (resolveTier), and is listed under the
+ * layer whose implementer it takes.
  */
 async function usage(scope: OrgScope, tiers: readonly ModelTier[]): Promise<Map<string, ModelTierUse[]>> {
-  const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels }>;
+  const [org] = (await scope.sql`
+    SELECT default_agent_models AS models, judgement_tier_id AS "judgementTier"
+    FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels; judgementTier: string | null }>;
   const projects = (await scope.sql`
     SELECT id, name, ${scope.sql.unsafe(PROJECT_IMAGE_URL)} AS "imageUrl", agent_models AS models
     FROM projects ORDER BY name`) as Array<{ id: string; name: string; imageUrl: string | null; models: AgentModels }>;
@@ -105,6 +108,7 @@ async function usage(scope: OrgScope, tiers: readonly ModelTier[]): Promise<Map<
       add(fixer.tierId, { kind: "project", role: "fixer", project, inherited: true });
     }
   }
+  add(org?.judgementTier, { kind: "judgements" });
   return out;
 }
 
@@ -231,9 +235,9 @@ async function reorderTiers(ctx: RequestContext): Promise<Response> {
 
 /**
  * Remove a tier, moving everything that names it — the organization's
- * roles, every project's overrides — to a replacement tier in the same
- * transaction. Sessions already running on it keep their model; their
- * Runs say which tier they were on.
+ * roles, every project's overrides, the organization's judgements — to a
+ * replacement tier in the same transaction. Sessions already running on it
+ * keep their model; their Runs say which tier they were on.
  */
 async function removeTier(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
@@ -257,13 +261,16 @@ async function removeTier(ctx: RequestContext): Promise<Response> {
     // lets a child insert's FK check (FOR KEY SHARE) through, so a
     // transaction that holds a project row and then adds an epic or a
     // prompt does not deadlock with this one.
-    const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId} FOR NO KEY UPDATE`) as Array<{ models: AgentModels }>;
+    const [org] = (await scope.sql`
+      SELECT default_agent_models AS models, judgement_tier_id AS "judgementTier"
+      FROM organizations WHERE id = ${scope.organizationId} FOR NO KEY UPDATE`) as Array<{ models: AgentModels; judgementTier: string | null }>;
     const projects = (await scope.sql`
       SELECT id, agent_models AS models FROM projects
       WHERE EXISTS (SELECT 1 FROM jsonb_each(agent_models) r WHERE r.value->>'tier' = ${id})
       FOR UPDATE`) as Array<{ id: string; models: AgentModels }>;
     const orgNamesIt = Object.values(org!.models as Record<string, { tier?: string } | undefined>).some((config) => config?.tier === id);
-    if ((orgNamesIt || projects.length > 0) && replacement === null) {
+    const judges = org!.judgementTier === id;
+    if ((orgNamesIt || judges || projects.length > 0) && replacement === null) {
       throw new HttpError(409, "this tier is in use: choose the tier its agents move to", "in_use");
     }
     if (replacement !== null) {
@@ -271,12 +278,15 @@ async function removeTier(ctx: RequestContext): Promise<Response> {
         await scope.sql`UPDATE organizations SET default_agent_models = ${replaceTier(org!.models, id, replacement)}::jsonb, updated_at = now()
           WHERE id = ${scope.organizationId}`;
       }
+      if (judges) {
+        await scope.sql`UPDATE organizations SET judgement_tier_id = ${replacement}, updated_at = now() WHERE id = ${scope.organizationId}`;
+      }
       for (const p of projects) {
         await scope.sql`UPDATE projects SET agent_models = ${replaceTier(p.models, id, replacement)}::jsonb, updated_at = now() WHERE id = ${p.id}`;
       }
     }
     await scope.sql`DELETE FROM model_tiers WHERE id = ${id}`;
-    await record(scope, ctx, { [id]: { removed: true, movedTo: replacement, projects: projects.map((p) => p.id) } });
+    await record(scope, ctx, { [id]: { removed: true, movedTo: replacement, projects: projects.map((p) => p.id), ...(judges ? { judgements: true } : {}) } });
   });
   return json(await tiersResponse(ctx));
 }

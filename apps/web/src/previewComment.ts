@@ -14,7 +14,7 @@
 
 import {
   FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
-  type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayToDude, type TaskServers,
+  type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
 /** Why commenting is not offered, in the words a person reads. */
@@ -153,13 +153,13 @@ export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: st
       id: i.id,
       n: k + 1,
       status: i.status,
-      author: i.author?.name.split(" ")[0] ?? "Someone",
+      author: clip(i.author?.name.split(" ")[0] ?? "Someone", OVERLAY_LIMITS.name),
       mine: i.author?.id === you,
       body: clip(i.body, OVERLAY_LIMITS.pinBody),
       selector: i.anchor.kind === "preview" ? i.anchor.selector ?? "" : "",
-      when: `${i.status === "draft" ? "drafted" : "submitted"} ${ago(i.submittedAt ?? i.createdAt, now)}`,
+      when: clip(`${i.status === "draft" ? "drafted" : "submitted"} ${ago(i.submittedAt ?? i.createdAt, now)}`, OVERLAY_LIMITS.name),
       replies: i.history.slice(-OVERLAY_LIMITS.replies).map((h) => ({
-        who: h.personId ? name(h.personId) : "The agent", kind: h.kind, body: clip(h.body, OVERLAY_LIMITS.replyBody),
+        who: clip(h.personId ? name(h.personId) : "The agent", OVERLAY_LIMITS.name), kind: h.kind, body: clip(h.body, OVERLAY_LIMITS.replyBody),
       })),
     }));
 }
@@ -186,6 +186,8 @@ export interface CommentingDeps {
     taskKey: string;
     you: string | null;
     name: (personId: string | null | undefined) => string;
+    /** dude's resolved theme, which the overlay follows once connected. */
+    theme?: OverlayTheme;
   };
   /** Uploads a picture as the task's attachment: its id. */
   readonly upload: (picture: { bytes: Uint8Array; type: string; name: string }) => Promise<string>;
@@ -349,7 +351,7 @@ export class PreviewCommenting {
     return this.open(item.anchor.url, this.#server, item.id);
   }
 
-  /** The page's pins again, after the list changed (a save, a submit, an agent's reply). */
+  /** The page's pins and dude's theme again, after the list or the theme changed (a save, a submit, an agent's reply, the person's theme). */
   refresh(): void {
     if (this.#state === "open" && this.#url) this.#post(this.#session(this.#url));
   }
@@ -367,7 +369,8 @@ export class PreviewCommenting {
 
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
-    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins() };
+    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins(),
+      ...(s.theme ? { theme: s.theme } : {}) };
   }
 
   #showPins(value?: boolean): boolean {

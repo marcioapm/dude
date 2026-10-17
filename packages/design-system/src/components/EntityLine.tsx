@@ -20,11 +20,13 @@ export interface EntityLineProps extends Omit<HTMLAttributes<HTMLSpanElement>, "
   readonly trailing?: ReactNode;
   /** A small name for a table cell or a byline (the transcript's size is the default). */
   readonly size?: "sm" | "md" | undefined;
+  /** Name and detail wrap onto more lines instead of ending in an ellipsis: a sentence, not a name. */
+  readonly wrap?: boolean | undefined;
 }
 
-export function EntityLine({ lead, name, detail, trailing, size = "md", className, ...rest }: EntityLineProps) {
+export function EntityLine({ lead, name, detail, trailing, size = "md", wrap = false, className, ...rest }: EntityLineProps) {
   return (
-    <span className={cx(styles["line"], size === "sm" && styles["sm"], trailing !== undefined && styles["fill"], className)} {...rest}>
+    <span className={cx(styles["line"], size === "sm" && styles["sm"], trailing !== undefined && styles["fill"], wrap && styles["wrap"], className)} {...rest}>
       {lead !== undefined ? <span className={styles["lead"]}>{lead}</span> : null}
       <span className={styles["text"]}>
         <span className={styles["name"]}>{name}</span>

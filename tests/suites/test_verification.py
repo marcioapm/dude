@@ -10,8 +10,10 @@ the tree, `fake/test-blocked` cannot start the application.
 
 from __future__ import annotations
 
+import json
 import subprocess
 
+import requests
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
@@ -127,6 +129,80 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     expect(rows.nth(0)).to_have_attribute("data-state", "waived")
     expect(rows.nth(0).get_by_test_id("criterion-decision")).to_have_text("Waived by e2e user: Checked by hand on staging.")
     assert console_errors == []
+
+
+START, END = "<!-- dude:verification -->", "<!-- /dude:verification -->"
+
+
+def _outside_section(body: str) -> tuple[str, str]:
+    """What a pull request body holds before dude's section and after it."""
+    assert body.count(START) == 1 and body.count(END) == 1, body
+    return body[:body.index(START)], body[body.index(END) + len(END):]
+
+
+def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """A pull request dude opened carries its verification section. A
+    person edits the description on GitHub; then they push, and the
+    conductor has the work tested again while the pull request waits. dude
+    rewrites its section for the new head and leaves every byte the person
+    wrote where it was."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True},
+        "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
+                                         "simplifier": "fake/scripted", "qa_browser": "fake/scripted",
+                                         "conductor": "fake/scripted"}),
+    })
+    # Warm throughout: the second message reaches a live conductor.
+    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
+                        {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet and say goodbye", acceptanceCriteria=CRITERIA)
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    pr = _pull_request(client, task["id"])
+    number = pr["number"]
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the delivery never waited on its pull request")
+    opened = fake_github.pulls[number].body
+    tested = fake_github.branch_sha(pr["headBranch"]) or ""
+    assert f"{START}\n## Verification\nTested at `{tested[:7]}`." in opened, opened
+    assert fake_github.body_edits == [], fake_github.body_edits
+
+    # The person's edit, through GitHub's API as their browser makes it: a
+    # paragraph above dude's section, and a line after it.
+    mine = ("Context for reviewers — façade first, then the 👋 copy.  \n"
+            "Trailing spaces and a [link](https://example.test/a_b) stay as typed.\n\n")
+    before, after = _outside_section(opened)
+    edited = before + mine + opened[len(before):] + "\n— Ana\n"
+    resp = requests.patch(f"{fake_github.api_url}/repos/{fake_github.owner}/{fake_github.repo}/issues/{number}",
+                          json={"body": edited}, headers={"authorization": "token fake-token"}, timeout=10)
+    assert resp.status_code == 200 and resp.json()["body"] == edited, resp.text
+    assert fake_github.pulls[number].body == edited
+    theirs = _outside_section(edited)
+
+    pushed = fake_github.commit(pr["headBranch"], "A person's change")
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "I'll steer from here."})
+    assert resp.status_code in (200, 201) and resp.json()["decider"] == "conductor", resp.text
+    tests = [r for r in client.task_runs(task["id"]) if r["phase"] == "test"]
+    resp = client.post(f"/v1/tasks/{task['id']}/chat",
+                       {"text": "Test it again.\ntool: start_phase " + json.dumps({"phase": "test"})})
+    assert resp.status_code in (200, 201), resp.text
+    wait_until(lambda: len([r for r in client.task_runs(task["id"]) if r["phase"] == "test" and r["status"] == "completed"])
+               > len(tests), timeout=120, message="the conductor's test never completed")
+
+    def refreshed() -> bool:
+        return any(e["payload"].get("number") == number and e["payload"].get("head") == pushed
+                   and "error" not in e["payload"]
+                   for e in client.events(taskId=task["id"], limit=1000)
+                   if e["eventType"] == "pull_request.verification_updated")
+    wait_until(refreshed, timeout=60, message="dude never refreshed the section for the new head")
+
+    body = fake_github.pulls[number].body
+    assert f"Tested at `{pushed[:7]}`." in body and f"Tested at `{tested[:7]}`." not in body, body
+    assert _outside_section(body) == theirs, body
+    # The person's edit and dude's one, which sent the body alone.
+    assert [n for n, _ in fake_github.body_edits] == [number, number], fake_github.body_edits
+    assert list(fake_github.body_edits[1][1]) == ["body"], fake_github.body_edits
 
 
 def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(

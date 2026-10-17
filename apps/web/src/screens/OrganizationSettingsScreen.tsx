@@ -36,13 +36,14 @@ import { ForgePermissionList, GithubBehaviour, verificationSummary, WebhookCard 
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 import { MachinesPage, useMachineSizes } from "./MachinesSettings.tsx";
 import { ModelsPage, useModelTiers } from "./ModelsSettings.tsx";
+import { JudgementsPage, useJudgementSettings } from "./JudgementsSettings.tsx";
 import { ImagesPage, queueCount, useImages } from "./ImagesSettings.tsx";
 import { useImageChoices } from "../images.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
-const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "network", "models", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "network", "models", "judgements", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;
@@ -69,6 +70,9 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   const machines = useMachineSizes(client);
   // The tiers, likewise: the menu's count, the Models page and each role's tier.
   const models = useModelTiers(client);
+  // The judgement tier, for the menu's "no model" note and the Judgements page.
+  const judgement = useJudgementSettings(client);
+  const judgementTier = models.tiers?.tiers.find((t) => t.id === judgement.settings?.tierId) ?? null;
   // The library and its queue, once for the screen: the menu's count of
   // builds running and waiting, the Images pages, and every role's image.
   const images = useImages(client);
@@ -110,6 +114,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         agentsNav(settings),
         { id: "network", label: "Network", icon: "globe" },
         { id: "models", label: "Models", icon: "sparkle", note: models.tiers?.tiers.length || undefined },
+        { id: "judgements", label: "Judgements", icon: "list-check", note: judgementTier && !judgementTier.model ? "no model" : undefined },
         { id: "machines", label: "Machines", icon: "chip", note: machines.sizes?.sizes.length ?? undefined },
         { id: "images", label: "Images", icon: "cube", note: queueCount(images.data) ? <span className="imagesNavCount" data-testid="images-queue-count"><span className="ds-live-dot" aria-hidden />{queueCount(images.data)}</span> : undefined },
         deliveryNav(settings),
@@ -121,9 +126,14 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         <MemoryPages client={client} page={page} projects={projects} admin={me?.role === "admin"} index={index} onPage={onPage}
           scope={{ kind: "organization", name: settings?.organization.name ?? "the organisation" }} />
       ) : page === "models" ? (
-        // Models says who may change tiers itself.
+        // Models says who may change tiers itself. A removal may have moved the judgement tier to the replacement.
         <ModelsPage client={client} orgName={settings?.organization.name ?? "the organisation"}
-          tiers={models.tiers} problem={models.problem} setTiers={models.setTiers} />
+          tiers={models.tiers} problem={models.problem} setTiers={models.setTiers} onRemoved={judgement.reload} />
+      ) : page === "judgements" ? (
+        // Judgements says who may change the tier itself.
+        <JudgementsPage client={client} orgName={orgName} tiers={models.tiers?.tiers ?? null} tiersProblem={models.problem}
+          judgement={judgement} onManageTiers={admin ? () => onPage("models") : undefined}
+          onChanged={() => void client.modelTiers().then(models.setTiers, () => undefined)} />
       ) : page === "images" ? (
         <ImagesPage client={client} orgName={settings?.organization.name ?? "the organisation"} images={images} sub={sub}
           onSub={(next) => {
