@@ -54,8 +54,13 @@ def _assert_integrated(client: ApiClient, env, fake_github: FakeGitHub, task_id:
     both tasks' lines, and an internal review read the merge."""
     pr0 = _pull_request(client, task_id)
     assert pr0 is not None
-    wait_until(lambda: any(m.startswith("Merge remote-tracking branch 'lux/main'") for m in fake_github.branch_log(pr0["headBranch"])),
-               timeout=180, message="the integration merge was not pushed")
+    try:
+        wait_until(lambda: any(m.startswith("Merge remote-tracking branch 'lux/main'") for m in fake_github.branch_log(pr0["headBranch"])),
+                   timeout=180, message="the integration merge was not pushed")
+    except AssertionError as e:
+        runs = [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task_id)]
+        workflow = query(env.owner_dsn, "SELECT step, status, last_error FROM workflow_runs WHERE task_id = %s", (task_id,))
+        raise AssertionError(f"{e}; runs: {runs}; workflow: {workflow}; branch: {fake_github.branch_log(pr0['headBranch'])}") from e
     # fake-lux's git push is not a GitHub webhook; notify the same synchronize
     # event GitHub sends for the pushed integration head.
     fake_github.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr0["number"]}})
