@@ -92,10 +92,7 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 	// lux is asked a few Runs at a time, all within one budget: the sweep's
 	// other work waits on this, and an unreachable lux host must not hold
 	// it up for each Run in turn.
-	budget := stallLuxBudget
-	if s.StallLuxBudget > 0 {
-		budget = s.StallLuxBudget
-	}
+	budget := max(stallLuxBudget, s.StallLuxBudget)
 	luxCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var wg sync.WaitGroup
