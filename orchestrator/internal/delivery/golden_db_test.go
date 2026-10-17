@@ -307,3 +307,21 @@ first?', 'per_bo')`)
 	})
 	golden(t, "brainstorm-question-withdrawn", got)
 }
+
+// The digest's bounds: the newest ten messages, the rest counted, and one
+// with no reply yet.
+func TestGoldenDigestBounds(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind)
+		VALUES ('run_p1', $1, 'prj_g', 'wi_p1', 1, 'running', 'implement', 'implementer', 'agent')`)
+	for i := range 12 {
+		w.exec(t, `INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text, created_at)
+			VALUES ($2, $1, 'wi_p1', 'run_p1', 'wi_g', $3, $4::timestamptz)`,
+			fmt.Sprintf("pm_%02d", i), fmt.Sprintf("Question %d?", i), fmt.Sprintf("2026-01-02 14:%02d:00Z", i))
+	}
+	w.exec(t, `INSERT INTO conductor_digests (task_id, organization_id, through) VALUES ('wi_g', $1, '2026-01-02 12:30Z')`)
+	got := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+		return ConductorDigestTx(ctx, tx, w.org, "wi_g", "", "briefing")
+	})
+	golden(t, "digest-bounded", goldenNow.ReplaceAllString(got, "→ NOW UTC)"))
+}

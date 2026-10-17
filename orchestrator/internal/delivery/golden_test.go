@@ -390,3 +390,9 @@ func TestGoldenFeedbackText(t *testing.T) {
 		golden(t, fmt.Sprintf("feedback-cli-%v", cli), FeedbackText(goldenFeedback(), cli))
 	}
 }
+
+func TestGoldenMachineOffers(t *testing.T) {
+	for _, m := range goldenMachineChoices() {
+		golden(t, "machine-offer-"+m.name, m.c.Offer())
+	}
+}
