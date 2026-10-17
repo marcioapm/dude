@@ -45,3 +45,5 @@ It came from the pull request, not Chat, and hands you no decisions: answer it t
 {{- define "notices/told/checkout-read-only"}}Your checkout cannot be kept current by this lux: do not edit; publish is refused. Delegate changes (start_phase).{{end}}
 
 {{- define "notices/told/talk-when-unblocked"}}{{.First}} set this task to be talked through once nothing was in front of it, and {{.By}} merged. Read the task and the merged code, then ask {{.First}} what you need to know, or propose a plan. Nothing is built until they agree.{{end}}
+
+{{- define "notices/told/session-owner"}}{{.To}} owns this session now. {{.From}} {{if .Left}}left it{{else if .Read}}stays in it and can read{{else}}stays in it and can chat{{end}}. Edits you propose are filed by whoever owns the task, as before.{{end}}
