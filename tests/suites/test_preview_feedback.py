@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -139,9 +140,15 @@ def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
     done the read is the preview's again; one that went to sleep meanwhile is
     woken as a visitor would.
     """
-    # Between two of the delivery's Runs the read is briefly the preview's again: wait for the delivery to rest first.
-    wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(task["id"]))
-               and not any(r["status"] in ("scheduled", "starting", "running") for r in client.task_runs(task["id"]) if r.get("kind") != "preview"),
+    # Between two of the delivery's Runs the read is briefly the preview's again: wait for the delivery to rest
+    # first. The scripted fixer never answers the item, so the delivery ends waiting on a person (as in
+    # test_feedback.py), not at simplify: at rest is the task off "running" with no agent Run at work, twice.
+    def at_rest() -> bool:
+        t = client.get(f"/v1/tasks/{task['id']}").json()
+        return t["status"] not in ("received", "intake", "queued", "running") and not any(
+            r["status"] in ("pending", "scheduled", "starting", "running") for r in t.get("runs", []) if r.get("kind") != "preview")
+
+    wait_until(lambda: at_rest() and (time.sleep(1.0) is None) and at_rest(),
                timeout=180, message="the delivery's agents were still at work after 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
                       timeout=60, message="the servers read never came back to the preview after the delivery rested")
