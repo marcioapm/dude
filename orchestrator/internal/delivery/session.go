@@ -308,7 +308,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	}
 	for _, p := range people {
 		if p.Accepted {
-			data.People = append(data.People, person{p.Name, sessionRoleWords[p.Role]})
+			data.People = append(data.People, person{p.Name, p.Role})
 		}
 	}
 	projects, err := SessionProjects(ctx, tx, sessionID)
@@ -330,8 +330,6 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	}
 	return render("briefings/session", data), nil
 }
-
-var sessionRoleWords = map[string]string{SessionOwner: "owner", SessionChat: "can chat", SessionRead: "can read"}
 
 // Member is a person in a session, or invited to it.
 type Member struct {

@@ -189,20 +189,17 @@ func (c MachineChoices) Offer() string {
 // Line is the prompt's paragraph for an agent with a machine: where it
 // runs (and why, when an agent raised it), what it may move to, and when.
 func (c MachineChoices) Line(cli bool) string {
-	type raised struct{ Scope, Who, Reason string }
+	type raised struct {
+		Session           bool
+		RoleLabel, Reason string
+	}
 	data := struct {
 		C      MachineChoices
 		Raised *raised
 		CLI    bool
 	}{C: c, CLI: cli}
 	if r := c.Current.Raised; r != nil {
-		data.Raised = &raised{"task", "an agent", r.Reason}
-		if c.Current.From == "session" {
-			data.Raised.Scope = "session"
-		}
-		if label := RoleLabel[r.Role]; label != "" {
-			data.Raised.Who = "the " + strings.ToLower(label)
-		}
+		data.Raised = &raised{c.Current.From == "session", strings.ToLower(RoleLabel[r.Role]), r.Reason}
 	}
 	return render("contracts/machine", data)
 }

@@ -8,7 +8,7 @@ Brainstorm, this is the session {{printf "%q" (oneLine .Title)}}, as you named i
 
 ## People
 {{range .People}}
-- {{.Name}} ({{.Role}}){{end}}
+- {{.Name}} ({{if eq .Role "owner"}}owner{{else if eq .Role "chat"}}can chat{{else if eq .Role "read"}}can read{{end}}){{end}}
 
 ## Linked projects
 {{if not .Projects}}
