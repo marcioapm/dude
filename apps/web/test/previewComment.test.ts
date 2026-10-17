@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { DudeToOverlay, FeedbackItem, OverlayAnchor, RunServer, TaskServers } from "@dude/domain";
 import { OVERLAY_LIMITS } from "@dude/domain";
-import { PreviewCommenting, commentingOffer, pinsFor, previewOrigins, type CommentingView } from "../src/previewComment.ts";
+import { PreviewCommenting, commentingOffer, pinsFor, previewOrigins, type CommentingDeps, type CommentingView } from "../src/previewComment.ts";
 
 const WEB = "https://web-shop-1.preview.example.test";
 const API = "https://api-shop-1.preview.example.test";
@@ -45,11 +45,12 @@ let createDraft: ReturnType<typeof mock>;
 let views: CommentingView[];
 let c: PreviewCommenting;
 
-function boot() {
+function boot(over: Partial<CommentingDeps> = {}) {
   c = new PreviewCommenting({
     win: window as unknown as Window, taskId: "tsk_1", helloWaitMs: 40,
     read: () => ({ origins: previewOrigins(data), items, drafts: items.filter((i) => i.status === "draft").length, taskKey: "SHOP-1", you: "per_me", name: () => "Ana" }),
     upload: upload as never, createDraft: createDraft as never, onSaved: () => {}, onOpenItem: () => {}, onChange: (v) => views.push(v),
+    ...over,
   });
   c.listen();
 }
@@ -346,12 +347,7 @@ test("hello or navigated naming another site than the sender's is refused, not a
 test("Open in dude for an item not in the task's list is not passed on", () => {
   const openItem = mock((_id: string) => {});
   c.dispose();
-  c = new PreviewCommenting({
-    win: window as unknown as Window, taskId: "tsk_1",
-    read: () => ({ origins: previewOrigins(data), items, drafts: 0, taskKey: "SHOP-1", you: null, name: () => "Ana" }),
-    upload: upload as never, createDraft: createDraft as never, onSaved: () => {}, onOpenItem: openItem, onChange: () => {},
-  });
-  c.listen();
+  boot({ onOpenItem: openItem });
   items = [item("fbk_here")];
   c.open(`${WEB}/cart`, "web");
   post({ type: "open", v: 1, itemId: "fbk_elsewhere" });
