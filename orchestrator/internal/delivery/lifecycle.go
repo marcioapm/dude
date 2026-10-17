@@ -44,7 +44,7 @@ const (
 type ArchivedError struct{ TaskKey string }
 
 func (e ArchivedError) Error() string {
-	return fmt.Sprintf("%s is archived: unarchive it to start it.", e.TaskKey)
+	return fmt.Sprintf(mLifecycleArchived, e.TaskKey)
 }
 
 // ClosedError is a start of a task a person closed: never overridden.
@@ -56,15 +56,15 @@ type ClosedError struct {
 
 func (e ClosedError) Error() string {
 	if e.PickUp {
-		return fmt.Sprintf("%s was closed: reopen it to pick it back up.", e.TaskKey)
+		return fmt.Sprintf(mLifecycleClosedPickUp, e.TaskKey)
 	}
-	return fmt.Sprintf("%s was closed as %s: reopen it to start it.", e.TaskKey, ResolutionLabel[e.Resolution])
+	return fmt.Sprintf(mLifecycleClosed, e.TaskKey, ResolutionLabel[e.Resolution])
 }
 
 // AgentRefusal is what a conductor is told when its task's start is
 // refused as archived or closed.
 func agentLifecycleRefusal(err error) string {
-	return err.Error() + " Nobody can start it anyway until a person does that. Tell the person, and end your turn."
+	return fmt.Sprintf(mLifecycleAgent, err.Error())
 }
 
 // StartRefusalReason is err's reason when it is a start refused by the
