@@ -3271,6 +3271,7 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Both SETs read the old row, so retry_due_at = next_attempt_at.
 		_, err := tx.Exec(ctx, `UPDATE runs SET retry_failures = `+retryStreak+`,
 				retry_due_at = now() + `+retryWait+`, next_attempt_at = now() + `+retryWait+`
 			WHERE id = $1`,

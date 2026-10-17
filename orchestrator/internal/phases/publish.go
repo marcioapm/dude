@@ -129,6 +129,8 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 	}
 	// The loop runs one pass at a time, so the slots counted free above are
 	// still free; a caller running passes side by side waits here instead.
+	// Its claims are not renewed while it waits and may lapse; the claim
+	// guard on every write of carryClaimed covers that (delivery.ErrClaimLost).
 	wait := s.passWait()
 	defer wait.stop()
 	done := make(chan bool, len(todo))
