@@ -219,7 +219,7 @@ export async function drawPicture(el: Element, win: Window, paint = { outline: "
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new PictureError("this browser can't draw it");
   ctx.scale(scale, scale);
-   ctx.fillStyle = paint.background || "white";
+  ctx.fillStyle = paint.background || "white";
   ctx.fillRect(0, 0, w + 2 * PAD, h + 2 * PAD);
   ctx.drawImage(img, PAD, PAD, w, h);
   ctx.strokeStyle = paint.outline || "currentColor";
