@@ -116,14 +116,14 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		batch = caller.batch
 		switch {
 		case caller.ended():
-			return ReplyPost{}, refusef("your Run is %s: it posts nothing", caller.status)
+			return ReplyPost{}, refusef(rYourRunPostsNothing, caller.status)
 		case len(batch) == 0:
-			return ReplyPost{}, refusef("you reply only to the pull request feedback you were given, and you were given none")
+			return ReplyPost{}, refuseText(rYouReplyOnlyPullRequestFeedback)
 		case !slices.Contains(batch, strings.TrimSpace(in.InReplyTo)):
-			return ReplyPost{}, refusef("in_reply_to must be one of the comments in your feedback: %s", strings.Join(batch, ", "))
+			return ReplyPost{}, refusef(rInReplyMustBeOneComments, strings.Join(batch, ", "))
 		}
 	} else if caller.role != RoleConductor {
-		return ReplyPost{}, refusef("a task's conductor replies on its pull requests")
+		return ReplyPost{}, refuseText(rTaskConductorRepliesOnItsPull)
 	}
 	var live bool
 	if batch != nil {
@@ -133,14 +133,14 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		return ReplyPost{}, err
 	}
 	if !live {
-		return ReplyPost{}, refusef("you are no longer this task's conductor: another took over from you. Post nothing")
+		return ReplyPost{}, refuseText(rYouAreNoLongerThisTask5)
 	}
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
-		return ReplyPost{}, refusef("say what to post: text is required")
+		return ReplyPost{}, refuseText(rSayWhatPostTextRequired)
 	case len(text) > ChatMessageMax:
-		return ReplyPost{}, refusef("a reply is at most %d bytes, as a Chat message is", ChatMessageMax)
+		return ReplyPost{}, refusef(rReplyAtMostBytesAsChat, ChatMessageMax)
 	}
 	repo, number, err := parsePR(in.PR)
 	if err != nil {
@@ -151,14 +151,14 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
 		ref.TaskID, number, repo).Scan(&repo, &url)
 	if db.IsNotFound(err) {
-		return ReplyPost{}, refusef("%s is not a pull request of your task: you reply only on your task's (pull_requests lists them)", in.PR)
+		return ReplyPost{}, refusef(rNotPullRequestYourTaskYou2, in.PR)
 	}
 	if err != nil {
 		return ReplyPost{}, err
 	}
 	slug := forge.SlugFromURL(url)
 	if gh == nil || slug == "" {
-		return ReplyPost{}, refusef("%s#%d is not on a GitHub dude is connected to: there is nowhere to post", repo, number)
+		return ReplyPost{}, refusef(rNotOnGithubDudeConnectedThere, repo, number)
 	}
 	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
 	if batch != nil {
@@ -173,7 +173,7 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 			  AND (payload->>'number')::int = $5 AND payload->>'repo' = $6 ORDER BY cursor DESC LIMIT 1`,
 			ref.TaskID, EvPullRequestCommented, EvPullRequestCommentEdited, p.inReplyTo, number, repo).Scan(&author, &said)
 		if db.IsNotFound(err) {
-			return ReplyPost{}, refusef("%s is not a comment on %s#%d (pull_requests lists its feedback)", p.inReplyTo, repo, number)
+			return ReplyPost{}, refusef(rNotCommentOnPullRequestsLists, p.inReplyTo, repo, number)
 		}
 		if err != nil {
 			return ReplyPost{}, err
@@ -181,7 +181,7 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	}
 	if id, ok := strings.CutPrefix(p.inReplyTo, "line-comment-"); ok {
 		if p.thread, err = strconv.ParseInt(id, 10, 64); err != nil {
-			return ReplyPost{}, refusef("%s is not a line comment's id", p.inReplyTo)
+			return ReplyPost{}, refusef(rNotLineCommentId, p.inReplyTo)
 		}
 		p.body = text + "\n\n" + forge.ReplyMarker
 		return p, nil
@@ -205,7 +205,7 @@ func PostReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted
 		posted, err = gh.Comment(ctx, p.slug, p.number, p.body)
 	}
 	if forge.Refused(err) || forge.Transient(err) {
-		return forge.Posted{}, refusef("GitHub did not take the reply, and nothing was posted: %v", err)
+		return forge.Posted{}, refusef(rGithubDidNotTakeReplyAnd, err)
 	}
 	return posted, err
 }
@@ -232,7 +232,7 @@ func parsePR(s string) (string, int, error) {
 	}
 	n, err := strconv.Atoi(num)
 	if err != nil || n <= 0 {
-		return "", 0, refusef("name the pull request by its number, or repo#number: %q is neither", s)
+		return "", 0, refusef(rNamePullRequestByItsNumber, s)
 	}
 	return strings.TrimSpace(repo), n, nil
 }

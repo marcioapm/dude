@@ -42,12 +42,12 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		return nil, nil
 	}
 	if len(ids) > MaxAttachmentsPerMessage {
-		return nil, AttachmentError{fmt.Sprintf("a message carries at most %d images", MaxAttachmentsPerMessage)}
+		return nil, AttachmentError{fmt.Sprintf(mMessageCarriesAtMostImages, MaxAttachmentsPerMessage)}
 	}
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if seen[id] {
-			return nil, AttachmentError{fmt.Sprintf("image %s is named twice", id)}
+			return nil, AttachmentError{fmt.Sprintf(mImageNamedTwice, id)}
 		}
 		seen[id] = true
 	}
@@ -71,15 +71,15 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		// Another organization's is not visible here at all: the same
 		// answer as one that does not exist.
 		if i < 0 || found[i].TaskID != taskID {
-			return nil, AttachmentError{fmt.Sprintf("image %s is not one of this task's", id)}
+			return nil, AttachmentError{fmt.Sprintf(mImageNotOneThisTask, id)}
 		}
 		if found[i].Sent {
-			return nil, AttachmentError{fmt.Sprintf("image %s was already sent", id)}
+			return nil, AttachmentError{fmt.Sprintf(mImageWasAlreadySent, id)}
 		}
 		total += found[i].Bytes
 	}
 	if total > MaxMessageAttachmentBytes {
-		return nil, AttachmentError{fmt.Sprintf("a message's images are at most %d MiB together", MaxMessageAttachmentBytes>>20)}
+		return nil, AttachmentError{fmt.Sprintf(mMessageImagesAreAtMostMib, MaxMessageAttachmentBytes>>20)}
 	}
 	var out []json.RawMessage
 	for pos, id := range ids {
@@ -184,18 +184,18 @@ func SyncTaskImagesTx(ctx context.Context, tx pgx.Tx, taskID, goal string, crite
 	var total int64
 	for _, r := range found {
 		if r.TaskID != taskID {
-			return AttachmentError{fmt.Sprintf("image %s is another task's; upload it to this one", r.ID)}
+			return AttachmentError{fmt.Sprintf(mImageAnotherTaskUploadThisOne, r.ID)}
 		}
 		if r.Sent {
-			return AttachmentError{fmt.Sprintf("image %s was sent with a message; upload it again to use it here", r.ID)}
+			return AttachmentError{fmt.Sprintf(mImageWasSentWithMessageUpload, r.ID)}
 		}
 		total += r.Bytes
 	}
 	if len(found) > MaxAttachmentsPerMessage {
-		return AttachmentError{fmt.Sprintf("a task's text shows at most %d images", MaxAttachmentsPerMessage)}
+		return AttachmentError{fmt.Sprintf(mTaskTextShowsAtMostImages, MaxAttachmentsPerMessage)}
 	}
 	if total > MaxMessageAttachmentBytes {
-		return AttachmentError{fmt.Sprintf("a task's images are at most %d MiB together", MaxMessageAttachmentBytes>>20)}
+		return AttachmentError{fmt.Sprintf(mTaskImagesAreAtMostMib, MaxMessageAttachmentBytes>>20)}
 	}
 	// Never nil: NOT (id = ANY(NULL)) is NULL, which would let none go.
 	kept := []string{}

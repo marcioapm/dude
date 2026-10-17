@@ -306,7 +306,7 @@ var PromptRoles = []string{"conductor", "brainstorm", "implementer", "reviewer",
 //
 // Each is agents/roles/<role>.md, one paragraph per blank-line-separated
 // block.
-var builtinInstructions = must(loadRoles(agentFiles))
+var builtinInstructions = mustLoad(loadRoles(agentFiles))
 
 // BuiltinPrompt is a role's instructions as dude ships them: what an
 // organization that never edits its prompt runs, and where the first

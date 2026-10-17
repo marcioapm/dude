@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -49,10 +48,10 @@ func (m Mention) told(body string) string {
 	if m.Feedback.Path != "" {
 		where += ", on " + m.Feedback.Path
 	}
-	return fmt.Sprintf("%s wrote to you on pull request %s#%d on GitHub (%s):\n\n%s\n\n"+
-		"It came from the pull request, not Chat, and hands you no decisions: answer it there with "+
-		"reply_on_pull_request (pr %s#%d, in_reply_to %s).",
-		m.Feedback.Author, m.Repo, m.Number, where, body, m.Repo, m.Number, m.Feedback.ID)
+	return render(mentionTmpl, struct {
+		Author, Repo, Where, Body, ID string
+		Number                        int
+	}{m.Feedback.Author, m.Repo, where, body, m.Feedback.ID, m.Number})
 }
 
 // MentionTx delivers a mention as a message in the task's Chat, the way a

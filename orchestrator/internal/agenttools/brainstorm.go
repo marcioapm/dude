@@ -28,46 +28,25 @@ import (
 var brainstorms = []string{delivery.RoleBrainstorm}
 
 var brainstormTools = []tool{
-	define("list_tasks", "A linked project's epics and tasks, with their keys (like BL-12), status and who asked for "+
-		"them — optionally only those mentioning some text.", brainstorms, sessionListTasks),
-	define("list_epics", "A linked project's epics, in priority order, with how many tasks each has and how many are "+
-		"still open.", brainstorms, sessionListEpics),
-	define("list_repositories", "A linked project's repositories: which are checked out for this session (read only, "+
-		"and where), and which are not.", brainstorms, sessionListRepositories),
-	define("pull_requests", "A linked project's pull requests: with task, that task's in full (checks, reviews, "+
-		"feedback); without, the project's latest, one line each.", brainstorms, sessionPullRequests),
-	define("findings", "Review findings in a linked project: with task, that task's (name ids to read some in full); "+
-		"without, the project's open findings, one line each.", brainstorms, sessionFindings),
-	define("search_memory", "Search what is known in a linked project — memories, tasks, epics — and the "+
-		"organisation's own memories, by words and by meaning, best first.", brainstorms, sessionSearchMemory).before(embedQuery),
-	define("get_memory", "Read one memory in full, by the id search_memory gave.", brainstorms, sessionGetMemory),
-	define("remember", "Save something worth knowing next time, for this session: only its members and its agent "+
-		"will find it. A fact that holds, a procedure that works, a trap and its way around. Search first.",
-		brainstorms, sessionRemember).limit(remembersPerRun),
-	define("propose", "Put work on the session's proposal card, for a member to file with a click, as themselves: "+
-		"new epics and tasks in linked projects, edits to a task's goal or criteria (before/after), comments on a task, "+
-		"and notes for an epic: a new epic's notes, or a note on an existing one. A note is a short working fact every "+
-		"agent on the epic must follow (a contract, a decision, where the docs are); you never pin one yourself. "+
-		"A task item may say what it waits on and holds up (blockedBy, blocks, related): an existing task as "+
-		"{\"key\": \"BL-41\"}, or another item of this proposal as {\"item\": 1}, numbered from 1 as the card numbers "+
-		"them. Work out the order: filing a task files what it waits on with it. "+
-		"You never create, edit or comment yourself. A new proposal replaces the card.",
-		brainstorms, propose).limit(createsPerRun),
-	define("relate", "Propose a relation between two existing tasks of linked projects, for a member to file: "+
-		"from blocks to (to can't start until from is merged), or related. You never write it yourself.",
-		brainstorms, relate).limit(createsPerRun),
-	define("ask_person", askDescription+" Then end your turn: the answers are your next message. With to (a member's "+
-		"name), only that member can answer; what others say meanwhile reaches you with the answer.", brainstorms, sessionAsk),
-	define("name_session", "Name this session: one line of plain words, at most 60 characters, once its subject is "+
-		"clear. Name it again only if the subject clearly changes. Refused once a member has named it.",
-		brainstorms, nameSession).limit(namesPerRun),
+	define("list_tasks", brainstorms, sessionListTasks),
+	define("list_epics", brainstorms, sessionListEpics),
+	define("list_repositories", brainstorms, sessionListRepositories),
+	define("pull_requests", brainstorms, sessionPullRequests),
+	define("findings", brainstorms, sessionFindings),
+	define("search_memory", brainstorms, sessionSearchMemory).before(embedQuery),
+	define("get_memory", brainstorms, sessionGetMemory),
+	define("remember", brainstorms, sessionRemember).limit(remembersPerRun),
+	define("propose", brainstorms, propose).limit(createsPerRun),
+	define("relate", brainstorms, relate).limit(createsPerRun),
+	define("ask_person", brainstorms, sessionAsk),
+	define("name_session", brainstorms, nameSession).limit(namesPerRun),
 }
 
 // namesPerRun bounds how often one Run renames its session.
 const namesPerRun = 20
 
 type nameSessionIn struct {
-	Title string `json:"title" jsonschema:"the session's name: one line, at most 60 characters, plain words"`
+	Title string `json:"title"`
 }
 
 type nameSessionOut struct {
@@ -79,11 +58,11 @@ type nameSessionOut struct {
 func nameSession(ctx context.Context, tx pgx.Tx, c Caller, in nameSessionIn) (nameSessionOut, error) {
 	title := delivery.OneLineTitle(in.Title)
 	if title == "" || utf8.RuneCountInString(title) > delivery.AgentTitleMax {
-		return nameSessionOut{}, refuse("a title of 1 to %d characters, on one line", delivery.AgentTitleMax)
+		return nameSessionOut{}, refuse(rTitle1CharactersOnOneLine, delivery.AgentTitleMax)
 	}
 	_, err := delivery.RenameSession(ctx, tx, c.run(), title, delivery.ByAgent, ledger.ActorAgent, c.RunID)
 	if errors.Is(err, delivery.ErrNamedByPerson) {
-		return nameSessionOut{}, refuse("a member named this session; their name stays: don't rename it")
+		return nameSessionOut{}, refuseText(rMemberNamedThisSessionTheirName)
 	}
 	return nameSessionOut{Title: title}, err
 }
@@ -99,7 +78,7 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 	if key == "" {
 		switch len(projects) {
 		case 0:
-			return delivery.LinkedProject{}, refuse("no project is linked to this session yet: a member links one")
+			return delivery.LinkedProject{}, refuseText(rNoProjectLinkedThisSessionYet)
 		case 1:
 			return projects[0], nil
 		}
@@ -107,14 +86,14 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 		for i, p := range projects {
 			keys[i] = p.Key
 		}
-		return delivery.LinkedProject{}, refuse("name a project: %s", strings.Join(keys, ", "))
+		return delivery.LinkedProject{}, refuse(rNameProject, strings.Join(keys, ", "))
 	}
 	for _, p := range projects {
 		if strings.EqualFold(p.Key, key) || strings.EqualFold(p.Name, key) {
 			return p, nil
 		}
 	}
-	return delivery.LinkedProject{}, refuse("project %s is not linked to this session", key)
+	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
 }
 
 // inProject is the caller as a tool for one project sees it.
@@ -124,12 +103,12 @@ func inProject(c Caller, projectID string) Caller {
 }
 
 type projectIn struct {
-	Project string `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
+	Project string `json:"project,omitempty"`
 }
 
 type sessionListTasksIn struct {
-	Project string `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
-	Text    string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this"`
+	Project string `json:"project,omitempty"`
+	Text    string `json:"text,omitempty"`
 }
 
 func sessionListTasks(ctx context.Context, tx pgx.Tx, c Caller, in sessionListTasksIn) (listTasksOut, error) {
@@ -172,9 +151,9 @@ func sessionListRepositories(ctx context.Context, tx pgx.Tx, c Caller, in projec
 
 // taskIn names a task of a linked project.
 type taskIn struct {
-	Project string   `json:"project,omitempty" jsonschema:"a linked project's key (like BL); optional when only one is linked"`
-	Task    string   `json:"task,omitempty" jsonschema:"a task's key (like BL-58) in that project"`
-	IDs     []string `json:"ids,omitempty" jsonschema:"findings: with task, those to read in full (fnd_…)"`
+	Project string   `json:"project,omitempty"`
+	Task    string   `json:"task,omitempty"`
+	IDs     []string `json:"ids,omitempty"`
 }
 
 // taskOf is the task a tool names in a linked project, as a caller of the
@@ -192,7 +171,7 @@ func taskOf(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (Caller, delive
 		return c, p, false, err
 	}
 	if id == "" {
-		return c, p, false, refuse("no task %s in %s", in.Task, p.Key)
+		return c, p, false, refuse(rNoTaskIn, in.Task, p.Key)
 	}
 	scoped := inProject(c, p.ID)
 	scoped.TaskID = id
@@ -235,7 +214,7 @@ func sessionFindings(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, 
 		return findings(ctx, tx, scoped, findingsIn{IDs: in.IDs})
 	}
 	if len(in.IDs) > 0 {
-		return nil, refuse("name the task to read findings in full")
+		return nil, refuseText(rNameTaskReadFindingsInFull)
 	}
 	rows, err := tx.Query(ctx, `SELECT $2 || '-' || t.number, f.id, f.severity::text, f.category, f.status::text
 		FROM review_findings f JOIN tasks t ON t.id = f.task_id
@@ -257,10 +236,10 @@ func sessionFindings(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, 
 }
 
 type sessionSearchIn struct {
-	Project string   `json:"project,omitempty" jsonschema:"a linked project's key; optional when only one is linked"`
-	Query   string   `json:"query" jsonschema:"what you want to know, in words"`
-	Types   []string `json:"types,omitempty" jsonschema:"only these: memory, task, epic, project (default all)"`
-	Limit   int      `json:"limit,omitempty" jsonschema:"how many results, 1 to 20 (default 8)"`
+	Project string   `json:"project,omitempty"`
+	Query   string   `json:"query"`
+	Types   []string `json:"types,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
 }
 
 // sessionSearchMemory searches a linked project and its organisation; with
@@ -284,7 +263,7 @@ func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSea
 func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	if err != nil {
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	}
 	if m.ProjectID != "" {
 		projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
@@ -292,7 +271,7 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 			return memory.Memory{}, err
 		}
 		if !slices.ContainsFunc(projects, func(p delivery.LinkedProject) bool { return p.ID == m.ProjectID }) {
-			return memory.Memory{}, refuse("no memory %s", in.ID)
+			return memory.Memory{}, refuse(rNoMemory, in.ID)
 		}
 	}
 	c.ProjectID = m.ProjectID
@@ -304,10 +283,10 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 // organisation's or a project's — that would export a private
 // conversation without anyone choosing to.
 type sessionRememberIn struct {
-	Title   string   `json:"title" jsonschema:"one line that says what it is"`
-	Content string   `json:"content" jsonschema:"the fact, procedure or note, in Markdown"`
-	Kind    string   `json:"kind,omitempty" jsonschema:"fact (default), procedure or note"`
-	About   []string `json:"about,omitempty" jsonschema:"task keys in a linked project, or epic titles there (project:Title when more than one is linked)"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Kind    string   `json:"kind,omitempty"`
+	About   []string `json:"about,omitempty"`
 }
 
 func sessionRemember(ctx context.Context, tx pgx.Tx, c Caller, in sessionRememberIn) (rememberOut, error) {
@@ -362,11 +341,11 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory
 	if id, err := epicByTitle(ctx, tx, p.ID, strings.TrimSpace(title)); err != nil || id != "" {
 		return memory.Ref{Type: "epic", ID: id}, err
 	}
-	return memory.Ref{}, refuse("%q is not a task or epic of the linked projects", name)
+	return memory.Ref{}, refuse(rNotTaskOrEpicLinkedProjects, name)
 }
 
 type proposeIn struct {
-	Items []delivery.ProposalItem `json:"items" jsonschema:"the card's items in order: {kind: epic, project, title, description, notes?: [text]} (notes pinned when filed); {kind: task, project, epic?, title, goal, acceptanceCriteria, blockedBy?, blocks?, related?}; {kind: edit, task, after: {goal?, acceptanceCriteria?}}; {kind: comment, task, text}; {kind: note, project, epic, text, replaces?} (replaces: a current note's number)"`
+	Items []delivery.ProposalItem `json:"items"`
 }
 
 type proposeOut struct {
@@ -379,7 +358,7 @@ type proposeOut struct {
 // now; who may file it is the card's to say, for whoever presses File.
 func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut, error) {
 	if len(in.Items) == 0 || len(in.Items) > 30 {
-		return proposeOut{}, refuse("propose 1 to 30 items")
+		return proposeOut{}, refuseText(rPropose130Items)
 	}
 	projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
 	if err != nil {
@@ -399,32 +378,32 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		case "epic", "task":
 			p, err := linkedProject(ctx, tx, c, item.Project)
 			if err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			item.Project = p.Key
 			if item.Title == "" || len(item.Title) > 500 {
-				return proposeOut{}, refuse("item %d: a title of 1 to 500 characters", n)
+				return proposeOut{}, refuse(rItemTitle1500Characters, n)
 			}
 			if item.Kind == "epic" {
 				if len(item.Title) > 200 || len(item.Description) > 10_000 {
-					return proposeOut{}, refuse("item %d: an epic's title is at most 200 characters, its description 10,000", n)
+					return proposeOut{}, refuse(rItemEpicTitleAtMost200, n)
 				}
 				if len(item.Notes) > delivery.NotesMax {
-					return proposeOut{}, refuse("item %d: an epic holds at most %d notes", n, delivery.NotesMax)
+					return proposeOut{}, refuse(rItemEpicHoldsAtMostNotes, n, delivery.NotesMax)
 				}
 				for j, text := range item.Notes {
 					if item.Notes[j] = strings.TrimSpace(text); item.Notes[j] == "" || utf8.RuneCountInString(item.Notes[j]) > delivery.NoteTextMax {
-						return proposeOut{}, refuse("item %d: note %d is 1 to %d characters", n, j+1, delivery.NoteTextMax)
+						return proposeOut{}, refuse(rItemNote1Characters, n, j+1, delivery.NoteTextMax)
 					}
 				}
 				newEpics[strings.ToLower(p.Key+"/"+item.Title)] = true
 				break
 			}
 			if len(item.Notes) > 0 {
-				return proposeOut{}, refuse("item %d: notes go on an epic, or as a note item", n)
+				return proposeOut{}, refuse(rItemNotesGoOnEpicOr, n)
 			}
 			if err := checkTaskText(&item.Goal, &item.AcceptanceCriteria, true); err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			if e := strings.TrimSpace(item.Epic); e != "" && !newEpics[strings.ToLower(p.Key+"/"+e)] {
 				id, err := epicByTitle(ctx, tx, p.ID, e)
@@ -432,7 +411,7 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 					return proposeOut{}, err
 				}
 				if id == "" {
-					return proposeOut{}, refuse("item %d: no epic %q in %s, and none proposed before it", n, e, p.Key)
+					return proposeOut{}, refuse(rItemNoEpicInAndNone, n, e, p.Key)
 				}
 			}
 		case "edit", "comment":
@@ -441,18 +420,18 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				return proposeOut{}, err
 			}
 			if id == "" {
-				return proposeOut{}, refuse("item %d: %s is not a task of a linked project", n, item.Task)
+				return proposeOut{}, refuse(rItemNotTaskLinkedProject, n, item.Task)
 			}
 			item.Task = strings.ToUpper(strings.TrimSpace(item.Task))
 			if item.Kind == "comment" {
 				item.Text = strings.TrimSpace(item.Text)
 				if item.Text == "" || len(item.Text) > delivery.ChatMessageMax {
-					return proposeOut{}, refuse("item %d: a comment of 1 to %d bytes", n, delivery.ChatMessageMax)
+					return proposeOut{}, refuse(rItemComment1Bytes, n, delivery.ChatMessageMax)
 				}
 				break
 			}
 			if item.After == nil || item.After.Goal == nil && item.After.AcceptanceCriteria == nil {
-				return proposeOut{}, refuse("item %d: an edit gives after: a new goal, new acceptance criteria, or both", n)
+				return proposeOut{}, refuse(rItemEditGivesAfterNewGoal, n)
 			}
 			var crit []string
 			if item.After.AcceptanceCriteria != nil {
@@ -463,7 +442,7 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				goal = *item.After.Goal
 			}
 			if err := checkTaskText(&goal, &crit, item.After.Goal != nil); err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			// The card shows the task as it is now beside the edit.
 			var nowGoal string
@@ -477,18 +456,18 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		case "note":
 			p, err := linkedProject(ctx, tx, c, item.Project)
 			if err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			item.Project = p.Key
 			item.Epic, item.Text = strings.TrimSpace(item.Epic), strings.TrimSpace(item.Text)
 			if item.Text == "" || utf8.RuneCountInString(item.Text) > delivery.NoteTextMax {
-				return proposeOut{}, refuse("item %d: a note of 1 to %d characters", n, delivery.NoteTextMax)
+				return proposeOut{}, refuse(rItemNote1Characters2, n, delivery.NoteTextMax)
 			}
 			if item.Replaces < 0 {
-				return proposeOut{}, refuse("item %d: replaces is a note's number", n)
+				return proposeOut{}, refuse(rItemReplacesNoteNumber, n)
 			}
 			if item.Epic == "" {
-				return proposeOut{}, refuse("item %d: a note names its epic", n)
+				return proposeOut{}, refuse(rItemNoteNamesItsEpic, n)
 			}
 			if !newEpics[strings.ToLower(p.Key+"/"+item.Epic)] {
 				id, err := epicByTitle(ctx, tx, p.ID, item.Epic)
@@ -496,13 +475,13 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 					return proposeOut{}, err
 				}
 				if id == "" {
-					return proposeOut{}, refuse("item %d: no epic %q in %s, and none proposed before it", n, item.Epic, p.Key)
+					return proposeOut{}, refuse(rItemNoEpicInAndNone, n, item.Epic, p.Key)
 				}
 			} else if item.Replaces != 0 {
-				return proposeOut{}, refuse("item %d: a new epic has no note %d to replace", n, item.Replaces)
+				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
 			}
 		default:
-			return proposeOut{}, refuse("item %d: kind is epic, task, edit, comment or note", n)
+			return proposeOut{}, refuse(rItemKindEpicTaskEditComment, n)
 		}
 		items[i] = item
 	}
@@ -510,8 +489,7 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		return proposeOut{}, err
 	}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
-	return proposeOut{ProposalID: id, Next: "The card is in the session. A member files what they keep, as themselves; " +
-		"you are not told unless they say so."}, err
+	return proposeOut{ProposalID: id, Next: proposedNext}, err
 }
 
 // checkProposalRelations holds a proposal's relations to what filing can
@@ -527,23 +505,23 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 			refs []delivery.ProposalRef
 		}{{"blockedBy", it.BlockedBy}, {"blocks", it.Blocks}, {"related", it.Related}} {
 			if len(side.refs) > 0 && it.Kind != "task" {
-				return refuse("item %d: only a task item has relations; relate existing tasks with relate", n)
+				return refuse(rItemOnlyTaskItemHasRelations, n)
 			}
 			for j, r := range side.refs {
 				switch {
 				case r.Item != 0 && r.Key != "":
-					return refuse("item %d: %s names a task by key or by item, not both", n, side.name)
+					return refuse(rItemNamesTaskByKeyOr, n, side.name)
 				case r.Item == n:
-					return refuse("item %d: %s names itself", n, side.name)
+					return refuse(rItemNamesItself, n, side.name)
 				case r.Item != 0 && (r.Item < 0 || r.Item > len(items) || items[r.Item-1].Kind != "task"):
-					return refuse("item %d: %s names item %d, which is not a task of this proposal", n, side.name, r.Item)
+					return refuse(rItemNamesItemWhichNotTask, n, side.name, r.Item)
 				case r.Item == 0:
 					id, _, err := delivery.TaskByKey(ctx, tx, linked, r.Key)
 					if err != nil {
 						return err
 					}
 					if id == "" {
-						return refuse("item %d: %s names %s, which is not a task of a linked project", n, side.name, r.Key)
+						return refuse(rItemNamesWhichNotTaskLinked, n, side.name, r.Key)
 					}
 					k, _ := delivery.TaskKey(r.Key)
 					side.refs[j].Key = k
@@ -582,7 +560,7 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 			for k, x := range loop {
 				words[k] = fmt.Sprintf("item %d", x+1)
 			}
-			return refuse("the items wait on each other in a loop: %s. Propose them in an order", strings.Join(words, " waits on "))
+			return refuse(rItemsWaitOnEachOtherIn, strings.Join(words, " waits on "))
 		}
 	}
 	return nil
@@ -591,10 +569,10 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 // ---- relate (brainstorm) ----------------------------------------------
 
 type relateIn struct {
-	From string `json:"from" jsonschema:"an existing task's key (BL-41) in a linked project"`
-	To   string `json:"to" jsonschema:"another existing task's key in a linked project"`
-	Kind string `json:"kind" jsonschema:"blocks (from can't let to start until from is merged) or related"`
-	Why  string `json:"why,omitempty" jsonschema:"why, for the member who files it and the tasks' history"`
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+	Why  string `json:"why,omitempty"`
 }
 
 // relate proposes a relation between existing tasks, as a card item a
@@ -611,7 +589,7 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 	}
 	kind := strings.TrimSpace(in.Kind)
 	if kind != "blocks" && kind != "related" {
-		return proposeOut{}, refuse("kind is blocks or related")
+		return proposeOut{}, refuseText(rKindBlocksOrRelated)
 	}
 	var keys [2]string
 	var taskIDs [2]string
@@ -621,13 +599,13 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 			return proposeOut{}, err
 		}
 		if id == "" {
-			return proposeOut{}, refuse("%s is not a task of a linked project", k)
+			return proposeOut{}, refuse(rNotTaskLinkedProject, k)
 		}
 		keys[i], _ = delivery.TaskKey(k)
 		taskIDs[i] = id
 	}
 	if taskIDs[0] == taskIDs[1] {
-		return proposeOut{}, refuse("a task can't be related to itself")
+		return proposeOut{}, refuseText(rTaskCanTBeRelatedItself)
 	}
 	if kind == "blocks" {
 		var loop []string
@@ -635,17 +613,16 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 			return proposeOut{}, err
 		}
 		if loop != nil {
-			return proposeOut{}, refuse("that would make a loop: %s. A task can't wait on itself", strings.Join(loop, " → "))
+			return proposeOut{}, refuse(rThatWouldMakeLoopTaskCan, strings.Join(loop, " → "))
 		}
 	}
 	why := strings.TrimSpace(in.Why)
 	if len(why) > 2000 {
-		return proposeOut{}, refuse("why: at most 2000 characters")
+		return proposeOut{}, refuseText(rWhyAtMost2000Characters)
 	}
 	item := delivery.ProposalItem{Kind: "relation", From: keys[0], To: keys[1], RelationKind: kind, Why: why}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), []delivery.ProposalItem{item})
-	return proposeOut{ProposalID: id, Next: "The relation is on a card in the session. A member files it, as themselves; " +
-		"you are not told unless they say so."}, err
+	return proposeOut{ProposalID: id, Next: relationProposedNext}, err
 }
 
 // checkTaskText holds a goal and criteria to what a person may save
@@ -664,10 +641,10 @@ func checkTaskText(goal *string, criteria *[]string, goalGiven bool) error {
 }
 
 type sessionAskIn struct {
-	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
-	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer"`
-	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; answered all at once"`
-	To        string      `json:"to,omitempty" jsonschema:"a member's name: only they answer; others' messages meanwhile come with the answer"`
+	Question  string      `json:"question,omitempty"`
+	Choices   []string    `json:"choices,omitempty"`
+	Questions []askItemIn `json:"questions,omitempty"`
+	To        string      `json:"to,omitempty"`
 }
 
 // sessionAsk records a question — or up to four — for the session's
@@ -683,7 +660,7 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 		return askOut{}, err
 	}
 	if open {
-		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
+		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
 	to, toName := "", ""
 	if name := strings.TrimSpace(in.To); name != "" {
@@ -698,7 +675,7 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 			return askOut{}, err
 		}
 		if len(found) != 1 {
-			return askOut{}, refuse("to names one member who can chat; %q is %d of them", name, len(found))
+			return askOut{}, refuse(rNamesOneMemberWhoCanChat, name, len(found))
 		}
 		to, toName = found[0].ID, found[0].Name
 	}
@@ -717,9 +694,9 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvQuestionAsked, payload)); err != nil {
 		return askOut{}, err
 	}
-	next := "End your turn now. The answer will be your next message."
-	if to != "" {
-		next = "End your turn now. Only " + toName + " answers it; what others say meanwhile comes with the answer."
-	}
-	return askOut{QuestionID: id, Next: next}, nil
+	return askOut{QuestionID: id, Next: sessionAskNext(toName)}, nil
 }
+
+// sessionAskNext is what the session's ask_person tells the agent to do
+// next; to, the one member who answers, "" for any.
+func sessionAskNext(to string) string { return sessionAskResult.Render(struct{ To string }{to}) }

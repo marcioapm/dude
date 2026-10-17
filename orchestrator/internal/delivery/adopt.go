@@ -101,9 +101,8 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	for _, p := range changed {
 		st.ChangedPaths = append(st.ChangedPaths, repo.Name+"/"+p)
 	}
-	line := fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch)
 	if !src.Continues() {
-		return w.next(ctx, sc, st, PointImplemented, "review", line+" Saved as work to review as it is.")
+		return w.next(ctx, sc, st, PointImplemented, "review", tookOverLine(src, head, len(changed)))
 	}
 	// Work to continue: the implementer, which under the conductor is its
 	// call at the start, as for new work (or a review of it as it is).
@@ -112,7 +111,17 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
-	return w.next(ctx, sc, st, PointStart, "implementRun", line+" Saved as work to continue: an implementer carries it on.")
+	return w.next(ctx, sc, st, PointStart, "implementRun", tookOverLine(src, head, len(changed)))
+}
+
+// tookOverLine is the conductor's fact on work taken over at head: what
+// was taken, and what becomes of it.
+func tookOverLine(src *Source, head string, changed int) string {
+	return render(tookOverTmpl, struct {
+		Head, SHA, Base string
+		Files           int
+		Continues       bool
+	}{src.HeadBranch, short(head), src.BaseBranch, changed, src.Continues()})
 }
 
 // Continues says the work taken over goes to an implementer before review.
@@ -124,10 +133,7 @@ func (st *State) adoptedBranch() bool { return st.Source != nil && st.Source.Kin
 
 // sourceChanged is a source_changed escalation's reason: the saved source
 // is immutable once delivery started, so only these two ways out work.
-func sourceChanged(what string) string {
-	return "GitHub's pull request (or branch) no longer matches what this task adopted: " + what +
-		". Put it back on GitHub and Try again, or stop this task and adopt it in a new one."
-}
+func sourceChanged(what string) string { return render(sourceChangedTmpl, what) }
 
 // keepAdoptedPullRequest is the pull request step of a delivery that took
 // one over: what the loop pushed on it is put before its reviewers again,

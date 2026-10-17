@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -21,9 +20,9 @@ const remembersPerRun = 20
 // ---- search_memory -----------------------------------------------------------
 
 type searchMemoryIn struct {
-	Query string   `json:"query" jsonschema:"what you want to know, in words: a question or the terms you would expect"`
-	Types []string `json:"types,omitempty" jsonschema:"only these: memory, task, epic, project (default all)"`
-	Limit int      `json:"limit,omitempty" jsonschema:"how many results, 1 to 20 (default 8)"`
+	Query string   `json:"query"`
+	Types []string `json:"types,omitempty"`
+	Limit int      `json:"limit,omitempty"`
 }
 
 type searchHit struct {
@@ -50,11 +49,11 @@ func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) (
 // searchScoped searches within scope (its Project, OrgOnly and Session).
 func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, scope memory.Query) ([]searchHit, error) {
 	if strings.TrimSpace(in.Query) == "" {
-		return nil, refuse("a query is required")
+		return nil, refuseText(rQueryRequired)
 	}
 	for _, t := range in.Types {
 		if !slices.Contains(memory.Types, t) {
-			return nil, refuse("types are memory, task, epic and project, not %q", t)
+			return nil, refuse(rTypesAreMemoryTaskEpicAnd, t)
 		}
 	}
 	emb, _ := c.env.prepared.(memory.Embedded)
@@ -80,21 +79,21 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 // ---- get_memory --------------------------------------------------------------
 
 type getMemoryIn struct {
-	ID string `json:"id" jsonschema:"a memory's id, as search_memory gives it (mem_…)"`
+	ID string `json:"id"`
 }
 
 func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	switch {
 	case errors.Is(err, memory.ErrNotFound):
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	case err != nil:
 		return memory.Memory{}, err
 	case m.ProjectID != "" && m.ProjectID != c.ProjectID:
 		// Another project's memory is not this Run's to read.
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	case m.ArchivedAt != nil:
-		return memory.Memory{}, refuse("memory %s was archived: it is no longer held true", in.ID)
+		return memory.Memory{}, refuse(rMemoryWasArchivedNoLongerHeld, in.ID)
 	}
 	return m, nil
 }
@@ -102,11 +101,11 @@ func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory
 // ---- remember ----------------------------------------------------------------
 
 type rememberIn struct {
-	Title   string   `json:"title" jsonschema:"one line that says what it is, as another agent would scan it in a list"`
-	Content string   `json:"content" jsonschema:"the fact, procedure or note, in Markdown: what, and why it holds"`
-	Kind    string   `json:"kind,omitempty" jsonschema:"fact (default), procedure (steps that work) or note"`
-	About   []string `json:"about,omitempty" jsonschema:"task keys (TEXT-12) or epic titles this is about, in this project"`
-	Scope   string   `json:"scope,omitempty" jsonschema:"project (default): this project only; organization: true in every project"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Kind    string   `json:"kind,omitempty"`
+	About   []string `json:"about,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
 }
 
 type rememberOut struct {
@@ -120,7 +119,7 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	case "organization":
 		project = ""
 	default:
-		return rememberOut{}, refuse("scope is project or organization")
+		return rememberOut{}, refuseText(rScopeProjectOrOrganization)
 	}
 	var about []memory.Ref
 	for _, a := range in.About {
@@ -164,5 +163,5 @@ func resolveAbout(ctx context.Context, tx pgx.Tx, project, name string) (memory.
 	if id, err = epicByTitle(ctx, tx, project, name); err != nil || id != "" {
 		return memory.Ref{Type: "epic", ID: id}, err
 	}
-	return memory.Ref{}, refuse("%s", fmt.Sprintf("no task %q or epic %q in this project (list_tasks shows them)", name, name))
+	return memory.Ref{}, refuse(rNoTaskOrEpicInThisProject, name, name)
 }

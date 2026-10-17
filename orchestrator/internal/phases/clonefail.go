@@ -1,9 +1,10 @@
 package phases
 
 import (
-	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // What settleClone says of a repository a resume added whose clone failed:
@@ -38,7 +39,7 @@ func shortCloneError(err string) string {
 		short = string(r[:199]) + "…"
 	}
 	if short == "" {
-		return "no reason given"
+		return cloneErrorUnknown
 	}
 	return short
 }
@@ -76,10 +77,13 @@ func onGitHub(repoURL string) bool {
 // session's Run, the bare name on a task's (task repositories have no
 // project key), and remedy one of the two below.
 func cloneFailedNote(repository, err, remedy string) string {
-	return fmt.Sprintf("%s could not be checked out (%s). It is not in /workspace; %s", repository, shortCloneError(err), remedy)
+	return cloneFailed.Render(struct{ Repository, Error, Remedy string }{repository, shortCloneError(err), remedy})
 }
 
-const (
-	sessionCloneRemedy = "a member can check the repository's URL and access and link it again."
-	taskCloneRemedy    = "carry on without it, or ask a person to check the repository's URL and access."
+// What the agent is told of a failed checkout: delivery/agents/notices/.
+var (
+	cloneFailed        = delivery.MustText("notices/clone-failed")
+	cloneErrorUnknown  = delivery.MustText("notices/clone-error-unknown").Render(nil)
+	sessionCloneRemedy = delivery.MustText("notices/clone-remedy-session").Render(nil)
+	taskCloneRemedy    = delivery.MustText("notices/clone-remedy-task").Render(nil)
 )

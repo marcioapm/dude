@@ -1,0 +1,1 @@
+Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace and conversation are as you left them; processes you had running are not. Carry on with your task where you left off.

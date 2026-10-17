@@ -85,11 +85,13 @@ func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
 		return input
 	}
 	refusal := p.refusalWords(le)
-	told := fmt.Sprintf("You asked for %s; lux kept you on %s: %s", p.moveTo, p.Recorded.Name, refusal.ForAgent())
-	if p.moveKind == "reset" {
-		// A person's Reset: the agent has nothing to ask instead.
-		told = fmt.Sprintf("You were to move back to %s; lux kept you on %s: %s.", p.moveTo, p.Recorded.Name, refusal.ForPerson())
+	// A person's Reset: the agent has nothing to ask instead.
+	reset := p.moveKind == "reset"
+	why := refusal.ForAgent()
+	if reset {
+		why = refusal.ForPerson()
 	}
+	told := moveKeptTold(p.moveTo, p.Recorded.Name, why, reset)
 	return joinInput(told, input)
 }
 
@@ -103,6 +105,33 @@ func (p *ResizePlan) refusalWords(le *lux.Error) delivery.MoveRefusal {
 	r.OtherPool = p.Pool != ""
 	return r
 }
+
+// movedBackTold is what an agent a person's Reset moved back to target is
+// told, with the person's note.
+func movedBackTold(target, person, note string) string {
+	return movedBack.Render(struct{ Target, Person, Note string }{target, person, note})
+}
+
+// movedTold is what an agent raised to target is told; where, " in <pool>"
+// when it changed pools.
+func movedTold(target delivery.Machine, where string) string {
+	return moved.Render(struct{ Name, Spec, Where string }{target.Name, target.Spec(), where})
+}
+
+// moveKeptTold is what a Run whose move lux refused is told.
+func moveKeptTold(to, kept, why string, reset bool) string {
+	return moveKept.Render(struct {
+		To, Kept, Why string
+		Reset         bool
+	}{to, kept, why, reset})
+}
+
+// What a Run is told of its machine move: delivery/agents/notices/.
+var (
+	moved     = delivery.MustText("notices/moved")
+	movedBack = delivery.MustText("notices/moved-back")
+	moveKept  = delivery.MustText("notices/move-kept")
+)
 
 func joinInput(first, rest string) string {
 	if rest == "" {
@@ -424,10 +453,7 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	// Told only of a move this resume asks lux for.
 	if plan.Target != nil && plan.Note == "" {
 		if move.Kind == "reset" {
-			plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + "."
-			if move.Note != "" {
-				plan.moveTold = "Moved back to " + plan.Target.Name + " by " + person + ": " + move.Note
-			}
+			plan.moveTold = movedBackTold(plan.Target.Name, person, move.Note)
 		} else {
 			where := ""
 			if plan.Pool != "" {
@@ -438,8 +464,7 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 					where = " in " + *target.Pool
 				}
 			}
-			plan.moveTold = fmt.Sprintf("You now run on %s (%s)%s. Start again any server or watcher you had running. Carry on.",
-				plan.Target.Name, plan.Target.Spec(), where)
+			plan.moveTold = movedTold(*plan.Target, where)
 		}
 	}
 	if move.Code != "" || move.Message != "" {
