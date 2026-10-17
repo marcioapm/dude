@@ -138,10 +138,12 @@ def test_the_fake_updates_a_branch_only_as_github_does(fake_github: FakeGitHub):
     assert fake_github.branch_sha("b") == head
 
     fake_github.commit_file("c", "C.md", "c\n", "c's file")
-    resp = requests.put(update % 3, json={"expected_head_sha": fake_github.branch_sha("c")}, timeout=10)
+    old_head, main = fake_github.branch_sha("c"), fake_github.branch_sha("main")
+    resp = requests.put(update % 3, json={"expected_head_sha": old_head}, timeout=10)
     assert resp.status_code == 202, resp.text
     assert fake_github.file_at("c", "FACTORY.md") == "A intent\n" and fake_github.file_at("c", "C.md") == "c\n"
     assert fake_github.branch_log("c")[0] == "Merge branch 'main' into c"
+    assert fake_github._git_out("rev-list", "--parents", "-n1", "refs/heads/c").split()[1:] == [old_head, main]
 
 
 def test_a_conflict_after_another_task_merges_is_resolved_by_dude(
