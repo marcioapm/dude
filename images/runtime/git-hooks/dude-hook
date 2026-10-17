@@ -33,8 +33,8 @@
 # working and its commit-msg sees the trailers, and a hook that refuses
 # still refuses the commit. An explicit `git -c core.hooksPath=…` comes
 # after the Run's setting and wins: that one command bypasses dude.
-# reference-transaction and post-index-change are not linked (the
-# Dockerfile), so a repository's own of those do not run.
+# reference-transaction and post-index-change are not linked
+# (link-git-hooks.sh), so a repository's own of those do not run.
 
 name=$(basename "$0")
 
