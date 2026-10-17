@@ -431,7 +431,7 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if w.escalationReason(wi) != "" {
 		t.Fatal(w.escalationReason(wi))
 	}
-	// Kept past the integration, whose fixer has no candidate: the fix on
+	// An integration fixer publishes on the candidate. A person's item stays
 	// the candidate after it is given the comment.
 	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
 		t.Fatal("the integration fixer was given the comment")
@@ -1138,7 +1138,7 @@ func TestABaseMovedNoteResumesNoParkedConductor(t *testing.T) {
 }
 
 // The people's open feedback waits out an integration: its fixer, which
-// publishes with no candidate, is not given the items, they hold no merge
+// publishes on a candidate, is not given the items, they hold no merge
 // of the base, and once the integration is done they go to ordinary pull
 // request fixes, which have all of the pull request's budget.
 func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
@@ -1210,12 +1210,11 @@ func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
 	}
 }
 
-// An integration fixer publishes to the pull request's branch with no
-// candidate. A person's item open during it, and a comment that came with
-// the conflict, are neither given to it nor settled by its publish: the
-// fix after the integration's review and test takes them up on a
-// candidate, and the item's resolution holds once that candidate is
-// promoted.
+// An integration fixer publishes on the candidate. A person's item open
+// during it, and a comment that came with the conflict, are neither given
+// to it nor settled by its publish: the fix after the integration's review
+// and test takes them up on a candidate, and the item's resolution holds
+// once that candidate is promoted.
 func TestAnIntegrationLeavesTheOpenFeedbackToTheNextCheckedFix(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()

@@ -8,6 +8,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { FeedbackItem, RunServer, TaskServers } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { ThemeProvider, useTheme } from "@dude/design-system";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID, YOU, PEOPLE } from "../src/fixtures/data.ts";
@@ -145,6 +146,33 @@ test("Show on preview is offered only where it can work: not with commenting off
     expect(card.textContent).toContain("Preview");
     for (const u of mounted.splice(0)) await u();
   }
+});
+
+test("the open preview hears dude's resolved theme in its session, and again when the person switches it", async () => {
+  localStorage.setItem("dude.theme", "dark");
+  const client = new PreviewClient([web()]);
+  const popup = { postMessage: mock((_m: unknown, _o: string) => {}), closed: false, focus() {} };
+  (window as unknown as { open: unknown }).open = () => popup;
+  let setPreference: ((p: "light" | "dark") => void) | null = null;
+  function Switch() {
+    setPreference = useTheme().setPreference;
+    return null;
+  }
+  const { container: c, unmount } = await mount(
+    <ThemeProvider target={document.createElement("div")}><Switch /><ToastProvider><TooltipProvider><PeopleProvider client={client}>
+      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab="servers" />
+    </PeopleProvider></TooltipProvider></ToastProvider></ThemeProvider>,
+  );
+  mounted.push(async () => { await unmount(); localStorage.removeItem("dude.theme"); });
+  await click(await until(() => c.querySelector('[data-testid="comment-on-server"][data-server="web"]'), "Comment on web"));
+  await act(async () => {
+    window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url: `${WEB}/` }, origin: WEB, source: popup as unknown as MessageEventSource }));
+  });
+  const themes = () => popup.postMessage.mock.calls.map((x) => x[0] as { type: string; theme?: string }).filter((m) => m.type === "session").map((m) => m.theme);
+  await until(() => themes().length > 0 || null, "the first session");
+  expect(themes().at(-1)).toBe("dark");
+  await act(async () => setPreference!("light"));
+  await until(() => themes().at(-1) === "light" || null, "a session in the light theme");
 });
 
 function previewDraft(id: string, url: string): FeedbackItem {

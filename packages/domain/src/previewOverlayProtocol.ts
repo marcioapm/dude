@@ -32,6 +32,8 @@ export const OVERLAY_LIMITS = {
   pinBody: 600,
   replyBody: 400,
   replies: 5,
+  /** A pin's author, a reply's author and a pin's when, as the overlay shows them. */
+  name: 200,
   /** Pins sent for one page. */
   pins: 200,
   /** FEEDBACK_LIMITS' own, repeated so the overlay bundles no zod (a test holds them equal). */
@@ -66,8 +68,13 @@ export interface OverlayPin {
   replies: Array<{ who: string; kind: "reply" | "resolve" | "reopen"; body: string }>;
 }
 
+/** dude's resolved light or dark theme, which the overlay draws in once it is connected. */
+export type OverlayTheme = "light" | "dark";
+export const OVERLAY_THEMES: ReadonlyArray<OverlayTheme> = ["light", "dark"];
+
 export type DudeToOverlay =
-  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean }
+  // `theme` is optional: an overlay or a dude from before it reads or sends none, and the overlay then follows the OS.
+  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme }
   | { type: "saved"; v: 1; nonce: string; id: string; drafts: number; picture: "attached" | "none" | "failed" }
   | { type: "refused"; v: 1; nonce?: string; reason: string }
   | { type: "highlight"; v: 1; itemId: string }

@@ -15,10 +15,11 @@
  */
 
 import {
-  OVERLAY_LIMITS, OVERLAY_PROTOCOL, overlayPage,
-  type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayToDude,
+  OVERLAY_LIMITS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage,
+  type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
+import { TOKENS_CSS } from "./tokens.gen.ts";
 import { anchorFor, foreignFrame, labelFor, resolveOne, selectorFor, componentOf } from "./pick.ts";
 import { PictureError, drawPicture, tooBig } from "./picture.ts";
 
@@ -115,6 +116,55 @@ const asElement = (t: EventTarget | null): Element | null => (t !== null && (t a
 
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
+// overlaySessionSchema's rules, by hand: the overlay bundles no zod.
+const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme"]);
+const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
+const REPLY_KEYS = new Set(["who", "kind", "body"]);
+const PIN_STATUSES = new Set<unknown>(["draft", "open", "delivered", "resolved", "replied"]);
+const REPLY_KINDS = new Set<unknown>(["reply", "resolve", "reopen"]);
+
+/** A plain object with no key outside `keys`, as zod's `.strict()`. */
+function strictObject(value: unknown, keys: ReadonlySet<string>): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return (proto === Object.prototype || proto === null) && Object.keys(value).every((key) => keys.has(key));
+}
+
+function boundedString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length <= max;
+}
+
+function wholeNumber(value: unknown, min: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min;
+}
+
+function validReply(value: unknown): boolean {
+  return strictObject(value, REPLY_KEYS) && boundedString(value.who, OVERLAY_LIMITS.name) && REPLY_KINDS.has(value.kind)
+    && boundedString(value.body, OVERLAY_LIMITS.replyBody);
+}
+
+function validPin(value: unknown): value is OverlayPin {
+  return strictObject(value, PIN_KEYS) && boundedString(value.id, 100) && value.id.length > 0 && wholeNumber(value.n, 1)
+    && PIN_STATUSES.has(value.status) && boundedString(value.author, OVERLAY_LIMITS.name) && typeof value.mine === "boolean"
+    && boundedString(value.body, OVERLAY_LIMITS.pinBody) && boundedString(value.selector, 2_000) && boundedString(value.when, OVERLAY_LIMITS.name)
+    && Array.isArray(value.replies) && value.replies.length <= OVERLAY_LIMITS.replies && value.replies.every(validReply);
+}
+
+function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "session" }> {
+  if (!strictObject(value, SESSION_KEYS) || value.type !== "session" || value.v !== OVERLAY_PROTOCOL
+    || !boundedString(value.task, 100) || !boundedString(value.url, 2_048)
+    || !Array.isArray(value.pins) || value.pins.length > OVERLAY_LIMITS.pins
+    || !wholeNumber(value.drafts, 0) || typeof value.showPins !== "boolean"
+    || (value.theme !== undefined && !OVERLAY_THEMES.includes(value.theme as OverlayTheme))) return false;
+  try {
+    const url = new URL(value.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  } catch {
+    return false;
+  }
+  return value.pins.every(validPin);
+}
+
 export class Overlay {
   readonly host: HTMLElement;
   readonly #root: ShadowRoot;
@@ -155,6 +205,9 @@ export class Overlay {
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
   #raf = 0;
+  // dude's resolved theme once a session names it; until then (or from an older dude) the OS's.
+  #dudeTheme: OverlayTheme | null = null;
+  #osDark: MediaQueryList | null = null;
   // The shadow tree's layers, made once: a render replaces a layer's children, never the tree.
   readonly #top: HTMLElement;
   readonly #lay: Record<"pins" | "catchers" | "hover" | "box" | "bar", HTMLElement>;
@@ -176,7 +229,7 @@ export class Overlay {
     const layer = () => this.#h("div", { class: "layer" });
     this.#lay = { pins: layer(), catchers: layer(), hover: layer(), box: layer(), bar: layer() };
     this.#top = this.#h("div", { class: "root", "data-overlay": "" }, this.#lay.pins, this.#lay.catchers, this.#lay.hover, this.#lay.box, this.#lay.bar);
-    this.#root.append(this.#h("style", {}, CSS), this.#top);
+    this.#root.append(this.#h("style", {}, TOKENS_CSS, CSS), this.#top);
   }
 
   start(): void {
@@ -192,6 +245,13 @@ export class Overlay {
     this.#win.addEventListener("popstate", this.#onRoute);
     this.#win.addEventListener("hashchange", this.#onRoute);
     this.#wrapHistory();
+    try {
+      this.#osDark = this.#win.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
+    } catch {
+      this.#osDark = null;
+    }
+    this.#osDark?.addEventListener?.("change", this.#onOsTheme);
+    this.#applyTheme();
     if (!this.#opener()) {
       this.#connection = "none";
     } else {
@@ -223,8 +283,28 @@ export class Overlay {
     this.#win.removeEventListener("resize", this.#later);
     this.#win.removeEventListener("popstate", this.#onRoute);
     this.#win.removeEventListener("hashchange", this.#onRoute);
+    this.#osDark?.removeEventListener?.("change", this.#onOsTheme);
     this.host.remove();
   }
+
+  /** The theme drawn now: dude's once it said one, else the OS's; dark when neither is known, as dude's own default. */
+  get theme(): OverlayTheme {
+    if (this.#dudeTheme) return this.#dudeTheme;
+    try {
+      if (this.#win.matchMedia?.("(prefers-color-scheme: light)").matches) return "light";
+    } catch {
+      // No media queries: dude's default.
+    }
+    return "dark";
+  }
+
+  #applyTheme(): void {
+    if (this.#top.getAttribute("data-theme") !== this.theme) this.#top.setAttribute("data-theme", this.theme);
+  }
+
+  readonly #onOsTheme = (): void => {
+    if (!this.#stopped) this.#applyTheme();
+  };
 
   // ------------------------------------------------------------------ dude
 
@@ -258,12 +338,14 @@ export class Overlay {
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
     switch (m.type) {
       case "session":
-        if (overlayPage(m.url) !== this.#page) return;
+        if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
         this.#connection = "connected";
         this.#task = String(m.task).slice(0, 40);
         this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
+        this.#dudeTheme = m.theme ?? null;
+        this.#applyTheme();
         if (this.#unanswered) {
           // dude's tab is back: the box keeps its words, and Save is for it again.
           this.#unanswered = false;
@@ -452,7 +534,10 @@ export class Overlay {
 
   #drawFor(el: Element): void {
     this.#picture = { state: "drawing" };
-    const draw = this.#opts.draw ?? drawPicture;
+    const draw = this.#opts.draw ?? ((target: Element, win: Window) => {
+      const style = win.getComputedStyle(this.#top);
+      return drawPicture(target, win, { outline: style.getPropertyValue("--ds-color-accent").trim(), background: style.getPropertyValue("--ds-color-surface").trim() });
+    });
     draw(el, this.#win).then((url) => {
       if (this.#picked?.el !== el) return;
       this.#picture = { state: "ready", url };
