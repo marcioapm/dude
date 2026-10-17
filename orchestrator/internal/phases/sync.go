@@ -2140,11 +2140,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if err != nil {
 			return nil, "", fmt.Errorf("comparing %s's push with where it started: %w", repo.Name, err)
 		}
-		trusted, untrusted, err := s.trustedBase(ctx, gh, r.Org, r.ID, slug, res.Repo, baseBranch)
-		if err != nil {
-			return nil, "", err
-		}
-		acc, err := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, trusted, untrusted, cmp)
+		acc, err := accountPublish(ctx, gh, slug, baseBranch, base, res.Commit, cmp)
 		if err != nil {
 			return nil, "", fmt.Errorf("publication accounting unavailable for %s: %w", repo.Name, err)
 		}

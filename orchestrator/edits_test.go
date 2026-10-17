@@ -736,6 +736,53 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 	})
 }
 
+// What main brought into the conductor's checkout is not the conductor's
+// edit, though lux never fetched main for it: here main's 61 lines would put
+// the publish past the limit of 60 lines / 3 files.
+func TestAConductorsPublishLeavesOutTheMainItMerged(t *testing.T) {
+	recorded := func(t *testing.T, e *editing, id string) {
+		t.Helper()
+		if status, why := e.published(id); status != delivery.PublishPublished {
+			t.Fatalf("publish %s: %s", status, why)
+		}
+		if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1
+			AND heads->'target'->'changedPaths' = '["Y.md", "Z.md"]'::jsonb AND (heads->'target'->>'lines')::int = 5`, id); n != 1 {
+			var heads string
+			_ = e.owner.QueryRow(context.Background(), `SELECT COALESCE(heads::text, '') FROM conductor_publishes WHERE id = $1`, id).Scan(&heads)
+			t.Errorf("the publish recorded %s, want Y.md and Z.md, 5 lines", heads)
+		}
+	}
+	onMain := map[string]string{".github/workflows/backup.yml": strings.Repeat("ci\n", 61)}
+	t.Run("merged into the task branch by GitHub's Update branch", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		start := e.gh.SHA(e.branch)
+		e.gh.CommitFiles("main", "Someone else's work", onMain)
+		if e.gh.MergeInto(e.branch, "main", nil) == "" {
+			t.Fatal("no update-branch merge")
+		}
+		if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'heads'->>'target' = $2`, e.task, start); n != 1 {
+			t.Fatal("dude's heads moved with the update-branch merge")
+		}
+		e.current()
+		e.commit(map[string]string{"Y.md": "y\ny\ny\n", "Z.md": "z\nz\n"})
+		recorded(t, e, e.publish())
+	})
+	t.Run("merged by the conductor, with no fetch lux reported", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		e.current()
+		e.gh.CommitFiles("main", "Someone else's work", onMain)
+		e.git("fetch", "-q", "origin", "main")
+		e.git("merge", "-q", "--no-edit", "FETCH_HEAD")
+		if n := e.count(`SELECT count(*) FROM runs WHERE id = $1 AND synced_bases->'target' ? 'main'`, e.cond); n != 0 {
+			t.Fatal("lux reported a fetch of main")
+		}
+		e.commit(map[string]string{"Y.md": "y\ny\ny\n", "Z.md": "z\nz\n"})
+		recorded(t, e, e.publish())
+	})
+}
+
 // The gate refuses a head that is the conductor's commit until a review
 // ran on it: the conductor's ask and open, and Deliver's opening after a
 // hand-back; then allows.
