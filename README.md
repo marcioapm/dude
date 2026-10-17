@@ -253,7 +253,8 @@ real lux (the latest `run_tests.py --serve` in lux's repository, or
 `VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun ≥ 1.4 and GNU
 tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
 `SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-image-builder,dude-backend,dude-migrate}`
-and `share/dude/web`, with the licences of code bundled into the binaries under
+and `share/dude/web`, the dude layer's build context in `share/dude/layer`
+(which `dude-image-builder` builds, docs/design/images.md), with the licences of code bundled into the binaries under
 `share/dude/third-party`, and a `FEATURES` file listing what the release
 supports (docs/operations.md, "Release archive"); unpack it into a prefix. `dude-migrate` carries every
 `migrations/*.sql` inside itself (`scripts/build-migrate.sh`). The Go
