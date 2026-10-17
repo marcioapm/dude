@@ -19,6 +19,7 @@ import {
   type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
+import { TOKENS_CSS } from "./tokens.gen.ts";
 import { anchorFor, foreignFrame, labelFor, resolveOne, selectorFor, componentOf } from "./pick.ts";
 import { PictureError, drawPicture, tooBig } from "./picture.ts";
 
@@ -176,7 +177,7 @@ export class Overlay {
     const layer = () => this.#h("div", { class: "layer" });
     this.#lay = { pins: layer(), catchers: layer(), hover: layer(), box: layer(), bar: layer() };
     this.#top = this.#h("div", { class: "root", "data-overlay": "" }, this.#lay.pins, this.#lay.catchers, this.#lay.hover, this.#lay.box, this.#lay.bar);
-    this.#root.append(this.#h("style", {}, CSS), this.#top);
+    this.#root.append(this.#h("style", {}, TOKENS_CSS, CSS), this.#top);
   }
 
   start(): void {
