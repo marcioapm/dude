@@ -726,7 +726,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 				p.ReviewRange = reviewRange
 				d.apply(p)
 				if st.Integration != nil {
-					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Integration.MergeSHA, st.Integration.MergeSHA)}}
+					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: integrationReviewBrief(st.Integration.MergeSHA)}}
 				}
 			})
 		if err != nil {
@@ -2339,14 +2339,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
-			"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
-			"you decide_escalation.",
-			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
-		if reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked {
-			line += " The test's verdict per criterion and its evidence are on the task; " +
-				"accept or waive ships past a criterion nobody saw work, and needs the person's reason."
-		}
+		line := escalatedLine(reason, st.Escalation.Actions())
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
 				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
@@ -2603,4 +2596,24 @@ func (w *steps) awaitRead(ctx context.Context, sc workflow.StepContext) (workflo
 // humanFeedback says whether the signals carry a person's feedback.
 func humanFeedback(sc workflow.StepContext) bool {
 	return slices.ContainsFunc(sc.Signals, func(s workflow.Signal) bool { return s.Name == SignalHumanFeedback })
+}
+
+// escalatedLine tells the conductor the delivery escalated to a person for
+// reason, with the actions the person has.
+func escalatedLine(reason string, actions []string) string {
+	line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
+		"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
+		"you decide_escalation.",
+		strings.ReplaceAll(reason, "_", " "), strings.Join(actions, ", "))
+	if reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked {
+		line += " The test's verdict per criterion and its evidence are on the task; " +
+			"accept or waive ships past a criterion nobody saw work, and needs the person's reason."
+	}
+	return line
+}
+
+// integrationReviewBrief is what a reviewer of an integration merge (sha)
+// is given as feedback.
+func integrationReviewBrief(sha string) string {
+	return fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", sha, sha)
 }

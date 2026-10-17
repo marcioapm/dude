@@ -90,7 +90,12 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 	if body == "" {
 		return "", nil
 	}
-	return "## The conversation so far\n\n" + replayLead + "\n\n" + body, nil
+	return replayHeading(body), nil
+}
+
+// replayHeading is the rendered replay under its heading and lead.
+func replayHeading(body string) string {
+	return "## The conversation so far\n\n" + replayLead + "\n\n" + body
 }
 
 // fromCompaction is where the replay starts: the newest compaction summary

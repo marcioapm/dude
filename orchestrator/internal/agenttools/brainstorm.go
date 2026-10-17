@@ -489,9 +489,16 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		return proposeOut{}, err
 	}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
-	return proposeOut{ProposalID: id, Next: "The card is in the session. A member files what they keep, as themselves; " +
-		"you are not told unless they say so."}, err
+	return proposeOut{ProposalID: id, Next: proposedNext}, err
 }
+
+// What propose and relate tell the session's agent comes next.
+const (
+	proposedNext = "The card is in the session. A member files what they keep, as themselves; " +
+		"you are not told unless they say so."
+	relationProposedNext = "The relation is on a card in the session. A member files it, as themselves; " +
+		"you are not told unless they say so."
+)
 
 // checkProposalRelations holds a proposal's relations to what filing can
 // write: a task item's refs name an existing task of a linked project or
@@ -623,8 +630,7 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 	}
 	item := delivery.ProposalItem{Kind: "relation", From: keys[0], To: keys[1], RelationKind: kind, Why: why}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), []delivery.ProposalItem{item})
-	return proposeOut{ProposalID: id, Next: "The relation is on a card in the session. A member files it, as themselves; " +
-		"you are not told unless they say so."}, err
+	return proposeOut{ProposalID: id, Next: relationProposedNext}, err
 }
 
 // checkTaskText holds a goal and criteria to what a person may save
@@ -696,9 +702,14 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvQuestionAsked, payload)); err != nil {
 		return askOut{}, err
 	}
-	next := "End your turn now. The answer will be your next message."
+	return askOut{QuestionID: id, Next: sessionAskNext(toName)}, nil
+}
+
+// sessionAskNext is what the session's ask_person tells the agent to do
+// next; to, the one member who answers, "" for any.
+func sessionAskNext(to string) string {
 	if to != "" {
-		next = "End your turn now. Only " + toName + " answers it; what others say meanwhile comes with the answer."
+		return "End your turn now. Only " + to + " answers it; what others say meanwhile comes with the answer."
 	}
-	return askOut{QuestionID: id, Next: next}, nil
+	return "End your turn now. The answer will be your next message."
 }

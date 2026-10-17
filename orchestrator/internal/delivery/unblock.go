@@ -166,12 +166,17 @@ func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by st
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
 		return err
 	}
-	line := fmt.Sprintf("%s merged: %s can start now, nothing open in front of it. Tell the person; start nothing until they agree.", by, taskKey)
-	if auto {
-		line = fmt.Sprintf("%s merged: %s can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.", by, taskKey)
-	}
-	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, line)
+	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, unblockedLine(by, taskKey, auto))
 	return err
+}
+
+// unblockedLine tells a conductor its task taskKey can start, by merged;
+// auto, when it starts on its own.
+func unblockedLine(by, taskKey string, auto bool) string {
+	if auto {
+		return fmt.Sprintf("%s merged: %s can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.", by, taskKey)
+	}
+	return fmt.Sprintf("%s merged: %s can start now, nothing open in front of it. Tell the person; start nothing until they agree.", by, taskKey)
 }
 
 // EndAutoStartTx ends the task's start when unblocked without firing it,

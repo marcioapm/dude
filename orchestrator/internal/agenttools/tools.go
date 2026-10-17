@@ -413,10 +413,19 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 			id, escalation, acts); err != nil {
 			return askOut{}, err
 		}
-		return askOut{QuestionID: id, Next: "End your turn now. The owner picking a choice decides the escalation, as the " +
-			"banner does; an answer in their own words is your next message, and lets you decide it with decide_escalation."}, nil
+		return askOut{QuestionID: id, Next: askNext(true)}, nil
 	}
-	return askOut{QuestionID: id, Next: "End your turn now. The person's answer will be your next message."}, nil
+	return askOut{QuestionID: id, Next: askNext(false)}, nil
+}
+
+// askNext is what ask_person tells the agent to do next; escalation, for a
+// conductor's question about its task's escalation.
+func askNext(escalation bool) string {
+	if escalation {
+		return "End your turn now. The owner picking a choice decides the escalation, as the " +
+			"banner does; an answer in their own words is your next message, and lets you decide it with decide_escalation."
+	}
+	return "End your turn now. The person's answer will be your next message."
 }
 
 // ---- emit_event -------------------------------------------------------------
@@ -540,14 +549,19 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
 		return requestRepoOut{}, err
 	}
-	next := "Do not wait or check for it: a person may take a while. Carry on with what you can without " +
-		repo.Name + ". If they approve while you work, you will be paused and resumed with it checked out, and " +
-		"told where, in a message; if not, a message will say so."
-	if in.Wait {
-		next = "End your turn now. When a person decides, you are resumed: with " + repo.Name +
+	return requestRepoOut{RequestID: id, Status: "pending", Next: requestRepositoryNext(repo.Name, in.Wait)}, nil
+}
+
+// requestRepositoryNext is what request_repository tells the agent to do
+// next about repo; wait, when it asked to wait for the decision.
+func requestRepositoryNext(repo string, wait bool) string {
+	if wait {
+		return "End your turn now. When a person decides, you are resumed: with " + repo +
 			" checked out, and told where, or told it was declined."
 	}
-	return requestRepoOut{RequestID: id, Status: "pending", Next: next}, nil
+	return "Do not wait or check for it: a person may take a while. Carry on with what you can without " +
+		repo + ". If they approve while you work, you will be paused and resumed with it checked out, and " +
+		"told where, in a message; if not, a message will say so."
 }
 
 // ---- list_repositories ----------------------------------------------------

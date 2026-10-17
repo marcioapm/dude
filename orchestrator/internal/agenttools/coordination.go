@@ -107,7 +107,7 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	case err == nil && self:
 		return waitOut{}, refuse("you closed %s yourself, going ahead on what you assumed: there is nothing to wait for", id)
 	case err == nil:
-		return waitOut{Reply: &r, Next: "The reply had already come: carry on with it."}, nil
+		return waitOut{Reply: &r, Next: replyCameNext}, nil
 	case !db.IsNotFound(err):
 		return waitOut{}, err
 	}
@@ -118,8 +118,16 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	if w.Notice != "" {
 		return waitOut{Next: w.Notice}, nil
 	}
-	return waitOut{Waiting: &w, Next: "End your turn now. " + toKey + "'s reply resumes you as your next message; if none " +
-		"comes within the project's grace, your Run is parked until it does."}, nil
+	return waitOut{Waiting: &w, Next: waitNext(toKey)}, nil
+}
+
+// replyCameNext is wait_for_reply's answer when the reply is in already.
+const replyCameNext = "The reply had already come: carry on with it."
+
+// waitNext is wait_for_reply's answer when it waits on peer's reply.
+func waitNext(peer string) string {
+	return "End your turn now. " + peer + "'s reply resumes you as your next message; if none " +
+		"comes within the project's grace, your Run is parked until it does."
 }
 
 // ---- note ----------------------------------------------------------------------

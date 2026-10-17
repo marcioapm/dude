@@ -329,8 +329,7 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	out := map[string]any{"directiveId": st.ID, "run": in.Run,
-		"next": "Queued for the Run. You are woken when it has read it, or if it never will."}
+	out := map[string]any{"directiveId": st.ID, "run": in.Run, "next": steerNext}
 	if lands != "" {
 		out["lands"] = lands
 	}
@@ -365,8 +364,7 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	return map[string]any{"restarted": in.Run, "run": id,
-		"next": "The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision."}, nil
+	return map[string]any{"restarted": in.Run, "run": id, "next": restartNext}, nil
 }
 
 type replyIn struct {
@@ -433,8 +431,7 @@ func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	return map[string]any{"publishId": id, "status": "publishing",
-		"next": "lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused."}, nil
+	return map[string]any{"publishId": id, "status": "publishing", "next": publishNext}, nil
 }
 
 type updateTaskIn struct {
@@ -494,7 +491,7 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 			return conducted[map[string]any](nil, err)
 		}
 		if in.Goal == nil && in.AcceptanceCriteria == nil {
-			return map[string]any{"updated": true, "next": "The relations are written. A task blocked by another starts only once that one is merged."}, nil
+			return map[string]any{"updated": true, "next": relationsWrittenNext}, nil
 		}
 	}
 	spec := delivery.TaskSpec{Goal: in.Goal}
@@ -510,5 +507,14 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 		return nil, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
 	}
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
-	return conducted(map[string]any{"updated": true, "next": "The implementer's prompt will have it."}, err)
+	return conducted(map[string]any{"updated": true, "next": taskUpdatedNext}, err)
 }
+
+// What the conductor's tools tell it comes next.
+const (
+	steerNext            = "Queued for the Run. You are woken when it has read it, or if it never will."
+	restartNext          = "The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision."
+	publishNext          = "lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused."
+	relationsWrittenNext = "The relations are written. A task blocked by another starts only once that one is merged."
+	taskUpdatedNext      = "The implementer's prompt will have it."
+)

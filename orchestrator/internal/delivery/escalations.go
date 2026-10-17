@@ -253,16 +253,28 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.Conductor != "":
 		return nil
 	case in.QuestionID != "":
-		line = fmt.Sprintf("The owner's answer to your question %s decided the escalation: %s. The delivery goes on.",
-			in.QuestionID, in.Action)
+		line = escalationAnsweredLine(in.QuestionID, in.Action)
 	case len(closed) > 0:
-		line = fmt.Sprintf("The person decided the escalation on the banner: %s. Your question %s about it is closed. "+
-			"The delivery goes on.", in.Action, closed[0].ID)
+		line = escalationOnBannerLine(in.Action, closed[0].ID)
 	default:
 		return nil
 	}
 	_, err = RecordWakeTx(ctx, tx, org, taskID, "escalation", key+":decided", line)
 	return err
+}
+
+// escalationAnsweredLine tells the conductor the owner's answer to its
+// question decided the escalation.
+func escalationAnsweredLine(questionID, action string) string {
+	return fmt.Sprintf("The owner's answer to your question %s decided the escalation: %s. The delivery goes on.",
+		questionID, action)
+}
+
+// escalationOnBannerLine tells the conductor the person decided the
+// escalation on the banner, closing its question about it.
+func escalationOnBannerLine(action, questionID string) string {
+	return fmt.Sprintf("The person decided the escalation on the banner: %s. Your question %s about it is closed. "+
+		"The delivery goes on.", action, questionID)
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
@@ -490,9 +502,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "questionId": qID,
-		"next": "The delivery carries it out now, as the banner's would. You are woken at the next decision."}, nil
+	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext}, nil
 }
+
+// escalationDecidedNext is what decide_escalation answers once it decided.
+const escalationDecidedNext = "The delivery carries it out now, as the banner's would. You are woken at the next decision."
 
 // TaskOwner is the task's owner: its first active person, "" for none.
 func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {

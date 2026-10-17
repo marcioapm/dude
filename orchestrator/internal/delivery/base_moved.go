@@ -42,7 +42,7 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 	if err != nil {
 		return err
 	}
-	line := fmt.Sprintf("`%s` moved: %s merged (#%d). Call sync_base if your work depends on it.", base, key, number)
+	line := baseMovedLine(base, key, number)
 	wakeKey := heldWakePrefix + prID
 	for _, t := range targets {
 		tag, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
@@ -61,4 +61,10 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 		}
 	}
 	return nil
+}
+
+// baseMovedLine tells a conductor base moved: task key merged pull request
+// number into it.
+func baseMovedLine(base, key string, number int) string {
+	return fmt.Sprintf("`%s` moved: %s merged (#%d). Call sync_base if your work depends on it.", base, key, number)
 }

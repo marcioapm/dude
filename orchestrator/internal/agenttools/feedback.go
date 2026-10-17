@@ -59,8 +59,11 @@ func resolveFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackResolv
 		return nil, feedbackRefusal(err)
 	}
 	return map[string]any{"id": in.ID, "status": "resolved", "commit": strings.ToLower(strings.TrimSpace(in.Commit)), "repo": repo,
-		"next": "Resolved, pending: it holds until your work is published with this commit in it."}, nil
+		"next": feedbackResolvedNext}, nil
 }
+
+// feedbackResolvedNext is what feedback_resolve tells the agent.
+const feedbackResolvedNext = "Resolved, pending: it holds until your work is published with this commit in it."
 
 // feedbackRefusal answers a refused feedback call as the tool's refusal.
 func feedbackRefusal(err error) error {

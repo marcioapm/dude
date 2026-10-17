@@ -723,6 +723,12 @@ type Directive struct {
 	Interrupt               bool
 }
 
+// runAsksLine tells the conductor a Run it started asked the person
+// question id.
+func runAsksLine(phase, runID, id string) string {
+	return fmt.Sprintf("Your %s Run %s asks the person a question (%s): read it in its chat.", phase, runID, id)
+}
+
 // QueueDirective records a directive for the Run, and returns its id and
 // when it was queued.
 //
@@ -796,8 +802,7 @@ func AskItemsTx(ctx context.Context, tx pgx.Tx, r RunRef, items []QuestionItem) 
 	var phase string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1 AND conductor_run_id IS NOT NULL`,
 		r.RunID).Scan(&phase); err == nil {
-		if _, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", "question:"+id,
-			fmt.Sprintf("Your %s Run %s asks the person a question (%s): read it in its chat.", phase, r.RunID, id)); err != nil {
+		if _, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", "question:"+id, runAsksLine(phase, r.RunID, id)); err != nil {
 			return "", err
 		}
 	} else if !db.IsNotFound(err) {

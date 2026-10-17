@@ -564,12 +564,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 	for _, repo := range slices.Sorted(maps.Keys(heads)) {
 		commits = append(commits, repo+"@"+short(heads[repo].SHA))
 	}
-	line := fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
-		p.ID, strings.Join(commits, " "), lines, len(paths))
-	if len(notMoved) > 0 {
-		line = fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
-			p.ID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
-	}
+	line := publishedLine(p.ID, commits, lines, len(paths), notMoved)
 	if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+p.ID, line); err != nil {
 		return err
 	}
@@ -593,9 +588,31 @@ func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, claim, 
 		}
 		return nil
 	}
-	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID,
-		fmt.Sprintf("Your publish %s was refused, nothing moved: %s", pubID, clip(oneLine(why), 220)))
+	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID, publishRefusedLine(pubID, why))
 	return err
+}
+
+// publishedLine tells the conductor its publish id landed: commits
+// (repo@sha), lines in files; notMoved, the repositories it could not move.
+func publishedLine(id string, commits []string, lines, files int, notMoved []string) string {
+	if len(notMoved) > 0 {
+		return fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
+			id, strings.Join(commits, " "), strings.Join(notMoved, "; "))
+	}
+	return fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
+		id, strings.Join(commits, " "), lines, files)
+}
+
+// publishRefusedLine tells the conductor its publish id was refused.
+func publishRefusedLine(id, why string) string {
+	return fmt.Sprintf("Your publish %s was refused, nothing moved: %s", id, clip(oneLine(why), 220))
+}
+
+// publishStalledLine tells the conductor its publish id could not be
+// confirmed: said, each repository and the head it was sent to.
+func publishStalledLine(id string, said []string) string {
+	return fmt.Sprintf("Your publish %s could not be confirmed on the task branch (%s): check the branch before you publish again.",
+		id, strings.Join(said, ", "))
 }
 
 // PublishStalledTx settles a moving publish none of whose moves was
@@ -634,9 +651,7 @@ func stalledNoticeTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, s
 			return err
 		}
 	}
-	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_stalled", "publish_stalled:"+pubID,
-		fmt.Sprintf("Your publish %s could not be confirmed on the task branch (%s): check the branch before you publish again.",
-			pubID, strings.Join(said, ", ")))
+	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_stalled", "publish_stalled:"+pubID, publishStalledLine(pubID, said))
 	return err
 }
 

@@ -154,11 +154,20 @@ func SteerSettledTx(ctx context.Context, tx pgx.Tx, org, directiveID string, rea
 	if err != nil {
 		return err
 	}
-	kind, line := "steer_read", fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, root)
+	kind, line := "steer_read", steerReadLine(phase, runID, root)
 	if !read {
-		kind, line = "steer_failed", fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", root, phase, runID,
-			clip(oneLine(why), 120))
+		kind, line = "steer_failed", steerFailedLine(root, phase, runID, why)
 	}
 	_, err = RecordWakeTx(ctx, tx, org, taskID, kind, kind+":"+root, line)
 	return err
+}
+
+// steerReadLine tells the conductor its steer root was read.
+func steerReadLine(phase, runID, root string) string {
+	return fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, root)
+}
+
+// steerFailedLine tells the conductor its steer root was not delivered.
+func steerFailedLine(root, phase, runID, why string) string {
+	return fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", root, phase, runID, clip(oneLine(why), 120))
 }

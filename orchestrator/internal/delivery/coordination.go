@@ -219,7 +219,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 		}
 		out.Lands = LandsNextStep
 	} else {
-		out.Notice = fmt.Sprintf("%s has no Run going; it will see this when its next Run starts.", in.To.Key)
+		out.Notice = heldMessageNotice(in.To.Key)
 	}
 	payload := map[string]any{"message": id, "to": in.To.Key, "toTaskId": in.To.ID, "reply_to": db.Nullable(in.ReplyTo),
 		"lands": out.Lands, "text": text}
@@ -368,6 +368,17 @@ func PeerEndedLine(key, status string) string {
 		key, strings.ReplaceAll(status, "_", " "))
 }
 
+// heldMessageNotice tells the sender its message to peer is held for the
+// peer's next Run.
+func heldMessageNotice(peer string) string {
+	return fmt.Sprintf("%s has no Run going; it will see this when its next Run starts.", peer)
+}
+
+// alreadyAnsweredNotice is wait_for_reply's notice of a reply already in.
+func alreadyAnsweredNotice(reply string) string {
+	return fmt.Sprintf("The message has already been answered: carry on with the reply (%s).", reply)
+}
+
 // Waiting is a Run's wait on a peer's reply.
 type Waiting struct {
 	Message string     `json:"message"`
@@ -399,7 +410,7 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 		return w, err
 	}
 	if reply != "" {
-		w.Notice = fmt.Sprintf("The message has already been answered: carry on with the reply (%s).", reply)
+		w.Notice = alreadyAnsweredNotice(reply)
 		return w, nil
 	}
 	var current string

@@ -153,15 +153,30 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	if err := noteEvent(ctx, tx, org, projectID, in, EvNotePinned, payload); err != nil {
 		return Pinned{}, err
 	}
-	change, line := "added", fmt.Sprintf("Epic note added: %d · %s · %s", out.N, by, text)
+	change, line := "added", noteAddedLine(out.N, by, text)
 	if was != nil {
-		change, line = "replaced", fmt.Sprintf("Epic note replaced: %d → %d · %s · %s\n(was: %s)", was.N, out.N, by, text, was.Text)
+		change, line = "replaced", noteReplacedLine(was.N, out.N, by, text, was.Text)
 	}
 	if out.Told, err = announceNoteTx(ctx, tx, org, in.EpicID, out.ID, in.Run.RunID, change, line); err != nil {
 		return Pinned{}, err
 	}
 	out.Current, err = CurrentNotes(ctx, tx, in.EpicID)
 	return out, err
+}
+
+// noteAddedLine tells the epic's live agents note n was pinned by by.
+func noteAddedLine(n int, by, text string) string {
+	return fmt.Sprintf("Epic note added: %d · %s · %s", n, by, text)
+}
+
+// noteReplacedLine tells them note was was replaced by note n.
+func noteReplacedLine(was, n int, by, text, wasText string) string {
+	return fmt.Sprintf("Epic note replaced: %d → %d · %s · %s\n(was: %s)", was, n, by, text, wasText)
+}
+
+// noteRetiredLine tells them note n was retired by by.
+func noteRetiredLine(n int, by, text string) string {
+	return fmt.Sprintf("Epic note retired: %d · %s · no longer in force: %s", n, by, text)
 }
 
 // notCurrent refuses replacing a note that is not current: none by that
@@ -214,8 +229,7 @@ func RetireNoteTx(ctx context.Context, tx pgx.Tx, org, epicID string, n int, per
 	if _, err := ledger.Append(ctx, tx, ev); err != nil {
 		return Note{}, err
 	}
-	if _, err := announceNoteTx(ctx, tx, org, epicID, old.ID, "", "retired",
-		fmt.Sprintf("Epic note retired: %d · %s · no longer in force: %s", old.N, name, old.Text)); err != nil {
+	if _, err := announceNoteTx(ctx, tx, org, epicID, old.ID, "", "retired", noteRetiredLine(old.N, name, old.Text)); err != nil {
 		return Note{}, err
 	}
 	retired, err := noteByN(ctx, tx, epicID, n)

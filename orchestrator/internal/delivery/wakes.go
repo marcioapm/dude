@@ -345,9 +345,13 @@ func RecordFailedTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) e
 	if category != "" {
 		phase += " · " + category
 	}
-	_, err := RecordWakeTx(ctx, tx, org, taskID, "decision", "failed:"+runID,
-		fmt.Sprintf("Your %s Run %s failed: %s", phase, runID, clip(oneLine(errText), 120)))
+	_, err := RecordWakeTx(ctx, tx, org, taskID, "decision", "failed:"+runID, runFailedLine(phase, runID, errText))
 	return err
+}
+
+// runFailedLine is the reason a Run the conductor started failed, in words.
+func runFailedLine(phase, runID, errText string) string {
+	return fmt.Sprintf("Your %s Run %s failed: %s", phase, runID, clip(oneLine(errText), 120))
 }
 
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
