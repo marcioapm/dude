@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
@@ -105,6 +107,26 @@ func TestAPromotionDoesNotAdoptAPersonsMergeOfTheCandidate(t *testing.T) {
 	w.refusedOver(&m)
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, w.wi, "pull_request.fix_merge_attempted"); n != 0 {
 		t.Errorf("%d merge attempts recorded", n)
+	}
+}
+
+// The base merged in during the check rewrites the file the fix writes:
+// GitHub will not merge the candidate in (409), the branch keeps the base
+// merge, and a person is asked, told why.
+func TestAPromotionConflictingWithABaseMergeIsRefused(t *testing.T) {
+	w := newPRFixWorld(t)
+	var x string
+	w.onTest = func() {
+		w.gh.MergeCommit("main", w.gh.SHA(w.branch))
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{fakeagent.FixedFile: "the base's\n"})
+		x = w.gh.MergeInto(w.branch, "main", nil)
+	}
+	w.refusedOver(&x)
+	var why string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'error', '') FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&why)
+	if !strings.Contains(why, "main was merged into the task branch meanwhile") || !strings.Contains(why, "conflicts with that merge") {
+		t.Errorf("the escalation says %q, want the base merge's conflict", why)
 	}
 }
 
