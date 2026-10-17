@@ -17,7 +17,7 @@ import (
 // when the package initialises: one that is missing or fails to parse
 // stops the process at startup, never renders empty.
 //
-//go:embed agents/roles/*.md
+//go:embed agents/roles/*.md agents/contracts
 var agentFiles embed.FS
 
 var agentTemplates = mustParse(parseAgentTemplates(agentFiles))
@@ -36,6 +36,12 @@ var agentFuncs = template.FuncMap{
 	"clip":     clip,
 	"criteria": CriteriaList,
 	"add1":     func(i int) int { return i + 1 },
+	"short":    short,
+	"join":     strings.Join,
+	// quoteLines continues a Markdown quote over the text's lines.
+	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
+	// fenced breaks each ``` in a log so it cannot close the fence around it.
+	"fenced": func(s string) string { return strings.ReplaceAll(s, "```", "`\u200b``") },
 }
 
 // fileText is a file's text: its content less one trailing newline.
@@ -84,6 +90,18 @@ func render(name string, data any) string {
 		panic(fmt.Sprintf("agents/%s.md: %v", name, err))
 	}
 	return b.String()
+}
+
+// agentTexts renders each template under prefix ("contracts/review-focus/")
+// once, keyed by the rest of its name.
+func agentTexts(prefix string) map[string]string {
+	out := map[string]string{}
+	for _, t := range agentTemplates.Templates() {
+		if key, ok := strings.CutPrefix(t.Name(), prefix); ok {
+			out[key] = render(t.Name(), nil)
+		}
+	}
+	return out
 }
 
 // loadRoles reads roles/<role>.md: a role's instructions, one paragraph

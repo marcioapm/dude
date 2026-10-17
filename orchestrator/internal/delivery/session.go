@@ -355,19 +355,10 @@ func SessionMembers(ctx context.Context, tx pgx.Tx, sessionID string) ([]Member,
 // BrainstormPrompt is the brainstorm's first prompt: the briefing, then
 // how it works, its repositories and its tools.
 func BrainstormPrompt(briefing string, in PromptInput) string {
-	sections := []string{briefing, "## How you work"}
+	sections := []string{briefing, render("contracts/how-you-work", nil)}
 	lead, _ := in.instructions(RoleBrainstorm)
 	sections = append(sections, lead...)
-	if len(in.Repositories) == 0 {
-		sections = append(sections, "No repository is checked out for this session.")
-	} else {
-		var b strings.Builder
-		b.WriteString("Your checkouts, read only (never pushed):")
-		for _, r := range in.Repositories {
-			fmt.Fprintf(&b, "\n- `%s` at `%s`", r.Name, r.Path)
-		}
-		sections = append(sections, b.String())
-	}
+	sections = append(sections, render("contracts/brainstorm-checkouts", in.Repositories))
 	if in.Anywhere {
 		sections = append(sections, brainstormWebNote)
 	}
@@ -376,41 +367,26 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 	}
 	sections = append(sections, brainstormPublishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
-		sections = append(sections, "## Notes\n\n"+c)
+		sections = append(sections, render("contracts/brainstorm-notes", c))
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-const brainstormToolsNote = "The dude tools read the linked projects: list_tasks, list_epics, pull_requests, findings, " +
-	"list_repositories, search_memory and get_memory, each with a project key (optional when one is linked). " +
-	"propose fills the session's proposal card — new epics and tasks, edits to tasks, comments, and epic notes (a new " +
-	"epic's notes, or a note on an existing epic) — for a member to " +
-	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
-	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
-	"and what others say meanwhile reaches you with the answer."
+var brainstormToolsNote = render("contracts/brainstorm-tools", nil)
 
 // brainstormWebNote is said only to a brainstorm whose network is
 // unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
 // or "*" in either list. It is dude's, after the instructions, so an
 // organisation's own prompt does not drop it.
-const brainstormWebNote = "You can read the web: search for and fetch public pages when the conversation needs " +
-	"facts from outside the linked repositories. Say where each fact came from, with its URL."
+var brainstormWebNote = render("contracts/brainstorm-web", nil)
 
 // brainstormNamingNote is when the agent names its session. The rule
 // that a person's name stays is name_session's own, not only these words.
-const brainstormNamingNote = "Name the session with name_session once its subject is clear, typically after the " +
-	"first exchange or two: one line of plain words, at most 60 characters, no quotes or punctuation for show. " +
-	"Name it again only if the subject clearly changes. Once a member has named it, leave the name alone: " +
-	"name_session refuses."
+var brainstormNamingNote = render("contracts/brainstorm-naming", nil)
 
 // brainstormPublishNote is how the agent hands the members a document. Its
 // files are listed beside the session, for its members alone.
-const brainstormPublishNote = "To give the members a document — a design note, a diagram, a table, a CSV — run " +
-	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish design.md --name design.md " +
-	"--description \"Invoice PDF export design\"`, `dude publish usage.csv --name usage.csv --description \"Usage per " +
-	"customer, last 30 days\"`); the description is one short line saying what the file is for. Each appears in the " +
-	"session's Files at once, Markdown rendered, for its members only; the same name again is a new version. " +
-	"Say in your reply what you published and why. Never publish code."
+var brainstormPublishNote = render("contracts/brainstorm-publish", nil)
 
 // SessionHandOver settles what members sent an ended brainstorm and it
 // never read: each goes, in order and with its writer, to the session's
