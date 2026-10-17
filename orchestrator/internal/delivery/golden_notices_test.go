@@ -154,3 +154,33 @@ func TestGoldenReplay(t *testing.T) {
 		{"summary", joinReplay(replayStart{summary: "  We agreed on CSV.  ", run: "run_c"}, replayEntries(events[6:7]), 3)},
 	})
 }
+
+// How a refused machine move is said, to the agent and to a person.
+func TestGoldenMoveRefusals(t *testing.T) {
+	pool := "highmem"
+	xl := Machine{Name: "XL", CPUs: 8, MemoryMiB: 32768, DiskGiB: 80, Pool: &pool}
+	large := Machine{Name: "Large", CPUs: 4.5, MemoryMiB: 1536}
+	var lines [][2]string
+	for _, c := range []struct {
+		name string
+		r    MoveRefusal
+	}{
+		{"old-lux-pools", MoveRefusal{Status: 400, Size: xl, OtherPool: true}},
+		{"old-lux-stopped", MoveRefusal{Status: 400, Size: large}},
+		{"unknown-pool", MoveRefusal{Status: 422, Code: "unknown_pool", Size: xl}},
+		{"platform", MoveRefusal{Status: 422, Code: "platform_mismatch", Size: xl, PoolPlatforms: []string{"linux/arm64", "linux/riscv"},
+			ImagePlatforms: []string{"linux/amd64"}}},
+		{"platform-an", MoveRefusal{Status: 422, Code: "platform_mismatch", Size: xl, PoolPlatforms: []string{"linux/amd64"},
+			ImagePlatforms: []string{"linux/arm64"}}},
+		{"platform-unknown", MoveRefusal{Status: 422, Code: "platform_mismatch", Size: large}},
+		{"nested", MoveRefusal{Status: 422, Code: "pool_unfit", Size: xl, NoNested: true}},
+		{"nested-said", MoveRefusal{Status: 422, Code: "pool_unfit", Size: large, luxMessage: "no nested containers here"}},
+		{"too-large", MoveRefusal{Status: 422, Code: "pool_unfit", Size: large}},
+		{"invalid-spec", MoveRefusal{Status: 422, Code: "invalid_spec", Size: xl}},
+		{"not-resumable", MoveRefusal{Status: 409, Code: "not_resumable", Size: xl}},
+		{"other", MoveRefusal{Status: 500, Code: "boom", Size: xl}},
+	} {
+		lines = append(lines, [2]string{c.name + " (agent)", c.r.ForAgent()}, [2]string{c.name + " (person)", c.r.ForPerson()})
+	}
+	goldenLines(t, "move-refusals", lines)
+}
