@@ -101,9 +101,8 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	for _, p := range changed {
 		st.ChangedPaths = append(st.ChangedPaths, repo.Name+"/"+p)
 	}
-	line := fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), len(changed), src.BaseBranch)
 	if !src.Continues() {
-		return w.next(ctx, sc, st, PointImplemented, "review", line+" Saved as work to review as it is.")
+		return w.next(ctx, sc, st, PointImplemented, "review", tookOverLine(src, head, len(changed)))
 	}
 	// Work to continue: the implementer, which under the conductor is its
 	// call at the start, as for new work (or a review of it as it is).
@@ -112,7 +111,17 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
-	return w.next(ctx, sc, st, PointStart, "implementRun", line+" Saved as work to continue: an implementer carries it on.")
+	return w.next(ctx, sc, st, PointStart, "implementRun", tookOverLine(src, head, len(changed)))
+}
+
+// tookOverLine is the conductor's fact on work taken over at head: what
+// was taken, and what becomes of it.
+func tookOverLine(src *Source, head string, changed int) string {
+	line := fmt.Sprintf("Took over %s at %s, %d files changed against %s.", src.HeadBranch, short(head), changed, src.BaseBranch)
+	if !src.Continues() {
+		return line + " Saved as work to review as it is."
+	}
+	return line + " Saved as work to continue: an implementer carries it on."
 }
 
 // Continues says the work taken over goes to an implementer before review.

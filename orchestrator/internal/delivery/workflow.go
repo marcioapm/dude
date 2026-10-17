@@ -641,7 +641,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 			return workflow.Result{}, err
 		}
 		st.HeadRunID, st.PendingRunIDs = runID, nil
-		return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement")+" Nothing to add: the work it continues is reviewed as it is.")
+		return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement")+nothingToAdd)
 	}
 	if len(out.ChangedPaths) == 0 && (writable || !out.Published) {
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
@@ -1307,7 +1307,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 			}
 			if len(st.PRFeedback) > 0 || len(open) > 0 {
 				st.ActingOnPR = false
-				line := fmt.Sprintf("%d feedback items from people are open after the base integration: read them with feedback.", len(open))
+				line := feedbackOpenLine(feedbackAfterIntegration, len(open))
 				if len(st.PRFeedback) > 0 {
 					line = feedbackLine(st.PRFeedback)
 				}
@@ -1348,7 +1348,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 		if len(open) > 0 {
 			return w.next(ctx, sc, st, PointReviewed, "fix",
-				fmt.Sprintf("%d feedback items from people are open (feedback): they go to a fixer before any pull request.", len(open)))
+				feedbackOpenLine(feedbackBeforePR, len(open)))
 		}
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
@@ -1537,8 +1537,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			}
 			if len(open) > 0 {
 				st.PRFeedback = nil
-				return w.next(ctx, sc, st, PointPRFeedback, "prFix",
-					fmt.Sprintf("%d feedback items from people are open: read them with feedback.", len(open)))
+				return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackOpenLine(feedbackOpen, len(open)))
 			}
 		}
 		if readiness {
@@ -2153,21 +2152,50 @@ func (w *steps) prFixLanded(ctx context.Context, sc workflow.StepContext, st *St
 	}
 	// People's feedback the fix left unanswered is open again, and no
 	// signal will come for it: another fix, within MaxPRFixIterations.
-	if fix, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are still open after the fix: read them with feedback."); err != nil || started {
+	if fix, started, err := w.fixOpenFeedback(ctx, sc, st, feedbackAfterFix); err != nil || started {
 		return fix, err
 	}
 	return res, nil
 }
 
 // fixOpenFeedback starts a pull request fix when people's feedback items
-// are open (started), with line (formatted with their count) as its reason.
-func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st *State, line string) (res workflow.Result, started bool, err error) {
+// are open (started), with when's feedbackOpenLine as its reason.
+func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st *State, when string) (res workflow.Result, started bool, err error) {
 	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
 	if err != nil || len(open) == 0 {
 		return workflow.Result{}, false, err
 	}
-	res, err = w.next(ctx, sc, st, PointPRFeedback, "prFix", fmt.Sprintf(line, len(open)))
+	res, err = w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackOpenLine(when, len(open)))
 	return res, true, err
+}
+
+// nothingToAdd follows the implementer's outcome when the work it continues
+// is reviewed as it is.
+const nothingToAdd = " Nothing to add: the work it continues is reviewed as it is."
+
+// When people's feedback items are open, for feedbackOpenLine.
+const (
+	feedbackOpen             = "open"
+	feedbackAfterFix         = "after-fix"
+	feedbackAfterIntegration = "after-integration"
+	feedbackBeforePR         = "before-pr"
+	feedbackReadyToRead      = "ready-to-read"
+)
+
+// feedbackOpenLine is the conductor's fact on n of people's feedback items
+// open, when.
+func feedbackOpenLine(when string, n int) string {
+	switch when {
+	case feedbackAfterFix:
+		return fmt.Sprintf("%d feedback items from people are still open after the fix: read them with feedback.", n)
+	case feedbackAfterIntegration:
+		return fmt.Sprintf("%d feedback items from people are open after the base integration: read them with feedback.", n)
+	case feedbackBeforePR:
+		return fmt.Sprintf("%d feedback items from people are open (feedback): they go to a fixer before any pull request.", n)
+	case feedbackReadyToRead:
+		return fmt.Sprintf("%d feedback items from people on the work ready to read: read them with feedback.", n)
+	}
+	return fmt.Sprintf("%d feedback items from people are open: read them with feedback.", n)
 }
 
 // promotedRefreshRepos are the repositories a full promotion refreshes:
@@ -2425,7 +2453,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			return workflow.Result{Next: "prFix", State: st}, nil
 		}
 		if handOpen && len(st.PullRequestIDs) > 0 {
-			if res, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are open: read them with feedback."); err != nil || started {
+			if res, started, err := w.fixOpenFeedback(ctx, sc, st, feedbackOpen); err != nil || started {
 				return res, err
 			}
 		}
@@ -2589,8 +2617,7 @@ func (w *steps) awaitRead(ctx context.Context, sc workflow.StepContext) (workflo
 	}
 	st.Retries++
 	st.Iteration, st.PendingRunIDs = 0, nil
-	return w.next(ctx, sc, st, PointReviewed, "fix",
-		fmt.Sprintf("%d feedback items from people on the work ready to read: read them with feedback.", len(open)))
+	return w.next(ctx, sc, st, PointReviewed, "fix", feedbackOpenLine(feedbackReadyToRead, len(open)))
 }
 
 // humanFeedback says whether the signals carry a person's feedback.

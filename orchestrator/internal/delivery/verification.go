@@ -363,8 +363,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 			if st.checkingCandidate() {
 				return workflow.Result{Next: "fix", State: st}, nil
 			}
-			return w.next(ctx, sc, st, PointReviewed, "fix", fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
-				"of the tester's; test fix round %d of %d.", runID, g.Criteria, len(g.Findings), st.TestFixRounds, MaxTestFixRounds))
+			return w.next(ctx, sc, st, PointReviewed, "fix", testFailedLine(runID, g.Criteria, len(g.Findings), st.TestFixRounds))
 		}
 		return w.escalate(ctx, sc, st, ReasonTestFailedCriteria, detail)
 	case "blocked":
@@ -374,7 +373,19 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		// A pull request's fix, checked: the pull request takes it now.
 		return workflow.Result{Next: "promoteCandidate", State: st}, nil
 	}
-	return w.beforePR(ctx, sc, st, fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID))
+	return w.beforePR(ctx, sc, st, testPassedLine(runID))
+}
+
+// testFailedLine is the conductor's fact on test runID failing criteria
+// with findings blocking ones of the tester's, in fix round round.
+func testFailedLine(runID string, criteria []int, findings, round int) string {
+	return fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
+		"of the tester's; test fix round %d of %d.", runID, criteria, findings, round, MaxTestFixRounds)
+}
+
+// testPassedLine is the conductor's fact on test runID passing.
+func testPassedLine(runID string) string {
+	return fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID)
 }
 
 // criteriaOf names the criteria in a gate's detail: number and text.
