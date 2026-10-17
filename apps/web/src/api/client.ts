@@ -1282,7 +1282,7 @@ export class ApiClient {
     return this.#request("PUT", "/v1/judgements/settings", { tierId });
   }
 
-  judgements(query: { asker?: string; limit?: number; before?: string } = {}): Promise<JudgementCallsResponse> {
+  judgements(query: { asker?: string | undefined; limit?: number | undefined; before?: string | undefined } = {}): Promise<JudgementCallsResponse> {
     const params = new URLSearchParams();
     if (query.asker) params.set("asker", query.asker);
     if (query.limit) params.set("limit", String(query.limit));
