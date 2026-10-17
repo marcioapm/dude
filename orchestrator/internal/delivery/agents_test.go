@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -24,7 +25,7 @@ func TestEveryRoleHasItsInstructionsFile(t *testing.T) {
 		}
 	}
 	for role := range roles {
-		if !strings.Contains(strings.Join(PromptRoles, " "), role) {
+		if !slices.Contains(PromptRoles, role) {
 			t.Errorf("agents/roles/%s.md is no role a person can edit", role)
 		}
 	}
