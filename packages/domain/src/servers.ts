@@ -158,6 +158,30 @@ export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 
 export type ServerState = "stopped" | "starting" | "ready" | "unreachable" | "exited";
 
+/**
+ * Whether a preview server's pages load dude's commenting overlay. Not
+ * available names what is missing: dude's origin (`auth.public_url`), or a
+ * lux whose servers take inject (v0.1.32 or later).
+ */
+export const commentingSchema = z.discriminatedUnion("available", [
+  z.object({ available: z.literal(true) }).strict(),
+  z.object({ available: z.literal(false), reason: z.enum(["public_url", "lux"]) }).strict(),
+]);
+export type Commenting = z.infer<typeof commentingSchema>;
+
+/** What a wakeable preview's server says about commenting: on every one of them, absent on any other server. */
+export const serverCommentingSchema = z.object({
+  commenting: commentingSchema,
+  /**
+   * Its Run is up and its pages are served without the overlay wanted now
+   * (made before commenting, or for another origin). Restart it
+   * (`POST /v1/runs/:id/servers/:name/restart`) to load it; an asleep
+   * server gets it at its next wake and is never flagged.
+   */
+  needsRestart: z.boolean(),
+});
+export type ServerCommenting = z.infer<typeof serverCommentingSchema>;
+
 /** One of a Run's servers, as lux reports it, passed through. */
 export interface RunServer {
   name: string;
@@ -181,6 +205,9 @@ export interface RunServer {
    * beside `state`, its process's. Absent on a Run's own servers.
    */
   serverState?: WakeableServerState;
+  /** A wakeable preview's server: whether its pages load the commenting overlay (ServerCommenting). */
+  commenting?: Commenting;
+  needsRestart?: boolean;
 }
 
 /** lux's state of a server that wakes on request (`/v1/servers`' `state`). */

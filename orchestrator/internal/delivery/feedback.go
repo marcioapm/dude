@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -111,7 +113,15 @@ type FeedbackAnchor struct {
 		Width  int `json:"width"`
 		Height int `json:"height"`
 	} `json:"viewport,omitempty"`
-	Component *struct {
+	// The element's box in the window, in CSS pixels.
+	Rect *struct {
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	} `json:"rect,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	Component    *struct {
 		Name string `json:"name,omitempty"`
 		File string `json:"file,omitempty"`
 		Line int    `json:"line,omitempty"`
@@ -141,6 +151,38 @@ func (a FeedbackAnchor) Where() string {
 	return ""
 }
 
+// PageLine is where on its page a preview item was made: "Route /cart in
+// a 1280×720 window · the element is 92×38 at 152, 431". Each clause only
+// with its data; "" without a window or a box, as the URL is already said.
+func (a FeedbackAnchor) PageLine() string {
+	if a.Kind != "preview" || (a.Viewport == nil && a.Rect == nil) {
+		return ""
+	}
+	route := "/"
+	if u, err := url.Parse(a.URL); err == nil && u.EscapedPath() != "" {
+		route = u.EscapedPath()
+	}
+	line := "Route " + route
+	if v := a.Viewport; v != nil {
+		line += fmt.Sprintf(" in a %d×%d window", v.Width, v.Height)
+	}
+	if r := a.Rect; r != nil {
+		line += fmt.Sprintf(" · the element is %d×%d at %d, %d", px(r.Width), px(r.Height), px(r.X), px(r.Y))
+	}
+	return line
+}
+
+func px(v float64) int { return int(math.Round(v)) }
+
+// pictureID is the upload a preview item's anchor names as its picture;
+// "" for none and for any other kind of item.
+func (a FeedbackAnchor) pictureID() string {
+	if a.Kind != "preview" {
+		return ""
+	}
+	return a.AttachmentID
+}
+
 // FeedbackItem is a submitted item as an agent is shown it: the person's
 // own words, never a summary.
 type FeedbackItem struct {
@@ -157,6 +199,10 @@ type FeedbackItem struct {
 	Pending bool                `json:"resolutionPending,omitempty"`
 	Commit  string              `json:"commit,omitempty"`
 	History []FeedbackHistoryAt `json:"history,omitempty"`
+	// The name of its picture when the message carrying the item carries
+	// the picture too (MarkPictures); "" otherwise, and never read from
+	// the anchor alone.
+	Picture string `json:"-"`
 }
 
 // FeedbackHistoryAt is one reply, resolution or reopening.
@@ -252,6 +298,12 @@ func FeedbackText(items []FeedbackItem, cli bool) string {
 					b.WriteString("\n" + l.Kind + l.Text)
 				}
 				b.WriteString("\n```")
+			}
+			if line := it.Anchor.PageLine(); line != "" {
+				b.WriteString("\n\n" + line)
+			}
+			if it.Anchor.Kind == "preview" && it.Picture != "" {
+				b.WriteString("\n\nPicture: " + it.Picture + ", attached (the element, outlined)")
 			}
 			if it.Anchor.Kind == "preview" && it.Anchor.Text != "" {
 				b.WriteString("\n\nThe element's text: " + clip(oneLine(it.Anchor.Text), 400))
@@ -514,11 +566,79 @@ func steerFeedbackTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemIDs []strin
 	if err != nil {
 		return err
 	}
+	// Only a picture no message has carried yet can go with this one
+	// (Attach): one already sent with an earlier steer reaches the next
+	// fixer with its prompt instead (PromptAttachments).
+	pictures, err := feedbackPicturesTx(ctx, tx, ref.TaskID, items, true, MaxAttachmentsPerMessage, MaxMessageAttachmentBytes)
+	if err != nil {
+		return err
+	}
+	MarkPictures(items, pictures)
 	directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: FeedbackText(items, true), Scope: "run"})
 	if err != nil {
 		return err
 	}
+	ids := make([]string, len(pictures))
+	for i, p := range pictures {
+		ids[i] = p.ID
+	}
+	if _, err := Attach(ctx, tx, ref.TaskID, directiveID, ids); err != nil {
+		return err
+	}
 	return recordGivenTx(ctx, tx, ref.RunID, directiveID, itemIDs)
+}
+
+// feedbackPicturesTx are the pictures of the preview items among items
+// that one message can carry: each the task's own upload, in the items'
+// order, at most room images and roomBytes bytes together; with unsent,
+// only those no message carries yet. A picture past the room, or gone
+// (swept, removed), is left out, and its item is sent without it.
+func feedbackPicturesTx(ctx context.Context, tx pgx.Tx, taskID string, items []FeedbackItem, unsent bool, room int, roomBytes int64) ([]SentAttachment, error) {
+	var ids []string
+	for _, it := range items {
+		if id := it.Anchor.pictureID(); id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 || room <= 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT a.id, a.name, a.content_type, a.object_key, a.bytes
+		FROM unnest($2::text[]) WITH ORDINALITY AS ref(id, n) JOIN attachments a ON a.id = ref.id
+		WHERE a.task_id = $1 AND (NOT $3 OR a.attached_at IS NULL) ORDER BY ref.n`, taskID, ids, unsent)
+	if err != nil {
+		return nil, err
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[SentAttachment])
+	if err != nil {
+		return nil, err
+	}
+	var out []SentAttachment
+	for _, a := range found {
+		if len(out) == room || a.Bytes > roomBytes {
+			continue
+		}
+		roomBytes -= a.Bytes
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// MarkPictures names on each preview item the picture sent with it, of
+// those a message carries: what FeedbackText says is attached.
+func MarkPictures(items []FeedbackItem, sent []SentAttachment) {
+	for i := range items {
+		items[i].Picture = ""
+		id := items[i].Anchor.pictureID()
+		if id == "" {
+			continue
+		}
+		for _, a := range sent {
+			if a.ID == id {
+				items[i].Picture = a.Name
+			}
+		}
+	}
 }
 
 // recordGivenTx records items as carried to Run runID by a directive, and

@@ -1305,6 +1305,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if peopleFeedback, err = delivery.RunFeedbackTx(ctx, tx, r.ID); err != nil {
 			return err
 		}
+		// A preview item's picture is said attached only when it goes with
+		// this prompt (PromptAttachments had room for it).
+		delivery.MarkPictures(peopleFeedback, taskImages)
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
