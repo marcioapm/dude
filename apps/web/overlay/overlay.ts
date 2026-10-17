@@ -16,7 +16,7 @@
 
 import {
   OVERLAY_LIMITS, OVERLAY_PROTOCOL, overlayPage,
-  type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayToDude,
+  type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
 import { TOKENS_CSS } from "./tokens.gen.ts";
@@ -156,6 +156,9 @@ export class Overlay {
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
   #raf = 0;
+  // dude's resolved theme once a session names it; until then (or from an older dude) the OS's.
+  #dudeTheme: OverlayTheme | null = null;
+  #osDark: MediaQueryList | null = null;
   // The shadow tree's layers, made once: a render replaces a layer's children, never the tree.
   readonly #top: HTMLElement;
   readonly #lay: Record<"pins" | "catchers" | "hover" | "box" | "bar", HTMLElement>;
@@ -193,6 +196,13 @@ export class Overlay {
     this.#win.addEventListener("popstate", this.#onRoute);
     this.#win.addEventListener("hashchange", this.#onRoute);
     this.#wrapHistory();
+    try {
+      this.#osDark = this.#win.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
+    } catch {
+      this.#osDark = null;
+    }
+    this.#osDark?.addEventListener?.("change", this.#onOsTheme);
+    this.#applyTheme();
     if (!this.#opener()) {
       this.#connection = "none";
     } else {
@@ -224,8 +234,28 @@ export class Overlay {
     this.#win.removeEventListener("resize", this.#later);
     this.#win.removeEventListener("popstate", this.#onRoute);
     this.#win.removeEventListener("hashchange", this.#onRoute);
+    this.#osDark?.removeEventListener?.("change", this.#onOsTheme);
     this.host.remove();
   }
+
+  /** The theme drawn now: dude's once it said one, else the OS's; dark when neither is known, as dude's own default. */
+  get theme(): OverlayTheme {
+    if (this.#dudeTheme) return this.#dudeTheme;
+    try {
+      if (this.#win.matchMedia?.("(prefers-color-scheme: light)").matches) return "light";
+    } catch {
+      // No media queries: dude's default.
+    }
+    return "dark";
+  }
+
+  #applyTheme(): void {
+    if (this.#top.getAttribute("data-theme") !== this.theme) this.#top.setAttribute("data-theme", this.theme);
+  }
+
+  readonly #onOsTheme = (): void => {
+    if (!this.#stopped) this.#applyTheme();
+  };
 
   // ------------------------------------------------------------------ dude
 
@@ -265,6 +295,11 @@ export class Overlay {
         this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
+        // Only the two names: another value (a newer dude's) leaves the theme as it was.
+        if (m.theme === "light" || m.theme === "dark") {
+          this.#dudeTheme = m.theme;
+          this.#applyTheme();
+        }
         if (this.#unanswered) {
           // dude's tab is back: the box keeps its words, and Save is for it again.
           this.#unanswered = false;

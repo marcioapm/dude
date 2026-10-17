@@ -131,3 +131,12 @@ export function useDensity(): Density {
   const attr = typeof document !== "undefined" ? document.documentElement.getAttribute("data-density") : null;
   return isDensity(attr) ? attr : DEFAULT_DENSITY;
 }
+
+/** The theme in force: the provider's resolved one, else the root's `data-theme`, else the OS's, dark when unknown (as the CSS does). */
+export function useResolvedTheme(): ThemeMode {
+  const v = useContext(ThemeContext);
+  if (v) return v.resolved;
+  const attr = typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null;
+  if (attr === "light" || attr === "dark") return attr;
+  return readMedia("(prefers-color-scheme: light)") ? "light" : "dark";
+}

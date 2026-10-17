@@ -14,7 +14,7 @@
 
 import {
   FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
-  type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayToDude, type TaskServers,
+  type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
 /** Why commenting is not offered, in the words a person reads. */
@@ -186,6 +186,8 @@ export interface CommentingDeps {
     taskKey: string;
     you: string | null;
     name: (personId: string | null | undefined) => string;
+    /** dude's resolved theme, which the overlay follows once connected. */
+    theme?: OverlayTheme;
   };
   /** Uploads a picture as the task's attachment: its id. */
   readonly upload: (picture: { bytes: Uint8Array; type: string; name: string }) => Promise<string>;
@@ -349,7 +351,7 @@ export class PreviewCommenting {
     return this.open(item.anchor.url, this.#server, item.id);
   }
 
-  /** The page's pins again, after the list changed (a save, a submit, an agent's reply). */
+  /** The page's pins and dude's theme again, after the list or the theme changed (a save, a submit, an agent's reply, the person's theme). */
   refresh(): void {
     if (this.#state === "open" && this.#url) this.#post(this.#session(this.#url));
   }
@@ -367,7 +369,8 @@ export class PreviewCommenting {
 
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
-    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins() };
+    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins(),
+      ...(s.theme ? { theme: s.theme } : {}) };
   }
 
   #showPins(value?: boolean): boolean {

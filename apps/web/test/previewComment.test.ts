@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { DudeToOverlay, FeedbackItem, OverlayAnchor, RunServer, TaskServers } from "@dude/domain";
-import { OVERLAY_LIMITS } from "@dude/domain";
+import { OVERLAY_LIMITS, overlaySessionSchema } from "@dude/domain";
 import { PreviewCommenting, commentingOffer, pinsFor, previewOrigins, type CommentingDeps, type CommentingView } from "../src/previewComment.ts";
 
 const WEB = "https://web-shop-1.preview.example.test";
@@ -96,6 +96,30 @@ test("hello from the window dude opened at the task's origin is answered with th
   expect(session && session.type === "session" && session.pins.map((p) => p.id)).toEqual(["fbk_a"]);
   expect(popup.postMessage.mock.calls[0]![1]).toBe(WEB);
   expect(c.view.state).toBe("open");
+});
+
+test("the session carries dude's resolved theme, valid by the protocol's schema, and a theme change is sent as a new session", () => {
+  let theme: "light" | "dark" = "dark";
+  c.dispose();
+  boot({ read: () => ({ origins: previewOrigins(data), items, drafts: 0, taskKey: "SHOP-1", you: "per_me", name: () => "Ana", theme }) });
+  items = [item("fbk_a")];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const first = told().filter((m) => m.type === "session");
+  expect(first.map((m) => m.type === "session" && m.theme)).toEqual(["dark"]);
+  expect(overlaySessionSchema.safeParse(first[0]).success).toBe(true);
+  theme = "light";
+  c.refresh();
+  const sessions = told().filter((m) => m.type === "session");
+  expect(sessions.map((m) => m.type === "session" && m.theme)).toEqual(["dark", "light"]);
+  expect(overlaySessionSchema.safeParse(sessions[1]).success).toBe(true);
+  // Without a theme to say (an older caller), the session says none.
+  c.dispose();
+  popup.postMessage.mockClear();
+  boot();
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  expect(told().find((m) => m.type === "session")).not.toHaveProperty("theme");
 });
 
 test("a message from an origin that is not one of this task's previews is ignored", async () => {

@@ -675,3 +675,72 @@ test("Esc with only a panel showing closes it and the page still hears Esc; pick
   expect(count('[data-testid="ov-hint"]')).toBe(0);
   expect(heard).toEqual([false]);
 });
+
+/** The OS's colour scheme as the page's matchMedia reports it, switchable as a person would switch it. */
+function osScheme(start: "light" | "dark" | "none") {
+  let scheme = start;
+  const lists: Array<{ media: string; listeners: Array<() => void> }> = [];
+  win.matchMedia = (media: string) => {
+    const l = { media, listeners: [] as Array<() => void> };
+    lists.push(l);
+    return {
+      media,
+      get matches() { return scheme !== "none" && media.includes(`prefers-color-scheme: ${scheme}`); },
+      addEventListener: (_: string, f: () => void) => l.listeners.push(f),
+      removeEventListener: (_: string, f: () => void) => { l.listeners = l.listeners.filter((x) => x !== f); },
+    };
+  };
+  return {
+    set(next: "light" | "dark") { scheme = next; for (const l of lists) for (const f of l.listeners) f(); },
+    listening: () => lists.reduce((n, l) => n + l.listeners.length, 0),
+  };
+}
+
+const drawn = () => q("[data-overlay]")!.getAttribute("data-theme");
+
+test("before dude answers it follows the OS's colour scheme, live, and dark when the OS says neither", () => {
+  const os = osScheme("light");
+  boot();
+  expect(drawn()).toBe("light");
+  os.set("dark");
+  expect(drawn()).toBe("dark");
+  os.set("light");
+  expect(drawn()).toBe("light");
+  overlay.stop();
+  expect(os.listening()).toBe(0);
+  page(CART);
+  osScheme("none");
+  boot();
+  expect(drawn()).toBe("dark");
+});
+
+test("once dude's session names a theme it follows dude's, not the OS, and a new session switches it", () => {
+  const os = osScheme("light");
+  boot();
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "dark" });
+  expect(drawn()).toBe("dark");
+  os.set("light");
+  expect(drawn()).toBe("dark");
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" });
+  expect(drawn()).toBe("light");
+});
+
+test("a session with no theme (an older dude) or one it doesn't know leaves the theme as it was", () => {
+  const os = osScheme("light");
+  boot();
+  connect();
+  expect(drawn()).toBe("light");
+  os.set("dark");
+  expect(drawn()).toBe("dark");
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "sepia" as "light" });
+  expect(drawn()).toBe("dark");
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a theme from another origin or another window is not heard", () => {
+  osScheme("dark");
+  boot();
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" }, "https://evil.example.test");
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" }, DUDE, { postMessage() {} });
+  expect(drawn()).toBe("dark");
+});
