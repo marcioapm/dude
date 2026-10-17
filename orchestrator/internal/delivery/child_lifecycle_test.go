@@ -215,11 +215,11 @@ func TestChildStaleResults(t *testing.T) {
 	}
 	// A valid pending result becomes non-actionable if the parent ends before consumption.
 	w := newChildWorld(t)
-	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
 	id := w.child("pending")
 	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
+	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
 	w.exec(`UPDATE tasks SET status = 'done' WHERE id = 'wi_life'`)
 	if consumed, err := w.s.ConsumeChildResult(w.ctx, w.org, "run_parent", id, 1); err != nil || consumed {
 		t.Fatalf("ended receipt: %v %v", consumed, err)
