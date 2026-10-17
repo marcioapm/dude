@@ -73,12 +73,6 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   // The judgement tier, for the menu's "no model" note and the Judgements page.
   const judgement = useJudgementSettings(client);
   const judgementTier = models.tiers?.tiers.find((t) => t.id === judgement.settings?.tierId) ?? null;
-  // A tier removed on the Models page moves the judgement tier with it.
-  const { reload: reloadJudgement } = judgement;
-  const tierList = models.tiers;
-  useEffect(() => {
-    if (tierList) reloadJudgement();
-  }, [tierList, reloadJudgement]);
   // The library and its queue, once for the screen: the menu's count of
   // builds running and waiting, the Images pages, and every role's image.
   const images = useImages(client);
@@ -132,9 +126,9 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         <MemoryPages client={client} page={page} projects={projects} admin={me?.role === "admin"} index={index} onPage={onPage}
           scope={{ kind: "organization", name: settings?.organization.name ?? "the organisation" }} />
       ) : page === "models" ? (
-        // Models says who may change tiers itself.
+        // Models says who may change tiers itself. A removal may have moved the judgement tier to the replacement.
         <ModelsPage client={client} orgName={settings?.organization.name ?? "the organisation"}
-          tiers={models.tiers} problem={models.problem} setTiers={models.setTiers} />
+          tiers={models.tiers} problem={models.problem} setTiers={models.setTiers} onRemoved={judgement.reload} />
       ) : page === "judgements" ? (
         // Judgements says who may change the tier itself.
         <JudgementsPage client={client} orgName={orgName} tiers={models.tiers?.tiers ?? null} tiersProblem={models.problem}

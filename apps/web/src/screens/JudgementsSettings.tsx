@@ -58,8 +58,8 @@ const EVERYONE = "__all__";
 
 /**
  * The organisation's judgement setting, loaded once by the settings screen
- * for the menu's "no model" note and the page. `reload` reads it again: a
- * tier's removal on the Models page may have moved it.
+ * for the menu's "no model" note and the page. `reload` reads it again
+ * after a tier's removal on the Models page, which may have moved it.
  */
 export function useJudgementSettings(client: ApiClient) {
   const [settings, setSettings] = useState<JudgementSettings | null>(null);

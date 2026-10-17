@@ -135,12 +135,14 @@ function HowItWorks({ example, proxy }: { example: ModelTier | null; proxy: stri
   );
 }
 
-export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
+export function ModelsPage({ client, orgName, tiers, problem, setTiers, onRemoved }: {
   client: ApiClient;
   orgName: string;
   tiers: ModelTiersResponse | null;
   problem: string | null;
   setTiers: (t: ModelTiersResponse) => void;
+  /** A tier was removed: settings that named it moved to its replacement. */
+  onRemoved?: (() => void) | undefined;
 }) {
   const proxy = useProxyModels(client);
   const [editing, setEditing] = useState<{ tier: ModelTierWithUse | null; test: boolean } | null>(null);
@@ -192,7 +194,10 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
       ) : null}
       {removing ? (
         <RemoveTierDialog client={client} orgName={orgName} tier={removing} others={tiers.tiers.filter((t) => t.id !== removing.id)}
-          onClose={() => setRemoving(null)} onRemoved={setTiers} />
+          onClose={() => setRemoving(null)} onRemoved={(t) => {
+            setTiers(t);
+            onRemoved?.();
+          }} />
       ) : null}
     </div>
   );
