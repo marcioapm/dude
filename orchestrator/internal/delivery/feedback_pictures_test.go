@@ -124,3 +124,20 @@ func TestAFixersPicturesFollowTheTasksImagesWithinOneMessage(t *testing.T) {
 		})
 	}
 }
+
+// Only a preview item has a picture: an attachment id on another kind of
+// anchor is never matched to an attachment the message carries.
+func TestOnlyAPreviewItemIsMarkedWithAPicture(t *testing.T) {
+	sent := []delivery.SentAttachment{{ID: "att_1", Name: "att_1.png"}}
+	items := []delivery.FeedbackItem{
+		{ID: "fbi_preview", Anchor: delivery.FeedbackAnchor{Kind: "preview", AttachmentID: "att_1"}},
+		{ID: "fbi_code", Anchor: delivery.FeedbackAnchor{Kind: "code", AttachmentID: "att_1"}},
+		{ID: "fbi_general", Anchor: delivery.FeedbackAnchor{Kind: "general", AttachmentID: "att_1"}},
+	}
+	delivery.MarkPictures(items, sent)
+	for _, it := range items {
+		if want := it.ID == "fbi_preview"; (it.Picture != "") != want {
+			t.Errorf("%s (%s): picture %q, want one: %v", it.ID, it.Anchor.Kind, it.Picture, want)
+		}
+	}
+}

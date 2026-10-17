@@ -76,6 +76,9 @@ func TestPublicOriginIsAnHTTPSOrigin(t *testing.T) {
 	if _, err := PublicOrigin("https://d.test#f"); err == nil || !strings.Contains(err.Error(), "fragment") {
 		t.Errorf("fragment: %v, want it named", err)
 	}
+	if _, err := PublicOrigin("https://1.2.3.4."); err == nil || !strings.Contains(err.Error(), "trailing dot") {
+		t.Errorf("IPv4 with a trailing dot: %v, want the dot named", err)
+	}
 }
 
 // Commenting needs both: dude's origin and a lux whose servers take
