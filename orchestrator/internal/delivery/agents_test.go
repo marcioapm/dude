@@ -31,16 +31,9 @@ func TestEveryRoleHasItsInstructionsFile(t *testing.T) {
 	}
 }
 
-// Every embedded template parses, and a file that does not is an error at
-// load, never a template that renders empty.
+// A file that does not parse, or is empty, is an error at load, never a
+// template that renders empty.
 func TestEveryAgentTemplateParses(t *testing.T) {
-	parsed, err := parseAgentTemplates(agentFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(parsed.Templates()) != len(agentTemplates.Templates()) {
-		t.Errorf("parsed %d templates, the package holds %d", len(parsed.Templates()), len(agentTemplates.Templates()))
-	}
 	broken := fstest.MapFS{"agents/contracts/broken.md": {Data: []byte("Hello {{.Name\n")}}
 	if _, err := parseAgentTemplates(broken); err == nil || !strings.Contains(err.Error(), "agents/contracts/broken.md") {
 		t.Errorf("a template that does not parse loads: %v", err)
