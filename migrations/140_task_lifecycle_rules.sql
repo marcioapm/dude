@@ -44,17 +44,18 @@ CREATE OR REPLACE FUNCTION task_relation_would_cycle(src text, dst text) RETURNS
     walked   text[] := ARRAY[src];
     cur      text := src;
   BEGIN
+    -- Each step probes its edges from the worktable (the primary key for
+    -- blocks out of a task, task_relations_to_idx for the duplicates hop
+    -- into it): a join to a union of all edges would scan them every step.
     IF NOT EXISTS (
       WITH RECURSIVE reach (task) AS (
         SELECT dst
         UNION
-        SELECT e.to_id FROM reach JOIN (
-            SELECT r.from_task_id AS from_id, r.to_task_id AS to_id FROM task_relations r WHERE r.kind = 'blocks'
-            UNION ALL
-            SELECT d.to_task_id, r.to_task_id FROM task_relations d
-              JOIN task_relations r ON r.from_task_id = d.from_task_id AND r.kind = 'blocks'
-             WHERE d.kind = 'duplicates'
-          ) e ON e.from_id = reach.task
+        (WITH cur AS (SELECT task FROM reach)
+         SELECT r.to_task_id FROM cur JOIN task_relations r ON r.from_task_id = cur.task AND r.kind = 'blocks'
+         UNION ALL
+         SELECT r.to_task_id FROM cur JOIN task_relations d ON d.to_task_id = cur.task AND d.kind = 'duplicates'
+           JOIN task_relations r ON r.from_task_id = d.from_task_id AND r.kind = 'blocks')
       )
       SELECT 1 FROM reach WHERE task = src
     ) THEN

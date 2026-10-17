@@ -293,18 +293,22 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
 
     // Relations: every edge between the tasks read, with what each end is
     // (merged: done with a merged pull request, the rule task_blocked_by
-    // reads), and the starts when unblocked set. One query each.
+    // reads), and the starts when unblocked set. One query each; the
+    // merged set is joined once for both ends, not probed per edge.
     const edges = (await sql`
+      WITH merged AS (SELECT DISTINCT task_id FROM pull_requests WHERE state = 'merged')
       SELECT r.from_task_id AS "fromId", r.to_task_id AS "toId", r.kind,
         fp.key_prefix || '-' || f.number AS "fromKey", f.title AS "fromTitle", f.status AS "fromStatus", f.project_id AS "fromProject",
         fp.name AS "fromProjectName",
-        f.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = f.id AND pr.state = 'merged') AS "fromMerged",
+        f.status = 'done' AND fm.task_id IS NOT NULL AS "fromMerged",
         tp.key_prefix || '-' || t.number AS "toKey", t.title AS "toTitle", t.status AS "toStatus", t.project_id AS "toProject",
         tp.name AS "toProjectName",
-        t.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged') AS "toMerged"
+        t.status = 'done' AND tm.task_id IS NOT NULL AS "toMerged"
       FROM task_relations r
       JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id
       JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id
+      LEFT JOIN merged fm ON fm.task_id = f.id
+      LEFT JOIN merged tm ON tm.task_id = t.id
       ORDER BY r.created_at`) as EdgeRow[];
     const autoStarts = (await sql`
       SELECT a.task_id AS "taskId", a.how, a.set_at AS at, person_ref(p) AS by

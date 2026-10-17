@@ -107,8 +107,8 @@ mapping is the brief's.
 - **Close is offered** for a task not started, and for one that stopped (`failed`, `aborted`
   with no resolution). *Decided:* not for a running one ("Stop its agents first"). Stopping is
   already a decision with its own dialog; folding it into Close would make one click end live
-  work. Not for `review` or `ready_to_merge` either ("It has a pull request open"): closing that
-  is GitHub's or Mark done's.
+  work. Not for `review` or `ready_to_merge` either ("It has a pull request open"), nor for
+  any task with an `open` pull request, whatever its status: closing that is GitHub's or Mark done's.
 - **Nothing to merge is not offered in Close** ("Only for work that ran: Mark done gives this,
   once there is a write-up or an answer"). `markDone` writes it: the route stays, and from now on
   stores `resolution = 'nothing_to_merge'` on the task, so today's "done, nothing merged" gets
@@ -177,8 +177,8 @@ running agents; owner or admin; Activity both ways.
 - **On an ended task, Archive… is the plain confirmation** (screen *archive-task*, CP-46).
 - **A running task, or one with a pull request open, can't be archived**, exactly as it can't be
   closed: the menu item is disabled with "Stop its agents first" (`running`, `awaiting_input`)
-  or "It has a pull request open" (`review`, `ready_to_merge`).
-- **Back out in two steps.** An archived, closed task shows Unarchive; once unarchived, Reopen.
+  or "It has a pull request open" (`review`, `ready_to_merge`, or any other status with an
+  `open` pull request).- **Back out in two steps.** An archived, closed task shows Unarchive; once unarchived, Reopen.
   *Rejected:* one "Unarchive and reopen": the two undo different decisions, and most unarchives
   (an ended task wanted back in a count) don't want the reopen.
 - **Archiving an epic archives nothing by itself.** With unfinished tasks it is refused
@@ -261,16 +261,16 @@ it didn't list:
 |---|---|---|---|
 | 1 | **Deliver**, Create and deliver | `deliver` `orchestrator/internal/api/api.go:455` → `delivery.StartTx` `api.go:484` → `GuardStartTx` `delivery/start.go:109` | `RefuseStartTx` in `GuardStartTx`: Archived and Closed refused even with `override`. "Create and deliver" makes the task and says it was not started (`footerProblem`), as for blocked |
 | 2 | **Talk it through** | `talk` `api/chat.go:67` → `talkThrough` `chat.go:300` → `StartTx` `chat.go:301` | same, through `StartTx` |
-| 3 | **A first message in an unstarted task's Chat** | `chat` `chat.go:30` → `decideFor` → `talkThrough` `chat.go:277` | same; the composer keeps the words |
+| 3 | **A first message in an unstarted task's Chat** | `chat` `chat.go:30` → `decideFor` → `talkThrough` `chat.go:277` | same; a closed task's first Chat message is refused and the composer keeps the words |
 | 4 | **The conductor's first `start_phase implement` / `decide` at `PointStart`** | `ConductStartPhase` `delivery/conduct.go:193` → `refuseBlockedStart` `conduct.go:211`; `ConductDecide` `conduct.go:371` → `conduct.go:386` | `refuseBlockedStart` calls `RefuseStartTx`; an Archived or Closed refusal is a `Refusal` whatever `st.Overridden` says |
-| 5 | **The workflow's `implement` step** | `implementRun` `delivery/workflow.go:470` → `parkIfBlocked` `workflow.go:478` (`delivery/relations.go:144`) | unchanged: parks as for blocked, only before the first implementer of the attempt. Archived and Closed can't reach it: Close and Archive are refused while agents run |
+| 5 | **The workflow's `implement` step** | `implementRun` `delivery/workflow.go:470` → `parkIfBlocked` `workflow.go:478` (`delivery/relations.go:144`) | parks as for blocked; a closed or archived task that the unblock woke is also parked, never a workflow error, and no phase Run is made |
 | 6 | **Start over** | `recoverTask` `api/recover.go:206` → `GuardStartTx` `recover.go:252` → `startOver` `recover.go:353` | `RefuseStartTx`; Start over *anyway* passes neither Archived nor Closed |
 | 7 | **Resume / Try again** | `recoverTask` → `pickUp` `api/recover.go:286` (`recover.go:322`) | **newly guarded for Archived and Closed only** (`RefuseStartTx` with blocked skipped). A closed task that once ran is `aborted` with a workflow, so `stoppedTask` offers it; it is refused ("CP-34 was closed: reopen it to pick it back up"), and the task page offers Reopen instead of Resume. Blocked stays unguarded here, as the relations doc decided |
 | 8 | **`POST /v1/tasks/:id/runs`** | `createRun` `apps/control-plane/src/api/routes/work.ts:365`, blockers at `work.ts:382` | `task_start_refusal(task)` before `task_blocked_by`, same 409s |
 | 9 | **Filing a proposal** | `fileProposal` `api/sessions.go:778` → `CreateTaskTx` `sessions.go:968` (`delivery/filing.go:57`) | starts nothing |
 | 10 | **`create_task`** | `createTask` `agenttools/tools.go:283` | starts nothing |
 | 11 | **Start when unblocked** | `AutoStarts.Sweep` `delivery/unblock.go:227` → `RefuseBlockedTx` `unblock.go:387` → `StartTx` `unblock.go:425` | `RefuseStartTx` at fire time. Close (and so Close and archive) ends the task's request in its transaction (`EndAutoStartTx` `unblock.go:180`, why `"closed"`, a new reason beside `"owner"`, `"started"`, …): a closed task holds none |
-| 12 | **A first feedback batch on a never-delivered task** *(not in the relations doc)* | `startForFeedbackTx` `delivery/feedback.go:528` → `StartTx` `feedback.go:533` | through `StartTx`: a never-delivered task closed, or closed and archived, refuses the batch's start |
+| 12 | **A first feedback batch on a never-delivered task** *(not in the relations doc)* | `startForFeedbackTx` `delivery/feedback.go:528` → `StartTx` `feedback.go:533` | through `StartTx`: a never-delivered task's first feedback on a closed or archived task is refused; the drafts remain |
 
 Confirming a plan (`awaiting_confirmation`) still has no route; any future one calls the guard.
 
@@ -812,7 +812,8 @@ Where the build differs from, or settles, what the sections above say:
   `archived` while archived. Its next start is a fresh attempt (a new delivery idempotency key,
   `delivery:<id>:attempt-N`), whether through Deliver or Talk it through.
 - **Path 3** is refused by `RefuseLifecycleTx` in `decideFor`, before a chat turn is decided.
-  **Path 5** stays blocked-only. **Path 7** answers "CP-34 was closed: reopen it to pick it back
+  **Path 5** also parks on closed or archived, never errors: a step already claimed when Close
+  commits makes no phase Run. **Path 7** answers "CP-34 was closed: reopen it to pick it back
   up."; `GET …/recovery` returns no actions and `refused: "closed" | "archived"`. **Path 11**
   ends the request with why `closed` or `archived` and records `task.start_refused` with path
   `auto_start`. **Path 12**: a feedback submit on a closed or archived task is refused 409 with

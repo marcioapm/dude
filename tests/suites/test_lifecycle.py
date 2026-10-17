@@ -77,7 +77,7 @@ def test_each_resolution_closes_and_a_duplicate_hands_its_blocking_over(client: 
     assert blocked["details"]["blockers"] == [{"key": dup["key"], "status": "received"}]
 
 
-def test_close_and_archive_is_one_write(client: ApiClient, project: dict):
+def test_close_and_archive_is_one_write(client: ApiClient, project: dict, owner_dsn: str):
     task = _task(client, project, "Billing page")
     _refused(client.post(f"/v1/tasks/{task['id']}/archive", {}), 409, "not_ended")
     assert _get(client, task["id"])["archivedAt"] is None
@@ -89,6 +89,10 @@ def test_close_and_archive_is_one_write(client: ApiClient, project: dict):
     assert [e["eventType"] for e in events] == ["task.closed", "task.archived"]
     assert events[0]["payload"]["andArchived"] is True
     assert events[1]["payload"] == {"viaClose": True} and events[1]["causationId"] == events[0]["eventId"]
+    # One writing transaction: both events carry its id.
+    writes = query(owner_dsn, """SELECT count(DISTINCT xmin::text) AS n FROM events WHERE task_id = %s
+        AND event_type IN ('task.closed', 'task.archived')""", (task["id"],))
+    assert writes == [{"n": 1}]
     # Archived: Reopen waits for Unarchive; the two are separate steps.
     _refused(client.post(f"/v1/tasks/{task['id']}/reopen"), 409, "archived")
     assert client.post(f"/v1/tasks/{task['id']}/unarchive").status_code == 200
