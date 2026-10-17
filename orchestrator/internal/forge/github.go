@@ -1265,7 +1265,7 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 			continue
 		}
 		path := fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, c.RunID)
-		if c.App == "github-actions" {
+		if c.App == ActionsApp {
 			path = fmt.Sprintf("/repos/%s/actions/jobs/%d/rerun", slug, c.RunID)
 		}
 		if err := g.do(ctx, "POST", path, map[string]any{}, nil); err != nil {
@@ -1282,44 +1282,6 @@ func (g *GitHub) RequestReviewers(ctx context.Context, slug string, number int, 
 	users, teams := reviewerSlugs(slug, logins)
 	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/pulls/%d/requested_reviewers", slug, number),
 		map[string]any{"reviewers": users, "team_reviewers": teams}, nil)
-}
-
-// CheckOutput is what a failed check run says about why: its summary and
-// text, and its annotations (file, line, message). Truncated: a fixer
-// wants the reason, not the whole log.
-func (g *GitHub) CheckOutput(ctx context.Context, slug string, runID int64, limit int) (string, error) {
-	var run struct {
-		Output struct {
-			Title   string `json:"title"`
-			Summary string `json:"summary"`
-			Text    string `json:"text"`
-		} `json:"output"`
-	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d", slug, runID), nil, &run); err != nil {
-		return "", err
-	}
-	var annotations []struct {
-		Path    string `json:"path"`
-		Line    int    `json:"start_line"`
-		Level   string `json:"annotation_level"`
-		Message string `json:"message"`
-	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=50", slug, runID), nil, &annotations); err != nil {
-		var e *Error
-		if !asError(err, &e) || Transient(err) {
-			return "", err
-		}
-	}
-	var b strings.Builder
-	for _, part := range []string{run.Output.Title, run.Output.Summary, run.Output.Text} {
-		if part = strings.TrimSpace(part); part != "" {
-			b.WriteString(part + "\n")
-		}
-	}
-	for _, a := range annotations {
-		fmt.Fprintf(&b, "%s:%d: %s: %s\n", a.Path, a.Line, a.Level, a.Message)
-	}
-	return truncate(strings.TrimSpace(b.String()), limit), nil
 }
 
 // truncate keeps the end of a log, where the failure usually is.
