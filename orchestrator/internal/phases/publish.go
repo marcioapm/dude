@@ -618,7 +618,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 				}
 				continue
 			}
-			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head, m.MergeAttempted, func() error {
+			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head, func() (bool, error) { return m.MergeAttempted, nil }, func() error {
 				err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.AttemptMergeTx(ctx, tx, p.of(), name) })
 				if err == nil {
 					m.MergeAttempted = true

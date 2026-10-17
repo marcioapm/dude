@@ -2051,10 +2051,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if acc.Full != "" {
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
-		attempted, err := s.mergeAttempted(ctx, r, repo.Name, res.Commit)
-		if err != nil {
-			return nil, err
-		}
+		attempted := func() (bool, error) { return s.mergeAttempted(ctx, r, repo.Name, res.Commit) }
 		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
 			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,

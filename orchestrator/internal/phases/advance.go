@@ -88,10 +88,12 @@ func parentsOf(parents []string) string {
 // (POST /merges) besides the fast-forward.
 //
 // A head that is already a pure merge of commit is adopted only when
-// attempted: the caller durably recorded, in beforeMerge, sending that
-// merge itself. Otherwise someone else made it, and it is refused like any
-// other move.
-func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted bool, beforeMerge ...func() error) (advanced, error) {
+// attempted says so: the caller durably recorded, in beforeMerge, sending
+// that merge itself. Otherwise someone else made it, and it is refused like
+// any other move. attempted is called only for such a head, never on a
+// fast-forward or an ordinary fallback; a phase's lookup there scans the
+// Run's events by events_run_cursor_idx, bounded by that one Run.
+func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted func() (bool, error), beforeMerge ...func() error) (advanced, error) {
 	refusal := gh.FastForward(ctx, slug, branch, commit)
 	if refusal == nil || !notFastForward(refusal) || start == "" || baseBranch == "" {
 		return advanced{Head: commit}, refusal
@@ -107,9 +109,16 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 		return advanced{}, refusal
 	case err != nil:
 		return advanced{}, err
-	case !j.only, j.own && !attempted:
+	case !j.only:
 		return advanced{}, refusal
 	case j.own:
+		ours, err := attempted()
+		if err != nil {
+			return advanced{}, err
+		}
+		if !ours {
+			return advanced{}, refusal
+		}
 		// commit merged already, by an attempt whose answer was lost.
 		return advanced{Head: at, Commit: commit, MergedInto: j.under}, nil
 	}
