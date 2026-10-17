@@ -77,7 +77,9 @@ func (g *GitHub) readCheckRun(ctx context.Context, slug string, runID int64) (ch
 	for _, part := range []string{run.Output.Title, run.Output.Summary, run.Output.Text} {
 		if part = strings.TrimSpace(part); part != "" {
 			b.WriteString(part + "\n")
-			out.generic = false
+			if !exitCodeAnnotation.MatchString(part) {
+				out.generic = false
+			}
 		}
 	}
 	for _, a := range annotations {

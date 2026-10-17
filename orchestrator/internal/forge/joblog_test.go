@@ -174,6 +174,28 @@ func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
 	}
 }
 
+func TestAnExitOnlyCheckOutputUsesTheActionsLog(t *testing.T) {
+	for _, field := range []string{"title", "summary", "text"} {
+		t.Run(field, func(t *testing.T) {
+			fake, gh := logWorld(t, jobLog(5))
+			run := fakegithub.ActionsJob()
+			switch field {
+			case "title":
+				run.Title = "Process completed with exit code 1."
+			case "summary":
+				run.Summary = "Process completed with exit code 2."
+			case "text":
+				run.Text = "Process completed with exit code 127."
+			}
+			fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = run })
+			out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+			if err != nil || !strings.Contains(out, "AssertionError: 3 != 2") {
+				t.Fatalf("exit-only %s: %q, %v", field, out, err)
+			}
+		})
+	}
+}
+
 // A check that is not an Actions job, or an Actions job whose check run
 // says why, gives what its check run says; its log is not read.
 func TestACheckThatSaysWhyIsReadAsBefore(t *testing.T) {
