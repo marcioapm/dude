@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,6 +60,57 @@ func brainstorming(t *testing.T) (*sessionWorld, string) {
 	id := s.session()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "what is open on GitHub?"})
 	return s, s.started(id)
+}
+
+func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
+	log := strings.Repeat("2026-10-16T19:47:01.123Z setup noise\n", 1000) +
+		"2026-10-16T19:47:02.123Z E       AssertionError: 3 != 2\n" +
+		"2026-10-16T19:47:03.123Z ##[error]Process completed with exit code 1.\n" +
+		"2026-10-16T19:47:04.123Z Post job cleanup.\n"
+	for _, role := range []string{"brainstorm", "conductor"} {
+		t.Run(role, func(t *testing.T) {
+			var w *world
+			var read func(string, string) map[string]any
+			var scope, column string
+			if role == "brainstorm" {
+				s, run := brainstorming(t)
+				w = s.world
+				read = func(tool, args string) map[string]any { return s.read(run, tool, args) }
+				scope, column = s.sessionOf(run), "session_id"
+				if status, _ := s.tool(run, "github_check_log", `{"repo":"acme/web","checkId":77}`); status != 422 {
+					t.Fatalf("outside repo: %d", status)
+				}
+			} else {
+				var task string
+				w, task = conductingWithAnotherProject(t)
+				read = func(tool, args string) map[string]any { return w.must(task, tool, args) }
+				scope, column = task, "task_id"
+				w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":77}`, "not a repository you may read")
+			}
+			downloads := httptest.NewServer(w.gh.LogDownloads())
+			t.Cleanup(downloads.Close)
+			w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
+			w.gh.SetJobLog(77, log, downloads.URL)
+			out := read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			text, ok := quoted(field(out, "log").(string))
+			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || strings.Contains(text, "Post job cleanup") ||
+				len(text) > 16<<10 || field(out, "source") != "log" {
+				t.Fatalf("log result: %v", out)
+			}
+			var payload string
+			if err := w.owner.QueryRow(context.Background(), `SELECT payload::text FROM events WHERE `+column+` = $1
+				AND event_type = 'github.read' AND payload->>'tool' = 'github_check_log'`, scope).Scan(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(payload, "AssertionError") || !strings.Contains(payload, `"bytes"`) {
+				t.Fatalf("ledger: %s", payload)
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1
+				AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_check_log'`, scope); n != 1 {
+				t.Fatalf("log read attempts: %d", n)
+			}
+		})
+	}
 }
 
 func (s *sessionWorld) read(run, tool, args string) map[string]any {
@@ -129,7 +181,8 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 		field(p, "unresolvedThreads", 0, "line") != float64(3) {
 		t.Errorf("reviews %v, threads %v", field(p, "reviews"), field(p, "unresolvedThreads"))
 	}
-	if conclusion := field(p, "checks", 0, "conclusion"); conclusion != "failure" {
+	if conclusion := field(p, "checks", 0, "conclusion"); conclusion != "failure" ||
+		field(p, "checks", 0, "id") != float64(77) || field(p, "checks", 0, "log") != true {
 		t.Errorf("checks %v", field(p, "checks"))
 	}
 	if path != "rollup.go" || field(p, "files", 0, "additions") != float64(3) || !strings.Contains(diff, "+func Count() int { return 1 }") {
@@ -154,6 +207,7 @@ func TestABrainstormIsRefusedARepositoryNotLinkedAndGitHubIsNotAsked(t *testing.
 		{"github_search", `{"repo":"acme/web","query":"elsewhere","kind":"issue"}`},
 		{"github_issue", `{"repo":"acme/web","number":101}`},
 		{"github_pull_request", `{"repo":"acme/web","number":1}`},
+		{"github_check_log", `{"repo":"acme/web","checkId":77}`},
 		{"github_issue", `{"repo":"torvalds/linux","number":1}`},
 		{"github_search", `{"repo":"acme/target","query":"repo:acme/web elsewhere","kind":"issue"}`},
 	} {
@@ -219,6 +273,7 @@ func TestAConductorReadsItsProjectsRepositoryAndNoOther(t *testing.T) {
 	w.refused(task, "github_issue", `{"repo":"acme/web","number":101}`, "acme/web is not a repository you may read: only your task's project, acme/target")
 	w.refused(task, "github_search", `{"repo":"acme/web","kind":"issue"}`, "only your task's project, acme/target")
 	w.refused(task, "github_pull_request", `{"repo":"acme/web","number":1}`, "only your task's project, acme/target")
+	w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":77}`, "only your task's project, acme/target")
 	if w.requests() != before {
 		t.Errorf("refused reads reached GitHub: %v", w.web.Requests())
 	}
@@ -330,6 +385,7 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE events SET run_id = 'run_previous_reader' WHERE run_id = $1 AND event_type = 'agent.tool.attempted'`, conductor)
 	before := w.requests()
 	w.refused(task, "github_search", `{"repo":"acme/target","kind":"issue"}`, "at most 60 GitHub reads an hour")
+	w.refused(task, "github_check_log", `{"repo":"acme/target","checkId":77}`, "at most 60 GitHub reads an hour")
 	if w.requests() != before {
 		t.Error("the 61st read reached GitHub")
 	}

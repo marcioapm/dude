@@ -85,7 +85,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,feedback,feedback_reply,findings,get_memory,"+
-		"github_issue,github_pull_request,github_search,"+
+		"github_check_log,github_issue,github_pull_request,github_search,"+
 		"list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,remember,reply_on_pull_request,"+
 		"request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
 		"restart_run,run_diff,search_memory,start_phase,steer,sync_base,update_task,wait_for_reply" {
@@ -96,7 +96,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	var out map[string]any
 	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "update_task", "steer",
 		"restart_run", "publish", "request_review", "mark_ready", "rerun_failed_checks",
-		"github_search", "github_issue", "github_pull_request"} {
+		"github_search", "github_issue", "github_pull_request", "github_check_log"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
 		}

@@ -70,11 +70,17 @@ type githubPullRequestIn struct {
 	Files  []string `json:"files,omitempty" jsonschema:"paths of changed files whose diff to read (at most 20); none reads no diff"`
 }
 
+type githubCheckLogIn struct {
+	Repo    string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
+	CheckID int64  `json:"checkId" jsonschema:"the check id from github_pull_request"`
+}
+
 // githubRead is a read checked in the call's transaction: what to ask
 // GitHub, and how its ledger event names it.
 type githubRead struct {
 	Tool, Slug string
 	Number     int
+	CheckID    int64
 	Query      string
 	Kind       string
 	State      string
@@ -114,10 +120,10 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 }
 
 // A session's and a task's GitHub reads in the last hour. Both share one
-// predicate, the WHERE of their partial indexes (migrations 135, 136),
+// predicate, the WHERE of their partial indexes (migrations 140-143),
 // written with literals, as a parameter would not prove the index's WHERE.
 const (
-	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
+	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log')
 		AND occurred_at > now() - interval '1 hour'`
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
 	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
@@ -211,6 +217,13 @@ func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPu
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_pull_request", Slug: in.Repo, Number: in.Number, Files: files})
 }
 
+func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheckLogIn) (githubRead, error) {
+	if in.CheckID <= 0 {
+		return githubRead{}, refuse("checkId is the check run's id, from 1")
+	}
+	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID})
+}
+
 // readOnGitHub makes the read. GitHub refusing it, or its rate limit, is
 // said to the agent as a refusal.
 func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessage, error) {
@@ -243,6 +256,12 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 			return nil, githubRefusal(read, err)
 		}
 		out = w.pullRequest(pr, read.Files)
+	case "github_check_log":
+		log, err := gh.CheckLog(ctx, read.Slug, read.CheckID, (16<<10)-len("…\n"))
+		if err != nil {
+			return nil, githubRefusal(read, err)
+		}
+		out = w.checkLog(log)
 	default:
 		return nil, fmt.Errorf("no GitHub read %s", read.Tool)
 	}
@@ -348,6 +367,9 @@ func readPayload(read githubRead) map[string]any {
 	payload := map[string]any{"tool": read.Tool, "repo": read.Slug}
 	if read.Number > 0 {
 		payload["number"] = read.Number
+	}
+	if read.CheckID > 0 {
+		payload["checkId"] = read.CheckID
 	}
 	if read.Tool == "github_search" {
 		payload["query"], payload["kind"] = read.Query, read.Kind
@@ -494,6 +516,8 @@ type ghCheckOut struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion,omitempty"`
+	ID         int64  `json:"id,omitempty"`
+	Log        bool   `json:"log,omitempty"`
 }
 
 type ghFileOut struct {
@@ -516,7 +540,7 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	}
 	checks := []ghCheckOut{}
 	for _, c := range p.Checks {
-		checks = append(checks, ghCheckOut{Name: w.text(c.Name, 200), Status: c.Status, Conclusion: c.Conclusion})
+		checks = append(checks, ghCheckOut{Name: w.text(c.Name, 200), Status: c.Status, Conclusion: c.Conclusion, ID: c.RunID, Log: c.App == forge.ActionsApp})
 	}
 	files := []ghFileOut{}
 	var missing []string
@@ -558,6 +582,10 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		}
 	}
 	return pr
+}
+
+func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
+	return map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
 }
 
 // fit encodes a result within resultCap, its note first. Past it, one
@@ -681,5 +709,8 @@ var githubReadTools = []tool{
 		"files it changes with their line counts; and, for the paths you name in files, their diff. Read only: reading "+
 		"a pull request lets you do nothing on it. What people wrote comes marked as external text.",
 		githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
+		readOnGitHub, recordGitHubRead),
+	around(define("github_check_log", "Read a failed check's log, or what its check run reported when it is not a GitHub Actions job or GitHub cannot provide its log. Use the check id from github_pull_request before deciding whether to rerun or fix it. Read only; the result is marked as external text.",
+		githubReaders, readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 }

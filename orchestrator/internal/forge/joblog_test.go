@@ -126,7 +126,7 @@ func TestAHugeLogIsReadToItsCapOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if huge.n > logReadMax+64<<10 {
+	if huge.n != logReadMax {
 		t.Errorf("read %d bytes, past the %d cap", huge.n, logReadMax)
 	}
 	if len(out) > 4000+len("…\n") || !strings.HasSuffix(out, "read stopped there") {
@@ -209,7 +209,9 @@ func TestAnAgentReadsACheckLog(t *testing.T) {
 	if err != nil || read.Source != "log" || !read.Actions || !strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") {
 		t.Fatalf("%+v, %v", read, err)
 	}
-	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = fakegithub.CheckRun{App: "circleci", Summary: "lint failed"} })
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns[77] = fakegithub.CheckRun{App: "circleci", Summary: "lint failed"}
+	})
 	if read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10); err != nil || read.Source != "check_run" ||
 		read.Actions || read.Text != "lint failed" {
 		t.Errorf("%+v, %v", read, err)
