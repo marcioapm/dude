@@ -16,15 +16,13 @@ import (
 // current notes, and the messages held for its task while it had no Run
 // going. Bounded by the epic's size and NotesMax.
 
-// Roles that write to their peers; the rest read them.
+// Roles that write to their peers; the rest read them. briefings/epic.md
+// tells writers epic-peer-writers.md, readers epic-peer-readers.md.
 var peerWriters = map[string]bool{RoleConductor: true, "implementer": true, "fixer": true, "investigator": true}
 
 // Roles whose Run speaks for its task (voiceSQL): messages held for the
 // task go to the next of these.
 var voices = map[string]bool{"implementer": true, "fixer": true, "investigator": true}
-
-// What a writer and a reader are told of their peers:
-// agents/briefings/epic-peer-writers.md and epic-peer-readers.md.
 
 // heldMessages caps the held messages one briefing carries; the rest stay
 // for the next.

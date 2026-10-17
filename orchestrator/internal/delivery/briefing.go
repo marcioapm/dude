@@ -120,7 +120,7 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 		return "", fmt.Errorf("briefing: the task: %w", err)
 	}
 	b := conductorBrief{Key: key, TaskID: taskID, Title: oneLine(title), Status: status, Goal: briefGoal(goal),
-		Who: person, Message: message, Why: map[briefedFor]string{byPerson: "person", byWake: "wake", rebrief: "rebrief"}[why]}
+		Who: person, Message: message, Wake: why == byWake, Rebrief: why == rebrief}
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
 	for i, c := range ac {
@@ -169,7 +169,8 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 
 // conductorBrief is what briefings/conductor.md is written from.
 type conductorBrief struct {
-	Why, Who, Message          string
+	Wake, Rebrief              bool
+	Who, Message               string
 	Key, TaskID, Title, Status string
 	Goal                       string
 	Criteria                   []string
@@ -178,7 +179,9 @@ type conductorBrief struct {
 	Digest, Epic, Replay       string
 	PullRequests               []briefPullRequest
 	Heads                      []RepoHead
-	Decider, Waiting, Step     string
+	// Who decides: no live delivery, Deliver, or else the conductor.
+	NoDelivery, DeliverDecides bool
+	Waiting, Step              string
 }
 
 // briefLines is a bounded list: its total, and the lines shown.
@@ -204,13 +207,13 @@ func briefDecider(ctx context.Context, tx pgx.Tx, b *conductorBrief, taskID stri
 	}
 	switch {
 	case d == nil || !d.Live() || Ended(d.TaskStatus):
-		b.Decider = "none"
+		b.NoDelivery = true
 	case !d.State.conducted():
-		b.Decider = "deliver"
+		b.DeliverDecides = true
 	case d.State.Decision != nil && d.State.Decision.Taken == nil:
-		b.Decider, b.Waiting = "conductor", pointLabel[d.State.Decision.Point]
+		b.Waiting = pointLabel[d.State.Decision.Point]
 	default:
-		b.Decider, b.Step = "conductor", d.Step
+		b.Step = d.Step
 	}
 	return nil
 }

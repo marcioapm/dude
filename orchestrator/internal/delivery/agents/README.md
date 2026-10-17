@@ -14,7 +14,14 @@ only which sections a Run gets and fills in the data.
 Where each is used: `prompts.go` (`Prompt`, `ConductorPrompt`),
 `session.go` (`BrainstormPrompt`, the session briefing), `briefing.go`,
 `coordination_brief.go`, `adopted_prompt.go`, `feedback.go`
-(`FeedbackText`), `machine_choices.go`.
+(`FeedbackText`, the conductor's feedback wake line), `machine_choices.go`,
+`conduct.go` (`AcceptedBy`, what the conductor's decision tools answer).
+
+Some reach agents outside a prompt too: `contracts/machine-*.md` through
+the machine tools' descriptions and refusals (`agenttools/machines.go`),
+`contracts/feedback.md` through steer messages and directives
+(`conduct_steer.go`, `feedback.go`), and `briefings/finding-accepted.md`
+through the conductor's `findings` tool (`agenttools/conductor.go`).
 
 ## Editing
 

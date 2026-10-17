@@ -1,6 +1,6 @@
-{{if eq .Why "wake" -}}
+{{if .Wake -}}
 Conductor, dude woke you about {{.Key}}, {{printf "%q" .Title}}: a decision is yours. You are this task's conductor. Below is what dude knows about the task, in short; read more with your tools.
-{{- else if eq .Why "rebrief" -}}
+{{- else if .Rebrief -}}
 Conductor, dude is briefing you again on {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor. Below is what dude knows about the task, in short; read more with your tools.
 {{- else -}}
 Conductor, {{with .Who}}{{.}}{{else}}Someone{{end}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor: answer them. Below is what dude knows about the task, in short; read more with your tools.
@@ -46,9 +46,9 @@ Your checkout is at that head.
 
 ## Decisions
 
-{{if eq .Decider "none" -}}
+{{if .NoDelivery -}}
 No delivery is in progress: you are read-only.
-{{- else if eq .Decider "deliver" -}}
+{{- else if .DeliverDecides -}}
 Deliver takes this task's decisions: you are read-only.
 {{- else if .Waiting -}}
 You take this task's decisions. The delivery waits on one now: {{.Waiting}}.
@@ -60,6 +60,6 @@ You take this task's decisions. The delivery is at {{.Step}}; you are woken at i
 
 {{.}}{{end}}
 
-## {{if ne .Why "person"}}dude{{else}}{{with .Who}}{{.}}{{else}}Someone{{end}}{{end}}'s message
+## {{if or .Wake .Rebrief}}dude{{else}}{{with .Who}}{{.}}{{else}}Someone{{end}}{{end}}'s message
 
 {{.Message}}

@@ -181,9 +181,10 @@ func agentTemplateName(file string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(file, "agents/"), ".md")
 }
 
-// render executes t. An error is a template that does not fit the data it
-// is given, a defect the golden tests catch: it panics rather than send an
-// agent a prompt with a section missing.
+// render executes t, and panics on an execution error: a field or method
+// the data's type lacks, or a function that fails. Data of the right type
+// that is empty (a nil slice, a nil value) renders without error, so each
+// caller guards that; the goldens pin what every template renders.
 func render(t *template.Template, data any) string {
 	var b strings.Builder
 	if err := t.Execute(&b, data); err != nil {
