@@ -1,7 +1,8 @@
 // Package llm is how the orchestrator speaks to the LLM proxy itself: which
 // of the agent image's two providers a model goes through, the models the
-// proxy lists, and a test message to one. It holds the proxy's key
-// (DUDE_LLM_KEY); the backend never does.
+// proxy lists, a test message to one, and a direct Chat Completions call
+// (Complete). It holds the proxy's key (DUDE_LLM_KEY); the backend never
+// does.
 package llm
 
 import (
@@ -90,7 +91,10 @@ type Client struct {
 	Timeout time.Duration
 }
 
-// TestTimeout bounds one test message.
+// TestTimeout bounds one test message, and judge.Test's test question. It
+// must stay below the backend's wait for either (testMessageMs, 35 s, in
+// apps/control-plane/src/config.ts), so a slow proxy is reported from here
+// rather than as the backend giving up.
 const TestTimeout = 30 * time.Second
 
 // testMaxTokens keeps a test message tiny: it checks the model answers,

@@ -354,6 +354,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
             <Label>EntityLine, in a table cell</Label>
             <EntityLine lead={<Icon name="memory" size={16} />} name="Run the control-plane tests against a throwaway database"
               detail="Procedure · learned on WI-2402 · 2h ago" trailing={<Badge size="sm" icon="archive">Archived</Badge>} />
+            <Label>EntityLine wrap: a question that reads whole, in a narrow cell</Label>
+            <span style={{ display: "block", maxWidth: 240 }}>
+              <EntityLine size="sm" wrap name="Should the fixer act on this review comment, or is it a question for the author?"
+                detail="ACME-28 · acme#5477" />
+            </span>
             <Label>AuthorLine: a person, an agent for a person, dude</Label>
             <AuthorLine author={{ kind: "person", person: { id: "ana", name: "Ana Ribeiro" } }} />
             <AuthorLine author={{ kind: "agent", person: { id: "marcio", name: "Márcio Martins" }, role: "implementer", task: "WI-2402" }} />

@@ -1,0 +1,16 @@
+.asked { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.question { color: var(--ds-color-text-strong); }
+.about { color: var(--ds-color-text-muted); font-size: var(--ds-text-sm, 12px); }
+.clickRow { cursor: pointer; }
+.clickRow:hover td, .clickRow:focus-visible td { background: var(--ds-color-hover, var(--ds-color-sunken)); }
+.clickRow:focus-visible { outline: 2px solid var(--ds-color-focus, currentColor); outline-offset: -2px; }
+.empty { display: flex; flex-direction: column; gap: 4px; padding: 24px; border: 1px dashed var(--ds-color-border); border-radius: 8px; color: var(--ds-color-text-muted); text-align: center; }
+.emptyTitle { color: var(--ds-color-text-strong); font-weight: 600; }
+.answer { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 8px; background: var(--ds-color-sunken); }
+.answerHead { display: flex; align-items: center; gap: 10px; }
+.sure { color: var(--ds-color-text-secondary); font-family: var(--ds-font-mono); font-size: 13px; }
+.reasoning { margin: 0; color: var(--ds-color-text); line-height: 1.5; }
+.pre { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--ds-color-sunken); font-family: var(--ds-font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.quote { color: var(--ds-color-text-secondary); }
+.newTitle { display: inline-flex; align-items: center; gap: 8px; }
+.judgeFace { display: inline-flex; }
