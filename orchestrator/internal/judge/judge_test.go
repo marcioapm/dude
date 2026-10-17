@@ -359,6 +359,38 @@ func TestACallerDeadlineStillRecordsTheCall(t *testing.T) {
 	}
 }
 
+// A proxy error that echoes the proxy's key or a project secret is stored redacted.
+func TestAnEchoedKeyInAProxyErrorIsRedacted(t *testing.T) {
+	w := setup(t, func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid key sk-test for a body naming s3cr3t-value-42"}}`))
+	}, true)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_judge', $1, 'Web', 'web', 'WEB')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_judge', $1, 'prj_judge', 1, 'T', 'G')`,
+		`INSERT INTO project_secrets (project_id, organization_id, name, value, hint) VALUES ('prj_judge', $1, 'API_KEY', 's3cr3t-value-42', '-42')`,
+	} {
+		if _, err := w.owner.Exec(ctx, q, w.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := "wi_judge"
+	a := ask
+	a.TaskID = &task
+	if _, err := w.svc.Judge(ctx, w.org, a); err == nil {
+		t.Fatal("no error")
+	}
+	got := w.calls(t)
+	if len(got) != 1 || got[0].Error == nil {
+		t.Fatalf("recorded %+v", got)
+	}
+	want := "the LLM proxy answered 401: invalid key [REDACTED:DUDE_LLM_KEY] for a body naming [REDACTED:API_KEY]"
+	if *got[0].Error != want {
+		t.Errorf("error = %q, want %q", *got[0].Error, want)
+	}
+}
+
 // The test question goes the same way and is not recorded.
 func TestTheTestQuestionIsNotRecorded(t *testing.T) {
 	w := setup(t, answering(`{"decision":"yes","confidence":0.99,"reasoning":"Rayleigh scattering."}`), false)

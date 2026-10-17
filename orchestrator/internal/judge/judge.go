@@ -133,11 +133,14 @@ func orgTier(ctx context.Context, tx pgx.Tx) (Tier, error) {
 	return LoadTier(ctx, tx, *id)
 }
 
-// redactor redacts what a call stores: the tier's header values, which
-// may be credentials, and, for a question about a task, its project's
-// secret values.
-func redactor(ctx context.Context, tx pgx.Tx, taskID *string, headers map[string]string) (*redact.Redactor, error) {
+// redactor redacts what a call stores: the proxy's key (a proxy may echo
+// it in an error), the tier's header values, which may be credentials,
+// and, for a question about a task, its project's secret values.
+func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, headers map[string]string) (*redact.Redactor, error) {
 	var list []redact.Secret
+	if proxyKey != "" {
+		list = append(list, redact.Secret{Name: "DUDE_LLM_KEY", Value: proxyKey})
+	}
 	for name, value := range headers {
 		list = append(list, redact.Secret{Name: name, Value: value})
 	}
@@ -172,7 +175,7 @@ func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, err
 		if tier, err = orgTier(ctx, tx); err != nil {
 			return err
 		}
-		red, err = redactor(ctx, tx, ask.TaskID, tier.Headers)
+		red, err = redactor(ctx, tx, s.LLM.Key, ask.TaskID, tier.Headers)
 		return err
 	})
 	if err != nil {

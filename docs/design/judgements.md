@@ -82,8 +82,10 @@ security like every tenant table:
 The task and tier keys are composite with `organization_id`, so a row
 cannot name another organisation's. The request, response, result and
 error are redacted (`internal/redact`) before they are stored: with the
-tier's header values, and, for a question about a task, its project's
-secret values. The model itself is sent the text unredacted.
+proxy's key (`DUDE_LLM_KEY`), the tier's header values, and, for a
+question about a task, its project's secret values. Values shorter than
+`redact.MinLength` (6 bytes) are not redacted. The model itself is sent
+the text unredacted.
 
 ## The API
 
