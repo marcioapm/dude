@@ -298,10 +298,14 @@ func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	w.gh.AdvanceBase("main", "Base moved")
+	var reads atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
 			if strings.HasSuffix(r.URL.Path, "/update-branch") {
 				w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+			}
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls/1") {
+				reads.Add(1)
 			}
 			return 0
 		}
@@ -314,9 +318,13 @@ func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 	// Unpumped, the workflow stays at awaitPullRequest on the refused head.
 	// Read clean again, each sync sees it behind, as the refused one did,
 	// and must not ask GitHub a second time.
+	reads.Store(0)
 	for range 2 {
 		w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
 		w.sync()
+	}
+	if n := reads.Load(); n < 2 {
+		t.Fatalf("the later syncs read the pull request %d times, want at least 2", n)
 	}
 	var updates int
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -326,8 +334,11 @@ func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 			}
 		}
 	})
-	if updates != 1 || w.gh.SHA(branch) != head {
-		t.Fatalf("%d update-branch requests for head %s (now %s), want 1", updates, head, w.gh.SHA(branch))
+	if updates != 1 {
+		t.Fatalf("%d update-branch requests for head %s, want 1", updates, head)
+	}
+	if now := w.gh.SHA(branch); now != head {
+		t.Fatalf("the refused head %s moved to %s before the integration", head, now)
 	}
 	if n := w.count(refused, wi); n != 1 {
 		t.Fatalf("%d refused updates recorded", n)
