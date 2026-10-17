@@ -99,6 +99,10 @@ var (
 	noteReplacedTmpl    = mustTemplate("notices/note-replaced")
 	noteRetiredTmpl     = mustTemplate("notices/note-retired")
 	peerEndedTmpl       = mustTemplate("notices/peer-ended")
+
+	integrationFixTmpl       = mustTemplate("briefings/integration-fix")
+	integrationMergeWhenTmpl = mustTemplate("briefings/integration-merge-when")
+	integrationReviewTmpl    = mustTemplate("briefings/integration-review")
 )
 
 // mustTemplate is the named template, or a panic naming its file.

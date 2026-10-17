@@ -1,0 +1,1 @@
+Review integration at {{.}}: run `git show --remerge-diff {{.}}` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.

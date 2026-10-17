@@ -2610,6 +2610,4 @@ func escalatedLine(reason string, actions []string) string {
 
 // integrationReviewBrief is what a reviewer of an integration merge (sha)
 // is given as feedback.
-func integrationReviewBrief(sha string) string {
-	return fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", sha, sha)
-}
+func integrationReviewBrief(sha string) string { return render(integrationReviewTmpl, sha) }
