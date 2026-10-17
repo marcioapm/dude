@@ -126,7 +126,7 @@ func workspaceNote(repos []PromptRepo, phase string) string {
 	if len(repos) == 1 && !repos[0].ReadOnly {
 		return ""
 	}
-	return render("contracts/workspace", struct {
+	return render(workspaceTmpl, struct {
 		Repos        []PromptRepo
 		Review, Test bool
 	}{repos, phase == PhaseReview, phase == PhaseTest})
@@ -145,7 +145,7 @@ func CriteriaList(criteria []string) string {
 }
 
 func (in PromptInput) task() string {
-	return render("contracts/task", struct {
+	return render(taskTmpl, struct {
 		Title, Goal string
 		Criteria    []string
 		Decisions   []Decision
@@ -160,7 +160,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
 // Each is agents/contracts/review-focus/<category>.md.
-var reviewFocus = agentTexts("contracts/review-focus/")
+var reviewFocus = agentTexts("contracts/review-focus/", reviewerOrder...)
 
 // reviewContract is how every reviewer works and what its reply carries,
 // whatever its instructions say: findings a fixer can act on and a person
@@ -175,7 +175,7 @@ const (
 
 // rangeReason says why a review covers only its range, by ReviewRange.Of:
 // agents/contracts/review-range/<of>.md.
-var rangeReason = agentTexts("contracts/review-range/")
+var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix)
 
 // reviewContractFor is the review contract with the range the reviewer
 // establishes: the whole branch when base is empty, else the commits named,
@@ -190,7 +190,7 @@ func reviewContractFor(base map[string]string, of string, checkouts int) string 
 	for _, repo := range slices.Sorted(maps.Keys(base)) {
 		ranges = append(ranges, reviewRange{repo, base[repo], len(base) > 1 || checkouts > 1})
 	}
-	return render("contracts/review", struct {
+	return render(reviewTmpl, struct {
 		Ranges []reviewRange
 		Reason string
 	}{ranges, rangeReason[of]})
@@ -199,16 +199,16 @@ func reviewContractFor(base map[string]string, of string, checkouts int) string 
 // reviewSummary closes a review's reply. Its fields sit indented under
 // `review_summary:`, so ParseFindings reads the document as one untitled
 // block and drops it, as it drops any document without a title.
-var reviewSummary = render("contracts/review-summary", nil)
+var reviewSummary = render(mustTemplate("contracts/review-summary"), nil)
 
-var findingFormat = render("contracts/finding-format", nil)
+var findingFormat = render(mustTemplate("contracts/finding-format"), nil)
 
 // earlierFindings asks a re-review to judge what the last round raised.
 // Whether a finding was fixed is the reviewer's call, made by reading the
 // code — not inferred from which files a fix touched, which retires a
 // finding at line 40 because line 200 of the same file changed.
 func earlierFindings(findings []Finding) string {
-	return render("contracts/earlier-findings", findings)
+	return render(earlierFindingsTmpl, findings)
 }
 
 // severityNote tells a reviewer what its severities cause, from the
@@ -218,47 +218,47 @@ func severityNote(blocking []string) string {
 	if len(blocking) == 0 {
 		return ""
 	}
-	return render("contracts/severity", blocking)
+	return render(severityTmpl, blocking)
 }
 
 // fixContract is how every fix is made, whatever the fixer's instructions
 // say: a defect shown before it is changed, and shown gone after.
-var fixContract = render("contracts/fix", nil)
+var fixContract = render(mustTemplate("contracts/fix"), nil)
 
 // implementContract asks the implementer to check its own work: the
 // independent tester after it verifies, but does not do this for it.
-var implementContract = render("contracts/implement", nil)
+var implementContract = render(mustTemplate("contracts/implement"), nil)
 
 // Every phase that changes code commits it; lux pushes what was committed.
 // Uncommitted work is not part of the result, and saying so is cheaper than
 // discovering an empty push. The image's commit hook adds the task's people
 // as Co-authored-by trailers; an agent editing them would undo it.
-var commitNote = render("contracts/commit", nil)
+var commitNote = render(mustTemplate("contracts/commit"), nil)
 
 // Every move of the task branch is a fast-forward, so a writer brings the
 // base in by merging it: a rebase would never publish, and would orphan
 // review threads tied to the old commits. dude's, like commitNote: an
 // organisation's prompt does not drop it.
-var baseIntegrationNote = render("contracts/base-integration", nil)
+var baseIntegrationNote = render(mustTemplate("contracts/base-integration"), nil)
 
 // conductorBaseNote is baseIntegrationNote for the conductor, which runs
 // no tests and publishes with its tool.
-var conductorBaseNote = render("contracts/conductor-base", nil)
+var conductorBaseNote = render(mustTemplate("contracts/conductor-base"), nil)
 
 // testerContract is what a person merging the change relies on from the
 // tester, whatever its instructions say: every criterion accounted for in
 // one report, evidence behind each pass, and a product it did not touch.
-var testerContract = render("contracts/tester", nil)
+var testerContract = render(mustTemplate("contracts/tester"), nil)
 
 // testerTools is how the tester drives a browser and records it. Playwright
 // and Chromium are in the runtime image (images/runtime); the evidence is
 // published as files people open next to the task.
-var testerTools = render("contracts/tester-tools", nil)
+var testerTools = render(mustTemplate("contracts/tester-tools"), nil)
 
 // publishNote tells an agent how to hand a person something that is not
 // code. Every phase may: an implementer's design notes, a reviewer's
 // reproduction, a tester's screenshots.
-var publishNote = render("contracts/publish", nil)
+var publishNote = render(mustTemplate("contracts/publish"), nil)
 
 // ask is how this agent stops for a person: dude's ask_person tool.
 // Without dude's tools it cannot ask, and decides for itself.
@@ -269,17 +269,17 @@ func (in PromptInput) ask() []string {
 	return nil
 }
 
-var askToolNote = render("contracts/ask", nil)
+var askToolNote = render(mustTemplate("contracts/ask"), nil)
 
 // toolsNote tells an agent about dude's tools.
-var toolsNote = render("contracts/tools", nil)
+var toolsNote = render(mustTemplate("contracts/tools"), nil)
 
 // cliNote tells an agent about the dude CLI.
-var cliNote = render("contracts/cli", nil)
+var cliNote = render(mustTemplate("contracts/cli"), nil)
 
 // fixerGitHubNote tells a fixer of pull request feedback how it answers
 // on GitHub: through dude, on the comments it was given only.
-var fixerGitHubNote = render("contracts/fixer-github", nil)
+var fixerGitHubNote = render(mustTemplate("contracts/fixer-github"), nil)
 
 // PromptRoleForPhase is whose prompt and settings each phase runs with: an
 // agent role, or the fixer's — the implementer's model, told something
@@ -362,7 +362,7 @@ func (in PromptInput) instructions(role string) (lead, tail []string) {
 
 // conductorToolsNote is the conductor's own tools: the read ones, its
 // decisions, and create_task for a change it is asked for.
-var conductorToolsNote = render("contracts/conductor-tools", struct{ ExternalTextNote string }{ExternalTextNote})
+var conductorToolsNote = render(mustTemplate("contracts/conductor-tools"), struct{ ExternalTextNote string }{ExternalTextNote})
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
@@ -372,12 +372,12 @@ var conductorToolsNote = render("contracts/conductor-tools", struct{ ExternalTex
 // phase's prompt, and a saved prompt's {{task.goal}} does too.
 func ConductorPrompt(briefing string, in PromptInput) string {
 	in = in.withImages()
-	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), render("contracts/how-you-work", nil)}
+	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), render(howYouWorkTmpl, nil)}
 	lead, _ := in.instructions(RoleConductor)
 	for _, s := range lead {
 		sections = append(sections, in.fill(s))
 	}
-	sections = append(sections, render("contracts/conductor-checkout", struct {
+	sections = append(sections, render(conductorCheckoutTmpl, struct {
 		Repos      []PromptRepo
 		TaskBranch string
 	}{in.Repositories, in.TaskBranch}))
@@ -388,7 +388,7 @@ func ConductorPrompt(briefing string, in PromptInput) string {
 		sections = append(sections, conductorToolsNote)
 	}
 	if c := strings.TrimSpace(in.Context); c != "" {
-		sections = append(sections, render("contracts/project-notes", c))
+		sections = append(sections, render(projectNotesTmpl, c))
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -428,13 +428,13 @@ func Prompt(phase string, in PromptInput) string {
 		if reviewFocus[category] == "" {
 			category = "correctness"
 		}
-		add(render("contracts/review-lead", category), reviewFocus[category])
+		add(render(reviewLeadTmpl, category), reviewFocus[category])
 		add(lead...)
 		contract := reviewContract
 		if len(in.ReviewBase) > 0 {
 			contract = reviewContractFor(in.ReviewBase, in.ReviewOf, len(in.Repositories))
 		}
-		add(render("contracts/task-under-review", in.task()), contract, findingFormat, reviewSummary)
+		add(render(taskUnderReviewTmpl, in.task()), contract, findingFormat, reviewSummary)
 		for _, f := range in.PRFeedback {
 			if f.Source == "integration" {
 				add(f.Body)
@@ -450,7 +450,7 @@ func Prompt(phase string, in PromptInput) string {
 	case PhaseFix:
 		add(lead...)
 		if len(in.Findings) > 0 {
-			add(render("contracts/review-findings", in.Findings))
+			add(render(reviewFindingsTmpl, in.Findings))
 		}
 		if len(in.PRFeedback) > 0 {
 			type item struct {
@@ -466,10 +466,10 @@ func Prompt(phase string, in PromptInput) string {
 				items = append(items, item{f, in.Tools})
 			}
 			if len(items) > 0 {
-				add(render("contracts/pr-feedback", items))
+				add(render(prFeedbackTmpl, items))
 			}
 			if len(bots) > 0 {
-				add(render("contracts/pr-feedback-bots", bots))
+				add(render(prFeedbackBotsTmpl, bots))
 			}
 			if in.Tools {
 				add(fixerGitHubNote)
@@ -481,13 +481,13 @@ func Prompt(phase string, in PromptInput) string {
 		add(tail...)
 		add(fixContract)
 		add(commitNote, baseIntegrationNote)
-		add(render("contracts/task-for-context", in.task()))
+		add(render(taskForContextTmpl, in.task()))
 		add(in.ask()...)
 
 	case PhaseSimplify:
 		add(lead...)
 		add(commitNote, baseIntegrationNote)
-		add(render("contracts/task-implemented", in.task()))
+		add(render(taskImplementedTmpl, in.task()))
 
 	case PhaseTest:
 		add(lead...)
@@ -505,10 +505,10 @@ func Prompt(phase string, in PromptInput) string {
 	}
 
 	if n := strings.TrimSpace(in.ConductorNote); n != "" {
-		add(render("contracts/from-conductor", n))
+		add(render(fromConductorTmpl, n))
 	}
 	if n := strings.TrimSpace(in.RestartNote); n != "" {
-		add(render("contracts/restarted", n))
+		add(render(restartedTmpl, n))
 	}
 	if c := strings.TrimSpace(in.Coordination); c != "" {
 		add(c)
@@ -530,7 +530,7 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
-		add(render("contracts/project-notes", c))
+		add(render(projectNotesTmpl, c))
 	}
 	if in.Machine != "" {
 		add(in.Machine)

@@ -68,7 +68,7 @@ func EpicBriefing(ctx context.Context, tx pgx.Tx, org, taskID, runID, role strin
 	for _, n := range notes {
 		by := n.By
 		if n.Session != "" {
-			by = render("briefings/epic-note-from-session", n.By)
+			by = render(epicNoteFromSessionTmpl, n.By)
 		}
 		data.Notes = append(data.Notes, told{n.N, strings.ReplaceAll(n.Text, "\n", "\n   "), by})
 		if runID == "" {
@@ -79,7 +79,7 @@ func EpicBriefing(ctx context.Context, tx pgx.Tx, org, taskID, runID, role strin
 			return "", err
 		}
 	}
-	brief := render("briefings/epic", data)
+	brief := render(epicTmpl, data)
 	if !voices[role] {
 		return brief, nil
 	}
@@ -146,7 +146,7 @@ func heldForTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) (strin
 			return "", err
 		}
 	}
-	return render("briefings/epic-held", out), nil
+	return render(epicHeldTmpl, out), nil
 }
 
 // The conductor's digest: what happened on its task's epic since it was
@@ -241,7 +241,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 		if total > len(msgs) {
 			more = total - len(msgs)
 		}
-		groups = append(groups, render("briefings/digest-messages", struct {
+		groups = append(groups, render(digestMessagesTmpl, struct {
 			Key      string
 			Messages []shown
 			More     int
@@ -286,7 +286,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 			}
 			digestChanges = append(digestChanges, item)
 		}
-		groups = append(groups, render("briefings/digest-notes", lines))
+		groups = append(groups, render(digestNotesTmpl, lines))
 	}
 
 	// Peers whose status changed: its latest change since, one line each.
@@ -316,7 +316,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 			lines = append(lines, shown{p.Key, strings.ReplaceAll(p.Status, "_", " "), p.At.UTC().Format("15:04")})
 			digestPeersOut = append(digestPeersOut, map[string]any{"task": p.Key, "status": p.Status, "at": p.At})
 		}
-		groups = append(groups, render("briefings/digest-peers", lines))
+		groups = append(groups, render(digestPeersTmpl, lines))
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE conductor_digests SET through = $2 WHERE task_id = $1`, taskID, now); err != nil {
@@ -334,7 +334,7 @@ func ConductorDigestTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, where
 			return "", err
 		}
 	}
-	return render("briefings/digest", struct {
+	return render(digestTmpl, struct {
 		Since, Through string
 		Groups         []string
 	}{since.UTC().Format("15:04"), now.UTC().Format("15:04"), groups}), nil

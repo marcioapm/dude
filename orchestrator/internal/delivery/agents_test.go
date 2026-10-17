@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -50,4 +51,18 @@ func TestEveryAgentTemplateParses(t *testing.T) {
 	if _, err := loadRoles(fstest.MapFS{"agents/roles/fixer.md": {Data: []byte("  \n")}}); err == nil {
 		t.Error("an empty role file loads")
 	}
+	including := fstest.MapFS{"agents/contracts/a.md": {Data: []byte("x{{if .}}{{template \"contracts/gone\"}}{{end}}\n")}}
+	if _, err := parseAgentTemplates(including); err == nil || !strings.Contains(err.Error(), "agents/contracts/gone.md") {
+		t.Errorf("a template including a missing one loads: %v", err)
+	}
+}
+
+// A name Go renders that has no file panics, naming the file.
+func TestAMissingTemplateNamesItsFile(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "agents/contracts/gone.md") {
+			t.Errorf("mustTemplate of a missing name: %v", r)
+		}
+	}()
+	mustTemplate("contracts/gone")
 }

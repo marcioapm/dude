@@ -277,7 +277,7 @@ func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) 
 	if replay != "" {
 		about += "\n\n" + replay
 	}
-	return about + "\n\n" + render("briefings/session-first-message", message), nil
+	return about + "\n\n" + render(sessionFirstMessageTmpl, message), nil
 }
 
 // sessionAbout is the session as its agent is briefed on it: its name,
@@ -328,7 +328,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 		}
 		data.Projects = append(data.Projects, linked)
 	}
-	return render("briefings/session", data), nil
+	return render(sessionTmpl, data), nil
 }
 
 // Member is a person in a session, or invited to it.
@@ -352,10 +352,10 @@ func SessionMembers(ctx context.Context, tx pgx.Tx, sessionID string) ([]Member,
 // BrainstormPrompt is the brainstorm's first prompt: the briefing, then
 // how it works, its repositories and its tools.
 func BrainstormPrompt(briefing string, in PromptInput) string {
-	sections := []string{briefing, render("contracts/how-you-work", nil)}
+	sections := []string{briefing, render(howYouWorkTmpl, nil)}
 	lead, _ := in.instructions(RoleBrainstorm)
 	sections = append(sections, lead...)
-	sections = append(sections, render("contracts/brainstorm-checkouts", in.Repositories))
+	sections = append(sections, render(brainstormCheckoutsTmpl, in.Repositories))
 	if in.Anywhere {
 		sections = append(sections, brainstormWebNote)
 	}
@@ -364,26 +364,26 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 	}
 	sections = append(sections, brainstormPublishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
-		sections = append(sections, render("contracts/brainstorm-notes", c))
+		sections = append(sections, render(brainstormNotesTmpl, c))
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-var brainstormToolsNote = render("contracts/brainstorm-tools", struct{ ExternalTextNote string }{ExternalTextNote})
+var brainstormToolsNote = render(mustTemplate("contracts/brainstorm-tools"), struct{ ExternalTextNote string }{ExternalTextNote})
 
 // brainstormWebNote is said only to a brainstorm whose network is
 // unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
 // or "*" in either list. It is dude's, after the instructions, so an
 // organisation's own prompt does not drop it.
-var brainstormWebNote = render("contracts/brainstorm-web", nil)
+var brainstormWebNote = render(mustTemplate("contracts/brainstorm-web"), nil)
 
 // brainstormNamingNote is when the agent names its session. The rule
 // that a person's name stays is name_session's own, not only these words.
-var brainstormNamingNote = render("contracts/brainstorm-naming", nil)
+var brainstormNamingNote = render(mustTemplate("contracts/brainstorm-naming"), nil)
 
 // brainstormPublishNote is how the agent hands the members a document. Its
 // files are listed beside the session, for its members alone.
-var brainstormPublishNote = render("contracts/brainstorm-publish", nil)
+var brainstormPublishNote = render(mustTemplate("contracts/brainstorm-publish"), nil)
 
 // SessionHandOver settles what members sent an ended brainstorm and it
 // never read: each goes, in order and with its writer, to the session's
@@ -533,7 +533,7 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 			map[string]any{"questionId": q.ID, "by": "withdrawn"})); err != nil {
 			return err
 		}
-		if err := TellBrainstorm(ctx, tx, org, sessionID, render("briefings/question-withdrawn", struct{ Name, Prompt string }{name, q.Prompt})); err != nil {
+		if err := TellBrainstorm(ctx, tx, org, sessionID, render(questionWithdrawnTmpl, struct{ Name, Prompt string }{name, q.Prompt})); err != nil {
 			return err
 		}
 	}

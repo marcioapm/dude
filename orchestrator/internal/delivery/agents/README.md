@@ -34,9 +34,11 @@ Where each is used: `prompts.go` (`Prompt`, `ConductorPrompt`),
   `{{run.branch}}` and `{{run.base_ref}}` are a different mechanism
   (`fill` in `prompts.go`) applied to an organisation's or project's text,
   never to these files.
-- Every file is parsed when the orchestrator starts: one that is missing,
-  empty or does not parse stops it, and `go test ./internal/delivery`
-  fails (`agents_test.go`).
+- Every file is parsed when the orchestrator starts, and every template
+  name the Go code renders or a file includes with `{{template}}` is
+  looked up then (`mustTemplate` and the handles in `agents.go`). A file
+  that is missing, empty or does not parse stops the orchestrator at
+  startup, and `go test ./internal/delivery` fails.
 
 ## Golden files
 

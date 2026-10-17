@@ -77,7 +77,7 @@ const (
 
 // lostConversation is dude's message in a talker's briefing again, after
 // its harness restarted without the conversation (Rebriefing).
-var lostConversation = render("briefings/lost-conversation", nil)
+var lostConversation = render(mustTemplate("briefings/lost-conversation"), nil)
 
 // Rebriefing is the briefing of a talker whose harness restarted without
 // its conversation (lux started a blank session on resume), in dude's own
@@ -90,7 +90,7 @@ var lostConversation = render("briefings/lost-conversation", nil)
 func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (string, error) {
 	message := lostConversation
 	if reason != "" {
-		message += "\n\n" + render("briefings/lost-conversation-reason", reason)
+		message += "\n\n" + render(lostConversationReasonTmpl, reason)
 	}
 	if ref.SessionID != "" {
 		about, err := sessionAbout(ctx, tx, ref.SessionID)
@@ -104,7 +104,7 @@ func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (stri
 		if replay != "" {
 			about += "\n\n" + replay
 		}
-		return render("briefings/rebrief-session", message+"\n\n"+about), nil
+		return render(rebriefSessionTmpl, message+"\n\n"+about), nil
 	}
 	return briefing(ctx, tx, ref.TaskID, ref.RunID, "dude", message, rebrief)
 }
@@ -170,7 +170,7 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if b.Replay, err = Replay(ctx, tx, Talker{TaskID: taskID}); err != nil {
 		return "", err
 	}
-	return render("briefings/conductor", b), nil
+	return render(conductorTmpl, b), nil
 }
 
 // conductorBrief is what briefings/conductor.md is written from.
@@ -252,7 +252,7 @@ func briefRuns(ctx context.Context, tx pgx.Tx, taskID, self string) (briefLines,
 		if outcome == "" {
 			outcome = firstLine(r.Said)
 		}
-		line := render("briefings/run-line", struct{ ID, What, Role, Status, Outcome string }{r.ID, what, r.Role, r.Status, outcome})
+		line := render(runLineTmpl, struct{ ID, What, Role, Status, Outcome string }{r.ID, what, r.Role, r.Status, outcome})
 		out.Lines = append(out.Lines, clip(line, briefRunLineChars))
 	}
 	return out, nil
@@ -293,7 +293,7 @@ func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, e
 		if where != "" && f.Line > 0 {
 			where = fmt.Sprintf("%s:%d", f.File, f.Line)
 		}
-		out.Lines = append(out.Lines, render("briefings/finding-line", struct{ ID, Severity, Category, Where, Settled string }{
+		out.Lines = append(out.Lines, render(findingLineTmpl, struct{ ID, Severity, Category, Where, Settled string }{
 			f.ID, f.Severity, f.Category, where, settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)}))
 	}
 	return out, nil
@@ -304,7 +304,7 @@ func settled(status, by string, attempts int, note string) string {
 	if status == "accepted" {
 		return AcceptedBy(note)
 	}
-	return render("briefings/finding-settled", struct {
+	return render(findingSettledTmpl, struct {
 		Status, By string
 		Attempts   int
 	}{status, by, attempts})

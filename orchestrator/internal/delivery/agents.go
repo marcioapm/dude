@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 	"text/template"
+	"text/template/parse"
 )
 
 // What dude tells agents lives in Markdown under agents/ (its README says
@@ -14,13 +15,71 @@ import (
 // plain text; contracts/ and briefings/ are text/template files, each
 // named by its path without ".md" ("contracts/commit"). A file's one
 // trailing newline is not part of its text. Every file is read and parsed
-// when the package initialises: one that is missing or fails to parse
-// stops the process at startup, never renders empty.
+// when the package initialises, and every name Go renders is resolved then
+// (mustTemplate, agentTexts' keys) as is every {{template}} a file
+// includes: a file that is missing, empty or does not parse panics at
+// startup instead of on the first prompt that needs it.
 //
 //go:embed agents/roles/*.md agents/contracts agents/briefings
 var agentFiles embed.FS
 
 var agentTemplates = mustParse(parseAgentTemplates(agentFiles))
+
+// The templates rendered with data, resolved at init by mustTemplate.
+var (
+	conductorTmpl              = mustTemplate("briefings/conductor")
+	digestTmpl                 = mustTemplate("briefings/digest")
+	digestMessagesTmpl         = mustTemplate("briefings/digest-messages")
+	digestNotesTmpl            = mustTemplate("briefings/digest-notes")
+	digestPeersTmpl            = mustTemplate("briefings/digest-peers")
+	epicTmpl                   = mustTemplate("briefings/epic")
+	epicHeldTmpl               = mustTemplate("briefings/epic-held")
+	epicNoteFromSessionTmpl    = mustTemplate("briefings/epic-note-from-session")
+	findingAcceptedTmpl        = mustTemplate("briefings/finding-accepted")
+	findingLineTmpl            = mustTemplate("briefings/finding-line")
+	findingSettledTmpl         = mustTemplate("briefings/finding-settled")
+	lostConversationReasonTmpl = mustTemplate("briefings/lost-conversation-reason")
+	questionWithdrawnTmpl      = mustTemplate("briefings/question-withdrawn")
+	rebriefSessionTmpl         = mustTemplate("briefings/rebrief-session")
+	runLineTmpl                = mustTemplate("briefings/run-line")
+	sessionTmpl                = mustTemplate("briefings/session")
+	sessionFirstMessageTmpl    = mustTemplate("briefings/session-first-message")
+	adoptedPrTmpl              = mustTemplate("contracts/adopted-pr")
+	baseTmpl                   = mustTemplate("contracts/base")
+	brainstormCheckoutsTmpl    = mustTemplate("contracts/brainstorm-checkouts")
+	brainstormNotesTmpl        = mustTemplate("contracts/brainstorm-notes")
+	conductorCheckoutTmpl      = mustTemplate("contracts/conductor-checkout")
+	continueTmpl               = mustTemplate("contracts/continue")
+	earlierFindingsTmpl        = mustTemplate("contracts/earlier-findings")
+	feedbackTmpl               = mustTemplate("contracts/feedback")
+	fromConductorTmpl          = mustTemplate("contracts/from-conductor")
+	howYouWorkTmpl             = mustTemplate("contracts/how-you-work")
+	machineTmpl                = mustTemplate("contracts/machine")
+	machineNothingTmpl         = mustTemplate("contracts/machine-nothing")
+	machineOfferTmpl           = mustTemplate("contracts/machine-offer")
+	prFeedbackTmpl             = mustTemplate("contracts/pr-feedback")
+	prFeedbackBotsTmpl         = mustTemplate("contracts/pr-feedback-bots")
+	projectNotesTmpl           = mustTemplate("contracts/project-notes")
+	restartedTmpl              = mustTemplate("contracts/restarted")
+	reviewTmpl                 = mustTemplate("contracts/review")
+	reviewFindingsTmpl         = mustTemplate("contracts/review-findings")
+	reviewLeadTmpl             = mustTemplate("contracts/review-lead")
+	severityTmpl               = mustTemplate("contracts/severity")
+	taskTmpl                   = mustTemplate("contracts/task")
+	taskForContextTmpl         = mustTemplate("contracts/task-for-context")
+	taskImplementedTmpl        = mustTemplate("contracts/task-implemented")
+	taskUnderReviewTmpl        = mustTemplate("contracts/task-under-review")
+	workspaceTmpl              = mustTemplate("contracts/workspace")
+)
+
+// mustTemplate is the named template, or a panic naming its file.
+func mustTemplate(name string) *template.Template {
+	t := agentTemplates.Lookup(name)
+	if t == nil {
+		panic(fmt.Sprintf("agents/%s.md is missing", name))
+	}
+	return t
+}
 
 func mustParse(t *template.Template, err error) *template.Template {
 	if err != nil {
@@ -72,7 +131,45 @@ func parseAgentTemplates(fsys fs.FS) (*template.Template, error) {
 		}
 		return nil
 	})
-	return root, err
+	if err != nil {
+		return nil, err
+	}
+	// text/template resolves {{template "x"}} only when it executes.
+	for _, t := range root.Templates() {
+		if t.Tree == nil {
+			continue
+		}
+		for _, name := range includedTemplates(t.Tree.Root) {
+			if root.Lookup(name) == nil {
+				return nil, fmt.Errorf("agents/%s.md includes agents/%s.md, which is missing", t.Name(), name)
+			}
+		}
+	}
+	return root, nil
+}
+
+// includedTemplates are the names of the {{template}} actions under n.
+func includedTemplates(n parse.Node) []string {
+	switch n := n.(type) {
+	case *parse.TemplateNode:
+		return []string{n.Name}
+	case *parse.ListNode:
+		if n == nil {
+			return nil
+		}
+		var out []string
+		for _, c := range n.Nodes {
+			out = append(out, includedTemplates(c)...)
+		}
+		return out
+	case *parse.IfNode:
+		return append(includedTemplates(n.List), includedTemplates(n.ElseList)...)
+	case *parse.RangeNode:
+		return append(includedTemplates(n.List), includedTemplates(n.ElseList)...)
+	case *parse.WithNode:
+		return append(includedTemplates(n.List), includedTemplates(n.ElseList)...)
+	}
+	return nil
 }
 
 // agentTemplateName is a file's template name: "agents/contracts/commit.md"
@@ -81,24 +178,29 @@ func agentTemplateName(file string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(file, "agents/"), ".md")
 }
 
-// render executes the named template. An error is a template that does not
-// fit the data it is given, a defect the golden tests catch: it panics
-// rather than send an agent a prompt with a section missing.
-func render(name string, data any) string {
+// render executes t. An error is a template that does not fit the data it
+// is given, a defect the golden tests catch: it panics rather than send an
+// agent a prompt with a section missing.
+func render(t *template.Template, data any) string {
 	var b strings.Builder
-	if err := agentTemplates.ExecuteTemplate(&b, name, data); err != nil {
-		panic(fmt.Sprintf("agents/%s.md: %v", name, err))
+	if err := t.Execute(&b, data); err != nil {
+		panic(fmt.Sprintf("agents/%s.md: %v", t.Name(), err))
 	}
 	return b.String()
 }
 
 // agentTexts renders each template under prefix ("contracts/review-focus/")
-// once, keyed by the rest of its name.
-func agentTexts(prefix string) map[string]string {
+// once, keyed by the rest of its name. Each of want must be among them.
+func agentTexts(prefix string, want ...string) map[string]string {
 	out := map[string]string{}
 	for _, t := range agentTemplates.Templates() {
 		if key, ok := strings.CutPrefix(t.Name(), prefix); ok {
-			out[key] = render(t.Name(), nil)
+			out[key] = render(t, nil)
+		}
+	}
+	for _, key := range want {
+		if _, ok := out[key]; !ok {
+			panic(fmt.Sprintf("agents/%s%s.md is missing", prefix, key))
 		}
 	}
 	return out

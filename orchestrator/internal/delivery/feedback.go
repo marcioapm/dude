@@ -275,7 +275,7 @@ func BlockingFeedbackTx(ctx context.Context, tx pgx.Tx, taskID string, attempt i
 // FeedbackText is items as an agent is given them: each one's id, author,
 // anchor and the person's words verbatim, then what to do with them.
 func FeedbackText(items []FeedbackItem, cli bool) string {
-	return render("contracts/feedback", struct {
+	return render(feedbackTmpl, struct {
 		Items []FeedbackItem
 		CLI   bool
 	}{items, cli})

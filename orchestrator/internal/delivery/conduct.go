@@ -616,7 +616,7 @@ const DismissedByConductor = "Dismissed by the conductor: "
 // resolution note: the conductor, with its reason, or a person.
 func AcceptedBy(note string) string {
 	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
-	return render("briefings/finding-accepted", struct {
+	return render(findingAcceptedTmpl, struct {
 		Conductor bool
 		Reason    string
 	}{conductor, reason})

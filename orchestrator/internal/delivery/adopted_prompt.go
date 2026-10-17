@@ -15,7 +15,7 @@ func baseNote(bases map[string]string) string {
 	if len(bases) == 0 {
 		return ""
 	}
-	return render("contracts/base", bases)
+	return render(baseTmpl, bases)
 }
 
 // AdoptedContext is the pull request a task took over, as it stood when
@@ -46,7 +46,7 @@ type AdoptedComment struct {
 const adoptedSaidLimit = 15
 
 func (a *AdoptedContext) note() string {
-	return render("contracts/adopted-pr", struct {
+	return render(adoptedPrTmpl, struct {
 		PR               *AdoptedContext
 		ChangesRequested bool
 	}{a, a.Review == forge.ReviewChangesRequested && len(a.ChangesRequestedBy) > 0})
@@ -57,7 +57,7 @@ func (a *AdoptedContext) note() string {
 // already. Done already still answers to the testing requirement after it:
 // committing nothing says the goal is met and tested, not just met.
 func continueNote(src *Source) string {
-	return render("contracts/continue", src)
+	return render(continueTmpl, src)
 }
 
 // AdoptedContextTx reads the adopted pull request of the task's attempt as

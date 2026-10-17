@@ -177,13 +177,13 @@ func (c MachineChoices) Names() string {
 // Nothing is what an agent with no size to move to is told: at the
 // organization's largest, or every larger size left out.
 func (c MachineChoices) Nothing() string {
-	return render("contracts/machine-nothing", c)
+	return render(machineNothingTmpl, c)
 }
 
 // Offer is the request tool's description: the sizes and what a move
 // keeps, so a harness that drops the prompt's tail still has them.
 func (c MachineChoices) Offer() string {
-	return render("contracts/machine-offer", c)
+	return render(machineOfferTmpl, c)
 }
 
 // Line is the prompt's paragraph for an agent with a machine: where it
@@ -201,5 +201,5 @@ func (c MachineChoices) Line(cli bool) string {
 	if r := c.Current.Raised; r != nil {
 		data.Raised = &raised{c.Current.From == "session", strings.ToLower(RoleLabel[r.Role]), r.Reason}
 	}
-	return render("contracts/machine", data)
+	return render(machineTmpl, data)
 }
