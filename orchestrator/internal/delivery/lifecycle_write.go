@@ -462,26 +462,27 @@ func archiveRowTx(ctx context.Context, tx pgx.Tx, taskID, person string) error {
 // UnarchiveTaskTx puts an archived task back as it was: still closed, if
 // it was; Reopen is its own step. Refused while its epic is archived.
 func UnarchiveTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor) error {
+	// The epic before the task, the order epic archive and unarchive take
+	// them in; FOR SHARE waits out either of those on this epic.
+	var epicID, epic string
+	var epicArchived bool
+	err := tx.QueryRow(ctx, `SELECT e.id, e.title, e.archived_at IS NOT NULL FROM tasks t JOIN epics e ON e.id = t.epic_id
+		WHERE t.id = $1 FOR SHARE OF e`, taskID).Scan(&epicID, &epic, &epicArchived)
+	if err != nil && !db.IsNotFound(err) {
+		return err
+	}
 	t, err := lockLifecycleTask(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
+	if t.EpicID == nil && epicID != "" || t.EpicID != nil && *t.EpicID != epicID {
+		return lifecycleRefuse("conflict", "%s moved epics: try again.", t.Key)
+	}
 	if !t.Archived {
 		return lifecycleRefuse("conflict", "%s isn't archived.", t.Key)
 	}
-	if t.EpicID != nil {
-		// FOR SHARE waits on an epic archive's FOR UPDATE, which skips this
-		// still-archived task; that archive never waits on an archived
-		// task's row, so the order can't invert.
-		var epic string
-		var archived bool
-		err := tx.QueryRow(ctx, `SELECT title, archived_at IS NOT NULL FROM epics WHERE id = $1 FOR SHARE`, *t.EpicID).Scan(&epic, &archived)
-		if err != nil && !db.IsNotFound(err) {
-			return err
-		}
-		if archived {
-			return lifecycleRefuse("archived", "%s's epic %s is archived: unarchive the epic first.", t.Key, epic)
-		}
+	if epicArchived {
+		return lifecycleRefuse("archived", "%s's epic %s is archived: unarchive the epic first.", t.Key, epic)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE tasks SET archived_at = NULL, archived_by = NULL, updated_at = now() WHERE id = $1`, t.ID); err != nil {
 		return err

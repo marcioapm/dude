@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -605,6 +606,86 @@ func TestTwoClosesAtOnce(t *testing.T) {
 	}
 	if n := w.events(task, "task.closed"); n != 1 {
 		t.Fatalf("%d task.closed", n)
+	}
+}
+
+// An epic's unarchive and the unarchive of one of its tasks, at once, in
+// either interleaving: each ends with its answer or a refusal, never a
+// deadlock. A third transaction holds the row the first of them queues on,
+// so both are waiting before either goes on.
+func TestUnarchiveAnEpicAndItsTaskAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name, fence string
+		taskFirst   bool
+	}{
+		// The epic's unarchive holds the epic and waits on the task's row.
+		{"the epic's first", `SELECT 1 FROM epics WHERE id = $1 FOR UPDATE`, false},
+		// The task's unarchive gets as far as it can before the epic's starts.
+		{"the task's first", `SELECT 1 FROM tasks WHERE epic_id = $1 FOR UPDATE`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			ctx := context.Background()
+			epic := "epc_" + w.org
+			task := w.task()
+			mustExec(t, w.owner, `INSERT INTO epics (id, organization_id, project_id, title, archived_at) VALUES ($1, $2, $3, 'Webhooks', now())`,
+				epic, w.org, w.project)
+			mustExec(t, w.owner, `UPDATE tasks SET epic_id = $1, status = 'done', archived_at = (SELECT archived_at FROM epics WHERE id = $1)
+				WHERE id = $2`, epic, task)
+			a := delivery.Actor{ActorType: "human", ActorID: "test"}
+			fence, err := w.owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fence.Rollback(ctx)
+			if _, err := fence.Exec(ctx, c.fence, epic); err != nil {
+				t.Fatal(err)
+			}
+			// Until n of this database's sessions wait on a lock.
+			waitFor := func(n int) {
+				deadline := time.Now().Add(10 * time.Second)
+				for got := 0; got != n; time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("%d sessions waiting on a lock, want %d", got, n)
+					}
+					if err := w.app.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+						WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&got); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			taskErr, epicErr := make(chan error, 1), make(chan error, 1)
+			unarchiveTask := func() {
+				taskErr <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error { return delivery.UnarchiveTaskTx(ctx, tx, w.org, task, a) })
+			}
+			unarchiveEpic := func() {
+				epicErr <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+					_, err := delivery.UnarchiveEpicTx(ctx, tx, w.org, epic, a)
+					return err
+				})
+			}
+			first, second := unarchiveEpic, unarchiveTask
+			if c.taskFirst {
+				first, second = unarchiveTask, unarchiveEpic
+			}
+			go first()
+			waitFor(1)
+			go second()
+			waitFor(2)
+			if err := fence.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var refusal delivery.LifecycleRefusal
+			if err := <-epicErr; err != nil {
+				t.Fatalf("the epic's unarchive: %v", err)
+			}
+			if err := <-taskErr; err != nil && !errors.As(err, &refusal) {
+				t.Fatalf("the task's unarchive: %v", err)
+			}
+			if n := w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND archived_at IS NULL`, task); n != 1 {
+				t.Fatal("the task is still archived")
+			}
+		})
 	}
 }
 
