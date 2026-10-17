@@ -207,6 +207,11 @@ class CommentingOnAPreview(unittest.TestCase):
         pv.hover("button.greet")
         wait_ov(pv, "ov-label")
         self.assertIn("<GreetButton>", ov_text(pv, "ov-label"))
+        for drawn_theme in ("dark", "light"):
+            ov(pv, "(r, t) => r.querySelector('[data-overlay]').setAttribute('data-theme', t)", drawn_theme)
+            self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-highlight]')).borderTopColor"), ACCENT[drawn_theme])
+            self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-label]')).backgroundColor"), ACCENT[drawn_theme])
+        ov(pv, "r => r.querySelector('[data-overlay]').setAttribute('data-theme', 'dark')")
         shoot(pv, "overlay-hover", themes=False)
         # The narrow shot moved the pointer's element: back over the button.
         pv.hover("header.app-header")
@@ -387,9 +392,11 @@ class CommentingOnAPreview(unittest.TestCase):
         pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'light'", timeout=10_000)
         self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor"), ACCENT["light"])
         # The preview's own OS switching no longer moves it: dude decides now.
+        before_requests = list(self.overlay_requests)
         pv.emulate_media(color_scheme="dark")
-        pv.wait_for_timeout(300)
+        pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'light'", timeout=2_000)
         self.assertEqual(theme(pv), "light")
+        self.assertEqual(self.overlay_requests, before_requests)
         self.assertEqual(self.errors, [])
 
     def test_restart_and_the_unavailable_reason(self):
