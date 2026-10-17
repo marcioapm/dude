@@ -109,6 +109,7 @@ func newWorld(t *testing.T) *world {
 	mux.Handle("/acme/web.git/", w.web.Handler())
 	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
+	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.marcioWeb))
 	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -429,7 +430,8 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 		t.Errorf("task = %s, want review (waiting on people)", s)
 	}
 
-	// The loop went round once: one blocking finding, one fix, then clean.
+	// The loop went round once: one blocking finding, one fix, then clean;
+	// then the simplifier's diff was reviewed on its own, clean.
 	phaseCounts := map[string]int{}
 	for _, r := range w.lux.Runs() {
 		var spec struct {
@@ -438,7 +440,7 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 		_ = json.Unmarshal(r.Spec, &spec)
 		phaseCounts[spec.Labels["dude.phase"]]++
 	}
-	if phaseCounts["implement"] != 1 || phaseCounts["review"] != 2 || phaseCounts["fix"] != 1 || phaseCounts["simplify"] != 1 {
+	if phaseCounts["implement"] != 1 || phaseCounts["review"] != 3 || phaseCounts["fix"] != 1 || phaseCounts["simplify"] != 1 {
 		t.Errorf("runs per phase = %v", phaseCounts)
 	}
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
@@ -3336,15 +3338,19 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
+	head := w.gh.Pull(1).Head
+	before := w.gh.SHA(head)
 	w.gh.Comment(1, "alice", "Please also fix the typo in the README.")
 	w.until("a fixer", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "running"
 	})
 	w.gh.SetChecks("none")
+	// On the pull request: its candidate's own reviews set the task to
+	// review too, before the simplifier and the move.
 	w.until("the fix in review", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.taskStatus(wi) == "review"
+		return w.gh.SHA(head) != before && w.taskStatus(wi) == "review"
 	})
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)

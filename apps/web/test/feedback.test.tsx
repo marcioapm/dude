@@ -454,6 +454,17 @@ describe("Activity", () => {
     // A payload's words never reach a line, whatever it carries.
     expect(lines.map((l) => renderToStaticMarkup(<>{l.text}</>)).filter((w) => w.includes("SECRET"))).toEqual([]);
   });
+  test("an item dude reopened says why: its commit was not published, or its pull request ended while the fix was checked", () => {
+    const lines = activityLines([
+      ev("feedback.reopened", { itemId: "a", why: "not_published" }, { type: "system", id: "workflow" }),
+      ev("feedback.reopened", { itemId: "b", why: "pull_request_ended" }, { type: "system", id: "workflow" }),
+    ], people, [], [], 1, "WC-1");
+    const words = lines.filter((l) => l.kind === "feedback").map((l) => renderToStaticMarkup(<>{l.text}</>).replace(/<[^>]+>/g, ""));
+    expect(words).toEqual([
+      "1 feedback item opened again · its pull request ended while the fix was checked; a fixer checks it again on the follow-up pull request",
+      "1 feedback item opened again · the commit that resolved it was not published",
+    ]);
+  });
 });
 
 describe("placing items on a diff", () => {

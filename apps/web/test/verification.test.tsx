@@ -30,7 +30,7 @@ function artifact(id: string, name: string, runId: string): Artifact {
 }
 
 const verification = (over: Partial<Verification> = {}): Verification => ({
-  runId: "run_test2", attempt: 1, heads: { api: "3adab691c0ffee00" }, stale: false, createdAt: "2026-10-01T00:00:00Z",
+  runId: "run_test2", attempt: 1, heads: { api: "3adab691c0ffee00" }, stale: false, candidate: false, createdAt: "2026-10-01T00:00:00Z",
   criteria: [
     { criterion: 1, text: "it greets", status: "pass", evidence: ["walkthrough.webm", "01-hello.png"], observed: "Hello, Ana.", problem: "",
       decision: null, decidedBy: null, decisionNote: null },
@@ -68,6 +68,7 @@ test("each criterion shows its verdict, a waiver who and why, and the tested com
   expect(rows[2]!.textContent).toContain("receipt.png is not a file this test published.");
   expect(page.querySelector("[data-testid=verification-heads]")?.textContent).toBe("tested at 3adab69");
   expect(count(page, "[data-testid=verification-stale]")).toBe(0);
+  expect(count(page, "[data-testid=verification-candidate]")).toBe(0);
 });
 
 test("evidence opens the file that test published; a name it never published opens nothing", async () => {
@@ -86,7 +87,15 @@ test("evidence opens the file that test published; a name it never published ope
 test("a verdict the branch has moved past is marked stale", async () => {
   const { page } = await section(verification({ stale: true, heads: { api: "aaaaaaa1", web: "bbbbbbb2" } }), []);
   expect(count(page, "[data-testid=verification-stale]")).toBe(1);
+  expect(count(page, "[data-testid=verification-candidate]")).toBe(0);
   expect(page.querySelector("[data-testid=verification-heads]")?.textContent).toBe("tested at api aaaaaaa, web bbbbbbb");
+});
+
+test("a pull request's fix still being checked is labelled the candidate's, not stale", async () => {
+  const { page } = await section(verification({ candidate: true, heads: { api: "ccccccc3" } }), []);
+  expect(page.querySelector("[data-testid=verification-candidate]")?.textContent).toBe("Candidate — not on the pull request yet");
+  expect(count(page, "[data-testid=verification-stale]")).toBe(0);
+  expect(page.querySelector("[data-testid=verification-heads]")?.textContent).toBe("tested at ccccccc");
 });
 
 // -- the banner --

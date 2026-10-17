@@ -520,21 +520,24 @@ const CallsLabel = "dude.calls"
 // repository, commit {"message"} commits everything there, git
 // {"args"} runs git there (the fake lux only), integrate {"args","repo"}
 // runs a merge in repo's checkout and resolves its conflicts keeping both
-// sides (the fake lux only), and artifact
+// sides (the fake lux only), artifact
 // {"path","content","description"} publishes a file for people with
-// lux-shim publish.
+// lux-shim publish, and say {"text"} says text in its reply (the fake lux
+// only), where {{last.PATH}} is a field of the last dude tool's answer
+// (items.0.number).
 const (
 	LocalWrite     = "write"
 	LocalCommit    = "commit"
 	LocalGit       = "git"
 	LocalArtifact  = "artifact"
 	LocalIntegrate = "integrate"
+	LocalSay       = "say"
 )
 
 // Local says whether a call is the scripted conductor's own work in its
 // container rather than one of dude's tools.
 func Local(name string) bool {
-	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact || name == LocalIntegrate
+	return name == LocalWrite || name == LocalCommit || name == LocalGit || name == LocalArtifact || name == LocalIntegrate || name == LocalSay
 }
 
 // IntegrationCalls are the scripted integration fixer's calls for an

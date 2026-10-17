@@ -108,6 +108,8 @@ export interface VerificationGroupProps extends Omit<HTMLAttributes<HTMLElement>
   readonly heads: Readonly<Record<string, string>>;
   /** The work has moved past the tested commits. */
   readonly stale?: boolean | undefined;
+  /** Tested on a pull request's candidate fix, which the pull request does not hold yet. */
+  readonly candidate?: boolean | undefined;
   /** Section title. Default "Verification". */
   readonly title?: ReactNode;
   /** Right side of the header: an earlier test, a link to the Run. */
@@ -118,9 +120,10 @@ export interface VerificationGroupProps extends Omit<HTMLAttributes<HTMLElement>
 /**
  * A test's verdict, criterion by criterion (`CriterionRow`s), under the
  * commits it covers — and, once the branch has moved past them, a stale
- * mark: what was shown working is not what the branch holds now.
+ * mark: what was shown working is not what the branch holds now. A test of
+ * a pull request's fix still being checked says so instead.
  */
-export function VerificationGroup({ heads, stale, title = "Verification", actions, children, className, ...rest }: VerificationGroupProps) {
+export function VerificationGroup({ heads, stale, candidate, title = "Verification", actions, children, className, ...rest }: VerificationGroupProps) {
   const headingId = useId();
   const repos = Object.keys(heads).sort();
   return (
@@ -139,15 +142,31 @@ export function VerificationGroup({ heads, stale, title = "Verification", action
             </span>
           ))}
         </span>
-        {stale ? (
-          <Badge tone="attention" emphasis="tinted" size="sm" icon="warning" data-testid="verification-stale"
-            title="The branch has changed since this test: its verdict is about the commits it names.">
-            Stale
-          </Badge>
-        ) : null}
+        <StandingBadge stale={stale} candidate={candidate} />
         {actions ? <span className={styles["groupActions"]}>{actions}</span> : null}
       </header>
       <ul className={styles["list"]}>{children}</ul>
     </section>
   );
+}
+
+// A candidate's verdict is never shown stale: the pull request does not hold it yet.
+function StandingBadge({ stale, candidate }: Pick<VerificationGroupProps, "stale" | "candidate">) {
+  if (candidate) {
+    return (
+      <Badge tone="info" emphasis="tinted" size="sm" data-testid="verification-candidate"
+        title="Tested on the fix being checked: the pull request shows it once its test passes.">
+        Candidate — not on the pull request yet
+      </Badge>
+    );
+  }
+  if (stale) {
+    return (
+      <Badge tone="attention" emphasis="tinted" size="sm" icon="warning" data-testid="verification-stale"
+        title="The branch has changed since this test: its verdict is about the commits it names.">
+        Stale
+      </Badge>
+    );
+  }
+  return null;
 }

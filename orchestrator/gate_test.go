@@ -111,6 +111,7 @@ func TestAHandBackWhileEnteringTheGateStillAsks(t *testing.T) {
 			w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 			armed.Store(true)
 			w.must(task, "start_phase", `{"phase":"simplify"}`)
+			w.finishSimplifierReview(task)
 			w.until("the gate's question", func() bool { return w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0 })
 			for range 3 {
 				w.pump()
@@ -211,6 +212,7 @@ func TestAStaleStepCannotAuthorizeTheGateOverANewerAnswer(t *testing.T) {
 	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
 	armed.Store(true)
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.finishSimplifierReview(task)
 	w.until("Deliver's gate question", func() bool { return w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0 })
 	w.pump()
 	if n := len(w.gh.Pulls()); n != 0 {
