@@ -373,13 +373,12 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if isAgentRead(ctx) {
+	agentRead := isAgentRead(ctx)
+	client := g.http
+	if agentRead {
 		if err := reserveAgentRequest(target, authorization, g.rateResource(target)); err != nil {
 			return err
 		}
-	}
-	client := g.http
-	if isAgentRead(ctx) {
 		copy := *client
 		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		client = &copy
@@ -392,7 +391,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	noteRate(target, authorization, res.Header)
 	var response io.Reader = res.Body
 	const agentResponseMax = 4 << 20
-	if isAgentRead(ctx) {
+	if agentRead {
 		response = io.LimitReader(res.Body, agentResponseMax+1)
 		// A redirect's body is another location's answer: drained unread.
 		if res.StatusCode >= 300 && res.StatusCode < 400 {
@@ -401,7 +400,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		}
 	}
 	data, err := io.ReadAll(response)
-	if isAgentRead(ctx) && len(data) > agentResponseMax {
+	if agentRead && len(data) > agentResponseMax {
 		return &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
 			Message: "GitHub response exceeds the agent read limit (4 MiB)"}
 	}
