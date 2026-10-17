@@ -9,8 +9,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ArchiveEpicDialog, MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock, hasEnded } from "@dude/design-system/components";
-import { MIB, gib, type AgentMachine, type Machine } from "@dude/domain";
+import { ArchiveEpicDialog, MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock } from "@dude/design-system/components";
+import { MIB, gib, lifecycleEnded, type AgentMachine, type Machine } from "@dude/domain";
 import { raisedProvenance, raisedRows, roleLabel, taskRaisedMachines } from "../machines.ts";
 import { firstName, type NavEpic, type NavProject, type NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
@@ -253,8 +253,8 @@ export function EpicDialog(props: {
 export function ArchiveEpicConfirm(props: { client: ApiClient; epic: EpicRef; tasks: NavEpic["tasks"]; onClose: () => void; onArchived: () => void }) {
   const { busy, problem, save } = useSave();
   const ref = (t: NavEpic["tasks"][number]) => ({ key: t.key ?? t.id, title: t.title, status: t.status });
-  const unfinished = props.tasks.filter((t) => !hasEnded(t)).map((t) => ({ ...ref(t), owner: t.people?.[0] ? firstName(t.people[0].name) : undefined }));
-  const ended = props.tasks.filter((t) => hasEnded(t)).map(ref);
+  const unfinished = props.tasks.filter((t) => !lifecycleEnded(t.status, t.resolution)).map((t) => ({ ...ref(t), owner: t.people?.[0] ? firstName(t.people[0].name) : undefined }));
+  const ended = props.tasks.filter((t) => lifecycleEnded(t.status, t.resolution)).map(ref);
   return (
     <ArchiveEpicDialog open onOpenChange={(o) => !o && props.onClose()} epic={props.epic.title} unfinished={unfinished} ended={ended}
       problem={problem} busy={busy}

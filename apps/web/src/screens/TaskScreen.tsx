@@ -325,7 +325,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
   // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
   const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
-  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting, onChanged: reload });
+  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting,
+    pullRequestOpen: pullRequests.some((p) => p.state === "open"), onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);

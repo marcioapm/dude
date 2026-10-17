@@ -6,11 +6,11 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ArchiveDialog, ArchivedMark, CloseDialog, ResolutionMark, hasEnded, lifecycleMenuItems,
+import { ArchiveDialog, ArchivedMark, CloseDialog, ResolutionMark, lifecycleMenuItems,
   type CloseDecision, type LifecycleTaskRef } from "@dude/design-system/components";
 import { Button, Callout, RowMenu } from "@dude/design-system/primitives";
 import { firstName, scopeTasks, type NavProject } from "@dude/design-system";
-import { RESOLUTION_LABEL, closedBy, notStarted } from "@dude/domain";
+import { RESOLUTION_LABEL, closedBy, lifecycleEnded, notStarted } from "@dude/domain";
 import type { ApiClient, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
@@ -42,13 +42,15 @@ export interface LifecycleControl {
 }
 
 /** What the task page needs of its lifecycle. `onChanged` re-reads the page. Called before the task is read: then nothing. */
-export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, onChanged }: {
+export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, pullRequestOpen, onChanged }: {
   client: ApiClient;
   task: TaskDetail | null;
   people: People;
   tree: ReadonlyArray<NavProject>;
   /** The not-started tasks it blocks: what waits on it. */
   waiting: ReadonlyArray<LifecycleTaskRef>;
+  /** One of its pull requests is open on GitHub. */
+  pullRequestOpen: boolean;
   onChanged: () => void;
 }): LifecycleControl {
   const [dialog, setDialog] = useState<"close" | "closeArchive" | "archive" | null>(null);
@@ -63,8 +65,8 @@ export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, o
   const task = maybe;
   const refused = notYours(task, people);
   const archived = Boolean(task.archivedAt);
-  const life = { status: task.status, resolution: task.resolution, archived };
-  const ended = hasEnded(life);
+  const life = { status: task.status, resolution: task.resolution, archived, pullRequestOpen };
+  const ended = lifecycleEnded(life.status, life.resolution);
   const act = async (fn: () => Promise<unknown>, keep = false) => {
     setBusy(true);
     setProblem(null);

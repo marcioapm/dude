@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArchivedMark, ResolutionMark } from "@dude/design-system/components";
 import { Button, Callout, Section } from "@dude/design-system/primitives";
 import { StatusMark } from "@dude/design-system/components";
+import { closedBy } from "@dude/domain";
 import type { ApiClient, ProjectOverview, Task } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
@@ -49,7 +50,7 @@ export function ArchivedTasks({ client, projectId, version, onOpen }: {
               <StatusMark status={t.status} size="sm" />
               <span className="ds-mono">{t.key}</span>
               <button type="button" className="archivedTitle linkish" onClick={() => onOpen(t.id)}>{t.title}</button>
-              {t.resolution && t.resolution !== "nothing_to_merge" ? <ResolutionMark resolution={t.resolution} of={t.duplicateOf ?? undefined} /> : null}
+              {closedBy(t.resolution) ? <ResolutionMark resolution={t.resolution!} of={t.duplicateOf ?? undefined} /> : null}
               <ArchivedMark />
               <Button size="sm" variant="quiet" onClick={() => act(() => client.unarchiveTask(t.id))} data-testid="unarchive-row">Unarchive</Button>
             </li>

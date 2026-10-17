@@ -197,7 +197,7 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (lis
 		WHERE w.project_id = $1
 		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
 		  AND ($4 OR w.archived_at IS NULL)
-		  AND (NOT $5 OR (w.resolution IS NOT NULL AND w.resolution <> 'nothing_to_merge'))
+		  AND (NOT $5 OR task_closed(w))
 		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(in.Text)), in.Archived, in.Closed)
 	if err != nil {
 		return out, err

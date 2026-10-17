@@ -1078,7 +1078,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   each shown to everyone and disabled with its reason, checked in order:
   who may not ("Only Ana, the owner, or an admin can do this"), agents
   working ("Stop its agents first"), a pull request open ("It has a pull
-  request open"), then the task's own state ("Already ended"; "Unarchive it
+  request open": `review` or `ready_to_merge`, or `pullRequestOpen` on any
+  other status), then the task's own state ("Already ended"; "Unarchive it
   first, then reopen it").
 - **`CloseDialog`** is the decision: four resolutions as a `ChoiceList`, two
   disabled with why (Nothing to merge is Mark done's; Can't reproduce where

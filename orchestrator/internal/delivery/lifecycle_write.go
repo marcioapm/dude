@@ -114,7 +114,7 @@ func refuseBusy(ctx context.Context, tx pgx.Tx, t lifecycleTask) error {
 		return lifecycleRefuse("running", "%s: an agent of %s is still working.", StopAgentsFirst, t.Key)
 	}
 	if open {
-		return lifecycleRefuse("review", "%s: %s is in review. Closing it is GitHub's or Mark done's.", PullRequestOpen, t.Key)
+		return lifecycleRefuse("review", "%s: close it on GitHub first.", PullRequestOpen)
 	}
 	return nil
 }
@@ -192,14 +192,9 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in Clo
 			return out, err
 		}
 		if len(dups) > 0 {
-			it := "it"
-			if len(dups) > 1 {
-				it = "them"
-			}
 			names := strings.Join(dups, ", ")
 			return out, LifecycleRefusal{Code: "conflict", Details: map[string]any{"duplicates": dups},
-				Msg: fmt.Sprintf("%s is what %s duplicates: reopen %s first, or close %s as a duplicate of %s.",
-					t.Key, names, names, it, canonical.Key)}
+				Msg: fmt.Sprintf("%s is what %s duplicates: reopen %s first.", t.Key, names, names)}
 		}
 		// What it blocks waits on the canonical task from now on: refused
 		// when that closes a loop, named as Add relation names one.
@@ -475,13 +470,17 @@ func UnarchiveTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor
 		return lifecycleRefuse("conflict", "%s isn't archived.", t.Key)
 	}
 	if t.EpicID != nil {
+		// FOR SHARE waits on an epic archive's FOR UPDATE, which skips this
+		// still-archived task; that archive never waits on an archived
+		// task's row, so the order can't invert.
 		var epic string
-		err := tx.QueryRow(ctx, `SELECT title FROM epics WHERE id = $1 AND archived_at IS NOT NULL`, *t.EpicID).Scan(&epic)
-		if err == nil {
-			return lifecycleRefuse("archived", "%s's epic %s is archived: unarchive the epic first.", t.Key, epic)
-		}
-		if !db.IsNotFound(err) {
+		var archived bool
+		err := tx.QueryRow(ctx, `SELECT title, archived_at IS NOT NULL FROM epics WHERE id = $1 FOR SHARE`, *t.EpicID).Scan(&epic, &archived)
+		if err != nil && !db.IsNotFound(err) {
 			return err
+		}
+		if archived {
+			return lifecycleRefuse("archived", "%s's epic %s is archived: unarchive the epic first.", t.Key, epic)
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE tasks SET archived_at = NULL, archived_by = NULL, updated_at = now() WHERE id = $1`, t.ID); err != nil {
@@ -490,6 +489,11 @@ func UnarchiveTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor
 	_, err = ledger.Append(ctx, tx, a.event(org, t.ProjectID, t.ID, EvTaskUnarchived, map[string]any{}))
 	return err
 }
+
+// TaskOwnerOf is the owner of the task aliased t, as a scalar subquery:
+// its first active person by position. Every owner check reads this one.
+const TaskOwnerOf = `(SELECT tp.person_id FROM task_people tp JOIN people pe ON pe.id = tp.person_id
+	WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)`
 
 // EpicTask is one of an epic's tasks, as the epic's archive names it.
 type EpicTask struct {
@@ -521,8 +525,7 @@ func ArchiveEpicTx(ctx context.Context, tx pgx.Tx, org, epicID string, withEnded
 	}
 	// Each task's row, in id order, as a status move would take it.
 	rows, err := tx.Query(ctx, `SELECT t.id, p.key_prefix || '-' || t.number, t.title, t.status::text,
-			COALESCE((SELECT tp.person_id FROM task_people tp JOIN people pe ON pe.id = tp.person_id
-			          WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1), ''),
+			COALESCE(`+TaskOwnerOf+`, ''),
 			t.status = 'done' OR (t.status = 'aborted' AND t.resolution IS NOT NULL)
 		FROM tasks t JOIN projects p ON p.id = t.project_id
 		WHERE t.epic_id = $1 AND t.archived_at IS NULL ORDER BY t.id FOR NO KEY UPDATE OF t`, epicID)

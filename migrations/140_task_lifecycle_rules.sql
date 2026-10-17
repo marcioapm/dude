@@ -92,18 +92,23 @@ CREATE OR REPLACE FUNCTION task_relation_would_cycle(src text, dst text) RETURNS
   END
   $$;
 
+-- A person closed the task: a resolution other than delivery's
+-- nothing_to_merge. The one spelling of the rule in SQL.
+CREATE FUNCTION task_closed(t tasks) RETURNS boolean
+  LANGUAGE sql IMMUTABLE
+  AS $$ SELECT t.resolution IS NOT NULL AND t.resolution <> 'nothing_to_merge' $$;
+
 -- Why the task can't start now, the first that holds: 'archived' (put
--- away), 'closed' (a person ended it: a resolution other than delivery's
--- nothing_to_merge), 'blocked' (task_blocked_by is not empty); NULL when it
--- can. Both processes read it — the orchestrator's RefuseStartTx and the
--- backend's bare Run — so the order is written once. The first two are
--- never overridden; only 'blocked' is, by a person.
+-- away), 'closed' (task_closed), 'blocked' (task_blocked_by is not empty);
+-- NULL when it can. Both processes read it — the orchestrator's
+-- RefuseStartTx and the backend's bare Run — so the order is written once.
+-- The first two are never overridden; only 'blocked' is, by a person.
 CREATE FUNCTION task_start_refusal(task text) RETURNS text
   LANGUAGE sql STABLE
   AS $$
     SELECT CASE
              WHEN t.archived_at IS NOT NULL THEN 'archived'
-             WHEN t.resolution IS NOT NULL AND t.resolution <> 'nothing_to_merge' THEN 'closed'
+             WHEN task_closed(t) THEN 'closed'
              WHEN EXISTS (SELECT 1 FROM task_blocked_by(t.id)) THEN 'blocked'
            END
       FROM tasks t WHERE t.id = task

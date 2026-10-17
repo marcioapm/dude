@@ -6,7 +6,7 @@
  */
 
 import { useState, useId, type ReactNode } from "react";
-import { RESOLUTION_LABEL, closedBy, keyList, lifecycleBusy, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
+import { RESOLUTION_LABEL, closedBy, keyList, lifecycleBusy, lifecycleEnded, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -61,6 +61,8 @@ export interface LifecycleTask {
   readonly status: TaskStatus;
   readonly resolution?: TaskResolution | null | undefined;
   readonly archived?: boolean | undefined;
+  /** A pull request of it is open on GitHub: refused as `review` whatever the status. */
+  readonly pullRequestOpen?: boolean | undefined;
 }
 
 export interface LifecycleMenuOptions {
@@ -73,11 +75,6 @@ export interface LifecycleMenuOptions {
   readonly onUnarchive?: (() => void) | undefined;
 }
 
-/** Ended, for lifecycle: done, or aborted with a resolution. */
-export function hasEnded(t: LifecycleTask): boolean {
-  return t.status === "done" || (t.status === "aborted" && Boolean(t.resolution));
-}
-
 const BUSY_WORDS = { running: "Stop its agents first", review: "It has a pull request open" } as const;
 
 /**
@@ -87,14 +84,14 @@ const BUSY_WORDS = { running: "Stop its agents first", review: "It has a pull re
  * Reopen on a closed task, and Archive… becomes Unarchive on an archived one.
  */
 export function lifecycleMenuItems(t: LifecycleTask, o: LifecycleMenuOptions): RowMenuItem[] {
-  const busy = lifecycleBusy(t.status);
+  const busy = lifecycleBusy(t.status) ?? (t.pullRequestOpen ? "review" : null);
   const reason = (state?: string | undefined) => o.notYours ?? state;
   const items: RowMenuItem[] = [];
   if (closedBy(t.resolution)) {
     items.push({ id: "reopen", label: "Reopen", icon: "retry", onSelect: o.onReopen,
       disabled: Boolean(o.notYours || t.archived), disabledReason: reason(t.archived ? "Unarchive it first, then reopen it" : undefined) });
   } else {
-    const ended = hasEnded(t);
+    const ended = lifecycleEnded(t.status, t.resolution);
     const state = busy ? BUSY_WORDS[busy] : ended ? "Already ended" : undefined;
     items.push({ id: "close", label: ended ? "Closed" : "Close…", icon: "circle-x", onSelect: o.onClose,
       disabled: Boolean(o.notYours || state), disabledReason: reason(state) });

@@ -59,6 +59,9 @@ describe("the task menu's lifecycle items", () => {
     // A stopped task with no resolution hasn't ended: Close is offered.
     expect(items({ status: "aborted" }, {})).toEqual(["Close…", "Archive…"]);
     expect(items({ status: "failed" }, {})).toEqual(["Close…", "Archive…"]);
+    // Stopped with its pull request still open: refused as review is.
+    expect(items({ status: "aborted", pullRequestOpen: true }, {}))
+      .toEqual(["Close… — It has a pull request open", "Archive… — It has a pull request open"]);
     expect(items({ status: "aborted", resolution: "wont_do" }, {})).toEqual(["Reopen", "Archive…"]);
     expect(items({ status: "aborted", resolution: "wont_do", archived: true }, {})).toEqual(["Reopen — Unarchive it first, then reopen it", "Unarchive"]);
     // Who may not comes first, whatever the state.
