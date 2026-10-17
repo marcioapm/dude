@@ -140,14 +140,22 @@ const blockedRecheck = 5 * time.Minute
 // parkIfBlocked is path 5: the implement step of a delivery whose task
 // gained an open blocker after it started. The task goes back to queued,
 // saying what it waits on, and the step parks on relations.unblocked;
-// nothing fails. The refusal is recorded once per blocker set.
-func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State) (bool, error) {
+// nothing fails. The refusal is recorded once per blocker set. A task
+// closed or archived meanwhile (a Close racing the step an unblock woke)
+// parks too, whatever blockers says, and is never an error: Close has
+// already ended the delivery, so no implementer is made.
+func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State, blockers bool) (bool, error) {
 	parked := false
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		// Blockers only: Close and Archive are refused while its agents
-		// run, so a lifecycle refusal can't reach this step.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, st.TaskID); err != nil {
+		if err := RefuseLifecycleTx(ctx, tx, st.TaskID); err != nil {
+			if IsLifecycleRefusal(err) {
+				parked = true
+				return nil
+			}
 			return err
+		}
+		if !blockers {
+			return nil
 		}
 		err := refuseBlockedOnlyTx(ctx, tx, st.TaskID)
 		blocked, ok := AsBlocked(err)

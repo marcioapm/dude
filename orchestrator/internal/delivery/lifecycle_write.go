@@ -102,14 +102,19 @@ func refuseBusy(ctx context.Context, tx pgx.Tx, t lifecycleTask) error {
 		return lifecycleRefuse("running", "%s: %s is in progress.", StopAgentsFirst, t.Key)
 	}
 	// Its phase Runs: a conductor talks about the work and stays, read-only
-	// once the task has ended.
-	var live bool
+	// once the task has ended. Its pull requests: one still open refuses
+	// whatever the status (a stopped task can keep one).
+	var live, open bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL
-		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))`, t.ID).Scan(&live); err != nil {
+		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')),
+		EXISTS (SELECT 1 FROM pull_requests WHERE task_id = $1 AND state = 'open')`, t.ID).Scan(&live, &open); err != nil {
 		return err
 	}
 	if live {
 		return lifecycleRefuse("running", "%s: an agent of %s is still working.", StopAgentsFirst, t.Key)
+	}
+	if open {
+		return lifecycleRefuse("review", "%s: %s is in review. Closing it is GitHub's or Mark done's.", PullRequestOpen, t.Key)
 	}
 	return nil
 }
@@ -179,6 +184,23 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in Clo
 			return out, err
 		}
 		out.DuplicateOf = canonical.Key
+		// A canonical task stays one: task_blocked_by follows one hop.
+		var dups []string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(p.key_prefix || '-' || d.number ORDER BY d.project_id, d.number), '{}')
+			FROM task_relations r JOIN tasks d ON d.id = r.from_task_id JOIN projects p ON p.id = d.project_id
+			WHERE r.to_task_id = $1 AND r.kind = 'duplicates'`, t.ID).Scan(&dups); err != nil {
+			return out, err
+		}
+		if len(dups) > 0 {
+			it := "it"
+			if len(dups) > 1 {
+				it = "them"
+			}
+			names := strings.Join(dups, ", ")
+			return out, LifecycleRefusal{Code: "conflict", Details: map[string]any{"duplicates": dups},
+				Msg: fmt.Sprintf("%s is what %s duplicates: reopen %s first, or close %s as a duplicate of %s.",
+					t.Key, names, names, it, canonical.Key)}
+		}
 		// What it blocks waits on the canonical task from now on: refused
 		// when that closes a loop, named as Add relation names one.
 		rows, err := tx.Query(ctx, `SELECT r.to_task_id, p.key_prefix || '-' || d.number FROM task_relations r

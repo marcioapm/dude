@@ -566,16 +566,15 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	// The backstop for an edge added between the start and this step: a
-	// first implementer never starts on a blocked task. Parked, not failed.
-	if !st.Overridden && st.Retries == 0 {
-		parked, err := w.s.parkIfBlocked(ctx, sc.OrganizationID, st)
-		if err != nil {
-			return workflow.Result{}, err
-		}
-		if parked {
-			return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
-				SleepUntil: time.Now().Add(blockedRecheck)}, nil
-		}
+	// first implementer never starts on a blocked task, and no implementer
+	// on a closed or archived one. Parked, not failed.
+	parked, err := w.s.parkIfBlocked(ctx, sc.OrganizationID, st, !st.Overridden && st.Retries == 0)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if parked {
+		return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
+			SleepUntil: time.Now().Add(blockedRecheck)}, nil
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err

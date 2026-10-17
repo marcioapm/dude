@@ -141,8 +141,10 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	fresh := Reopened(d)
 	if fresh {
 		// Reopened after it ran: a fresh attempt, keyed as Start over keys
-		// one, so the start never joins the delivery that ended.
-		attempt++
+		// one, so the start never joins the delivery that ended. Past the
+		// ended delivery's own attempt too: one that parked before any phase
+		// Run left max(runs.attempt) where it was.
+		attempt = max(attempt, d.State.Attempt) + 1
 		key = fmt.Sprintf("delivery:%s:attempt-%d", in.TaskID, attempt)
 	}
 	st, err := NewState(ctx, tx, in.TaskID, projectID, policy, attempt)

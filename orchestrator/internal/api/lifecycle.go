@@ -203,11 +203,13 @@ func (s *Server) unarchiveEpic(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		if !principalOf(r).Admin {
-			// The tasks it brings back are those the archive took: their owners' or an admin's.
+			// The tasks it brings back are those the archive took: their
+			// owners' (taskOwner's: the first active person) or an admin's.
 			var others int
 			if err := tx.QueryRow(r.Context(), `SELECT count(*) FROM tasks t JOIN epics e ON e.id = t.epic_id
-				WHERE e.id = $1 AND t.archived_at = e.archived_at AND NOT EXISTS (SELECT 1 FROM task_people tp
-				WHERE tp.task_id = t.id AND tp.position = 0 AND tp.person_id = $2)`, epicID, a.Person).Scan(&others); err != nil {
+				WHERE e.id = $1 AND t.archived_at = e.archived_at AND (SELECT tp.person_id FROM task_people tp
+				JOIN people pe ON pe.id = tp.person_id WHERE tp.task_id = t.id AND pe.removed_at IS NULL
+				ORDER BY tp.position, tp.person_id LIMIT 1) IS DISTINCT FROM $2`, epicID, a.Person).Scan(&others); err != nil {
 				return err
 			}
 			if others > 0 {
