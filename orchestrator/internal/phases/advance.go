@@ -137,32 +137,32 @@ func advanceBranch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBran
 	case m.SHA == "":
 		return advanced{Head: at}, nil
 	}
-	if len(m.Parents) != 2 || m.Parents[0] != at {
-		into := ""
-		if len(m.Parents) > 0 {
-			into = m.Parents[0]
-		}
-		if len(m.Parents) != 2 || into == "" {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
-		}
-		j, err := baseMerges(ctx, gh, slug, baseBranch, start, into, commit)
-		if err != nil {
-			return advanced{}, err
-		}
-		if !j.only && into != start {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
-		}
-		pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA)
-		if err != nil {
-			return advanced{}, err
-		}
-		if !pure {
-			return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents) + " and content beyond its parents' automatic merge",
-				expected: "GitHub's automatic merge of the writer's commit " + commit + " onto " + into}
-		}
-		at = into
+	if len(m.Parents) == 2 && m.Parents[0] == at {
+		return advanced{Head: m.SHA, Commit: commit, MergedInto: at}, nil
 	}
-	return advanced{Head: m.SHA, Commit: commit, MergedInto: at}, nil
+	into := ""
+	if len(m.Parents) > 0 {
+		into = m.Parents[0]
+	}
+	if len(m.Parents) != 2 || into == "" {
+		return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
+	}
+	j, err = baseMerges(ctx, gh, slug, baseBranch, start, into, commit)
+	if err != nil {
+		return advanced{}, err
+	}
+	if !j.only && into != start {
+		return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents), expected: mergedOnto(at, baseBranch, commit)}
+	}
+	pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA)
+	if err != nil {
+		return advanced{}, err
+	}
+	if !pure {
+		return advanced{}, &errUnsafeMerge{merge: m.SHA, found: parentsOf(m.Parents) + " and content beyond its parents' automatic merge",
+			expected: "GitHub's automatic merge of the writer's commit " + commit + " onto " + into}
+	}
+	return advanced{Head: m.SHA, Commit: commit, MergedInto: into}, nil
 }
 
 // notFastForward says GitHub refused a ref update for not being a
