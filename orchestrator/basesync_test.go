@@ -28,7 +28,15 @@ import (
 // syncer and lux, as the orchestrator's main does.
 func (w *world) toolsWithSync() string {
 	w.t.Helper()
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase}).Handler())
+	return w.toolsWithSyncWaiting(0)
+}
+
+// toolsWithSyncWaiting is toolsWithSync with sync_base waiting at most wait
+// for lux's reports; zero is sync_base's own bound.
+func (w *world) toolsWithSyncWaiting(wait time.Duration) string {
+	w.t.Helper()
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
+		SyncBaseWait: wait}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.syncer.Agent.ToolsService = true
@@ -759,7 +767,7 @@ func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 	var out struct {
 		Repositories []struct {
 			Repo, Base, Ref, Status, Next string
-			Behind                        int
+			Behind                        *int
 		}
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
@@ -769,7 +777,7 @@ func TestSyncBaseFetchesTheBaseWithoutMovingTheCheckout(t *testing.T) {
 		t.Fatalf("repositories: %s", body)
 	}
 	r := out.Repositories[0]
-	if r.Repo != "target" || r.Base != "main" || r.Ref != "lux/main" || r.Status != "fetched" || r.Behind != 1 ||
+	if r.Repo != "target" || r.Base != "main" || r.Ref != "lux/main" || r.Status != "fetched" || r.Behind == nil || *r.Behind != 1 ||
 		!strings.Contains(r.Next, "git merge lux/main") {
 		t.Errorf("answer: %+v", r)
 	}

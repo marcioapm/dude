@@ -210,7 +210,9 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
   resolve keeping both sides' intent, then an internal review that runs
   `git show --remerge-diff` on the merge, then the policy's test; the
-  conductor never runs tests. A pair already tried, or a pull request
+  conductor never runs tests. A pair already tried, an integration Run
+  that finishes without publishing to the conflicting repository (no
+  merge: nothing to review), or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
   `integration: true` (retry or wait). An integration Run spends none of
   the pull request's fix budget. With `whenBehind` `tell` nothing
@@ -411,6 +413,14 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 - **Previews open in a new tab**, never in a frame: a preview's sign-in
   cookie is SameSite=Lax and does not reach a cross-site iframe. Only an
   `https://` server URL becomes a link.
+- **Commenting on a preview** (`servers/commenting.go`): every wakeable
+  preview server carries lux's `inject`, one tag loading
+  `<auth.public_url>/feedback/overlay.js`, derived from the origin at each
+  create and sync and never stored; only when `auth.public_url` is set and
+  lux's whoami says `serverInject`, otherwise no `inject` is sent. The
+  servers read gives each such server `commenting` and `needsRestart`
+  (lux's reported `inject` is not the current tag while its Run is up). See
+  [operations](operations.md#commenting-on-previews).
 - **Egress entries are what lux takes**: `*`, a hostname, an address, a
   CIDR range, or a wildcard `*.example.com` (lux#68: `*.` then a domain of
   at least two labels, no port or path; it matches names under the domain,

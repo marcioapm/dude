@@ -104,6 +104,34 @@ egress = ["file.example"]
     const named = file(`[backend]\nweb_dir = "/named"\n`);
     expect(Config.load({ env: { DUDE_CONFIG: named }, defaultPath: fallback }).webDir).toBe("/named");
   });
+
+  // The orchestrator's servers.PublicOrigin table (publicOrigins in
+  // commenting_test.go): the preview snippet names the origin Access checks.
+  test("auth.public_url resolves to the origin the orchestrator's snippet names", () => {
+    const origins: Record<string, string> = {
+      "https://Dude.Example.com/": "https://dude.example.com",
+      "https://d.test:8443": "https://d.test:8443",
+      "https://DUDE.EXAMPLE.COM:443": "https://dude.example.com",
+      "https://d.test:443/": "https://d.test",
+      "https://d.test:0443": "https://d.test",
+      "https://d.test.": "https://d.test.",
+      "https://D.TEST.:443": "https://d.test.",
+      "https://d.test:08443": "https://d.test:8443",
+      " https://d.test\n": "https://d.test",
+      "https://xn--bcher-kva.example": "https://xn--bcher-kva.example",
+      "https://127.0.0.1:8443": "https://127.0.0.1:8443",
+      "https://[::1]": "https://[::1]",
+      "https://[2001:DB8:0:0:0:0:0:1]:443": "https://[2001:db8::1]",
+      "https://a-b.c-d.test": "https://a-b.c-d.test",
+    };
+    for (const [raw, origin] of Object.entries(origins)) {
+      const auth = load({
+        DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: raw,
+        DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "t", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "a",
+      }).auth;
+      expect([raw, auth.provider === "cloudflare_access" ? auth.public_url : null]).toEqual([raw, origin]);
+    }
+  });
 });
 
 describe("strictness", () => {

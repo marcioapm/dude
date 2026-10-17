@@ -436,6 +436,57 @@ until they end: a Run with its servers in its spec, at
 and woken by a person starting a server. Nothing is migrated: stop and
 start an old preview to move it to the new path.
 
+### Commenting on previews
+
+People comment on a branch preview's pages through a script the page loads
+from dude's own origin. dude has lux add one tag to every wakeable preview
+server (lux's `inject`):
+
+```html
+<script src="<auth.public_url>/feedback/overlay.js" data-dude-origin="<auth.public_url>" async></script>
+```
+
+It names dude's origin and nothing else: no task, Run, person or key. lux
+adds it only to a page a browser navigates to that the server answers
+`200` with `text/html`, so a server that serves an API is never touched.
+
+It needs both:
+
+- **`auth.public_url`** set, read by the orchestrator as well as the
+  backend, with any `auth.provider`;
+- **lux v0.1.32 or later**, whose `GET /v1/whoami` says `serverInject`.
+
+Without either, no inject is sent to lux, and a task's servers say why
+(`commenting: {available: false, reason: "public_url" | "lux"}`). The
+orchestrator logs at startup whether commenting is on, and if not, which
+one is missing. Turning it off leaves on a server the tag it already has.
+A `public_url` that is not an https origin (no path, an ASCII host: an
+internationalised name as punycode; a fully qualified name's trailing dot
+is kept, an IPv4 address's is refused) never stops the orchestrator: it
+starts with commenting off, logs why, and `validate` prints it as a
+warning.
+
+The tag is put on a server when it is created and at each wake, before
+lux starts it, and on a person's start or restart of it. A server running
+when commenting was turned on, or `auth.public_url` changed, serves its
+pages without the current tag and shows as needing a restart
+(`needsRestart`); dude does not restart it on its own. An asleep server
+gets the tag at its next wake.
+
+`/feedback/overlay.js` is served to anyone with no credential, like every
+file of the web app, and an unknown path under `/feedback/` is a 404, never
+`index.html`. Behind Cloudflare Access, give exactly that path a **Bypass**
+policy: a preview page's request carries no Access cookie for dude's
+origin, and Access would answer it with its sign-in page. Nothing else
+needs one.
+
+A comment's picture is an upload the comment names. The backend's sweeper
+keeps it while any comment, draft or submitted, names it; once none does,
+it is swept like any upload never sent, on the first pass a day after its
+upload.
+
+Old-style previews (`wakeable = false`) and agents' servers get no tag.
+
 ## Project secrets
 
 A project's secrets (Project settings → Servers → Secrets) are environment
@@ -720,7 +771,7 @@ does not refuse to start.
 | `vapid.subject` | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | orchestrator | Who push services may contact (`mailto:` or `https:`). |
 | `factory.logins` | `DUDE_FACTORY_LOGINS` | none | orchestrator | GitHub logins whose PR comments are the factory's own, and wake no agent. |
 | `auth.provider` | `DUDE_AUTH_PROVIDER` | `api_key` | backend | `api_key` or `cloudflare_access` ([README](../README.md)). API keys keep working either way. Access settings below without a provider are refused. |
-| `auth.public_url` | `DUDE_AUTH_PUBLIC_URL` | required with Access | backend | The https origin people open dude at; changes signed in by Access must come from it. |
+| `auth.public_url` | `DUDE_AUTH_PUBLIC_URL` | required with Access | both | The https origin people open dude at (no path; a trailing slash is dropped); changes signed in by Access must come from it. Also turns on [commenting on previews](#commenting-on-previews), with any `auth.provider`. |
 | `auth.auto_create` | `DUDE_AUTH_AUTO_CREATE` | `true` | backend | Someone Access lets in who is not yet one of the organization's people becomes a member; `false` refuses them. |
 | `auth.default_organization` | `DUDE_AUTH_DEFAULT_ORGANIZATION` | required with Access | backend | The slug of an existing organization Access sign-ins belong to; startup fails if none has it. |
 | `auth.cloudflare_access.team` | `DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM` | required with Access | backend | The Zero Trust team name (one DNS label). |
@@ -1022,7 +1073,9 @@ Images people send agents are the other files it stores, under
 variant the agent is sent (the browser scales it to at most 2000 px and
 4.5 MiB). Only the organisation's members can read them, through the
 backend. The backend's one background loop deletes uploads never sent after
-24 hours and the objects of every attachment row that is gone — removed, swept,
+24 hours, except a comment's picture
+([Commenting on previews](#commenting-on-previews)), and the objects of
+every attachment row that is gone — removed, swept,
 or with its task (`ON DELETE CASCADE`); a delete storage refuses is retried on
 the next pass, every 10 minutes. The orchestrator reads the delivered
 variant to give it to lux, so it needs `s3:GetObject` on the bucket too.
@@ -1030,7 +1083,8 @@ variant to give it to lux, so it needs `s3:GetObject` on the bucket too.
 With `DUDE_WEB_DIR` set, GET and HEAD requests that match no API route and
 are outside `/v1` and `/health` are served from the directory, and unknown
 paths get `index.html`. Files under `/assets/` are cached for a year;
-everything else is revalidated.
+everything else is revalidated. `/feedback/overlay.js` is one of them,
+served to anyone; see [Commenting on previews](#commenting-on-previews).
 
 ### dude-migrate
 

@@ -47,6 +47,9 @@ type TenantServer struct {
 	Command []string          `json:"command"`
 	Workdir string            `json:"workdir"`
 	Env     map[string]string `json:"env"`
+	// HTML its preview adds to the pages a browser navigates to; "" for
+	// none, and on a lux from before inject (v0.1.32).
+	Inject string `json:"inject"`
 
 	Raw json.RawMessage `json:"-"`
 }
@@ -106,6 +109,9 @@ type CreateServer struct {
 	Lifetime    string            `json:"lifetime,omitempty"`
 	ExpireAfter string            `json:"expireAfter,omitempty"`
 	RunID       string            `json:"runId,omitempty"`
+	// Sent only to a lux that reports serverInject: an older one has no
+	// such field.
+	Inject string `json:"inject,omitempty"`
 }
 
 // PatchServer is PATCH /v1/servers/{id}'s body (lux's PatchServerInput):
@@ -119,6 +125,8 @@ type PatchServer struct {
 	Workdir     *string            `json:"workdir,omitempty"`
 	Env         *map[string]string `json:"env,omitempty"`
 	WakeTimeout *string            `json:"wakeTimeout,omitempty"`
+	// Applies to the next request to its preview, without a restart.
+	Inject *string `json:"inject,omitempty"`
 }
 
 // SyncRef moves one repository of a Run (its spec's name) to a ref.
@@ -306,17 +314,20 @@ type PreviewConfig struct {
 	Domain string
 	// Nil identifies lux versions that require full hostnames.
 	Previews *bool
+	// Servers take inject (lux v0.1.32); false when whoami says nothing.
+	ServerInject bool
 }
 
 func (c *HTTPClient) PreviewDomain(ctx context.Context) (PreviewConfig, error) {
 	var w struct {
 		PreviewDomain string `json:"previewDomain"`
 		Previews      *bool  `json:"previews"`
+		ServerInject  bool   `json:"serverInject"`
 	}
 	if err := c.do(ctx, "GET", "/v1/whoami", nil, nil, &w); err != nil {
 		return PreviewConfig{}, err
 	}
-	return PreviewConfig{Domain: NormalDomain(w.PreviewDomain), Previews: w.Previews}, nil
+	return PreviewConfig{Domain: NormalDomain(w.PreviewDomain), Previews: w.Previews, ServerInject: w.ServerInject}, nil
 }
 
 // NormalDomain is a domain as dude compares and joins it: lowercase, no

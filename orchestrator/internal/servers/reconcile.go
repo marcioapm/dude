@@ -158,8 +158,9 @@ type recordedServer struct {
 }
 
 // updateServer PATCHes the fields in which a preview server's recipe
-// differs from what lux has (cur), and its wake timeout when it is not
-// timeout (wakeTimeoutPatch); nothing when none does. The timeout lux has
+// differs from what lux has (cur), its inject when it is not the overlay
+// snippet commenting wants now (injectPatch), and its wake timeout when it
+// is not timeout (wakeTimeoutPatch); nothing when none does. The timeout lux has
 // then is recorded (preview_servers.wake_timeout_s). A server lux no
 // longer has is left to the feed; a 409 (attached or detached meanwhile) is
 // returned as an error that is not lux's refusal, so the wake is tried
@@ -195,6 +196,10 @@ func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantSe
 		}
 		patch.Env = &env
 		changed = append(changed, "env")
+	}
+	if inject := p.injectPatch(cur); inject != nil {
+		patch.Inject = inject
+		changed = append(changed, "inject")
 	}
 	if len(changed) == 0 {
 		return p.recordWakeTimeout(ctx, r, cur)

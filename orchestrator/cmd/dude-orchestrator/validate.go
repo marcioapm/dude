@@ -28,7 +28,7 @@ func validate(args []string, opts config.Options, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "usage: dude-orchestrator validate")
 		return 2
 	}
-	cfg, _, err := resolve(opts)
+	cfg, set, err := resolve(opts)
 	if cfg != nil {
 		for _, w := range cfg.Warnings {
 			fmt.Fprintln(stderr, "warning: "+w)
@@ -37,6 +37,9 @@ func validate(args []string, opts config.Options, stdout, stderr io.Writer) int 
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if w := set.publicURLWarning(); w != "" {
+		fmt.Fprintln(stderr, "warning: "+w)
 	}
 	path := cfg.Path
 	if path == "" {

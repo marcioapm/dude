@@ -329,6 +329,59 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 	}
 }
 
+// auth.public_url reaches the orchestrator as an origin: surrounding space,
+// a trailing slash, :443 and letter case are dropped.
+func TestThePublicURLIsAnOrigin(t *testing.T) {
+	for raw, want := range map[string]string{"": "", "https://Dude.Example.com/": "https://dude.example.com",
+		"https://dude.example.com": "https://dude.example.com", "https://dude.example.com:8443": "https://dude.example.com:8443",
+		" https://dude.example.com": "https://dude.example.com", "https://dude.example.com\n": "https://dude.example.com",
+		"\thttps://dude.example.com/ \n": "https://dude.example.com", "https://DUDE.EXAMPLE.COM:443": "https://dude.example.com"} {
+		if s := mustSettings(t, loadConfig(t, required, 0o600, map[string]string{"DUDE_AUTH_PUBLIC_URL": raw})); s.PublicURL != want || s.PublicURLProblem != "" {
+			t.Errorf("%q: %q (%q), want %q", raw, s.PublicURL, s.PublicURLProblem, want)
+		}
+	}
+}
+
+// A public_url that is no https origin never stops the orchestrator, under
+// any provider (the backend ignores it under api_key): it starts with
+// commenting off, says why once, and the servers read says public_url.
+func TestAPublicURLThatIsNoOriginTurnsCommentingOff(t *testing.T) {
+	for _, raw := range []string{"http://localhost:3000", "https://x/app", "http://dude.example.com", "https://u:p@dude.example.com",
+		"https://dude.example.com/?x=1", "dude.example.com", "https://Bücher.example"} {
+		for _, provider := range []string{"api_key", "cloudflare_access", ""} {
+			vars := map[string]string{"DUDE_AUTH_PUBLIC_URL": raw}
+			if provider != "" {
+				vars["DUDE_AUTH_PROVIDER"] = provider
+			}
+			s, err := settingsFrom(loadConfig(t, required, 0o600, vars))
+			if err != nil {
+				t.Errorf("%q, provider %q: refused: %v", raw, provider, err)
+				continue
+			}
+			if s.PublicURL != "" || s.PublicURLProblem == "" {
+				t.Errorf("%q, provider %q: origin %q, problem %q", raw, provider, s.PublicURL, s.PublicURLProblem)
+			}
+			var buf bytes.Buffer
+			logCommenting(slog.New(slog.NewJSONHandler(&buf, nil)), s, true)
+			var rec map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &rec); err != nil || strings.Count(buf.String(), "\n") != 1 {
+				t.Fatalf("%q: log %q, want one record", raw, buf.String())
+			}
+			want := "commenting on previews is off: auth.public_url is not an https origin (" + s.PublicURLProblem + ")"
+			if rec["msg"] != want || rec["level"] != "WARN" {
+				t.Errorf("%q: logged %v, want WARN %q", raw, rec, want)
+			}
+			if svc := (previewMode{Relative: true, ServerInject: true}).service(nil, nil, nil, "", s.PublicURL); svc.PublicURL != "" {
+				t.Errorf("%q: the service has origin %q", raw, svc.PublicURL)
+			}
+		}
+	}
+	s, _ := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_AUTH_PUBLIC_URL": "https://Bücher.example"}))
+	if !strings.Contains(s.PublicURLProblem, "punycode") {
+		t.Errorf("IDN: %q, want it to say punycode", s.PublicURLProblem)
+	}
+}
+
 func TestAOneConnectionDatabasePoolIsRefused(t *testing.T) {
 	for url, ok := range map[string]bool{
 		"postgres://file/dude?pool_max_conns=1": false,

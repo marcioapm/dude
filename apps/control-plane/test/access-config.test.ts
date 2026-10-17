@@ -87,6 +87,14 @@ aud = "application-audience"
     expect(authOf(valid, { DUDE_AUTH_PROVIDER: "api_key" })).toEqual({ provider: "api_key" });
   });
 
+  test("public_url alone keeps API keys: it also turns on commenting on previews, which needs no Access", () => {
+    expect(authOf(`[auth]\npublic_url = "https://dude.acme.dev"\n`)).toEqual({ provider: "api_key" });
+    expect(authOf("", { DUDE_AUTH_PUBLIC_URL: "https://env.example" })).toEqual({ provider: "api_key" });
+    // Any other Access setting without a provider is still refused.
+    expect(() => authOf(`[auth]\npublic_url = "https://dude.acme.dev"\nsuper_admins = ["a@acme.dev"]\n`))
+      .toThrow("auth.super_admins (DUDE_AUTH_SUPER_ADMINS) set, but auth.provider");
+  });
+
   test("the retired auto_create and default_organization are accepted, ignored and warned about", () => {
     const withOld = valid.replace("[auth.cloudflare_access]", `auto_create = false\ndefault_organization = "acme"\n[auth.cloudflare_access]`);
     const c = loaded(withOld, { DUDE_AUTH_AUTO_CREATE: "maybe", DUDE_AUTH_DEFAULT_ORGANIZATION: "other" });

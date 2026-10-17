@@ -23,6 +23,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // ShimBinary is lux.ShimBinary, not imported, to keep this package free of
@@ -541,7 +542,9 @@ func Local(name string) bool {
 
 // IntegrationCalls are the scripted integration fixer's calls for an
 // integration brief: sync_base on dude, then the merge of lux/<base> in
-// the checkout. nil when the prompt names no integration.
+// the checkout. Whoever plays them calls sync_base again while it answers
+// a fetch pending (SyncBasePending), as the brief says. nil when the
+// prompt names no integration.
 func IntegrationCalls(prompt string) [][2]string {
 	base, repo, ok := integrationTarget(prompt)
 	if !ok {
@@ -550,6 +553,46 @@ func IntegrationCalls(prompt string) [][2]string {
 	args, _ := json.Marshal(map[string]any{"args": []string{"merge", "--no-edit", "lux/" + base}, "repo": repo})
 	return [][2]string{{"sync_base", "{}"}, {LocalIntegrate, string(args)}}
 }
+
+// SyncBasePending says whether a sync_base answer has a repository whose
+// fetch lux has not reported yet (status "asked"): lux/<base> may be
+// missing, or older than the base, until it has.
+func SyncBasePending(answer []byte) bool {
+	return slices.Contains(syncBaseStatuses(answer), "asked")
+}
+
+// SyncBaseLanded says whether a sync_base answer brought every
+// repository's base in: each fetched or up-to-date.
+func SyncBaseLanded(answer []byte) bool {
+	statuses := syncBaseStatuses(answer)
+	return len(statuses) > 0 && !slices.ContainsFunc(statuses, func(s string) bool {
+		return s != "fetched" && s != "up-to-date"
+	})
+}
+
+// syncBaseStatuses are a sync_base answer's statuses, one per repository;
+// nil when the answer is not JSON.
+func syncBaseStatuses(answer []byte) []string {
+	var out struct {
+		Repositories []struct{ Status string } `json:"repositories"`
+	}
+	if json.Unmarshal(answer, &out) != nil {
+		return nil
+	}
+	statuses := make([]string, len(out.Repositories))
+	for i, r := range out.Repositories {
+		statuses[i] = r.Status
+	}
+	return statuses
+}
+
+// How long the scripted agent goes on calling sync_base while its fetch is
+// pending, and how long it waits between calls. Each call itself waits up
+// to sync_base's own bound (20 s) for lux's report.
+const (
+	SyncBaseRetryFor   = 2 * time.Minute
+	SyncBaseRetryEvery = time.Second
+)
 
 // integrationTarget is the base and repository an integration brief names.
 func integrationTarget(prompt string) (base, repo string, ok bool) {
@@ -575,17 +618,60 @@ const integrationResolve = `git merge --no-edit %[1]s || { ` +
 
 // IntegrationScript is IntegrationCalls as a lux-fake script, for a real
 // lux: sync_base through the dude service, then the merge and its
-// resolution in the repository's checkout at dir. "" when the prompt names
-// no integration.
+// resolution in the repository's checkout at dir. lux-fake has no loop, so
+// a pending fetch is waited out in sh (integrationFetched) and, if lux
+// still has not brought the base in, sync_base is called once more and
+// waited on again. The merge runs only once the base is in: otherwise the
+// Run publishes nothing (no_merge). "" when the prompt names no
+// integration.
 func IntegrationScript(prompt, dir string) string {
 	base, _, ok := integrationTarget(prompt)
 	if !ok {
 		return ""
 	}
+	fetched := integrationFetched(base, integrationBaseHead(prompt))
+	wait := fmt.Sprintf(`i=0; until %s; do i=$((i+1)); [ $i -ge %d ] && break; sleep 1; done`,
+		fetched, int(scriptFetchWait/time.Second))
 	return "http dude POST /tools/sync_base {}\n" +
 		"cd " + dir + "\n" +
-		"sh " + fmt.Sprintf(integrationResolve, "lux/"+base) + "\n" +
+		"sh rm -f " + syncBaseAgain + "; " + wait + "; " + fetched + " || touch " + syncBaseAgain + "\n" +
+		"if-exists " + syncBaseAgain + " http dude POST /tools/sync_base {}\n" +
+		"if-exists " + syncBaseAgain + " sh " + wait + "\n" +
+		"sh " + fetched + " && { " + fmt.Sprintf(integrationResolve, "lux/"+base) + "; }\n" +
 		"echo " + IntegrationReply
+}
+
+// scriptFetchWait is how long each of the script's waits for the fetch
+// lasts: two of them, with a second sync_base between, SyncBaseRetryFor.
+var scriptFetchWait = SyncBaseRetryFor / 2
+
+// syncBaseAgain marks, in the checkout's git directory (relative to the
+// repository, where the script runs, and never committed), that the first
+// wait for the fetch ran out.
+const syncBaseAgain = ".git/dude-sync-base-again"
+
+// integrationFetched is a sh condition true once the checkout's lux/<base>
+// holds the base head the brief recorded (any lux/<base> when it names
+// none).
+func integrationFetched(base, head string) string {
+	if head == "" {
+		return "git rev-parse -q --verify lux/" + base + " >/dev/null"
+	}
+	return fmt.Sprintf("git merge-base --is-ancestor %s lux/%s 2>/dev/null", head, base)
+}
+
+// integrationBaseHead is the base head an integration brief recorded, ""
+// when it names none.
+func integrationBaseHead(prompt string) string {
+	_, rest, ok := strings.Cut(prompt, "The recorded base head is ")
+	if !ok {
+		return ""
+	}
+	head, _, _ := strings.Cut(rest, ".")
+	if len(head) < 7 || strings.Trim(head, "0123456789abcdef") != "" {
+		return ""
+	}
+	return head
 }
 
 // IntegrationRepo is the repository an integration brief names, "" for none.
