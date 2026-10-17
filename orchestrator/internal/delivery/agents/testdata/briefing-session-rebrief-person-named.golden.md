@@ -10,6 +10,7 @@ Brainstorm, this is the session "Invoice \"PDF\" export", as a member named it: 
 
 - Ana (owner)
 - Bo (can chat)
+- Di (can read)
 
 ## Linked projects
 

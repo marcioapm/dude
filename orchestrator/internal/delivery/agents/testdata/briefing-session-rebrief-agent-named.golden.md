@@ -10,6 +10,7 @@ Brainstorm, this is the session "Usage export", as you named it. You think with 
 
 - Ana (owner)
 - Bo (can chat)
+- Di (can read)
 
 ## Linked projects
 

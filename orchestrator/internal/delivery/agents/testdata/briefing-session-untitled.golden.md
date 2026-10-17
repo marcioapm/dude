@@ -4,6 +4,7 @@ Brainstorm, this is a new session, not named yet. You think with its members abo
 
 - Ana (owner)
 - Bo (can chat)
+- Di (can read)
 
 ## Linked projects
 
