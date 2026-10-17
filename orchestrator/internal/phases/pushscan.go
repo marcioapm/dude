@@ -201,12 +201,16 @@ func trustedBases(ctx context.Context, tx pgx.Tx, r phaseRun) (map[string]string
 		if !ok {
 			continue
 		}
-		branch := cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
-		if sha := synced[name][branch]; isSHA(sha) {
+		if sha := synced[name][baseBranch(tb, repo)]; isSHA(sha) {
 			out[name] = sha
 		}
 	}
 	return out, nil
+}
+
+// baseBranch is the branch repo's task work is based on.
+func baseBranch(tb delivery.TaskBranch, repo delivery.Repository) string {
+	return cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
 }
 
 // splitHistory splits historyScript's output into its repositories'
