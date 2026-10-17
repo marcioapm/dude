@@ -38,7 +38,6 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-width: 720px;
 }
 
 .header {
@@ -198,6 +197,8 @@
 .form {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: var(--ds-measure-message);
   min-width: 0;
   container-type: inline-size;
 }
@@ -293,7 +294,9 @@
 }
 .choice {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  /* The row spans the turn's column; its tracks pack left, so "agent suggests" and the key sit beside the label, not at the far edge. */
+  grid-template-columns: 16px minmax(0, max-content) auto;
+  justify-content: start;
   align-items: start;
   gap: var(--ds-space-12);
   margin: 0 calc(-1 * var(--ds-space-8));

@@ -134,7 +134,8 @@ type Integration struct {
 	// The integration Run, or "server-<sha>" for a merge GitHub made
 	// (agentRun tells them apart).
 	RunID string `json:"runId,omitempty"`
-	// The merge is on the task branch: what follows validates it.
+	// The merge is published on the candidate for an open pull request;
+	// what follows validates it.
 	Published bool   `json:"published,omitempty"`
 	MergeSHA  string `json:"mergeSha,omitempty"`
 	// Before the pull request opened (syncBeforePR): a person's wait goes
@@ -254,6 +255,11 @@ func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext,
 	}
 	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": cause, "error": problem}); err != nil {
 		return workflow.Result{}, err
+	}
+	if c := st.Candidate; c != nil {
+		// Never promoted: what its Runs pushed stays on the candidate, and
+		// the delivery stands on what the pull requests show.
+		st.Heads, st.Candidate = maps.Clone(c.From), nil
 	}
 	return w.escalate(ctx, sc, st, "pull_request_conflict", detail)
 }
