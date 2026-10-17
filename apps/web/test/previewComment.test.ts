@@ -49,6 +49,7 @@ function boot() {
     read: () => ({ origins: previewOrigins(data), items, drafts: items.filter((i) => i.status === "draft").length, taskKey: "SHOP-1", you: "per_me", name: () => "Ana" }),
     upload: upload as never, createDraft: createDraft as never, onSaved: () => {}, onOpenItem: () => {}, onChange: (v) => views.push(v),
   });
+  c.listen();
 }
 
 /** What the page posts, as the browser delivers it to dude's window. */

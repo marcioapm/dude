@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Greeter</title>
+<style>
+  /* The app's own CSS, broad on purpose: none of it may reach dude's overlay. */
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 Georgia, serif; background: #f6f7fb; color: #1d2230; }
+  button { font: 600 15px/1 system-ui, sans-serif; color: #fff; background: #1f7a5a; border: 0; border-radius: 8px; padding: 12px 22px; }
+  header.app-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 32px; background: #fff; border-bottom: 1px solid #e3e6ee; }
+  header nav a { margin-left: 18px; color: #3b4050; text-decoration: none; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  section.hero { grid-column: 1 / -1; }
+  h1 { margin: 0; font-size: 34px; }
+  form#greet { display: grid; gap: 14px; background: #fff; padding: 24px; border-radius: 12px; }
+  label { display: grid; gap: 6px; font: 14px system-ui, sans-serif; }
+  input, select { font: 15px system-ui, sans-serif; padding: 10px; border: 1px solid #c9cdd8; border-radius: 6px; }
+  ul.greetings { list-style: none; margin: 0; padding: 0; background: #fff; border-radius: 12px; }
+  ul.greetings li { padding: 12px 18px; border-bottom: 1px solid #eef0f4; }
+  aside.status iframe { width: 100%; height: 90px; border: 1px dashed #c9cdd8; border-radius: 8px; background: #fff; }
+</style>
+</head>
+<body>
+  <header class="app-header" data-component="AppHeader" data-source="src/components/AppHeader.tsx:12">
+    <b>Greeter</b>
+    <nav><a href="/" data-route="/">Home</a><a href="/greetings" data-route="/greetings">Greetings</a></nav>
+  </header>
+  <main>
+    <section class="hero"><h1>Say hello, in their language</h1></section>
+    <form id="greet" data-component="GreetForm" data-source="src/components/GreetForm.tsx:9" onsubmit="event.preventDefault(); document.querySelector('ul.greetings').insertAdjacentHTML('afterbegin', '<li>Hello!</li>')">
+      <label>Name <input name="name" placeholder="Who are you greeting?"></label>
+      <label>Language <select name="lang"><option>Português (Portugal)</option><option>English</option></select></label>
+      <div><button type="submit" class="greet" data-component="GreetButton" data-source="src/components/GreetForm.tsx:42">Greet</button></div>
+    </form>
+    <div>
+      <ul class="greetings"><li>Olá, Ana!</li><li>Hello, Sam!</li><li>Bonjour, Léa!</li></ul>
+      <aside class="status"><iframe title="Status" src="https://status.widgets.test/"></iframe></aside>
+    </div>
+  </main>
+  <script>
+    // A small SPA: in-app links move with pushState, as a router does.
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a[data-route]");
+      if (!a) return;
+      e.preventDefault();
+      history.pushState({}, "", a.getAttribute("data-route"));
+    });
+  </script>
+  <!--OVERLAY-->
+</body>
+</html>

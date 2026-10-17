@@ -67,7 +67,7 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     onOpenItem: (id) => latest.current.onOpenItem(id),
     onChange: setView,
   }), [client, taskId]);
-  useEffect(() => () => commenting.dispose(), [commenting]);
+  useEffect(() => commenting.listen(), [commenting]);
   // The open page's pins follow the list: a save, a submit, an agent's reply.
   useEffect(() => commenting.refresh(), [commenting, fb.items]);
   const { restart } = servers;

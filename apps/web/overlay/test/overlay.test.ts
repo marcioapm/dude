@@ -148,6 +148,34 @@ test("↑ widens the pick to the parent, step by step, never to the page itself"
   expect(tid("ov-label")!.textContent).toContain("main");
 });
 
+test("↑ widens with focus still on the overlay's Comment button, just pressed", () => {
+  boot();
+  connect();
+  const comment = tid("ov-comment")!;
+  comment.focus();
+  comment.click();
+  hover(win.document.querySelector("button.pay")!);
+  const focused = root.activeElement ?? tid("ov-comment")!;
+  focused.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, composed: true }));
+  expect(tid("ov-label")!.textContent).toContain("#checkout");
+});
+
+test("a frame from another site can't be picked inside: hovering it says so, and a click comments on the frame", () => {
+  page(`<main><iframe src="https://status.widgets.test/" title="Status"></iframe></main>`);
+  const frame = win.document.querySelector("iframe")!;
+  Object.defineProperty(frame, "contentDocument", { configurable: true, get: () => { throw new Error("cross-origin"); } });
+  sized(frame, 50, 300, 400, 90);
+  boot();
+  connect();
+  tid("ov-comment")!.click();
+  const catcher = tid("ov-frame-catcher")!;
+  catcher.dispatchEvent(new win.MouseEvent("mouseover", { bubbles: true }));
+  expect(tid("ov-label")!.textContent).toContain("Can't pick inside this frame");
+  expect(tid("ov-label")!.textContent).toContain("status.widgets.test");
+  tid("ov-frame-catcher")!.click();
+  expect(tid("ov-comment-box")!.getAttribute("aria-label")).toBe("Comment on the frame from status.widgets.test");
+});
+
 test("Esc backs out one step at a time: the box, then picking", () => {
   boot();
   connect();

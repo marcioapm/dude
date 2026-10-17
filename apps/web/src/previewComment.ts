@@ -196,7 +196,12 @@ export class PreviewCommenting {
 
   constructor(deps: CommentingDeps) {
     this.#d = deps;
-    deps.win.addEventListener("message", this.onMessage);
+  }
+
+  /** Starts hearing messages; the returned function stops. */
+  listen(): () => void {
+    this.#d.win.addEventListener("message", this.onMessage);
+    return () => this.dispose();
   }
 
   dispose(): void {

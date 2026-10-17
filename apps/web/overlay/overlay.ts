@@ -286,12 +286,12 @@ export class Overlay {
       return;
     }
     if (!this.#picking || this.#picked) return;
-    if (ours) return;
+    // ↑ works with focus on the overlay's own buttons too (Comment was just pressed); Enter there is that button.
     if (e.key === "ArrowUp" && this.#hover) {
       e.preventDefault();
       e.stopImmediatePropagation();
       this.widen();
-    } else if (e.key === "Enter" && this.#hover) {
+    } else if (e.key === "Enter" && this.#hover && !ours) {
       e.preventDefault();
       e.stopImmediatePropagation();
       this.#pick(this.#hover);
@@ -506,6 +506,7 @@ export class Overlay {
   #layers(narrow: boolean): Child[] {
     const out: Child[] = [];
     if (this.#showPins && this.#connection === "connected" && !this.#picking && !this.#picked) out.push(...this.#pinLayer());
+    if (this.#picking && !this.#picked) out.push(...this.#frameCatchers());
     if (this.#picking && !this.#picked && this.#hover) out.push(...this.#hoverLayer(this.#hover));
     if (this.#picked) out.push(...this.#boxLayer(narrow));
     out.push(this.#collapsed && !this.#picking && !this.#picked ? this.#pill() : this.#bar(narrow));
@@ -529,10 +530,32 @@ export class Overlay {
         this.#h("span", { class: "mono" }, labelFor(selectorFor(el), componentOf(el))),
         this.#h("span", { class: "dim" }, `${Math.round(r.width)}×${Math.round(r.height)}`));
     const out: Child[] = [box, label];
-    // A frame from another site keeps its own clicks: a catcher over it takes the one that picks it.
-    if (frame) out.push(this.#h("div", { class: "shield", "data-testid": "ov-frame-catcher",
-      style: `inset:auto;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`,
-      onclick: (e: Event) => { e.preventDefault(); this.#pick(el); } }));
+    return out;
+  }
+
+  /**
+   * While picking, a catcher over each frame from another site: the page
+   * hears no pointer inside such a frame, so the catcher is where hovering
+   * says it can't be read and a click picks the frame as a whole.
+   */
+  #frameCatchers(): Child[] {
+    const out: Child[] = [];
+    for (const f of this.#doc.querySelectorAll("iframe, frame")) {
+      if (!foreignFrame(f, this.#win)) continue;
+      const r = this.#rect(f);
+      if (r.width < 1 || r.height < 1) continue;
+      const over = () => {
+        if (this.#hover !== f) {
+          this.#hover = f;
+          this.#widenedFrom = null;
+          this.#render();
+        }
+      };
+      out.push(this.#h("div", { class: "shield", "data-testid": "ov-frame-catcher",
+        style: `inset:auto;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`,
+        onmouseover: over, onmousemove: over,
+        onclick: (e: Event) => { e.preventDefault(); this.#pick(f); } }));
+    }
     return out;
   }
 

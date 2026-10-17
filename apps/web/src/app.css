@@ -1555,7 +1555,10 @@ body {
 }
 /* Where Comment would be, when commenting on previews is off: the reason, muted. */
 .commentOff {
+  display: inline-block;
+  max-width: 15em;
   font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-tight);
   color: var(--ds-color-text-muted);
   padding: 0 var(--ds-space-8);
 }

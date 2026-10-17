@@ -36,7 +36,7 @@ svg{flex:none}
 .hint b{color:#f3f4f8}
 .pill{position:fixed;right:20px;bottom:20px;padding:4px;height:auto;border-radius:999px;background:var(--ink);box-shadow:0 6px 18px rgba(0,0,0,.3)}
 .pill .mark{border-radius:50%}
-.panel{display:flex;flex-direction:column;width:420px;max-width:100%;max-height:60vh;overflow:auto;border-bottom:1px solid var(--line)}
+.panel{display:flex;flex-direction:column;min-width:420px;max-width:100%;max-height:60vh;overflow:auto;border-bottom:1px solid var(--line)}
 .ph{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px 6px}
 .pp{margin:0;padding:0 12px 10px;color:var(--dim)}
 .pp b{color:#f3f4f8}
@@ -88,10 +88,10 @@ dd{margin:0;overflow-wrap:anywhere}
 .pin.resolved{background:var(--ok)}
 .pin.gone{background:transparent;border:1.5px dashed var(--warn);color:var(--warn)}
 .pin.active{outline:2px solid var(--pick);outline-offset:2px}
-.toast{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--ink2);width:440px;max-width:100%}
+.toast{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--ink2);min-width:440px;max-width:100%}
 .tt{flex:1;display:flex;flex-direction:column;min-width:0;font-size:12px}
 .tt b{font-size:13px}
 .okc{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--ok);color:#fff}
 .narrow .bar{left:8px;right:8px!important;bottom:8px!important;max-width:none}
-.narrow .panel,.narrow .toast{width:auto}
+.narrow .panel,.narrow .toast{width:auto;min-width:0}
 `;

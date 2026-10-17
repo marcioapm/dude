@@ -208,7 +208,8 @@
   display: block;
   width: 100%;
   aspect-ratio: 16 / 10;
-  object-fit: cover;
+  /* The picture is the element alone, outlined: all of it shows, never cropped. */
+  object-fit: contain;
   border-radius: var(--ds-radius-mark);
   background: var(--ds-color-sunken);
 }
