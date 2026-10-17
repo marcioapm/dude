@@ -47,19 +47,19 @@
     </div>
   </main>
   <script>
-    // The canvas is blue; the video plays a stream whose left half is green and right half yellow.
+    // The canvas is blue; the video plays a 128x64 stream, twice its 64x32 box, whose left half is green and right half yellow.
     const blue = document.querySelector(".promo canvas").getContext("2d");
     blue.fillStyle = "rgb(0, 0, 230)";
     blue.fillRect(0, 0, 64, 32);
     const frames = document.createElement("canvas");
-    frames.width = 64;
-    frames.height = 32;
+    frames.width = 128;
+    frames.height = 64;
     const f = frames.getContext("2d");
     const paint = () => {
       f.fillStyle = "rgb(0, 200, 0)";
-      f.fillRect(0, 0, 32, 32);
+      f.fillRect(0, 0, 64, 64);
       f.fillStyle = "rgb(240, 240, 0)";
-      f.fillRect(32, 0, 32, 32);
+      f.fillRect(64, 0, 64, 64);
     };
     paint();
     setInterval(paint, 100);
