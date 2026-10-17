@@ -1,8 +1,10 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -87,7 +89,23 @@ func maskNow(t *testing.T, s string, now time.Time) string {
 	return goldenNow.ReplaceAllString(s, "→ NOW UTC)")
 }
 
+// requireTestDatabase fails where dbtest.Open would skip: under -update a
+// skipped briefing golden would be left as it was while the run reports ok.
+// The address and credentials are dbtest's.
+func requireTestDatabase(t *testing.T) {
+	t.Helper()
+	host := cmp.Or(os.Getenv("DUDE_TEST_PG"), "localhost:5433")
+	conn, err := pgx.Connect(context.Background(), "postgres://dude:dude@"+host+"/postgres")
+	if err != nil {
+		t.Fatalf("-update needs the test database (DUDE_TEST_PG, default localhost:5433) to rewrite the briefing goldens: %v", err)
+	}
+	conn.Close(context.Background())
+}
+
 func newGoldenWorld(t *testing.T) goldenWorld {
+	if *updateGoldens {
+		requireTestDatabase(t)
+	}
 	app, owner := dbtest.Open(t)
 	w := goldenWorld{app: app, owner: owner, org: dbtest.Org(t, owner)}
 	w.exec(t, `INSERT INTO people (id, organization_id, name) VALUES ('per_ana', $1, 'Ana'), ('per_bo', $1, 'Bo'), ('per_cy', $1, 'Cy')`)

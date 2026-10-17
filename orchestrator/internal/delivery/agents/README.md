@@ -56,3 +56,11 @@ git diff internal/delivery/agents/testdata
 
 Without `-update` the test fails on any byte that differs and names the
 first line.
+
+The briefing goldens (`briefing-*`, `epic-*`, `digest-*`,
+`brainstorm-question-withdrawn` and the `*-with-briefing*` prompts) render
+over a Postgres database: they need `DUDE_TEST_PG=host:port` (default
+`localhost:5433`, user and password `dude`) and `bun` on the `PATH`, which
+runs the migrations. Without a database those tests are skipped, and
+`go test -v` prints `SKIP … no test database` for each: it means they were
+not checked. With `-update` and no database they fail instead.
