@@ -1,7 +1,8 @@
 // Package llm is how the orchestrator speaks to the LLM proxy itself: which
 // of the agent image's two providers a model goes through, the models the
-// proxy lists, and a test message to one. It holds the proxy's key
-// (DUDE_LLM_KEY); the backend never does.
+// proxy lists, a test message to one, and a direct Chat Completions call
+// (Complete). It holds the proxy's key (DUDE_LLM_KEY); the backend never
+// does.
 package llm
 
 import (

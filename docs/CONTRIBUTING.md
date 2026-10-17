@@ -160,6 +160,14 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   requested. A role on no
   tier, or on one with no model, fails its Run saying so. Design:
   [`design/model-tiers.md`](design/model-tiers.md).
+- **dude can also call a model directly**, with no agent and no tools:
+  `llm.Client.Complete` sends one OpenAI-compatible Chat Completions
+  request to the proxy (`/chat/completions`, the same for every provider),
+  and every such call is recorded, redacted and without its headers, in
+  `model_calls`. On it, `internal/judge` asks the organisation's judgement
+  tier (`organizations.judgement_tier_id`, Off by default) one question
+  and reads back yes, no or unsure with a confidence, failing closed.
+  Nothing calls it yet. Design: [`design/judgements.md`](design/judgements.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
 - **Project secrets reach the phases each names** (`phases/projectsecrets.go`),
