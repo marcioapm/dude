@@ -15,7 +15,7 @@
  */
 
 import {
-  OVERLAY_LIMITS, OVERLAY_PROTOCOL, overlayPage,
+  OVERLAY_LIMITS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage,
   type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
@@ -116,39 +116,46 @@ const asElement = (t: EventTarget | null): Element | null => (t !== null && (t a
 
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
+// overlaySessionSchema's rules, by hand: the overlay bundles no zod.
 const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme"]);
-const PIN_STATUSES = new Set(["draft", "open", "delivered", "resolved", "replied"]);
-const REPLY_KINDS = new Set(["reply", "resolve", "reopen"]);
+const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
+const REPLY_KEYS = new Set(["who", "kind", "body"]);
+const PIN_STATUSES = new Set<unknown>(["draft", "open", "delivered", "resolved", "replied"]);
+const REPLY_KINDS = new Set<unknown>(["reply", "resolve", "reopen"]);
 
-function plainObject(value: unknown): value is Record<string, unknown> {
+/** A plain object with no key outside `keys`, as zod's `.strict()`. */
+function strictObject(value: unknown, keys: ReadonlySet<string>): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
   const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  return (proto === Object.prototype || proto === null) && Object.keys(value).every((key) => keys.has(key));
 }
 
 function boundedString(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
 }
 
+function wholeNumber(value: unknown, min: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min;
+}
+
+function validReply(value: unknown): boolean {
+  return strictObject(value, REPLY_KEYS) && boundedString(value.who, OVERLAY_LIMITS.name) && REPLY_KINDS.has(value.kind)
+    && boundedString(value.body, OVERLAY_LIMITS.replyBody);
+}
+
 function validPin(value: unknown): value is OverlayPin {
-  if (!plainObject(value) || !Object.keys(value).every((key) => ["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"].includes(key))) return false;
-  if (!boundedString(value.id, 100) || value.id.length === 0 || typeof value.n !== "number" || !Number.isInteger(value.n) || value.n < 1
-    || typeof value.status !== "string" || !PIN_STATUSES.has(value.status) || !boundedString(value.author, OVERLAY_LIMITS.name) || typeof value.mine !== "boolean"
-    || !boundedString(value.body, OVERLAY_LIMITS.pinBody) || !boundedString(value.selector, 2_000) || !boundedString(value.when, OVERLAY_LIMITS.name)
-    || !Array.isArray(value.replies) || value.replies.length > OVERLAY_LIMITS.replies) return false;
-  return value.replies.every((reply) => plainObject(reply)
-    && Object.keys(reply).every((key) => ["who", "kind", "body"].includes(key))
-    && boundedString(reply.who, OVERLAY_LIMITS.name)
-    && typeof reply.kind === "string" && REPLY_KINDS.has(reply.kind)
-    && boundedString(reply.body, OVERLAY_LIMITS.replyBody));
+  return strictObject(value, PIN_KEYS) && boundedString(value.id, 100) && value.id.length > 0 && wholeNumber(value.n, 1)
+    && PIN_STATUSES.has(value.status) && boundedString(value.author, OVERLAY_LIMITS.name) && typeof value.mine === "boolean"
+    && boundedString(value.body, OVERLAY_LIMITS.pinBody) && boundedString(value.selector, 2_000) && boundedString(value.when, OVERLAY_LIMITS.name)
+    && Array.isArray(value.replies) && value.replies.length <= OVERLAY_LIMITS.replies && value.replies.every(validReply);
 }
 
 function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "session" }> {
-  if (!plainObject(value) || !Object.keys(value).every((key) => SESSION_KEYS.has(key))
-    || value.type !== "session" || value.v !== OVERLAY_PROTOCOL || !boundedString(value.task, 100)
-    || typeof value.url !== "string" || value.url.length > 2_048 || !Array.isArray(value.pins)
-    || value.pins.length > OVERLAY_LIMITS.pins || typeof value.drafts !== "number" || !Number.isInteger(value.drafts)
-    || value.drafts < 0 || typeof value.showPins !== "boolean" || (value.theme !== undefined && value.theme !== "light" && value.theme !== "dark")) return false;
+  if (!strictObject(value, SESSION_KEYS) || value.type !== "session" || value.v !== OVERLAY_PROTOCOL
+    || !boundedString(value.task, 100) || !boundedString(value.url, 2_048)
+    || !Array.isArray(value.pins) || value.pins.length > OVERLAY_LIMITS.pins
+    || !wholeNumber(value.drafts, 0) || typeof value.showPins !== "boolean"
+    || (value.theme !== undefined && !OVERLAY_THEMES.includes(value.theme as OverlayTheme))) return false;
   try {
     const url = new URL(value.url);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
