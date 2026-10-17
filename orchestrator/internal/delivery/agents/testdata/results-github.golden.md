@@ -82,3 +82,7 @@ GitHub shows no diff for it (binary, or too large)
 
 …cut
 
+## text-cut
+
+ …cut: 4 of 10 bytes
+

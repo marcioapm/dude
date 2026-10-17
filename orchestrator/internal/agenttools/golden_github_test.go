@@ -52,6 +52,7 @@ func TestGoldenGitHubAndMachineWords(t *testing.T) {
 		[2]string{"pr-more-files", fmt.Sprint(pr["moreFiles"])},
 		[2]string{"pr-no-diff", pr["files"].([]ghFileOut)[filesMax-1].Diff},
 		[2]string{"cut", cutMark},
+		[2]string{"text-cut", strings.TrimPrefix(w.text("abcdefghij", 4), w.text("abcd", 4))},
 	)
 	githubGoldenLines(t, "results-github", lines)
 }
