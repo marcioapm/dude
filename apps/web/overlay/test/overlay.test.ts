@@ -394,6 +394,50 @@ test("a save dude never answers is given up on: the reason, Copy text, Save agai
   expect(count('[data-testid="ov-problem"]')).toBe(0);
 });
 
+test("after the give-up, a late saved from a slow dude still lands: the box closes and says it was saved", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  await writeOnPay("Slow link");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { type: string; nonce: string };
+  await tick(100);
+  expect(tid("ov-problem")!.textContent).toContain("dude didn't answer");
+  fromDude({ type: "saved", v: 1, nonce: first.nonce, id: "fbk_1", drafts: 1, picture: "none" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(0);
+  expect(count('[data-testid="ov-saved"]')).toBe(1);
+});
+
+test("after the give-up, Save again sends the same save, so dude never saves the words twice", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  await writeOnPay("Slow link");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { type: string; nonce: string };
+  expect(first.type).toBe("draft");
+  await tick(100);
+  connect();
+  tid("ov-save")!.click();
+  const again = sent().at(-1) as { type: string; nonce: string };
+  expect(again).toMatchObject({ type: "draft", nonce: first.nonce });
+  fromDude({ type: "saved", v: 1, nonce: first.nonce, id: "fbk_1", drafts: 1, picture: "none" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(0);
+  expect(count('[data-testid="ov-saved"]')).toBe(1);
+});
+
+test("Esc while an IME is composing is the IME's: the box and its words stay", async () => {
+  boot();
+  connect();
+  const field = await writeOnPay("にほ");
+  field.dispatchEvent(new win.CompositionEvent("compositionstart", { bubbles: true }));
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, isComposing: true }));
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("にほ");
+  // Once the composition is over, Esc is the overlay's again.
+  field.dispatchEvent(new win.CompositionEvent("compositionend", { bubbles: true }));
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  expect(count('[data-testid="ov-comment-box"]')).toBe(0);
+});
+
 const pinOn = (id: string, selector: string, n = 1): OverlayPin =>
   ({ id, n, status: "open", author: "Ana", mine: false, body: `about ${selector}`, selector, when: "", replies: [] });
 

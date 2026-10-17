@@ -384,3 +384,24 @@ test("commenting is offered on a live preview's ready servers, or not with the r
   const offer = commentingOffer(servers([server("web", WEB, { needsRestart: true }), server("api", API, { state: "starting" }), server("plain", "http://x.test")]));
   expect(offer).toEqual({ kind: "available", servers: [{ name: "web", url: WEB, needsRestart: true }], restart: ["web"] });
 });
+
+test("a draft sent again with its nonce is saved once: in flight it is answered when it lands, after that with the same draft", async () => {
+  let finish!: () => void;
+  upload = mock(() => new Promise<string>((r) => { finish = () => r("att_1"); }));
+  c.dispose();
+  boot();
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor(), picture: PNG });
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor(), picture: PNG });
+  await tick();
+  expect(told()).toEqual([]);
+  finish();
+  await tick(5);
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor(), picture: PNG });
+  await tick(5);
+  expect(createDraft).toHaveBeenCalledTimes(1);
+  expect(upload).toHaveBeenCalledTimes(1);
+  const saved = told().filter((m) => m.type === "saved");
+  expect(saved).toHaveLength(2);
+  expect(saved.map((m) => m.type === "saved" && m.id)).toEqual(["fbk_new", "fbk_new"]);
+});

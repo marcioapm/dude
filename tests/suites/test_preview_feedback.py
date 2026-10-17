@@ -139,8 +139,12 @@ def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
     done the read is the preview's again; one that went to sleep meanwhile is
     woken as a visitor would.
     """
+    # Between two of the delivery's Runs the read is briefly the preview's again: wait for the delivery to rest first.
+    wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(task["id"]))
+               and not any(r["status"] in ("scheduled", "starting", "running") for r in client.task_runs(task["id"]) if r.get("kind") != "preview"),
+               timeout=180, message="the delivery's agents were still at work after 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
-                      timeout=180, message="the delivery's agents were still at work after 180 s: the servers read never came back to the preview")
+                      timeout=60, message="the servers read never came back to the preview after the delivery rested")
     if read["run"].get("asleep"):
         _lux(env, "POST", f"/fake/servers/{read['servers'][0]['id']}/request?path=/")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview"

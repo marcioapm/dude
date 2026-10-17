@@ -213,6 +213,9 @@ export class PreviewCommenting {
   #pendingHighlight: string | null = null;
   // One draft from the window at a time.
   #saving = false;
+  // The save in flight, and the ones answered: a nonce sent again (the overlay gave up waiting) is not saved twice.
+  #inFlight: string | null = null;
+  readonly #answered = new Map<string, Extract<DudeToOverlay, { type: "saved" }>>();
   #timers: number[] = [];
   readonly #d: CommentingDeps;
 
@@ -297,7 +300,9 @@ export class PreviewCommenting {
    * comment stay; opened at `url` otherwise.
    */
   comment(url: string, server: string): boolean {
-    if ((this.#state === "open" || this.#state === "waiting") && this.#server === server && this.#win && !this.#win.closed) {
+    // By origin, not only server name: a window taken back after a reload knows its page, not its server.
+    const same = this.#server === server || this.#server === null && originOf(this.#url) !== null && originOf(this.#url) === originOf(url);
+    if ((this.#state === "open" || this.#state === "waiting") && same && this.#win && !this.#win.closed) {
       this.focus();
       return true;
     }
@@ -407,13 +412,21 @@ export class PreviewCommenting {
       case "open":
         if (this.#d.read().items.some((i) => i.id === msg.itemId)) this.#d.onOpenItem(msg.itemId);
         return;
-      case "draft":
+      case "draft": {
+        const done = this.#answered.get(msg.nonce);
+        if (done) {
+          this.#post(done);
+          return;
+        }
         if (this.#saving) {
-          this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: "Still saving the last one" });
+          // The same save sent again is answered when it lands; another one waits its turn.
+          if (msg.nonce !== this.#inFlight) this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: "Still saving the last one" });
           return;
         }
         this.#saving = true;
-        void this.#save(msg).finally(() => { this.#saving = false; });
+        this.#inFlight = msg.nonce;
+        void this.#save(msg).finally(() => { this.#saving = false; this.#inFlight = null; });
+      }
     }
   };
 
@@ -467,7 +480,10 @@ export class PreviewCommenting {
       const anchor: OverlayAnchor & { attachmentId?: string } = { ...msg.anchor, ...(attachmentId ? { attachmentId } : {}) };
       const created = await this.#d.createDraft(anchor, msg.body);
       this.#saved++;
-      this.#post({ type: "saved", v: OVERLAY_PROTOCOL, nonce: msg.nonce, id: created.id, drafts: created.drafts, picture });
+      const saved = { type: "saved", v: OVERLAY_PROTOCOL, nonce: msg.nonce, id: created.id, drafts: created.drafts, picture } as const;
+      this.#answered.set(msg.nonce, saved);
+      if (this.#answered.size > 50) this.#answered.delete(this.#answered.keys().next().value!);
+      this.#post(saved);
       this.#d.onSaved(created.id);
       this.#emit();
     } catch (err) {

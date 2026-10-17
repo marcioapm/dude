@@ -133,6 +133,8 @@ export class Overlay {
   #attach = true;
   #field: HTMLTextAreaElement | null = null;
   #saving: string | null = null;
+  // The save given up on after SAVE_WAIT_MS: dude may only have been slow, so its answer still counts.
+  #late: string | null = null;
   #saveTimer = 0;
   // A save went unanswered: Copy text is offered beside Save.
   #unanswered = false;
@@ -264,14 +266,14 @@ export class Overlay {
         }
         break;
       case "saved":
-        if (m.nonce !== this.#saving) return;
+        if (m.nonce !== this.#saving && (this.#late === null || m.nonce !== this.#late)) return;
         this.#saveDone();
         this.#drafts = Number(m.drafts) || this.#drafts;
         this.#toast = { drafts: this.#drafts, picture: m.picture, ...(this.#picture.state === "failed" ? { why: this.#picture.why } : {}) };
         this.#closeBox(false);
         break;
       case "refused":
-        if (m.nonce !== undefined && m.nonce !== this.#saving) return;
+        if (m.nonce !== undefined && m.nonce !== this.#saving && m.nonce !== this.#late) return;
         this.#saveDone();
         this.#problem = String(m.reason).slice(0, 500);
         break;
@@ -346,6 +348,8 @@ export class Overlay {
     if (this.#stopped) return;
     const ours = this.#ours(e);
     if (e.key === "Escape") {
+      // Esc while composing cancels the composition: it is the IME's, and the words stay.
+      if (e.isComposing || e.keyCode === 229) return;
       // Picking or writing, Esc is the overlay's alone; otherwise it closes a toast, popover or panel and the page still hears it.
       const owned = this.#picking || this.#picked !== null;
       if (this.#back() && owned) {
@@ -470,7 +474,8 @@ export class Overlay {
       this.#render();
       return;
     }
-    const nonce = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    // After a give-up, Save again is the same save: dude answers a nonce it already saved without saving twice.
+    const nonce = this.#late ?? `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const msg: OverlayToDude = { type: "draft", v: OVERLAY_PROTOCOL, nonce, body: body.slice(0, OVERLAY_LIMITS.body), anchor: this.#picked.anchor };
     if (this.#attach && this.#picture.state === "ready") msg.picture = this.#picture.url;
     if (!this.#post(msg)) {
@@ -485,6 +490,7 @@ export class Overlay {
 
   #saveDone(): void {
     this.#saving = null;
+    this.#late = null;
     this.#unanswered = false;
     this.#win.clearTimeout(this.#saveTimer);
   }
@@ -497,6 +503,7 @@ export class Overlay {
   #saveUnanswered(nonce: string): void {
     if (this.#saving !== nonce || this.#stopped) return;
     this.#saving = null;
+    this.#late = nonce;
     this.#unanswered = true;
     this.#problem = SAVE_UNANSWERED;
     this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
@@ -660,6 +667,7 @@ export class Overlay {
     const keep = new Map<string, PinNodes>();
     const want: Node[] = [];
     if (this.#pinsShown()) {
+      const placed: Array<[PinNodes, DOMRect]> = [];
       for (const p of this.#pins) {
         const el = resolveOne(this.#doc, p.selector);
         if (!el) continue;
@@ -667,12 +675,13 @@ export class Overlay {
         const key = `${JSON.stringify(p)}|${active ? `+${this.#popover?.from ?? ""}` : "-"}`;
         const old = this.#pinNodes.get(p.id);
         const n = old && old.key === key ? old : this.#pinNode(p, active, key);
-        this.#placePin(n, el);
+        placed.push([n, this.#rect(el)]);
         keep.set(p.id, n);
         if (n.show) want.push(n.show);
         want.push(n.pin);
         if (n.pop) want.push(n.pop);
       }
+      for (const [n, r] of placed) this.#placePin(n, r);
     }
     this.#pinNodes = keep;
     sync(this.#lay.pins, want);
@@ -682,17 +691,19 @@ export class Overlay {
   #placePins(): void {
     if (this.#stopped || !this.#pinsShown()) return;
     let changed = false;
+    // Every read before any write, so the page is laid out once, not once per pin.
+    const moves: Array<[PinNodes, DOMRect]> = [];
     for (const p of this.#pins) {
       const el = resolveOne(this.#doc, p.selector);
       const n = this.#pinNodes.get(p.id);
       if (!el !== !n) changed = true;
-      else if (el && n) this.#placePin(n, el);
+      else if (el && n) moves.push([n, this.#rect(el)]);
     }
+    for (const [n, r] of moves) this.#placePin(n, r);
     if (changed) this.#syncPins();
   }
 
-  #placePin(n: PinNodes, el: Element): void {
-    const r = this.#rect(el);
+  #placePin(n: PinNodes, r: DOMRect): void {
     const at = (node: HTMLElement, style: string) => { if (node.getAttribute("style") !== style) node.setAttribute("style", style); };
     at(n.pin, `left:${Math.max(4, r.right - 18)}px;top:${Math.max(4, r.top - 14)}px`);
     if (n.show) at(n.show, `left:${r.left - 3}px;top:${r.top - 3}px;width:${r.width + 6}px;height:${r.height + 6}px`);
