@@ -76,7 +76,7 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
   const restarting = servers.busy !== null;
   return useMemo(() => ({
     offer, view,
-    open: (s: { name: string; url: string }) => void commenting.open(s.url, s.name),
+    open: (s: { name: string; url: string }) => void commenting.comment(s.url, s.name),
     show: (item: FeedbackItem) => void commenting.show(item),
     canShow: (item: FeedbackItem) => item.anchor.kind === "preview" && showable(offer, item.anchor.url),
     focus: () => commenting.focus(),

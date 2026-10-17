@@ -48,10 +48,20 @@ function imageData(img: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement,
   }
 }
 
-function cloneWithStyles(root: Element, win: Window): Element {
+// Nodes cloned between yields to the page, so a large element doesn't hold the main thread for its whole walk.
+const NODES_PER_YIELD = 200;
+
+async function cloneWithStyles(root: Element, win: Window): Promise<Element> {
+  // Counted before any style is read: an element over the cap costs one native count, not a walk.
+  if (root.getElementsByTagName("*").length + 1 > MAX_NODES) throw new PictureError("it is too large to draw");
   let nodes = 0;
-  const walk = (el: Element): Element => {
+  const pause = () => new Promise<void>((r) => {
+    if (win.requestAnimationFrame) win.requestAnimationFrame(() => r());
+    else win.setTimeout(r, 0);
+  });
+  const walk = async (el: Element): Promise<Element> => {
     if (++nodes > MAX_NODES) throw new PictureError("it is too large to draw");
+    if (nodes % NODES_PER_YIELD === 0) await pause();
     const name = el.localName;
     let out: Element;
     if (name === "canvas" || name === "video") {
@@ -68,7 +78,7 @@ function cloneWithStyles(root: Element, win: Window): Element {
       }
       if (name === "input" || name === "textarea") out.setAttribute("value", (el as HTMLInputElement).value);
       for (const c of el.childNodes) {
-        if (c.nodeType === 1) out.appendChild(walk(c as Element));
+        if (c.nodeType === 1) out.appendChild(await walk(c as Element));
         else if (c.nodeType === 3) out.appendChild(c.cloneNode());
       }
     }
@@ -97,7 +107,7 @@ export async function drawPicture(el: Element, win: Window): Promise<string> {
   const r = el.getBoundingClientRect();
   const w = Math.ceil(r.width), h = Math.ceil(r.height);
   if (w < 1 || h < 1) throw new PictureError("it has no size");
-  const clone = cloneWithStyles(el, win);
+  const clone = await cloneWithStyles(el, win);
   clone.setAttribute("style", `${clone.getAttribute("style")}margin:0;position:static;transform:none;`);
   const xhtml = new XMLSerializer().serializeToString(clone);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject x="0" y="0" width="100%" height="100%">`

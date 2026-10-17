@@ -183,6 +183,7 @@ export class Overlay {
     this.#win.addEventListener("scroll", this.#later, true);
     this.#win.addEventListener("resize", this.#later);
     this.#win.addEventListener("popstate", this.#onRoute);
+    this.#win.addEventListener("hashchange", this.#onRoute);
     this.#wrapHistory();
     if (!this.#opener()) {
       this.#connection = "none";
@@ -196,7 +197,8 @@ export class Overlay {
       }, 1_000));
     }
     // Pins follow what the page draws, which may move without a scroll: moved in place, never redrawn.
-    this.#timers.push(this.#win.setInterval(() => this.#placePins(), this.#opts.tickMs ?? 1_500));
+    // The route is checked too, for an app that kept history's own pushState from before the overlay wrapped it.
+    this.#timers.push(this.#win.setInterval(() => { this.#onRoute(); this.#placePins(); }, this.#opts.tickMs ?? 1_500));
     this.#render();
   }
 
@@ -213,6 +215,7 @@ export class Overlay {
     this.#win.removeEventListener("scroll", this.#later, true);
     this.#win.removeEventListener("resize", this.#later);
     this.#win.removeEventListener("popstate", this.#onRoute);
+    this.#win.removeEventListener("hashchange", this.#onRoute);
     this.host.remove();
   }
 
@@ -343,7 +346,9 @@ export class Overlay {
     if (this.#stopped) return;
     const ours = this.#ours(e);
     if (e.key === "Escape") {
-      if (this.#back()) {
+      // Picking or writing, Esc is the overlay's alone; otherwise it closes a toast, popover or panel and the page still hears it.
+      const owned = this.#picking || this.#picked !== null;
+      if (this.#back() && owned) {
         e.preventDefault();
         e.stopImmediatePropagation();
       }
@@ -869,7 +874,7 @@ export class Overlay {
   }
 
   #routeNote(): HTMLElement {
-    const path = (() => { try { return new URL(this.#win.location.href).pathname; } catch { return ""; } })();
+    const path = (() => { try { const u = new URL(this.#win.location.href); return u.pathname + (/^#!?\//.test(u.hash) ? u.hash : ""); } catch { return ""; } })();
     return this.#h("span", { "data-testid": "ov-route" }, this.#g("route", 12), " Now on ", this.#h("b", { class: "mono" }, path),
       this.#pins.length === 0 ? " · no comments here yet" : ` · ${this.#pins.length} here`);
   }

@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { resolveOne, selectorFor } from "../pick.ts";
-import { tooBig } from "../picture.ts";
+import { PictureError, drawPicture, tooBig } from "../picture.ts";
 
 test("a selector is built that finds the element and nothing else, also among look-alike siblings", () => {
   document.body.innerHTML = `<ul class="list"><li class="row"><a>one</a></li><li class="row"><a>two</a></li><li class="row"><a>three</a></li></ul>
@@ -35,4 +35,18 @@ test("a picture is off by default for an element larger than the window", () => 
   expect(tooBig(el, win)).toBe(true);
   box(400, 900);
   expect(tooBig(el, win)).toBe(true);
+});
+
+test("an element over the picture's node cap is refused before any style is read", async () => {
+  const el = document.createElement("div");
+  el.innerHTML = "<span></span>".repeat(2_500);
+  document.body.append(el);
+  el.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 300, right: 400, bottom: 300, toJSON: () => ({}) }) as DOMRect;
+  const styles = spyOn(window, "getComputedStyle");
+  const err = await drawPicture(el, window as unknown as Window).catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(PictureError);
+  expect((err as Error).message).toBe("it is too large to draw");
+  expect(styles).not.toHaveBeenCalled();
+  styles.mockRestore();
+  el.remove();
 });

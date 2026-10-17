@@ -441,3 +441,55 @@ test("it takes no focus until picking or writing", () => {
   connect();
   expect(win.document.activeElement).toBe(win.document.body);
 });
+
+test("hash routes are pages: each shows only its own pins, and moving between them is told to dude", async () => {
+  page(`<button class="pay">Pay</button><p class="other">x</p>`);
+  win.location.href = "https://web-wi-1-shop.preview.example.test/#/cart";
+  boot();
+  expect(sent()[0]).toEqual({ type: "hello", v: 1, url: "https://web-wi-1-shop.preview.example.test/#/cart" });
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: "https://web-wi-1-shop.preview.example.test/#/cart", drafts: 0, showPins: true, pins: [pinOn("c", "button.pay")] });
+  expect([...root.querySelectorAll('[data-testid="ov-pin"]')].map((p) => p.getAttribute("data-id"))).toEqual(["c"]);
+  win.location.hash = "#/settings";
+  win.dispatchEvent(new win.HashChangeEvent("hashchange"));
+  expect(sent().at(-1)).toEqual({ type: "navigated", v: 1, url: "https://web-wi-1-shop.preview.example.test/#/settings" });
+  expect(count('[data-testid="ov-pin"]')).toBe(0);
+  // The /#/cart session is not this page's.
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: "https://web-wi-1-shop.preview.example.test/#/cart", drafts: 0, showPins: true, pins: [pinOn("c", "button.pay")] });
+  expect(count('[data-testid="ov-pin"]')).toBe(0);
+  fromDude({ type: "session", v: 1, task: "SHOP-1", url: "https://web-wi-1-shop.preview.example.test/#/settings", drafts: 0, showPins: true, pins: [pinOn("s", "p.other")] });
+  expect([...root.querySelectorAll('[data-testid="ov-pin"]')].map((p) => p.getAttribute("data-id"))).toEqual(["s"]);
+  // A plain fragment is no route: #top and #bottom are the same page.
+  win.location.hash = "#top";
+  win.dispatchEvent(new win.HashChangeEvent("hashchange"));
+  expect(sent().at(-1)).toEqual({ type: "navigated", v: 1, url: "https://web-wi-1-shop.preview.example.test/#top" });
+  const before = sent().length;
+  win.location.hash = "#bottom";
+  win.dispatchEvent(new win.HashChangeEvent("hashchange"));
+  expect(sent().length).toBe(before);
+});
+
+test("an app holding history's own pushState from before the overlay still has its route change told, on the tick", async () => {
+  const own = win.history.pushState.bind(win.history);
+  boot({ tickMs: 10 });
+  connect();
+  own({}, "", "/greetings");
+  await tick(40);
+  expect(sent().at(-1)).toEqual({ type: "navigated", v: 1, url: "https://web-wi-1-shop.preview.example.test/greetings" });
+});
+
+test("Esc with only a panel showing closes it and the page still hears Esc; picking, the overlay keeps it", () => {
+  boot();
+  connect();
+  const heard: boolean[] = [];
+  win.document.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Escape") heard.push(e.defaultPrevented); });
+  const esc = () => win.document.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  tid("ov-pins")!.click();
+  expect(count('[data-testid="ov-pins-panel"]')).toBe(1);
+  esc();
+  expect(count('[data-testid="ov-pins-panel"]')).toBe(0);
+  expect(heard).toEqual([false]);
+  tid("ov-comment")!.click();
+  esc();
+  expect(count('[data-testid="ov-hint"]')).toBe(0);
+  expect(heard).toEqual([false]);
+});

@@ -73,11 +73,15 @@ export type DudeToOverlay =
   | { type: "highlight"; v: 1; itemId: string }
   | { type: "stop"; v: 1 };
 
-/** The page a URL names, as pins are matched to it: origin and path, the query and fragment aside. */
+/**
+ * The page a URL names, as pins are matched to it: origin and path, the
+ * query aside. The fragment is part of it when it is a hash route
+ * (`#/cart`, `#!/cart`), and aside otherwise (`#top`).
+ */
 export function overlayPage(url: string): string | null {
   try {
     const u = new URL(url);
-    return u.origin + u.pathname;
+    return u.origin + u.pathname + (/^#!?\//.test(u.hash) ? u.hash : "");
   } catch {
     return null;
   }

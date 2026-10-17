@@ -245,6 +245,31 @@ test("Show on preview sends highlight to the open page, or opens the item's page
   expect(told().slice(-2).map((m) => m.type)).toEqual(["session", "highlight"]);
 });
 
+test("Comment with the window already open on that server brings it forward instead of opening it again", () => {
+  let focused = 0;
+  popup.focus = () => { focused++; };
+  expect(c.comment(`${WEB}/`, "web")).toBe(true);
+  expect(opened.length).toBe(1);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  focused = 0;
+  expect(c.comment(`${WEB}/`, "web")).toBe(true);
+  expect(opened.length).toBe(1);
+  expect(focused).toBe(1);
+  // Another server, or a closed window: opened.
+  c.comment(`${API}/`, "api");
+  expect(opened.length).toBe(2);
+  popup.closed = true;
+  c.comment(`${API}/`, "api");
+  expect(opened.length).toBe(3);
+});
+
+test("a hash route is its own page for pins; a plain fragment is not", () => {
+  const list = [item("cart", { url: `${WEB}/#/cart` }), item("settings", { url: `${WEB}/#!/settings` }), item("top", { url: `${WEB}/#top` })];
+  expect(pinsFor(list, `${WEB}/#/cart`, null, () => "Ana").map((p) => p.id)).toEqual(["cart"]);
+  expect(pinsFor(list, `${WEB}/#!/settings`, null, () => "Ana").map((p) => p.id)).toEqual(["settings"]);
+  expect(pinsFor(list, `${WEB}/`, null, () => "Ana").map((p) => p.id)).toEqual(["top"]);
+});
+
 test("a window that never says hello is the preview not answering; one closed says so", async () => {
   c.open(`${WEB}/cart`, "web");
   await tick(60);

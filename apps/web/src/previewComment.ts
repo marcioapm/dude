@@ -289,6 +289,19 @@ export class PreviewCommenting {
     return true;
   }
 
+  /**
+   * Comment (or Comment on preview) on `server`: the window brought forward
+   * when it is already open on that server, so the page and a half-written
+   * comment stay; opened at `url` otherwise.
+   */
+  comment(url: string, server: string): boolean {
+    if ((this.#state === "open" || this.#state === "waiting") && this.#server === server && this.#win && !this.#win.closed) {
+      this.focus();
+      return true;
+    }
+    return this.open(url, server);
+  }
+
   /** Brings the window forward, if it is still open. */
   focus(): void {
     try {
