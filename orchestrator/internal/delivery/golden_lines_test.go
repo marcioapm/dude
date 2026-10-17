@@ -116,3 +116,17 @@ func TestGoldenDecisionFacts(t *testing.T) {
 	}
 	goldenTexts(t, "decision-facts", lines)
 }
+
+// Why a publish is refused as it lands, what it did not move, and the
+// first words of a conductor an unblocked task's Talk it through starts.
+func TestGoldenPublishAndUnblockWords(t *testing.T) {
+	var lines [][2]string
+	add := func(name, text string) { lines = append(lines, [2]string{name, text}) }
+	for _, c := range []struct{ c, what string }{{"not-conductor", ""}, {"read-only", "lux cannot sync it"},
+		{"no-delivery", ""}, {"ended", "done"}, {"started-over", ""}} {
+		add("publish-refused-"+c.c, publishRefusedWhy(c.c, c.what))
+	}
+	add("not-moved", strings.Join(notMovedParts(map[string]string{"web": "the branch\nmoved"}, map[string]string{"api": "1111111aaaa"}), "; "))
+	add("talk-when-unblocked", talkWhenUnblocked("Ana", "GLD-8"))
+	goldenTexts(t, "publish-unblock-words", lines)
+}

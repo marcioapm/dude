@@ -53,3 +53,13 @@ func TestGoldenRunNotices(t *testing.T) {
 		{"clone-failed-long", cloneFailedNote("api", strings.Repeat("e", 250), taskCloneRemedy)},
 	})
 }
+
+// What a Run is told when a person approves its repositories, and a
+// conductor whose checkout lux cannot keep current.
+func TestGoldenApprovedAndReadOnly(t *testing.T) {
+	agentGolden(t, "notices-approved", [][2]string{
+		{"approved", approvedTold([]string{approvedRepoTold("docs", "/workspace/repos/docs", false),
+			approvedRepoTold("web", "/workspace/repos/web", true)})},
+		{"checkout-read-only", checkoutReadOnlyTold},
+	})
+}
