@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -280,6 +281,100 @@ func TestAFastForwardPublishLooksUpNoMergeAttempt(t *testing.T) {
 	}
 	if n := lookups.Load(); n != 0 {
 		t.Errorf("%d merge-attempt lookups over fast-forward publishes, want 0", n)
+	}
+}
+
+// A review-loop fix's merge over a base merge lands and its answer is
+// lost; a person aborts the fix while it backs off, and retries the step.
+// The new fix starts where the aborted one did, and its agent takes up the
+// aborted fix's commit as its own work: the merge of that commit on the
+// branch is the aborted Run's attempt, not the new Run's, so the new fix
+// is refused as not a fast-forward and records nothing.
+func TestARetriedFixDoesNotAdoptTheMergeAnAbortedFixAttempted(t *testing.T) {
+	w := newWorld(t)
+	var fixes atomic.Int64
+	var taken atomic.Pointer[string]
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" && fixes.Add(1) == 2 {
+			args, _ := json.Marshal(map[string]any{"args": []string{"reset", "-q", "--hard", *taken.Load()}})
+			b.Commit, b.CallTools = nil, [][2]string{{fakeagent.LocalGit, string(args)}}
+		}
+		return b
+	}
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	isFixMove := func(r *http.Request) bool {
+		if !isMoveOf(branch)(r) {
+			return false
+		}
+		out, _ := exec.Command("git", "-C", w.gh.Repo, "log", "-1", "--format=%s", movedTo(r)).Output()
+		return strings.HasPrefix(string(out), "Address review findings")
+	}
+	under, x := landOnce(isFixMove, func(*http.Request) string {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		return w.gh.MergeInto(branch, "main", nil)
+	})
+	var merges atomic.Int64
+	var held atomic.Bool
+	w.onGitHub(under, func(r *http.Request) int {
+		if isMergesCall(r) && merges.Add(1) == 1 {
+			held.Store(true)
+		}
+		if held.Load() && isMoveOf(branch)(r) {
+			// The aborted fix's retries: GitHub unavailable until the abort.
+			return http.StatusBadGateway
+		}
+		return 0
+	})
+	w.gh.Set(func(s *fakegithub.Server) { s.LoseMergeResponses = 1 })
+	w.deliver(wi)
+
+	var first, c string
+	w.until("the first fix's merge landed, its answer lost", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(push_result->'results'->0->>'commit', '') FROM runs
+			WHERE task_id = $1 AND phase = 'fix' AND status = 'running' AND next_attempt_at IS NOT NULL`, wi).Scan(&first, &c)
+		return merges.Load() == 1 && c != ""
+	})
+	m := w.gh.SHA(branch)
+	if got := w.gh.Parents(m); x() == "" || !slices.Equal(got, []string{x(), c}) {
+		t.Fatalf("the branch's head %.8s has parents %v, want GitHub's base merge %.8s then the fix's %.8s", m, got, x(), c)
+	}
+	if status, body := w.call("/internal/runs/"+first+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	w.until("the task offering a retry", func() bool { actions, _ := w.options(wi); return slices.Contains(actions, "retry") })
+	taken.Store(&c)
+	held.Store(false)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	var second, status, why, base, pushed string
+	w.until("the retried fix settled", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, status::text, COALESCE(error, ''), COALESCE(base_shas->>'target', ''),
+				COALESCE(push_result->'results'->0->>'commit', '')
+			FROM runs WHERE task_id = $1 AND phase = 'fix' AND id <> $2 AND status IN ('completed', 'failed')`, wi, first).
+			Scan(&second, &status, &why, &base, &pushed)
+		return second != ""
+	})
+	if pushed != c || base != w.gh.Parents(x())[0] {
+		t.Fatalf("the retried fix pushed %.8s from %.8s, want the aborted fix's %.8s from %.8s", pushed, base, c, w.gh.Parents(x())[0])
+	}
+	if status != "failed" || !strings.Contains(why, "Update is not a fast forward") {
+		t.Fatalf("retried fix %s (%s), want refused as not a fast-forward", status, why)
+	}
+	if got := w.gh.SHA(branch); got != m {
+		t.Errorf("the task branch at %.8s, want the aborted fix's merge %.8s", got, m)
+	}
+	if n := merges.Load(); n != 1 {
+		t.Errorf("%d merge requests, want the aborted fix's 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'git.merge_attempted'`, second); n != 0 {
+		t.Errorf("%d merge attempts recorded by the retried fix", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2`, wi, m); n != 0 {
+		t.Errorf("%d commit events taking the aborted fix's merge as a fix's", n)
 	}
 }
 
