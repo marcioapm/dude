@@ -84,6 +84,9 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 			}
 			held = append(held, id)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		rows.Close()
 		if want := slices.Sorted(slices.Values(reads)); !slices.Equal(held, want) {
 			t.Errorf("%s holds %v, want %v", ix.name, held, want)

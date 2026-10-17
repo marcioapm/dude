@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -91,32 +92,67 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 			t.Errorf("issue %d: GitHub's text reached the agent: %s", w.number, told)
 		}
 	}
-	rows, err := f.owner.Query(context.Background(), `SELECT payload FROM events WHERE run_id = 'run_cond' AND event_type = 'github.read'
-		ORDER BY cursor`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []map[string]any
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+	payloads := func(sql string, args ...any) []map[string]any {
+		t.Helper()
+		rows, err := f.owner.Query(context.Background(), sql, args...)
+		if err != nil {
 			t.Fatal(err)
 		}
-		var p map[string]any
-		_ = json.Unmarshal(raw, &p)
-		got = append(got, p)
+		defer rows.Close()
+		var got []map[string]any
+		for rows.Next() {
+			var raw []byte
+			if err := rows.Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var p map[string]any
+			if err := json.Unmarshal(raw, &p); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, p)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return got
 	}
+	got := payloads(`SELECT payload FROM events WHERE run_id = 'run_cond' AND event_type = 'github.read' ORDER BY cursor`)
 	if len(got) != len(want) {
 		t.Fatalf("%d github.read events, want %d: %v", len(got), len(want), got)
 	}
 	for i, w := range want {
 		p := got[i]
-		if p["tool"] != "github_issue" || p["repo"] != "acme/target" || p["number"] != float64(w.number) || p["refused"] != w.kind ||
-			p["status"] != float64(w.status) || len(p) != 5 {
-			t.Errorf("issue %d recorded as %v, want refused %s status %d", w.number, p, w.kind, w.status)
+		for k, v := range map[string]any{"tool": "github_issue", "repo": "acme/target", "number": float64(w.number),
+			"refused": w.kind, "status": float64(w.status)} {
+			if p[k] != v {
+				t.Errorf("issue %d: %s = %v, want %v", w.number, k, p[k], v)
+			}
+		}
+		if _, ok := p["bytes"]; ok {
+			t.Errorf("issue %d: a refused read has bytes: %v", w.number, p)
 		}
 	}
-	if n := f.count(t, `SELECT count(*) FROM events WHERE organization_id = $1 AND payload::text LIKE '%' || $2 || '%'`, f.org, canary); n != 0 {
-		t.Errorf("GitHub's text is in %d events", n)
+	// Every event of the organisation, decoded: none holds GitHub's text.
+	for _, p := range payloads(`SELECT payload FROM events WHERE organization_id = $1`, f.org) {
+		if holds(p, canary) {
+			t.Errorf("GitHub's text is in an event: %v", p)
+		}
 	}
+}
+
+// holds says a decoded JSON value has s in any of its keys or strings.
+func holds(v any, s string) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(x, s)
+	case []any:
+		return slices.ContainsFunc(x, func(item any) bool { return holds(item, s) })
+	case map[string]any:
+		for k, item := range x {
+			if strings.Contains(k, s) || holds(item, s) {
+				return true
+			}
+		}
+	}
+	return false
 }

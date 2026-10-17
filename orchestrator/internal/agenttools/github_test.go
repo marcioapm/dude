@@ -198,10 +198,13 @@ func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
 		name string
 		v    map[string]any
 		kept []string
+		// What gives way: the lists of bodies, below their size.
+		shortened []string
 	}{
-		{"issue", w.issue(issue), []string{"external", "issue", "moreComments"}},
+		{"issue", w.issue(issue), []string{"external", "issue", "moreComments"}, []string{"comments"}},
 		{"pull request", w.pullRequest(pr, []string{"missing.go"}),
-			[]string{"external", "pullRequest", "draft", "head", "base", "moreReviews", "threadsUnknown", "moreChecks", "moreFiles", "notListed"}},
+			[]string{"external", "pullRequest", "draft", "head", "base", "moreReviews", "threadsUnknown", "moreChecks", "moreFiles", "notListed"},
+			[]string{"reviews", "files"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			whole, _ := json.Marshal(tc.v)
@@ -221,6 +224,14 @@ func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
 				a, _ := json.Marshal(after[k])
 				if string(a) != string(b) {
 					t.Errorf("%s changed in the cut:\n got %.200s\nwant %.200s", k, a, b)
+				}
+			}
+			// The lists gave way: each is shorter than it was, and none is gone.
+			for _, k := range tc.shortened {
+				b, _ := json.Marshal(before[k])
+				a, _ := json.Marshal(after[k])
+				if _, ok := after[k]; !ok || len(a) >= len(b) {
+					t.Errorf("%s not shortened: %d bytes of %d", k, len(a), len(b))
 				}
 			}
 			if cut, _ := after["cut"].(string); !strings.HasPrefix(cut, cutMark) {
