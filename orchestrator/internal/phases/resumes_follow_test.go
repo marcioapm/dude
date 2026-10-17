@@ -46,8 +46,15 @@ func (f *streamLux) Output(ctx context.Context, _, _ string, _ int64, fn func(lu
 // the returned stub; it stops when the test ends.
 func (w *resumeWorld) following() *streamLux {
 	w.t.Helper()
+	return w.followingAs(func(st *streamLux) lux.Client { return st })
+}
+
+// followingAs is following with lux the client wrap makes of the stub. The
+// follower reads s.Lux from its own goroutine, so it is set before it starts.
+func (w *resumeWorld) followingAs(wrap func(*streamLux) lux.Client) *streamLux {
+	w.t.Helper()
 	st := newStreamLux(w.lux)
-	w.s.Lux = st
+	w.s.Lux = wrap(st)
 	r := w.run
 	r.Status, r.LuxState = statusRunning, "resuming"
 	ctx, cancel := context.WithCancel(w.ctx)
@@ -176,7 +183,7 @@ func TestFramesStreamedBeforeLuxAnswersTheResumeAreTimed(t *testing.T) {
 	w.sessionOn(1)
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	w.s.Lux = &earlyFramesLux{streamLux: w.following(), w: w, epoch: 2}
+	w.followingAs(func(st *streamLux) lux.Client { return &earlyFramesLux{streamLux: st, w: w, epoch: 2} })
 	if _, _, err := w.s.resume(w.ctx, w.run, ""); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -273,8 +280,7 @@ func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *t
 	w.sessionOn(1)
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	st := w.following()
-	w.s.Lux = &earlyFramesLux{streamLux: st, w: w, epoch: 3}
+	st := w.followingAs(func(st *streamLux) lux.Client { return &earlyFramesLux{streamLux: st, w: w, epoch: 3} })
 	w.whilePaused()
 	w.untilTimed()
 	if n := len(w.timed()); n != 1 {
@@ -387,8 +393,7 @@ func TestALuxAnswerCarryingTheStoppedEpochLeavesTheRowAtTheForeseenOne(t *testin
 	}
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	st := w.following()
-	w.s.Lux = &stoppedEpochLux{streamLux: st, base: base}
+	st := w.followingAs(func(st *streamLux) lux.Client { return &stoppedEpochLux{streamLux: st, base: base} })
 	w.whilePaused()
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1 AND epoch = 1`); n != 0 {
 		t.Errorf("the row moved to the stopped epoch 1")
