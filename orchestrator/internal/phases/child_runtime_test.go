@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -9,6 +10,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestChildRuntimeWriterFence(t *testing.T) {
@@ -99,15 +101,70 @@ func TestChildCancelReleasesLocks(t *testing.T) {
 type childTerminalLux struct {
 	*sweepLux
 	frames []lux.Frame
+	output func(context.Context) error
 }
 
-func (f *childTerminalLux) Output(_ context.Context, _, _ string, _ int64, fn func(lux.Frame) error) error {
+func (f *childTerminalLux) Output(ctx context.Context, _, _ string, _ int64, fn func(lux.Frame) error) error {
+	if f.output != nil {
+		return f.output(ctx)
+	}
 	for _, frame := range f.frames {
 		if err := fn(frame); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func TestChildTerminalDrainBound(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}',status='completed',ended_at=now(),artifacts_due_at=now()-interval '2 days',artifacts_next_at=now() WHERE id=$1`, w.run.ID)
+	ctx, cancel := context.WithCancel(w.ctx)
+	defer cancel()
+	bounded := make(chan bool, 1)
+	fake := &childTerminalLux{sweepLux: &sweepLux{}, output: func(ctx context.Context) error {
+		_, ok := ctx.Deadline()
+		bounded <- ok
+		if ok {
+			return context.DeadlineExceeded
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	done := make(chan error, 1)
+	go func() { _, err := (&Artifacts{DB: w.s.DB, Lux: fake, Log: w.s.Log}).Sweep(ctx); done <- err }()
+	if !<-bounded {
+		cancel()
+		<-done
+		t.Fatal("terminal drain has no independent deadline")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("drain error %v", err)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("bounded drain hung artifact sweep")
+	}
+	var pending bool
+	if err := w.owner.QueryRow(w.ctx, `SELECT artifacts_due_at IS NOT NULL FROM runs WHERE id=$1`, w.run.ID).Scan(&pending); err != nil || !pending {
+		t.Fatalf("unfinished drain lost pending exit: %v %v", pending, err)
+	}
+}
+
+func TestChildTerminalGoneOutput(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}',status='completed',ended_at=now() WHERE id=$1`, w.run.ID)
+	fake := &childTerminalLux{sweepLux: &sweepLux{}, output: func(context.Context) error { return &lux.Error{Status: 404, Code: "not_found"} }}
+	if _, err := (&Artifacts{DB: w.s.DB, Lux: fake, Log: w.s.Log}).Sweep(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var pending bool
+	if err := w.owner.QueryRow(w.ctx, `SELECT artifacts_due_at IS NOT NULL FROM runs WHERE id=$1`, w.run.ID).Scan(&pending); err != nil || pending {
+		t.Fatalf("gone output did not settle: %v %v", pending, err)
+	}
 }
 func (f *childTerminalLux) Cost(context.Context, string) (lux.RunCost, error) {
 	return lux.RunCost{}, &lux.Error{Status: 404, Code: "not_found"}

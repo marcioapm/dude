@@ -1752,7 +1752,17 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		close(frames)
 	}()
 
-	for f := range frames {
+	for {
+		var f lux.Frame
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case next, ok := <-frames:
+			if !ok {
+				return <-read
+			}
+			f = next
+		}
 		batch := []lux.Frame{f}
 	more:
 		for len(batch) < cap(frames) {
@@ -1777,7 +1787,6 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			t.resumes = nil
 		}
 	}
-	return <-read
 }
 
 // applyBatch records a batch of the Run's frames in one transaction, with

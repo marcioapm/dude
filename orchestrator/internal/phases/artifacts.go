@@ -148,7 +148,10 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		if s.Log == nil {
 			s.Log = slog.Default()
 		}
-		if err := s.followOutput(ctx, phaseRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID, SourceKind: "task_conductor"}); err != nil && !lux.IsNotFound(err) {
+		drainCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		drainErr := s.followOutput(drainCtx, phaseRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID, SourceKind: "task_conductor"})
+		cancel()
+		if err := drainErr; err != nil && !lux.IsNotFound(err) {
 			return a.later(ctx, r, err)
 		}
 		luxErr, dbErr := (&Costs{DB: a.DB, Lux: a.Lux, Log: a.Log}).read(ctx, costRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID})
