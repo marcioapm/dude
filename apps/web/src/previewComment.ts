@@ -211,9 +211,8 @@ export class PreviewCommenting {
   #server: string | null = null;
   #saved = 0;
   #pendingHighlight: string | null = null;
-  // One draft from the window at a time.
-  #saving = false;
-  // The save in flight, and the ones answered: a nonce sent again (the overlay gave up waiting) is not saved twice.
+  // The one save in flight (one draft from the window at a time), and the ones answered:
+  // a nonce sent again (the overlay gave up waiting) is not saved twice.
   #inFlight: string | null = null;
   readonly #answered = new Map<string, Extract<DudeToOverlay, { type: "saved" }>>();
   #timers: number[] = [];
@@ -278,6 +277,13 @@ export class PreviewCommenting {
         this.#emit();
       }
     }, this.#d.helloWaitMs ?? HELLO_WAIT_MS));
+    this.#watchClosed();
+    this.focus();
+    this.#emit();
+    return true;
+  }
+
+  #watchClosed(): void {
     this.#timers.push(this.#d.win.setInterval(() => {
       if (this.#win?.closed && this.#state !== "closed") {
         this.#state = "closed";
@@ -285,13 +291,6 @@ export class PreviewCommenting {
         this.#emit();
       }
     }, 1_000));
-    try {
-      w.focus();
-    } catch {
-      // Focus is the browser's to refuse.
-    }
-    this.#emit();
-    return true;
   }
 
   /**
@@ -359,6 +358,10 @@ export class PreviewCommenting {
     w.postMessage(msg, origin);
   }
 
+  #refuse(reason: string, nonce: string | undefined): void {
+    this.#post({ type: "refused", v: OVERLAY_PROTOCOL, ...(nonce !== undefined ? { nonce } : {}), reason });
+  }
+
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
     return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins() };
@@ -379,7 +382,7 @@ export class PreviewCommenting {
     if (!checked.ok) {
       if ("reason" in checked) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
-        this.#post({ type: "refused", v: OVERLAY_PROTOCOL, ...(typeof nonce === "string" && nonce.length <= 100 ? { nonce } : {}), reason: checked.reason });
+        this.#refuse(checked.reason, typeof nonce === "string" && nonce.length <= 100 ? nonce : undefined);
       }
       return;
     }
@@ -391,13 +394,7 @@ export class PreviewCommenting {
         if (this.#state !== "open") {
           this.#state = "open";
           this.#clearTimers();
-          this.#timers.push(this.#d.win.setInterval(() => {
-            if (this.#win?.closed && this.#state !== "closed") {
-              this.#state = "closed";
-              this.#clearTimers();
-              this.#emit();
-            }
-          }, 1_000));
+          this.#watchClosed();
           this.#emit();
         }
         this.#post(this.#session(msg.url));
@@ -418,14 +415,13 @@ export class PreviewCommenting {
           this.#post(done);
           return;
         }
-        if (this.#saving) {
+        if (this.#inFlight !== null) {
           // The same save sent again is answered when it lands; another one waits its turn.
-          if (msg.nonce !== this.#inFlight) this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: "Still saving the last one" });
+          if (msg.nonce !== this.#inFlight) this.#refuse("Still saving the last one", msg.nonce);
           return;
         }
-        this.#saving = true;
         this.#inFlight = msg.nonce;
-        void this.#save(msg).finally(() => { this.#saving = false; this.#inFlight = null; });
+        void this.#save(msg).finally(() => { this.#inFlight = null; });
       }
     }
   };
@@ -459,7 +455,7 @@ export class PreviewCommenting {
     // The API's own limit, checked before any upload: a refused draft leaves no picture behind.
     const drafts = this.#d.read().drafts;
     if (drafts >= FEEDBACK_LIMITS.drafts) {
-      this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: `you have ${drafts} drafts on this task: submit or remove some first` });
+      this.#refuse(`you have ${drafts} drafts on this task: submit or remove some first`, msg.nonce);
       return;
     }
     let attachmentId: string | undefined;
@@ -487,7 +483,7 @@ export class PreviewCommenting {
       this.#d.onSaved(created.id);
       this.#emit();
     } catch (err) {
-      this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: err instanceof Error ? err.message : String(err) });
+      this.#refuse(err instanceof Error ? err.message : String(err), msg.nonce);
     }
   }
 }
