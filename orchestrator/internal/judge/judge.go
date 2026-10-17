@@ -213,12 +213,16 @@ const TestQuestion = "Is the sky blue on a clear day?"
 // It is bounded as the Models page's test message is (c.Timeout, else
 // llm.TestTimeout), inside the backend's wait for a test.
 func Test(ctx context.Context, c llm.Client, t Tier) (Judgement, llm.Completion, error) {
+	return decide(ctx, c, testCall(c, t))
+}
+
+func testCall(c llm.Client, t Tier) llm.Call {
 	sent := call(t, TestQuestion, "")
 	sent.Timeout = c.Timeout
 	if sent.Timeout == 0 {
 		sent.Timeout = llm.TestTimeout
 	}
-	return decide(ctx, c, sent)
+	return sent
 }
 
 // decide sends one call and reads its answer as a decision. On

@@ -391,6 +391,13 @@ func TestAnEchoedKeyInAProxyErrorIsRedacted(t *testing.T) {
 	}
 }
 
+func TestTheTestQuestionHasTheDefaultBound(t *testing.T) {
+	sent := testCall(llm.Client{}, Tier{Model: "m"})
+	if sent.Timeout != llm.TestTimeout {
+		t.Fatalf("timeout = %s, want %s", sent.Timeout, llm.TestTimeout)
+	}
+}
+
 // The test question is bounded by the client's Timeout when it names one.
 func TestTheTestQuestionIsBoundedByTheClientsTimeout(t *testing.T) {
 	release := make(chan struct{})
