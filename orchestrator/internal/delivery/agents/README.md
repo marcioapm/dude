@@ -23,6 +23,21 @@ the machine tools' descriptions and refusals (`agenttools/machines.go`),
 (`conduct_steer.go`, `feedback.go`), and `briefings/finding-accepted.md`
 through the conductor's `findings` tool (`agenttools/conductor.go`).
 
+Not every sentence an agent receives is here yet. These are still Go
+literals, and moving them is a follow-up:
+
+- `agenttools/tools.go:500-503`, the `ask_person` result: the same "End
+  your turn now. The person's answer will be your next message." as
+  `contracts/conductor-asked.md`, in a second copy.
+- `prwait.go:105`, the wait-on-pull-request result.
+- `escalations.go:256-260`, the wake line telling the conductor an
+  escalation was decided, and `:494`, the `decide_escalation` result.
+- `agenttools/conductor.go:333`, `:369` and `:437`, the steer, restart and
+  publish results.
+- `agenttools/brainstorm.go:720-722`, a brainstorm question's result.
+- `conduct.go:367`, `GateChoices`, the gate question's answers in the
+  conductor's `ask` result.
+
 ## Editing
 
 - A file's text is everything in it but its one trailing newline. Keep
