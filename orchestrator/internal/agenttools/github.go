@@ -269,7 +269,8 @@ func githubRefusal(read githubRead, err error) error {
 	}
 	later := "later"
 	if wait := forge.RetryAfter(err); wait > 0 {
-		later = "in " + wait.Round(time.Minute).String()
+		// Never "in 0s": a wait under a minute reads as one.
+		later = "in " + max(wait, time.Minute).Round(time.Minute).String()
 	}
 	kind := refusalKind(err)
 	var msg string
