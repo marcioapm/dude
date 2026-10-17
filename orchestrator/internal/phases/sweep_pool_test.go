@@ -131,14 +131,30 @@ func (w *sweepWorld) sweep(want int) time.Duration {
 }
 
 // idle waits until no slot of the sweep is held.
-func (w *sweepWorld) idle(slots *pool) {
+func (w *sweepWorld) idle() {
 	w.t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); slots.free() != cap(slots.slots); {
+	slots, _ := w.s.pools()
+	waitHeld(w.t, slots, 0)
+}
+
+// waitHeld waits until want slots of p are held.
+func waitHeld(t *testing.T, p *pool, want int) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); len(p.slots) != want; {
 		if time.Now().After(deadline) {
-			w.t.Fatalf("%d slots still held", cap(slots.slots)-slots.free())
+			t.Fatalf("%d slots held, want %d", len(p.slots), want)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// hungRuns is n Run ids and their lux Run ids, l<id>.
+func hungRuns(n int) (ids, luxIDs []string) {
+	for i := range n {
+		id := fmt.Sprintf("hung%d", i)
+		ids, luxIDs = append(ids, id), append(luxIDs, "l"+id)
+	}
+	return ids, luxIDs
 }
 
 // A Run whose lux call hangs holds one slot past the sweep's wait, not the
@@ -170,8 +186,7 @@ func TestAHungRunDoesNotHoldTheNextSweep(t *testing.T) {
 	// Let go, it fails as lux unavailable and is retried by a later pass,
 	// which, with nothing hung, waits for all it started.
 	close(fake.open)
-	slots, _ := w.s.pools()
-	w.idle(slots)
+	w.idle()
 	w.s.SweepWait = 0
 	w.sweep(1)
 	if calls, most := fake.count("lhung"); calls != 2 || most != 1 {
@@ -182,14 +197,7 @@ func TestAHungRunDoesNotHoldTheNextSweep(t *testing.T) {
 // With every slot held by hung Runs, a pass advances nothing and returns 0
 // once its wait is over, without asking lux about the Run behind them.
 func TestASweepWithEverySlotHeldReturnsAfterItsWait(t *testing.T) {
-	var hung []string
-	for i := range sweepSlots {
-		hung = append(hung, fmt.Sprintf("hung%d", i))
-	}
-	luxIDs := make([]string, len(hung))
-	for i, id := range hung {
-		luxIDs[i] = "l" + id
-	}
+	hung, luxIDs := hungRuns(sweepSlots)
 	fake := newHangLux(luxIDs...)
 	w := newSweepWorld(t, fake)
 	w.failed(hung...)
@@ -209,8 +217,7 @@ func TestASweepWithEverySlotHeldReturnsAfterItsWait(t *testing.T) {
 		}
 	}
 	close(fake.open)
-	slots, _ := w.s.pools()
-	w.idle(slots)
+	w.idle()
 	w.s.SweepWait = 0
 	w.sweep(sweepSlots + 1)
 	if calls, _ := fake.count("lbehind"); calls != 1 {
@@ -222,14 +229,7 @@ func TestASweepWithEverySlotHeldReturnsAfterItsWait(t *testing.T) {
 // still busy is not advanced again from that row: once per pass at most,
 // and not before the back-off its advance wrote is over.
 func TestARunFreedMidPassIsNotAdvancedFromItsStaleRow(t *testing.T) {
-	var hung []string
-	for i := range sweepSlots - 1 {
-		hung = append(hung, fmt.Sprintf("hung%d", i))
-	}
-	luxIDs := make([]string, len(hung))
-	for i, id := range hung {
-		luxIDs[i] = "l" + id
-	}
+	hung, luxIDs := hungRuns(sweepSlots - 1)
 	fake := newHangLux(luxIDs...)
 	gx := fake.gate("lx")
 	w := newSweepWorld(t, fake)
@@ -360,21 +360,12 @@ func TestAHungPublishHoldsOneSlotAndTheNextPassClaimsTheRest(t *testing.T) {
 			t.Errorf("the pass took %v with a SweepWait of %v", took, s.SweepWait)
 		}
 	}
-	held := func(want int) {
-		t.Helper()
-		for deadline := time.Now().Add(10 * time.Second); len(slots.slots) != want; {
-			if time.Now().After(deadline) {
-				t.Fatalf("%d slots held, want %d", len(slots.slots), want)
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
 
 	settle(publishSlots)
-	held(1)
+	waitHeld(t, slots, 1)
 	// Two slots free: two more, though three are due.
 	settle(publishSlots - 1)
-	held(1)
+	waitHeld(t, slots, 1)
 	if n := forges.count(orgs[0]); n != 1 {
 		t.Errorf("the hung publish was carried on %d times, want once", n)
 	}
@@ -384,7 +375,7 @@ func TestAHungPublishHoldsOneSlotAndTheNextPassClaimsTheRest(t *testing.T) {
 		}
 	}
 	close(forges.open)
-	held(0)
+	waitHeld(t, slots, 0)
 }
 
 // Sweep with SweepWait zero waits for all it started, as the tests' pump
