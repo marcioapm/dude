@@ -113,7 +113,7 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 }
 
 // A session's and a task's GitHub reads in the last hour. Each predicate
-// matches its partial index (migrations 133, 134) with literals, as a
+// matches its partial index (migrations 134, 135) with literals, as a
 // parameter would not prove the index's WHERE.
 const (
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1
