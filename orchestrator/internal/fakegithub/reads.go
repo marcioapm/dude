@@ -60,20 +60,20 @@ func (s *Server) LineCommentAt(number int, author, path string, line int, body s
 
 // WriteFile commits a file to a branch, as a person pushing does; its SHA.
 func (s *Server) WriteFile(branch, path, content, message string) string {
-	blob, err := s.gitIn(content, "hash-object", "-w", "--stdin")
+	blob, err := s.gitWith(content, nil, "hash-object", "-w", "--stdin")
 	if err != nil {
 		return ""
 	}
 	index := s.Repo + "/fake-index-" + strconv.FormatInt(nextID.Add(1), 10)
 	defer os.Remove(index)
 	env := []string{"GIT_INDEX_FILE=" + index}
-	if _, err := s.gitEnv(env, "read-tree", "refs/heads/"+branch); err != nil {
+	if _, err := s.gitWith("", env, "read-tree", "refs/heads/"+branch); err != nil {
 		return ""
 	}
-	if _, err := s.gitEnv(env, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path); err != nil {
+	if _, err := s.gitWith("", env, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path); err != nil {
 		return ""
 	}
-	tree, err := s.gitEnv(env, "write-tree")
+	tree, err := s.gitWith("", env, "write-tree")
 	if err != nil {
 		return ""
 	}

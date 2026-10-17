@@ -215,17 +215,10 @@ func (s *Server) git(args ...string) (string, error) {
 	return s.gitAs("", args...)
 }
 
-// gitIn runs git with stdin.
-func (s *Server) gitIn(stdin string, args ...string) (string, error) {
+// gitWith runs git with stdin and extra environment.
+func (s *Server) gitWith(stdin string, env []string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-// gitEnv runs git with extra environment.
-func (s *Server) gitEnv(env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
 	cmd.Env = append(cmd.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
