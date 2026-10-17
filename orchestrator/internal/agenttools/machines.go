@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -76,9 +75,9 @@ func machineOffer(request bool) func(ctx context.Context, tx pgx.Tx, c Caller) (
 			return choices.Offer(), nil
 		}
 		if len(choices.Targets) == 0 {
-			return "The larger machine sizes this Run may move to: none. " + choices.Nothing(), nil
+			return machinesListNone.Render(choices.Nothing()), nil
 		}
-		return "The larger machine sizes this Run may move to, with their pools: " + choices.List() + ".", nil
+		return machinesList.Render(choices.List()), nil
 	}
 }
 
@@ -115,17 +114,17 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if pending > 0 {
-		return out, refuse(rYouAreBeingMovedNowAsk, cmp.Or(pendingTo, "another size"))
+		return out, refuse(rYouAreBeingMovedNowAsk, cmp.Or(pendingTo, machinesAnotherSize))
 	}
 	if used >= machineMovesPerRun {
-		on := "your machine"
+		on := machinesYourMachine
 		if current != nil {
 			on = current.Name
 		}
 		return out, refuse(rThisRunHasMovedTimesLimit, machineMovesPerRun, on)
 	}
 	if current == nil || live == "" || status != "running" || control != "none" {
-		return out, refusal{msg: "this Run is not live and available for a machine move", code: "not_live"}
+		return out, refusal{msg: machinesNotLive, code: "not_live"}
 	}
 	choices, sizes, pools, _, err := machineChoices(ctx, tx, c)
 	if err != nil {
@@ -151,7 +150,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return refusal{msg: msg, code: code, event: &refusedEvent{delivery.EvMachineRequested, payload}}
 	}
 	if !delivery.Larger(target, *current) {
-		msg := fmt.Sprintf("you run on %s (%s); ask for one larger: %s", current.Name, current.Spec(), choices.Names())
+		msg := machinesNotLarger.Render(struct{ Name, Spec, Names string }{current.Name, current.Spec(), choices.Names()})
 		if len(choices.Targets) == 0 {
 			msg = choices.Nothing()
 		}
@@ -234,3 +233,13 @@ func movedAnswer(session bool, role string, choices delivery.MachineChoices, tar
 		Session                       bool
 	}{target.Name, target.Spec(), choices.OtherPool(target), role, label, session})
 }
+
+// The machine tools' own words: delivery/agents/results/machines.md.
+var (
+	machinesList        = delivery.MustText("results/machines/list")
+	machinesListNone    = delivery.MustText("results/machines/list-none")
+	machinesNotLarger   = delivery.MustText("results/machines/not-larger")
+	machinesNotLive     = delivery.MustText("results/machines/not-live").Render(nil)
+	machinesYourMachine = delivery.MustText("results/machines/your-machine").Render(nil)
+	machinesAnotherSize = delivery.MustText("results/machines/another-size").Render(nil)
+)
