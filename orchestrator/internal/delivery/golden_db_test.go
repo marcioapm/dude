@@ -70,8 +70,8 @@ func (w goldenWorld) inAt(t *testing.T, fn func(ctx context.Context, tx pgx.Tx) 
 // clock.
 var goldenNow = regexp.MustCompile(`→ (\d\d:\d\d) UTC\)`)
 
-// maskNow checks that the digest in s ends at now, within a minute, and
-// masks that time.
+// maskNow checks that the digest in s ends at now, the same transaction's
+// now() the digest reads, and masks that time.
 func maskNow(t *testing.T, s string, now time.Time) string {
 	t.Helper()
 	ms := goldenNow.FindAllStringSubmatch(s, -1)
@@ -79,12 +79,8 @@ func maskNow(t *testing.T, s string, now time.Time) string {
 		t.Fatalf("no digest end time (→ HH:MM UTC)) in:\n%s", s)
 	}
 	for _, m := range ms {
-		ok := false
-		for _, d := range []time.Duration{0, -time.Minute, time.Minute} {
-			ok = ok || m[1] == now.Add(d).UTC().Format("15:04")
-		}
-		if !ok {
-			t.Errorf("the digest ends at %s, the database's now() is %s", m[1], now.UTC().Format("15:04"))
+		if want := now.UTC().Format("15:04"); m[1] != want {
+			t.Errorf("the digest ends at %s, the database's now() is %s", m[1], want)
 		}
 	}
 	return goldenNow.ReplaceAllString(s, "→ NOW UTC)")
