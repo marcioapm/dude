@@ -5,13 +5,18 @@
  * tab.
  */
 
+import type { ReactNode } from "react";
 import { ServersSummary, ServersSummaryRow, TerminalLink } from "@dude/design-system/components";
 import { anyMoving, describeServer, formatTimestamp, useNow } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 
-export function ServersAside({ client, taskId, servers, onAll }: { client: ApiClient; taskId: string; servers: ServersState; onAll: () => void }) {
+export function ServersAside({ client, taskId, servers, onAll, comment }: {
+  client: ApiClient; taskId: string; servers: ServersState; onAll: () => void;
+  /** Comment on preview, or why commenting is off. */
+  comment?: ReactNode;
+}) {
   const data = servers.data!;
   // The clock the words are told by: ticking while something is moving.
   const now = useNow(anyMoving(data.servers), 30_000);
@@ -44,6 +49,7 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
         <>
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onAll} data-testid="servers-all">All servers</Button>
           {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl}>Terminal</TerminalLink> : null}
+          {comment}
         </>
       }
     >

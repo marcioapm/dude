@@ -1548,6 +1548,25 @@ body {
 .feedbackHighlight {
   box-shadow: inset 2px 0 0 var(--ds-color-accent);
 }
+/* The preview way in when commenting is off: the same line, not a button, with the reason. */
+.feedbackGeneralOff:hover {
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+}
+/* Where Comment would be, when commenting on previews is off: the reason, muted. */
+.commentOff {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  padding: 0 var(--ds-space-8);
+}
+.commentOff code {
+  font-family: var(--ds-font-mono);
+}
+.noticeActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
 .mergeHeld {
   display: block;
 }
