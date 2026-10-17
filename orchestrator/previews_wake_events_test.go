@@ -44,8 +44,7 @@ func (w *world) migrate066() {
 	}
 }
 
-// resumingEvent is the id of the latest resuming state event lux has for
-// Run id.
+// resumingEvent returns lux's latest resuming state event for id.
 func (w *world) resumingEvent(id string) int64 {
 	w.t.Helper()
 	frames, err := w.previews.Lux.Events(context.Background(), id, 0)

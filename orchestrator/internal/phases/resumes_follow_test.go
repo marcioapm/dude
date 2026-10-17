@@ -49,8 +49,8 @@ func (w *resumeWorld) following() *streamLux {
 	return w.followingAs(func(st *streamLux) lux.Client { return st })
 }
 
-// followingAs is following with lux the client wrap makes of the stub. The
-// follower reads s.Lux from its own goroutine, so it is set before it starts.
+// followingAs wraps the stub before starting the follower, which reads s.Lux
+// from its own goroutine.
 func (w *resumeWorld) followingAs(wrap func(*streamLux) lux.Client) *streamLux {
 	w.t.Helper()
 	st := newStreamLux(w.lux)

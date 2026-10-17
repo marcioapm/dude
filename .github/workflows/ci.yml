@@ -73,8 +73,7 @@ jobs:
             exit 1
           fi
 
-      # forge's concurrency tests assert only under the race detector; phases
-      # runs its followers on goroutines of their own.
+      # Forge and phases concurrency tests assert only under the race detector.
       - name: go test -race, forge and phases
         working-directory: orchestrator
         run: go test -race -count=1 ./internal/forge ./internal/phases

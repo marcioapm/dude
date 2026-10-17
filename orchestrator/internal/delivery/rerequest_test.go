@@ -733,9 +733,8 @@ func (f *rerequestFixture) advisoryLocks() int {
 	return n
 }
 
-// untilNoAdvisoryLocks is advisoryLocks once it reads 0, or at within. A
-// connection pgx closes after a failed statement is gone on the client at
-// once, but its backend frees its session locks only when it exits, after.
+// untilNoAdvisoryLocks waits for advisoryLocks to read 0 or until within expires.
+// The backend releases session locks after pgx closes the connection.
 func (f *rerequestFixture) untilNoAdvisoryLocks(within time.Duration) int {
 	f.t.Helper()
 	deadline := time.Now().Add(within)
