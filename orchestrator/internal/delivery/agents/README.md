@@ -1,7 +1,7 @@
 # What dude tells agents
 
 The catalogue contains the migrated agent-facing text. Some fixed protocol identifiers and
-unreachable legacy branches remain in Go; they are listed below. Go decides only which
+labels remain in Go; they are listed below. Except as listed below, Go decides only which
 sections a Run gets and fills in the data.
 
 | Directory | What it holds |
@@ -37,15 +37,33 @@ A new refusal is a `{{define}}` plus one line in `internal/refusalgen/<dir>.mani
 under `refusals/tools/`, `refusals/delivery/` or `refusals/domain/` that no manifest lists fails
 the generator, and so does a manifest line whose define is missing.
 
-`DismissedByConductor` is a persisted resolution prefix parsed by `AcceptedBy`, so it remains a
-fixed Go protocol marker; JSON enum and state identifiers likewise remain Go data. The
-`checkout-kept-as-is` notice is unreachable after the earlier off-branch return and is left
-without an impossible fixture. Other remaining candidates are the API handover sentence,
-image-reference labels, feedback page-line labels, coordination labels, read-only causes,
-blocker-state words, unblock `howLabel`, escalation banner wording and agent-facing HTTP error
-bodies; these are known Go-side text and are not claimed to be migrated.
+Text that still reaches an agent from Go (paths under `orchestrator/internal/`); JSON enum and
+state identifiers also remain Go data:
 
-## Editing
+- `delivery/conduct.go:623` — `DismissedByConductor`, the resolution-note prefix of a finding
+  the conductor dismissed; `AcceptedBy` (`:628`) parses it back, so it stays a Go constant.
+- `api/sessions.go:1685` — the handover line a brainstorm agent is told when a session changes
+  owner ("… owns this session now. …").
+- `delivery/references.go:175`, `:178`, `:208` — the image-reference labels that replace an
+  image in a text: `[Image N: name]`, `[Image unavailable: name]`, `[Image: name]`.
+- `delivery/feedback.go:157-172` — `FeedbackAnchor.PageLine`, the "Route /cart in a W×H window
+  · the element is …" line `contracts/feedback.md` includes.
+- `delivery/coordination.go:272-274` — the `Message` / `Reply to <id>` label of a peer message.
+- `phases/edits.go:105-107` — the read-only cause ("this lux cannot keep your checkout
+  current (…)"), which `delivery/edits.go:116` and `:297` put into a refusal.
+- `delivery/relations.go:48-52` — `stateWord`, a blocker's state as refusals name it.
+- `delivery/unblock.go:435` — `howLabel` ("Deliver", "Talk it through"), used in the
+  auto-start Chat notice at `:431-432`.
+- `delivery/escalations.go:411-412` — the banner sentence passed into the
+  `rNoEscalationWaitsOnDecisionNow` and `rOwnerHasNotAnsweredYourQuestion` refusals.
+- `agenttools/server.go:151`, `:157`, `:161` and `agenttools/coauthors.go:103` — the HTTP error
+  bodies of the tool server ("a Run's token is required", "unknown or ended Run", "internal
+  error").
+
+`wakes/facts/checkout-kept-as-is` is a wake fact in Markdown, used through `checkoutKeptAsIs`
+(`delivery/agents_facts.go:10`). Its only caller, `delivery/edits.go:740`, cannot be reached:
+a `kept` checkout with nothing dirty, diverged or ahead already returns as `off-branch` at
+`:727-731`. No golden pins it.
 
 ## Editing
 
@@ -94,8 +112,7 @@ git -C orchestrator diff internal/delivery/agents/testdata
 For refusal constants, regenerate first with `go -C orchestrator generate ./internal/refusalgen`.
 
 Without `-update` the test fails on any byte that differs and names the
-first line. `agenttools` and `phases` build only on Linux
-(`internal/images`).
+first line.
 
 The briefing goldens (`briefing-*`, `epic-*`, `digest-*`,
 `brainstorm-question-withdrawn`, the `*-with-briefing*` prompts and
