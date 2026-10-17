@@ -399,3 +399,21 @@ func TestASweepWithoutAWaitWaitsForEveryRun(t *testing.T) {
 		t.Errorf("%d slots still held after a sweep that waited", n)
 	}
 }
+
+// A pass whose wait is over counts every result already sent, and does not
+// wait for those that are not.
+func TestAnExpiredPassCountsTheResultsAlreadySent(t *testing.T) {
+	expired := make(chan struct{})
+	close(expired)
+	w := passWait{expired: expired, stop: func() bool { return false }}
+	// Many times: a select between the results and the expiry picks at random.
+	for range 200 {
+		results := make(chan bool, sweepSlots+2)
+		for i := range sweepSlots {
+			results <- i != 0
+		}
+		if got := w.collect(results, sweepSlots+2); got != sweepSlots-1 {
+			t.Fatalf("counted %d of %d results that acted", got, sweepSlots-1)
+		}
+	}
+}

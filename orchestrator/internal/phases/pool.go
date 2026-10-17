@@ -92,16 +92,27 @@ func (s *Syncer) passWait() passWait {
 }
 
 // collect receives up to n results of a pass's work until w expires, and
-// counts those that acted.
+// counts those that acted. At expiry it still counts results already sent:
+// select picks at random between them and the expiry.
 func (w passWait) collect(results <-chan bool, n int) int {
 	acted := 0
-	for range n {
+	for i := 0; i < n; i++ {
 		select {
 		case did := <-results:
 			if did {
 				acted++
 			}
 		case <-w.expired:
+			for ; i < n; i++ {
+				select {
+				case did := <-results:
+					if did {
+						acted++
+					}
+				default:
+					return acted
+				}
+			}
 			return acted
 		}
 	}
