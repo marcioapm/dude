@@ -143,6 +143,24 @@ describe("the Judgements page", () => {
       .toBe("claude-opus-5-5 gave no answer in 2.4s. The model's answer is not a decision: no JSON object in it.Not recorded in Recent judgements.");
   });
 
+  test("a refused test request shows the danger callout with the refusal, and says it is not recorded", async () => {
+    class Refusing extends Judging {
+      override testJudgement(tierId: string): Promise<JudgementTestResult> {
+        this.tests.push(tierId);
+        return Promise.reject(new Error("the judgement tier names no model"));
+      }
+    }
+    const client = new Refusing("a");
+    client.settings = { tierId: "mtr_coder", canEdit: true };
+    const container = await show(client);
+    await click(container.querySelector("[data-testid=judgement-test]")!);
+    const result = await until(() => container.querySelector<HTMLElement>("[data-testid=judgement-test-result]"), "the refusal");
+    expect(client.tests).toEqual(["mtr_coder"]);
+    expect(result.getAttribute("data-ok")).toBe("false");
+    expect(result.getAttribute("data-tone")).toBe("danger");
+    expect(result.textContent).toBe("The judgement tier names no model.Not recorded in Recent judgements.");
+  });
+
   test("nothing asked yet: the empty state", async () => {
     const container = await show(new Judging("a"));
     const recent = await until(() => container.querySelector("[data-testid=recent-judgements]"), "Recent judgements");

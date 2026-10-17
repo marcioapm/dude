@@ -101,3 +101,23 @@ func TestTheTestQuestionIsAskedOfTheNamedTierAndNotRecorded(t *testing.T) {
 		t.Errorf("%d calls recorded (%v)", n, err)
 	}
 }
+
+// With no proxy URL configured the test question is refused 503, after the
+// tier is found and before anything is sent.
+func TestTheTestQuestionIsRefusedWhenNoProxyIsConfigured(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	var fast string
+	if err := owner.QueryRow(context.Background(), `UPDATE model_tiers SET model = 'gpt-6-sol-mini' WHERE organization_id = $1 AND name = 'Fast' RETURNING id`, org).Scan(&fast); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: app, Token: "svc", Log: slog.New(slog.NewTextHandler(io.Discard, nil)), LLM: llm.Client{}}
+	r := httptest.NewRequest("POST", "/internal/judgements/test", strings.NewReader(`{"tierId":"`+fast+`"}`))
+	r.Header.Set("Authorization", "Bearer svc")
+	r.Header.Set("X-Dude-Organization", org)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "the LLM proxy is not configured (DUDE_LLM_URL)") {
+		t.Errorf("no proxy: %d %s", w.Code, w.Body.String())
+	}
+}

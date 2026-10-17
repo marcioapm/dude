@@ -182,7 +182,7 @@ function TestOutcome({ test }: { test: { result: JudgementTestResult } | { error
     return (
       <Callout tone="danger" data-testid="judgement-test-result" data-ok={false}>
         <FormStack>
-          <span>{test.error}</span>
+          <span>{errorSentence(test.error)}</span>
           <SettingsMeta>Not recorded in Recent judgements.</SettingsMeta>
         </FormStack>
       </Callout>
