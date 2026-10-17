@@ -187,8 +187,12 @@ const (
 // expected, for the writer's commit (BaseMerges). A head that is already
 // a merge of commit is adopted only when attempted says the caller sent
 // it, and under is that merge's first parent. A compare GitHub refuses
-// (history rewritten) is Refuse with no error.
+// (history rewritten) is Refuse with no error, as is a writer with no
+// start or base branch to judge against.
 func Admit(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, head, commit string, attempted func() (bool, error)) (v Verdict, under string, err error) {
+	if start == "" || baseBranch == "" {
+		return Refuse, "", nil
+	}
 	j, err := BaseMerges(ctx, gh, slug, baseBranch, start, head, commit)
 	switch {
 	case forge.Refused(err):
