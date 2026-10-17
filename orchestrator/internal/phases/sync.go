@@ -103,6 +103,15 @@ type Syncer struct {
 	// move for lux to run the Run again (luxstop.go); zero takes heldWait
 	// and moveWait.
 	HeldWait, MoveWait time.Duration
+	// How long a pass of Sweep or SettlePublishes waits for the work it
+	// started before returning; what is still running then keeps its slot
+	// and finishes in the background. Zero waits for all of it.
+	SweepWait time.Duration
+
+	// The slots of Sweep and of SettlePublishes, shared by their passes
+	// (pool.go).
+	poolsOnce              sync.Once
+	sweepPool, publishPool *pool
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -576,10 +585,14 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 	return nil
 }
 
+// sweepSlots is how many Runs the sweep advances at once.
+const sweepSlots = 8
+
 // Sweep takes one pass over every phase Run dude still has something to do
 // for, advancing each as far as it can. Cross-tenant, because finding the
 // Runs that need attention is the job; each is then handled in its own
-// organization's scope.
+// organization's scope. Returns how many of the Runs it started acted and
+// finished within SweepWait.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.beforeDue(ctx); err != nil {
 		return 0, err
@@ -589,27 +602,39 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	// Concurrently, a few at a time: one slow call to lux or GitHub must not
-	// hold up submitting, following and steering every other Run.
-	var handled atomic.Int64
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, 8)
+	// hold up submitting, following and steering every other Run. A Run an
+	// earlier pass is still advancing is left to it: two advances of one Run
+	// must never run at once.
+	slots, _ := s.pools()
+	wait := s.passWait()
+	defer wait.stop()
+	// Buffered for every Run, so work finishing after the pass returned
+	// never blocks.
+	results := make(chan bool, len(runs))
+	started := 0
 	for _, r := range runs {
-		wg.Add(1)
-		slots <- struct{}{}
+		if !slots.claim(r.ID) {
+			continue
+		}
+		if !slots.take(ctx, wait.expired) {
+			slots.unclaim(r.ID)
+			break
+		}
+		started++
 		go func() {
-			defer func() { <-slots; wg.Done() }()
 			acted, err := s.advance(ctx, r)
 			if err != nil && !errors.Is(err, errRetry) {
 				s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
-				return
+				acted = false
 			}
-			if acted {
-				handled.Add(1)
-			}
+			// Released before the result is sent: a pass that waited for
+			// it may sweep again at once and must find the Run free.
+			slots.unclaim(r.ID)
+			slots.give()
+			results <- acted
 		}()
 	}
-	wg.Wait()
-	return int(handled.Load()), nil
+	return wait.collect(results, started), nil
 }
 
 const stuckTurnNudge = "A tool call of yours was open for 10 minutes, so dude stopped your turn. " +

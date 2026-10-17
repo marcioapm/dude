@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,12 +90,18 @@ func (p publishRow) of() delivery.PublishOf {
 }
 
 // SettlePublishes is one pass of the publish worker: it claims as many of
-// the publishes due as it has slots, oldest due first, and carries each on
-// at once. Each claim is a token of its own, renewed while its publish is
+// the publishes due as it has free slots, oldest due first, and carries each
+// on at once. Each claim is a token of its own, renewed while its publish is
 // carried on; every write of the worker's is guarded on it, so a worker
-// whose claim lapsed and was taken over writes nothing more. Returns how
-// many it claimed.
+// whose claim lapsed and was taken over writes nothing more. A publish still
+// carried on after SweepWait keeps its slot past the pass. Returns how many
+// it claimed.
 func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
+	_, slots := s.pools()
+	free := slots.free()
+	if free == 0 {
+		return 0, nil
+	}
 	var todo []publishRow
 	if err := s.DB.InSystem(ctx, "conductor-publishes", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH due AS (
@@ -113,7 +118,7 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 				COALESCE(p.workflow_run_id, ''), COALESCE(p.attempt, 0), p.moves, COALESCE(p.branch, ''),
 				COALESCE(p.asked_at < now() - $3::interval, false), p.failures, now(), p.claim_token, p.lux_events_after
 			FROM claimed p JOIN runs r ON r.id = p.run_id ORDER BY p.created_at`,
-			publishSlots, publishClaim.String(), askedGiveUp.String())
+			free, publishClaim.String(), askedGiveUp.String())
 		if err != nil {
 			return err
 		}
@@ -122,15 +127,20 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	var wg sync.WaitGroup
+	// The loop runs one pass at a time, so the slots counted free above are
+	// still free; a caller running passes side by side waits here instead.
+	wait := s.passWait()
+	defer wait.stop()
+	done := make(chan bool, len(todo))
 	for _, p := range todo {
-		wg.Add(1)
+		slots.hold()
 		go func() {
-			defer wg.Done()
 			s.carryClaimed(ctx, p)
+			slots.give()
+			done <- false
 		}()
 	}
-	wg.Wait()
+	wait.collect(done, len(todo))
 	return len(todo), nil
 }
 
