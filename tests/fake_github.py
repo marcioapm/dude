@@ -871,17 +871,28 @@ class FakeGitHub:
                     pr = gh.pulls[int(m[1])]
                     with gh._lock:
                         gh.updates.append(pr.number)
+                    head, base = gh.branch_sha(pr.head), gh.branch_sha(pr.base)
+                    # A merge commit of the base into the head, as GitHub
+                    # makes: the merged tree, refused when the flag says the
+                    # branches conflict or git cannot merge them. The flag is
+                    # read first, as the Go fake does.
                     if pr.conflicting:
                         return self._send(422, {"message": "merge conflict between base and head"})
-                    if body.get("expected_head_sha") and body["expected_head_sha"] != gh.branch_sha(pr.head):
+                    if not head or not base:
+                        return self._send(422, {"message": "Reference does not exist"})
+                    if body.get("expected_head_sha") and body["expected_head_sha"] != head:
                         return self._send(422, {"message": "expected head sha didn't match current head ref"})
-                    # A merge commit of the base into the head, as GitHub makes.
-                    tree = self._git("rev-parse", f"refs/heads/{pr.head}^{{tree}}").stdout.strip()
-                    sha = gh._git_out("commit-tree", tree, "-p", f"refs/heads/{pr.head}", "-p", f"refs/heads/{pr.base}",
+                    merged = self._git("merge-tree", "--write-tree", head, base)
+                    if merged.returncode:
+                        return self._send(422, {"message": "merge conflict between base and head"})
+                    tree = merged.stdout.split("\n", 1)[0].strip()
+                    sha = gh._git_out("commit-tree", tree, "-p", head, "-p", base,
                                       "-m", f"Merge branch '{pr.base}' into {pr.head}",
                                       env={"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
                                            "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"})
-                    self._git("update-ref", f"refs/heads/{pr.head}", sha)
+                    # The old head guards the ref against a push during the merge.
+                    if self._git("update-ref", f"refs/heads/{pr.head}", sha, head).returncode:
+                        return self._send(422, {"message": "expected head sha didn't match current head ref"})
                     self._send(202, {"message": "Updating pull request branch."})
                     gh.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr.number}})
                     return None
