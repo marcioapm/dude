@@ -1,11 +1,11 @@
 /**
- * A picture of one element, drawn from the page itself: the element and
- * its descendants (with their ::before and ::after) cloned with every
- * computed style inlined, laid out in
- * an SVG foreignObject, drawn into a canvas and outlined. No screen
- * capture and no request: an image the page has already loaded is copied
- * through a canvas, and one the page may not read (another origin without
- * CORS) makes the picture fail rather than come out blank where it was.
+ * A picture of one element, drawn from the page itself: the element and its
+ * descendants (with their ::before and ::after) cloned with every computed
+ * style inlined, laid out in an SVG foreignObject, drawn into a canvas and
+ * outlined. No screen capture and no request: an image the page has already
+ * loaded is copied through a canvas, and one the page may not read (another
+ * origin without CORS) makes the picture fail rather than come out blank
+ * where it was.
  */
 
 import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
@@ -89,8 +89,8 @@ export function contentParts(content: string, el: Element, quotes: string): (str
   return parts;
 }
 
-// Elements browsers draw no ::before / ::after for.
-const NO_PSEUDO = new Set(["img", "input", "textarea", "select", "br", "hr", "wbr", "canvas", "video", "audio", "iframe", "frame", "embed", "object"]);
+// Elements browsers draw no ::before / ::after for; canvas, video and frames never get this far.
+const NO_PSEUDO = new Set(["img", "input", "textarea", "select", "br", "hr", "wbr", "audio", "embed", "object"]);
 
 /** The element's ::before or ::after as a styled span, or null when it has none dude can draw. */
 function pseudoSpan(el: Element, which: "::before" | "::after", win: Window, count: () => void): Element | null {

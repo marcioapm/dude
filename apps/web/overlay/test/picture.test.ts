@@ -49,10 +49,13 @@ test("::before is the clone's first child and ::after its last, with their own s
 });
 
 test("an element with no pseudo content, or one browsers draw none for, gets no span", async () => {
-  const win = page(`<div id="it"><b>a</b><img src="data:image/png;base64,iVBORw0KGgo="><input></div>`, {
+  const win = page(`<div id="it"><b>a</b><img src="data:image/png;base64,iVBORw0KGgo="><input><audio></audio><embed><object></object></div>`, {
     "b|::before": `content: normal`,
     "img|::before": `content: "x"`,
     "input|::after": `content: "x"`,
+    "audio|::before": `content: "x"`,
+    "embed|::before": `content: "x"`,
+    "object|::after": `content: "x"`,
   });
   const out = await clone(win);
   expect(out.querySelectorAll("span").length).toBe(0);
