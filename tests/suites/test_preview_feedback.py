@@ -58,6 +58,12 @@ HOLD_ROOT = """(() => {
   };
 })()"""
 
+# In dude's tab: the origin of every message it is sent, heard before the app's own listener.
+HEARD = """(() => {
+  window.__heard = [];
+  window.addEventListener('message', (e) => window.__heard.push(e.origin));
+})()"""
+
 
 def _lux(env, method: str, path: str) -> dict:
     res = requests.request(method, env.lux_url + path, headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
@@ -87,6 +93,7 @@ def _context(browser, web: dict, web_url: str, env):
     tag = inject.replace(FAKE_PUBLIC_URL, web_url)
     ctx = browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
     ctx.add_init_script(HOLD_ROOT)
+    ctx.add_init_script(HEARD)
     origin = re.sub(r"/$", "", web["url"])
     ctx.route(f"{origin}/**", lambda r: r.fulfill(status=200, content_type="text/html", body=APP.replace("%TAG%", tag)))
     ctx.route("https://evil.preview.dude.test/**", lambda r: r.fulfill(status=200, content_type="text/html", body=EVIL))
@@ -122,6 +129,37 @@ def _open_comment(ctx, page: Page) -> Page:
     pv = opened.value
     pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=15_000)
     return pv
+
+
+def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
+    """The servers read showing the preview again, its web server ready: the web server as it says.
+
+    Submitting the draft starts a delivery, and while its agents work the
+    servers read is their Run, where dude offers no Comment. Once they are
+    done the read is the preview's again; one that went to sleep meanwhile is
+    woken as a visitor would.
+    """
+    read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
+                      timeout=180, message="the delivery's agents were still at work after 180 s: the servers read never came back to the preview")
+    if read["run"].get("asleep"):
+        _lux(env, "POST", f"/fake/servers/{read['servers'][0]['id']}/request?path=/")
+    read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview"
+                      and s["run"]["previewStage"] == "ready" and s["servers"][0]["state"] == "ready" and s,
+                      timeout=60, message="the preview never woke after the delivery")
+    [web] = read["servers"]
+    return web
+
+
+def _evil_posted(page: Page) -> None:
+    """Opens the page on another origin that posts a draft to dude, and waits until dude's tab has heard it.
+
+    HEARD (an init script in dude's tab) records each message's origin in a
+    listener added before the app's, so once it lists the evil origin the
+    app's own listener has run on that message too; its origin check refuses
+    synchronously.
+    """
+    page.evaluate("() => window.open('https://evil.preview.dude.test/', 'evil')")
+    page.wait_for_function("() => (window.__heard ?? []).includes('https://evil.preview.dude.test')", timeout=15_000)
 
 
 def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_colleague(
@@ -185,13 +223,13 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
         _shoot(direct, "overlay-no-opener")
 
         # A page on another origin posting a draft to dude is not heard.
-        page.evaluate("() => window.open('https://evil.preview.dude.test/', 'evil')")
-        page.wait_for_timeout(1_000)
+        _evil_posted(page)
         assert len(client.get(f"/v1/tasks/{task['id']}/feedback").json()["feedback"]) == 1
         assert errors == [], errors
         ctx.close()
 
-        # A colleague's Comment shows the submitted item pinned on the button.
+        # A colleague's Comment shows the submitted item pinned on the button, once the delivery's agents leave the preview to it.
+        web = _back_to_the_preview(client, env, task)
         _, colleague = provision_person(client, env, "Ana Ribeiro", f"ana-{task['id']}@example.com")
         ctx2, errors2 = _context(browser, web, web_url, env)
         page2 = ctx2.new_page()

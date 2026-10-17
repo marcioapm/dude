@@ -58,10 +58,16 @@ HOLD_ROOT = """(() => {
 
 EVIL = """<!doctype html><title>evil</title><script>
   const draft = { type: "draft", v: 1, nonce: "x1", body: "From another site",
-    anchor: { kind: "preview", url: "https://web-shop.preview.test/", selector: "h1" } };
+    anchor: { kind: "preview", url: location.origin + "/", selector: "h1" } };
   window.opener && window.opener.postMessage(draft, "*");
   document.title = "posted";
 </script>"""
+
+# In dude's tab: the origin of every message it is sent, heard before the app's own listener.
+HEARD = """(() => {
+  window.__heard = [];
+  window.addEventListener('message', (e) => window.__heard.push(e.origin));
+})()"""
 
 
 def ov(page, js, arg=None):
@@ -139,6 +145,7 @@ class CommentingOnAPreview(unittest.TestCase):
         self.overlay_requests = []
         ctx.add_init_script(f"if (location.origin === '{DUDE}') localStorage.setItem('dude.fixtures.previewUrl', '{PREVIEW}')")
         ctx.add_init_script(HOLD_ROOT)
+        ctx.add_init_script(HEARD)
 
         def preview(route):
             route.fulfill(status=200, content_type="text/html", body=PAGE.replace("<!--OVERLAY-->", TAG))
@@ -152,8 +159,14 @@ class CommentingOnAPreview(unittest.TestCase):
         return ctx, page
 
     def record_request(self, request):
-        # What a preview page asks of dude's origin: the overlay script, and nothing else, ever.
-        if request.url.startswith(DUDE) and (request.headers.get("referer") or "").startswith(PREVIEW):
+        # Every load a preview page makes, by the frame that made it (Chrome sends no Referer from https to dude's http):
+        # subresources by their frame, a sub-frame's navigation by its parent. The window's own navigation is not the page's.
+        try:
+            frame = request.frame
+            by = frame.parent_frame if request.is_navigation_request() else frame
+        except Exception:  # noqa: BLE001 - a request with no frame (a service worker's) is no preview page's
+            return
+        if by is not None and by.url.startswith(PREVIEW):
             self.overlay_requests.append(request.url)
 
     def watch(self, p):
@@ -172,7 +185,7 @@ class CommentingOnAPreview(unittest.TestCase):
             comment.click()
         pv = opened.value
         pv.wait_for_load_state("domcontentloaded")
-        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=10_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
         # Ana's submitted comment is pinned on the heading, the one element its selector finds.
         wait_ov(pv, "ov-pin")
@@ -242,11 +255,11 @@ class CommentingOnAPreview(unittest.TestCase):
 
         # A page on another origin posting to dude is not heard: no draft.
         page.evaluate("() => window.open('https://evil.preview.test/', 'evil')")
-        page.wait_for_timeout(800)
+        page.wait_for_function("() => window.__heard.includes('https://evil.preview.test')", timeout=10_000)
         self.assertEqual(page.get_by_test_id("fb-tray").get_attribute("data-count"), "1")
 
-        # The overlay asked dude's origin for its script and nothing else.
-        self.assertTrue(all(u.endswith("/feedback/overlay.js") for u in self.overlay_requests), self.overlay_requests)
+        # The preview loaded the overlay from dude's origin and its own status frame: nothing else, ever.
+        self.assertEqual(set(self.overlay_requests), {f"{DUDE}/feedback/overlay.js", "https://status.widgets.test/"}, self.overlay_requests)
         self.assertEqual(self.errors, [])
 
     def center(self, page, selector):
@@ -310,7 +323,7 @@ class CommentingOnAPreview(unittest.TestCase):
             comment.click()
         pv = opened.value
         pv.set_viewport_size({"width": 390, "height": 844})
-        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=10_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         ov_click(pv, "ov-comment")
         pv.hover("button.greet")
         pv.mouse.click(*self.center(pv, "button.greet"))

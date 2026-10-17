@@ -112,7 +112,7 @@ export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">
   return { ok: true, msg };
 }
 
-/** A picture's bytes and type, when the data URL holds a PNG or JPEG (checked by its first bytes, not its label). */
+/** A picture's bytes and type, when the data URL holds a PNG or JPEG: its first bytes must be what its label says. */
 export function pictureBytes(dataUrl: string): { bytes: Uint8Array; type: "image/png" | "image/jpeg" } | null {
   const m = /^data:image\/(png|jpeg);base64,(.+)$/.exec(dataUrl);
   if (!m) return null;
@@ -123,8 +123,10 @@ export function pictureBytes(dataUrl: string): { bytes: Uint8Array; type: "image
     return null;
   }
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return { bytes, type: "image/png" };
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { bytes, type: "image/jpeg" };
+  const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (m[1] === "png" && png) return { bytes, type: "image/png" };
+  if (m[1] === "jpeg" && jpeg) return { bytes, type: "image/jpeg" };
   return null;
 }
 

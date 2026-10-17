@@ -82,6 +82,16 @@ test("with commenting off there is no Comment: the reason is said in its place",
     expect(off.textContent).toBe(words);
     expect(c.querySelectorAll('[data-testid="comment-on-server"]').length).toBe(0);
     for (const u of mounted.splice(0)) await u();
+    // The Overview's servers and the Feedback tab's way in say the same, with no Comment.
+    for (const tab of ["overview", "feedback"] as const) {
+      const t = await page(new PreviewClient([web({ commenting: { available: false, reason } })]), tab);
+      const where = tab === "overview" ? '[data-testid="servers-summary"] [data-testid="commenting-unavailable"]' : '[data-testid="preview-way-in"] [data-testid="commenting-unavailable"]';
+      const said = await until(() => t.querySelector(where), `the reason on ${tab}`);
+      expect([tab, said.textContent]).toEqual([tab, words]);
+      expect([tab, t.querySelectorAll('[data-testid="comment-on-preview"]').length]).toEqual([tab, 0]);
+      expect([tab, t.querySelectorAll('button[data-testid="preview-way-in"]').length]).toEqual([tab, 0]);
+      for (const u of mounted.splice(0)) await u();
+    }
   }
 });
 

@@ -24,6 +24,7 @@ let opener: Opener | null;
 let overlay: Overlay;
 let root: ShadowRoot;
 let requests: string[];
+let watchLoads: (node: Node) => void;
 
 function page(html: string, withOpener = true) {
   win = new Window({ url: PAGE, width: 1280, height: 720 });
@@ -42,10 +43,35 @@ function page(html: string, withOpener = true) {
     return open.call(this, method, url, true);
   } as typeof open;
   Object.defineProperty(win.navigator, "sendBeacon", { configurable: true, value: (url: string) => { requests.push(url); return true; } });
+  for (const name of ["EventSource", "WebSocket"]) {
+    win[name] = function (url: string | URL) { requests.push(`${name} ${String(url)}`); throw new Error("no network in tests"); };
+  }
+  // A load named by an element the page holds (an image, a script, a stylesheet, a frame), however it got there.
+  const loads = (el: Element) => {
+    const name = el.localName;
+    const url = name === "link" ? el.getAttribute("href") : ["img", "script", "iframe", "frame", "source", "video", "audio"].includes(name) ? el.getAttribute("src") : null;
+    if (url && !url.startsWith("data:") && !url.startsWith("blob:")) requests.push(`${name} ${url}`);
+  };
+  const setAttribute = win.Element.prototype.setAttribute;
+  win.Element.prototype.setAttribute = function (this: Element, name: string, value: string) {
+    setAttribute.call(this, name, value);
+    // Connected or not: a detached <img> or <script> with a src loads too.
+    if ((name === "src" || name === "href") && !this.isConnected) loads(this);
+  };
+  watchLoads = (node: Node) => new win.MutationObserver((records: MutationRecord[]) => {
+    for (const r of records) {
+      if (r.type === "attributes") loads(r.target as Element);
+      for (const n of r.addedNodes) if (n.nodeType === 1) { loads(n as Element); (n as Element).querySelectorAll("*").forEach(loads); }
+    }
+  }).observe(node, { subtree: true, childList: true, attributes: true, attributeFilter: ["src", "href"] });
+  watchLoads(win.document);
   const attach = win.HTMLElement.prototype.attachShadow;
   win.HTMLElement.prototype.attachShadow = function (this: HTMLElement, init: ShadowRootInit) {
     const r = attach.call(this, init);
-    if (this.localName === "dude-preview-overlay") root = r;
+    if (this.localName === "dude-preview-overlay") {
+      root = r;
+      watchLoads(r);
+    }
     return r;
   };
 }
@@ -83,8 +109,10 @@ function hover(el: Element) {
 const CART = `<main><section class="cart"><form id="checkout"><button class="pay" type="submit">Pay now</button></form></section><p class="other">x</p></main>`;
 
 beforeEach(() => page(CART));
-afterEach(() => {
+afterEach(async () => {
   overlay?.stop();
+  // The load observers report on the next turn.
+  await tick(5);
   expect(requests).toEqual([]);
   win.happyDOM?.abort?.();
 });
@@ -475,6 +503,25 @@ test("an app holding history's own pushState from before the overlay still has i
   own({}, "", "/greetings");
   await tick(40);
   expect(sent().at(-1)).toEqual({ type: "navigated", v: 1, url: "https://web-wi-1-shop.preview.example.test/greetings" });
+});
+
+test("stop from dude takes the overlay off the page", () => {
+  boot();
+  connect();
+  expect(win.document.querySelectorAll("dude-preview-overlay").length).toBe(1);
+  fromDude({ type: "stop", v: 1 });
+  expect(win.document.querySelectorAll("dude-preview-overlay").length).toBe(0);
+});
+
+test("a saved answer for another save is not this one's", async () => {
+  boot();
+  connect();
+  await writeOnPay("Green");
+  tid("ov-save")!.click();
+  fromDude({ type: "saved", v: 1, nonce: "someone-else", id: "fbk_x", drafts: 4, picture: "none" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  expect(tid("ov-save")!.textContent).toBe("Saving…");
+  expect(count('[data-testid="ov-saved"]')).toBe(0);
 });
 
 test("Esc with only a panel showing closes it and the page still hears Esc; picking, the overlay keeps it", () => {

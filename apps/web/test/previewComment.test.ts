@@ -13,6 +13,8 @@ import { PreviewCommenting, commentingOffer, pinsFor, previewOrigins, type Comme
 const WEB = "https://web-shop-1.preview.example.test";
 const API = "https://api-shop-1.preview.example.test";
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==";
+// A 1×1 baseline JPEG.
+const JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
 
 type Popup = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void };
 
@@ -189,6 +191,26 @@ test("a picture whose bytes are not an image is dropped, and the draft is saved 
   expect(told()).toContainEqual(expect.objectContaining({ type: "saved", picture: "failed" }));
 });
 
+test("a JPEG picture is uploaded as image/jpeg; one whose label and bytes disagree is not uploaded", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "j1", body: "x", anchor: anchor(), picture: JPEG });
+  await tick(5);
+  expect(upload).toHaveBeenCalledTimes(1);
+  const pic = upload.mock.calls[0]![0] as { bytes: Uint8Array; type: string; name: string };
+  expect(pic.type).toBe("image/jpeg");
+  expect([...pic.bytes.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+  expect(pic.name).toBe("preview-cart-element.jpg");
+  expect(told()).toContainEqual(expect.objectContaining({ type: "saved", nonce: "j1", picture: "attached" }));
+  // JPEG bytes labelled PNG, and PNG bytes labelled JPEG: the draft is saved, the picture refused.
+  post({ type: "draft", v: 1, nonce: "j2", body: "x", anchor: anchor(), picture: JPEG.replace("image/jpeg", "image/png") });
+  await tick(5);
+  post({ type: "draft", v: 1, nonce: "j3", body: "x", anchor: anchor(), picture: PNG.replace("image/png", "image/jpeg") });
+  await tick(5);
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(told()).toContainEqual(expect.objectContaining({ type: "saved", nonce: "j2", picture: "failed" }));
+  expect(told()).toContainEqual(expect.objectContaining({ type: "saved", nonce: "j3", picture: "failed" }));
+});
+
 test("an upload refused saves the draft without its picture", async () => {
   upload = mock(async () => { throw new Error("image storage is not configured"); });
   c.dispose();
@@ -292,6 +314,66 @@ test("pins carry only the page's preview items that name a selector, each no lon
   expect(pins.map((p) => p.id)).toEqual(["a", "b", "f"]);
   expect(pins[0]!.body.length).toBe(OVERLAY_LIMITS.pinBody);
   expect(pins[2]).toMatchObject({ mine: true, status: "draft", n: 3 });
+});
+
+test("Stop commenting tells the window to take the overlay off, and the view is idle", () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  c.stop();
+  expect(told().at(-1)).toEqual({ type: "stop", v: 1 });
+  expect(popup.postMessage.mock.calls.at(-1)![1]).toBe(WEB);
+  expect(c.view.state).toBe("idle");
+});
+
+test("navigated is answered with the session for the page the window is on now", () => {
+  items = [item("cart"), item("greet", { url: `${WEB}/greetings` })];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  post({ type: "navigated", v: 1, url: `${WEB}/greetings` });
+  const session = told().at(-1)!;
+  expect(session).toMatchObject({ type: "session", url: `${WEB}/greetings` });
+  expect(session.type === "session" && session.pins.map((p) => p.id)).toEqual(["greet"]);
+});
+
+test("hello or navigated naming another site than the sender's is refused, not answered with pins", () => {
+  items = [item("cart")];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${API}/cart` });
+  post({ type: "navigated", v: 1, url: "https://evil.example.test/cart" });
+  expect(told().map((m) => m.type)).toEqual(["refused", "refused"]);
+});
+
+test("Open in dude for an item not in the task's list is not passed on", () => {
+  const openItem = mock((_id: string) => {});
+  c.dispose();
+  c = new PreviewCommenting({
+    win: window as unknown as Window, taskId: "tsk_1",
+    read: () => ({ origins: previewOrigins(data), items, drafts: 0, taskKey: "SHOP-1", you: null, name: () => "Ana" }),
+    upload: upload as never, createDraft: createDraft as never, onSaved: () => {}, onOpenItem: openItem, onChange: () => {},
+  });
+  c.listen();
+  items = [item("fbk_here")];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "open", v: 1, itemId: "fbk_elsewhere" });
+  post({ type: "open", v: 1, itemId: "fbk_here" });
+  expect(openItem.mock.calls).toEqual([["fbk_here"]]);
+});
+
+test("a page's pins are never more than the cap", () => {
+  const many = Array.from({ length: OVERLAY_LIMITS.pins + 30 }, (_, i) => item(`p${i}`));
+  expect(pinsFor(many, `${WEB}/cart`, null, () => "Ana").length).toBe(OVERLAY_LIMITS.pins);
+});
+
+test("a server whose commenting is not available gives no origin a draft is taken from", async () => {
+  data = servers([server("web", WEB, { commenting: { available: false, reason: "lux" } })]);
+  expect(previewOrigins(data).size).toBe(0);
+  data = servers([server("web", WEB), server("api", API, { commenting: { available: false, reason: "lux" } })]);
+  expect([...previewOrigins(data)]).toEqual([WEB]);
+  c.open(`${WEB}/cart`, "web");
+  // A window at api's origin, posting as the opened one would: not heard.
+  post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor({ url: `${API}/cart` }) }, API);
+  await tick();
+  expect(createDraft).not.toHaveBeenCalled();
 });
 
 test("commenting is offered on a live preview's ready servers, or not with the reason, and restart is named", () => {
