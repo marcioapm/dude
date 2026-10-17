@@ -189,7 +189,6 @@ func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, err
 	if askErr == nil {
 		rec.Result = j
 	}
-	// A call that was sent is recorded even when ctx ended while the model ran.
 	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 	var id string
