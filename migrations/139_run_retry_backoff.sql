@@ -4,8 +4,9 @@
 --
 -- retry_failures: how many such failures in a row. retry_due_at: when the
 -- last of them scheduled the retry. A failure is in a row with the last when
--- it comes within a minute of that retry being due; otherwise the count
--- starts over.
+-- it comes within a minute of that retry being due and no retry succeeded
+-- in between (the sweep clears both columns after one does); otherwise the
+-- count starts over.
 ALTER TABLE runs
   ADD COLUMN retry_failures int NOT NULL DEFAULT 0,
   ADD COLUMN retry_due_at timestamptz;

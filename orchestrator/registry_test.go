@@ -771,9 +771,9 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 	})
 	api.setFail(nil)
 	api.advance(registry.FirstRetry) // past the provider's back-off
-	// Within a minute of the submit's retry being due: the second failure
-	// in a row, so 10 s.
-	w.retried(runID, 10*time.Second, func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 })
+	// The submit's retry succeeded since, which ended its streak: the
+	// resume's failure is the first of a new one, so 5 s.
+	w.retried(runID, 5*time.Second, func() bool { return w.luxCalls(w.lux.Runs()[0].ID, "resume") == 1 })
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})

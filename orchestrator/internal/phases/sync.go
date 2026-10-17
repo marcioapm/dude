@@ -209,6 +209,10 @@ type phaseRun struct {
 	// (luxstop.go), and how long it has been held; nil for none.
 	Broken    *brokenTurn
 	BrokenFor time.Duration
+	// retryLater's streak and when the retry it scheduled was due, as the
+	// sweep read them (migration 139); nil for none.
+	RetryFailures int
+	RetryDueAt    *time.Time
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -263,7 +267,8 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
-	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0)`
+	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
+	r.retry_failures, r.retry_due_at`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -431,7 +436,8 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
-		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs)
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
+		&r.RetryFailures, &r.RetryDueAt)
 	if err != nil {
 		return r, err
 	}
@@ -632,6 +638,9 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			if err != nil && !errors.Is(err, errRetry) {
 				s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
 				acted = false
+			}
+			if err == nil && r.RetryFailures > 0 {
+				s.resetRetries(ctx, r)
 			}
 			// Released before the result is sent: a pass that waited for
 			// it may sweep again at once and must find the Run free.
@@ -3234,7 +3243,8 @@ func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refus
 
 // Back-off of retryLater: retryBase doubling with each failure in a row, up
 // to retryMax. A failure is in a row with the last when it comes within
-// retryGrace of the retry that one scheduled being due.
+// retryGrace of the retry that one scheduled being due, with no successful
+// retry in between (Sweep's resetRetries).
 const (
 	retryBase  = 5 * time.Second
 	retryMax   = 5 * time.Minute
@@ -3267,6 +3277,20 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 			r.ID, retryBase.Seconds(), retryMax.Seconds(), forge.RetryAfter(cause).Seconds(), retryGrace.Seconds())
 		return err
 	})
+}
+
+// resetRetries ends r's back-off streak after an advance that returned no
+// error. Only if retry_due_at is still what the sweep read: a retry that
+// failed again went through retryLater, which moved it, and stays counted.
+func (s *Syncer) resetRetries(ctx context.Context, r phaseRun) {
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET retry_failures = 0, retry_due_at = NULL
+			WHERE id = $1 AND retry_due_at = $2`, r.ID, r.RetryDueAt)
+		return err
+	})
+	if err != nil {
+		s.Log.Warn("resetting a run's retry back-off failed", "run", r.ID, "error", err)
+	}
 }
 
 func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor string, payload map[string]any) error {
