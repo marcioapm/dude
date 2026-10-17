@@ -30,6 +30,7 @@ func TestGoldenReadOnlyCause(t *testing.T) {
 		cause error
 	}{
 		{"lux-said", &lux.Error{Status: 400, Code: "bad_mode", Message: "sync mode\n  ff is not supported " + strings.Repeat("x", 130)}},
+		{"lux-whitespace", &lux.Error{Status: 400, Code: "bad_mode", Message: " \n\t "}},
 		{"lux-said-nothing", &lux.Error{Status: 400, Code: "bad_mode"}},
 		{"not-lux", errors.New("connection reset")},
 	} {

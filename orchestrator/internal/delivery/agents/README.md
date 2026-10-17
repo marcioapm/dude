@@ -38,7 +38,7 @@ A new refusal is a `{{define}}` plus one line in `internal/refusalgen/<dir>.mani
 under `refusals/tools/`, `refusals/delivery/` or `refusals/domain/` that no manifest lists fails
 the generator, and so does a manifest line whose define is missing.
 
-Text that still reaches an agent from Go (paths under `orchestrator/internal/`):
+Known text that still reaches an agent from Go (paths under `orchestrator/internal/`; this inventory is not exhaustive):
 
 - `delivery/conduct.go:623` — `DismissedByConductor`, the resolution-note prefix of a finding
   the conductor dismissed; `AcceptedBy` (`:628`) parses it back, so it stays a Go constant.

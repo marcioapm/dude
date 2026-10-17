@@ -102,9 +102,10 @@ func (s *Syncer) syncAsked(ctx context.Context, r phaseRun, id string, refs []lu
 // checkout current: it stays read-only, Chat says so, and so does the
 // conductor's next input.
 func (s *Syncer) checkoutReadOnly(ctx context.Context, r phaseRun, cause error) error {
-	var said string
+	var said *string
 	if le, ok := lux.AsError(cause); ok && le.Message != "" {
-		said = oneLineClip(le.Message, 120)
+		message := oneLineClip(le.Message, 120)
+		said = &message
 	}
 	why := readOnlyCause.Render(said)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
