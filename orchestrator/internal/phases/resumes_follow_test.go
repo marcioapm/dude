@@ -528,6 +528,7 @@ func (shortTimingDeadline) Deadline() (time.Time, bool) {
 	return time.Now().Add(180 * time.Millisecond), true
 }
 
+// bestEffort applies the Run's deadline budget to timing statements.
 func TestBestEffortAppliesTheRunsDeadlineBudget(t *testing.T) {
 	w := newResumeWorld(t)
 	var lockMS, statementMS float64
@@ -552,10 +553,8 @@ func TestBestEffortAppliesTheRunsDeadlineBudget(t *testing.T) {
 	}
 }
 
-// A timing statement waiting on a lock inside the Run's deadline fails on
-// its own budget: the Run's update after it goes through on the same
-// transaction. The deadline is generous so that only the budget can end the
-// wait; how the budget shrinks with the deadline is the test above.
+// A timing statement waiting on a lock uses its own budget, leaving the Run's
+// transaction usable for its update.
 func TestATimingLockWaitInsideTheRunsDeadlineLeavesTheRunsTransactionUsable(t *testing.T) {
 	w := newResumeWorld(t)
 	w.resume(stoppedOnHost1(time.Now()))
