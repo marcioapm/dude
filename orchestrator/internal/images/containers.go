@@ -369,9 +369,9 @@ func mapper(root, path string, capBit uint) Mapper {
 		}
 	}
 	buf := make([]byte, 64)
-	// x/sys/unix, not syscall: syscall has Getxattr only on Linux. On
-	// macOS the attribute does not exist, err says so, and the file has
-	// no capability.
+	// x/sys/unix, not syscall: syscall has Getxattr only on Linux. macOS
+	// normally has no Linux security.capability attribute, so a failed lookup
+	// reports no Linux capability.
 	n, err := unix.Getxattr(full, "security.capability", buf)
 	// vfs_cap_data: magic_etc, then permitted and inheritable of the low
 	// 32 capabilities (v2 and v3 have a second pair, and v3 a root id).
