@@ -30,6 +30,9 @@ function page(html: string, pseudos: Record<string, string> = {}) {
 
 const clone = (win: any, sel = "#it") => cloneWithStyles(win.document.querySelector(sel), win);
 
+const DATA = "data:image/png;base64,iVBORw0KGgo=";
+const REMOTE = "https://cdn.test/a.png";
+
 test("::before is the clone's first child and ::after its last, with their own styles and text", async () => {
   const win = page(`<p id="it" data-n="7">Cart</p>`, {
     "#it|::before": `content: "\\2605  " attr(data-n) " " open-quote; color: rgb(255, 0, 0); font-weight: 700`,
@@ -49,7 +52,7 @@ test("::before is the clone's first child and ::after its last, with their own s
 });
 
 test("an element with no pseudo content, or one browsers draw none for, gets no span", async () => {
-  const win = page(`<div id="it"><b>a</b><img src="data:image/png;base64,iVBORw0KGgo="><input><audio></audio><embed><object></object></div>`, {
+  const win = page(`<div id="it"><b>a</b><img src="${DATA}"><input><audio></audio><embed><object></object></div>`, {
     "b|::before": `content: normal`,
     "img|::before": `content: "x"`,
     "input|::after": `content: "x"`,
@@ -64,13 +67,13 @@ test("an element with no pseudo content, or one browsers draw none for, gets no 
 
 test("a data: image in content is drawn; an image only a request could get leaves that pseudo out", async () => {
   const win = page(`<div id="it"><b>a</b><i>b</i><u>c</u></div>`, {
-    "b|::before": `content: url("data:image/png;base64,iVBORw0KGgo=") " new"`,
+    "b|::before": `content: url("${DATA}") " new"`,
     "i|::before": `content: url("https://cdn.test/star.png")`,
     "u|::after": `content: "!"; background-image: url("https://cdn.test/bg.png")`,
   });
   const out = await clone(win);
   const b = out.querySelector("b")!.firstElementChild!;
-  expect(b.querySelector("img")!.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
+  expect(b.querySelector("img")!.getAttribute("src")).toBe(DATA);
   expect(b.textContent).toBe(" new");
   expect(out.querySelector("i")!.querySelectorAll("span").length).toBe(0);
   expect(out.querySelector("u")!.querySelectorAll("span").length).toBe(0);
@@ -90,7 +93,7 @@ test("a pseudo's data: images count against the cap too", async () => {
   const items = "<i></i>".repeat(999);
   const text = page(`<div id="it">${items}</div>`, { "i|::before": `content: "•"` });
   expect((await clone(text)).querySelectorAll("span").length).toBe(999);
-  const icons = page(`<div id="it">${items}</div>`, { "i|::before": `content: url("data:image/png;base64,iVBORw0KGgo=")` });
+  const icons = page(`<div id="it">${items}</div>`, { "i|::before": `content: url("${DATA}")` });
   await expect(clone(icons)).rejects.toThrow(new PictureError("it is too large to draw"));
 });
 
@@ -103,8 +106,6 @@ test("the walk yields to the page every 200 counted nodes, pseudo spans included
   expect(frames).toBeGreaterThanOrEqual(8);
 });
 
-const DATA = "data:image/png;base64,iVBORw0KGgo=";
-const REMOTE = "https://cdn.test/a.png";
 const noCopy = new PictureError("it has a background image dude can't copy");
 
 test.each([
