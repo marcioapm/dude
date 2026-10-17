@@ -461,7 +461,8 @@ Without either, no inject is sent to lux, and a task's servers say why
 orchestrator logs at startup whether commenting is on, and if not, which
 one is missing. Turning it off leaves on a server the tag it already has.
 A `public_url` that is not an https origin (no path, an ASCII host: an
-internationalised name as punycode) never stops the orchestrator: it
+internationalised name as punycode; a fully qualified name's trailing dot
+is kept, an IPv4 address's is refused) never stops the orchestrator: it
 starts with commenting off, logs why, and `validate` prints it as a
 warning.
 

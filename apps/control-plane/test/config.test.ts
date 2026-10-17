@@ -114,6 +114,8 @@ egress = ["file.example"]
       "https://DUDE.EXAMPLE.COM:443": "https://dude.example.com",
       "https://d.test:443/": "https://d.test",
       "https://d.test:0443": "https://d.test",
+      "https://d.test.": "https://d.test.",
+      "https://D.TEST.:443": "https://d.test.",
       "https://d.test:08443": "https://d.test:8443",
       " https://d.test\n": "https://d.test",
       "https://xn--bcher-kva.example": "https://xn--bcher-kva.example",

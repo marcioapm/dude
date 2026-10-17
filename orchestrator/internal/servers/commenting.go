@@ -71,8 +71,12 @@ func originHost(h string) (string, error) {
 		}
 		return "[" + a.String() + "]", nil
 	}
-	labels := strings.Split(h, ".")
+	// One trailing dot (a fully qualified name) stays in the origin, as WHATWG keeps it.
+	labels := strings.Split(strings.TrimSuffix(h, "."), ".")
 	if numericLabel.MatchString(labels[len(labels)-1]) {
+		if strings.HasSuffix(h, ".") {
+			return "", errors.New("an IPv4 address with a trailing dot; give it without the dot")
+		}
 		a, err := netip.ParseAddr(h)
 		if err != nil || !a.Is4() || a.String() != h {
 			return "", errors.New("a host that ends in a number but is not a dotted-decimal IPv4 address")

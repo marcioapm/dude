@@ -48,6 +48,8 @@ var publicOrigins = map[string]string{
 	"https://[::1]":                      "https://[::1]",
 	"https://[2001:DB8:0:0:0:0:0:1]:443": "https://[2001:db8::1]",
 	"https://a-b.c-d.test":               "https://a-b.c-d.test",
+	"https://d.test.":                    "https://d.test.",
+	"https://D.TEST.:443":                "https://d.test.",
 }
 
 func TestPublicOriginIsAnHTTPSOrigin(t *testing.T) {
@@ -62,7 +64,8 @@ func TestPublicOriginIsAnHTTPSOrigin(t *testing.T) {
 		// Not ASCII DNS, IPv4 or bracketed IPv6: WHATWG would rewrite or refuse it.
 		"https://Bücher.example", "https://x.test<b>", "https://x.test'y", "https://x.test&amp;", "https://a_b.test",
 		"https://-a.test", "https://a..test", "https://0x7f.1", "https://1.2.3", "https://127.000.0.1", "https://d.test.1",
-		"https://[::ffff:1.2.3.4]", "https://[fe80::1%25eth0]", "https://d.test:65536"} {
+		"https://[::ffff:1.2.3.4]", "https://[fe80::1%25eth0]", "https://d.test:65536",
+		"https://d.test..", "https://.", "https://1.2.3.4."} {
 		if got, err := PublicOrigin(raw); err == nil {
 			t.Errorf("%q accepted as %q", raw, got)
 		}
