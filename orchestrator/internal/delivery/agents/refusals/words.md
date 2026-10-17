@@ -12,6 +12,28 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 
 {{- define "refusals/words/blocker"}}{{.Key}} ({{.State}}){{end}}
 
+{{- define "refusals/words/blocker-state/review"}}in review{{end}}
+
+{{- define "refusals/words/blocker-state/running"}}in progress{{end}}
+
+{{- define "refusals/words/blocker-state/awaiting_input"}}needs a person{{end}}
+
+{{- define "refusals/words/blocker-state/ready_to_merge"}}ready to merge{{end}}
+
+{{- define "refusals/words/blocker-state/failed"}}failed{{end}}
+
+{{- define "refusals/words/blocker-state/aborted"}}aborted{{end}}
+
+{{- define "refusals/words/blocker-state/received"}}not started{{end}}
+
+{{- define "refusals/words/blocker-state/queued"}}not started{{end}}
+
+{{- define "refusals/words/blocker-state/intake"}}being shaped{{end}}
+
+{{- define "refusals/words/blocker-state/awaiting_confirmation"}}plan to confirm{{end}}
+
+{{- define "refusals/words/blocker-state/done"}}done, nothing merged{{end}}
+
 {{- define "refusals/words/not-a-peer"}}{{.}} is not one of your peers: only the other tasks on your epic are (list_tasks with peers: true shows them){{end}}
 
 {{- define "refusals/words/relation-line"}}{{with .Open}}blocked by {{join . ", "}}{{end}}{{if and .Open .Blocks}} · {{end}}{{with .Blocks}}blocks {{join . ", "}}{{end}}{{if and (or .Open .Blocks) .Related}} · {{end}}{{with .Related}}related {{join . ", "}}{{end}}{{end}}
