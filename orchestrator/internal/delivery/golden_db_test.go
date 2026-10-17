@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,7 +18,7 @@ import (
 // whose peers are GLD-8 and GLD-9, and a brainstorm session linking GLD
 // (two repositories) and OPS (none). Every time it writes is fixed, so a
 // briefing renders the same on every run; the digest's "through", which
-// is the database's now(), is masked (goldenNow).
+// is the database's now(), is checked against now() and masked (maskNow).
 type goldenWorld struct {
 	app   *db.DB
 	owner *pgx.Conn
@@ -48,9 +49,43 @@ func (w goldenWorld) in(t *testing.T, fn func(ctx context.Context, tx pgx.Tx) (s
 	return out
 }
 
-// goldenNow masks the digest's end, the only time a briefing takes from
-// the clock.
-var goldenNow = regexp.MustCompile(`→ \d\d:\d\d UTC\)`)
+// inAt is in, and the database's now() in the same transaction: the time
+// the digest ends at.
+func (w goldenWorld) inAt(t *testing.T, fn func(ctx context.Context, tx pgx.Tx) (string, error)) (string, time.Time) {
+	t.Helper()
+	var now time.Time
+	out := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+		if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+			return "", err
+		}
+		return fn(ctx, tx)
+	})
+	return out, now
+}
+
+// goldenNow is the digest's end, the only time a briefing takes from the
+// clock.
+var goldenNow = regexp.MustCompile(`→ (\d\d:\d\d) UTC\)`)
+
+// maskNow checks that the digest in s ends at now, within a minute, and
+// masks that time.
+func maskNow(t *testing.T, s string, now time.Time) string {
+	t.Helper()
+	ms := goldenNow.FindAllStringSubmatch(s, -1)
+	if len(ms) == 0 {
+		t.Fatalf("no digest end time (→ HH:MM UTC)) in:\n%s", s)
+	}
+	for _, m := range ms {
+		ok := false
+		for _, d := range []time.Duration{0, -time.Minute, time.Minute} {
+			ok = ok || m[1] == now.Add(d).UTC().Format("15:04")
+		}
+		if !ok {
+			t.Errorf("the digest ends at %s, the database's now() is %s", m[1], now.UTC().Format("15:04"))
+		}
+	}
+	return goldenNow.ReplaceAllString(s, "→ NOW UTC)")
+}
 
 func newGoldenWorld(t *testing.T) goldenWorld {
 	app, owner := dbtest.Open(t)
@@ -162,14 +197,15 @@ func TestGoldenConductorBriefings(t *testing.T) {
 		w.history(t)
 		w.coordination(t)
 		w.delivery(t, "conductor.decision", `{"decider":"conductor","decision":{"point":"before_pull_request","policy":"openPullRequest"}}`)
-		got := w.in(t, briefWith(byPerson, "Ana", "Why is the export\nnot streamed?"))
-		golden(t, "briefing-conductor-full", goldenNow.ReplaceAllString(got, "→ NOW UTC)"))
+		got, now := w.inAt(t, briefWith(byPerson, "Ana", "Why is the export\nnot streamed?"))
+		got = maskNow(t, got, now)
+		golden(t, "briefing-conductor-full", got)
 		// The conductor's prompt around it, as the syncer composes it.
 		in := goldenTask()
 		in.Tools = true
 		in.Repositories = twoRepos()
 		in.TaskBranch = "dude/wi_g/attempt-1"
-		golden(t, "conductor-prompt-with-briefing", ConductorPrompt(goldenNow.ReplaceAllString(got, "→ NOW UTC)"), in))
+		golden(t, "conductor-prompt-with-briefing", ConductorPrompt(got, in))
 		// Told once: briefed again, it has no digest.
 		again := w.in(t, briefWith(byWake, "", "dude woke you; one thing:\n- A decision waits."))
 		golden(t, "briefing-conductor-wake", again)
@@ -320,8 +356,8 @@ func TestGoldenDigestBounds(t *testing.T) {
 			fmt.Sprintf("pm_%02d", i), fmt.Sprintf("Question %d?", i), fmt.Sprintf("2026-01-02 14:%02d:00Z", i))
 	}
 	w.exec(t, `INSERT INTO conductor_digests (task_id, organization_id, through) VALUES ('wi_g', $1, '2026-01-02 12:30Z')`)
-	got := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+	got, now := w.inAt(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
 		return ConductorDigestTx(ctx, tx, w.org, "wi_g", "", "briefing")
 	})
-	golden(t, "digest-bounded", goldenNow.ReplaceAllString(got, "→ NOW UTC)"))
+	golden(t, "digest-bounded", maskNow(t, got, now))
 }
