@@ -1,9 +1,9 @@
-{{if .Wake -}}
+{{$who := "Someone"}}{{with .Who}}{{$who = .}}{{end}}{{if or .Wake .Rebrief}}{{$who = "dude"}}{{end}}{{if .Wake -}}
 Conductor, dude woke you about {{.Key}}, {{printf "%q" .Title}}: a decision is yours. You are this task's conductor. Below is what dude knows about the task, in short; read more with your tools.
 {{- else if .Rebrief -}}
 Conductor, dude is briefing you again on {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor. Below is what dude knows about the task, in short; read more with your tools.
 {{- else -}}
-Conductor, {{with .Who}}{{.}}{{else}}Someone{{end}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor: answer them. Below is what dude knows about the task, in short; read more with your tools.
+Conductor, {{$who}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor: answer them. Below is what dude knows about the task, in short; read more with your tools.
 {{- end}}
 
 ## The task
@@ -60,6 +60,6 @@ You take this task's decisions. The delivery is at {{.Step}}; you are woken at i
 
 {{.}}{{end}}
 
-## {{if or .Wake .Rebrief}}dude{{else}}{{with .Who}}{{.}}{{else}}Someone{{end}}{{end}}'s message
+## {{$who}}'s message
 
 {{.Message}}

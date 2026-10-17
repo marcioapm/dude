@@ -106,7 +106,8 @@ func Rebriefing(ctx context.Context, tx pgx.Tx, ref RunRef, reason string) (stri
 		}
 		return render(rebriefSessionTmpl, message+"\n\n"+about), nil
 	}
-	return briefing(ctx, tx, ref.TaskID, ref.RunID, "dude", message, rebrief)
+	// No person: conductor.md names dude as the speaker of every rebrief.
+	return briefing(ctx, tx, ref.TaskID, ref.RunID, "", message, rebrief)
 }
 
 // briefing is the conductor's briefing; message is from person, or from
