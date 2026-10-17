@@ -118,6 +118,14 @@ func movedTold(target delivery.Machine, where string) string {
 	return moved.Render(struct{ Name, Spec, Where string }{target.Name, target.Spec(), where})
 }
 
+// moveKeptTold is what a Run whose move lux refused is told.
+func moveKeptTold(to, kept, why string, reset bool) string {
+	return moveKept.Render(struct {
+		To, Kept, Why string
+		Reset         bool
+	}{to, kept, why, reset})
+}
+
 // What a Run is told of its machine move: delivery/agents/notices/.
 var (
 	moved     = delivery.MustText("notices/moved")
