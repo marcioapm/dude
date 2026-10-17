@@ -3,6 +3,7 @@ package fakelux
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"regexp"
@@ -32,6 +33,7 @@ type tenantServer struct {
 	Command           []string
 	Workdir           string
 	Env, Labels       map[string]string
+	Inject            string
 	Wake, Lifetime    string
 	IdleAfter         time.Duration
 	WakeTimeout       time.Duration
@@ -213,6 +215,10 @@ func (s *Server) tview(ts *tenantServer) map[string]any {
 		expire = dur(*ts.ExpireAfter)
 	}
 	out["expireAfter"] = expire
+	if s.ServerInject {
+		// lux from v0.1.32 reports it on every server, "" for none.
+		out["inject"] = ts.Inject
+	}
 	if ts.RunID != "" {
 		runID = ts.RunID
 		if run := s.runs[ts.RunID]; run != nil {
@@ -266,9 +272,14 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 		Lifetime    string            `json:"lifetime"`
 		ExpireAfter json.RawMessage   `json:"expireAfter"`
 		RunID       string            `json:"runId"`
+		Inject      *string           `json:"inject"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := s.decodeTenantBody(r, "POST /v1/servers", &in); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
+		return
+	}
+	if msg := s.injectProblem(in.Inject); msg != "" {
+		writeErr(w, 422, "invalid_server", msg)
 		return
 	}
 	if msg := (serverInput{Name: in.Name, Port: in.Port}).check(true); msg != "" {
@@ -332,6 +343,9 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 	t := &tenantServer{ID: fmt.Sprintf("srv_%d", s.nextSrv), Name: in.Name, Port: in.Port, Command: in.Command,
 		Workdir: in.Workdir, Env: in.Env, Labels: in.Labels, Wake: wake, Lifetime: lifetime, IdleAfter: idle,
 		WakeTimeout: timeout, CreatedAt: time.Now(), Owner: "key"}
+	if in.Inject != nil {
+		t.Inject = *in.Inject
+	}
 	if host == "" {
 		host = fmt.Sprintf("%s-%08d", in.Name, s.nextSrv)
 	}
@@ -493,9 +507,14 @@ func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 		Workdir     *string            `json:"workdir"`
 		Env         *map[string]string `json:"env"`
 		WakeTimeout json.RawMessage    `json:"wakeTimeout"`
+		Inject      *string            `json:"inject"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := s.decodeTenantBody(r, "PATCH /v1/servers/"+r.PathValue("sid"), &in); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
+		return
+	}
+	if msg := s.injectProblem(in.Inject); msg != "" {
+		writeErr(w, 422, "invalid_server", msg)
 		return
 	}
 	s.mu.Lock()
@@ -533,12 +552,59 @@ func (s *Server) patchTenantServer(w http.ResponseWriter, r *http.Request) {
 	if in.Env != nil {
 		t.Env, changed = maps.Clone(*in.Env), append(changed, "env")
 	}
+	if in.Inject != nil {
+		// Applies to the next request, without a restart: nothing of the
+		// process changes.
+		t.Inject, changed = *in.Inject, append(changed, "inject")
+	}
 	if p := t.proc; p != nil {
 		p.Port, p.Command, p.Workdir, p.Env = t.Port, t.Command, t.Workdir, t.Env
 	}
 	s.tenantCalls = append(s.tenantCalls, "patch "+t.ID+" "+strings.Join(changed, ","))
 	s.serverEvent(t, "server.updated", map[string]any{"by": "key", "changed": changed})
 	writeJSON(w, 200, s.tview(t))
+}
+
+// TenantBody is one create or patch of a tenant server as it came: its
+// method and path, and its body's fields as JSON had them.
+type TenantBody struct {
+	Call   string
+	Fields map[string]json.RawMessage
+}
+
+// decodeTenantBody keeps the request's body (TenantBodies) and decodes it.
+func (s *Server) decodeTenantBody(r *http.Request, call string, v any) error {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	s.mu.Lock()
+	s.tenantBodies = append(s.tenantBodies, TenantBody{Call: call, Fields: fields})
+	s.mu.Unlock()
+	return json.Unmarshal(raw, v)
+}
+
+// TenantBodies is every create and patch of a tenant server, in order.
+func (s *Server) TenantBodies() []TenantBody {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.tenantBodies)
+}
+
+// injectProblem is lux's refusal of a server's inject: an older lux knows
+// no such property; a newer one takes at most 8 KiB with no NUL.
+func (s *Server) injectProblem(inject *string) string {
+	switch {
+	case inject == nil:
+		return ""
+	case !s.ServerInject:
+		return "unexpected property: inject"
+	case len(*inject) > 8<<10 || strings.ContainsRune(*inject, 0):
+		return "inject: at most 8 KiB, no NUL"
+	}
+	return ""
 }
 
 // envNameRe is lux's spec envRe.
@@ -831,6 +897,9 @@ func (s *Server) whoami(w http.ResponseWriter, _ *http.Request) {
 	if s.Previews != nil {
 		out["previews"] = *s.Previews
 	}
+	if s.ServerInject {
+		out["serverInject"] = true
+	}
 	if s.PreviewPort > 0 {
 		out["previewPort"] = s.PreviewPort
 	}
@@ -879,13 +948,28 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run.Syncs = append(run.Syncs, in.Sync)
 	run.SyncCredentials = append(run.SyncCredentials, in.Credentials)
-	if s.HoldSyncs {
-		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
-		return
+	report := func() {
+		changed := s.applySync(run, in.Sync, in.RequestID)
+		s.luxEvent(run, "sync.done", map[string]any{"requestId": in.RequestID, "changed": changed})
 	}
-	changed := s.applySync(run, in.Sync, in.RequestID)
-	s.luxEvent(run, "sync.done", map[string]any{"requestId": in.RequestID, "changed": changed})
+	if s.HoldSyncs {
+		s.heldSyncs = append(s.heldSyncs, report)
+	} else {
+		report()
+	}
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
+}
+
+// ReleaseSyncs makes the syncs HoldSyncs held, now, each reported with its
+// git.sync and sync.done as lux would have: a lux whose reports come late.
+func (s *Server) ReleaseSyncs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held := s.heldSyncs
+	s.heldSyncs = nil
+	for _, report := range held {
+		report()
+	}
 }
 
 // applySync moves each named checkout to its ref's commit, as git.sync

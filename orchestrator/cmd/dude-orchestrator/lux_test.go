@@ -144,10 +144,39 @@ func TestThePreviewDomainIsLuxsOrMatchesIt(t *testing.T) {
 // Startup's service carries the mode: relative mode reaches the service
 // that names previews, so they are created wakeable with a bare label.
 func TestPreviewModeReachesTheService(t *testing.T) {
-	for _, m := range []previewMode{{Relative: true}, {Domain: "preview.test"}, {LuxOff: true}} {
-		s := m.service(nil, nil, nil, "https://console.test")
-		if s.PreviewRelative != m.Relative || s.PreviewDomain != m.Domain || s.ConsoleURL != "https://console.test" {
+	for _, m := range []previewMode{{Relative: true}, {Domain: "preview.test", ServerInject: true}, {LuxOff: true}} {
+		s := m.service(nil, nil, nil, "https://console.test", "https://dude.test")
+		if s.PreviewRelative != m.Relative || s.PreviewDomain != m.Domain || s.ConsoleURL != "https://console.test" ||
+			s.ServerInject != m.ServerInject || s.PublicURL != "https://dude.test" {
 			t.Errorf("mode %+v: service %+v", m, s)
+		}
+	}
+}
+
+// whoami's serverInject (lux v0.1.32) is read into the mode in either
+// naming mode; a lux that does not say it has none.
+func TestServerInjectIsReadFromWhoami(t *testing.T) {
+	for _, tc := range []struct {
+		whoami string
+		inject bool
+	}{
+		{`{"previews":true,"previewDomain":null,"serverInject":true}`, true},
+		{`{"previewDomain":"preview.test","serverInject":true}`, true},
+		{`{"previews":true,"previewDomain":null}`, false},
+		{`{"previews":true,"previewDomain":null,"serverInject":false}`, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1/whoami" {
+				_, _ = io.WriteString(w, tc.whoami)
+			} else {
+				_, _ = io.WriteString(w, `{"servers":[]}`)
+			}
+		}))
+		mode, err := previewModeOf(context.Background(), lux.New(srv.URL, "k"), "", quietLog, time.Millisecond)
+		srv.Close()
+		if err != nil || mode.ServerInject != tc.inject {
+			t.Errorf("%s: mode %+v, %v", tc.whoami, mode, err)
 		}
 	}
 }

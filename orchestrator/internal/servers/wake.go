@@ -333,7 +333,7 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
-		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter}
+		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter, Inject: p.inject()}
 	domain := p.PreviewDomain
 	if p.PreviewRelative {
 		domain = ""
@@ -1281,12 +1281,14 @@ func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *
 	}
 	out.Servers = []lux.Server{}
 	waking := r.WakeWanted
+	commenting, want := s.commenting(), s.inject()
 	for _, ts := range list {
 		var m map[string]any
 		if json.Unmarshal(ts.Raw, &m) != nil {
 			continue
 		}
 		m["serverState"], m["state"], m["fromSpec"] = ts.State, ts.Process, true
+		m["commenting"], m["needsRestart"] = commenting, needsRestart(ts, want)
 		raw, _ := json.Marshal(m)
 		var sv lux.Server
 		if json.Unmarshal(raw, &sv) == nil {

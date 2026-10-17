@@ -33,7 +33,12 @@ type Service struct {
 	PreviewDomain string
 	// PreviewRelative sends bare labels for lux to resolve under its domain.
 	PreviewRelative bool
-	Log             *slog.Logger
+	// dude's origin (auth.public_url, normalised: PublicOrigin), "" when
+	// unset; and whether lux's servers take inject (whoami serverInject).
+	// Together they turn on commenting on previews (commenting.go).
+	PublicURL    string
+	ServerInject bool
+	Log          *slog.Logger
 	// Wakes the loops after a change, so a preview starts or stops now.
 	Kick func()
 }
@@ -599,11 +604,19 @@ func (s *Service) Add(ctx context.Context, org, runID string, in AddInput) (lux.
 }
 
 // Action starts, stops or restarts one of a Run's servers. Starting one on
-// a parked preview wakes it: the server starts once it runs.
+// a parked preview wakes it: the server starts once it runs. On a wakeable
+// preview a start or restart first gives the server the overlay snippet
+// wanted now (syncInject): it is how a server made without it
+// (needsRestart) gets it.
 func (s *Service) Action(ctx context.Context, org, runID, name, action string) (lux.Server, error) {
 	r, err := s.writable(ctx, org, runID)
 	if woke, err := s.wakeOnStart(ctx, org, runID, action, err); woke || err != nil {
 		return lux.Server{Name: name}, err
+	}
+	if action != "stop" {
+		if err := s.syncInject(ctx, r, name); err != nil {
+			return lux.Server{Name: name}, err
+		}
 	}
 	if r.parked() {
 		if action == "stop" {
@@ -681,8 +694,15 @@ func (s *Service) All(ctx context.Context, org, runID, action string) (TaskServe
 	case r.parked():
 	default:
 		for _, name := range names {
-			if _, err = s.Lux.ServerAction(ctx, r.LuxRunID, name, action); err != nil {
+			// As Action does: a server started gets the overlay snippet wanted now.
+			if action == "start" {
+				err = s.syncInject(ctx, r, name)
+			}
+			if err == nil {
+				_, err = s.Lux.ServerAction(ctx, r.LuxRunID, name, action)
 				err = luxError(err)
+			}
+			if err != nil {
 				var e *Error
 				if errors.As(err, &e) {
 					e.Message = name + ": " + e.Message
