@@ -18,6 +18,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // The production race under candidates: the base is merged into the pull
@@ -75,6 +76,38 @@ func TestAPromotionIsRefusedOverAPersonsCommitThatLandedDuringItsCheck(t *testin
 		theirs = w.gh.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
 	}
 	w.refusedOver(&theirs)
+}
+
+// A fix of two pull requests is checked while GitHub merges the base into
+// target's and a person pushes to web's: target's base merge alone would be
+// merged into, but web's push refuses the promotion before either moves.
+func TestAPromotionAdmissibleInOneRepositoryButNotTheOtherMovesNeither(t *testing.T) {
+	w := newPRFixWorldIn(t, true)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "fix" && n == 1 {
+			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
+		}
+	}
+	var x, theirs string
+	w.onTest = func() {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		x = w.gh.MergeInto(w.branch, "main", nil)
+		theirs = w.web.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
+	}
+	w.comment("Please rename the greeting.")
+	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	if at := w.gh.SHA(w.branch); x == "" || at != x {
+		t.Errorf("target's pull request at %.8s, want the base merge %.8s kept", at, x)
+	}
+	if at := w.web.SHA(w.branch); theirs == "" || at != theirs {
+		t.Errorf("web's pull request at %.8s, want the person's %.8s kept", at, theirs)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 0 {
+		t.Errorf("%d moves recorded", n)
+	}
 }
 
 // GitHub's merge of the base that also carries a person's edit (resolved
