@@ -430,11 +430,8 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(render(reviewLeadTmpl, category), reviewFocus[category])
 		add(lead...)
-		contract := reviewContract
-		if len(in.ReviewBase) > 0 {
-			contract = reviewContractFor(in.ReviewBase, in.ReviewOf, len(in.Repositories))
-		}
-		add(render(taskUnderReviewTmpl, in.task()), contract, findingFormat, reviewSummary)
+		add(render(taskUnderReviewTmpl, in.task()), reviewContractFor(in.ReviewBase, in.ReviewOf, len(in.Repositories)),
+			findingFormat, reviewSummary)
 		for _, f := range in.PRFeedback {
 			if f.Source == "integration" {
 				add(f.Body)
