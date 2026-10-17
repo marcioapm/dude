@@ -2,12 +2,12 @@
 
 *Decided: the build spec. Clickable mockup: [`mockups/tracking/index.html`](mockups/tracking/index.html)
 (`?screen=…&theme=dark|light&density=comfortable|compact&role=owner|member`), built from
-`apps/web/mockups/tracking/`. Nothing here is built yet.*
+`apps/web/mockups/tracking/`. Epic 1 (Lifecycle) is built; see *Epic 1 as built*. Epics 2 and
+3 are not.*
 
 Throughout, **Decided** marks what Márcio fixed, in the brief or in *Decisions* (2026-10-17);
 each names the alternative it rejected. Where the brief's first wording turned out to need a
-change to be buildable, the change is called out as **Correction**. One question found while
-applying the decisions is under *Open*, with the answer this document builds to.
+change to be buildable, the change is called out as **Correction**.
 
 ## The problem
 
@@ -245,7 +245,7 @@ locking the task row, three steps:
 2. **Closed** → `ClosedError` ("CP-34 was closed as Can't reproduce: reopen it to start it.").
    Not overridable. A closed task is `aborted`, and `stoppedTask` (`api/recover.go:141`) treats
    every `aborted` task with a workflow as one to pick back up; without this step, Resume would
-   restart a task a person closed, past Reopen. See *Open*.
+   restart a task a person closed, past Reopen. See *Decisions*.
 3. **Blocked** → `BlockedError`, exactly as today, overridable by a person.
 
 `RefuseBlockedTx` stays as a wrapper while callers move; the API maps `ArchivedError` to 409
@@ -708,7 +708,8 @@ search and `/` are unchanged. Results use the tree's row grammar: an epic result
 
 ## Migration sketch
 
-Next free number: **132** (`131_fake_secret_models.sql` is the last).
+Written before 132–138 were taken. Epic 1 shipped its part as `139` and `140` (see *Epic 1 as
+built*); Epic 2 and 3's columns take the next free numbers.
 
 ```sql
 -- 132_tracking_work.sql — Close, Archive; kind, priority, a bug's report;
@@ -779,15 +780,52 @@ Márcio's answers, 2026-10-17. Numbered as the questions were; Q3 left with Late
   `reviewFocus["correctness"]`. No project switch. (2026-10-17)
 - **Q5. The sidebar's epic row: glyph only, or glyph and roll-up word?** Glyph only (a).
   (2026-10-17)
+- **Resume on a closed task.** Refused. `RefuseStartTx` refuses a closed task (`ClosedError`,
+  409 `closed`) on every path, recovery included; the task page hides the recovery bar and
+  offers Reopen (*Start paths*, step 2). *Rejected:* Resume implying Reopen, which would let a
+  click on the recovery bar undo a person's Close without saying so. (2026-10-17)
 
 ## Open
 
-- **Resume on a closed task.** Close is offered on a stopped task that once ran; it stays
-  `aborted` with its workflow, which `stoppedTask` (`api/recover.go:141`) offers for Resume /
-  Try again. *This document builds:* `RefuseStartTx` refuses a closed task (`ClosedError`, 409
-  `closed`) on every path, recovery included, and the page offers Reopen, not Resume (*Start
-  paths*, step 2). The alternative, Resume implying Reopen, would let a click on the recovery
-  bar undo a person's Close without saying so.
+None for Epic 1.
+
+## Epic 1 as built
+
+Where the build differs from, or settles, what the sections above say:
+
+- **Migrations** are `139_task_lifecycle.sql` (types, columns, constraints, the
+  `nothing_to_merge` backfill) and `140_task_lifecycle_rules.sql` (`task_blocked_by`,
+  `task_start_refusal`, `task_relation_would_cycle`), not one `132`: other migrations took
+  132–138, and `ADD VALUE 'duplicates'` can't be used in the transaction that adds it. Epic 1
+  adds only its own columns; kind, priority, a bug's report and `search` are Epic 2 and 3's.
+- **Closed** means `resolution IS NOT NULL AND resolution <> 'nothing_to_merge'`. **Ended**
+  means `done`, or `aborted` with a resolution.
+- **Close writes** `status = 'aborted'`, `closed_by`, and a `task.status_changed` with the reason
+  "closed as won't do by Ana". Close is refused `running` while the task is `running` or
+  `awaiting_input` or a phase agent's run is live, and `review` while it is `review` or
+  `ready_to_merge`. Close on a parked live delivery completes its workflow.
+- **The loop check** walks handed-over edges (the canonical task → each task the duplicate
+  blocks), not `duplicates` read as `blocks`.
+- **Release on merge.** When the canonical task merges, the tasks its duplicates blocked are
+  released as its own dependants are (`delivery/unblock.go`).
+- **Reopen** returns the task to `received`, deletes its `duplicates` edge, and is refused
+  `archived` while archived. Its next start is a fresh attempt (a new delivery idempotency key,
+  `delivery:<id>:attempt-N`), whether through Deliver or Talk it through.
+- **Path 3** is refused by `RefuseLifecycleTx` in `decideFor`, before a chat turn is decided.
+  **Path 5** stays blocked-only. **Path 7** answers "CP-34 was closed: reopen it to pick it back
+  up."; `GET …/recovery` returns no actions and `refused: "closed" | "archived"`. **Path 11**
+  ends the request with why `closed` or `archived` and records `task.start_refused` with path
+  `auto_start`. **Path 12**: a feedback submit on a closed or archived task is refused 409 with
+  the rule's sentence and "Your drafts are kept."
+- **Epics.** Archiving an epic needs an admin or the owner of every task it archives.
+  `epic.archived` / `epic.unarchived` carry the project and `{epicId, title, tasks}`.
+  Unarchiving a task is refused `archived` while its epic is archived; unarchiving the epic
+  restores the tasks archived with it (those whose `archived_at` is the epic's).
+- **`GET /v1/tasks`** leaves archived tasks out unless `archived=1`, which returns only them;
+  the board's "N archived" hint opens that list on the project page.
+- **CLI.** `dude task close|reopen|archive|unarchive` exist and refuse locally: they are a
+  person's decisions, not an agent's.
+- **`cant_reproduce`** is accepted on every task until Epic 2 adds kind.
 
 ## Not here
 
