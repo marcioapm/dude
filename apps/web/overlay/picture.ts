@@ -56,6 +56,9 @@ function inlineStyles(from: Element, to: Element, win: Window): void {
 const unescapeCss = (s: string) => s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (_, hex: string | undefined, ch: string | undefined) =>
   hex ? String.fromCodePoint(parseInt(hex, 16)) : ch!);
 
+// A content value's tokens: string (1, 2), url() (3, its URL in 4-6), attr() (7), counter, quote (8), alt-text slash (9).
+const CONTENT_TOKEN = new RegExp(String.raw`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(${URL_SRC})|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(open|close)-quote|(\/)`, "g");
+
 /**
  * What a computed `content` shows, as text and data-URL images; null when
  * it names an image only a request could get. Counters are left out: no
@@ -64,15 +67,16 @@ const unescapeCss = (s: string) => s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (
 export function contentParts(content: string, el: Element, quotes: string): (string | { img: string })[] | null {
   const q = quotes === "auto" ? ["\u201c", "\u201d"] : [...quotes.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => unescapeCss(m[1]!));
   const parts: (string | { img: string })[] = [];
-  const token = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|url\(\s*["']?([^"')]*)["']?\s*\)|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(open|close)-quote|(\/)/g;
-  for (const m of content.matchAll(token)) {
-    if (m[6]) break;
+  for (const m of content.matchAll(CONTENT_TOKEN)) {
+    if (m[9]) break;
     if (m[1] !== undefined || m[2] !== undefined) parts.push(unescapeCss(m[1] ?? m[2]!));
     else if (m[3] !== undefined) {
-      if (!m[3].startsWith("data:")) return null;
-      parts.push({ img: m[3] });
-    } else if (m[4]) parts.push(el.getAttribute(m[4]) ?? "");
-    else if (m[5]) parts.push(q[m[5] === "open" ? 0 : 1] ?? "");
+      // Chrome serialises a url() quoted, escaping an inner `"` as `\"`.
+      const u = unescapeCss(m[4] ?? m[5] ?? m[6] ?? "").trim();
+      if (!u.startsWith("data:")) return null;
+      parts.push({ img: u });
+    } else if (m[7]) parts.push(el.getAttribute(m[7]) ?? "");
+    else if (m[8]) parts.push(q[m[8] === "open" ? 0 : 1] ?? "");
   }
   return parts;
 }
@@ -84,7 +88,7 @@ const NO_PSEUDO = new Set(["img", "input", "textarea", "select", "br", "hr", "wb
 function pseudoSpan(el: Element, which: "::before" | "::after", win: Window, count: () => void): Element | null {
   const cs = win.getComputedStyle(el, which);
   const content = cs.getPropertyValue("content");
-  if (!content || content === "none" || content === "normal") return null;
+  if (!content || content === "none" || content === "normal" || fetchedUrl(content)) return null;
   const parts = contentParts(content, el, cs.getPropertyValue("quotes") || "auto");
   // `content` is dropped from the span's style: on an element, a url() there would replace it.
   const css = parts && styleText(cs, "content");

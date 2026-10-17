@@ -149,3 +149,20 @@ test("content: strings with escapes, attr(), quotes, counters left out, alt text
   expect(contentParts(`"\\1F600 x" / "smile"`, el, "auto")).toEqual(["\u{1F600}x"]);
   expect(contentParts(`url(https://cdn.test/a.png)`, el, "auto")).toBeNull();
 });
+
+test("content: a quoted url() is read whole, as Chrome computes it, quotes and escapes inside", () => {
+  const el = page(`<p>x</p>`).document.querySelector("p");
+  const svg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Crect fill='url(%23g)'/%3E%3C/svg%3E";
+  expect(contentParts(`url("${svg}")`, el, "auto")).toEqual([{ img: svg }]);
+  expect(contentParts(`url("data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\"/>") " x"`, el, "auto"))
+    .toEqual([{ img: `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>` }, " x"]);
+  expect(contentParts(`"x" url(${DATA}) "y"`, el, "auto")).toEqual(["x", { img: DATA }, "y"]);
+  expect(contentParts(`url("https://cdn.test/a'b.png")`, el, "auto")).toBeNull();
+  expect(contentParts(`url("https://cdn.test/data:x.png")`, el, "auto")).toBeNull();
+  expect(fetchedUrl(`url("https://cdn.test/?data:x")`)).toBe(true);
+});
+
+test("a pseudo whose content names a remote url() with a quote in it is left out", async () => {
+  const win = page(`<p id="it">a</p>`, { "#it|::before": `content: url("https://cdn.test/a'b.png")` });
+  expect((await clone(win)).querySelectorAll("span").length).toBe(0);
+});

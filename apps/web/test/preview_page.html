@@ -23,6 +23,8 @@
   /* What the picture must draw from the page alone: a ::before badge, a canvas and a video frame, in pure colours. */
   .promo { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 16px; background: #fff; border-radius: 12px; }
   .promo .badge::before { content: "NEW"; display: inline-block; width: 64px; height: 32px; background: rgb(230, 0, 0); color: rgb(230, 0, 0); }
+  /* An inline-SVG icon in the usual form: single-quoted attributes inside a quoted data: URL. */
+  .promo .badge::after { content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='32'%3E%3Crect width='64' height='32' fill='rgb(200,0,200)'/%3E%3C/svg%3E"); display: inline-block; width: 64px; height: 32px; }
   .promo canvas, .promo video { width: 64px; height: 32px; }
 </style>
 </head>
