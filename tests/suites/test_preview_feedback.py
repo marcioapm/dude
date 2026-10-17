@@ -148,8 +148,8 @@ def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> di
     woken as a visitor would.
     """
     # Between two of the delivery's Runs the read is briefly the preview's again, so wait for where it ends: the
-    # scripted fixer never answers the item, and after MaxAttemptsPerFinding fixes the review loop escalates it as
-    # stuck (workflow.go escalate), the only state here that starts no further Run until a person decides.
+    # scripted fixer never answers the item, and after its one fix (maxAttemptsPerFinding 1) the review loop escalates
+    # it as stuck (workflow.go escalate), the only state here that starts no further Run until a person decides.
     wait_until(lambda: _escalated_on(client, task, item_id),
                timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
@@ -178,6 +178,9 @@ def _evil_posted(page: Page) -> None:
 def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_colleague(
     browser_type: BrowserType, web_url: str, client: ApiClient, org: dict, forge_project: dict, env
 ):
+    # One fix per finding: the unanswered item is escalated after its first fix.
+    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
+                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task, web = _ready_preview(client, env, forge_project, "Comment on the checkout")
     assert web["commenting"] == {"available": True} and web["needsRestart"] is False, web
     browser = browser_type.launch(channel="chrome", headless=True, args=LAUNCH_ARGS)
