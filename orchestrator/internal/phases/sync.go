@@ -2699,12 +2699,8 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 		repo := byName[name][0]
 		in.AddRepositories = append(in.AddRepositories, repo)
 		carried = append(carried, q.ID)
-		note := "read only"
-		if q.Access == "write" {
-			note = "you may change it; commit there and it gets its own pull request"
-		}
 		// Written before lux clones it, so hedged: settleClone tells a failure.
-		told = append(told, fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", q.Name, repo.Path, note))
+		told = append(told, approvedRepoTold(q.Name, repo.Path, q.Access == "write"))
 	}
 	if len(failed) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -2718,7 +2714,7 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 	}
 	if len(carried) > 0 {
 		in.RequestID = carried[0]
-		in.Input = strings.TrimSpace("A person approved your request. " + strings.Join(told, " ") + " Carry on.\n\n" + in.Input)
+		in.Input = strings.TrimSpace(approvedTold(told) + "\n\n" + in.Input)
 	}
 	return nil
 }
@@ -3359,4 +3355,20 @@ func short(sha string) string {
 		return sha[:7]
 	}
 	return sha
+}
+
+// approvedRepoTold is what an agent is told of a repository a person
+// approved for it, checked out at path; write, when it may change it.
+func approvedRepoTold(name, path string, write bool) string {
+	note := "read only"
+	if write {
+		note = "you may change it; commit there and it gets its own pull request"
+	}
+	return fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", name, path, note)
+}
+
+// approvedTold is what an agent is told when a person approved its
+// requests for repositories: each one's approvedRepoTold.
+func approvedTold(told []string) string {
+	return "A person approved your request. " + strings.Join(told, " ") + " Carry on."
 }

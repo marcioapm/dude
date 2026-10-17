@@ -423,9 +423,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	}
 	in := StartInput{Org: org, TaskID: taskID, How: how, Writer: Writer{ActorType: ledger.ActorSystem, ActorID: "dude", Person: setBy}}
 	if how == HowTalk {
-		in.Message = fmt.Sprintf("%s set this task to be talked through once nothing was in front of it, and %s merged. "+
-			"Read the task and the merged code, then ask %s what you need to know, or propose a plan. Nothing is built until they agree.",
-			first, by, first)
+		in.Message = talkWhenUnblocked(first, by)
 	}
 	if _, err := StartTx(ctx, tx, a.Starter, in); err != nil {
 		return err
@@ -492,4 +490,12 @@ func firstName(name string) string {
 		return f[0]
 	}
 	return "its owner"
+}
+
+// talkWhenUnblocked is what the conductor started by an unblocked task's
+// Talk it through is told first: first set it, by merged.
+func talkWhenUnblocked(first, by string) string {
+	return fmt.Sprintf("%s set this task to be talked through once nothing was in front of it, and %s merged. "+
+		"Read the task and the merged code, then ask %s what you need to know, or propose a plan. Nothing is built until they agree.",
+		first, by, first)
 }

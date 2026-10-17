@@ -292,15 +292,15 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 	}
 	switch {
 	case !live:
-		return d, "you are no longer this task's conductor", nil
+		return d, publishRefusedWhy("not-conductor", ""), nil
 	case readOnly != "":
-		return d, "your checkout is read-only for this conversation: " + readOnly, nil
+		return d, publishRefusedWhy("read-only", readOnly), nil
 	case d == nil || !d.Live():
-		return d, "this task has no delivery in progress", nil
+		return d, publishRefusedWhy("no-delivery", ""), nil
 	case Ended(d.TaskStatus):
-		return d, "this task is " + d.TaskStatus, nil
+		return d, publishRefusedWhy("ended", d.TaskStatus), nil
 	case d.WorkflowID != p.WorkflowID || d.State.Attempt != p.Attempt:
-		return d, "the task was started over since you published", nil
+		return d, publishRefusedWhy("started-over", ""), nil
 	case !d.State.conducted():
 		return d, refusedPolicy, nil
 	case writer:
@@ -539,13 +539,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 		WHERE id = $1`, p.WorkflowID, rawHeads, rawPaths); err != nil {
 		return err
 	}
-	var notMoved []string
-	for _, repo := range slices.Sorted(maps.Keys(refused)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
-	}
-	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s could not be confirmed at %s", repo, short(stalled[repo])))
-	}
+	notMoved := notMovedParts(refused, stalled)
 	raw, _ := json.Marshal(heads)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(),
 			error = NULLIF($3, ''), next_attempt_at = NULL
@@ -768,4 +762,33 @@ func operationName(op string) string { return render(operationNameTmpl, op) }
 // repo, an operation (lux.Operation*) being in progress in its checkout.
 func MidOperationRefusal(repo, op string) string {
 	return render(midOperationTmpl, struct{ Repo, Op string }{repo, op})
+}
+
+// publishRefusedWhy is why a publish is refused as it lands: case, with
+// what it names (the read-only reason, the task's status).
+func publishRefusedWhy(c, what string) string {
+	switch c {
+	case "not-conductor":
+		return "you are no longer this task's conductor"
+	case "read-only":
+		return "your checkout is read-only for this conversation: " + what
+	case "no-delivery":
+		return "this task has no delivery in progress"
+	case "ended":
+		return "this task is " + what
+	}
+	return "the task was started over since you published"
+}
+
+// notMovedParts are the repositories a publish did not move: refused (with
+// why), then stalled (with the head it was sent to).
+func notMovedParts(refused, stalled map[string]string) []string {
+	var notMoved []string
+	for _, repo := range slices.Sorted(maps.Keys(refused)) {
+		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
+	}
+	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
+		notMoved = append(notMoved, fmt.Sprintf("%s could not be confirmed at %s", repo, short(stalled[repo])))
+	}
+	return notMoved
 }
