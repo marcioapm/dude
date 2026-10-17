@@ -260,9 +260,9 @@ func githubRefusal(read githubRead, err error) error {
 	if read.Number > 0 {
 		what = fmt.Sprintf("%s#%d", read.Slug, read.Number)
 	}
-	var e *forge.Error
+	e := forgeError(err)
 	var u *forge.Unreachable
-	if !errors.As(err, &e) && !errors.As(err, &u) {
+	if e == nil && !errors.As(err, &u) {
 		return err
 	}
 	status := 0
@@ -307,11 +307,20 @@ func githubRefusal(read githubRead, err error) error {
 	return refuseRecorded(EvGitHubRead, payload, msg)
 }
 
+// forgeError is GitHub's refusal err wraps, or nil for none (no answer).
+func forgeError(err error) *forge.Error {
+	var e *forge.Error
+	if errors.As(err, &e) {
+		return e
+	}
+	return nil
+}
+
 // refusalKind is why a read was refused, in dude's words.
 func refusalKind(err error) string {
-	var e *forge.Error
+	e := forgeError(err)
 	switch {
-	case !errors.As(err, &e):
+	case e == nil:
 		return "unavailable"
 	case e.Refusal != "":
 		return e.Refusal
@@ -609,8 +618,9 @@ func (w wrapper) fit(v map[string]any) (json.RawMessage, error) {
 var marshalResult = delivery.GitHubReadJSON
 
 // fitRank is the order fit spends the budget in: the note saying the
-// quotes are data, then what the item is, then the flags saying what is
-// missing, and the bodies and long lists last. Ties go by name.
+// quotes are data, then small structural metadata (the item, its state,
+// draft, head and base), then the flags saying what is missing, and the
+// bodies and long lists last. Ties go by name.
 func fitRank(key string) int {
 	switch key {
 	case "external":
