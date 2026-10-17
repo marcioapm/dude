@@ -74,7 +74,8 @@ def test_an_admin_picks_the_judgement_tier_and_it_shows_on_models(
     page.get_by_test_id("judgement-test").click()
     result = page.get_by_test_id("judgement-test-result")
     expect(result).to_have_attribute("data-ok", "false", timeout=45_000)
-    expect(result).to_contain_text("gave no answer")
+    expect(result).to_contain_text("No answer from the LLM proxy")
+    expect(result).not_to_contain_text(re.compile(r"no answer.*no answer", re.IGNORECASE))
     expect(result).to_contain_text("Not recorded in Recent judgements.")
     assert query(owner_dsn, "SELECT count(*) AS n FROM model_calls WHERE organization_id = %s", (org["id"],))[0]["n"] == 0
 

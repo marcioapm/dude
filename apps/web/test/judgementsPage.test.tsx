@@ -15,7 +15,7 @@ import { act, click, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { MODEL_TIERS } from "../src/fixtures/data.ts";
 import { JudgementsPage, useJudgementSettings } from "../src/screens/JudgementsSettings.tsx";
-import { testAnswerWords, testTokensWords } from "../src/judgements.ts";
+import { errorSentence, testAnswerWords, testTokensWords } from "../src/judgements.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -134,7 +134,12 @@ describe("the Judgements page", () => {
     await click(container.querySelector("[data-testid=judgement-test]")!);
     await until(() => container.querySelector("[data-testid=judgement-test-result][data-ok=false]"), "the failure");
     expect(container.querySelector("[data-testid=judgement-test-result]")?.textContent)
-      .toBe("claude-opus-5-5 gave no answer: no answer from the LLM proxy: dial tcp: lookup llm.dude.test: no such host.Not recorded in Recent judgements.");
+      .toBe("claude-opus-5-5: No answer from the LLM proxy: dial tcp: lookup llm.dude.test: no such host.Not recorded in Recent judgements.");
+    client.testAnswer = { ...client.testAnswer, latencyMs: 2_400, error: "the model's answer is not a decision: no JSON object in it." };
+    await click(container.querySelector("[data-testid=judgement-test]")!);
+    await until(() => (container.querySelector("[data-testid=judgement-test-result]")?.textContent?.includes("JSON") ? true : null), "the second failure");
+    expect(container.querySelector("[data-testid=judgement-test-result]")?.textContent)
+      .toBe("claude-opus-5-5 gave no answer in 2.4s. The model's answer is not a decision: no JSON object in it.Not recorded in Recent judgements.");
   });
 
   test("nothing asked yet: the empty state", async () => {
@@ -168,7 +173,16 @@ describe("the Judgements page", () => {
     await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Close")!);
     await click(rows[1]!);
     const failed = await until(() => document.querySelector<HTMLElement>("[role=dialog] [data-testid=judgement-failed]"), "the failure");
-    expect(failed.textContent).toBe("No answer. no answer from the LLM proxy in 1m0s. The caller fell back to what it does without a judgement.");
+    expect(failed.textContent).toBe("No answer from the LLM proxy in 1m0s. The caller fell back to what it does without a judgement.");
+  });
+
+  test("a failed call whose error is not a missing answer leads with \"No answer.\" and gives the error as its own sentence", async () => {
+    const client = new Judging("a");
+    client.calls = [{ ...FAILED, id: "mcl_3", error: "the model's answer is not a decision: it names no decision" }];
+    const container = await show(client);
+    await click(await until(() => container.querySelector<HTMLElement>("[data-testid=judgement-row]"), "the row"));
+    const failed = await until(() => document.querySelector<HTMLElement>("[role=dialog] [data-testid=judgement-failed]"), "the failure");
+    expect(failed.textContent).toBe("No answer. The model's answer is not a decision: it names no decision. The caller fell back to what it does without a judgement.");
   });
 
   test("a row says what it opens, and opens on Enter or Space", async () => {
@@ -207,8 +221,12 @@ describe("the words", () => {
   test("the test's answer reads its time as the design system formats a duration", () => {
     const failed = { ok: false, decision: null, confidence: null, reasoning: null, model: "m", inputTokens: 0, outputTokens: 0,
       error: "the model's answer is not a decision: no JSON object in it" };
-    expect(testAnswerWords({ ...failed, latencyMs: 30_000 })).toBe("gave no answer in 30s: the model's answer is not a decision: no JSON object in it.");
-    expect(testAnswerWords({ ...failed, latencyMs: 75_000 })).toBe("gave no answer in 1m 15s: the model's answer is not a decision: no JSON object in it.");
+    expect(testAnswerWords({ ...failed, latencyMs: 30_000 })).toBe(" gave no answer in 30s. The model's answer is not a decision: no JSON object in it.");
+    expect(testAnswerWords({ ...failed, latencyMs: 75_000 })).toBe(" gave no answer in 1m 15s. The model's answer is not a decision: no JSON object in it.");
+    expect(testAnswerWords({ ...failed, latencyMs: 30_000, error: "no answer from the LLM proxy in 30s" })).toBe(": No answer from the LLM proxy in 30s.");
+    expect(testAnswerWords({ ...failed, latencyMs: 0, error: null })).toBe(" gave no answer. No reason given.");
+    expect(errorSentence("the LLM proxy answered 401: bad key!")).toBe("The LLM proxy answered 401: bad key!");
+    expect(errorSentence("the LLM proxy answered with no choices")).toBe("The LLM proxy answered with no choices.");
     expect(testTokensWords({ inputTokens: 1204, outputTokens: 96 })).toBe("; 1.3k tokens");
     expect(testTokensWords({ inputTokens: 0, outputTokens: 0 })).toBe("");
   });

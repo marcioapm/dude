@@ -47,7 +47,7 @@ import {
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { DECISION, sure, testAnswerWords, testTokensWords } from "../judgements.ts";
+import { DECISION, errorSentence, saysNoAnswer, sure, testAnswerWords, testTokensWords } from "../judgements.ts";
 import { tierEffortLabel, tierMark } from "../tiers.ts";
 import { tierOption } from "./ModelsSettings.tsx";
 
@@ -193,7 +193,7 @@ function TestOutcome({ test }: { test: { result: JudgementTestResult } | { error
   return (
     <Callout tone={ok ? "success" : "danger"} data-testid="judgement-test-result" data-ok={ok}>
       <FormStack>
-        <span><code>{r.model}</code> {testAnswerWords(r)}</span>
+        <span><code>{r.model}</code>{testAnswerWords(r)}</span>
         {ok ? <span className="judgementQuote">“{JUDGEMENT_TEST_QUESTION}” — “{r.reasoning}”</span> : null}
         <SettingsMeta>Not recorded in Recent judgements{testTokensWords(r)}.</SettingsMeta>
       </FormStack>
@@ -300,7 +300,10 @@ function JudgementDialog({ client, call, onClose }: { client: ApiClient; call: J
       footer={<Button variant="quiet" onClick={onClose}>Close</Button>}>
       <FormStack>
         {call.status === "error" || !call.decision ? (
-          <Callout tone="danger" data-testid="judgement-failed"><b>No answer.</b> {call.error}. The caller fell back to what it does without a judgement.</Callout>
+          <Callout tone="danger" data-testid="judgement-failed">
+            {saysNoAnswer(call.error) ? <b>{errorSentence(call.error!)}</b> : <><b>No answer.</b> {errorSentence(call.error ?? "")}</>}
+            {" "}The caller fell back to what it does without a judgement.
+          </Callout>
         ) : (
           <div className="judgementAnswer" data-testid="judgement-answer">
             <div className="judgementAnswerHead">
