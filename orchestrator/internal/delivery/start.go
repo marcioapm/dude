@@ -134,9 +134,6 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 		return out, err
 	}
 	var attempt int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, in.TaskID).Scan(&attempt); err != nil {
-		return out, err
-	}
 	key := "delivery:" + in.TaskID
 	fresh := Reopened(d)
 	if fresh {
@@ -146,6 +143,8 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 			return out, err
 		}
 		key = fmt.Sprintf("delivery:%s:attempt-%d", in.TaskID, attempt)
+	} else if attempt, err = currentAttemptTx(ctx, tx, in.TaskID); err != nil {
+		return out, err
 	}
 	st, err := NewState(ctx, tx, in.TaskID, projectID, policy, attempt)
 	if err != nil {
@@ -187,7 +186,13 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 // only, as attempt metrics count them (migration 073): a preview takes the
 // attempt it shows and never starts one.
 func NextAttemptTx(ctx context.Context, tx pgx.Tx, taskID string, deliveryAttempt int) (int, error) {
-	var runs int
-	err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, taskID).Scan(&runs)
+	runs, err := currentAttemptTx(ctx, tx, taskID)
 	return max(runs, deliveryAttempt) + 1, err
+}
+
+// currentAttemptTx is the task's highest agent Run attempt, 1 for none.
+func currentAttemptTx(ctx context.Context, tx pgx.Tx, taskID string) (int, error) {
+	var attempt int
+	err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, taskID).Scan(&attempt)
+	return attempt, err
 }

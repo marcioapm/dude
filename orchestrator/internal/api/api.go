@@ -599,10 +599,11 @@ func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) er
 }
 
 // taskOwner is the task's first active ordered member; nil when it has none.
+// The owner's id first, then its name by key: a join on the subquery loses
+// people_pkey under row-level security.
 func taskOwner(ctx context.Context, tx pgx.Tx, taskID string) (id, name *string, err error) {
-	err = tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
-		LEFT JOIN people owner ON owner.id = `+delivery.TaskOwnerOf+`
-		WHERE t.id = $1`, taskID).Scan(&id, &name)
+	err = tx.QueryRow(ctx, `SELECT o.pid, (SELECT name FROM people WHERE id = o.pid)
+		FROM (SELECT `+delivery.TaskOwnerOf+` AS pid FROM tasks t WHERE t.id = $1) o`, taskID).Scan(&id, &name)
 	return id, name, err
 }
 

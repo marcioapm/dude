@@ -50,7 +50,7 @@ export function ArchivedTasks({ client, projectId, version, onOpen }: {
               <StatusMark status={t.status} size="sm" />
               <span className="ds-mono">{t.key}</span>
               <button type="button" className="archivedTitle linkish" onClick={() => onOpen(t.id)}>{t.title}</button>
-              {closedBy(t.resolution) ? <ResolutionMark resolution={t.resolution!} of={t.duplicateOf ?? undefined} /> : null}
+              {closedBy(t.resolution) ? <ResolutionMark resolution={t.resolution} of={t.duplicateOf ?? undefined} /> : null}
               <ArchivedMark />
               <Button size="sm" variant="quiet" onClick={() => act(() => client.unarchiveTask(t.id))} data-testid="unarchive-row">Unarchive</Button>
             </li>

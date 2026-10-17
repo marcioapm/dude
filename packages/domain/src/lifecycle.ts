@@ -22,7 +22,7 @@ export const RESOLUTION_LABEL: Record<TaskResolution, string> = {
 export type StartRefusal = "archived" | "closed" | "blocked";
 
 /** A person closed it: a resolution other than delivery's Nothing to merge. */
-export function closedBy(resolution: TaskResolution | null | undefined): boolean {
+export function closedBy(resolution: TaskResolution | null | undefined): resolution is CloseResolution {
   return Boolean(resolution) && resolution !== "nothing_to_merge";
 }
 

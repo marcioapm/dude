@@ -192,9 +192,12 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in Clo
 			return out, err
 		}
 		if len(dups) > 0 {
-			names := strings.Join(dups, ", ")
+			names, verb := strings.Join(dups, ", "), "duplicates"
+			if len(dups) > 1 {
+				verb = "duplicate"
+			}
 			return out, LifecycleRefusal{Code: "conflict", Details: map[string]any{"duplicates": dups},
-				Msg: fmt.Sprintf("%s is what %s duplicates: reopen %s first.", t.Key, names, names)}
+				Msg: fmt.Sprintf("%s is what %s %s: reopen %s first.", t.Key, names, verb, names)}
 		}
 		// What it blocks waits on the canonical task from now on: refused
 		// when that closes a loop, named as Add relation names one.
@@ -492,7 +495,8 @@ func UnarchiveTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor
 }
 
 // TaskOwnerOf is the owner of the task aliased t, as a scalar subquery:
-// its first active person by position. Every owner check reads this one.
+// its first active person by position. The lifecycle's owner checks
+// (taskOwner, epic archive and unarchive) read this one.
 const TaskOwnerOf = `(SELECT tp.person_id FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 	WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1)`
 

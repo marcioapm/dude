@@ -46,6 +46,7 @@ const MENU_STATES: ReadonlyArray<readonly [string, LifecycleTask, string | undef
   ["Backlog, the owner", { status: "received" }, undefined],
   ["Running", { status: "running" }, undefined],
   ["In review", { status: "review" }, undefined],
+  ["Stopped, pull request open", { status: "aborted", pullRequestOpen: true }, undefined],
   ["Done, nothing to merge", { status: "done", resolution: "nothing_to_merge" }, undefined],
   ["Closed", { status: "aborted", resolution: "wont_do" }, undefined],
   ["Closed and archived", { status: "aborted", resolution: "wont_do", archived: true }, undefined],
