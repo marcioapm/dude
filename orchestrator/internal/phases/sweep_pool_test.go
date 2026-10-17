@@ -148,6 +148,8 @@ func TestAHungRunDoesNotHoldTheNextSweep(t *testing.T) {
 	fake := newHangLux("lhung")
 	w := newSweepWorld(t, fake)
 	w.failed("hung", "first")
+	// Room enough for the Runs that do finish to be counted.
+	w.s.SweepWait = time.Second
 
 	if took := w.sweep(1); took > 5*time.Second {
 		t.Errorf("the sweep took %v with a SweepWait of %v", took, w.s.SweepWait)
@@ -165,10 +167,12 @@ func TestAHungRunDoesNotHoldTheNextSweep(t *testing.T) {
 		t.Errorf("the hung Run was asked %d times, %d at once, while held; want once", calls, most)
 	}
 
-	// Let go, it fails as lux unavailable and is retried by a later pass.
+	// Let go, it fails as lux unavailable and is retried by a later pass,
+	// which, with nothing hung, waits for all it started.
 	close(fake.open)
 	slots, _ := w.s.pools()
 	w.idle(slots)
+	w.s.SweepWait = 0
 	w.sweep(1)
 	if calls, most := fake.count("lhung"); calls != 2 || most != 1 {
 		t.Errorf("the hung Run was asked %d times, %d at once; want twice, one at a time", calls, most)
@@ -207,6 +211,7 @@ func TestASweepWithEverySlotHeldReturnsAfterItsWait(t *testing.T) {
 	close(fake.open)
 	slots, _ := w.s.pools()
 	w.idle(slots)
+	w.s.SweepWait = 0
 	w.sweep(sweepSlots + 1)
 	if calls, _ := fake.count("lbehind"); calls != 1 {
 		t.Errorf("the Run behind the hung ones was asked %d times once they were let go, want once", calls)
