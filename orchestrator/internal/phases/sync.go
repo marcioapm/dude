@@ -34,6 +34,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/advance"
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -2052,7 +2053,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
 		attempted := func() (bool, error) { return s.mergeAttempted(ctx, r, repo.Name, res.Commit) }
-		adv, err := advanceBranch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
+		adv, err := advance.Branch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
 			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,
 					map[string]any{"repo": repo.Name, "commit": res.Commit})
@@ -2087,7 +2088,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 				return err
 			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent,
-				adv.payload(map[string]any{"repo": repo.Name, "baseSha": base, "branch": branch, "changedPaths": acc.Paths}))
+				adv.Payload(map[string]any{"repo": repo.Name, "baseSha": base, "branch": branch, "changedPaths": acc.Paths}))
 		}); err != nil {
 			return nil, "", err
 		}

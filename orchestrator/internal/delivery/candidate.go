@@ -24,6 +24,53 @@ import (
 // Payload: {repo, number, from, to, candidate}.
 const EvPullRequestFixMoved = "pull_request.fix_moved"
 
+// EvPullRequestFixMergeAttempted: promotion is about to ask GitHub to
+// merge the candidate's head into a pull request's branch (POST /merges),
+// recorded before it is sent: what lets a retry adopt that merge as its
+// own. On the task; payload {repo, branch, candidate, round, commit}.
+const EvPullRequestFixMergeAttempted = "pull_request.fix_merge_attempted"
+
+// fixMergeAttemptTx records that promotion of this round's candidate
+// merges commit into repo's pull request branch.
+func (s *Store) fixMergeAttemptTx(ctx context.Context, org string, st *State, repo, commit string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestFixMergeAttempted, OrganizationID: org,
+			ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+			Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,
+			Payload: map[string]any{"repo": repo, "branch": st.Branch, "candidate": st.Candidate.Branch,
+				"round": st.Candidate.Round, "commit": commit}})
+		return err
+	})
+}
+
+// fixMergeAttempted says whether promotion of this round's candidate
+// recorded merging commit into repo's pull request branch: only then is
+// such a merge found on the branch the promotion's own.
+func (s *Store) fixMergeAttempted(ctx context.Context, org string, st *State, repo, commit string) (bool, error) {
+	var attempted bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+			AND payload->>'repo' = $3 AND payload->>'commit' = $4 AND payload->>'candidate' = $5
+			AND (payload->>'round')::int = $6)`,
+			st.TaskID, EvPullRequestFixMergeAttempted, repo, commit, st.Candidate.Branch, st.Candidate.Round).Scan(&attempted)
+	})
+	return attempted, err
+}
+
+// baseBranches is what each repository the task may change merges into
+// (State.BaseFor), by name.
+func (s *Store) baseBranches(ctx context.Context, org string, st *State) (map[string]string, error) {
+	out := map[string]string{}
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		repos, err := TaskRepositories(ctx, tx, st.TaskID)
+		for _, r := range repos {
+			out[r.Name] = st.BaseFor(r)
+		}
+		return err
+	})
+	return out, err
+}
+
 // rangeFindings are the open findings of this attempt raised by a review
 // of the range the delivery reviews now: what a fix of that loop is sent.
 // A range grows when a fix changes a repository it lacked (awaitFix), so

@@ -470,7 +470,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// old head. That only makes a merge under a writer rarer (another
 	// sync, a person's Update branch, GitHub's own still land one); what
 	// makes one harmless is the writer's publish merging itself in
-	// (phases.advanceBranch).
+	// (advance.Branch), and promotion merging a checked candidate in over
+	// it (delivery promoteCandidate). Checking a candidate is never
+	// awaitPullRequest, so no update is asked for during it.
 	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowStep == "awaitPullRequest" && signal == nil {
 		s.updateBranch(ctx, org, gh, slug, pr, status.HeadSHA)
 	}

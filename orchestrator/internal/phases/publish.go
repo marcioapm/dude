@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/advance"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -545,7 +546,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 			if m.MergeAttempted {
 				// A merge of an earlier attempt's, its answer lost, is the head.
 				if err := ownMerge(ctx, gh, &m, p.Branch); err != nil {
-					if unsafe := (*errUnsafeMerge)(nil); errors.As(err, &unsafe) {
+					if unsafe := (*advance.ErrUnsafeMerge)(nil); errors.As(err, &unsafe) {
 						m.Status, m.Error = delivery.MoveRefused, err.Error()
 						if err := keep(name, m); err != nil {
 							return err
@@ -618,15 +619,15 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 				}
 				continue
 			}
-			adv, err := advanceBranch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head, func() (bool, error) { return m.MergeAttempted, nil }, func() error {
+			adv, err := advance.Branch(ctx, gh, m.Slug, p.Branch, m.BaseBranch, m.Base, m.Head, func() (bool, error) { return m.MergeAttempted, nil }, func() error {
 				err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error { return delivery.AttemptMergeTx(ctx, tx, p.of(), name) })
 				if err == nil {
 					m.MergeAttempted = true
 				}
 				return err
 			})
-			var unsafe *errUnsafeMerge
-			var conflict *errBaseMergeConflict
+			var unsafe *advance.ErrUnsafeMerge
+			var conflict *advance.ErrBaseMergeConflict
 			switch {
 			case err == nil:
 				m.Status = delivery.MoveMoved
@@ -662,7 +663,7 @@ func (s *Syncer) carryMove(ctx context.Context, p publishRow) error {
 var errNoForge = errors.New("no forge credential to read the task branch with")
 
 // ownMerge records on m the merge of m.Head an earlier attempt's
-// advanceBranch made, when the branch's head is it: a move sent whose
+// advance.Branch made, when the branch's head is it: a move sent whose
 // answer was lost. Anything else on top is not the publish's, and is left
 // unrecorded, as reached says.
 func ownMerge(ctx context.Context, gh *forge.GitHub, m *delivery.Move, branch string) error {
@@ -673,13 +674,13 @@ func ownMerge(ctx context.Context, gh *forge.GitHub, m *delivery.Move, branch st
 	if err != nil || at == m.Head || at == "" {
 		return err
 	}
-	j, err := baseMerges(ctx, gh, m.Slug, m.BaseBranch, m.Base, at, m.Head)
-	if err == nil && (!j.own || !j.only) {
-		return &errUnsafeMerge{merge: at, found: "is the task branch's head",
-			expected: fmt.Sprintf("GitHub's merge of the writer's commit %s onto %s or merges of %s on it", m.Head, m.Base, m.BaseBranch)}
+	j, err := advance.BaseMerges(ctx, gh, m.Slug, m.BaseBranch, m.Base, at, m.Head)
+	if err == nil && (!j.Own || !j.Only) {
+		return &advance.ErrUnsafeMerge{Merge: at, Found: "is the task branch's head",
+			Expected: fmt.Sprintf("GitHub's merge of the writer's commit %s onto %s or merges of %s on it", m.Head, m.Base, m.BaseBranch)}
 	}
-	if err == nil && j.own && j.only {
-		m.MergedHead, m.MergedInto = at, j.under
+	if err == nil && j.Own && j.Only {
+		m.MergedHead, m.MergedInto = at, j.Under
 	}
 	return err
 }
@@ -778,11 +779,11 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 			if said {
 				continue
 			}
-			adv := advanced{Head: h.SHA}
+			adv := advance.Result{Head: h.SHA}
 			if m.MergedHead != "" {
 				adv.Commit, adv.MergedInto = m.Head, m.MergedInto
 			}
-			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, adv.payload(map[string]any{
+			if err := s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, adv.Payload(map[string]any{
 				"repo": name, "baseSha": h.Base, "branch": p.Branch, "changedPaths": h.ChangedPaths,
 				"lines": h.Lines, "by": delivery.RoleConductor, "publishId": p.ID, "message": p.Message})); err != nil {
 				return err
