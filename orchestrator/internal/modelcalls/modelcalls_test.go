@@ -33,7 +33,7 @@ func TestACallIsRecordedRedactedWithoutItsHeaders(t *testing.T) {
 	status := 200
 	red := redact.New(map[string]string{"API_TOKEN": "tok-0123456789abcdef"})
 	c := Call{
-		Purpose: PurposeJudgement, Asker: "delivery.escalation", About: "ACME-1 · acme#7", TierID: &tierID, TierName: tierName, Model: "gpt-6",
+		Purpose: PurposeJudgement, Asker: "delivery.escalation", About: "ACME-1 · acme#7", TierID: &tierID, TierName: tierName,
 		Sent: llm.Call{Model: "gpt-6", Headers: map[string]string{"X-Secret-Header": "hdr-value-never-stored"},
 			Messages: []llm.Message{{Role: "user", Content: "Is tok-0123456789abcdef a token?"}}, MaxTokens: 1024},
 		Completion: llm.Completion{Text: "it was tok-0123456789abcdef", Status: &status, LatencyMs: 42, InputTokens: 9, OutputTokens: 4},
@@ -97,7 +97,7 @@ func TestAFailedCallIsRecordedAsAnError(t *testing.T) {
 	org := dbtest.Org(t, owner)
 	_, tierName := tierOf(t, owner, org)
 	err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierName: tierName, Model: "m",
+		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierName: tierName,
 			Sent: llm.Call{Model: "m"}, Completion: llm.Completion{LatencyMs: 7}, Err: errors.New("no answer from the LLM proxy in 1m0s")})
 		return err
 	})
@@ -167,14 +167,14 @@ func TestACallIsItsOrganisations(t *testing.T) {
 	org, other := dbtest.Org(t, owner), dbtest.Org(t, owner)
 	otherTier, _ := tierOf(t, owner, other)
 	err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierID: &otherTier, TierName: "x", Model: "m", Sent: llm.Call{Model: "m"}})
+		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierID: &otherTier, TierName: "x", Sent: llm.Call{Model: "m"}})
 		return err
 	})
 	if err == nil || !strings.Contains(err.Error(), "foreign key") {
 		t.Errorf("another organisation's tier: err = %v", err)
 	}
 	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierName: "x", Model: "m", Sent: llm.Call{Model: "m"}})
+		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierName: "x", Sent: llm.Call{Model: "m"}})
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestACallOutlivesItsTier(t *testing.T) {
 	org := dbtest.Org(t, owner)
 	tierID, tierName := tierOf(t, owner, org)
 	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierID: &tierID, TierName: tierName, Model: "m", Sent: llm.Call{Model: "m"}})
+		_, err := Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierID: &tierID, TierName: tierName, Sent: llm.Call{Model: "m"}})
 		return err
 	}); err != nil {
 		t.Fatal(err)

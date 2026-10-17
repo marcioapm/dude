@@ -171,7 +171,7 @@ func TestAJudgementIsOneCallRecorded(t *testing.T) {
 	msgs := body["messages"].([]any)
 	system := msgs[0].(map[string]any)
 	user := msgs[1].(map[string]any)
-	if system["role"] != "system" || system["content"] != System {
+	if system["role"] != "system" || system["content"] != systemPrompt {
 		t.Errorf("system = %v", system)
 	}
 	if user["role"] != "user" || user["content"] != "Should the fixer act on this comment?\n\n## Context\n\n> Looks good to me." {

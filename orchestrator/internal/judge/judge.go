@@ -74,8 +74,8 @@ type Tier struct {
 	Headers                 map[string]string
 }
 
-// System is what the model is told before every question.
-const System = `You decide one question for dude, a software-delivery system that runs coding agents on tasks and pull requests.
+// systemPrompt is what the model is told before every question.
+const systemPrompt = `You decide one question for dude, a software-delivery system that runs coding agents on tasks and pull requests.
 
 Read the question and its context, then answer with only a JSON object, nothing before or after it:
 {"decision":"yes"|"no"|"unsure","confidence":<a number from 0 to 1>,"reasoning":"<one or two sentences>"}
@@ -88,20 +88,20 @@ const recordTimeout = 5 * time.Second
 // maxTokens bounds one judgement's answer, with room for a reasoning model's thinking.
 const maxTokens = 1024
 
-// Messages are the messages a question is sent as: the fixed system
+// messages are the messages a question is sent as: the fixed system
 // message, then the question with its context under a heading.
-func Messages(question, context string) []llm.Message {
+func messages(question, context string) []llm.Message {
 	user := strings.TrimSpace(question)
 	if c := strings.TrimSpace(context); c != "" {
 		user += "\n\n## Context\n\n" + c
 	}
-	return []llm.Message{{Role: "system", Content: System}, {Role: "user", Content: user}}
+	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
 }
 
 // call is the request a question on t is sent as.
 func call(t Tier, question, context string) llm.Call {
 	temperature := 0.0
-	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: Messages(question, context),
+	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
 		MaxTokens: maxTokens, Temperature: &temperature}
 }
 
@@ -183,9 +183,9 @@ func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, err
 	}
 	sent := call(tier, ask.Question, ask.Context)
 	sent.Timeout = s.Timeout
-	j, done, askErr := Decide(ctx, s.LLM, sent)
+	j, done, askErr := decide(ctx, s.LLM, sent)
 	rec := modelcalls.Call{Purpose: modelcalls.PurposeJudgement, Asker: ask.Asker, About: ask.About, TaskID: ask.TaskID,
-		TierID: &tier.ID, TierName: tier.Name, Model: tier.Model, Sent: sent, Completion: done, Err: askErr}
+		TierID: &tier.ID, TierName: tier.Name, Sent: sent, Completion: done, Err: askErr}
 	if askErr == nil {
 		rec.Result = j
 	}
@@ -218,28 +218,28 @@ func Test(ctx context.Context, c llm.Client, t Tier) (Judgement, llm.Completion,
 	if sent.Timeout == 0 {
 		sent.Timeout = llm.TestTimeout
 	}
-	return Decide(ctx, c, sent)
+	return decide(ctx, c, sent)
 }
 
-// Decide sends one call and reads its answer as a decision. On
+// decide sends one call and reads its answer as a decision. On
 // ErrUnparseable the Completion keeps the model's text as it came.
-func Decide(ctx context.Context, c llm.Client, sent llm.Call) (Judgement, llm.Completion, error) {
+func decide(ctx context.Context, c llm.Client, sent llm.Call) (Judgement, llm.Completion, error) {
 	done, err := c.Complete(ctx, sent)
 	if err != nil {
 		return Judgement{}, done, err
 	}
-	j, err := Parse(done.Text)
+	j, err := parse(done.Text)
 	if err != nil {
 		return Judgement{}, done, err
 	}
 	return j, done, nil
 }
 
-// Parse reads a decision from a model's text, tolerantly: a Markdown code
+// parse reads a decision from a model's text, tolerantly: a Markdown code
 // fence around it and prose before or after it are skipped, and the first
 // balanced JSON object is read. It must name a decision of yes, no or
 // unsure and a confidence from 0 to 1.
-func Parse(text string) (Judgement, error) {
+func parse(text string) (Judgement, error) {
 	obj := firstObject(text)
 	if obj == "" {
 		return Judgement{}, fmt.Errorf("%w: no JSON object in it", ErrUnparseable)

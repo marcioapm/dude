@@ -35,7 +35,7 @@ its own fallback.
    reads the organisation's judgement tier; with none it returns `ErrOff`,
    with a tier naming no model `ErrNoModel` — in both cases nothing is sent
    and nothing recorded. Otherwise one `Complete` call: a fixed system
-   message (`judge.System`) telling the model it decides one question for a
+   message (`judge.systemPrompt`) telling the model it decides one question for a
    software-delivery system and must answer only
    `{"decision":"yes"|"no"|"unsure","confidence":<0..1>,"reasoning":"…"}`,
    then the question with the context under `## Context`; `max_tokens`
@@ -72,7 +72,7 @@ security like every tenant table:
 | `purpose` | `judgement` (a CHECK list, for the next kind of direct call) |
 | `asker`, `about` | who asked, and a short label of what about |
 | `task_id` | the task it was about; SET NULL when the task goes |
-| `tier_id`, `tier_name`, `model` | the tier (SET NULL when removed), and its name and model then |
+| `tier_id`, `tier_name`, `model` | the tier (SET NULL when removed), its name then, and the model **requested** (the proxy may serve a fallback; the served model is not stored) |
 | `question` | the first line of the question asked, to 500 characters: what the list shows, so it never reads `request` |
 | `request` | the body sent: messages and parameters, each message's content kept to 64 KiB (marked where cut; what is sent is not cut). **Never the headers.** |
 | `response_text` | the model's text as it came |

@@ -28,9 +28,8 @@ type Call struct {
 	TaskID   *string
 	TierID   *string
 	TierName string
-	// The model the call requested.
-	Model string
-	// What was sent; its headers are never stored.
+	// What was sent; its headers are never stored. Its Model is stored as
+	// model_calls.model: the model requested, not the one the proxy served.
 	Sent       llm.Call
 	Completion llm.Completion
 	// The call's error; nil for a call that succeeded.
@@ -86,7 +85,7 @@ func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (strin
 		INSERT INTO model_calls (id, organization_id, purpose, asker, about, task_id, tier_id, tier_name, model, question,
 		  request, response_text, result, status, error, http_status, latency_ms, input_tokens, output_tokens)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-		id, c.Purpose, c.Asker, about, c.TaskID, c.TierID, c.TierName, c.Model, question,
+		id, c.Purpose, c.Asker, about, c.TaskID, c.TierID, c.TierName, c.Sent.Model, question,
 		request, response, result, status, errText, c.Completion.Status, c.Completion.LatencyMs,
 		c.Completion.InputTokens, c.Completion.OutputTokens)
 	if err != nil {
