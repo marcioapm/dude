@@ -6,7 +6,7 @@ export const CSS = `
 *{box-sizing:border-box}
 .root{position:fixed;inset:0;pointer-events:none;z-index:2147483647;font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#f3f4f8;
 --ink:#15171f;--ink2:#1f2230;--ink3:#2b2f40;--line:#3a3f55;--dim:#a3a8bb;--pick:#7c5cff;--warn:#f2b13b;--ok:#33b87a;--info:#4c9cff}
-.root>*{pointer-events:auto}
+.layer{display:contents;pointer-events:auto}
 .mono{font:12px ui-monospace,"SF Mono",Menlo,Consolas,monospace}
 .dim{color:var(--dim)}
 .sp{flex:1}

@@ -41,7 +41,44 @@ export interface OverlayOptions {
   readonly draw?: (el: Element, win: Window) => Promise<string>;
   readonly sessionWaitMs?: number;
   readonly saveWaitMs?: number;
+  /** How often pins are moved to follow the page. */
+  readonly tickMs?: number;
 }
+
+interface PinNodes {
+  readonly key: string;
+  readonly pin: HTMLElement;
+  readonly show: HTMLElement | null;
+  readonly pop: HTMLElement | null;
+}
+
+interface BoxParts {
+  readonly section: HTMLElement;
+  readonly picked: HTMLElement;
+  readonly attach: HTMLInputElement;
+  readonly picLine: HTMLElement;
+  readonly picDd: HTMLElement;
+  readonly disconnected: HTMLElement;
+  readonly problem: HTMLElement;
+  readonly foot: HTMLElement;
+  readonly keys: HTMLElement;
+  readonly sp: HTMLElement;
+  readonly cancel: HTMLElement;
+  readonly copy: HTMLElement;
+  readonly save: HTMLButtonElement;
+  picKey: string;
+}
+
+/** Sets `parent`'s children to `want`, in order, moving or replacing none that stay. */
+function sync(parent: Element, want: ReadonlyArray<Node>): void {
+  for (const n of [...parent.childNodes]) if (!want.includes(n)) n.remove();
+  want.forEach((n, i) => {
+    const at = parent.childNodes[i] ?? null;
+    if (at !== n) parent.insertBefore(n, at);
+  });
+}
+
+const setText = (el: Element, text: string) => { if (el.textContent !== text) el.textContent = text; };
 
 const GLYPH: Record<string, string> = {
   grip: "M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01",
@@ -111,6 +148,13 @@ export class Overlay {
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
   #raf = 0;
+  // The shadow tree's layers, made once: a render replaces a layer's children, never the tree.
+  readonly #top: HTMLElement;
+  readonly #lay: Record<"pins" | "catchers" | "hover" | "box" | "bar", HTMLElement>;
+  // The pins drawn now, by id, moved in place as the page moves.
+  #pinNodes = new Map<string, PinNodes>();
+  // The comment box, built once per pick and updated in place: the textarea is never moved while it is in use.
+  #box: BoxParts | null = null;
 
   constructor(win: Window, opts: OverlayOptions) {
     this.#win = win;
@@ -122,6 +166,10 @@ export class Overlay {
     this.host.setAttribute("style", "all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647");
     this.#root = this.host.attachShadow({ mode: "closed" });
     this.#collapsed = this.#session("hidden") === "1";
+    const layer = () => this.#h("div", { class: "layer" });
+    this.#lay = { pins: layer(), catchers: layer(), hover: layer(), box: layer(), bar: layer() };
+    this.#top = this.#h("div", { class: "root", "data-overlay": "" }, this.#lay.pins, this.#lay.catchers, this.#lay.hover, this.#lay.box, this.#lay.bar);
+    this.#root.append(this.#h("style", {}, CSS), this.#top);
   }
 
   start(): void {
@@ -147,8 +195,8 @@ export class Overlay {
         if (this.#connection === "connected" && !this.#opener()) this.#lost("closed");
       }, 1_000));
     }
-    // Pins follow what the page draws, which may move without a scroll.
-    this.#timers.push(this.#win.setInterval(() => this.#pins.length > 0 && this.#showPins && this.#render(), 1_500));
+    // Pins follow what the page draws, which may move without a scroll: moved in place, never redrawn.
+    this.#timers.push(this.#win.setInterval(() => this.#placePins(), this.#opts.tickMs ?? 1_500));
     this.#render();
   }
 
@@ -368,7 +416,10 @@ export class Overlay {
         this.#save();
       }
     });
-    this.#field.addEventListener("input", () => this.#render());
+    // Only the box's own state follows the words; the textarea is left alone, so an IME composition runs undisturbed.
+    this.#field.addEventListener("input", (e) => { if (!(e as InputEvent).isComposing) this.#syncBox(); });
+    this.#field.addEventListener("compositionend", () => this.#syncBox());
+    this.#box = null;
     const big = tooBig(el, this.#win);
     this.#attach = !big && !frame;
     this.#picture = frame ? { state: "off", why: "a frame from another site can't be drawn" }
@@ -481,10 +532,21 @@ export class Overlay {
     if (this.#raf) return;
     this.#raf = this.#win.requestAnimationFrame?.(() => {
       this.#raf = 0;
-      this.#render();
+      this.#place();
     }) ?? 0;
-    if (!this.#raf) this.#render();
+    if (!this.#raf) this.#place();
   };
+
+  /** After a scroll or resize: what follows the page's boxes moves; nothing else is touched. */
+  #place(): void {
+    if (this.#stopped) return;
+    this.#placePins();
+    if (this.#picking && !this.#picked) {
+      sync(this.#lay.catchers, this.#frameCatchers());
+      sync(this.#lay.hover, this.#hover ? this.#hoverLayer(this.#hover) : []);
+    }
+    if (this.#picked) this.#syncBox();
+  }
 
   #session(key: string, value?: string): string | null {
     try {
@@ -528,33 +590,22 @@ export class Overlay {
     if (this.#stopped) return;
     const active = this.#root.activeElement as HTMLElement | null;
     const activeKey = active?.getAttribute?.("data-k") ?? null;
-    const fieldFocused = active !== null && active === this.#field;
-    const sel = fieldFocused ? [this.#field!.selectionStart, this.#field!.selectionEnd] : null;
     const narrow = this.#win.innerWidth <= 520;
-    const root = this.#h("div", { class: `root${narrow ? " narrow" : ""}`, "data-overlay": "" });
-    for (const layer of this.#layers(narrow)) if (layer) root.append(layer);
-    this.#root.replaceChildren(this.#h("style", {}, CSS), root);
-    if (fieldFocused && this.#field) {
-      this.#field.focus();
-      if (sel) this.#field.setSelectionRange(sel[0] ?? 0, sel[1] ?? 0);
-    } else if (activeKey) this.#focusKey(activeKey);
-  }
-
-  #layers(narrow: boolean): Child[] {
-    const out: Child[] = [];
-    if (this.#showPins && this.#connection === "connected" && !this.#picking && !this.#picked) out.push(...this.#pinLayer());
-    if (this.#picking && !this.#picked) out.push(...this.#frameCatchers());
-    if (this.#picking && !this.#picked && this.#hover) out.push(...this.#hoverLayer(this.#hover));
-    if (this.#picked) out.push(...this.#boxLayer(narrow));
-    out.push(this.#collapsed && !this.#picking && !this.#picked ? this.#pill() : this.#bar(narrow));
-    return out;
+    this.#top.className = `root${narrow ? " narrow" : ""}`;
+    this.#syncPins();
+    const picking = this.#picking && !this.#picked;
+    sync(this.#lay.catchers, picking ? this.#frameCatchers() : []);
+    sync(this.#lay.hover, picking && this.#hover ? this.#hoverLayer(this.#hover) : []);
+    this.#syncBox();
+    sync(this.#lay.bar, [this.#collapsed && !this.#picking && !this.#picked ? this.#pill() : this.#bar(narrow)]);
+    if (active && !active.isConnected && activeKey) this.#focusKey(activeKey);
   }
 
   #rect(el: Element): DOMRect {
     return el.getBoundingClientRect();
   }
 
-  #hoverLayer(el: Element): Child[] {
+  #hoverLayer(el: Element): HTMLElement[] {
     const r = this.#rect(el);
     const frame = foreignFrame(el, this.#win);
     const box = this.#h("div", { class: `hl${frame ? " warn" : ""}`, "data-testid": "ov-highlight",
@@ -566,8 +617,7 @@ export class Overlay {
       : this.#h("div", { class: "label", "data-testid": "ov-label", style: `left:${Math.max(4, r.left - 2)}px;top:${top}px` },
         this.#h("span", { class: "mono" }, labelFor(selectorFor(el), componentOf(el))),
         this.#h("span", { class: "dim" }, `${Math.round(r.width)}×${Math.round(r.height)}`));
-    const out: Child[] = [box, label];
-    return out;
+    return [box, label];
   }
 
   /**
@@ -575,8 +625,8 @@ export class Overlay {
    * hears no pointer inside such a frame, so the catcher is where hovering
    * says it can't be read and a click picks the frame as a whole.
    */
-  #frameCatchers(): Child[] {
-    const out: Child[] = [];
+  #frameCatchers(): HTMLElement[] {
+    const out: HTMLElement[] = [];
     for (const f of this.#doc.querySelectorAll("iframe, frame")) {
       if (!foreignFrame(f, this.#win)) continue;
       const r = this.#rect(f);
@@ -596,31 +646,70 @@ export class Overlay {
     return out;
   }
 
-  #pinLayer(): Child[] {
-    const out: Child[] = [];
-    for (const p of this.#pins) {
-      const el = resolveOne(this.#doc, p.selector);
-      if (!el) continue;
-      const r = this.#rect(el);
-      const active = this.#popover?.id === p.id;
-      if (active && this.#popover?.from) {
-        out.push(this.#h("div", { class: "hl show", "data-testid": "ov-show", style: `left:${r.left - 3}px;top:${r.top - 3}px;width:${r.width + 6}px;height:${r.height + 6}px` }));
-      }
-      const st = STATUS[p.status] ?? STATUS.open;
-      out.push(this.#h("button", { type: "button", class: `pin ${p.status}${active ? " active" : ""}`, "data-testid": "ov-pin", "data-id": p.id, "data-k": `pin-${p.id}`,
-        "data-status": p.status, "aria-expanded": active ? "true" : "false",
-        "aria-label": `${p.n}: ${p.mine ? "your draft" : `${p.author}'s comment`}, ${st.label}`,
-        style: `left:${Math.max(4, r.right - 18)}px;top:${Math.max(4, r.top - 14)}px`,
-        onclick: () => { this.#popover = active ? null : { id: p.id }; this.#render(); } }, String(p.n), this.#g(st.glyph, 11)));
-      if (active) out.push(this.#popoverFor(p, r));
-    }
-    return out;
+  #pinsShown(): boolean {
+    return this.#showPins && this.#connection === "connected" && !this.#picking && !this.#picked;
   }
 
-  #popoverFor(p: OverlayPin, r: DOMRect): HTMLElement {
+  /** The pins layer to match the pins, the popover and what resolves now: a pin whose data is unchanged keeps its nodes. */
+  #syncPins(): void {
+    const keep = new Map<string, PinNodes>();
+    const want: Node[] = [];
+    if (this.#pinsShown()) {
+      for (const p of this.#pins) {
+        const el = resolveOne(this.#doc, p.selector);
+        if (!el) continue;
+        const active = this.#popover?.id === p.id;
+        const key = `${JSON.stringify(p)}|${active ? `+${this.#popover?.from ?? ""}` : "-"}`;
+        const old = this.#pinNodes.get(p.id);
+        const n = old && old.key === key ? old : this.#pinNode(p, active, key);
+        this.#placePin(n, el);
+        keep.set(p.id, n);
+        if (n.show) want.push(n.show);
+        want.push(n.pin);
+        if (n.pop) want.push(n.pop);
+      }
+    }
+    this.#pinNodes = keep;
+    sync(this.#lay.pins, want);
+  }
+
+  /** The tick: pins moved to where their elements are now; nodes are made or dropped only when one appears or goes. */
+  #placePins(): void {
+    if (this.#stopped || !this.#pinsShown()) return;
+    let changed = false;
+    for (const p of this.#pins) {
+      const el = resolveOne(this.#doc, p.selector);
+      const n = this.#pinNodes.get(p.id);
+      if (!el !== !n) changed = true;
+      else if (el && n) this.#placePin(n, el);
+    }
+    if (changed) this.#syncPins();
+  }
+
+  #placePin(n: PinNodes, el: Element): void {
+    const r = this.#rect(el);
+    const at = (node: HTMLElement, style: string) => { if (node.getAttribute("style") !== style) node.setAttribute("style", style); };
+    at(n.pin, `left:${Math.max(4, r.right - 18)}px;top:${Math.max(4, r.top - 14)}px`);
+    if (n.show) at(n.show, `left:${r.left - 3}px;top:${r.top - 3}px;width:${r.width + 6}px;height:${r.height + 6}px`);
+    if (n.pop) {
+      const pos = this.#beside(r, 340, 300);
+      at(n.pop, `left:${pos.left}px;top:${pos.top}px`);
+    }
+  }
+
+  #pinNode(p: OverlayPin, active: boolean, key: string): PinNodes {
     const st = STATUS[p.status] ?? STATUS.open;
-    const pos = this.#beside(r, 340, 300);
-    return this.#h("section", { class: "pop", role: "dialog", "aria-label": `Comment ${p.n}`, "data-testid": "ov-popover", style: `left:${pos.left}px;top:${pos.top}px` },
+    const pin = this.#h("button", { type: "button", class: `pin ${p.status}${active ? " active" : ""}`, "data-testid": "ov-pin", "data-id": p.id, "data-k": `pin-${p.id}`,
+      "data-status": p.status, "aria-expanded": active ? "true" : "false",
+      "aria-label": `${p.n}: ${p.mine ? "your draft" : `${p.author}'s comment`}, ${st.label}`,
+      onclick: () => { this.#popover = active ? null : { id: p.id }; this.#render(); } }, String(p.n), this.#g(st.glyph, 11));
+    const show = active && this.#popover?.from ? this.#h("div", { class: "hl show", "data-testid": "ov-show" }) : null;
+    return { key, pin, show, pop: active ? this.#popoverFor(p) : null };
+  }
+
+  #popoverFor(p: OverlayPin): HTMLElement {
+    const st = STATUS[p.status] ?? STATUS.open;
+    return this.#h("section", { class: "pop", role: "dialog", "aria-label": `Comment ${p.n}`, "data-testid": "ov-popover" },
       this.#popover?.from ? this.#h("p", { class: "from" }, this.#popover.from) : null,
       this.#h("header", { class: "head" }, this.#h("b", {}, p.mine ? "You" : p.author), this.#h("span", { class: "dim" }, p.when), this.#h("span", { class: "sp" }),
         this.#h("span", { class: "st" }, this.#g(st.glyph, 11), ` ${st.label}`)),
@@ -645,19 +734,11 @@ export class Overlay {
     return { left: Math.max(8, Math.min(r.left, W - w - 8)), top: Math.max(8, Math.min(r.bottom + 14, H - h - 8)) };
   }
 
-  #boxLayer(narrow: boolean): Child[] {
+  /** The comment box, built once per pick. */
+  #buildBox(): BoxParts {
     const { el, anchor, frame } = this.#picked!;
-    const r = this.#rect(el);
-    const out: Child[] = [this.#h("div", { class: "hl picked", "data-testid": "ov-picked", style: `left:${r.left - 2}px;top:${r.top - 2}px;width:${r.width + 4}px;height:${r.height + 4}px` })];
-    const connected = this.#connection === "connected";
     const name = frame ? `the frame from ${frame.replace(/^https?:\/\//, "")}` : labelFor(anchor.selector ?? "", anchor.component);
-    const pos = this.#beside(r, 380, 480);
-    const pic = this.#picture;
-    const picLine = pic.state === "failed"
-      ? this.#h("p", { class: "note warn", "data-testid": "ov-picture-failed", role: "status" }, this.#g("warn", 12), ` Couldn't draw a picture: ${pic.why}. It saves without one.`)
-      : pic.state === "off" && pic.why ? this.#h("p", { class: "note" }, `No picture: ${pic.why}.`) : null;
-    const field = this.#field!;
-    const canSave = connected && !this.#saving && field.value.trim() !== "";
+    const picDd = this.#h("dd", {});
     const facts = this.#h("dl", {},
       this.#h("dt", {}, "Page"), this.#h("dd", { class: "mono" }, anchor.url.replace(/^https?:\/\//, "")),
       this.#h("dt", {}, "Window"), this.#h("dd", {}, `${anchor.viewport?.width}×${anchor.viewport?.height}`),
@@ -667,38 +748,89 @@ export class Overlay {
       this.#h("dt", {}, "Component"), this.#h("dd", {}, anchor.component?.name
         ? `${anchor.component.name}${anchor.component.file ? ` ${anchor.component.file}${anchor.component.line ? `:${anchor.component.line}` : ""}` : ""}` : this.#h("span", { class: "dim" }, "The app doesn't say")),
       this.#h("dt", {}, "HTML"), this.#h("dd", { class: "dim" }, `the element's outer HTML, ${anchor.html?.length ?? 0} characters`),
-      this.#h("dt", {}, "Picture"), this.#h("dd", {}, this.#attach && pic.state === "ready" ? this.#h("img", { class: "thumb", src: pic.url, alt: "The picture that would be attached" })
-        : this.#h("span", { class: "dim" }, this.#attach && pic.state === "drawing" ? "drawing…" : "none")));
-    out.push(this.#h("section", { class: `box${narrow ? " sheet" : ""}`, role: "dialog", "aria-label": `Comment on ${name}`, "data-testid": "ov-comment-box",
-      style: `left:${pos.left}px;top:${pos.top}px` },
+      this.#h("dt", {}, "Picture"), picDd);
+    const attach = this.#h("input", { type: "checkbox", "data-testid": "ov-attach", "data-k": "attach",
+      onchange: (e: Event) => {
+        this.#attach = (e.target as HTMLInputElement).checked;
+        if (this.#attach && this.#picture.state === "off") this.#drawFor(el);
+        this.#syncBox();
+      } }) as HTMLInputElement;
+    const picLine = this.#h("p", { class: "note" });
+    const disconnected = this.#h("p", { class: "note warn", role: "alert", "data-testid": "ov-disconnected" }, this.#g("warn", 12), this.#h("span", {}));
+    const problem = this.#h("p", { class: "note warn", role: "alert", "data-testid": "ov-problem" });
+    const keys = this.#h("span", { class: "dim" }, this.#h("kbd", {}, "⌘"), this.#h("kbd", {}, "↵"), " save · ", this.#h("kbd", {}, "Esc"), " cancel");
+    const sp = this.#h("span", { class: "sp" });
+    const cancel = this.#h("button", { type: "button", "data-k": "cancel", onclick: () => this.#closeBox(false) }, "Cancel");
+    const copy = this.#h("button", { type: "button", "data-k": "copy", "data-testid": "ov-copy", onclick: () => void this.#copy() }, "Copy text");
+    const save = this.#h("button", { type: "button", class: "primary", "data-k": "save", "data-testid": "ov-save", onclick: () => this.#save() }) as HTMLButtonElement;
+    const foot = this.#h("footer", { class: "foot" });
+    const section = this.#h("section", { class: "box", role: "dialog", "aria-label": `Comment on ${name}`, "data-testid": "ov-comment-box" },
       this.#h("header", { class: "bh" }, this.#h("span", {}, "Comment on ", this.#h("b", { class: "mono" }, name)),
         this.#h("span", { class: "dim" }, this.#g("lock", 11), " Private draft until you submit in dude")),
-      field,
-      this.#h("label", {}, this.#h("input", { type: "checkbox", "data-testid": "ov-attach", "data-k": "attach", checked: this.#attach,
-        disabled: pic.state === "off" || pic.state === "failed",
-        onchange: (e: Event) => {
-          this.#attach = (e.target as HTMLInputElement).checked;
-          if (this.#attach && pic.state === "off") this.#drawFor(el);
-          this.#render();
-        } }), this.#h("span", {}, "Attach a picture of this element ", this.#h("span", { class: "dim" }, "(drawn from the page)"))),
-      picLine,
+      this.#field!,
+      this.#h("label", {}, attach, this.#h("span", {}, "Attach a picture of this element ", this.#h("span", { class: "dim" }, "(drawn from the page)"))),
       this.#h("details", { "data-testid": "ov-what-dude-sends" }, this.#h("summary", { "data-k": "sends" }, "What dude will send"), facts,
         this.#h("p", { class: "dim" }, "Nothing leaves this page until you save. Then it is a draft only you see in dude.")),
-      connected ? null : this.#h("p", { class: "note warn", role: "alert", "data-testid": "ov-disconnected" }, this.#g("warn", 12),
-        this.#connection === "closed" ? " dude's tab was closed: this can't be saved from here. Copy your words, then open the task again."
-          : " This preview wasn't opened from dude: this can't be saved from here. Copy your words."),
-      this.#problem ? this.#h("p", { class: "note warn", role: "alert", "data-testid": "ov-problem" }, this.#problem) : null,
-      this.#h("footer", { class: "foot" },
-        narrow || !connected ? null : this.#h("span", { class: "dim" }, this.#h("kbd", {}, "⌘"), this.#h("kbd", {}, "↵"), " save · ", this.#h("kbd", {}, "Esc"), " cancel"),
-        this.#h("span", { class: "sp" }),
-        connected
-          ? this.#h("button", { type: "button", "data-k": "cancel", onclick: () => this.#closeBox(false) }, "Cancel")
-          : null,
-        !connected || this.#unanswered
-          ? this.#h("button", { type: "button", "data-k": "copy", "data-testid": "ov-copy", onclick: () => void this.#copy() }, "Copy text") : null,
-        connected ? this.#h("button", { type: "button", class: "primary", "data-k": "save", "data-testid": "ov-save", disabled: !canSave, onclick: () => this.#save() },
-          this.#saving ? "Saving…" : "Save draft") : null)));
-    return out;
+      foot);
+    const picked = this.#h("div", { class: "hl picked", "data-testid": "ov-picked" });
+    return { section, picked, attach, picLine, picDd, disconnected, problem, foot, keys, sp, cancel, copy, save, picKey: "" };
+  }
+
+  /** The box to match the state: positions, words and buttons set in place; the textarea and the open disclosure are left as they are. */
+  #syncBox(): void {
+    if (!this.#picked || !this.#field) {
+      this.#box = null;
+      sync(this.#lay.box, []);
+      return;
+    }
+    const b = (this.#box ??= this.#buildBox());
+    const narrow = this.#win.innerWidth <= 520;
+    const connected = this.#connection === "connected";
+    const r = this.#rect(this.#picked.el);
+    const pos = this.#beside(r, 380, 480);
+    b.picked.setAttribute("style", `left:${r.left - 2}px;top:${r.top - 2}px;width:${r.width + 4}px;height:${r.height + 4}px`);
+    b.section.setAttribute("style", `left:${pos.left}px;top:${pos.top}px`);
+    b.section.className = `box${narrow ? " sheet" : ""}`;
+    const pic = this.#picture;
+    b.attach.checked = this.#attach;
+    b.attach.disabled = pic.state === "off" || pic.state === "failed";
+    const picKey = `${pic.state}|${pic.state === "ready" ? pic.url.length : ""}|${this.#attach}`;
+    if (picKey !== b.picKey) {
+      b.picKey = picKey;
+      b.picDd.replaceChildren(this.#attach && pic.state === "ready" ? this.#h("img", { class: "thumb", src: pic.url, alt: "The picture that would be attached" })
+        : this.#h("span", { class: "dim" }, this.#attach && pic.state === "drawing" ? "drawing…" : "none"));
+      if (pic.state === "failed") {
+        b.picLine.className = "note warn";
+        b.picLine.setAttribute("data-testid", "ov-picture-failed");
+        b.picLine.setAttribute("role", "status");
+        b.picLine.replaceChildren(this.#g("warn", 12), ` Couldn't draw a picture: ${pic.why}. It saves without one.`);
+      } else {
+        b.picLine.className = "note";
+        b.picLine.removeAttribute("data-testid");
+        b.picLine.removeAttribute("role");
+        b.picLine.textContent = pic.state === "off" && pic.why ? `No picture: ${pic.why}.` : "";
+      }
+    }
+    const lineShown = pic.state === "failed" || pic.state === "off" && !!pic.why;
+    const after = b.section.querySelector("label");
+    if (lineShown && b.picLine.parentNode !== b.section) after?.after(b.picLine);
+    else if (!lineShown) b.picLine.remove();
+    setText(b.disconnected.lastElementChild!, this.#connection === "closed" ? " dude's tab was closed: this can't be saved from here. Copy your words, then open the task again."
+      : " This preview wasn't opened from dude: this can't be saved from here. Copy your words.");
+    this.#toggle(b.section, b.disconnected, !connected, b.foot);
+    setText(b.problem, this.#problem ?? "");
+    this.#toggle(b.section, b.problem, this.#problem !== null, b.foot);
+    setText(b.save, this.#saving ? "Saving…" : "Save draft");
+    b.save.disabled = !(connected && !this.#saving && this.#field.value.trim() !== "");
+    sync(b.foot, [narrow || !connected ? null : b.keys, b.sp, connected ? b.cancel : null, !connected || this.#unanswered ? b.copy : null, connected ? b.save : null]
+      .filter((n): n is HTMLElement => n !== null));
+    sync(this.#lay.box, [b.picked, b.section]);
+  }
+
+  /** `node` in `parent` just before `before` when `on`, out of it otherwise; left where it is when already right. */
+  #toggle(parent: Element, node: Element, on: boolean, before: Element): void {
+    if (!on) node.remove();
+    else if (node.parentNode !== parent) parent.insertBefore(node, before);
   }
 
   #pill(): HTMLElement {

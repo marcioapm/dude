@@ -366,6 +366,60 @@ test("a save dude never answers is given up on: the reason, Copy text, Save agai
   expect(count('[data-testid="ov-problem"]')).toBe(0);
 });
 
+const pinOn = (id: string, selector: string, n = 1): OverlayPin =>
+  ({ id, n, status: "open", author: "Ana", mine: false, body: `about ${selector}`, selector, when: "", replies: [] });
+
+test("words typed through an IME composition are saved exactly as composed, the box never redrawn under it", async () => {
+  boot({ tickMs: 10 });
+  connect([pinOn("p", "p.other")]);
+  const field = await writeOnPay("");
+  field.focus();
+  const ev = (type: string, data: string, composing: boolean) =>
+    field.dispatchEvent(type.startsWith("composition") ? new win.CompositionEvent(type, { data, bubbles: true }) : new win.InputEvent("input", { data, isComposing: composing, bubbles: true }));
+  ev("compositionstart", "", true);
+  field.value = "にほ";
+  ev("input", "にほ", true);
+  await tick(30);
+  field.value = "にほん";
+  ev("input", "にほん", true);
+  field.value = "日本";
+  ev("compositionend", "日本", false);
+  ev("input", "日本", false);
+  // The field is still the same node, in the box, with focus.
+  expect(q("textarea")).toBe(field);
+  expect(root.activeElement).toBe(field);
+  tid("ov-save")!.click();
+  expect((sent().find((m) => m.type === "draft") as { body: string }).body).toBe("日本");
+});
+
+test("the pin tick moves pins in place: an open disclosure stays open, focus stays in the box, pin nodes are the same nodes", async () => {
+  boot({ tickMs: 10 });
+  connect([pinOn("p", "p.other")]);
+  const pinBefore = tid("ov-pin")!;
+  await tick(40);
+  expect(tid("ov-pin")).toBe(pinBefore);
+  // The page moves the element: the same pin node moves with it.
+  sized(win.document.querySelector("p.other")!, 300, 400, 50, 20);
+  await tick(40);
+  expect(tid("ov-pin")).toBe(pinBefore);
+  expect(pinBefore.getAttribute("style")).toBe("left:332px;top:386px");
+  // With the box open: the disclosure and focus survive ticks and keystrokes.
+  const field = await writeOnPay("Gre");
+  field.focus();
+  const details = tid("ov-what-dude-sends") as HTMLDetailsElement;
+  details.open = true;
+  const save = tid("ov-save");
+  await tick(40);
+  field.value = "Green";
+  field.dispatchEvent(new win.InputEvent("input", { data: "en", bubbles: true }));
+  await tick(40);
+  expect(tid("ov-what-dude-sends")).toBe(details);
+  expect(details.open).toBe(true);
+  expect(root.activeElement).toBe(field);
+  expect(tid("ov-save")).toBe(save);
+  expect((save as HTMLButtonElement).disabled).toBe(false);
+});
+
 test("the overlay's root is closed and the page's CSS doesn't reach into it", () => {
   const style = win.document.createElement("style");
   style.textContent = "button { color: rgb(255, 0, 0) !important; display: none !important } * { font-size: 40px !important }";
