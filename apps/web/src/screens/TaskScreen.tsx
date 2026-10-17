@@ -101,6 +101,7 @@ import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/compo
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
+import { CommentOnPreview, CommentOnServer, CommentingNotices, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -368,6 +369,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // The current attempt's feedback: the tab, the tray, the header's chip and the open session's Changes share it.
   const feedback = useTaskFeedbackPage({ client, taskId, task: item, current, version: feedbackVersion, people,
     onShowInDiff: onOpenRun, onShowOnTab: () => latest.current.pickTab("feedback") });
+  // Commenting on the branch preview: one window per task, heard from here on every tab.
+  const commenting = usePreviewCommenting({ client, taskId, taskKey: item?.key ?? "", servers, fb: feedback, people,
+    onOpenItem: (id) => feedback.onDiff.openOnTab(id) });
+  const pictures = usePictures(client);
+  // Kept while the control is: the Servers section is memoised.
+  const commentOn = useCallback((name: string) => <CommentOnServer control={commenting} name={name} />, [commenting]);
   // An earlier attempt's open session: only to read. One value per attempt shown, not one per frame.
   const sessionFeedback = useMemo(() => (earlier
     ? { ...feedback.onDiff, closed: `Attempt ${shown} was set aside: its diff is only to read.`, readOnly: true }
@@ -563,6 +570,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     : (continues ? "an implementer on the existing work, " : "") + (source.kind === "pr"
       ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
       : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft");
+  const commentingNotices = !earlier && commentingNoticeShown(commenting) ? <CommentingNotices control={commenting} /> : null;
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -628,7 +636,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || openOrDraft || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
@@ -646,6 +654,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               onOpenRun={onOpenRun} onChoose={setPickingUp} />
           ) : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
+          {commentingNotices}
         </div>
       ) : null}
 
@@ -803,7 +812,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   </PullRequestActions>
                 ))}
                 {showServers ? (
-                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} />
+                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")}
+                    comment={<CommentOnPreview control={commenting} />} />
                 ) : null}
               </PageRail>
           } />
@@ -870,7 +880,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <EarlierFeedbackTab client={client} task={item} fb={feedback} shown={shown} current={current} version={feedbackVersion} onCurrent={() => pickAttempt(current)} />
           ) : (
             <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
-              onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined} />
+              onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined}
+              picture={pictures} preview={{ show: commenting.show, canShow: commenting.canShow, wayIn: <PreviewWayIn control={commenting} /> }} />
           )}
         </TabPanel>
 
@@ -887,7 +898,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="servers" className="railPanel">
-          <ServersSection client={client} servers={servers} taskId={taskId} />
+          <ServersSection client={client} servers={servers} taskId={taskId} comment={commentOn} />
         </TabPanel>
 
         <TabPanel value="activity" className="railPanel">

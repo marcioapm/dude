@@ -34,10 +34,12 @@ func main() {
 	oldPools := flag.Bool("old-pools", false, "list pools as a lux before host sizes: no hostSize, hostSizeFrom, instanceType or isDefault")
 	noNestedHost := flag.Bool("no-nested-host", false, "no host offers nested containers: a Run asking for them waits, saying so in its stateReason")
 	memoryShare := flag.Float64("memory-share", 0.95, "report each placement's memoryLimit as this share of the memory its spec asks for; 0 reports none, as an older lux")
+	serverInject := flag.Bool("server-inject", false, "a lux from v0.1.32: whoami says serverInject and servers take inject")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
 	srv.PreviewDomain, srv.IdleCheck = *previewDomain, *idleCheck
+	srv.ServerInject = *serverInject
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
 	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt
 	srv.MemoryShare = *memoryShare

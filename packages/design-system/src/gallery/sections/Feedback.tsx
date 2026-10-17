@@ -46,6 +46,12 @@ const item = (over: Partial<FeedbackCardItem>): FeedbackCardItem => ({
 });
 const ok = async () => true;
 
+/** A picture as the overlay draws one: the element alone on white, outlined. */
+const BUTTON_SHOT = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="212" height="76" viewBox="0 0 212 76">
+<rect width="212" height="76" fill="#fff"/><rect x="8" y="8" width="196" height="60" rx="8" fill="#1f7a5a"/>
+<text x="106" y="44" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="600" fill="#fff">Pay now</text>
+<rect x="5" y="5" width="202" height="66" rx="10" fill="none" stroke="#7c5cff" stroke-width="3"/></svg>`)}`;
+
 function DiffDemo({ view }: { readonly view: "unified" | "split" }) {
   const [selection, setSelection] = useState<DiffRange | null>({ path: FILE.path, side: "new", startLine: 40, endLine: 41 });
   const [editing, setEditing] = useState(true);
@@ -116,6 +122,11 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
             <FeedbackCard item={item({ status: "replied", author: marcio, anchor: { kind: "preview", url: "https://wi-2408.preview.acme.dev/runs/run_88", viewport: { width: 1440, height: 900 },
               selector: "header > div.actions > button[data-testid=pause]", text: "Pause", component: { name: "SessionHeader", file: "src/components/ChatTranscript.tsx", line: 318 } } })}
               onReply={ok} onReopen={ok} />
+            <Label>A draft on a preview's page, with its picture: Show on preview (onJump)</Label>
+            <FeedbackCard data-testid="gallery-fb-preview-draft" item={item({ status: "draft", routed: undefined, author: marcio, at: ago(1), body: "Green, and on the same line as the total.",
+              anchor: { kind: "preview", url: "https://web-wi-2408.preview.acme.dev/cart", viewport: { width: 1280, height: 720 }, selector: "form#checkout > button.pay",
+                rect: { x: 152, y: 431, width: 196, height: 60 }, text: "Pay now", component: { name: "PayButton", file: "src/cart/PayButton.tsx", line: 14 } } })}
+              imageUrl={BUTTON_SHOT} onSaveDraft={ok} onDelete={ok} onJump={() => {}} />
             <Label>An earlier attempt's: to read</Label>
             <FeedbackCard item={item({ status: "open" })} readOnly />
           </Col>

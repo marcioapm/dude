@@ -10,7 +10,7 @@
  * session's Changes.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CommentEditor, DraftsTray, FeedbackCard, FeedbackEmpty, PageRail, PageRailBlock, PageWithRail, Segmented, SubmitFeedbackDialog,
   feedbackHolds, type DraftsTrayRow,
@@ -40,6 +40,8 @@ export interface TaskFeedbackController {
   readonly editing: string | null;
   readonly setEditing: (id: string | null) => void;
   readonly highlight: string | null;
+  /** Marks a draft just saved from a preview window, as it arrives. */
+  readonly flash: (id: string) => void;
   readonly problem: string | null;
   /** Open an item's Run on Changes, brought into view. */
   readonly showInDiff: (runId: string, itemId: string) => void;
@@ -97,7 +99,8 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
     latest.current.onShowInDiff(runId);
   }, []);
 
-  return { items: list.feedback, drafts, blocking: list.blocking, loaded, problem, onDiff, reload: () => void reload(), editing, setEditing, highlight, showInDiff };
+  return { items: list.feedback, drafts, blocking: list.blocking, loaded, problem, onDiff, reload: () => void reload(), editing, setEditing, highlight,
+    flash: setHighlight, showInDiff };
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +219,7 @@ function GeneralComposer({ createDraft, full }: { createDraft: FeedbackOnDiff["c
   );
 }
 
-export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, earlier, shown, current, onCurrent, onStopped }: {
+export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, earlier, shown, current, onCurrent, onStopped, picture, preview }: {
   task: TaskDetail;
   fb: TaskFeedbackController;
   /** The attempt shown's items: the current one's (`fb.items`), or an earlier one's. */
@@ -230,6 +233,10 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   onCurrent: () => void;
   /** A failed or aborted task: its way back. */
   onStopped?: (() => void) | undefined;
+  /** A preview item's picture, read through the API (an <img> can't send the key). */
+  picture?: ((attachmentId: string) => string | undefined) | undefined;
+  /** Commenting on the branch preview: Show on preview, and the tab's way in. */
+  preview?: { show: (item: FeedbackItem) => void; canShow: (item: FeedbackItem) => boolean; wayIn: ReactNode } | undefined;
 }) {
   const [filter, setFilter] = useState<"needs" | "all">("needs");
   const d = fb.onDiff;
@@ -244,10 +251,13 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
 
   const card = (i: FeedbackItem) => {
     const a = i.anchor;
+    const jump = a.kind === "code" ? () => fb.showInDiff(a.runId, i.id)
+      : a.kind === "preview" && preview && !earlier && preview.canShow(i) ? () => preview.show(i) : undefined;
     return (
       <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}
         className={fb.highlight === i.id ? "feedbackHighlight" : undefined}
-        onJump={a.kind === "code" ? () => fb.showInDiff(a.runId, i.id) : undefined}
+        imageUrl={a.kind === "preview" && a.attachmentId ? picture?.(a.attachmentId) : undefined}
+        onJump={jump}
         onReply={(b) => d.reply(i.id, b)} onResolve={() => d.resolve(i.id)} onReopen={() => d.reopen(i.id)}
         onSaveDraft={(b) => d.saveDraft(i, b, null)} onDelete={() => d.deleteDraft(i.id)} maxLength={FEEDBACK_LIMITS.body}
         editing={i.status === "draft" ? fb.editing === i.id : undefined}
@@ -304,6 +314,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
               </Callout>
             ) : null}
             <GeneralComposer createDraft={d.createDraft} full={d.full} />
+            {preview?.wayIn}
           </>
         )}
 

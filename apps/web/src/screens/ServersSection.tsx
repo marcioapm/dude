@@ -45,6 +45,8 @@ export interface ServersSectionProps {
   servers: ServersState;
   /** The task, for Preview branch (its branch is what a preview checks out). */
   taskId?: string | undefined;
+  /** Beside a server's Preview: Comment, or why commenting is off. */
+  comment?: ((server: string) => ReactNode) | undefined;
 }
 
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
@@ -56,7 +58,7 @@ function runMark(run: ServersRun & { waitingReason?: string | null }) {
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
-export const ServersSection = memo(function ServersSection({ client, servers, taskId }: ServersSectionProps) {
+export const ServersSection = memo(function ServersSection({ client, servers, taskId, comment }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
   const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
@@ -203,6 +205,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                 error={s.error}
                 url={s.url}
                 busy={rowBusy}
+                besidePreview={comment?.(s.name)}
                 onStart={live && s.command ? () => void servers.start(s.name) : undefined}
                 onStop={live ? () => void servers.stop(s.name) : undefined}
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}
