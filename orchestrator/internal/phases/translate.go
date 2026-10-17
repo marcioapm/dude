@@ -75,6 +75,10 @@ type translator struct {
 	// A plan's calls are here too, as planCall, so their completions are
 	// known for what they are.
 	seenCalls map[string]string
+	// ACP calls' names from their pending announcements, by id, until they
+	// end: a GitHub read whose later updates name no tool is still one.
+	// Not kept across a restart; the read's output says what it is too.
+	announced map[string]string
 	// The task is recorded once per Run, whatever lux acknowledges again.
 	promptSeen bool
 	// What the agent reported using, written with the cursor.
@@ -1247,8 +1251,15 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 		}
 		switch status {
 		case "pending":
-			// Announced before its input is known; in_progress follows.
+			// Announced before its input is known; in_progress follows. Its
+			// name, when the announcement's title is one, is kept for the end.
 			t.openCalls[callID] = true
+			if title != "" && !strings.ContainsAny(title, " /.") {
+				if t.announced == nil {
+					t.announced = map[string]string{}
+				}
+				t.announced[callID] = title
+			}
 		case "in_progress":
 			t.openCalls[callID] = true
 			return t.callStarted(ctx, tx, s, nil, map[string]any{"tool": toolName(u), "callId": callID, "input": input, "title": title})

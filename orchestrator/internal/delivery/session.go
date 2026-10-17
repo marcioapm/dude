@@ -387,7 +387,9 @@ const brainstormToolsNote = "The dude tools read the linked projects: list_tasks
 	"epic's notes, or a note on an existing epic) — for a member to " +
 	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
 	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
-	"and what others say meanwhile reaches you with the answer."
+	"and what others say meanwhile reaches you with the answer. github_search, github_issue and github_pull_request " +
+	"read the linked projects' repositories on GitHub (issues, pull requests, their reviews, threads, checks and " +
+	"diffs), at most 60 reads an hour. " + ExternalTextNote
 
 // brainstormWebNote is said only to a brainstorm whose network is
 // unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
