@@ -232,6 +232,49 @@ func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
 	}
 }
 
+func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	checks, err := json.Marshal([]forge.Check{
+		{Name: "first", RunID: 77, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
+		{Name: "second", RunID: 78, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_json = $2 WHERE task_id = $1`, task, checks)
+	var refused atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/actions/jobs/78/rerun") {
+				refused.Add(1)
+				return http.StatusConflict
+			}
+			return 0
+		}
+	})
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "may or may not have happened")
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'claimed' = 'true'`, task); n != 1 {
+		t.Errorf("claims: %d, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'released' IS NOT NULL`, task); n != 0 {
+		t.Errorf("release events: %d, want none", n)
+	}
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "already")
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.JobsRerun, []int64{77}) || refused.Load() != 1 {
+			t.Errorf("successful jobs %v, refused requests %d", s.JobsRerun, refused.Load())
+		}
+	})
+}
+
 // Two simultaneous reruns claim the head before GitHub is asked: exactly
 // one request reaches GitHub, and the other is refused.
 func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
