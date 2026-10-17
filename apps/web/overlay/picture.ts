@@ -56,8 +56,8 @@ function inlineStyles(from: Element, to: Element, win: Window): void {
 const unescapeCss = (s: string) => s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (_, hex: string | undefined, ch: string | undefined) =>
   hex ? String.fromCodePoint(parseInt(hex, 16)) : ch!);
 
-// A content value's tokens: string (1, 2), url() (3, its URL in 4-6), attr() (7), counter, quote (8), alt-text slash (9).
-const CONTENT_TOKEN = new RegExp(String.raw`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(${URL_SRC})|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(open|close)-quote|(\/)`, "g");
+// A content value's tokens: string (1, 2), url() (3, its URL in 4-6), attr() (7), counter, [no-]quote (8, 9), alt-text slash (10).
+const CONTENT_TOKEN = new RegExp(String.raw`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(${URL_SRC})|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(no-)?(open|close)-quote|(\/)`, "g");
 
 /**
  * What a computed `content` shows, as text and data-URL images; null when
@@ -67,8 +67,10 @@ const CONTENT_TOKEN = new RegExp(String.raw`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)
 export function contentParts(content: string, el: Element, quotes: string): (string | { img: string })[] | null {
   const q = quotes === "auto" ? ["\u201c", "\u201d"] : [...quotes.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => unescapeCss(m[1]!));
   const parts: (string | { img: string })[] = [];
+  // Quote nesting within this one value; depth an ancestor's quotes left open is not known here.
+  let depth = 0;
   for (const m of content.matchAll(CONTENT_TOKEN)) {
-    if (m[9]) break;
+    if (m[10]) break;
     if (m[1] !== undefined || m[2] !== undefined) parts.push(unescapeCss(m[1] ?? m[2]!));
     else if (m[3] !== undefined) {
       // Chrome serialises a url() quoted, escaping an inner `"` as `\"`.
@@ -76,7 +78,13 @@ export function contentParts(content: string, el: Element, quotes: string): (str
       if (!u.startsWith("data:")) return null;
       parts.push({ img: u });
     } else if (m[7]) parts.push(el.getAttribute(m[7]) ?? "");
-    else if (m[8]) parts.push(q[m[8] === "open" ? 0 : 1] ?? "");
+    else if (m[9]) {
+      const open = m[9] === "open";
+      if (!open) depth = Math.max(0, depth - 1);
+      const pair = Math.max(0, Math.min(depth, (q.length >> 1) - 1));
+      if (!m[8]) parts.push(q[2 * pair + (open ? 0 : 1)] ?? "");
+      if (open) depth++;
+    }
   }
   return parts;
 }

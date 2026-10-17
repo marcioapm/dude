@@ -145,6 +145,12 @@ test("content: strings with escapes, attr(), quotes, counters left out, alt text
   expect(contentParts(`"a \\"b\\" \\'c" 'd'`, el, "auto")).toEqual([`a "b" 'c`, "d"]);
   expect(contentParts(`attr(data-n) attr(data-missing)`, el, "auto")).toEqual(["3", ""]);
   expect(contentParts(`open-quote "q" close-quote`, el, `"«" "»"`)).toEqual(["«", "q", "»"]);
+  expect(contentParts(`no-open-quote "x" no-close-quote`, el, "auto")).toEqual(["x"]);
+  const nested = `"«" "»" "‹" "›"`;
+  expect(contentParts(`open-quote open-quote "q" close-quote close-quote`, el, nested)).toEqual(["«", "‹", "q", "›", "»"]);
+  expect(contentParts(`no-open-quote open-quote open-quote close-quote close-quote no-close-quote`, el, nested)).toEqual(["‹", "‹", "›", "›"]);
+  expect(contentParts(`close-quote open-quote`, el, nested)).toEqual(["»", "«"]);
+  expect(contentParts(`open-quote close-quote`, el, "none")).toEqual(["", ""]);
   expect(contentParts(`"n" counter(c) "." counters(c, ".") ")"`, el, "auto")).toEqual(["n", ".", ")"]);
   expect(contentParts(`"\\1F600 x" / "smile"`, el, "auto")).toEqual(["\u{1F600}x"]);
   expect(contentParts(`url(https://cdn.test/a.png)`, el, "auto")).toBeNull();
