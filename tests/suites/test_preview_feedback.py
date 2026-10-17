@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -29,7 +28,7 @@ import requests
 from playwright.sync_api import BrowserType, Page, expect
 
 from env import FAKE_PUBLIC_URL
-from helpers import ApiClient, provision_person, sign_in, wait_until
+from helpers import ApiClient, provision_person, query, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -132,7 +131,21 @@ def _open_comment(ctx, page: Page) -> Page:
     return pv
 
 
-def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
+def _escalated_on(client: ApiClient, env, task: dict, item_id: str) -> bool:
+    """The delivery stopped for a person because the fixers left the item open: the task awaiting input, and its
+    workflow at decide, waiting on the person's decision, the review loop's "stuck" exit naming the item."""
+    if client.get(f"/v1/tasks/{task['id']}").json()["status"] != "awaiting_input":
+        return False
+    rows = query(env.owner_dsn, """SELECT step, status::text AS status, awaiting_signals, state->'escalation' AS escalation
+                                   FROM workflow_runs WHERE task_id = %s""", (task["id"],))
+    if len(rows) != 1:
+        return False
+    wf, esc = rows[0], rows[0]["escalation"] or {}
+    return (wf["step"] == "decide" and wf["status"] == "waiting" and wf["awaiting_signals"] == ["human.decision"]
+            and esc.get("reason") == "stuck" and (esc.get("detail") or {}).get("feedbackIds") == [item_id])
+
+
+def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> dict:
     """The servers read showing the preview again, its web server ready: the web server as it says.
 
     Submitting the draft starts a delivery, and while its agents work the
@@ -140,16 +153,11 @@ def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
     done the read is the preview's again; one that went to sleep meanwhile is
     woken as a visitor would.
     """
-    # Between two of the delivery's Runs the read is briefly the preview's again: wait for the delivery to rest
-    # first. The scripted fixer never answers the item, so the delivery ends waiting on a person (as in
-    # test_feedback.py), not at simplify: at rest is the task off "running" with no agent Run at work, twice.
-    def at_rest() -> bool:
-        t = client.get(f"/v1/tasks/{task['id']}").json()
-        return t["status"] not in ("received", "intake", "queued", "running") and not any(
-            r["status"] in ("pending", "scheduled", "starting", "running") for r in t.get("runs", []) if r.get("kind") != "preview")
-
-    wait_until(lambda: at_rest() and (time.sleep(1.0) is None) and at_rest(),
-               timeout=180, message="the delivery's agents were still at work after 180 s")
+    # Between two of the delivery's Runs the read is briefly the preview's again, so wait for where it ends: the
+    # scripted fixer never answers the item, and after MaxAttemptsPerFinding fixes the review loop escalates it as
+    # stuck (workflow.go escalate), the only state here that starts no further Run until a person decides.
+    wait_until(lambda: _escalated_on(client, env, task, item_id),
+               timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
                       timeout=60, message="the servers read never came back to the preview after the delivery rested")
     if read["run"].get("asleep"):
@@ -240,7 +248,7 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
         ctx.close()
 
         # A colleague's Comment shows the submitted item pinned on the button, once the delivery's agents leave the preview to it.
-        web = _back_to_the_preview(client, env, task)
+        web = _back_to_the_preview(client, env, task, listed[0]["id"])
         _, colleague = provision_person(client, env, "Ana Ribeiro", f"ana-{task['id']}@example.com")
         ctx2, errors2 = _context(browser, web, web_url, env)
         page2 = ctx2.new_page()
