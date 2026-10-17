@@ -113,6 +113,8 @@ const SVG = "http://www.w3.org/2000/svg";
 // An event's target as an element; the overlay's code runs in the page's realm, where instanceof may not hold.
 const asElement = (t: EventTarget | null): Element | null => (t !== null && (t as Node).nodeType === 1 ? (t as Element) : null);
 
+const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
+
 export class Overlay {
   readonly host: HTMLElement;
   readonly #root: ShadowRoot;
@@ -625,7 +627,7 @@ export class Overlay {
     const top = r.top > 30 ? r.top - 28 : r.bottom + 6;
     const label = frame
       ? this.#h("div", { class: "label warn", "data-testid": "ov-label", style: `left:${Math.max(4, r.left - 2)}px;top:${top}px` }, this.#g("frame", 12),
-        this.#h("span", {}, this.#h("b", {}, "Can't pick inside this frame"), ` — it comes from ${frame.replace(/^https?:\/\//, "")}, which dude can't read. Click to comment on the frame as a whole.`))
+        this.#h("span", {}, this.#h("b", {}, "Can't pick inside this frame"), ` — it comes from ${withoutScheme(frame)}, which dude can't read. Click to comment on the frame as a whole.`))
       : this.#h("div", { class: "label", "data-testid": "ov-label", style: `left:${Math.max(4, r.left - 2)}px;top:${top}px` },
         this.#h("span", { class: "mono" }, labelFor(selectorFor(el), componentOf(el))),
         this.#h("span", { class: "dim" }, `${Math.round(r.width)}×${Math.round(r.height)}`));
@@ -753,10 +755,10 @@ export class Overlay {
   /** The comment box, built once per pick. */
   #buildBox(): BoxParts {
     const { el, anchor, frame } = this.#picked!;
-    const name = frame ? `the frame from ${frame.replace(/^https?:\/\//, "")}` : labelFor(anchor.selector ?? "", anchor.component);
+    const name = frame ? `the frame from ${withoutScheme(frame)}` : labelFor(anchor.selector ?? "", anchor.component);
     const picDd = this.#h("dd", {});
     const facts = this.#h("dl", {},
-      this.#h("dt", {}, "Page"), this.#h("dd", { class: "mono" }, anchor.url.replace(/^https?:\/\//, "")),
+      this.#h("dt", {}, "Page"), this.#h("dd", { class: "mono" }, withoutScheme(anchor.url)),
       this.#h("dt", {}, "Window"), this.#h("dd", {}, `${anchor.viewport?.width}×${anchor.viewport?.height}`),
       this.#h("dt", {}, "Element"), this.#h("dd", { class: "mono" }, anchor.selector ?? ""),
       this.#h("dt", {}, "Box"), this.#h("dd", {}, anchor.rect ? `${anchor.rect.width}×${anchor.rect.height} at ${anchor.rect.x}, ${anchor.rect.y}` : ""),
