@@ -392,29 +392,23 @@ func (goldenStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (
 // What the conductor's decision tools answer, as it reads them, and the
 // line it is woken with for people's feedback.
 func TestGoldenConductorResults(t *testing.T) {
-	ref := func(w goldenWorld) RunRef {
-		return RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
-	}
-	decide := func(action, note string) func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
-		return func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
-			return func(ctx context.Context, tx pgx.Tx) (string, error) {
-				out, err := ConductDecide(ctx, tx, ref(w), action, note)
-				if err != nil {
-					return "", err
-				}
-				return fmt.Sprint(out["next"]), nil
+	type tool func(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error)
+	decide := func(action, note string) tool {
+		return func(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
+			out, err := ConductDecide(ctx, tx, ref, action, note)
+			if err != nil {
+				return "", err
 			}
+			return fmt.Sprint(out["next"]), nil
 		}
 	}
 	for _, c := range []struct {
 		name, point, policy, setup string
-		do                         func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error)
+		do                         tool
 	}{
 		{name: "start-phase", point: PointReviewed, policy: "reviewExit",
-			do: func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
-				return func(ctx context.Context, tx pgx.Tx) (string, error) {
-					return ConductStartPhase(ctx, tx, ref(w), StartPhase{Phase: PhaseReview})
-				}
+			do: func(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
+				return ConductStartPhase(ctx, tx, ref, StartPhase{Phase: PhaseReview})
 			}},
 		{name: "next", point: PointReviewed, policy: "reviewExit", do: decide("next", "")},
 		{name: "ask", point: PointReviewed, policy: "reviewExit", do: decide("ask_person", "Ship without the totals?")},
@@ -429,7 +423,10 @@ func TestGoldenConductorResults(t *testing.T) {
 				w.exec(t, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, answer, pr_gate_heads)
 					VALUES ('qst_gate', $1, 'wi_g', 'run_cond1', 'Open the pull request?', 'answered', $2, '{}')`, c.setup)
 			}
-			golden(t, "conductor-result-"+c.name, w.in(t, c.do(w)))
+			ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
+			golden(t, "conductor-result-"+c.name, w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+				return c.do(ctx, tx, ref)
+			}))
 		})
 	}
 	t.Run("feedback-wake", func(t *testing.T) {
