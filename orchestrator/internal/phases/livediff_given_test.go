@@ -77,6 +77,13 @@ func TestALiveReadIsGivenTheCommitsLuxSyncedIntoTheCheckout(t *testing.T) {
 	if got := read(phase); got != "target|/workspace/repos/target|"+start {
 		t.Errorf("no syncs: %q", got)
 	}
+	if _, err := owner.Exec(ctx, `UPDATE runs SET synced_bases = $2::jsonb WHERE id = $1`,
+		"run_"+org, `{"target":{"main":"`+base+`"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(phase); got != "target|/workspace/repos/target|"+start+" "+base {
+		t.Errorf("legacy latest sync: %q", got)
+	}
 	set(`{"target":"`+start+`"}`, `{"target":{"main":["`+base+`"],"`+branch+`":["`+tip+`"],"other":["`+tip+`"]},"elsewhere":{"main":["`+tip+`"]}}`)
 	if got := read(phase); got != "target|/workspace/repos/target|"+start+" "+base {
 		t.Errorf("phase Run: %q, want its start then main's sync", got)

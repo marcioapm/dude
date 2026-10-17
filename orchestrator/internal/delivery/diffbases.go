@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -11,8 +12,22 @@ import (
 // DiffGivens selects only commits lux delivered on this Run's imported branches.
 func DiffGivens(ctx context.Context, tx pgx.Tx, runID, taskID string, attempt int, conductor bool) (map[string][]string, error) {
 	var history map[string]map[string][]string
-	if err := tx.QueryRow(ctx, `SELECT sync_history FROM runs WHERE id = $1`, runID).Scan(&history); err != nil || len(history) == 0 {
+	var latest map[string]map[string]string
+	if err := tx.QueryRow(ctx, `SELECT sync_history, synced_bases FROM runs WHERE id = $1`, runID).Scan(&history, &latest); err != nil {
 		return nil, err
+	}
+	if history == nil {
+		history = map[string]map[string][]string{}
+	}
+	for repo, refs := range latest {
+		if history[repo] == nil {
+			history[repo] = map[string][]string{}
+		}
+		for ref, sha := range refs {
+			if !slices.Contains(history[repo][ref], sha) {
+				history[repo][ref] = append(history[repo][ref], sha)
+			}
+		}
 	}
 	tb, err := TaskBranchTx(ctx, tx, taskID, attempt)
 	if err != nil {
