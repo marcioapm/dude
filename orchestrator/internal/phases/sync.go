@@ -3244,10 +3244,12 @@ func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refus
 // Back-off of retryLater: retryBase doubling with each failure in a row, up
 // to retryMax. A failure is in a row with the last when it comes within
 // retryGrace of the retry that one scheduled being due, with no successful
-// retry in between (Sweep's resetRetries).
+// retry in between (Sweep's resetRetries). retryMax is short because a
+// person's pause, resume or message waits for next_attempt_at too (dueQuery);
+// a longer wait GitHub asks for still comes through forge.RetryAfter.
 const (
 	retryBase  = 5 * time.Second
-	retryMax   = 5 * time.Minute
+	retryMax   = time.Minute
 	retryGrace = time.Minute
 )
 

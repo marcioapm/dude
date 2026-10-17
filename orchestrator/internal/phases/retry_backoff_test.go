@@ -10,7 +10,7 @@ import (
 )
 
 // A Run whose lux call keeps failing is retried 5 s later, then 10 s, 20 s
-// and so on up to 5 minutes, sweep after sweep; a failure long after the
+// and so on up to a minute, sweep after sweep; a failure long after the
 // last retry was due starts over at 5 s; and the forge's wait wins over the
 // back-off when longer, and loses to it when shorter.
 func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
@@ -47,7 +47,7 @@ func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 		}
 	}
 	sweep := func(want time.Duration, wantFailures int) { t.Helper(); sweepLate("30 seconds", want, wantFailures) }
-	for i, want := range []time.Duration{5, 10, 20, 40, 80, 160, 300, 300} {
+	for i, want := range []time.Duration{5, 10, 20, 40, 60, 60} {
 		sweep(want*time.Second, i+1)
 	}
 	// The retry was due over a minute before this failure: not in a row.
