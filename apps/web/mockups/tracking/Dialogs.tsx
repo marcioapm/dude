@@ -11,7 +11,7 @@
 import { useCallback, useState } from "react";
 import { Breadcrumb, RefLead, SearchPicker, StatusMark } from "@dude/design-system/components";
 import { Button, Callout, Checkbox, ChoiceList, Dialog, Fieldset, FormStack, Input, KeyHint, MarkdownEditor, Select, Textarea, type CheckedState } from "@dude/design-system/primitives";
-import { EPICS, FINISHED, KIND, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, task, type Kind, type Priority, type Resolution, type Task } from "./data.ts";
+import { EPICS, KIND, PRIORITY, RESOLUTION, ROLE, TASKS, ended, firstName, task, type Kind, type Priority, type Resolution, type Task } from "./data.ts";
 import { KindMark } from "./Marks.tsx";
 import { DisabledWithHint } from "./TaskPage.tsx";
 import styles from "./pages.module.css";
@@ -135,8 +135,8 @@ export function ArchiveDialog({ open, onOpenChange, t }: { readonly open: boolea
 
 export function ArchiveEpicDialog({ open, onOpenChange }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void }) {
   const tasks = TASKS.filter((t) => t.epic === "webhooks" && !t.archived);
-  const unfinished = tasks.filter((t) => !FINISHED.has(t.status));
-  const finished = tasks.filter((t) => FINISHED.has(t.status));
+  const unfinished = tasks.filter((t) => !ended(t));
+  const finished = tasks.filter(ended);
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="md" title="Webhook reliability can't be archived yet"
       context={<Breadcrumb size="sm" current={false} items={[{ id: "p", label: "control-plane" }, { id: "e", label: "Webhook reliability", icon: "layers" }]} />}
