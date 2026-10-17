@@ -104,10 +104,7 @@ func (c Client) Complete(ctx context.Context, call Call) (Completion, error) {
 			if parent.Err() == nil {
 				return out, fmt.Errorf("no answer from the LLM proxy in %s", timeout)
 			}
-			if _, ok := parent.Deadline(); ok {
-				return out, fmt.Errorf("no answer from the LLM proxy before the caller gave up after %s", time.Since(start).Round(time.Millisecond))
-			}
-			return out, errors.New("no answer from the LLM proxy before the caller gave up")
+			return out, errors.New("no answer from the LLM proxy before the caller's deadline")
 		}
 		return out, fmt.Errorf("no answer from the LLM proxy: %w", err)
 	}

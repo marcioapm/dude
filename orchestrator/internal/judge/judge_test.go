@@ -344,7 +344,7 @@ func TestACallerDeadlineStillRecordsTheCall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	j, err := w.svc.Judge(ctx, w.org, ask)
-	if err == nil || err.Error() != "no answer from the LLM proxy before the caller gave up after 300ms" || j != (Judgement{}) {
+	if err == nil || err.Error() != "no answer from the LLM proxy before the caller's deadline" || j != (Judgement{}) {
 		t.Errorf("judgement = %+v, err = %v", j, err)
 	}
 	if n := w.proxy.count(); n != 1 {
@@ -354,7 +354,7 @@ func TestACallerDeadlineStillRecordsTheCall(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("recorded %d", len(got))
 	}
-	if c := got[0]; c.Status != "error" || c.Error == nil || *c.Error != "no answer from the LLM proxy before the caller gave up after 300ms" || c.HTTPStatus != nil {
+	if c := got[0]; c.Status != "error" || c.Error == nil || *c.Error != "no answer from the LLM proxy before the caller's deadline" || c.HTTPStatus != nil {
 		t.Errorf("recorded %+v", c)
 	}
 }
