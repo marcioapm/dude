@@ -227,7 +227,7 @@ func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
 // scan the organisation's tasks, or the listing grows with the square of
 // the project.
 func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
-	const n = 2000
+	const n = 4000
 	w, in := newRelWorld(t, 0)
 	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
 		SELECT $1||'_'||n, $1, 'prj_'||$1, n, 'T'||n, 'g' FROM generate_series(1, $2::int) n`, n)

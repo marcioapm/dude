@@ -12,7 +12,7 @@ import { afterEach, beforeEach } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { TASK_ID } from "../src/fixtures/data.ts";
+import { PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { ApiError, type TaskDetail } from "../src/api/client.ts";
@@ -143,6 +143,15 @@ describe("the task page's lifecycle", () => {
     const items = (await menuItems(page)).map(itemText);
     expect(items.some((t) => t.startsWith("Reopen"))).toBe(false);
     expect(items.find((t) => t.startsWith("Closed"))).toContain("Already ended");
+  });
+
+  test("a stopped task with its pull request still open: Close… and Archive… are disabled, saying so", async () => {
+    const client = await clientWith({ status: "aborted" });
+    client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, state: "open" }] });
+    const page = await taskPage(client);
+    const items = (await menuItems(page)).filter((i) => /^(Close|Archive)/.test(itemText(i)));
+    expect(items.map(itemText)).toEqual(["Close…. It has a pull request open", "Archive…. It has a pull request open"]);
+    for (const i of items) expect(i.getAttribute("aria-disabled")).toBe("true");
   });
 
   test("a member sees the lifecycle disabled with whose decision it is", async () => {

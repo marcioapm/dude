@@ -267,7 +267,7 @@ The table is the relations doc's, by function name, with two paths it didn't lis
 | 2 | **Talk it through** | `api.talk` → `talkThrough` → `StartTx` | same, through `StartTx` |
 | 3 | **A first message in an unstarted task's Chat** | `api.chat` → `decideFor` → `talkThrough` | same; a closed task's first Chat message is refused and the composer keeps the words |
 | 4 | **The conductor's first `start_phase implement` / `decide` at `PointStart`** | `delivery.ConductStartPhase` → `refuseBlockedStart`; `ConductDecide` | `refuseBlockedStart` calls `RefuseStartTx`; an Archived or Closed refusal is a `Refusal` whatever `st.Overridden` says |
-| 5 | **The workflow's `implement` step** | `implementRun` → `parkIfBlocked`, then `CreatePhaseRun` → `createPhaseRunTx` | parks as for blocked; a closed or archived task is also parked, never a workflow error. The insert itself refuses: `createPhaseRunTx`, holding the delivery's lock, returns `ErrDeliveryEnded` when the delivery is no longer live or `RefuseLifecycleTx` refuses, and `implementRun` parks on it, so no phase Run is made |
+| 5 | **The workflow's `implement` step** | `implementRun` → `parkIfBlocked`, then `CreatePhaseRun` → `createPhaseRunTx` | parks as for blocked; a closed or archived task is also parked, never a workflow error. The insert itself refuses: `createPhaseRunTx`, holding the delivery's lock, returns `ErrDeliveryEnded` when the step's own delivery is no longer live or `RefuseLifecycleTx` refuses, and `implementRun` parks on it, so no phase Run is made |
 | 6 | **Start over** | `api.recoverTask` → `GuardStartTx` → `startOver` | `RefuseStartTx`; Start over *anyway* passes neither Archived nor Closed |
 | 7 | **Resume / Try again** | `api.recoverTask` → `pickUp` | **newly guarded for Archived and Closed only** (`RefuseLifecycleTx`). A closed task that once ran is `aborted` with a workflow, so `stoppedTask` offers it; it is refused ("CP-34 was closed: reopen it to pick it back up"), and the task page offers Reopen instead of Resume. Blocked stays unguarded here, as the relations doc decided |
 | 8 | **`POST /v1/tasks/:id/runs`** | `createRun` (`apps/control-plane/src/api/routes/work.ts`) | `task_start_refusal(task)` before `task_blocked_by`, same 409s |
@@ -827,7 +827,9 @@ Where the build differs from, or settles, what the sections above say:
 - **Path 3** is refused by `RefuseLifecycleTx` in `decideFor`, before a chat turn is decided.
   **Path 5** also parks on closed or archived, never errors, and the insert itself refuses: a
   step already claimed when Close commits makes no phase Run, because `createPhaseRunTx` checks
-  the delivery and the task in the transaction that holds the delivery's lock. **Path 7**
+  the delivery and the task in the transaction that holds the delivery's lock. That check
+  refuses for the step's own delivery, loaded by its id, so a step of a delivery that a Close,
+  Reopen and new start replaced makes no phase Run either. **Path 7**
   answers "CP-34 was closed: reopen it to pick it back up."; `GET …/recovery` returns no
   actions and `refused: "closed" | "archived"`. **Path 11**
   ends the request with why `closed` or `archived` and records `task.start_refused` with path
@@ -839,7 +841,9 @@ Where the build differs from, or settles, what the sections above say:
   apart from it can be unarchived by any member.
   `epic.archived` / `epic.unarchived` carry the project and `{epicId, title, tasks}`.
   Unarchiving a task is refused `archived` while its epic is archived; unarchiving the epic
-  restores the tasks archived with it (those whose `archived_at` is the epic's).
+  restores the tasks archived with it (those whose `archived_at` is the epic's). Unarchiving a
+  task locks its epic (`FOR SHARE`) before the task's row, the order the epic's archive and
+  unarchive take them in, so the two never deadlock.
 - **`GET /v1/tasks`** leaves archived tasks out unless `archived=1`, which returns only them;
   the board's "N archived" hint opens that list on the project page.
 - **CLI.** `dude task close|reopen|archive|unarchive` exist and refuse locally: they are a
