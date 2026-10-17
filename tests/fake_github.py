@@ -91,6 +91,18 @@ class PullRequest:
     author: str = "dude-bot"
 
 
+@dataclass
+class Issue:
+    number: int
+    title: str
+    body: str
+    author: str
+    state: str = "open"
+    labels: list[str] = field(default_factory=list)
+    comments: list[dict] = field(default_factory=list)
+    updated_at: str = field(default_factory=_now)
+
+
 class FakeGitHub:
     """A bare repository, a git daemon serving it, and an API in front of both."""
 
@@ -159,6 +171,8 @@ class FakeGitHub:
         # Each edit of a pull request's title or body, in order: its number
         # and the fields the PATCH set.
         self.body_edits: list[tuple[int, dict]] = []
+        # Issues by number (open_issue), apart from pull requests.
+        self.issues: dict[int, Issue] = {}
 
     def _conflicting(self, pr: PullRequest) -> bool:
         if pr.conflicting:
@@ -534,6 +548,159 @@ class FakeGitHub:
         self.deliveries.append((event, resp.status_code))
         return resp.status_code
 
+    # -- what an agent reads: issues, search, files, threads' words ---------
+    # Issues are numbered from 101, apart from pull requests (from 1), so a
+    # test's numbers do not depend on the order it opens them in.
+
+    def open_issue(self, title: str, body: str = "", author: str = "ana", labels: list[str] | None = None) -> int:
+        """A person opens an issue; its number. No webhook: dude does not watch issues."""
+        with self._lock:
+            number = 101 + len(self.issues)
+            self.issues[number] = Issue(number=number, title=title, body=body, author=author, labels=list(labels or []))
+        return number
+
+    def issue_comment(self, number: int, body: str, author: str = "bo") -> int:
+        """A person comments on an issue; its id."""
+        with self._lock:
+            self._next_id += 1
+            issue = self.issues[number]
+            issue.comments.append({"id": self._next_id, "body": body, "user": {"login": author}, "created_at": _now(),
+                                   "html_url": f"https://github.test/{self.owner}/{self.repo}/issues/{number}#issuecomment-{self._next_id}"})
+            issue.updated_at = _now()
+            return self._next_id
+
+    def write_file(self, branch: str, path: str, content: str, message: str, author: str = "Gus Human") -> str:
+        """A person pushes a commit writing one file to a branch; its sha. No webhook."""
+        import os
+        import tempfile
+
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=self.bare, input=content,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            index = {"GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            self._git_out("read-tree", f"refs/heads/{branch}", env=index)
+            self._git_out("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=index)
+            tree = self._git_out("write-tree", env=index)
+        email = author.split()[0].lower() + "@example.com"
+        sha = self._git_out("commit-tree", tree, "-p", f"refs/heads/{branch}", "-m", message,
+                            env={"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": email,
+                                 "GIT_COMMITTER_NAME": author, "GIT_COMMITTER_EMAIL": email})
+        self._git_out("update-ref", f"refs/heads/{branch}", sha)
+        return sha
+
+    def _issue_json(self, issue: Issue | None = None, pr: PullRequest | None = None) -> dict:
+        """An issue as the issues and search APIs give it; a pull request's carries pull_request."""
+        full = f"{self.owner}/{self.repo}"
+        common = {"repository_url": f"{self.api_url}/repos/{full}", "updated_at": _now()}
+        if pr is not None:
+            return {**common, "number": pr.number, "title": pr.title, "body": pr.body, "state": pr.state,
+                    "user": {"login": pr.author}, "labels": [], "draft": pr.draft,
+                    "comments": len([c for c in pr.comments if not c.get("path")]),
+                    "html_url": f"https://github.test/{full}/pull/{pr.number}",
+                    "pull_request": {"merged_at": pr.merged_at}}
+        assert issue is not None
+        return {**common, "number": issue.number, "title": issue.title, "body": issue.body, "state": issue.state,
+                "user": {"login": issue.author}, "labels": [{"name": label} for label in issue.labels],
+                "comments": len(issue.comments), "updated_at": issue.updated_at,
+                "html_url": f"https://github.test/{full}/issues/{issue.number}"}
+
+    def search(self, q: str, per_page: int = 30) -> tuple[int, dict]:
+        """GET /search/issues across this and its sibling repositories. As
+        GitHub does, repo: qualifiers are ORed; is:pr or is:issue and is:open
+        or is:closed narrow it; every other word must be in the title or body.
+        Newest first: the fake's newest is its highest number."""
+        repos, words, kind, state = set(), [], "", ""
+        for term in q.split():
+            if term.startswith("repo:"):
+                repos.add(term[len("repo:"):].lower())
+            elif term in ("is:pr", "is:issue"):
+                kind = term[3:]
+            elif term in ("is:open", "is:closed"):
+                state = term[3:]
+            else:
+                words.append(term.lower())
+        if not repos:
+            return 422, {"message": "Validation Failed"}
+
+        def matches(title: str, body: str, st: str) -> bool:
+            text = f"{title}\n{body}".lower()
+            return (not state or st == state) and all(w in text for w in words)
+
+        hits: list[tuple[int, dict]] = []
+        for gh in [self, *self.siblings.values()]:
+            if f"{gh.owner}/{gh.repo}".lower() not in repos:
+                continue
+            with gh._lock:
+                if kind != "issue":
+                    hits += [(p.number, gh._issue_json(pr=p)) for p in gh.pulls.values() if matches(p.title, p.body, p.state)]
+                if kind != "pr":
+                    hits += [(i.number, gh._issue_json(issue=i)) for i in gh.issues.values() if matches(i.title, i.body, i.state)]
+        hits.sort(key=lambda h: -h[0])
+        return 200, {"total_count": len(hits), "incomplete_results": False,
+                     "items": [item for _, item in hits[:min(per_page, 100)]]}
+
+    def files(self, number: int) -> list[dict]:
+        """GET /pulls/{n}/files: each file the pull request changes against
+        its base, with its patch (the diff's hunks, no header)."""
+        pr = self.pulls[number]
+        spec = f"refs/heads/{pr.base}...refs/heads/{pr.head}"
+        status: dict[str, str] = {}
+        for line in self._git_out("diff", "--name-status", spec).splitlines():
+            code, _, name = line.partition("\t")
+            status[name] = {"A": "added", "D": "removed"}.get(code[:1], "modified")
+        out = []
+        for line in self._git_out("diff", "--numstat", spec).splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            added, deleted = (int(p) if p.isdigit() else 0 for p in parts[:2])
+            diff = self._git_out("diff", spec, "--", parts[2])
+            patch = diff[diff.index("\n@@") + 1:] if "\n@@" in diff else ""
+            out.append({"filename": parts[2], "status": status.get(parts[2], "modified"), "additions": added,
+                        "deletions": deleted, "changes": added + deleted, "patch": patch})
+        return out
+
+    def threads_read(self, number: int) -> dict:
+        """The review-thread query a reader sends: each thread with where it
+        is and what was said in it, oldest first."""
+        with self._lock:
+            pr = self.pulls.get(number)
+            if pr is None:
+                return {"data": {"repository": None}, "errors": [
+                    {"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]}
+            nodes = []
+            for root_comment in [c for c in pr.comments if c.get("path") and not c.get("in_reply_to_id")]:
+                said = [{"author": {"login": c["user"]["login"]}, "body": c["body"], "createdAt": c["created_at"]}
+                        for c in pr.comments if c["id"] == root_comment["id"] or c.get("in_reply_to_id") == root_comment["id"]]
+                tid = self.thread_id(root_comment["id"])
+                nodes.append({"isResolved": tid in self.resolved_threads, "isOutdated": tid in self.outdated_threads,
+                              "path": root_comment["path"], "line": root_comment.get("line"),
+                              "comments": {"totalCount": len(said), "nodes": said}})
+        return {"data": {"repository": {"pullRequest": {"reviewThreads": {
+            "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+
+    def read_route(self, path: str, query: str) -> tuple[int, object] | None:
+        """The reads' GET routes on this repository: an issue, its comments,
+        a pull request's files; None for any other path."""
+        from urllib.parse import parse_qs
+
+        q = {k: v[0] for k, v in parse_qs(query).items()}
+        per_page, page = min(int(q.get("per_page", 30)), 100), max(int(q.get("page", 1)), 1)
+        prefix = f"/repos/{self.owner}/{self.repo}"
+        if m := re.fullmatch(rf"{prefix}/issues/(\d+)", path):
+            with self._lock:
+                issue, pr = self.issues.get(int(m[1])), self.pulls.get(int(m[1]))
+                if issue is None and pr is None:
+                    return 404, {"message": "Not Found"}
+                return 200, self._issue_json(issue=issue, pr=pr)
+        if (m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path)) and int(m[1]) in self.issues:
+            with self._lock:
+                comments = list(self.issues[int(m[1])].comments)
+            return 200, comments[(page - 1) * per_page:page * per_page]
+        if (m := re.fullmatch(rf"{prefix}/pulls/(\d+)/files", path)) and int(m[1]) in self.pulls:
+            return 200, self.files(int(m[1]))[(page - 1) * per_page:page * per_page]
+        return None
+
     # -- the API -------------------------------------------------------------
 
     def _handler(self):
@@ -806,11 +973,23 @@ class FakeGitHub:
                     return self._send(201, self._pull_json(pr))
                 self._send(404, {"message": "Not Found"})
 
+            def _read(self, path: str, query: str) -> tuple[int, object] | None:
+                """An agent's read through dude (search, an issue and its
+                comments, a pull request's files); None for any other route."""
+                if path == "/search/issues":
+                    from urllib.parse import parse_qs
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    return root.search(q.get("q", ""), int(q.get("per_page", 30)))
+                return self.github.read_route(path, query)
+
             def _graphql(self, body: dict) -> None:
                 """The queries dude sends: a pull request's review threads,
                 and who could review it (REVIEWERS; the first two suggested)."""
                 v = body.get("variables") or {}
                 query = body.get("query", "")
+                if "reviewThreads" in query and "totalCount" in query and v.get("owner") == root.owner:
+                    # A reader's threads, with their words (forge.openThreads).
+                    return self._send(200, root._for_repo(v.get("name", "")).threads_read(int(v.get("number") or 0)))
                 if v.get("id"):
                     return self._send(200, root._by_node(query, v["id"]))
                 gh = root._for_repo(v.get("name", "")) if v.get("owner") == root.owner else None
@@ -844,6 +1023,8 @@ class FakeGitHub:
 
             def do_GET(self) -> None:
                 path, _, query = self.path.partition("?")
+                if (read := self._read(path, query)) is not None:
+                    return self._send(*read)
                 if m := re.fullmatch(rf"/{root.owner}/([^/]+)\.git/info/refs", path):
                     if m[1] != root.repo and m[1] not in root.siblings:
                         return self._send(404, {"message": "Not Found"})

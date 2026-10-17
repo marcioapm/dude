@@ -125,6 +125,7 @@ export class FixtureClient extends ApiClient {
     if (as === "refused") this.#refuse();
     if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
     if (as === "peers") this.#coordinate();
+    if (as === "comment" || as === "comment-restart" || as === "comment-off") this.#commentable(as);
     this.#nav = navigationFor(scenario);
     if (as === "asks") this.#nav = withViewerAsks(this.#nav);
     // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
@@ -254,6 +255,49 @@ export class FixtureClient extends ApiClient {
     if (!this.#task.agentMachines.some((m) => m.role === role)) throw new ApiError(404, "not_found", "nothing is raised");
     this.#task = { ...this.#task, agentMachines: this.#task.agentMachines.filter((m) => m.role !== role) };
     return { ok: true, moved: true };
+  }
+
+  /**
+   * `dude.fixtures.run` = comment: the task's branch preview is up, its
+   * `web` server ready with the comment tool on its pages, and Ana has a
+   * comment submitted on its home page. `comment-restart`: web serves its
+   * pages without the tool yet (needsRestart); `comment-off`: this dude
+   * sets no auth.public_url. `dude.fixtures.previewUrl` names web's URL (a
+   * local page in the browser checks).
+   */
+  #commentable(as: string) {
+    const url = localStorage.getItem("dude.fixtures.previewUrl") ?? `https://web-p8d2wq5nzr7m4kx1.${PREVIEW_DOMAIN}`;
+    const commenting = as === "comment-off" ? { available: false as const, reason: "public_url" as const } : { available: true as const };
+    const ready = new Date(Date.now() - 6 * 60_000).toISOString();
+    this.#servers = {
+      run: { ...previewRun, id: RUN_ID, previewStage: "ready", luxState: "running", wakeable: true, parksAfterMinutes: 15 },
+      servers: [
+        { ...server("web", 3000, { state: "ready", since: ready, readySince: ready, fromSpec: true }), url, serverState: "ready", commenting, needsRestart: as === "comment-restart" },
+        { ...server("api", 8080, { state: "ready", since: ready, readySince: ready, fromSpec: true }), serverState: "ready", commenting, needsRestart: false },
+      ],
+      moved: null, recipes: [...serverRecipes], preview: null,
+    };
+    const ana = PEOPLE[1]!;
+    const at = new Date(Date.now() - 42 * 60_000).toISOString();
+    this.feedbackItems.push({ id: "fbk_ana", taskId: TASK_ID, attempt: 1, batchId: "fb_b0", author: { id: ana.id, name: ana.name },
+      body: "The heading wraps after “hello,” at 1280px. Keep it on one line on desktop.",
+      anchor: { kind: "preview", url: `${url}/`, viewport: { width: 1280, height: 720 }, selector: "main > section.hero > h1", text: "Say hello, in their language" },
+      status: "open", deliveredRunId: null, resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: "workflow",
+      submittedAt: at, createdAt: at, updatedAt: at, history: [] });
+  }
+
+  /** Uploads kept in memory: the picture a preview comment carries, read back as it was sent. */
+  #uploads = new Map<string, Blob>();
+  override async uploadAttachment(_taskId: string, image: { name: string; original: Blob; delivered: Blob }) {
+    const id = `att_fx${this.#uploads.size + 1}`;
+    this.#uploads.set(id, image.delivered);
+    return { id, name: image.name, contentType: image.delivered.type as "image/png", width: 1, height: 1, bytes: image.delivered.size,
+      original: { contentType: image.original.type as "image/png", width: 1, height: 1, bytes: image.original.size } };
+  }
+  override async attachment(id: string): Promise<Blob> {
+    const b = this.#uploads.get(id);
+    if (!b) throw new ApiError(404, "not_found", `attachment ${id} not found`);
+    return b;
   }
 
   /**

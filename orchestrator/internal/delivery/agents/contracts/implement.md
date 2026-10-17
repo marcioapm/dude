@@ -1,0 +1,1 @@
+Before you finish, exercise the changed behaviour yourself, and add a test for each acceptance criterion that can be tested. A later independent tester verifies your work; it does not replace your own testing.

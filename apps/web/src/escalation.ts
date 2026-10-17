@@ -139,6 +139,14 @@ export function escalationWords(e: Escalation): EscalationWords {
     }
     case "pull_request_moved": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo}${d.number ? ` #${num("number")}` : ""}` : `#${num("number")}`;
+      // A cause is GitHub's refusal to move or merge the fix in; without one, a person pushed.
+      if (error !== ".") {
+        return {
+          short: "The pull request moved",
+          sentence: `Pull request ${which} moved while dude checked a fix for it, and the fix could not be brought onto it${error}. Fix the feedback again from what the branch holds now, or wait on the pull request without it.`,
+          runId,
+        };
+      }
       return {
         short: "The pull request moved",
         sentence: `Someone pushed to pull request ${which} while dude checked a fix for it. The fix was not moved over their commit: fix the feedback again from what the branch holds now, or wait on the pull request without it.`,

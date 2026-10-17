@@ -63,6 +63,7 @@ MIN_BUN = (1, 4, 0)
 
 # The fake lux's preview domain: its servers' URLs are under it.
 FAKE_PREVIEW_DOMAIN = "preview.dude.test"
+FAKE_PUBLIC_URL = "https://dude.e2e.test"
 
 # Access mode's team and application audience: what the control plane's own
 # Access tests sign for (apps/control-plane/test/access-harness.ts), which
@@ -293,6 +294,8 @@ class TestEnvironment:
              # No host runs nested containers: a Run on an image that can
              # run them waits, as on a pool without one.
              "-no-nested-host",
+             # A lux from v0.1.32: preview servers take dude's overlay tag.
+             "-server-inject",
              # Each Run's checkout, removed with the rest of the run's files.
              "-workspaces", str(self.git_root.parent)],
             stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,
@@ -338,6 +341,10 @@ class TestEnvironment:
                 # A working agent's diff is read every few seconds besides
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",
+                # Commenting on previews is on (with the fake lux's -server-inject). Its preview
+                # pages are the browser suite's own (test_preview_feedback.py), naming the web
+                # app's real origin in the tag: this origin only has to be an https one.
+                "DUDE_AUTH_PUBLIC_URL": FAKE_PUBLIC_URL,
                 # The images people send agents: it reads what the backend stored.
                 **self.s3_env,
                 **self._tools_env(),

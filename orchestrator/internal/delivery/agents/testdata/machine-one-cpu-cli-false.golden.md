@@ -1,0 +1,3 @@
+## Your machine
+
+You run on Tiny (1 CPU · 1.5 GiB · 10 GiB). Larger sizes you may move to: Small (2 · 4). If something you need to run is killed for memory (exit 137, "Killed", an out-of-memory error) or is far too slow for its CPUs, do not call it flaky: run it again with fewer workers if that is enough, and otherwise call request_machine with the size and your reason, saying what ran out. A move keeps your conversation and checkout; running processes and /tmp are not kept.

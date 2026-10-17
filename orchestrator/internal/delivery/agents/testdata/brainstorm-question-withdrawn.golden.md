@@ -1,0 +1,1 @@
+Your question to Bo is withdrawn: they can no longer answer in this session. Nobody answered "Which month first?"; ask someone else if you still need it decided.

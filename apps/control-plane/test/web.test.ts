@@ -206,25 +206,6 @@ describe("backend.web_dir in the configuration file", () => {
   });
 });
 
-describe("the web app's preview overlay (apps/web/public, copied into the build)", () => {
-  test("is a script that, on a page that loads it twice, says once that it loaded and does nothing else", async () => {
-    const res = await buildRouter(join(import.meta.dir, "../../web/public"))
-      .handle(new Request("http://dude.test/feedback/overlay.js", { headers: { origin: "https://web.preview.example" } }));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toStartWith("text/javascript");
-    const source = await res.text();
-    expect(new TextEncoder().encode(source).length).toBeLessThan(8 << 10);
-    const said: unknown[][] = [];
-    const page: Record<string, unknown> = {};
-    const run = new Function("window", "console", source);
-    const console = { debug: (...a: unknown[]) => said.push(a), log: () => { throw new Error("log"); } };
-    run(page, console);
-    run(page, console);
-    expect(said.length).toBe(1);
-    expect(Object.keys(page)).toEqual(["__dudeOverlay"]);
-  });
-});
-
 describe("without DUDE_WEB_DIR", () => {
   test("an unmatched path is the API's 404", async () => {
     const plain = buildRouter("");

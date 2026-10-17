@@ -1,0 +1,1 @@
+Move to a larger machine, giving the size by name and a reason naming the command, its exit or error, and the workers or threads it used. You run on Tiny (1 CPU · 1.5 GiB · 10 GiB). Larger sizes you may move to: Small (2 · 4). A successful request ends your turn: you are resumed on the new size. A move keeps your conversation and checkout; running processes and /tmp are not kept.

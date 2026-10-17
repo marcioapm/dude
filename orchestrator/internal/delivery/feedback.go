@@ -275,57 +275,10 @@ func BlockingFeedbackTx(ctx context.Context, tx pgx.Tx, taskID string, attempt i
 // FeedbackText is items as an agent is given them: each one's id, author,
 // anchor and the person's words verbatim, then what to do with them.
 func FeedbackText(items []FeedbackItem, cli bool) string {
-	var b strings.Builder
-	b.WriteString("## Feedback from people\n\nPeople reviewing this task left these. Each is in its author's own words.")
-	for _, it := range items {
-		fmt.Fprintf(&b, "\n\n### %s — %s", it.ID, it.Author)
-		if where := it.Anchor.Where(); where != "" {
-			b.WriteString("\n\nOn `" + where + "`")
-			if it.Anchor.Kind == "code" {
-				if it.Anchor.HeadSHA != "" {
-					b.WriteString(" at commit " + short(it.Anchor.HeadSHA))
-				} else {
-					b.WriteString(", uncommitted work of Run " + it.Anchor.RunID)
-				}
-				if it.Outdated {
-					b.WriteString(" (those lines have changed since)")
-				}
-			}
-			b.WriteString(":")
-			if len(it.Anchor.Excerpt) > 0 {
-				b.WriteString("\n\n```diff")
-				for _, l := range it.Anchor.Excerpt {
-					b.WriteString("\n" + l.Kind + l.Text)
-				}
-				b.WriteString("\n```")
-			}
-			if line := it.Anchor.PageLine(); line != "" {
-				b.WriteString("\n\n" + line)
-			}
-			if it.Anchor.Kind == "preview" && it.Picture != "" {
-				b.WriteString("\n\nPicture: " + it.Picture + ", attached (the element, outlined)")
-			}
-			if it.Anchor.Kind == "preview" && it.Anchor.Text != "" {
-				b.WriteString("\n\nThe element's text: " + clip(oneLine(it.Anchor.Text), 400))
-			}
-			if c := it.Anchor.Component; c != nil && c.File != "" {
-				fmt.Fprintf(&b, "\n\nComponent %s at `%s:%d`", c.Name, c.File, c.Line)
-			}
-		}
-		b.WriteString("\n\n" + quote(it.Body))
-		for _, h := range it.History {
-			fmt.Fprintf(&b, "\n\n%s (%s): %s", h.Kind, h.By, quote(h.Body))
-		}
-	}
-	if cli {
-		b.WriteString("\n\nHandle every item; none may be left unanswered. Fix what it asks, commit, then " +
-			"`dude feedback resolve ID --commit HEAD`. If you will not change it — it is wrong, or out of scope — say why " +
-			"with `dude feedback reply ID \"…\"`. `dude feedback` lists what is still open.")
-	} else {
-		b.WriteString("\n\nHandle every item; none may be left unanswered: fix it and resolve it with your commit " +
-			"(feedback_resolve), or reply saying why you will not (feedback_reply).")
-	}
-	return b.String()
+	return render(feedbackTmpl, struct {
+		Items []FeedbackItem
+		CLI   bool
+	}{items, cli})
 }
 
 func quote(s string) string {
@@ -497,9 +450,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	}
 	if d != nil && d.Live() && d.State.conducted() {
 		out.RoutedTo = RoutedConductor
-		line := fmt.Sprintf("%d feedback items from a person (%s): read their words with `dude feedback %s`; they stay "+
-			"open until a worker resolves or replies to each.", len(itemIDs), strings.Join(itemIDs, ", "), strings.Join(itemIDs, " "))
-		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, line); err != nil {
+		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, render(wakeFeedbackTmpl, itemIDs)); err != nil {
 			return err
 		}
 		// Waiting on its pull requests or its reader, the delivery parks at

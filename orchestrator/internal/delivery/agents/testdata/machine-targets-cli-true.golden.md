@@ -1,0 +1,3 @@
+## Your machine
+
+You run on Small (2 CPUs · 4 GiB · 20 GiB). Larger sizes you may move to: Large (4 · 16), XL (8 · 32, highmem pool). If something you need to run is killed for memory (exit 137, "Killed", an out-of-memory error) or is far too slow for its CPUs, do not call it flaky: run it again with fewer workers if that is enough, and otherwise move with `dude machine request SIZE --reason "…"`, saying what ran out. A move keeps your conversation and checkout; running processes and /tmp are not kept.

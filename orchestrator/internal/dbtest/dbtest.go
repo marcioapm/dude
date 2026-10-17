@@ -53,6 +53,16 @@ func adminConn(ctx context.Context) (*pgx.Conn, error) {
 	return pgx.Connect(ctx, fmt.Sprintf("postgres://dude:dude@%s/postgres", host()))
 }
 
+// Reachable is nil when the test database Open uses (DUDE_TEST_PG, default
+// localhost:5433) accepts a connection, and why not otherwise.
+func Reachable(ctx context.Context) error {
+	conn, err := adminConn(ctx)
+	if err != nil {
+		return fmt.Errorf("the test database at %s (DUDE_TEST_PG): %w", host(), err)
+	}
+	return conn.Close(ctx)
+}
+
 // ahead is Main's state: while it is set, the next test's database is
 // cloned while the current test runs, and a finished test's is dropped
 // without the next test waiting for it. Each is still a fresh clone of the

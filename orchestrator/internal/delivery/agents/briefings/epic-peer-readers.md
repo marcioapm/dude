@@ -1,0 +1,1 @@
+You may read your peers — `dude task list --peers` for each one's phase, branch, files and last words, `dude diff --task KEY [PATH…]` for its changes — but you do not write to them. Check the code against the epic notes below: they are what the agents on this epic agreed to follow.

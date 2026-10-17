@@ -55,6 +55,15 @@ describe("escalationWords", () => {
       .toBe("The pull request in web has had 5 fixes, the most the organisation allows for one.");
   });
 
+  test("a moved pull request says GitHub's refusal when there was one, and a person's push when not", () => {
+    const refused = escalationWords({ reason: "pull_request_moved", at,
+      detail: { repo: "web", number: 4, error: "main was merged into the task branch meanwhile, and the fix conflicts with that merge\nmore" } });
+    expect(refused.short).toBe("The pull request moved");
+    expect(refused.sentence).toBe("Pull request web #4 moved while dude checked a fix for it, and the fix could not be brought onto it: main was merged into the task branch meanwhile, and the fix conflicts with that merge. Fix the feedback again from what the branch holds now, or wait on the pull request without it.");
+    const pushed = escalationWords({ reason: "pull_request_moved", at, detail: { repo: "web", number: 4 } });
+    expect(pushed.sentence).toBe("Someone pushed to pull request web #4 while dude checked a fix for it. The fix was not moved over their commit: fix the feedback again from what the branch holds now, or wait on the pull request without it.");
+  });
+
   test("a failed integration says what is true, why in words, the base as a name, and links its Run only", () => {
     const tried = escalationWords({ reason: "pull_request_conflict", at,
       detail: { repo: "web", number: 4, base: "release", integration: true, runId: "run_9", cause: "still_conflicting", error: "still conflicting after integration" } });

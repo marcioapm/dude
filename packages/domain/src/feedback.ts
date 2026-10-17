@@ -48,7 +48,8 @@ const codeAnchorInput = z.object({
   .refine((a) => a.endLine - a.startLine < FEEDBACK_LIMITS.lines,
     { message: `a code item spans at most ${FEEDBACK_LIMITS.lines} lines`, path: ["endLine"] });
 
-const previewAnchorInput = z.object({
+// Exported for the preview overlay's messages (previewOverlay.ts), which carry the same anchor.
+export const previewAnchorInput = z.object({
   kind: z.literal("preview"),
   url: z.string().url().max(2_048).refine((u) => /^https?:\/\//.test(u), "an http(s) URL"),
   viewport: z.object({ width: z.number().int().positive().max(20_000), height: z.number().int().positive().max(20_000) }).strict().optional(),

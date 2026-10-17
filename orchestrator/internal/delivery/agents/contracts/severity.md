@@ -1,0 +1,1 @@
+Severity decides what happens next: {{range $i, $s := .}}{{if $i}}, {{end}}`{{$s}}`{{end}} send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of {{range $i, $s := .}}{{if $i}}, {{end}}`{{$s}}`{{end}}, however small the fix.

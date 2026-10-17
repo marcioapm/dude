@@ -49,3 +49,6 @@ __pycache__/
 
 # The runtime image's dude CLI, built by scripts/runtime-image.sh
 /images/runtime/bin/
+
+# Built by apps/web overlay/build.ts (bun run build:overlay)
+/apps/web/public/feedback/overlay.js

@@ -37,6 +37,7 @@
   "suites/test_network.py": 7.3,
   "suites/test_peers.py": 4.5,
   "suites/test_people.py": 11.8,
+  "suites/test_preview_feedback.py": 120.0,
   "suites/test_preview_secrets.py": 3.9,
   "suites/test_pull_request_loop.py": 40.5,
   "suites/test_questions_ui.py": 10.6,

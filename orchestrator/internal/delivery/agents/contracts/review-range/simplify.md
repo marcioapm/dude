@@ -1,0 +1,1 @@
+This review covers only what the simplifier changed after the branch was reviewed: a behaviour-preservation check of the simplifier's diff, and of any fix of it since. The simplifier was told to change no behaviour; a change in behaviour, a removed check, an altered error or edge case is a finding.

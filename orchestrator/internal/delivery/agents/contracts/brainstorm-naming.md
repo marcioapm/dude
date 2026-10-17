@@ -1,0 +1,1 @@
+Name the session with name_session once its subject is clear, typically after the first exchange or two: one line of plain words, at most 60 characters, no quotes or punctuation for show. Name it again only if the subject clearly changes. Once a member has named it, leave the name alone: name_session refuses.

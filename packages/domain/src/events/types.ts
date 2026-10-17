@@ -401,6 +401,8 @@ export const EventTypes = {
   RepoMaterialized: "repo.materialized",
   RepoBranchCreated: "repo.branch_created",
   GitCommitCreated: "git.commit_created",
+  /** A phase Run is about to merge its commit into the task branch on GitHub. Payload: `{ repo, commit }`. */
+  GitMergeAttempted: "git.merge_attempted",
   GitPushCompleted: "git.push_completed",
 
   // Review
@@ -435,6 +437,22 @@ export const EventTypes = {
    * `{ repo, number, from, to, candidate }`.
    */
   PullRequestFixMoved: "pull_request.fix_moved",
+  /**
+   * A session's agent or a task's conductor read GitHub through dude
+   * (github_search, github_issue, github_pull_request), on its Run.
+   * Payload: `{ tool, repo, number?, query?, kind?, state?, files?, bytes }`:
+   * what was asked and the result's size in bytes, never what GitHub said.
+   * A read refused once checked has `{ refused, status }` in place of
+   * `bytes`: dude's kind (moved, moved_item, redirect, rate_reserve, rate_limited,
+   * not_found, too_large, forbidden, refused, unavailable) and the HTTP status.
+   */
+  GitHubRead: "github.read",
+  /**
+   * dude is about to merge a checked fix into an open pull request's branch
+   * on GitHub, because GitHub merged the base into that branch while the fix
+   * was checked. Payload: `{ repo, branch, candidate, round, commit }`.
+   */
+  PullRequestFixMergeAttempted: "pull_request.fix_merge_attempted",
 
   // Agent sessions
   SessionStarted: "agent.session.started",
