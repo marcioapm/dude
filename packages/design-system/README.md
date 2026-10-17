@@ -1358,7 +1358,9 @@ here.
 - **EntityLine** is something named in a row: a face or glyph, its name in
   strong ink (`--ds-color-text-strong`: the one ink stronger than primary,
   for a name) over one muted line of detail, and badges at the end. A
-  member in a table, a memory in a list. `PersonLine` is it with a face;
+  member in a table, a memory in a list. `wrap` lets name and detail run
+  onto more lines instead of ending in an ellipsis, for a sentence (a
+  judgement's question) rather than a name. `PersonLine` is it with a face;
   **AuthorLine** is whoever wrote something: a person as themselves, an
   agent as the person it worked for with its role's tile on their face and
   "Role on KEY" beneath, and dude as the `system` avatar and why it wrote

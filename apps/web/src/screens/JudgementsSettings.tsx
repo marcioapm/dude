@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Duration,
+  EntityLine,
   FlowSteps,
   SettingRow,
   SettingsDisclosure,
@@ -248,10 +249,7 @@ function RecentJudgements({ client }: { client: ApiClient }) {
               <Tr key={c.id} interactive onClick={() => setOpen(c)} onKeyDown={(e) => e.key === "Enter" && setOpen(c)}
                 data-testid="judgement-row" data-call={c.id}>
                 <Td wrap>
-                  <span className="judgementAsked">
-                    <span className="judgementQuestion">{c.question}</span>
-                    {c.about ? <span className="judgementAbout">{c.about}</span> : null}
-                  </span>
+                  <EntityLine size="sm" wrap name={c.question} detail={c.about} />
                 </Td>
                 <Td fit><DecisionBadge call={c} /></Td>
                 <Td fit align="right" mono muted={c.confidence === null}>{sure(c.confidence)}</Td>

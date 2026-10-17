@@ -50,6 +50,14 @@
 .sm .detail {
   font-size: var(--ds-text-xs);
 }
+.wrap .text {
+  gap: var(--ds-space-2);
+}
+.wrap .name,
+.wrap .detail {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .trailing {
   display: inline-flex;
   align-items: center;
