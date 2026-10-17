@@ -3463,57 +3463,61 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding,
 	verdicts map[string]bool) error {
 	return database.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var projectID, taskID, phase, category string
-		if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
-			Scan(&projectID, &taskID, &phase, &category); err != nil {
-			return err
+		return recordFindingsTx(ctx, tx, org, runID, findings, verdicts)
+	})
+}
+
+func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, findings []delivery.Finding, verdicts map[string]bool) error {
+	var projectID, taskID, phase, category string
+	if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
+		Scan(&projectID, &taskID, &phase, &category); err != nil {
+		return err
+	}
+	// Only a review or test Run may report: a fixer reporting findings
+	// could manufacture the evidence that its own work is finished.
+	if phase != delivery.PhaseReview && phase != delivery.PhaseTest {
+		return fmt.Errorf("a %s run may not report findings", phase)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM review_findings WHERE run_id = $1`, runID); err != nil {
+		return err
+	}
+	// The reviewer's judgement of what it was shown: fixed is resolved;
+	// still stays open, for the next fix. One it said nothing about stays
+	// as it was.
+	for id, fixed := range verdicts {
+		if !fixed {
+			continue
 		}
-		// Only a review or test Run may report: a fixer reporting findings
-		// could manufacture the evidence that its own work is finished.
-		if phase != delivery.PhaseReview && phase != delivery.PhaseTest {
-			return fmt.Errorf("a %s run may not report findings", phase)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM review_findings WHERE run_id = $1`, runID); err != nil {
-			return err
-		}
-		// The reviewer's judgement of what it was shown: fixed is resolved;
-		// still stays open, for the next fix. One it said nothing about stays
-		// as it was.
-		for id, fixed := range verdicts {
-			if !fixed {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $2,
+		if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $2,
 				resolution_note = 'judged fixed by the re-review', updated_at = now()
 				WHERE id = $1 AND status = 'open'`, id, runID); err != nil {
-				return err
-			}
+			return err
 		}
-		counts := map[string]int{}
-		for _, f := range findings {
-			counts[f.Severity]++
-			// The category is the reviewer's flavour, what re-review routing
-			// groups by; a word of the reviewer's own is its topic. A test
-			// Run has no flavour: its word is the category.
-			cat, topic := f.Category, ""
-			if category != "" && f.Category != category {
-				cat, topic = category, f.Category
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
+	}
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[f.Severity]++
+		// The category is the reviewer's flavour, what re-review routing
+		// groups by; a word of the reviewer's own is its topic. A test
+		// Run has no flavour: its word is the category.
+		cat, topic := f.Category, ""
+		if category != "" && f.Category != category {
+			cat, topic = category, f.Category
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix)
 				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13)`,
-				ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
-				db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
-				return err
-			}
+			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
+			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
+			return err
 		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
-			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
-			Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
-		})
-		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{
+		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
+		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
+		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
 	})
+	return err
 }
 
 // NotifyFinished signals each workflow whose phase Run has finished but has

@@ -300,8 +300,29 @@ func TestChildStitchedRoleRoundTrip(t *testing.T) {
 			if _, err := (&Artifacts{DB: w.s.DB, Lux: fake, Log: w.s.Log}).Sweep(w.ctx); err != nil {
 				t.Fatal(err)
 			}
-			if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 1 {
-				t.Fatalf("settle %d %v", n, err)
+			type outcome struct {
+				n   int
+				err error
+			}
+			settled := make(chan outcome, 2)
+			for i := 0; i < 2; i++ {
+				go func() {
+					n, err := NotifyFinished(w.ctx, w.s.DB, func(context.Context, string, string, string, string, string) error {
+						return errors.New("child reached workflow notifier")
+					})
+					settled <- outcome{n, err}
+				}()
+			}
+			wins := 0
+			for i := 0; i < 2; i++ {
+				result := <-settled
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+				wins += result.n
+			}
+			if wins != 1 {
+				t.Fatalf("settlement winners %d", wins)
 			}
 			var findings, verdicts int
 			if err := w.owner.QueryRow(w.ctx, `SELECT findings,verdicts FROM child_results WHERE child_run_id=$1`, id).Scan(&findings, &verdicts); err != nil {
@@ -310,19 +331,43 @@ func TestChildStitchedRoleRoundTrip(t *testing.T) {
 			if profile == "reviewer" && findings != 1 || profile == "qa_browser" && verdicts != 1 {
 				t.Fatalf("role results %d/%d", findings, verdicts)
 			}
-			if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
-				t.Fatalf("enqueue %d %v", n, err)
+			for i := 0; i < 2; i++ {
+				go func() {
+					worker := &Syncer{DB: w.s.DB}
+					n, err := (&delivery.Store{DB: worker.DB}).EnqueueChildResults(w.ctx)
+					settled <- outcome{n, err}
+				}()
+			}
+			wins = 0
+			for i := 0; i < 2; i++ {
+				result := <-settled
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+				wins += result.n
+			}
+			if wins != 1 {
+				t.Fatalf("enqueue winners %d", wins)
 			}
 			var directive string
 			if err := w.owner.QueryRow(w.ctx, `SELECT directive_id FROM child_result_outbox WHERE child_run_id=$1`, id).Scan(&directive); err != nil {
 				t.Fatal(err)
 			}
 			parent := phaseRun{ID: "run_round_parent", Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, Role: "conductor", Status: "running", LuxState: "running", LuxRunID: "lux_parent"}
-			if _, err := w.s.deliverDirectives(w.ctx, parent); err != nil {
+			// The parent is mid-turn; a restarted sender uses the already queued
+			// directive, which lux accepts for the next step, not an interrupt.
+			sender := &Syncer{DB: w.s.DB, Lux: fake, Log: w.s.Log}
+			if _, err := sender.deliverDirectives(w.ctx, parent); err != nil {
 				t.Fatal(err)
 			}
 			if len(fake.inputs) != 1 {
 				t.Fatalf("parent inputs %d", len(fake.inputs))
+			}
+			if _, err := sender.deliverDirectives(w.ctx, parent); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.inputs) != 1 {
+				t.Fatal("restart replay sent another directive")
 			}
 			tr := &translator{run: parent}
 			if err := w.s.DB.InOrg(w.ctx, r.Org, func(tx pgx.Tx) error {

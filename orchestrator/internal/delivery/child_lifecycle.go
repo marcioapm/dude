@@ -73,6 +73,12 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 }
 
 func (s *Store) SettleChild(ctx context.Context, org, childID string, outcome ChildOutcome) (bool, error) {
+	return s.SettleChildWith(ctx, org, childID, outcome, nil)
+}
+
+// SettleChildWith collects role results under the same parent/child locks as
+// settlement, so another notifier cannot replace findings after the snapshot.
+func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcome ChildOutcome, collect func(pgx.Tx) error) (bool, error) {
 	if outcome.Status != "completed" && outcome.Status != "failed" && outcome.Status != "aborted" {
 		return false, refusef("a terminal child outcome is required")
 	}
@@ -88,6 +94,11 @@ func (s *Store) SettleChild(ctx context.Context, org, childID string, outcome Ch
 		}
 		if exists {
 			return nil
+		}
+		if collect != nil {
+			if err := collect(tx); err != nil {
+				return err
+			}
 		}
 		status := outcome.Status
 		if c.StopReason != "" {

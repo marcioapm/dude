@@ -53,18 +53,22 @@ func settleCollectedChildren(ctx context.Context, database *delivery.Store) (int
 	n := 0
 	for _, c := range children {
 		r := phaseRun{ID: c.ID, Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, Phase: c.Phase, Attempt: c.Attempt}
-		s := &Syncer{DB: database.DB}
-		if c.Phase == delivery.PhaseReview || c.Phase == delivery.PhaseTest {
-			if err := s.reportFindings(ctx, r); err != nil {
-				return n, err
+		won, err := database.SettleChildWith(ctx, c.Org, c.ID, delivery.ChildOutcome{Status: c.Status}, func(tx pgx.Tx) error {
+			if c.Phase == delivery.PhaseReview || c.Phase == delivery.PhaseTest {
+				reply, err := delivery.RunReplyTx(ctx, tx, c.ID)
+				if err != nil {
+					return err
+				}
+				if err := recordFindingsTx(ctx, tx, c.Org, c.ID, delivery.ParseFindings(reply), nil); err != nil {
+					return err
+				}
 			}
-		}
-		if c.Phase == delivery.PhaseTest {
-			if _, err := database.RecordVerdict(ctx, c.Org, &delivery.State{TaskID: c.TaskID, ProjectID: c.ProjectID, Attempt: c.Attempt, TestRunID: c.ID}, c.ID); err != nil {
-				return n, err
+			if c.Phase == delivery.PhaseTest {
+				_, err := delivery.RecordVerdictTx(ctx, tx, c.Org, &delivery.State{TaskID: r.TaskID, ProjectID: r.ProjectID, Attempt: r.Attempt, TestRunID: r.ID}, r.ID)
+				return err
 			}
-		}
-		won, err := database.SettleChild(ctx, c.Org, c.ID, delivery.ChildOutcome{Status: c.Status})
+			return nil
+		})
 		if err != nil {
 			return n, err
 		}
