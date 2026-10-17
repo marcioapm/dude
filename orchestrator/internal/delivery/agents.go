@@ -12,7 +12,7 @@ import (
 
 // What dude tells agents lives in Markdown under agents/ (its README says
 // how to edit it). roles/ holds each role's replaceable instructions as
-// plain text; contracts/ and briefings/ are text/template files, each
+// plain text; every other directory holds text/template files, each
 // named by its path without ".md" ("contracts/commit"). A file's one
 // trailing newline is not part of its text. Every file is read and parsed
 // when the package initialises, and every name Go renders is resolved then
