@@ -23,7 +23,7 @@ import (
 //go:embed agents/roles/*.md agents/contracts agents/briefings
 var agentFiles embed.FS
 
-var agentTemplates = mustParse(parseAgentTemplates(agentFiles))
+var agentTemplates = must(parseAgentTemplates(agentFiles))
 
 // The templates rendered with data, resolved at init by mustTemplate.
 var (
@@ -84,11 +84,12 @@ func mustTemplate(name string) *template.Template {
 	return t
 }
 
-func mustParse(t *template.Template, err error) *template.Template {
+// must is v, or a panic with err: for what the package loads at init.
+func must[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
 	}
-	return t
+	return v
 }
 
 // agentFuncs are the template functions: formatting of data, never words.
@@ -230,11 +231,4 @@ func loadRoles(fsys fs.FS) (map[string][]string, error) {
 		roles[strings.TrimSuffix(path.Base(f), ".md")] = strings.Split(text, "\n\n")
 	}
 	return roles, nil
-}
-
-func mustLoadRoles(roles map[string][]string, err error) map[string][]string {
-	if err != nil {
-		panic(err)
-	}
-	return roles
 }
