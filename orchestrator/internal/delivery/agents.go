@@ -28,6 +28,9 @@ var agentTemplates = mustParse(parseAgentTemplates(agentFiles))
 // The templates rendered with data, resolved at init by mustTemplate.
 var (
 	conductorTmpl              = mustTemplate("briefings/conductor")
+	wakeFeedbackTmpl           = mustTemplate("briefings/wake-feedback")
+	conductorStartsTmpl        = mustTemplate("contracts/conductor-starts")
+	conductorOpensTmpl         = mustTemplate("contracts/conductor-opens")
 	digestTmpl                 = mustTemplate("briefings/digest")
 	digestMessagesTmpl         = mustTemplate("briefings/digest-messages")
 	digestNotesTmpl            = mustTemplate("briefings/digest-notes")

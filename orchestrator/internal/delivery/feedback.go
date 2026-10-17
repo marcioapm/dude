@@ -450,9 +450,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	}
 	if d != nil && d.Live() && d.State.conducted() {
 		out.RoutedTo = RoutedConductor
-		line := fmt.Sprintf("%d feedback items from a person (%s): read their words with `dude feedback %s`; they stay "+
-			"open until a worker resolves or replies to each.", len(itemIDs), strings.Join(itemIDs, ", "), strings.Join(itemIDs, " "))
-		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, line); err != nil {
+		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, render(wakeFeedbackTmpl, itemIDs)); err != nil {
 			return err
 		}
 		// Waiting on its pull requests or its reader, the delivery parks at

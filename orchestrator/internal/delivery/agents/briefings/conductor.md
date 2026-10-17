@@ -3,7 +3,7 @@ Conductor, dude woke you about {{.Key}}, {{printf "%q" .Title}}: a decision is y
 {{- else if eq .Why "rebrief" -}}
 Conductor, dude is briefing you again on {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor. Below is what dude knows about the task, in short; read more with your tools.
 {{- else -}}
-Conductor, {{.Who}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor: answer them. Below is what dude knows about the task, in short; read more with your tools.
+Conductor, {{with .Who}}{{.}}{{else}}Someone{{end}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You are this task's conductor: answer them. Below is what dude knows about the task, in short; read more with your tools.
 {{- end}}
 
 ## The task
@@ -60,6 +60,6 @@ You take this task's decisions. The delivery is at {{.Step}}; you are woken at i
 
 {{.}}{{end}}
 
-## {{.Who}}'s message
+## {{if ne .Why "person"}}dude{{else}}{{with .Who}}{{.}}{{else}}Someone{{end}}{{end}}'s message
 
 {{.Message}}

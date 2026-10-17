@@ -121,12 +121,6 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	}
 	b := conductorBrief{Key: key, TaskID: taskID, Title: oneLine(title), Status: status, Goal: briefGoal(goal),
 		Who: person, Message: message, Why: map[briefedFor]string{byPerson: "person", byWake: "wake", rebrief: "rebrief"}[why]}
-	if b.Who == "" {
-		b.Who = "Someone"
-	}
-	if why != byPerson {
-		b.Who = "dude"
-	}
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
 	for i, c := range ac {
