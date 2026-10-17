@@ -33,6 +33,9 @@ with `go -C orchestrator generate ./internal/refusalgen`; the generated files ar
 must not be edited. `internal/refusalgen`'s ordinary test compares rendered bytes with the
 checked-in files, so stale generated files fail even if text goldens are updated. The generator
 is deliberately independent of delivery and does not duplicate call-site argument types.
+A new refusal is a `{{define}}` plus one line in `internal/refusalgen/<dir>.manifest`: a define
+under `refusals/tools/`, `refusals/delivery/` or `refusals/domain/` that no manifest lists fails
+the generator, and so does a manifest line whose define is missing.
 
 `DismissedByConductor` is a persisted resolution prefix parsed by `AcceptedBy`, so it remains a
 fixed Go protocol marker; JSON enum and state identifiers likewise remain Go data. The
