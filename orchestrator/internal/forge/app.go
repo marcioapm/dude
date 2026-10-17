@@ -417,6 +417,9 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		}
 		refusal := &Error{Status: res.StatusCode, Message: e.Message}
 		markRateLimit(refusal, res.Header, "rate limit: ")
+		if Transient(refusal) {
+			refusal.RetryAfter = retryAfter(res.Header, time.Now())
+		}
 		return refusal
 	}
 	if out != nil && len(data) > 0 {

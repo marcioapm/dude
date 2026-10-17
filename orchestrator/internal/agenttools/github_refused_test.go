@@ -54,6 +54,7 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 			w.Header().Set("X-RateLimit-Reset", reset)
 			_, _ = w.Write([]byte(`{"number":6,"title":"` + canary + `","comments":3}`))
 		case "/repos/acme/target/issues/7":
+			w.Header().Set("Retry-After", "20")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(message))
 		case "/repos/acme/target/issues/8":
@@ -88,8 +89,13 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 			t.Errorf("issue %d: %d %v, want refused", w.number, status, out)
 		}
 		// What the agent is told is dude's: nothing GitHub wrote.
-		if told, _ := json.Marshal(out); strings.Contains(string(told), canary) || strings.Contains(string(told), "docs.github.test") {
+		told, _ := json.Marshal(out)
+		if strings.Contains(string(told), canary) || strings.Contains(string(told), "docs.github.test") {
 			t.Errorf("issue %d: GitHub's text reached the agent: %s", w.number, told)
+		}
+		// GitHub's 20 s wait is told as a minute, never "in 0s".
+		if w.number == 7 && !strings.Contains(string(told), "read acme/target#7 in 1m0s") {
+			t.Errorf("issue 7: told %s, want it to read again in 1m0s", told)
 		}
 	}
 	payloads := func(sql string, args ...any) []map[string]any {
