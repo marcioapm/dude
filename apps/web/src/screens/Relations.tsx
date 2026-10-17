@@ -13,7 +13,7 @@ import {
 } from "@dude/design-system/components";
 import { Callout } from "@dude/design-system/primitives";
 import { dependencySteps, firstName, formatDuration, neighbourKeys, scopeTasks, type NavEpic, type NavProject, type NavTask } from "@dude/design-system";
-import { blockedRefusal, blockerList, neverMergesRefusal, type AutoStartHow, type TaskRelations, type TaskRelationView } from "@dude/domain";
+import { blockedRefusal, blockerList, keyList, neverMergesRefusal, type AutoStartHow, type TaskRelations, type TaskRelationView } from "@dude/domain";
 import { ApiError, refusedBlockers, type ApiClient, type StartAnyway } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
@@ -172,14 +172,20 @@ export function BlockedNotice({ client, taskId, relations, you, onChanged }: {
   );
 }
 
-const SIDE_OF: Record<RelationGroupKind, RelationSide> = { "blocked-by": "blocked_by", blocks: "blocks", related: "related" };
+// Duplicate groups are never removable (RelationList draws no remove on them).
+const SIDE_OF: Partial<Record<RelationGroupKind, RelationSide>> = { "blocked-by": "blocked_by", blocks: "blocks", related: "related" };
 
-function groups(r: TaskRelations): RelationGroupData[] {
+function groups(r: TaskRelations, taskKey: string): RelationGroupData[] {
   const row = (v: TaskRelationView) => ({
     ...related(v), owner: v.task.owner, settled: v.task.merged || undefined,
     removeHint: v.canRemove ? undefined : (v.removableBy ?? undefined),
   });
+  // What each duplicate handed over now waits on this task: said under the group.
+  const handed = r.duplicatedBy.filter((d) => d.handedOver?.length);
+  const note = handed.length ? handed.map((d) => `${d.task.key}'s blocking came here with it: ${keyList(d.handedOver!)} now ${d.handedOver!.length === 1 ? "waits" : "wait"} on ${taskKey}.`).join(" ") : undefined;
   return [
+    { kind: "duplicate-of", rows: r.duplicateOf.map(row) },
+    { kind: "duplicated-by", rows: r.duplicatedBy.map(row), ...(note ? { note } : {}) },
     { kind: "blocked-by", rows: r.blockedBy.map(row) },
     { kind: "blocks", rows: r.blocks.map(row) },
     { kind: "related", rows: r.related.map(row) },
@@ -240,12 +246,14 @@ export function TaskRelationsSection({ client, taskId, taskKey, relations, tree,
     }
   };
   const remove = (group: RelationGroupKind, key: string) => {
+    const side = SIDE_OF[group];
+    if (!side) return;
     setProblem(null);
-    client.removeRelation(taskId, SIDE_OF[group], key).then(onChanged, (err: unknown) => setProblem(errorText(err)));
+    client.removeRelation(taskId, side, key).then(onChanged, (err: unknown) => setProblem(errorText(err)));
   };
   return (
     <div className="taskBlock">
-      <RelationList wide groups={groups(relations)} onRemove={remove} onAdd={() => setAdding(true)} onOpen={onOpen}
+      <RelationList wide groups={groups(relations, taskKey)} onRemove={remove} onAdd={() => setAdding(true)} onOpen={onOpen}
         adding={adding ? <RelationPicker here={{ key: taskKey }} related={keys} find={find} onAdd={add} onClose={() => setAdding(false)} /> : undefined} />
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
     </div>

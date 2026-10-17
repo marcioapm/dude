@@ -35,6 +35,7 @@ import { PrChip } from "./PrChip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { AutoStartMark, HOW_LABEL, RelationChip, relationWords, startsWhen } from "./Relations.tsx";
 import { DriverGlyph, driverLabel } from "./DriverMark.tsx";
+import { ResolutionMark } from "./Lifecycle.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
 import styles from "./Board.module.css";
@@ -90,6 +91,11 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
    */
   readonly filter?: BoardFilter | undefined;
   readonly onFilterChange?: ((filter: BoardFilter) => void) | undefined;
+  /**
+   * The quiet "3 archived" beside New task: archived tasks are never on the
+   * board, and this is the way to them (a link the app draws). Nothing for none.
+   */
+  readonly archivedHint?: ReactNode;
 }
 
 /** The roving rule for a card's start: 0 only beside the card that holds the board's tab stop. */
@@ -132,7 +138,7 @@ interface Group {
  * saying it in words. Nothing is added to the layout.
  */
 export function Board({ project, you, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu,
-  cardMarks, cardStart, highlight: controlledHighlight, onHighlightChange, filter = "all", onFilterChange, className, ...rest }: BoardProps) {
+  cardMarks, cardStart, highlight: controlledHighlight, onHighlightChange, filter = "all", onFilterChange, archivedHint, className, ...rest }: BoardProps) {
   const swimlanes = groupBy === "epic" && !epic;
   const allColumns = useMemo(() => boardColumns(project, epic, you), [project, epic, you]);
   const columns = useMemo(() => boardFilter(allColumns, filter), [allColumns, filter]);
@@ -313,7 +319,7 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
               {cost > 0 ? <Cost tokensUsd={cost} size="sm" tone="muted" className={styles["summaryCost"]} /> : null}
             </span>
           ) : null}
-          {headerActions || onFilterChange ? (
+          {headerActions || onFilterChange || archivedHint ? (
             <span className={styles["headerActions"]}>
               {onFilterChange ? (
                 <Segmented size="sm" label="Show" value={filter} onChange={onFilterChange} data-testid="board-filter"
@@ -323,6 +329,7 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                     { value: "blocked", label: `Blocked ${filterCounts.blocked}` },
                   ]} />
               ) : null}
+              {archivedHint ? <span className={styles["archivedHint"]} data-testid="board-archived">{archivedHint}</span> : null}
               {headerActions}
             </span>
           ) : null}
@@ -533,11 +540,13 @@ function DefaultMarks({ card }: { readonly card: BoardCard }) {
   const wi = card.task;
   const blockers = card.blocked ? wi.blockedBy ?? [] : [];
   const holds = wi.blocks ?? [];
-  if (blockers.length === 0 && holds.length === 0) return null;
+  // A closed task's resolution, where "stopped" would otherwise say it.
+  const closed = wi.resolution && wi.resolution !== "nothing_to_merge" ? wi.resolution : null;
+  if (blockers.length === 0 && holds.length === 0 && !closed) return null;
   const auto = blockers.length && wi.autoStart ? wi.autoStart : null;
   return (
     <span className={styles["marks"]}>
-      {blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null}
+      {closed ? <ResolutionMark resolution={closed} of={wi.duplicateOf} /> : null}      {blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null}
       {holds.length ? <RelationChip kind="blocks" tasks={holds} /> : null}
       {auto ? (
         <span className={styles["marksLine"]}>
@@ -656,7 +665,8 @@ function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readon
   const w = working[0];
   if (w) return <><b>{w.title ?? ROLE_LABEL[w.role]}</b>{w.activity ?? "working"}</>;
   const where: Partial<Record<NavTask["status"], string>> = {
-    review: "waiting on GitHub", ready_to_merge: "ready to merge", done: doneWords(task), failed: "failed", aborted: "stopped",
+    review: "waiting on GitHub", ready_to_merge: "ready to merge", done: doneWords(task), failed: "failed",
+    aborted: task.resolution && task.resolution !== "nothing_to_merge" ? "closed" : "stopped",
     queued: "not started", received: "not started", intake: "being shaped", awaiting_confirmation: "plan to confirm",
   };
   return <><b>{names || statusSpec(task.status).label}</b>{where[task.status] ?? statusSpec(task.status).label.toLowerCase()}</>;

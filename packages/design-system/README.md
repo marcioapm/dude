@@ -955,6 +955,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   small-caps headers, epics carry the layers glyph and a total, tasks
   lead with a status dot and a mono key, agent sessions sit on a guide line behind
   a role avatar. A tree four deep still reads in grayscale.
+  The epic's glyph leads its row, after the chevron, as in `Breadcrumb` and
+  the board's lane header; a task row never draws it.
 - Default open state is derived from triage and never needs three clicks: a
   project opens if anything inside is counted; an epic if anything needs you
   or is active; a task only if it needs you, down to the asking
@@ -1059,6 +1061,36 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   epic keeps its row so its position stays visible. Cards drop their epic
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
+- **Archived tasks are not on the board**; the header's quiet "3 archived"
+  (`archivedHint`, the app's link) opens the archived list. A closed task
+  in Closed says its resolution on its marks line (`ResolutionMark`), and
+  its foot says "closed" where a stopped one says "stopped".
+
+### Lifecycle (closed, archived)
+
+- **Closed, archived.** Neutral, muted, never a tone: neither needs anyone.
+  A closed task's resolution (`ResolutionMark`, a neutral small badge: Won't
+  do, Duplicate of CP-62, Can't reproduce, Nothing to merge) sits beside its
+  status, which still says what delivery did. `ArchivedMark` is the
+  `archive` glyph and "Archived" in muted ink.
+- **The task's `…` menu carries the lifecycle** (`lifecycleMenuItems`):
+  Close… (Reopen on a closed task), Archive… (Unarchive on an archived one),
+  each shown to everyone and disabled with its reason, checked in order:
+  who may not ("Only Ana, the owner, or an admin can do this"), agents
+  working ("Stop its agents first"), a pull request open ("It has a pull
+  request open"), then the task's own state ("Already ended"; "Unarchive it
+  first, then reopen it").
+- **`CloseDialog`** is the decision: four resolutions as a `ChoiceList`, two
+  disabled with why (Nothing to merge is Mark done's; Can't reproduce where
+  the caller says so). Duplicate opens a `SearchPicker` that refuses the task
+  itself and a duplicate ("pick that one") and says what the handover does.
+  Any other resolution with something waiting on the task says it keeps
+  waiting, with **Remove the relation**. `andArchive` makes it Close and
+  archive: nothing chosen, one primary that does both. `refused` disables the
+  primary with whose decision it is.
+- **`ArchiveDialog`** is the plain confirmation for an ended task; Keep it
+  holds the focus. **`ArchiveEpicDialog`** refuses an epic with unended
+  tasks, listing them, and offers to archive its ended ones.
 
 ### Task relations (blocked by, blocks, related)
 
@@ -1090,6 +1122,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - `RelationList` groups a task's relations as Blocked by, Blocks, Related;
   a settled blocker stays listed, struck through as merged. A row its reader
   may not remove says whose it is (`removeHint`) instead of a disabled ✕.
+  A closed duplicate adds **Duplicate of** / **Duplicated by** (`copy`
+  glyph): Close writes them and Reopen removes them, so their rows are never
+  removable, and a group's `note` says the handover under it ("CP-63's
+  blocking came here with it: CP-47 now waits on CP-62.").
   `RelationPicker` refuses a loop and names it ("That would make a loop:
   CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
   takes the focus when it opens; the gallery passes `autoFocus={false}`, so its

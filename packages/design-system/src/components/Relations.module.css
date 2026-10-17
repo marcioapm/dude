@@ -133,6 +133,13 @@
   flex-direction: column;
   gap: 2px;
 }
+/* A duplicate's handover, under its group: secondary ink, the rows' inset. */
+.groupNote {
+  margin: 0;
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
 .row {
   display: flex;
   align-items: center;

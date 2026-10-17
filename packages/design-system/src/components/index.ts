@@ -73,6 +73,10 @@ export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WEL
 export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessionsProps, Starter, StarterPillsProps, WelcomeProps } from "./Welcome.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps, BoardCardStartFocus } from "./Board.tsx";
+export { ArchiveDialog, ArchiveEpicDialog, ArchivedMark, CloseDialog, ResolutionMark, hasEnded, isClosed, lifecycleMenuItems } from "./Lifecycle.tsx";
+export type {
+  ArchiveDialogProps, ArchiveEpicDialogProps, CloseDecision, CloseDialogProps, LifecycleMenuOptions, LifecycleTask, LifecycleTaskRef, ResolutionMarkProps,
+} from "./Lifecycle.tsx";
 export {
   AutoStartMark, DependencyStrip, HOW_LABEL, RelationChip, RelationList, RelationRow, StartGate, StartMenu,
   blockedReason, relationWords, startsWhen, stateWord,
