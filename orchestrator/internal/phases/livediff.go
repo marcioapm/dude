@@ -193,7 +193,7 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 			return err
 		}
 		var err error
-		given, err = givenCommits(ctx, tx, r)
+		given, err = delivery.DiffGivens(ctx, tx, r.ID, r.TaskID, r.Attempt, r.conductor())
 		return err
 	}); err != nil {
 		return false, err
@@ -228,35 +228,6 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 		st.checksum = sum
 	}
 	return changed, err
-}
-
-// givenCommits is, per repository by lux's name, the commits lux last
-// reported syncing into the Run's checkout (runs.synced_bases) of the
-// branches syncedBranches names, in its order: what the diff is against
-// besides where the checkout started.
-func givenCommits(ctx context.Context, tx pgx.Tx, r phaseRun) (map[string][]string, error) {
-	var synced map[string]map[string]string
-	if err := tx.QueryRow(ctx, `SELECT synced_bases FROM runs WHERE id = $1`, r.ID).Scan(&synced); err != nil || len(synced) == 0 {
-		return nil, err
-	}
-	tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
-	if err != nil {
-		return nil, err
-	}
-	repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string][]string{}
-	for _, repo := range repos {
-		name := lux.SpecName(repo.Name)
-		for _, branch := range syncedBranches(r, repo, tb) {
-			if sha := synced[name][branch]; isSHA(sha) {
-				out[name] = append(out[name], sha)
-			}
-		}
-	}
-	return out, nil
 }
 
 // syncedBranches are the branches lux brings into r's checkout of repo
@@ -341,13 +312,13 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 // the artifact collector finds it (FinalDiffPrefix). refs is each
 // repository's starting point as the spec names it — the commit, or the
 // branch lux checks out — since the hook runs before dude has heard where
-// the checkout started; synced, the refs lux leaves what it syncs into it
-// at (repoSynced), standing for the commits a live read is given.
-func beforeStop(refs map[string]string, synced map[string][]string) *lux.BeforeStop {
+// the checkout started. The script retrieves recorded sync commits through
+// dude's authenticated service; an unavailable service keeps the full diff.
+func beforeStop(refs map[string]string) *lux.BeforeStop {
 	if len(refs) == 0 {
 		return nil
 	}
-	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, synced), Timeout: FinalDiffTimeout}
+	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, nil), Timeout: FinalDiffTimeout}
 }
 
 // recordFinalDiff records the diff the beforeStop hook left, one patch per

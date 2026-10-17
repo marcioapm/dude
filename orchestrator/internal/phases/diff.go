@@ -253,6 +253,10 @@ func num(n int) *int { return &n }
 // repository.
 const diffScript = `set -u
 dest=$1; shift
+recorded=
+if [ "$dest" = artifacts ]; then
+  recorded=$(/usr/local/bin/dude git diff-bases 2>/dev/null) || recorded=
+fi
 base_of() {
   if first=$(git -C "$1" reflog show --format=%H "refs/heads/$2" -- 2>/dev/null | tail -n 1) && [ -n "$first" ]; then
     echo "$first"
@@ -283,6 +287,14 @@ fold() {
 diffs() {
   while [ $# -ge 3 ]; do
     name=$1 dir=$2 ref=${3%% *}; given=${3#"$ref"}; shift 3
+    if [ "$dest" = artifacts ]; then
+      given=
+      while read -r repo commits; do
+        [ "$repo" = "$name" ] && given=$commits
+      done <<EOF
+$recorded
+EOF
+    fi
     [ -d "$dir" ] || continue
     base=$(base_of "$dir" "$ref") || continue
     from=$(fold "$dir" "$base" $given)

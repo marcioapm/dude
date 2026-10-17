@@ -207,14 +207,12 @@ func TestWhatCannotBeFoldedInLeavesTheDiffAgainstTheStart(t *testing.T) {
 	}
 }
 
-// The beforeStop hook, fixed at submit, names the refs lux leaves its
-// syncs at, in the live read's order; a repository lux syncs nothing into
-// keeps today's arguments.
-func TestTheHookIsGivenTheRefsLuxSyncsInto(t *testing.T) {
+// The fixed hook arguments contain no agent-writable sync refs.
+func TestTheHookDoesNotTrustCheckoutSyncRefs(t *testing.T) {
 	spec := buildSpec(AgentConfig{}, specInput{Phase: "", Role: "conductor", Model: "m", Repos: []specRepo{
 		{Name: "api", Ref: "dude/wi_1", Synced: []string{"dude/wi_1", "main"}}, {Name: "web", Ref: "abc123"}}})
 	got := strings.Join(spec.Workload.BeforeStop.Command[5:], "|")
-	if got != "api|/workspace/repos/api|dude/wi_1 refs/remotes/lux/dude/wi_1 refs/remotes/lux/main|web|/workspace/repos/web|abc123" {
+	if got != "api|/workspace/repos/api|dude/wi_1|web|/workspace/repos/web|abc123" {
 		t.Errorf("args %q", got)
 	}
 }
@@ -228,5 +226,26 @@ func TestTheDiffCommandCarriesEachRepositorysGivenCommits(t *testing.T) {
 	}
 	if got := strings.Join(diffCommand("-", map[string]string{"api": "s1"}, nil)[5:], "|"); got != "api|/workspace/repos/api|s1" {
 		t.Errorf("no given: args %q", got)
+	}
+}
+
+func TestDiffFallbackIsIsolatedPerRepository(t *testing.T) {
+	bad := newGivenRepo(t, "task")
+	m1 := bad.someoneCommits("main", "task.txt", "conflicting base\n")
+	if exec.Command("git", "-C", bad.dir, "merge", "-q", "lux/main").Run() == nil {
+		t.Fatal("expected conflicting merge")
+	}
+	bad.commit(bad.dir, "task.txt", "resolved\n", "Resolve")
+	good := newGivenRepo(t, "task")
+	good.commit(good.dir, "own.txt", "own\n", "Own")
+	m2 := good.someoneCommits("main", "imported.txt", "imported\n")
+	good.git("merge", "-q", "--no-edit", "lux/main")
+	out, err := exec.Command("sh", "-c", diffScript, "dude-diff", "-",
+		"bad", bad.dir, "task "+m1, "good", good.dir, "task "+m2).CombinedOutput()
+	if err != nil {
+		t.Fatalf("diff: %v %s", err, out)
+	}
+	if got := diffPaths(string(out)); !slices.Equal(got, []string{"bad/task.txt", "good/own.txt"}) {
+		t.Fatalf("repository isolation: %v\n%s", got, out)
 	}
 }

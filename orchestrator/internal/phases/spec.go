@@ -277,7 +277,7 @@ func repoRefs(repos []specRepo) map[string]string {
 	return refs
 }
 
-// repoSetups are the repositories' setup scripts, in the spec's order.
+// repoSetups are the repositories setup scripts, in the specs order.
 func repoSetups(repos []specRepo) []Setup {
 	out := make([]Setup, 0, len(repos))
 	for _, r := range repos {
@@ -350,7 +350,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			Workdir: workdir(in.Repos),
 			// On every stop lux can see coming, the checkout's final diff
 			// (livediff.go). A session's agent changes nothing: none.
-			BeforeStop: beforeStop(repoRefs(in.Repos), repoSynced(in.Repos)),
+			BeforeStop: beforeStop(repoRefs(in.Repos)),
 		},
 		Volumes: []lux.Volume{
 			// The checkout, and the agent's session transcript: the two

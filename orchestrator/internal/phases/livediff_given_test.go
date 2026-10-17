@@ -51,7 +51,7 @@ func TestALiveReadIsGivenTheCommitsLuxSyncedIntoTheCheckout(t *testing.T) {
 	}
 	set := func(baseSHAs, synced string) {
 		t.Helper()
-		if _, err := owner.Exec(ctx, `UPDATE runs SET base_shas = $2::jsonb, synced_bases = $3::jsonb WHERE id = $1`,
+		if _, err := owner.Exec(ctx, `UPDATE runs SET base_shas = $2::jsonb, sync_history = $3::jsonb WHERE id = $1`,
 			"run_"+org, baseSHAs, synced); err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestALiveReadIsGivenTheCommitsLuxSyncedIntoTheCheckout(t *testing.T) {
 	if got := read(phase); got != "target|/workspace/repos/target|"+start {
 		t.Errorf("no syncs: %q", got)
 	}
-	set(`{"target":"`+start+`"}`, `{"target":{"main":"`+base+`","`+branch+`":"`+tip+`","other":"`+tip+`"},"elsewhere":{"main":"`+tip+`"}}`)
+	set(`{"target":"`+start+`"}`, `{"target":{"main":["`+base+`"],"`+branch+`":["`+tip+`"],"other":["`+tip+`"]},"elsewhere":{"main":["`+tip+`"]}}`)
 	if got := read(phase); got != "target|/workspace/repos/target|"+start+" "+base {
 		t.Errorf("phase Run: %q, want its start then main's sync", got)
 	}

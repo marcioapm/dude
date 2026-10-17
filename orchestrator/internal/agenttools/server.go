@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /tools", s.listJSON)
 	mux.HandleFunc("POST /tools/{name}", s.callJSON)
 	mux.HandleFunc("GET /git/coauthors", s.coauthors)
+	mux.HandleFunc("GET /git/diff-bases", s.diffBases)
 	mux.Handle("/", mcpHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -152,6 +153,10 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		caller, err := s.lookup(r.Context(), token)
+		// Final hooks may run after dude has already marked the Run ended.
+		if err == nil && !(r.Method == "GET" && r.URL.Path == "/git/diff-bases") && (caller.Status == "completed" || caller.Status == "failed" || caller.Status == "aborted") {
+			err = errUnknown
+		}
 		switch {
 		case errors.Is(err, errUnknown):
 			http.Error(w, httpUnknownRun, http.StatusUnauthorized)
@@ -247,10 +252,6 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	}
 	if role != nil {
 		c.Role = *role
-	}
-	switch c.Status {
-	case "completed", "failed", "aborted":
-		return c, errUnknown
 	}
 	return c, nil
 }
