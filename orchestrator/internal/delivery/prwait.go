@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -107,9 +106,7 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 
 // prPhaseStarted is what start_phase answers for a phase started while the
 // delivery waits on its pull requests.
-func prPhaseStarted(phase string) string {
-	return fmt.Sprintf("The delivery starts %s now, from the pull request's head, while it waits on it. You are woken when it is done.", phase)
-}
+func prPhaseStarted(phase string) string { return render(prPhaseStartedTmpl, phase) }
 
 // openPRRepos names the repositories of the pull requests still open.
 func openPRRepos(ctx context.Context, tx pgx.Tx, ids []string) ([]string, error) {

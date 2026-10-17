@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools
+//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -62,6 +62,7 @@ var (
 	machineOfferTmpl           = mustTemplate("contracts/machine-offer")
 	prFeedbackTmpl             = mustTemplate("contracts/pr-feedback")
 	prFeedbackBotsTmpl         = mustTemplate("contracts/pr-feedback-bots")
+	prPhaseStartedTmpl         = mustTemplate("results/pr-phase-started")
 	projectNotesTmpl           = mustTemplate("contracts/project-notes")
 	restartedTmpl              = mustTemplate("contracts/restarted")
 	reviewTmpl                 = mustTemplate("contracts/review")
@@ -199,6 +200,17 @@ func render(t *template.Template, data any) string {
 func agentTexts(prefix string, want ...string) map[string]string {
 	return agentTextsIn(agentTemplates, prefix, want...)
 }
+
+// Text is one agents/ template for another package to render, resolved
+// when it is made: a package-level Text panics at init if its file is
+// missing.
+type Text struct{ t *template.Template }
+
+// MustText is the template name ("results/steer"), or a panic naming its file.
+func MustText(name string) Text { return Text{mustTemplate(name)} }
+
+// Render executes the template with data (see render).
+func (x Text) Render(data any) string { return render(x.t, data) }
 
 // ToolText is agents/tools/<key>.md rendered with data: a tool's
 // description ("list_tasks", "session/list_tasks"), or the tools' shared

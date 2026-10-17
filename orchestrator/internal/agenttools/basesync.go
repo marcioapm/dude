@@ -234,28 +234,25 @@ func baseLine(repo, base, recorded string, res lux.SyncResult, earlier bool) Bas
 	if !earlier {
 		b.Behind, b.Ahead = &res.Behind, &res.Ahead
 	}
-	merge := fmt.Sprintf("`git merge-tree --write-tree HEAD lux/%s` shows whether it conflicts; then `git merge lux/%s`, "+
-		"resolve, run the affected tests, commit", base, base)
+	var c, mergeWhen string
 	switch {
 	case res.Status == "" && recorded != "":
-		b.Status = "asked"
-		b.Next = fmt.Sprintf("lux has not reported the fetch yet, so lux/%s may be missing or older than the base you "+
-			"integrate: call sync_base again in a moment. %s.", base, delivery.IntegrationMergeWhen(base, recorded)) +
-			" Then " + merge + "."
+		b.Status, c, mergeWhen = "asked", "asked-recorded", delivery.IntegrationMergeWhen(base, recorded)
 	case res.Status == "":
-		b.Status = "asked"
-		b.Next = fmt.Sprintf("lux has not reported the fetch yet: in a moment, `git rev-list --count HEAD..lux/%s` says "+
-			"how far behind you are (an error: not fetched yet); then %s.", base, merge)
+		b.Status, c = "asked", "asked"
 	case earlier:
-		b.Next = fmt.Sprintf("lux has not reported this call's fetch; its last fetch, for an earlier call, landed %s on "+
-			"lux/%s: `git rev-list --count HEAD..lux/%s` says how far behind you are; then %s.", res.To, base, base, merge)
+		c = "earlier"
 	case res.Status == "failed":
-		b.Next = "lux could not fetch it; call sync_base again, or carry on without it."
+		c = "failed"
 	case res.Behind == 0:
-		b.Next = fmt.Sprintf("You already have everything on %s: nothing to merge.", base)
+		c = "up-to-date"
 	default:
-		b.Next = fmt.Sprintf("%s is %d commits ahead of you: %s.", base, res.Behind, merge)
+		c = "behind"
 	}
+	b.Next = syncBaseResult.Render(struct {
+		Case, Base, To, MergeWhen string
+		Behind                    int
+	}{c, base, res.To, mergeWhen, res.Behind})
 	return b
 }
 

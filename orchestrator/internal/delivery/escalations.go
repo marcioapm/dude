@@ -506,7 +506,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 }
 
 // escalationDecidedNext is what decide_escalation answers once it decided.
-const escalationDecidedNext = "The delivery carries it out now, as the banner's would. You are woken at the next decision."
+var escalationDecidedNext = render(mustTemplate("results/escalation-decided"), nil)
 
 // TaskOwner is the task's owner: its first active person, "" for none.
 func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {

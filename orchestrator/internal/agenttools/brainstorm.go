@@ -492,14 +492,6 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 	return proposeOut{ProposalID: id, Next: proposedNext}, err
 }
 
-// What propose and relate tell the session's agent comes next.
-const (
-	proposedNext = "The card is in the session. A member files what they keep, as themselves; " +
-		"you are not told unless they say so."
-	relationProposedNext = "The relation is on a card in the session. A member files it, as themselves; " +
-		"you are not told unless they say so."
-)
-
 // checkProposalRelations holds a proposal's relations to what filing can
 // write: a task item's refs name an existing task of a linked project or
 // another task item of the proposal, never itself; and the proposal's own
@@ -707,9 +699,4 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 
 // sessionAskNext is what the session's ask_person tells the agent to do
 // next; to, the one member who answers, "" for any.
-func sessionAskNext(to string) string {
-	if to != "" {
-		return "End your turn now. Only " + to + " answers it; what others say meanwhile comes with the answer."
-	}
-	return "End your turn now. The answer will be your next message."
-}
+func sessionAskNext(to string) string { return sessionAskResult.Render(struct{ To string }{to}) }

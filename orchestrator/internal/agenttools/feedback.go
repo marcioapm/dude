@@ -62,9 +62,6 @@ func resolveFeedback(ctx context.Context, tx pgx.Tx, c Caller, in feedbackResolv
 		"next": feedbackResolvedNext}, nil
 }
 
-// feedbackResolvedNext is what feedback_resolve tells the agent.
-const feedbackResolvedNext = "Resolved, pending: it holds until your work is published with this commit in it."
-
 // feedbackRefusal answers a refused feedback call as the tool's refusal.
 func feedbackRefusal(err error) error {
 	var fe delivery.FeedbackError

@@ -355,16 +355,26 @@ func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) er
 	return nil
 }
 
-// Before the pull request, the conductor asks this, with these answers;
-// only Open or Draft, at the head it was asked at, opens it.
-const (
-	GateQuestion = "Open the pull request?"
-	GateOpen     = "Open"
-	GateDraft    = "Draft"
+// Before the pull request, the conductor asks this, with these answers
+// (results/gate-choices, one a line, Open and Draft first); only Open or
+// Draft, at the head it was asked at, opens it.
+const GateQuestion = "Open the pull request?"
+
+var (
+	GateChoices = gateChoices(render(mustTemplate("results/gate-choices"), nil))
+	GateOpen    = GateChoices[0]
+	GateDraft   = GateChoices[1]
 )
 
-// GateChoices are the gate question's answers.
-var GateChoices = []string{GateOpen, GateDraft, "Show me the diff", "Another round"}
+// gateChoices are the gate's answers, one a line: Open, Draft, then the
+// rest. Fewer than two panics at init.
+func gateChoices(text string) []string {
+	choices := strings.Split(text, "\n")
+	if len(choices) < 2 {
+		panic("agents/results/gate-choices.md needs Open and Draft, one a line")
+	}
+	return choices
+}
 
 // What decide answers the conductor once the delivery goes on, or once it
 // has asked the person.

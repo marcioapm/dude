@@ -226,23 +226,12 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 // movedAnswer is the design's answer to an accepted request; role is the
 // caller's settings role.
 func movedAnswer(session bool, role string, choices delivery.MachineChoices, target delivery.Machine) string {
-	where := ""
-	if pool := choices.OtherPool(target); pool != "" {
-		where = " in the " + pool + " pool"
+	label := strings.ToLower(delivery.RoleLabel[role])
+	if label == "" {
+		label = role
 	}
-	later := "Later " + strings.ToLower(delivery.RoleLabel[role]) + " Runs in this task run on " + target.Name + " too."
-	switch {
-	case session:
-		later = "This session's agent runs on " + target.Name + " from now on."
-	case role == "implementer":
-		later = "Later implementer and fixer Runs in this task run on " + target.Name + " too."
-	case role == delivery.RoleConductor:
-		later = "Later conductors in this task run on " + target.Name + " too."
-	case delivery.RoleLabel[role] == "":
-		later = "Later " + role + " Runs in this task run on " + target.Name + " too."
-	}
-	return fmt.Sprintf("Moved: you run on %s (%s)%s from your next step. Your conversation and your checkout are kept, "+
-		"committed or not, with everything else on /workspace and your home. Running processes and /tmp are not: start "+
-		"your servers and watchers again. %s End your turn now; you are resumed on %s.",
-		target.Name, target.Spec(), where, later, target.Name)
+	return machineMoved.Render(struct {
+		Name, Spec, Pool, Role, Label string
+		Session                       bool
+	}{target.Name, target.Spec(), choices.OtherPool(target), role, label, session})
 }

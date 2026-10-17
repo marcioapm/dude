@@ -117,21 +117,14 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 }
 
 func settledAs(status, by string, attempts int, note string) string {
-	switch status {
-	case "resolved":
-		if by != "" {
-			return "fixed by " + by
-		}
-		return "fixed"
-	case "accepted":
-		return delivery.AcceptedBy(note)
-	case "superseded":
-		return "superseded: the code it described is gone"
+	accepted := ""
+	if status == "accepted" {
+		accepted = delivery.AcceptedBy(note)
 	}
-	if attempts > 0 {
-		return fmt.Sprintf("open after %d fix attempts", attempts)
-	}
-	return "open"
+	return findingsSettled.Render(struct {
+		Status, By, Accepted string
+		Attempts             int
+	}{status, by, accepted, attempts})
 }
 
 // ---- pull_requests ----------------------------------------------------------
@@ -509,12 +502,3 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
 	return conducted(map[string]any{"updated": true, "next": taskUpdatedNext}, err)
 }
-
-// What the conductor's tools tell it comes next.
-const (
-	steerNext            = "Queued for the Run. You are woken when it has read it, or if it never will."
-	restartNext          = "The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision."
-	publishNext          = "lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused."
-	relationsWrittenNext = "The relations are written. A task blocked by another starts only once that one is merged."
-	taskUpdatedNext      = "The implementer's prompt will have it."
-)

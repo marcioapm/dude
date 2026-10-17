@@ -121,14 +121,8 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	return waitOut{Waiting: &w, Next: waitNext(toKey)}, nil
 }
 
-// replyCameNext is wait_for_reply's answer when the reply is in already.
-const replyCameNext = "The reply had already come: carry on with it."
-
 // waitNext is wait_for_reply's answer when it waits on peer's reply.
-func waitNext(peer string) string {
-	return "End your turn now. " + peer + "'s reply resumes you as your next message; if none " +
-		"comes within the project's grace, your Run is parked until it does."
-}
+func waitNext(peer string) string { return waitResult.Render(peer) }
 
 // ---- note ----------------------------------------------------------------------
 
