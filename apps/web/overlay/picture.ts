@@ -59,14 +59,16 @@ const unescapeCss = (s: string) => s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (
 // A content value's tokens: string (1, 2), url() (3, its URL in 4-6), attr() (7), counter, [no-]quote (8, 9), alt-text slash (10).
 const CONTENT_TOKEN = new RegExp(String.raw`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(${URL_SRC})|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(no-)?(open|close)-quote|(\/)`, "g");
 
+type ContentPart = string | { img: string };
+
 /**
  * What a computed `content` shows, as text and data-URL images; null when
  * it names an image only a request could get. Counters are left out: no
  * API gives their value. What follows a top-level `/` is alt text.
  */
-export function contentParts(content: string, el: Element, quotes: string): (string | { img: string })[] | null {
+export function contentParts(content: string, el: Element, quotes: string): ContentPart[] | null {
   const q = quotes === "auto" ? ["\u201c", "\u201d"] : [...quotes.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => unescapeCss(m[1]!));
-  const parts: (string | { img: string })[] = [];
+  const parts: ContentPart[] = [];
   // Quote nesting within this one value; depth an ancestor's quotes left open is not known here.
   let depth = 0;
   for (const m of content.matchAll(CONTENT_TOKEN)) {
