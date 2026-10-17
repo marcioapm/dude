@@ -11,16 +11,14 @@ import (
 
 // A Run whose lux call keeps failing is retried 5 s later, then 10 s, 20 s
 // and so on up to 5 minutes, sweep after sweep; a failure long after the
-// last retry was due starts over at 5 s; and a longer wait the forge asked
-// for wins over the back-off.
+// last retry was due starts over at 5 s; and the forge's wait wins over the
+// back-off when longer, and loses to it when shorter.
 func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 	w := newResumeWorld(t)
 	// A failed Run not kept: the sweep asks lux to cancel it, and lux is
 	// unavailable.
 	r, fake := endedRun(t, w, "failed", "running", false)
 	fake.err = map[string]error{r.LuxRunID: &lux.Error{Status: 503, Code: "unavailable"}}
-	// Every back-off is due at once, as if waited out.
-	w.s.RetryAhead = time.Hour
 	backoff := func() (time.Duration, int) {
 		t.Helper()
 		var secs float64
@@ -31,8 +29,11 @@ func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 		}
 		return time.Duration(secs * float64(time.Second)), failures
 	}
-	sweep := func(want time.Duration, wantFailures int) {
+	// sweepLate sweeps once the last retry is due and was due dueAgo ago,
+	// as a sweep after waiting it out finds it.
+	sweepLate := func(dueAgo string, want time.Duration, wantFailures int) {
 		t.Helper()
+		w.exec(`UPDATE runs SET next_attempt_at = now(), retry_due_at = now() - $2::interval WHERE id = $1`, r.ID, dueAgo)
 		calls := len(fake.Calls())
 		if _, err := w.s.Sweep(w.ctx); err != nil {
 			t.Fatal(err)
@@ -45,19 +46,25 @@ func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 			t.Fatalf("backed off %v after %d failures in a row, want %v after %d", got, failures, want, wantFailures)
 		}
 	}
+	sweep := func(want time.Duration, wantFailures int) { t.Helper(); sweepLate("30 seconds", want, wantFailures) }
 	for i, want := range []time.Duration{5, 10, 20, 40, 80, 160, 300, 300} {
 		sweep(want*time.Second, i+1)
 	}
 	// The retry was due over a minute before this failure: not in a row.
-	w.exec(`UPDATE runs SET retry_due_at = now() - interval '61 seconds' WHERE id = $1`, r.ID)
-	sweep(5*time.Second, 1)
+	sweepLate("61 seconds", 5*time.Second, 1)
 	sweep(10*time.Second, 2)
 
 	// GitHub's wait, longer than the back-off, is waited out.
-	fake.mu.Lock()
-	fake.err[r.LuxRunID] = &forge.Error{Status: 429, Message: "rate limit", RetryAfter: 10 * time.Minute}
-	fake.mu.Unlock()
+	setErr := func(err error) {
+		fake.mu.Lock()
+		fake.err[r.LuxRunID] = err
+		fake.mu.Unlock()
+	}
+	setErr(&forge.Error{Status: 429, Message: "rate limit", RetryAfter: 10 * time.Minute})
 	sweep(10*time.Minute, 3)
+	// Shorter than the back-off, the back-off wins.
+	setErr(&forge.Error{Status: 429, Message: "rate limit", RetryAfter: time.Second})
+	sweep(40*time.Second, 4)
 }
 
 // A retry that succeeds ends the streak: the Run's next failure, though
