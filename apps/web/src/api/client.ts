@@ -67,6 +67,10 @@ import type {
   ModelTestResult,
   ModelTestInput,
   ProxyModels,
+  JudgementCallDetail,
+  JudgementCallsResponse,
+  JudgementSettings,
+  JudgementTestResult,
   ImageBuildWithLog,
   ImageChoice,
   ImageDetail,
@@ -1265,6 +1269,35 @@ export class ApiClient {
   /** One small request for a tier's model with its effort, options and headers, as its agent sends it. */
   testModel(input: ModelTestInput): Promise<{ model: string; result: ModelTestResult }> {
     return this.#request("POST", "/v1/models/test", input);
+  }
+
+  // -- judgements: the organisation's judgement tier and its calls -----------
+
+  judgementSettings(): Promise<JudgementSettings> {
+    return this.#request("GET", "/v1/judgements/settings");
+  }
+
+  /** Sets the judgement tier; null is Off. */
+  setJudgementTier(tierId: string | null): Promise<JudgementSettings> {
+    return this.#request("PUT", "/v1/judgements/settings", { tierId });
+  }
+
+  judgements(query: { asker?: string; limit?: number; before?: string } = {}): Promise<JudgementCallsResponse> {
+    const params = new URLSearchParams();
+    if (query.asker) params.set("asker", query.asker);
+    if (query.limit) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const qs = params.toString();
+    return this.#request("GET", `/v1/judgements${qs ? `?${qs}` : ""}`);
+  }
+
+  judgement(id: string): Promise<JudgementCallDetail> {
+    return this.#request("GET", `/v1/judgements/${encodeURIComponent(id)}`);
+  }
+
+  /** The test question, asked of a tier as a judgement would be; not recorded. */
+  testJudgement(tierId: string): Promise<JudgementTestResult> {
+    return this.#request("POST", "/v1/judgements/test", { tierId });
   }
 
   // -- images: the organization's library ------------------------------------
