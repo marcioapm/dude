@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -130,37 +131,23 @@ func goldenPRFeedback() []forge.ActionableFeedback {
 	}
 }
 
+// anchor is a FeedbackAnchor from its JSON, as the backend stores it.
+func anchor(js string) FeedbackAnchor {
+	var a FeedbackAnchor
+	if err := json.Unmarshal([]byte(js), &a); err != nil {
+		panic(err)
+	}
+	return a
+}
+
 func goldenFeedback() []FeedbackItem {
-	code := FeedbackAnchor{Kind: "code", Repo: "api", Path: "export.go", Side: "new", StartLine: 10, EndLine: 12, HeadSHA: "abcdef1234567"}
-	code.Excerpt = append(code.Excerpt, struct {
-		Kind string `json:"kind"`
-		Old  *int   `json:"old"`
-		New  *int   `json:"new"`
-		Text string `json:"text"`
-	}{Kind: "+", Text: "total += round(line)"}, struct {
-		Kind string `json:"kind"`
-		Old  *int   `json:"old"`
-		New  *int   `json:"new"`
-		Text string `json:"text"`
-	}{Kind: " ", Text: "return total"})
-	uncommitted := FeedbackAnchor{Kind: "code", Path: "web/page.tsx", Side: "new", StartLine: 3, EndLine: 3, RunID: "run_impl"}
-	preview := FeedbackAnchor{Kind: "preview", URL: "https://app.preview.example/invoices?month=3", Selector: "button.export",
-		Text: "Export   CSV\nnow", AttachmentID: "att_pic"}
-	preview.Viewport = &struct {
-		Width  int `json:"width"`
-		Height int `json:"height"`
-	}{1280, 720}
-	preview.Rect = &struct {
-		X      float64 `json:"x"`
-		Y      float64 `json:"y"`
-		Width  float64 `json:"width"`
-		Height float64 `json:"height"`
-	}{152.4, 431.6, 92, 38}
-	preview.Component = &struct {
-		Name string `json:"name,omitempty"`
-		File string `json:"file,omitempty"`
-		Line int    `json:"line,omitempty"`
-	}{Name: "ExportButton", File: "web/ExportButton.tsx", Line: 9}
+	code := anchor(`{"kind":"code","repo":"api","path":"export.go","side":"new","startLine":10,"endLine":12,"headSha":"abcdef1234567",
+		"excerpt":[{"kind":"+","text":"total += round(line)"},{"kind":" ","text":"return total"}]}`)
+	uncommitted := anchor(`{"kind":"code","path":"web/page.tsx","side":"new","startLine":3,"endLine":3,"runId":"run_impl"}`)
+	preview := anchor(`{"kind":"preview","url":"https://app.preview.example/invoices?month=3","selector":"button.export",
+		"text":"Export   CSV\nnow","attachmentId":"att_pic","viewport":{"width":1280,"height":720},
+		"rect":{"x":152.4,"y":431.6,"width":92,"height":38},
+		"component":{"name":"ExportButton","file":"web/ExportButton.tsx","line":9}}`)
 	return []FeedbackItem{
 		{ID: "fbi_code", Author: "Ana", Body: "This rounds per line.\nSum first.", Anchor: code, Outdated: true,
 			History: []FeedbackHistoryAt{{Kind: "reply", By: "the fixer", Body: "Will do."}, {Kind: "reopened", By: "Ana", Body: "Not yet."}}},
