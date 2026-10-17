@@ -19,6 +19,14 @@ func TestGoldenInstructions(t *testing.T) {
 	}
 }
 
+func TestGoldenReviewerInstructions(t *testing.T) {
+	for _, category := range reviewerOrder {
+		in := goldenTask()
+		in.Tools, in.CLI = true, true
+		golden(t, "instructions-aspect-"+category, Instructions("reviewer", category, in.InstructionsInput()))
+	}
+}
+
 func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 	org := "Organisation's stance: {{task.title}}."
 	for _, role := range PromptRoles {

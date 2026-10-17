@@ -160,7 +160,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
 // Each is agents/contracts/review-focus/<category>.md.
-var reviewFocus = agentTexts("contracts/review-focus/", reviewerOrder...)
+var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 
 // reviewContract is how every reviewer works and what its reply carries,
 // whatever its instructions say: findings a fixer can act on and a person

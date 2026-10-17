@@ -169,7 +169,7 @@ func reviewerAspect(category string) string {
 	if reviewFocus[category] == "" {
 		category = "correctness"
 	}
-	return "# Your aspect: " + category + "\n\n" + reviewFocus[category]
+	return reviewFocus[category]
 }
 
 // stanceTitle is the stance section's heading, without its "## ".

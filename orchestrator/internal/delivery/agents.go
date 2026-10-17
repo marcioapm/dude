@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/instructions agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
+//go:embed agents/roles/*.md agents/instructions agents/aspects agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
