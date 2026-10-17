@@ -35,6 +35,8 @@ const CheckCommand = "containers-check"
 
 // Found is what the check found in an image.
 type Found struct {
+	// Paths required in every finished image for co-author trailers.
+	GitConfig, PrepareCommitMsg string `json:",omitempty"`
 	// Paths, "" for none; versions as the engine prints them.
 	Podman, PodmanVersion string `json:",omitempty"`
 	// Docker is the rootless launcher (dockerd-rootless[.sh]); it runs
@@ -104,6 +106,18 @@ func (f Found) engine() bool { return f.Podman != "" || f.docker() }
 // partialDocker is a rootless Docker launcher without the rest of it, in
 // an image with no podman: what is missing is Docker's parts.
 func (f Found) partialDocker() bool { return f.Podman == "" && f.Docker != "" && !f.docker() }
+
+func (f Found) HooksPassed() bool { return f.GitConfig != "" && f.PrepareCommitMsg != "" }
+
+func (f Found) HooksSentence() string {
+	if f.GitConfig == "" && f.PrepareCommitMsg == "" {
+		return "the image has no /usr/local/share/dude/git-config or prepare-commit-msg hook"
+	}
+	if f.GitConfig == "" {
+		return "the image has no /usr/local/share/dude/git-config"
+	}
+	return "the image has no /usr/local/share/dude/git-hooks/prepare-commit-msg hook"
+}
 
 // Passed is whether the image can run containers.
 func (f Found) Passed() bool {
@@ -275,6 +289,8 @@ func (f Found) LogLines() []string {
 		docker += ", without " + andList(f.dockerMissing())
 	}
 	return []string{
+		"check  git-config  " + or(f.GitConfig, ""),
+		"check  prepare-commit-msg  " + or(f.PrepareCommitMsg, ""),
 		"check  engine  podman: " + or(f.Podman, f.PodmanVersion) + " · docker: " + docker,
 		"check  fuse-overlayfs  " + or(f.FuseOverlayfs, ""),
 		"check  newuidmap  " + mapper(f.Newuidmap, "cap_setuid"),
@@ -305,7 +321,9 @@ func ContainersCheck(root string) Found {
 		}
 		return ""
 	}
-	f.Podman = look("podman")
+	f.GitConfig = regular(root, "/usr/local/share/dude/git-config")
+	f.PrepareCommitMsg = regular(root, "/usr/local/share/dude/git-hooks/prepare-commit-msg")
+
 	if f.Podman != "" && root == "/" {
 		f.PodmanVersion = version(f.Podman)
 	}
@@ -327,6 +345,14 @@ func ContainersCheck(root string) Found {
 	return f
 }
 
+func regular(root, path string) string {
+	full := filepath.Join(root, path)
+	st, err := os.Stat(full)
+	if err == nil && st.Mode().IsRegular() {
+		return path
+	}
+	return ""
+}
 func searchPath() []string {
 	dirs := filepath.SplitList(os.Getenv("PATH"))
 	for _, d := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {

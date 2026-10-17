@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"syscall"
 
@@ -65,9 +66,9 @@ func main() {
 }
 
 type settings struct {
-	DatabaseURL, Repository, Layer, Authfile string
-	Limits                                   images.Limits
-	MinFree                                  int64
+	DatabaseURL, Repository, Layer, LayerRepository, LayerContext, DudeBinary, Authfile string
+	Limits                                                                              images.Limits
+	MinFree                                                                             int64
 }
 
 var repoRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$`)
@@ -79,10 +80,13 @@ func resolve(opts config.Options) (*config.Config, settings, error) {
 		return nil, settings{}, fmt.Errorf("configuration: %w", err)
 	}
 	s := settings{
-		DatabaseURL: cfg.String("DUDE_BUILDER_DATABASE_URL"),
-		Repository:  cfg.String("DUDE_BUILDER_REPOSITORY"),
-		Layer:       cfg.String("DUDE_LAYER_IMAGE"),
-		Authfile:    cfg.String("DUDE_BUILDER_AUTHFILE"),
+		DatabaseURL:     cfg.String("DUDE_BUILDER_DATABASE_URL"),
+		Repository:      cfg.String("DUDE_BUILDER_REPOSITORY"),
+		Layer:           cfg.String("DUDE_LAYER_IMAGE"),
+		LayerRepository: images.LayerRepository(cfg.String("DUDE_BUILDER_REPOSITORY")),
+		LayerContext:    filepath.Join(filepath.Dir(filepath.Dir(os.Args[0])), "share/dude/layer"),
+		DudeBinary:      filepath.Join(filepath.Dir(filepath.Dir(os.Args[0])), "bin/dude"),
+		Authfile:        cfg.String("DUDE_BUILDER_AUTHFILE"),
 		Limits: images.Limits{Platform: cfg.String("DUDE_BUILDER_PLATFORM"), CPUs: cfg.Float("DUDE_BUILDER_CPUS"),
 			Memory: cfg.String("DUDE_BUILDER_MEMORY"), Timeout: cfg.Duration("DUDE_BUILDER_TIMEOUT")},
 		MinFree: cfg.Int("DUDE_BUILDER_MIN_FREE_BYTES"),
@@ -95,7 +99,6 @@ func resolve(opts config.Options) (*config.Config, settings, error) {
 	}
 	need("DUDE_BUILDER_DATABASE_URL", s.DatabaseURL)
 	need("DUDE_BUILDER_REPOSITORY", s.Repository)
-	need("DUDE_LAYER_IMAGE", s.Layer)
 	if s.Layer != "" && !images.IsDigestRef(s.Layer) {
 		problems = append(problems, fmt.Errorf("%s must name the layer by digest (…@sha256:<64 hex>), not %q", cfg.Label("DUDE_LAYER_IMAGE"), s.Layer))
 	}
@@ -167,14 +170,16 @@ func run(log *slog.Logger) error {
 	log.Info("image builder started", "version", version.Version, "repository", s.Repository, "layer", images.LayerShort(s.Layer),
 		"cpus", s.Limits.CPUs, "memory", s.Limits.Memory, "platform", s.Limits.Platform)
 	b := &images.Builder{
-		DB:         database,
-		Podman:     podman,
-		Repository: s.Repository,
-		Layer:      s.Layer,
-		Limits:     s.Limits,
-		MinFree:    s.MinFree,
-		Log:        log,
-		Version:    version.Version,
+		DB:              database,
+		Podman:          podman,
+		Repository:      s.Repository,
+		Layer:           s.Layer,
+		LayerRepository: s.LayerRepository,
+		LayerContext:    s.LayerContext, DudeBinary: s.DudeBinary,
+		Limits:  s.Limits,
+		MinFree: s.MinFree,
+		Log:     log,
+		Version: version.Version,
 	}
 	return b.Run(ctx)
 }

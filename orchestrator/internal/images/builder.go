@@ -28,11 +28,15 @@ type Builder struct {
 	Podman Podman
 	// Where versions are pushed: <registry>/<repo>, no tag.
 	Repository string
-	// The dude layer, a digest ref (DUDE_LAYER_IMAGE).
-	Layer   string
-	Limits  Limits
-	MinFree int64
-	Log     *slog.Logger
+	// Layer is the explicit DUDE_LAYER_IMAGE override, if configured.
+	Layer string
+	// LayerRepository is where the builder publishes its owned layer.
+	LayerRepository string
+	// LayerContext and DudeBinary are the installed release's context and CLI.
+	LayerContext, DudeBinary string
+	Limits                   Limits
+	MinFree                  int64
+	Log                      *slog.Logger
 	// How often a running job's log and heartbeat are written; 2s when 0.
 	Flush time.Duration
 	// How long an idle builder waits before looking again; 3s when 0.
@@ -76,6 +80,11 @@ type job struct {
 
 // Run takes jobs until ctx ends, writing its heartbeat throughout.
 func (b *Builder) Run(ctx context.Context) error {
+	if b.Layer == "" {
+		if err := b.ensureLayer(ctx); err != nil {
+			return err
+		}
+	}
 	if err := b.Recover(ctx); err != nil {
 		return err
 	}
@@ -597,10 +606,10 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 		return "", wrapTimeout(ctx, err)
 	}
 	timings["build"] += time.Since(start).Seconds()
+	if err := b.checkContainers(ctx, j, tag, p, timings); err != nil {
+		return "", err
+	}
 	if j.CanRunContainers {
-		if err := b.checkContainers(ctx, j, tag, p, timings); err != nil {
-			return "", err
-		}
 		// The check is done: the page shows the push as the next stage.
 		p.setStage("pushing")
 	}
@@ -622,7 +631,7 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 // job with the check's sentence, and nothing of it is pushed or published.
 func (b *Builder) checkContainers(ctx context.Context, j job, tag string, p *progress, timings map[string]float64) error {
 	p.setStage("checking")
-	p.printf("Check containers: v%d is marked Can run containers, so dude checks it.\n", j.Number)
+	p.printf("Checking the finished image for dude's git hook and config.\n")
 	start := time.Now()
 	found, err := b.Podman.CheckContainers(ctx, tag, p)
 	timings["check"] = time.Since(start).Seconds()
@@ -632,9 +641,17 @@ func (b *Builder) checkContainers(ctx context.Context, j job, tag string, p *pro
 	for _, l := range found.LogLines() {
 		p.printf("%s\n", l)
 	}
-	result, _ := json.Marshal(map[string]any{"passed": found.Passed(), "detail": found.Detail()})
+	result, _ := json.Marshal(map[string]any{"passed": found.Passed() && found.HooksPassed(), "detail": found.Detail()})
 	if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
 		return err
+	}
+	if !found.HooksPassed() {
+		sentence := "Can't build the image: " + found.HooksSentence() + "."
+		p.printf("%s\n", sentence)
+		return reason(sentence)
+	}
+	if !j.CanRunContainers {
+		return nil
 	}
 	if found.Passed() {
 		p.printf("Check passed: it can run containers.\n")

@@ -119,7 +119,13 @@ func Known(ctx context.Context, tx pgx.Tx) (func(string) bool, error) {
 	return func(id string) bool { return set[id] }, nil
 }
 
-// Outcome is what a Run whose image is a library image does now: start
+func EffectiveLayer(ctx context.Context, tx pgx.Tx, override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return CurrentLayer(ctx, tx)
+}
+
 // on Ref, wait for WaitBuild (its dude layer being added, or its first
 // version building), or fail with Fail, before lux and at no model cost.
 type Outcome struct {
@@ -130,7 +136,7 @@ type Outcome struct {
 }
 
 // ErrNotConfigured is a library image with no dude layer to finish it.
-const ErrNotConfigured = "image library not configured: DUDE_LAYER_IMAGE is unset, so the library's images cannot run"
+const ErrNotConfigured = "image library not configured: dude-image-builder has not published a dude layer yet"
 
 // Resolve is what imageID gives a Run now, under layer (DUDE_LAYER_IMAGE),
 // in the Run's organization's transaction. waitingOn is the job the Run
@@ -140,6 +146,12 @@ const ErrNotConfigured = "image library not configured: DUDE_LAYER_IMAGE is unse
 // or joined if one is: two Runs needing the same one share it, and the
 // builder takes it before any build.
 func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (Outcome, error) {
+	var err error
+	effectiveLayer, err := EffectiveLayer(ctx, tx, layer)
+	if err != nil {
+		return Outcome{}, err
+	}
+	layer = effectiveLayer
 	if waitingOn != "" {
 		var state, kind string
 		var why *string
@@ -164,7 +176,7 @@ func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (
 	var number *int
 	var userRef *string
 	var containers *bool
-	err := tx.QueryRow(ctx, `SELECT i.name, v.id, v.number, v.user_ref, v.can_run_containers FROM images i
+	err = tx.QueryRow(ctx, `SELECT i.name, v.id, v.number, v.user_ref, v.can_run_containers FROM images i
 		LEFT JOIN image_versions v ON v.id = i.published_version_id WHERE i.id = $1`, imageID).Scan(&name, &versionID, &number, &userRef, &containers)
 	if db.IsNotFound(err) {
 		return Outcome{Fail: fmt.Sprintf("its image %s is not one of the organization's", imageID)}, nil

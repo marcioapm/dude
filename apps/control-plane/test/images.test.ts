@@ -178,18 +178,49 @@ describe("images", () => {
 });
 
 describe("build and publish", () => {
-  test("with no dude layer configured, builds are unavailable and say why", async () => {
+  test("before the first published dude layer, builds are unavailable and say why", async () => {
     configure(null);
     try {
-      expect((await body(await call(adminKey, "GET", "/v1/images"))).builder).toMatchObject({ available: false, layer: null });
+      expect((await body(await call(adminKey, "GET", "/v1/images"))).builder).toMatchObject({ available: false, layer: null, offline: false });
       const res = await call(adminKey, "POST", `/v1/images/${ids.base}/build`);
       expect(res.status).toBe(503);
-      expect((await body(res)).error.code).toBe("builder_unavailable");
+      expect((await body(res)).error).toMatchObject({
+        code: "builder_unavailable", message: "dude-image-builder has not published a dude layer yet",
+      });
+      const before = await image(ids.base!);
+      const edited = await call(adminKey, "POST", `/v1/images/${ids.base}/build`, { containerfile: BASE + "RUN true\n", note: "Not saved" });
+      expect(edited.status).toBe(503);
+      const after = await image(ids.base!);
+      expect(after.versions).toEqual(before.versions);
+      expect(after.builds).toEqual([]);
     } finally {
       configure(LAYER);
     }
   });
 
+  test("a current published dude layer enables builds, and the override wins", async () => {
+    configure(null);
+    const first = "registry.example/dude/layer@sha256:" + "2".repeat(64);
+    const second = "registry.example/dude/layer@sha256:" + "3".repeat(64);
+    await owner`INSERT INTO image_layers (tag, ref, platform, version, current_at) VALUES
+      ('v1', ${first}, 'linux/amd64', '1'), ('v2', ${second}, 'linux/amd64', '2')`;
+    try {
+      const listed = await body(await call(memberKey, "GET", "/v1/images"));
+      expect(listed.builder).toMatchObject({ available: true, layer: second });
+
+      const created = await body(await call(adminKey, "POST", "/v1/images", { name: "layer-check", containerfile: BASE }));
+      const queued = await body(await call(adminKey, "POST", `/v1/images/${created.image.id}/build`));
+      expect(queued.buildId).toBeString();
+      expect(queued.image.builder).toMatchObject({ available: true, layer: second });
+      expect((await call(adminKey, "POST", `/v1/images/builds/${queued.buildId}/cancel`)).status).toBe(200);
+
+      configure(LAYER);
+      expect((await body(await call(memberKey, "GET", "/v1/images"))).builder.layer).toBe(LAYER);
+    } finally {
+      configure(null);
+      await owner`DELETE FROM image_layers`;
+    }
+  });
   test("Build & publish numbers the draft v1 and queues it; the published version is untouched", async () => {
     const res = await call(adminKey, "POST", `/v1/images/${ids.base}/build`);
     expect(res.status).toBe(201);

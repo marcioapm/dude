@@ -153,7 +153,7 @@ type fixture struct {
 func setup(t *testing.T) *fixture {
 	t.Helper()
 	_, owner := dbtest.Open(t)
-	f := &fixture{t: t, owner: owner, org: dbtest.Org(t, owner), podman: &fakePodman{}}
+	f := &fixture{t: t, owner: owner, org: dbtest.Org(t, owner), podman: &fakePodman{found: Found{GitConfig: "/usr/local/share/dude/git-config", PrepareCommitMsg: "/usr/local/share/dude/git-hooks/prepare-commit-msg"}}}
 	f.b = &Builder{DB: dbtest.Builder(t, owner), Podman: f.podman, Repository: repo, Layer: layer,
 		Limits:  Limits{Platform: "linux/arm64", CPUs: 1.5, Memory: "1536m", Timeout: time.Minute},
 		MinFree: 8 << 30, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Flush: 10 * time.Millisecond}
@@ -655,7 +655,7 @@ func TestCheckLimitsRefusesAPodmanWithoutCPUAndMemoryControllers(t *testing.T) {
 }
 
 // able is what the check finds in an image that can run containers.
-var able = Found{Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
+var able = Found{GitConfig: "/usr/local/share/dude/git-config", PrepareCommitMsg: "/usr/local/share/dude/git-hooks/prepare-commit-msg", Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
 	Newuidmap: Mapper{Path: "/usr/bin/newuidmap", FileCap: true}, Newgidmap: Mapper{Path: "/usr/bin/newgidmap", FileCap: true},
 	Subuid: []string{"agent:1:999", "agent:1001:64535"}, Subgid: []string{"agent:1:999", "agent:1001:64535"}}
 
@@ -679,7 +679,7 @@ func TestAVersionThatCanRunContainersIsCheckedOnItsFinalBeforeItIsPushed(t *test
 	}
 	log := f.log(build)
 	for _, want := range []string{
-		"Check containers: v1 is marked Can run containers, so dude checks it.\n",
+		"Checking the finished image for dude's git hook and config.\n",
 		"check  engine  podman: /usr/bin/podman (5.4) · docker: not found\n",
 		"check  subuid  agent:1:999, agent:1001:64535\n",
 		"Check passed: it can run containers.\npushed " + repo + "@",
@@ -754,7 +754,7 @@ func TestAFinishOfAVersionThatCanRunContainersIsCheckedToo(t *testing.T) {
 	f.once()
 	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
 	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_p1', 'finish', $2)`, f.org, next)
-	f.podman.found = Found{}
+	f.podman.found = Found{GitConfig: "/usr/local/share/dude/git-config", PrepareCommitMsg: "/usr/local/share/dude/git-hooks/prepare-commit-msg"}
 	f.once()
 	if got := f.row(`SELECT state, error FROM image_builds WHERE id = 'imb_fin'`); got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
 		t.Errorf("finish = %v", got)
