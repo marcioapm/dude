@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
+//go:embed agents/roles/*.md agents/instructions agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -171,6 +171,9 @@ func parseAgentTemplates(fsys fs.FS) (*template.Template, error) {
 		if err != nil {
 			return err
 		}
+		if role, ok := strings.CutPrefix(p, "agents/instructions/roles/"); ok {
+			return parseRole(root, p, strings.TrimSuffix(role, ".md"), text)
+		}
 		if _, err := root.New(agentTemplateName(p)).Parse(text); err != nil {
 			return fmt.Errorf("%s: %w", p, err)
 		}
@@ -314,4 +317,50 @@ func loadRoles(fsys fs.FS) (map[string][]string, error) {
 		roles[strings.TrimSuffix(path.Base(f), ".md")] = strings.Split(text, "\n\n")
 	}
 	return roles, nil
+}
+
+// stanceHeading opens the part of a role file a saved prompt may replace.
+const stanceHeading = "## How you work as "
+
+// parseRole splits instructions/roles/<role>.md into three templates: roles/<role>/head
+// (its title and purpose), roles/<role>/stance (the "How you work as …"
+// section, heading included: what a saved prompt in replace mode stands in
+// for) and roles/<role>/fixed (every later section, which no saved prompt
+// removes). A file without exactly one stance section is an error.
+func parseRole(root *template.Template, file, role, text string) error {
+	lines := strings.Split(text, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, stanceHeading) {
+			if start >= 0 {
+				return fmt.Errorf("%s has two %q sections", file, strings.TrimSpace(stanceHeading))
+			}
+			start = i
+		}
+	}
+	if start < 0 {
+		return fmt.Errorf("%s has no %q section", file, strings.TrimSpace(stanceHeading)+" <role>")
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "# ") || strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	parts := map[string]string{
+		"head":   strings.Join(lines[:start], "\n"),
+		"stance": strings.Join(lines[start:end], "\n"),
+		"fixed":  strings.Join(lines[end:], "\n"),
+	}
+	for _, part := range []string{"head", "stance", "fixed"} {
+		body := strings.Trim(parts[part], "\n")
+		if part != "fixed" && strings.TrimSpace(body) == "" {
+			return fmt.Errorf("%s: its %s is empty", file, part)
+		}
+		if _, err := root.New("roles/" + role + "/" + part).Parse(body); err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	return nil
 }
