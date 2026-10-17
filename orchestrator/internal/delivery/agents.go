@@ -100,6 +100,9 @@ var (
 	noteRetiredTmpl     = mustTemplate("notices/note-retired")
 	peerEndedTmpl       = mustTemplate("notices/peer-ended")
 
+	moveRefusedSaidTmpl   = mustTemplate("results/machine-refused/said")
+	moveRefusedAdviceTmpl = mustTemplate("results/machine-refused/advice")
+
 	integrationFixTmpl       = mustTemplate("briefings/integration-fix")
 	integrationMergeWhenTmpl = mustTemplate("briefings/integration-merge-when")
 	integrationReviewTmpl    = mustTemplate("briefings/integration-review")

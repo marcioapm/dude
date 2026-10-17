@@ -612,8 +612,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	return int(handled.Load()), nil
 }
 
-const stuckTurnNudge = "A tool call of yours was open for 10 minutes, so dude stopped your turn. " +
-	"Tell the people in the session briefly what you were doing and that it got stuck, then carry on or ask them."
+var stuckTurnNudge = delivery.MustText("notices/stuck-turn").Render(nil)
 
 func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 	type found struct{ ID, Org, SessionID string }
@@ -3099,11 +3098,10 @@ func (s *Syncer) askControl(ctx context.Context, r phaseRun, call func(context.C
 
 // resumeNudge is what a resumed agent is told when nobody said anything
 // while it was paused.
-const resumeNudge = "You were paused and have been resumed. Continue the task where you left off."
+var resumeNudge = delivery.MustText("notices/resumed").Render(nil)
 
 // idleNudge is what an agent quiet mid-turn for the idle limit is told.
-const idleNudge = "You have not done anything for a while. Carry on with your task — or, if you need " +
-	"something only a person can give, ask for it with ask_person (every such decision in one call) and end your turn."
+var idleNudge = delivery.MustText("notices/idle").Render(nil)
 
 // Events of dude parking a Run and taking it back up.
 const (

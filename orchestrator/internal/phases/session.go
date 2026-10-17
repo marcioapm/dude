@@ -208,6 +208,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 // linkedTold is what a session's agent is told of a repository a member
 // linked, checked out at path.
 func linkedTold(key, name, path string) string {
-	return fmt.Sprintf("A member linked %s/%s; it is checked out at %s (read only) unless dude tells you its clone failed.",
-		key, name, path)
+	return linked.Render(struct{ Key, Name, Path string }{key, name, path})
 }
+
+var linked = delivery.MustText("notices/linked")
