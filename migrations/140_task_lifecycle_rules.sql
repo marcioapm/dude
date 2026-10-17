@@ -21,7 +21,9 @@ CREATE OR REPLACE FUNCTION task_blocked_by(task text) RETURNS TABLE (key text, s
     SELECT DISTINCT ON (b.project_id, b.number, b.id) p.key_prefix || '-' || b.number, b.status, b.id
       FROM task_relations r
       LEFT JOIN task_relations d ON d.from_task_id = r.from_task_id AND d.kind = 'duplicates'
-      JOIN tasks b ON b.id = COALESCE(d.to_task_id, r.from_task_id)
+      -- CASE, not COALESCE: under RLS the planner probes tasks_pkey only
+      -- with the CASE form; COALESCE scans the organisation's tasks.
+      JOIN tasks b ON b.id = CASE WHEN d.to_task_id IS NULL THEN r.from_task_id ELSE d.to_task_id END
       JOIN projects p ON p.id = b.project_id
      WHERE r.to_task_id = task AND r.kind = 'blocks'
        AND NOT (b.status = 'done'

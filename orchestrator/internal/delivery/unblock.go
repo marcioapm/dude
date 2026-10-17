@@ -70,12 +70,14 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 	}
 	// What it blocks, and what the tasks closed as its duplicates block:
 	// their blocking was handed to it (task_blocked_by, migration 140).
+	// ANY(ARRAY(...)) keeps the primary-key probe; an OR seq-scans.
 	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (t.project_id, t.number) t.id, t.project_id, p.key_prefix || '-' || t.number,
 			NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
 			EXISTS (SELECT 1 FROM task_auto_starts a WHERE a.task_id = t.id)
 		FROM task_relations r JOIN tasks t ON t.id = r.to_task_id JOIN projects p ON p.id = t.project_id
 		WHERE r.kind = 'blocks' AND t.status = ANY($2::task_status[])
-		  AND (r.from_task_id = $1 OR r.from_task_id IN (SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
+		  AND r.from_task_id = ANY (ARRAY(SELECT $1::text UNION ALL
+		      SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
 		ORDER BY t.project_id, t.number`, taskID, notStartedStatuses)
 	if err != nil {
 		return err
@@ -146,7 +148,8 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 // path (delivery or task_auto_starts, then task) and deadlock.
 func lockReleasesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT to_task_id FROM task_relations WHERE kind = 'blocks'
-		AND (from_task_id = $1 OR from_task_id IN (SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
+		AND from_task_id = ANY (ARRAY(SELECT $1::text UNION ALL
+		    SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
 		ORDER BY to_task_id`, taskID)
 	if err != nil {
 		return err
