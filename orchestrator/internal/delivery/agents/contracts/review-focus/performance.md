@@ -1,0 +1,1 @@
+Look for work repeated per item or per request that could be done once, growth without bound under realistic data, blocking I/O or locks held across slow work, avoidable allocation or serialization on hot paths, and N+1 calls to a database or over the network. Back a claim with a measurement or a realistic size.

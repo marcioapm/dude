@@ -177,56 +177,29 @@ func (c MachineChoices) Names() string {
 // Nothing is what an agent with no size to move to is told: at the
 // organization's largest, or every larger size left out.
 func (c MachineChoices) Nothing() string {
-	if c.Largest {
-		org := c.Org + "'s"
-		if c.Org == "" {
-			org = "the organization's"
-		}
-		return fmt.Sprintf("You run on %s (%s), %s largest size: there is none larger to ask for. "+
-			"Use fewer workers or less data, and say in your work what did not fit.", c.Current.Name, c.Current.Spec(), org)
-	}
-	return fmt.Sprintf("You run on %s (%s), and no larger size can take this agent: their pools lack its platform, "+
-		"nested containers or a host they fit. Use fewer workers or less data, and say in your work what did not fit.",
-		c.Current.Name, c.Current.Spec())
+	return render(machineNothingTmpl, c)
 }
-
-const machineKept = "A move keeps your conversation and checkout; running processes and /tmp are not kept."
 
 // Offer is the request tool's description: the sizes and what a move
 // keeps, so a harness that drops the prompt's tail still has them.
 func (c MachineChoices) Offer() string {
-	if len(c.Targets) == 0 {
-		return "Move to a larger machine. " + c.Nothing()
-	}
-	return fmt.Sprintf("Move to a larger machine, giving the size by name and a reason naming the command, its exit "+
-		"or error, and the workers or threads it used. You run on %s (%s). Larger sizes you may move to: %s. "+
-		"A successful request ends your turn: you are resumed on the new size. %s",
-		c.Current.Name, c.Current.Spec(), c.List(), machineKept)
+	return render(machineOfferTmpl, c)
 }
 
 // Line is the prompt's paragraph for an agent with a machine: where it
 // runs (and why, when an agent raised it), what it may move to, and when.
 func (c MachineChoices) Line(cli bool) string {
-	if len(c.Targets) == 0 {
-		return "## Your machine\n\n" + c.Nothing()
+	type raised struct {
+		Session           bool
+		RoleLabel, Reason string
 	}
-	first := fmt.Sprintf("You run on %s (%s).", c.Current.Name, c.Current.Spec())
+	data := struct {
+		C      MachineChoices
+		Raised *raised
+		CLI    bool
+	}{C: c, CLI: cli}
 	if r := c.Current.Raised; r != nil {
-		scope, who := "task", "an agent"
-		if c.Current.From == "session" {
-			scope = "session"
-		}
-		if label := RoleLabel[r.Role]; label != "" {
-			who = "the " + strings.ToLower(label)
-		}
-		first = fmt.Sprintf("You run on %s (%s), raised for this %s after %s asked: %q.", c.Current.Name, c.Current.Spec(), scope, who, r.Reason)
+		data.Raised = &raised{c.Current.From == "session", strings.ToLower(RoleLabel[r.Role]), r.Reason}
 	}
-	how := "call request_machine with the size and your reason"
-	if cli {
-		how = "move with `dude machine request SIZE --reason \"…\"`"
-	}
-	return fmt.Sprintf("## Your machine\n\n%s Larger sizes you may move to: %s. If something you need to run is killed "+
-		"for memory (exit 137, \"Killed\", an out-of-memory error) or is far too slow for its CPUs, do not call it "+
-		"flaky: run it again with fewer workers if that is enough, and otherwise %s, saying what ran out. %s",
-		first, c.List(), how, machineKept)
+	return render(machineTmpl, data)
 }

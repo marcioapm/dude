@@ -252,7 +252,7 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		FindingIDs: in.FindingIDs, Note: clip(strings.TrimSpace(in.Note), noteChars)}); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("The delivery starts %s now, from the task's head. You are woken when it is done.", in.Phase), nil
+	return render(conductorStartsTmpl, in.Phase), nil
 }
 
 // noteChars bounds what the conductor asks of a Run, as runs.conductor_note does.
@@ -366,6 +366,14 @@ const (
 // GateChoices are the gate question's answers.
 var GateChoices = []string{GateOpen, GateDraft, "Show me the diff", "Another round"}
 
+// What decide answers the conductor once the delivery goes on, or once it
+// has asked the person.
+var (
+	conductorGoesOn    = render(mustTemplate("contracts/conductor-goes-on"), nil)
+	conductorAsked     = render(mustTemplate("contracts/conductor-asked"), nil)
+	conductorAskedGate = render(mustTemplate("contracts/conductor-asked-gate"), nil)
+)
+
 // ConductDecide is decide: the next step, asking the person, waiting on the
 // pull request, or opening it.
 func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note string) (map[string]any, error) {
@@ -417,16 +425,12 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 		if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars), Draft: draft}); err != nil {
 			return nil, err
 		}
-		what := "a pull request"
-		if draft {
-			what = "a draft pull request"
-		}
-		return map[string]any{"decided": action, "next": "The delivery opens " + what + " now."}, nil
+		return map[string]any{"decided": action, "next": render(conductorOpensTmpl, draft)}, nil
 	}
 	if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars)}); err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "next": "The delivery goes on. You are woken at the next decision."}, nil
+	return map[string]any{"decided": action, "next": conductorGoesOn}, nil
 }
 
 // ask is decide(ask_person): a question for the person, on the
@@ -446,7 +450,7 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"questionId": id, "next": "End your turn now. The person's answer will be your next message."}, nil
+		return map[string]any{"questionId": id, "next": conductorAsked}, nil
 	}
 	prompt := GateQuestion
 	if note != "" {
@@ -457,7 +461,7 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 		return nil, err
 	}
 	return map[string]any{"questionId": id, "choices": GateChoices,
-		"next": "End your turn now. If the person answers Open or Draft, decide open_pull_request."}, nil
+		"next": conductorAskedGate}, nil
 }
 
 // askGate asks the pull request gate's question on the conductor's Run, at
@@ -615,10 +619,11 @@ const DismissedByConductor = "Dismissed by the conductor: "
 // AcceptedBy says who left an accepted finding as it is, from its
 // resolution note: the conductor, with its reason, or a person.
 func AcceptedBy(note string) string {
-	if reason, ok := strings.CutPrefix(note, DismissedByConductor); ok {
-		return "dismissed by the conductor: " + clip(reason, 120)
-	}
-	return "accepted by a person"
+	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
+	return render(findingAcceptedTmpl, struct {
+		Conductor bool
+		Reason    string
+	}{conductor, reason})
 }
 
 // TaskSpec is update_task: a goal, acceptance criteria, or both; nil

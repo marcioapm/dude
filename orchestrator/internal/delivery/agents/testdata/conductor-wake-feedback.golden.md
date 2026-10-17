@@ -1,0 +1,1 @@
+2 feedback items from a person (fbi_g1, fbi_g2): read their words with `dude feedback fbi_g1 fbi_g2`; they stay open until a worker resolves or replies to each.

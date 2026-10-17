@@ -1,0 +1,1 @@
+Your agent session restarted without its earlier conversation: you no longer hold what was said before this. This is your briefing again, as things stand now, with the conversation so far as dude recorded it. Read again with your tools what you need, and answer the messages that follow, or that just came before this one.

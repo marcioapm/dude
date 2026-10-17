@@ -109,7 +109,8 @@ is not the current one.
 
 `orchestrator/internal/delivery/workflow.go` is the state machine;
 `store.go` holds its side effects; `policy.go` holds every bound;
-`prompts.go` what each agent is told.
+`prompts.go` composes what each agent is told from the Markdown in
+`agents/`.
 
 ```
 implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix on the candidate → review ⟲ fix → simplify → [review of its diff ⟲ fix] → test → move the PR branch) → done
@@ -748,7 +749,7 @@ In rough priority order.
 | You want to… | Look at |
 | --- | --- |
 | Change the delivery sequence or its bounds | `orchestrator/internal/delivery/workflow.go`, `policy.go` |
-| Change what an agent is told | `orchestrator/internal/delivery/prompts.go` |
+| Change what an agent is told | `orchestrator/internal/delivery/agents/` (its README), composed by `prompts.go` |
 | Change what lux is asked to run | `orchestrator/internal/phases/spec.go` |
 | Change what a branch preview runs, or when it parks | `orchestrator/internal/servers/previews.go` |
 | Change what an agent's output becomes in the ledger | `orchestrator/internal/phases/translate.go` |

@@ -277,7 +277,7 @@ func sessionBriefing(ctx context.Context, tx pgx.Tx, sessionID, message string) 
 	if replay != "" {
 		about += "\n\n" + replay
 	}
-	return about + "\n\n## The first message\n\n" + message, nil
+	return about + "\n\n" + render(sessionFirstMessageTmpl, message), nil
 }
 
 // sessionAbout is the session as its agent is briefed on it: its name,
@@ -287,27 +287,29 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	if err := tx.QueryRow(ctx, `SELECT title, titled_by FROM sessions WHERE id = $1`, sessionID).Scan(&title, &titledBy); err != nil {
 		return "", fmt.Errorf("briefing: the session: %w", err)
 	}
-	var b strings.Builder
-	switch {
-	case title == nil:
-		b.WriteString("Brainstorm, this is a new session, not named yet.")
-	case titledBy != nil && *titledBy == "person":
-		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as a member named it: keep that name.", oneLine(*title))
-	default:
-		fmt.Fprintf(&b, "Brainstorm, this is the session %q, as you named it.", oneLine(*title))
+	type repo struct{ Name, Path, DefaultBranch string }
+	type project struct {
+		Key, Name string
+		Repos     []repo
 	}
-	b.WriteString(" You think with its members about their projects: read, ask, propose. Below is what dude knows; " +
-		"read more with your tools.")
+	type person struct{ Name, Role string }
+	data := struct {
+		Title         string
+		NamedByPerson bool
+		People        []person
+		Projects      []project
+	}{NamedByPerson: titledBy != nil && *titledBy == "person"}
+	if title != nil {
+		data.Title = *title
+	}
 	people, err := SessionMembers(ctx, tx, sessionID)
 	if err != nil {
 		return "", err
 	}
-	b.WriteString("\n\n## People\n")
 	for _, p := range people {
-		if !p.Accepted {
-			continue
+		if p.Accepted {
+			data.People = append(data.People, person{p.Name, p.Role})
 		}
-		fmt.Fprintf(&b, "\n- %s (%s)", p.Name, sessionRoleWords[p.Role])
 	}
 	projects, err := SessionProjects(ctx, tx, sessionID)
 	if err != nil {
@@ -317,22 +319,17 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 	if err != nil {
 		return "", err
 	}
-	b.WriteString("\n\n## Linked projects\n")
-	if len(projects) == 0 {
-		b.WriteString("\nNone yet: you can talk and search memory; a member links projects when the idea is concrete.")
-	}
 	for _, p := range projects {
-		fmt.Fprintf(&b, "\n- %s (%s)", p.Key, p.Name)
+		linked := project{Key: p.Key, Name: p.Name}
 		for _, r := range repos {
 			if r.ProjectID == p.ID {
-				fmt.Fprintf(&b, "\n  - `%s` at `%s`, %s", r.Name, SessionRepoPath(r.Key, r.Name), r.DefaultBranch)
+				linked.Repos = append(linked.Repos, repo{r.Name, SessionRepoPath(r.Key, r.Name), r.DefaultBranch})
 			}
 		}
+		data.Projects = append(data.Projects, linked)
 	}
-	return b.String(), nil
+	return render(sessionTmpl, data), nil
 }
-
-var sessionRoleWords = map[string]string{SessionOwner: "owner", SessionChat: "can chat", SessionRead: "can read"}
 
 // Member is a person in a session, or invited to it.
 type Member struct {
@@ -355,19 +352,10 @@ func SessionMembers(ctx context.Context, tx pgx.Tx, sessionID string) ([]Member,
 // BrainstormPrompt is the brainstorm's first prompt: the briefing, then
 // how it works, its repositories and its tools.
 func BrainstormPrompt(briefing string, in PromptInput) string {
-	sections := []string{briefing, "## How you work"}
+	sections := []string{briefing, render(howYouWorkTmpl, nil)}
 	lead, _ := in.instructions(RoleBrainstorm)
 	sections = append(sections, lead...)
-	if len(in.Repositories) == 0 {
-		sections = append(sections, "No repository is checked out for this session.")
-	} else {
-		var b strings.Builder
-		b.WriteString("Your checkouts, read only (never pushed):")
-		for _, r := range in.Repositories {
-			fmt.Fprintf(&b, "\n- `%s` at `%s`", r.Name, r.Path)
-		}
-		sections = append(sections, b.String())
-	}
+	sections = append(sections, render(brainstormCheckoutsTmpl, in.Repositories))
 	if in.Anywhere {
 		sections = append(sections, brainstormWebNote)
 	}
@@ -376,43 +364,26 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 	}
 	sections = append(sections, brainstormPublishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
-		sections = append(sections, "## Notes\n\n"+c)
+		sections = append(sections, render(brainstormNotesTmpl, c))
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-const brainstormToolsNote = "The dude tools read the linked projects: list_tasks, list_epics, pull_requests, findings, " +
-	"list_repositories, search_memory and get_memory, each with a project key (optional when one is linked). " +
-	"propose fills the session's proposal card — new epics and tasks, edits to tasks, comments, and epic notes (a new " +
-	"epic's notes, or a note on an existing epic) — for a member to " +
-	"file with a click, as themselves: you never create, edit or comment yourself. remember saves what is worth " +
-	"knowing next time. ask_person asks a member something and ends your turn; with to, only that member answers, " +
-	"and what others say meanwhile reaches you with the answer. github_search, github_issue and github_pull_request " +
-	"read the linked projects' repositories on GitHub (issues, pull requests, their reviews, threads, checks and " +
-	"diffs), at most 60 reads an hour. " + ExternalTextNote
+var brainstormToolsNote = render(mustTemplate("contracts/brainstorm-tools"), struct{ ExternalTextNote string }{ExternalTextNote})
 
 // brainstormWebNote is said only to a brainstorm whose network is
 // unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere
 // or "*" in either list. It is dude's, after the instructions, so an
 // organisation's own prompt does not drop it.
-const brainstormWebNote = "You can read the web: search for and fetch public pages when the conversation needs " +
-	"facts from outside the linked repositories. Say where each fact came from, with its URL."
+var brainstormWebNote = render(mustTemplate("contracts/brainstorm-web"), nil)
 
 // brainstormNamingNote is when the agent names its session. The rule
 // that a person's name stays is name_session's own, not only these words.
-const brainstormNamingNote = "Name the session with name_session once its subject is clear, typically after the " +
-	"first exchange or two: one line of plain words, at most 60 characters, no quotes or punctuation for show. " +
-	"Name it again only if the subject clearly changes. Once a member has named it, leave the name alone: " +
-	"name_session refuses."
+var brainstormNamingNote = render(mustTemplate("contracts/brainstorm-naming"), nil)
 
 // brainstormPublishNote is how the agent hands the members a document. Its
 // files are listed beside the session, for its members alone.
-const brainstormPublishNote = "To give the members a document — a design note, a diagram, a table, a CSV — run " +
-	"`dude publish FILE --name NAME --description \"…\"` (for example `dude publish design.md --name design.md " +
-	"--description \"Invoice PDF export design\"`, `dude publish usage.csv --name usage.csv --description \"Usage per " +
-	"customer, last 30 days\"`); the description is one short line saying what the file is for. Each appears in the " +
-	"session's Files at once, Markdown rendered, for its members only; the same name again is a new version. " +
-	"Say in your reply what you published and why. Never publish code."
+var brainstormPublishNote = render(mustTemplate("contracts/brainstorm-publish"), nil)
 
 // SessionHandOver settles what members sent an ended brainstorm and it
 // never read: each goes, in order and with its writer, to the session's
@@ -562,8 +533,7 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 			map[string]any{"questionId": q.ID, "by": "withdrawn"})); err != nil {
 			return err
 		}
-		if err := TellBrainstorm(ctx, tx, org, sessionID, fmt.Sprintf("Your question to %s is withdrawn: they can no longer answer "+
-			"in this session. Nobody answered %q; ask someone else if you still need it decided.", name, oneLine(q.Prompt))); err != nil {
+		if err := TellBrainstorm(ctx, tx, org, sessionID, render(questionWithdrawnTmpl, struct{ Name, Prompt string }{name, q.Prompt})); err != nil {
 			return err
 		}
 	}

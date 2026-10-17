@@ -1,0 +1,3 @@
+## Your machine
+
+You run on Small (2 CPUs · 4 GiB · 20 GiB), raised for this session after an agent asked: "out of memory". Larger sizes you may move to: Large (4 · 16). If something you need to run is killed for memory (exit 137, "Killed", an out-of-memory error) or is far too slow for its CPUs, do not call it flaky: run it again with fewer workers if that is enough, and otherwise move with `dude machine request SIZE --reason "…"`, saying what ran out. A move keeps your conversation and checkout; running processes and /tmp are not kept.
