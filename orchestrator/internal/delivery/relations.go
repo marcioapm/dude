@@ -16,7 +16,7 @@ import (
 
 // Task relations (docs/design/task-relations.md): a `blocks` edge A → B
 // holds B's start until A is merged — done, with a merged pull request.
-// task_blocked_by (migration 111, 140) is the rule; RefuseStartTx
+// task_blocked_by (migration 111, 144) is the rule; RefuseStartTx
 // (lifecycle.go) is every start path's guard over it.
 
 // Events about relations and starts that wait on them.

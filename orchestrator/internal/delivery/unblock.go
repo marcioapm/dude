@@ -69,7 +69,7 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 		return err
 	}
 	// What it blocks, and what the tasks closed as its duplicates block:
-	// their blocking was handed to it (task_blocked_by, migration 140).
+	// their blocking was handed to it (task_blocked_by, migration 144).
 	// ANY(ARRAY(...)) keeps the primary-key probe; an OR seq-scans.
 	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (t.project_id, t.number) t.id, t.project_id, p.key_prefix || '-' || t.number,
 			NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),

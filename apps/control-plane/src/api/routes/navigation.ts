@@ -147,7 +147,7 @@ interface Related {
  * and the keys it is related to. A task of another project is named with
  * its project; done with nothing merged is said. A blocker closed as a
  * duplicate is read as the task it duplicates, as task_blocked_by reads it
- * (migration 140): that task's state, merged or not, is what holds.
+ * (migration 144): that task's state, merged or not, is what holds.
  */
 function relationsByTask(edges: EdgeRow[]) {
   const out = new Map<string, { blockedBy: Array<{ task: Related; open: boolean }>; blocks: Array<{ task: Related; open: boolean }>; related: string[];

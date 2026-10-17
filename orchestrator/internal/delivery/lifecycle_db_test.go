@@ -177,10 +177,10 @@ func TestTaskLifecycleConstraints(t *testing.T) {
 	}
 }
 
-// 139 names today's "done, nothing merged": a done task with no merged
+// 143 names today's "done, nothing merged": a done task with no merged
 // pull request gets nothing_to_merge; a merged one and an open one don't.
-func TestMigration139BackfillsNothingToMerge(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "139")
+func TestMigration143BackfillsNothingToMerge(t *testing.T) {
+	owner, apply := dbtest.Upgrade(t, "143")
 	ctx := context.Background()
 	org := dbtest.Org(t, owner)
 	exec := func(sql string, args ...any) {
