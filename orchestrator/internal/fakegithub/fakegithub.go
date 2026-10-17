@@ -146,6 +146,9 @@ type Server struct {
 	// Issues (reads.go), and every API request received (Requests).
 	issues   map[int]*Issue
 	requests []string
+	// Every head a branch was moved to through the API, in order
+	// (BranchLog).
+	moves []move
 	// Requests left of GitHub's hourly limit, by resource (core, graphql,
 	// search): answers carry them as X-RateLimit headers. Unset, none.
 	RateRemaining map[string]int
@@ -561,6 +564,7 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 409, "Branch moved")
 			return
 		}
+		s.moved(in.Base, sha)
 		s.mu.Lock()
 		lost := s.LoseMergeResponses > 0
 		if lost {
@@ -753,6 +757,7 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 422, sha)
 			return
 		}
+		s.moved(p.Head, sha)
 		write(w, 202, map[string]string{"message": "Updating pull request branch."})
 	})
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/merge", func(w http.ResponseWriter, r *http.Request) {
@@ -1452,6 +1457,7 @@ func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {
 		fail(w, 422, "Update is not a fast forward")
 		return
 	}
+	s.moved(branch, in.SHA)
 	write(w, 200, map[string]any{"ref": "refs/heads/" + branch})
 }
 
@@ -1462,7 +1468,32 @@ func (s *Server) createRef(w http.ResponseWriter, r *http.Request) {
 		fail(w, 422, "Reference already exists: "+out)
 		return
 	}
+	s.moved(strings.TrimPrefix(in.Ref, "refs/heads/"), in.SHA)
 	write(w, 201, map[string]any{"ref": in.Ref})
+}
+
+type move struct{ branch, sha string }
+
+// moved records that the API moved branch to sha.
+func (s *Server) moved(branch, sha string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.moves = append(s.moves, move{branch, sha})
+}
+
+// BranchLog is every head the API moved branch to (a fast-forward, a
+// create, a merge into it, an update-branch), oldest first: what anyone
+// reading the branch on GitHub could have seen it at.
+func (s *Server) BranchLog(branch string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, m := range s.moves {
+		if m.branch == branch {
+			out = append(out, m.sha)
+		}
+	}
+	return out
 }
 
 func (s *Server) DeleteBranch(branch string) error {
