@@ -948,13 +948,28 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run.Syncs = append(run.Syncs, in.Sync)
 	run.SyncCredentials = append(run.SyncCredentials, in.Credentials)
-	if s.HoldSyncs {
-		writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
-		return
+	report := func() {
+		changed := s.applySync(run, in.Sync, in.RequestID)
+		s.luxEvent(run, "sync.done", map[string]any{"requestId": in.RequestID, "changed": changed})
 	}
-	changed := s.applySync(run, in.Sync, in.RequestID)
-	s.luxEvent(run, "sync.done", map[string]any{"requestId": in.RequestID, "changed": changed})
+	if s.HoldSyncs {
+		s.heldSyncs = append(s.heldSyncs, report)
+	} else {
+		report()
+	}
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
+}
+
+// ReleaseSyncs makes the syncs HoldSyncs held, now, each reported with its
+// git.sync and sync.done as lux would have: a lux whose reports come late.
+func (s *Server) ReleaseSyncs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held := s.heldSyncs
+	s.heldSyncs = nil
+	for _, report := range held {
+		report()
+	}
 }
 
 // applySync moves each named checkout to its ref's commit, as git.sync

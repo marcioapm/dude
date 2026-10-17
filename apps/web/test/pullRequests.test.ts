@@ -127,6 +127,8 @@ describe("activity", () => {
       .toBe("could not resolve #41's conflicts with main: it already tried this branch against this base");
     expect(refused("run_failed", "lux 0 stream_ended: exec ended"))
       .toBe("could not resolve #41's conflicts with main: the agent resolving it stopped before it finished");
+    expect(refused("no_merge", "the integration Run finished without publishing a merge"))
+      .toBe("could not resolve #41's conflicts with main: the agent resolving it finished without merging the base in");
     expect(refused("", "integration fix budget exhausted")).toBe("could not resolve #41's conflicts with main");
     const lines = ["merge-base", "integration-started", "integration-completed", "integration-refused"].map((action) =>
       pullRequestActivity(event("pull_request.action", { action, base: "main", cause: "still_conflicting", error: "this head/base pair was already attempted" }), false)!);
