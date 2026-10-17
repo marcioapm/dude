@@ -266,6 +266,57 @@ class CommentingOnAPreview(unittest.TestCase):
         b = page.locator(selector).bounding_box()
         return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
 
+    def test_the_picture_draws_a_pseudo_element_a_canvas_and_a_video_frame(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("comment-on-server").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.wait_for_function("() => document.querySelector('.promo video').readyState >= 2", timeout=10_000)
+        ov_click(pv, "ov-comment")
+        wait_ov(pv, "ov-hint")
+        # The promo's own padding, beside its children: the pointer is on the promo itself.
+        b = pv.locator(".promo").bounding_box()
+        pv.mouse.move(b["x"] + 6, b["y"] + 6)
+        pv.wait_for_function("() => /Promo/.test(window.__ovRoot.querySelector('[data-testid=ov-label]')?.textContent ?? '')")
+        pv.mouse.click(b["x"] + 6, b["y"] + 6)
+        wait_ov(pv, "ov-comment-box")
+        pv.wait_for_function("() => window.__ovRoot.querySelector('[data-testid=ov-comment-box] img.thumb') || window.__ovRoot.querySelector('[data-testid=ov-picture-failed]')", timeout=10_000)
+        self.assertEqual(ov_count(pv, "ov-picture-failed"), 0, ov_text(pv, "ov-picture-failed"))
+        # Each pure colour the promo shows, its share of a 64x32 CSS-pixel box that must show, and what draws it.
+        colours = {
+            "red": ([230, 0, 0], 1 / 2, "the ::before badge"),
+            "magenta": ([200, 0, 200], 1 / 2, "the ::after data: SVG icon"),
+            "blue": ([0, 0, 230], 1 / 2, "the canvas"),
+            "green": ([0, 200, 0], 1 / 4, "the video's left half"),
+            "yellow": ([240, 240, 0], 1 / 4, "the video's right half"),
+        }
+        # The picture, decoded in the page: pixels of each colour counted.
+        counts = ov(pv, """async (r, { want, width }) => {
+          const img = new Image();
+          img.src = r.querySelector('[data-testid=ov-comment-box] img.thumb').src;
+          await img.decode();
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          const g = c.getContext('2d');
+          g.drawImage(img, 0, 0);
+          const d = g.getImageData(0, 0, c.width, c.height).data;
+          const n = { scale: c.width / width };
+          for (const k in want) n[k] = 0;
+          for (let i = 0; i < d.length; i += 4)
+            for (const [k, [R, G, B]] of Object.entries(want))
+              if (Math.abs(d[i] - R) < 24 && Math.abs(d[i + 1] - G) < 24 && Math.abs(d[i + 2] - B) < 24) n[k]++;
+          return n;
+        }""", {"want": {k: rgb for k, (rgb, _, _) in colours.items()}, "width": int(b["width"] + 16)})
+        area = 64 * 32 * counts["scale"] ** 2
+        for colour, (_, share, what) in colours.items():
+            self.assertGreater(counts[colour], area * share, f"{what} is missing: {counts}")
+        self.assertEqual(set(self.overlay_requests), {f"{DUDE}/feedback/overlay.js", "https://status.widgets.test/"}, self.overlay_requests)
+        self.assertEqual(self.errors, [])
+
     def test_an_app_that_redirects_before_dude_answers_still_connects(self):
         ctx, page = self.context()
         self.watch(page)

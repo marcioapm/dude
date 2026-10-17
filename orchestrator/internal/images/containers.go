@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // The container check: a version marked "Can run containers" is checked,
@@ -367,7 +369,10 @@ func mapper(root, path string, capBit uint) Mapper {
 		}
 	}
 	buf := make([]byte, 64)
-	n, err := syscall.Getxattr(full, "security.capability", buf)
+	// x/sys/unix, not syscall: syscall has Getxattr only on Linux. macOS
+	// normally has no Linux security.capability attribute, so a failed lookup
+	// reports no Linux capability.
+	n, err := unix.Getxattr(full, "security.capability", buf)
 	// vfs_cap_data: magic_etc, then permitted and inheritable of the low
 	// 32 capabilities (v2 and v3 have a second pair, and v3 a root id).
 	if err == nil && n >= 12 {

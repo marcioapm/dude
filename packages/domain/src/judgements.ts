@@ -4,7 +4,7 @@ import { z } from "zod";
  * Judgements: dude asks one model one question and reads back yes, no or
  * unsure, how sure it is and why. The organisation's admins pick the tier
  * that answers (organizations.judgement_tier_id); none is Off. Every call
- * sent is kept in model_calls (migration 141). Nothing asks for one yet.
+ * sent is kept in model_calls (migration 142). Nothing asks for one yet.
  */
 
 export const JUDGEMENT_DECISIONS = ["yes", "no", "unsure"] as const;

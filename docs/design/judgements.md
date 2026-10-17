@@ -63,7 +63,7 @@ which the setting moves with the roles (`removeTier`, `ModelTierUse`'s
 
 ## The table
 
-`model_calls` (migration 141), one row per call sent, under row-level
+`model_calls` (migration 142), one row per call sent, under row-level
 security like every tenant table:
 
 | Column | |

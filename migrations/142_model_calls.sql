@@ -1,4 +1,4 @@
--- 141_model_calls.sql — dude calls a model directly, and every call is kept.
+-- 142_model_calls.sql — dude calls a model directly, and every call is kept.
 --
 -- The orchestrator sends one Chat Completions request to the LLM proxy for
 -- a tier's model (orchestrator/internal/llm Complete), with no agent and no
@@ -14,12 +14,12 @@
 
 -- The composite keys below make a row naming another organisation's tier
 -- or task impossible, whatever the policy lets a transaction write. Tasks
--- are in tasks (work_items before 026). 139 and 140 built the unique
+-- are in tasks (work_items before 026). 140 and 141 built the unique
 -- indexes concurrently; attaching one holds the table's lock only briefly.
 -- A build interrupted mid-way leaves its index INVALID, which IF NOT EXISTS
 -- then skips on a retry and UNIQUE USING INDEX refuses: rebuild it here, in
 -- this transaction, under a SHARE lock (reads go on, writes wait). Only a
--- crashed 139 or 140 takes this path.
+-- crashed 140 or 141 takes this path.
 DO $$
 DECLARE
   name text;

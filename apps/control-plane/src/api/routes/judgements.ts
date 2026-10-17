@@ -2,7 +2,7 @@
  * Judgements: which tier answers the organisation's judgements, the calls
  * it has made, and a test question.
  *
- * The setting is organizations.judgement_tier_id (migration 141): everyone
+ * The setting is organizations.judgement_tier_id (migration 142): everyone
  * in the organisation reads it, its admins change it; NULL is Off. Calls are
  * model_calls rows the orchestrator wrote (purpose 'judgement'), read here
  * under the organisation's row-level security. The test question is asked

@@ -168,6 +168,9 @@ class FakeGitHub:
         # (set_conflicting): a branch that cannot merge into its base
         # conflicts, and one fixed by a merge stops conflicting.
         self.mergeability_from_git = False
+        # Each edit of a pull request's title or body, in order: its number
+        # and the fields the PATCH set.
+        self.body_edits: list[tuple[int, dict]] = []
         # Issues by number (open_issue), apart from pull requests.
         self.issues: dict[int, Issue] = {}
 
@@ -497,15 +500,16 @@ class FakeGitHub:
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
     def open_pull(self, head: str, base: str = "main", title: str | None = None, author: str = "gus",
-                  head_repo: str | None = None, draft: bool = False) -> str:
+                  head_repo: str | None = None, draft: bool = False, body: str = "") -> str:
         """A person's pull request from a new branch off base, opened before
         dude was watching (no webhook); its head commit. head_repo names a
-        fork's repository its head is in; draft opens it as a draft."""
+        fork's repository its head is in; draft opens it as a draft; body is
+        its description."""
         self._git_out("update-ref", f"refs/heads/{head}", self.branch_sha(base))
         sha = self.commit(head, f"work on {head}")
         with self._lock:
             number = len(self.pulls) + 1
-            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body="", draft=draft,
+            self.pulls[number] = PullRequest(number=number, head=head, base=base, title=title or head, body=body, draft=draft,
                                              head_repo=head_repo, author=author)
         return sha
 
@@ -754,6 +758,7 @@ class FakeGitHub:
                     "node_id": self.github.node_id(pr.number),
                     "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/pull/{pr.number}",
                     "title": pr.title,
+                    "body": pr.body,
                     "draft": pr.draft,
                     "state": pr.state,
                     "merged_at": pr.merged_at,
@@ -775,6 +780,27 @@ class FakeGitHub:
                 return subprocess.run(["git", *args], cwd=self.github.bare, capture_output=True, text=True)
 
             def do_PATCH(self) -> None:
+                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/(issues|pulls)/(\d+)", self.path):
+                    # A pull request's title or body, edited through either
+                    # endpoint, as GitHub takes it, then told by an `edited`
+                    # webhook; dude sends {"body"} to /issues/{n}. A state
+                    # change is not served here.
+                    gh, body = self.github, self._body()
+                    pr = gh.pulls.get(int(m[2]))
+                    if pr is None or "state" in body:
+                        return self._send(404, {"message": "Not Found"})
+                    if not (self._profile() or TokenProfile()).pulls_write:
+                        return self._refuse("pull_requests=write")
+                    edit = {k: body[k] for k in ("title", "body") if k in body}
+                    with gh._lock:
+                        if "title" in edit:
+                            pr.title = edit["title"]
+                        if "body" in edit:
+                            pr.body = edit["body"] or ""
+                        gh.body_edits.append((pr.number, edit))
+                    self._send(200, self._pull_json(pr))
+                    gh.send_webhook("pull_request", {"action": "edited", "pull_request": {"number": pr.number}})
+                    return None
                 if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/issues/comments/(\d+)", self.path):
                     # An edit of a conversation comment by its id: 404 when
                     # it is not there (deleted), 403 when the token is not its author.
@@ -845,17 +871,28 @@ class FakeGitHub:
                     pr = gh.pulls[int(m[1])]
                     with gh._lock:
                         gh.updates.append(pr.number)
+                    head, base = gh.branch_sha(pr.head), gh.branch_sha(pr.base)
+                    # A merge commit of the base into the head, as GitHub
+                    # makes: the merged tree, refused when the flag says the
+                    # branches conflict or git cannot merge them. The flag is
+                    # read first, as the Go fake does.
                     if pr.conflicting:
                         return self._send(422, {"message": "merge conflict between base and head"})
-                    if body.get("expected_head_sha") and body["expected_head_sha"] != gh.branch_sha(pr.head):
+                    if not head or not base:
+                        return self._send(422, {"message": "Reference does not exist"})
+                    if body.get("expected_head_sha") and body["expected_head_sha"] != head:
                         return self._send(422, {"message": "expected head sha didn't match current head ref"})
-                    # A merge commit of the base into the head, as GitHub makes.
-                    tree = self._git("rev-parse", f"refs/heads/{pr.head}^{{tree}}").stdout.strip()
-                    sha = gh._git_out("commit-tree", tree, "-p", f"refs/heads/{pr.head}", "-p", f"refs/heads/{pr.base}",
+                    merged = self._git("merge-tree", "--write-tree", head, base)
+                    if merged.returncode:
+                        return self._send(422, {"message": "merge conflict between base and head"})
+                    tree = merged.stdout.split("\n", 1)[0].strip()
+                    sha = gh._git_out("commit-tree", tree, "-p", head, "-p", base,
                                       "-m", f"Merge branch '{pr.base}' into {pr.head}",
                                       env={"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
                                            "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"})
-                    self._git("update-ref", f"refs/heads/{pr.head}", sha)
+                    # The old head guards the ref against a push during the merge.
+                    if self._git("update-ref", f"refs/heads/{pr.head}", sha, head).returncode:
+                        return self._send(422, {"message": "expected head sha didn't match current head ref"})
                     self._send(202, {"message": "Updating pull request branch."})
                     gh.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr.number}})
                     return None
