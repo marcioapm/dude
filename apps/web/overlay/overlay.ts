@@ -137,6 +137,9 @@ export class Overlay {
   #saving: string | null = null;
   // The save given up on after SAVE_WAIT_MS: dude may only have been slow, so its answer still counts.
   #late: string | null = null;
+  // What that save sent (words and whether it had a picture): only the very same save may reuse its nonce.
+  #lateSent: string | null = null;
+  #sent: string | null = null;
   #saveTimer = 0;
   // A save went unanswered: Copy text is offered beside Save.
   #unanswered = false;
@@ -269,6 +272,15 @@ export class Overlay {
         break;
       case "saved":
         if (m.nonce !== this.#saving && (this.#late === null || m.nonce !== this.#late)) return;
+        if (m.nonce === this.#late && this.#lateSent !== this.#current()) {
+          // The words or picture changed after the give-up: that save landed, this box is a new one.
+          this.#late = null;
+          this.#lateSent = null;
+          this.#drafts = Number(m.drafts) || this.#drafts;
+          this.#unanswered = false;
+          this.#problem = null;
+          break;
+        }
         this.#saveDone();
         this.#drafts = Number(m.drafts) || this.#drafts;
         this.#toast = { drafts: this.#drafts, picture: m.picture, ...(this.#picture.state === "failed" ? { why: this.#picture.why } : {}) };
@@ -476,8 +488,13 @@ export class Overlay {
       this.#render();
       return;
     }
-    // After a give-up, Save again is the same save: dude answers a nonce it already saved without saving twice.
-    const nonce = this.#late ?? `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    // After a give-up, Save again of the very same words and picture is the same save: dude answers its nonce once.
+    const same = this.#late !== null && this.#lateSent === this.#current();
+    if (!same) {
+      this.#late = null;
+      this.#lateSent = null;
+    }
+    const nonce = same ? this.#late! : `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const msg: OverlayToDude = { type: "draft", v: OVERLAY_PROTOCOL, nonce, body: body.slice(0, OVERLAY_LIMITS.body), anchor: this.#picked.anchor };
     if (this.#attach && this.#picture.state === "ready") msg.picture = this.#picture.url;
     if (!this.#post(msg)) {
@@ -485,14 +502,23 @@ export class Overlay {
       return;
     }
     this.#saving = nonce;
+    this.#sent = this.#current();
     this.#problem = null;
     this.#saveTimer = this.#win.setTimeout(() => this.#saveUnanswered(nonce), this.#opts.saveWaitMs ?? SAVE_WAIT_MS);
     this.#render();
   }
 
+  /** The box's words and whether a picture goes with them: what a save sends. */
+  #current(): string {
+    const body = (this.#field?.value ?? "").trim().slice(0, OVERLAY_LIMITS.body);
+    return `${this.#attach && this.#picture.state === "ready" ? "pic" : "nopic"}|${this.#picked?.anchor.selector ?? ""}|${body}`;
+  }
+
   #saveDone(): void {
     this.#saving = null;
     this.#late = null;
+    this.#lateSent = null;
+    this.#sent = null;
     this.#unanswered = false;
     this.#win.clearTimeout(this.#saveTimer);
   }
@@ -506,6 +532,7 @@ export class Overlay {
     if (this.#saving !== nonce || this.#stopped) return;
     this.#saving = null;
     this.#late = nonce;
+    this.#lateSent = this.#sent;
     this.#unanswered = true;
     this.#problem = SAVE_UNANSWERED;
     this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href });

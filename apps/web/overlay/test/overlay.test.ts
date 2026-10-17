@@ -424,6 +424,56 @@ test("after the give-up, Save again sends the same save, so dude never saves the
   expect(count('[data-testid="ov-saved"]')).toBe(1);
 });
 
+test("after the give-up, words changed before Save again are a new save: a new nonce, the new words", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  const field = await writeOnPay("First words");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { nonce: string };
+  await tick(100);
+  connect();
+  field.value = "Completely different words";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  tid("ov-save")!.click();
+  const again = sent().at(-1) as { type: string; nonce: string; body: string };
+  expect(again.type).toBe("draft");
+  expect(again.nonce).not.toBe(first.nonce);
+  expect(again.body).toBe("Completely different words");
+});
+
+test("after the give-up, a late saved for the old words leaves a box holding new words open", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  const field = await writeOnPay("First words");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { nonce: string };
+  await tick(100);
+  field.value = "Edited meanwhile";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  fromDude({ type: "saved", v: 1, nonce: first.nonce, id: "fbk_1", drafts: 1, picture: "none" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Edited meanwhile");
+});
+
+test("after the give-up, a late refused for that save still shows its reason", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  await writeOnPay("Words");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { nonce: string };
+  await tick(100);
+  fromDude({ type: "refused", v: 1, nonce: first.nonce, reason: "you have 50 drafts on this task" });
+  expect(tid("ov-problem")!.textContent).toContain("50 drafts");
+});
+
+test("the Esc that ends a composition in WebKit (keyCode 229, not composing) is the IME's too", async () => {
+  boot();
+  connect();
+  await writeOnPay("にほ");
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, keyCode: 229 } as KeyboardEventInit));
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+});
+
 test("Esc while an IME is composing is the IME's: the box and its words stay", async () => {
   boot();
   connect();

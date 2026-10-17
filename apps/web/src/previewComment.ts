@@ -264,7 +264,10 @@ export class PreviewCommenting {
     // Without noopener: the overlay talks to its opener, and only to it.
     const w = this.#d.win.open(url, `dude-preview-${this.#d.taskId}`);
     if (!w) return false;
-    if (w !== this.#win) this.#saved = 0;
+    if (w !== this.#win) {
+      this.#saved = 0;
+      this.#answered.clear();
+    }
     this.#win = w;
     this.#url = url;
     this.#server = server;
@@ -449,6 +452,7 @@ export class PreviewCommenting {
     this.#win = source;
     this.#url = m.url;
     this.#saved = 0;
+    this.#answered.clear();
   }
 
   async #save(msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {

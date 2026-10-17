@@ -401,3 +401,26 @@ test("a draft sent again with its nonce is saved once: in flight it is answered 
   expect(saved).toHaveLength(2);
   expect(saved.map((m) => m.type === "saved" && m.id)).toEqual(["fbk_new", "fbk_new"]);
 });
+
+test("a window taken back after a reload is brought forward by Comment on its own server, not another's", () => {
+  let focused = 0;
+  const reopened = { ...popup, opener: window, focus: () => { focused++; } };
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, reopened);
+  expect(c.comment(`${WEB}/`, "web")).toBe(true);
+  expect(opened.length).toBe(0);
+  expect(focused).toBe(1);
+  c.comment(`${API}/`, "api");
+  expect(opened.length).toBe(1);
+});
+
+test("what one window saved is not answered to the next: a new window starts with nothing remembered", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor() });
+  await tick(5);
+  const next = { postMessage: mock(() => {}), closed: false, focus: () => {} };
+  (window as unknown as { open: unknown }).open = () => next;
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor() }, WEB, next);
+  await tick(5);
+  expect(createDraft).toHaveBeenCalledTimes(2);
+});
