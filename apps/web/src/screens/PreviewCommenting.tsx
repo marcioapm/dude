@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Callout, Tooltip } from "@dude/design-system/primitives";
-import { Icon, plural } from "@dude/design-system";
+import { Icon, plural, useResolvedTheme } from "@dude/design-system";
 import type { FeedbackItem } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import type { ServersState } from "../hooks/useServers.ts";
@@ -43,16 +43,17 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
 }): PreviewCommentingControl {
   const offer = useMemo(() => commentingOffer(servers.data), [servers.data]);
   const [view, setView] = useState<CommentingView>(IDLE);
+  const theme = useResolvedTheme();
   // What each message is checked and answered against: the latest render's, read when it arrives.
-  const latest = useRef({ servers, fb, people, taskKey, onOpenItem });
-  latest.current = { servers, fb, people, taskKey, onOpenItem };
+  const latest = useRef({ servers, fb, people, taskKey, onOpenItem, theme });
+  latest.current = { servers, fb, people, taskKey, onOpenItem, theme };
   const commenting = useMemo(() => new PreviewCommenting({
     win: window,
     taskId,
     read: () => {
-      const { servers: s, fb: f, people: p, taskKey: key } = latest.current;
+      const { servers: s, fb: f, people: p, taskKey: key, theme: t } = latest.current;
       return {
-        origins: previewOrigins(s.data), items: f.items, drafts: f.drafts.length, taskKey: key, you: p.you,
+        origins: previewOrigins(s.data), items: f.items, drafts: f.drafts.length, taskKey: key, you: p.you, theme: t,
         name: (id) => (id ? (p.names.get(id) ?? "Someone").split(" ")[0]! : "Someone"),
       };
     },
@@ -70,8 +71,8 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     onChange: setView,
   }), [client, taskId]);
   useEffect(() => commenting.listen(), [commenting]);
-  // The open page's pins follow the list: a save, a submit, an agent's reply.
-  useEffect(() => commenting.refresh(), [commenting, fb.items]);
+  // The open page's pins and theme follow dude: a save, a submit, an agent's reply, the person switching light or dark.
+  useEffect(() => commenting.refresh(), [commenting, fb.items, theme]);
   const { restart } = servers;
   const restarting = servers.busy !== null;
   return useMemo(() => ({

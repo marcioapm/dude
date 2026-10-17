@@ -7,8 +7,8 @@
  */
 
 import { z } from "zod";
-import { FEEDBACK_LIMITS, previewAnchorInput } from "./feedback.ts";
-import { OVERLAY_LIMITS, type OverlayToDude } from "./previewOverlayProtocol.ts";
+import { FEEDBACK_LIMITS, FEEDBACK_STATUSES, previewAnchorInput } from "./feedback.ts";
+import { OVERLAY_LIMITS, OVERLAY_THEMES, type OverlayTheme, type OverlayToDude } from "./previewOverlayProtocol.ts";
 
 export * from "./previewOverlayProtocol.ts";
 
@@ -32,6 +32,24 @@ export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUni
   z.object({ type: z.literal("prefs"), v: v1, showPins: z.boolean() }).strict(),
   z.object({ type: z.literal("open"), v: v1, itemId: z.string().min(1).max(100) }).strict(),
 ]) as z.ZodType<OverlayToDude>;
+
+const overlayPinSchema = z.object({
+  id: z.string().min(1).max(100), n: z.number().int().positive(), status: z.enum(FEEDBACK_STATUSES), author: z.string().max(OVERLAY_LIMITS.name),
+  mine: z.boolean(), body: z.string().max(OVERLAY_LIMITS.pinBody), selector: z.string().max(2_000), when: z.string().max(OVERLAY_LIMITS.name),
+  replies: z.array(z.object({ who: z.string().max(OVERLAY_LIMITS.name), kind: z.enum(["reply", "resolve", "reopen"]), body: z.string().max(OVERLAY_LIMITS.replyBody) }).strict())
+    .max(OVERLAY_LIMITS.replies),
+}).strict();
+
+/**
+ * What dude's session message to the overlay may be: strict, `theme` one of
+ * OVERLAY_THEMES or absent. dude builds it itself; this holds it to the
+ * protocol (the overlay, which bundles no zod, guards the same by hand).
+ */
+export const overlaySessionSchema = z.object({
+  type: z.literal("session"), v: v1, task: z.string().max(100), url: pageUrl,
+  pins: z.array(overlayPinSchema).max(OVERLAY_LIMITS.pins), drafts: z.number().int().nonnegative(), showPins: z.boolean(),
+  theme: z.enum(OVERLAY_THEMES as [OverlayTheme, ...OverlayTheme[]]).optional(),
+}).strict();
 
 const MAX_ENTRIES = 2_000;
 

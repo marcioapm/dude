@@ -93,7 +93,7 @@ export {
   scopeTasks,
 } from "./util/boardModel.ts";
 export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardFilter, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
-export { ThemeProvider, useDensity, useTheme } from "./theme.tsx";
+export { ThemeProvider, useDensity, useResolvedTheme, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";
 export { describeServer, summarizeServers, summarizeTaskServers, isOn, canStart, canStop, isMoving, canStartAny, canStopAny, anyMoving, bareUrl, safeServerUrl, serverLogLines, serverNameProblem, serverPortProblem, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "./util/servers.ts";
 export type { ServerWords, ServerRunContext, ServersRun, ServerLogLine, TaskServersSummary } from "./util/servers.ts";

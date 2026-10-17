@@ -158,6 +158,15 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     card = tab.get_by_test_id("feedback-needs").get_by_test_id("fb-item")
     expect(card).to_contain_text("Say which pause it was")
     expect(card).to_contain_text("LIVE.md")
+    # The tab's column fills the pane up to its rail, as every other rail tab's does: no measure of its own.
+    edges = page.evaluate("""() => {
+      const pane = document.querySelector('[data-testid=feedback-tab]').getBoundingClientRect();
+      const rail = document.querySelector('[aria-label=Feedback]').getBoundingClientRect();
+      const card = document.querySelector('[data-testid=feedback-needs] [data-testid=fb-item]').getBoundingClientRect();
+      return { pane: pane.right, rail: rail.left, card: card.right, pad: parseFloat(getComputedStyle(document.querySelector('[data-testid=feedback-tab]')).paddingRight) };
+    }""")
+    assert abs(edges["pane"] - edges["rail"]) <= 1, edges
+    assert abs(edges["card"] - (edges["rail"] - edges["pad"])) <= 1, edges
     _shoot(page, "feedback-tab", card)
     card.get_by_test_id("fb-resolve").click()
     wait_until(lambda: _feedback(client, task["id"])["blocking"] == 0, timeout=10, message="never resolved")

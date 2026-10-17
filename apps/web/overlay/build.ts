@@ -7,9 +7,14 @@
 
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
+import { TOKENS_MODULE, overlayTokensModule, compactTokenNames } from "./build-tokens.ts";
 
 const here = import.meta.dir;
 const out = join(here, "..", "public", "feedback");
+// The design system's tokens, regenerated first: a build never bundles a stale copy.
+const tokens = overlayTokensModule();
+const committed = Bun.file(TOKENS_MODULE);
+if (!(await committed.exists()) || (await committed.text()) !== tokens) await Bun.write(TOKENS_MODULE, tokens);
 const result = await Bun.build({
   entrypoints: [join(here, "main.ts")],
   outdir: out,
@@ -23,5 +28,8 @@ if (!result.success) {
   for (const log of result.logs) console.error(log);
   process.exit(1);
 }
-const bytes = await Bun.file(join(out, "overlay.js")).bytes();
+// Both declarations and references share one mapping; the source and generated module retain the DS's names.
+const file = Bun.file(join(out, "overlay.js"));
+await Bun.write(file, compactTokenNames(await file.text()));
+const bytes = await file.bytes();
 console.log(`overlay.js: ${bytes.length} bytes, ${gzipSync(bytes).length} gzipped`);

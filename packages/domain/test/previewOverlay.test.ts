@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { FEEDBACK_LIMITS, OVERLAY_LIMITS, feedbackDraftSchema, overSize, overlayMessageSchema } from "../src/index.ts";
+import { FEEDBACK_LIMITS, OVERLAY_LIMITS, feedbackDraftSchema, overSize, overlayMessageSchema, overlaySessionSchema } from "../src/index.ts";
 
 const anchor = { kind: "preview", url: "https://web.preview.example/cart", selector: "button.pay", viewport: { width: 1280, height: 720 } };
 
@@ -25,6 +25,14 @@ test("a draft message's anchor is checked by the API's own preview anchor rule, 
     { ...ok, v: 2 },
     { ...ok, token: "x" },
   ]) expect(overlayMessageSchema.safeParse(bad).success).toBe(false);
+});
+
+test("a session names dude's theme as light or dark, or none for an older dude; any other value is refused", () => {
+  const session = { type: "session", v: 1, task: "WC-1", url: "https://web.preview.example/", pins: [], drafts: 0, showPins: true };
+  expect(overlaySessionSchema.safeParse(session).success).toBe(true);
+  for (const theme of ["light", "dark"]) expect(overlaySessionSchema.safeParse({ ...session, theme }).success).toBe(true);
+  for (const theme of ["system", "Dark", "", 1, null, "sepia"]) expect(overlaySessionSchema.safeParse({ ...session, theme }).success).toBe(false);
+  expect(overlaySessionSchema.safeParse({ ...session, colour: "red" }).success).toBe(false);
 });
 
 test("overSize counts a message's strings and stops once past the cap", () => {
