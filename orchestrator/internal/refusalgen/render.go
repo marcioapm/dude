@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"text/template/parse"
 )
 
 //go:embed *.manifest
@@ -33,33 +34,35 @@ var generated = []string{"refusals/tools/", "refusals/delivery/", "refusals/doma
 var entry = regexp.MustCompile(`(?m)^\s*(\w+)\s*=.*?"(refusals/[^"]+)"`)
 
 func Render(source fs.FS) (map[string][]byte, error) {
-	set := template.New("").Option("missingkey=error").Funcs(template.FuncMap{
-		"oneLine": func(s string) string { return strings.Join(strings.Fields(s), " ") },
-		"clip": func(s string, n int) string {
-			if len(s) > n {
-				return s[:n]
-			}
-			return s
-		},
-		"join": strings.Join,
-	})
-
+	set := template.New("").Option("missingkey=error")
 	files := map[string]bool{}
-	err := fs.WalkDir(source, "internal/delivery/agents/refusals", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(p) != ".md" {
+	for _, prefix := range generated {
+		err := fs.WalkDir(source, "internal/delivery/agents/"+strings.TrimSuffix(prefix, "/"), func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || path.Ext(p) != ".md" {
+				return err
+			}
+			b, err := fs.ReadFile(source, p)
+			if err != nil {
+				return err
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(p, "internal/delivery/agents/"), ".md")
+			files[name] = true
+			_, err = set.New(name).Parse(strings.TrimSuffix(string(b), "\n"))
 			return err
-		}
-		b, err := fs.ReadFile(source, p)
+		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		name := strings.TrimSuffix(strings.TrimPrefix(p, "internal/delivery/agents/"), ".md")
-		files[name] = true
-		_, err = set.New(name).Parse(strings.TrimSuffix(string(b), "\n"))
-		return err
-	})
-	if err != nil {
-		return nil, err
+	}
+	// A refusal is a printf format rendered with nil: anything but one text
+	// node would need data or functions the generator does not have.
+	for _, t := range set.Templates() {
+		if files[t.Name()] || t.Tree == nil {
+			continue
+		}
+		if nodes := t.Tree.Root.Nodes; len(nodes) != 1 || nodes[0].Type() != parse.NodeText {
+			return nil, fmt.Errorf("%s has a template action; a refusal is a printf format", t.Name())
+		}
 	}
 
 	entries := map[string][][]string{}
@@ -101,10 +104,11 @@ func Render(source fs.FS) (map[string][]byte, error) {
 			fmt.Fprintf(&b, "%s = %q\n", pair[1], text.String())
 		}
 		b.WriteString(")\n")
-		out[file.output], err = format.Source(b.Bytes())
+		src, err := format.Source(b.Bytes())
 		if err != nil {
 			return nil, err
 		}
+		out[file.output] = src
 	}
 	return out, nil
 }
