@@ -114,14 +114,17 @@ export interface ModelTier {
   updatedBy: { id: string; name: string } | null;
 }
 
-/** Who names a tier: an organization's role or a project's override. */
-export interface ModelTierUse {
+/** A role that names a tier: an organization's role or a project's override. */
+export interface ModelTierRoleUse {
   kind: "organization" | "project";
   role: string;
   project: { id: string; name: string; imageUrl: string | null } | null;
   /** The fixer with no tier of its own, taking the implementer's. */
   inherited?: boolean;
 }
+
+/** Who names a tier: a role, or the organization's judgements (organizations.judgement_tier_id). */
+export type ModelTierUse = ModelTierRoleUse | { kind: "judgements" };
 
 export interface ModelTierWithUse extends ModelTier {
   usedBy: ModelTierUse[];
