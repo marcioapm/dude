@@ -84,6 +84,9 @@ type Syncer struct {
 	// For tests: how long a conductor's input waits for its checkout's
 	// sync to be reported; zero is checkoutSyncWait.
 	CheckoutSyncWait time.Duration
+	// For tests: how long a finished turn waits for lux's git.checkout;
+	// zero is baseWait.
+	BaseWait time.Duration
 	// For tests: the budget of a sweep's stall reports for asking lux;
 	// zero is stallLuxBudget.
 	StallLuxBudget time.Duration
@@ -103,6 +106,15 @@ type Syncer struct {
 	// move for lux to run the Run again (luxstop.go); zero takes heldWait
 	// and moveWait.
 	HeldWait, MoveWait time.Duration
+	// How long a pass of Sweep or SettlePublishes waits for the work it
+	// started before returning; what is still running then keeps its slot
+	// and finishes in the background. Zero waits for all of it.
+	SweepWait time.Duration
+
+	// The slots of Sweep and of SettlePublishes, shared by their passes
+	// (pool.go).
+	poolsOnce              sync.Once
+	sweepPool, publishPool *pool
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -200,6 +212,10 @@ type phaseRun struct {
 	// (luxstop.go), and how long it has been held; nil for none.
 	Broken    *brokenTurn
 	BrokenFor time.Duration
+	// retryLater's streak (0 for none) and when the retry it scheduled was
+	// due (nil for none), as the sweep read them (migration 139).
+	RetryFailures int
+	RetryDueAt    *time.Time
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -254,7 +270,8 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
-	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0)`
+	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
+	r.retry_failures, r.retry_due_at`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -422,7 +439,8 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
-		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs)
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
+		&r.RetryFailures, &r.RetryDueAt)
 	if err != nil {
 		return r, err
 	}
@@ -434,14 +452,27 @@ const sweepBatch = 1000
 
 // actionable (SQL, over runFrom): a Run the sweep has something to do for
 // now, sorted ahead of those it only follows. A finished phase is
-// collected. A conductor's finished turn is work only when something is
-// queued for it, its warm period is over, or its container stopped: a
-// warm, quiet conductor waits for a person, and a thousand of them must
-// not keep a newer pending Run out of the batch.
+// collected, unless it is waiting for its checkout's base (baseWaiting).
+// A conductor's finished turn is work only when something is queued for
+// it, its warm period is over, or its container stopped: a warm, quiet
+// conductor waits for a person, and a thousand of them, or of phase Runs
+// waiting for a base, must not keep a newer pending Run out of the batch.
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
-	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
-		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT ` + baseWaiting + `) OR ` + unsentDirective + `
+		OR (r.phase IS NULL AND r.turn_done_at < now() - make_interval(secs => lim.warm_secs))
 		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
+
+// baseMissing (SQL, over runs r): a repository the Run pushes has no
+// recorded base (git.checkout) yet.
+const baseMissing = `EXISTS (SELECT 1 FROM unnest(r.lux_pushes) p WHERE NOT r.base_shas ? p)`
+
+// baseWaiting (SQL, over runs r; $6 the base wait in seconds): finish
+// would wait for the Run's checkout bases — live, pushing, not yet asked
+// to push, a base missing and its turn ended within the wait. lux
+// reporting the Run over ends the wait as well; actionable checks that.
+const baseWaiting = `(r.status IN ('scheduled', 'starting', 'running') AND COALESCE(r.push_branch, '') <> ''
+	AND r.push_result IS NULL AND COALESCE(r.push_request_id, '') = '' AND ` + baseMissing + `
+	AND r.turn_done_at > now() - make_interval(secs => $6::float8))`
 
 // due is what one sweep takes up: every live Run, not the oldest N — a Run
 // with nothing to do still needs its stream followed, and a paused, idle
@@ -465,7 +496,7 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 	var runs []phaseRun
 	b := &pgx.Batch{}
 	b.Queue(`SELECT set_config('jit', 'off', true)`)
-	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...).Query(func(rows pgx.Rows) (err error) {
+	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit, s.baseWait().Seconds())...).Query(func(rows pgx.Rows) (err error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
 		return err
 	})
@@ -474,7 +505,8 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 }
 
 // dueQuery is due's selection. Its parameters: runFrom's $1–$3, $4 how far
-// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch.
+// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch, $6
+// the base wait (seconds).
 const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			WHERE ` + sweptRuns + `
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -576,40 +608,63 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 	return nil
 }
 
+// sweepSlots is how many Runs the sweep advances at once.
+const sweepSlots = 8
+
 // Sweep takes one pass over every phase Run dude still has something to do
 // for, advancing each as far as it can. Cross-tenant, because finding the
 // Runs that need attention is the job; each is then handled in its own
-// organization's scope.
+// organization's scope. Returns how many of the Runs it started acted and
+// finished within SweepWait.
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.beforeDue(ctx); err != nil {
 		return 0, err
 	}
+	slots, _ := s.pools()
+	// Before due() reads the rows: a Run busy now may change under the read.
+	busy := slots.busyIDs()
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
 	}
 	// Concurrently, a few at a time: one slow call to lux or GitHub must not
-	// hold up submitting, following and steering every other Run.
-	var handled atomic.Int64
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, 8)
+	// hold up submitting, following and steering every other Run. A Run an
+	// earlier pass is still advancing is left to it: two advances of one Run
+	// must never run at once.
+	wait := s.passWait()
+	defer wait.stop()
+	// Buffered for every Run, so work finishing after the pass returned
+	// never blocks.
+	results := make(chan bool, len(runs))
+	started := 0
 	for _, r := range runs {
-		wg.Add(1)
-		slots <- struct{}{}
+		// A Run busy before due() has a row read while an earlier advance
+		// was still changing it; the next pass reads it fresh.
+		if busy[r.ID] || !slots.claim(r.ID) {
+			continue
+		}
+		if !slots.take(ctx, wait.expired) {
+			slots.unclaim(r.ID)
+			break
+		}
+		started++
 		go func() {
-			defer func() { <-slots; wg.Done() }()
 			acted, err := s.advance(ctx, r)
 			if err != nil && !errors.Is(err, errRetry) {
 				s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
-				return
+				acted = false
 			}
-			if acted {
-				handled.Add(1)
+			if err == nil && r.RetryFailures > 0 {
+				s.resetRetries(ctx, r)
 			}
+			// Released before the result is sent: a pass that waited for
+			// it may sweep again at once and must find the Run free.
+			slots.unclaim(r.ID)
+			slots.give()
+			results <- acted
 		}()
 	}
-	wg.Wait()
-	return int(handled.Load()), nil
+	return wait.collect(results, started), nil
 }
 
 var stuckTurnNudge = delivery.MustText("notices/stuck-turn").Render(nil)
@@ -1743,6 +1798,22 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
 	if pushes && r.PushResult == nil {
+		if r.PushRequestID == "" {
+			// lux's git.checkout, which says where each checkout started,
+			// trails the agent's records like any lifecycle event: a turn
+			// read before it waits for it, and nothing is pushed without it.
+			bases, missing, over, err := s.checkoutBases(ctx, r)
+			if err != nil {
+				return true, err
+			}
+			if missing {
+				if over || lux.Terminal(r.LuxState) {
+					return true, s.failKept(ctx, r, errNoBase.Error())
+				}
+				return false, nil
+			}
+			r.BaseSHAs = bases
+		}
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
 		// the agent's own records by up to a second, so the state recorded
@@ -1861,6 +1932,34 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+// baseWait is how long after its turn ended a Run waits for lux to say
+// where a checkout it pushes started. lux flushes lifecycle events on a
+// timer and they trail the agent's records by about a second; two minutes
+// covers a lux restart or a stalled event stream, and is short enough that
+// a lux that lost the event fails the Run while its container is still
+// worth resuming.
+const baseWait = 2 * time.Minute
+
+// checkoutBases reads r's recorded bases afresh: the follower may have
+// recorded git.checkout since the sweep read the Run. missing: a
+// repository the Run pushes has no base yet; over: its turn ended longer
+// than the base wait ago.
+func (s *Syncer) checkoutBases(ctx context.Context, r phaseRun) (bases map[string]string, missing, over bool, err error) {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT r.base_shas, `+baseMissing+`,
+				COALESCE(r.turn_done_at <= now() - make_interval(secs => $2), false)
+			FROM runs r WHERE r.id = $1`, r.ID, s.baseWait().Seconds()).Scan(&bases, &missing, &over)
+	})
+	return bases, missing, over, err
+}
+
+func (s *Syncer) baseWait() time.Duration {
+	if s.BaseWait == 0 {
+		return baseWait
+	}
+	return s.BaseWait
 }
 
 // resolutionsHeld weighs the feedback r resolved with a commit against
@@ -3186,9 +3285,6 @@ func (e errCannotResume) Unwrap() error { return e.err }
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
 
-// retryLater backs a Run off after a failure that may pass. A lux Run lux
-// no longer has will not come back, whichever call found out: that fails
-// the Run instead of retrying it forever.
 // retryOrFail: a request lux refused, and would refuse again, fails the Run
 // with lux's reason; anything else is tried again later.
 func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refused string) error {
@@ -3198,21 +3294,59 @@ func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refus
 	return s.retryLater(ctx, r, cause)
 }
 
+// Back-off of retryLater: retryBase doubling with each failure in a row, up
+// to retryMax. A failure is in a row with the last when it comes within
+// retryGrace of the retry that one scheduled being due, with no successful
+// retry in between (Sweep's resetRetries). retryMax is short because a
+// person's pause, resume or message waits for next_attempt_at too (dueQuery);
+// a longer wait GitHub asks for still comes through forge.RetryAfter.
+const (
+	retryBase  = 5 * time.Second
+	retryMax   = time.Minute
+	retryGrace = time.Minute
+)
+
+// retryStreak is a Run's failures in a row counting this one (SQL; the
+// row's values before the UPDATE that sets them).
+const retryStreak = `(CASE WHEN retry_due_at IS NOT NULL AND now() <= retry_due_at + make_interval(secs => $5)
+	THEN retry_failures + 1 ELSE 1 END)`
+
+// retryWait is the back-off for retryStreak, or the forge's wait ($4) when
+// longer: GitHub penalises requests made during a limit it asked to be
+// waited out.
+const retryWait = `GREATEST(LEAST(make_interval(secs => $2 * power(2, LEAST(` + retryStreak + ` - 1, 16))),
+	make_interval(secs => $3)), make_interval(secs => $4))`
+
+// retryLater backs a Run off after a failure that may pass. A lux Run lux
+// no longer has will not come back, whichever call found out: that fails
+// the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
 	if lux.IsNotFound(cause) {
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
-	// GitHub penalises requests made during a limit it asked to be waited out.
-	delay := 5 * time.Second
-	if wait := forge.RetryAfter(cause); wait > delay {
-		delay = wait
-	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
-			r.ID, delay.Seconds())
+		// Both SETs read the old row, so retry_due_at = next_attempt_at.
+		_, err := tx.Exec(ctx, `UPDATE runs SET retry_failures = `+retryStreak+`,
+				retry_due_at = now() + `+retryWait+`, next_attempt_at = now() + `+retryWait+`
+			WHERE id = $1`,
+			r.ID, retryBase.Seconds(), retryMax.Seconds(), forge.RetryAfter(cause).Seconds(), retryGrace.Seconds())
 		return err
 	})
+}
+
+// resetRetries ends r's back-off streak after an advance that returned no
+// error. Only if retry_due_at is still what the sweep read: a retry that
+// failed again went through retryLater, which moved it, and stays counted.
+func (s *Syncer) resetRetries(ctx context.Context, r phaseRun) {
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET retry_failures = 0, retry_due_at = NULL
+			WHERE id = $1 AND retry_due_at = $2`, r.ID, r.RetryDueAt)
+		return err
+	})
+	if err != nil {
+		s.Log.Warn("resetting a run's retry back-off failed", "run", r.ID, "error", err)
+	}
 }
 
 func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor string, payload map[string]any) error {

@@ -759,3 +759,41 @@ func TestARateLimitOnCheckRunsFailsTheSync(t *testing.T) {
 		t.Fatalf("err = %v, want a transient error", err)
 	}
 }
+
+// A REST call GitHub limits carries the wait GitHub asked for, by
+// Retry-After or by the reset of a spent limit; a refusal carries none.
+func TestARateLimitedRESTCallCarriesGitHubsWait(t *testing.T) {
+	// Headers are built as the server answers: a reset 90 s from then.
+	resetIn90s := func() map[string]string {
+		return map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": fmt.Sprint(time.Now().Add(90 * time.Second).Unix())}
+	}
+	for _, c := range []struct {
+		name    string
+		status  int
+		headers func() map[string]string
+		want    time.Duration
+	}{
+		{"429 Retry-After", 429, func() map[string]string { return map[string]string{"Retry-After": "120"} }, 120 * time.Second},
+		{"403 spent limit", 403, resetIn90s, 90 * time.Second},
+		{"404", 404, func() map[string]string { return nil }, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range c.headers() {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(c.status)
+				fmt.Fprint(w, `{"message":"no"}`)
+			}))
+			defer srv.Close()
+			_, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).Head(context.Background(), "acme/api", 1)
+			if err == nil {
+				t.Fatal("no error")
+			}
+			// The reset is whole seconds.
+			if got := RetryAfter(err); got > c.want || got < c.want-time.Second-500*time.Millisecond {
+				t.Errorf("RetryAfter = %v, want about %v (%v)", got, c.want, err)
+			}
+		})
+	}
+}

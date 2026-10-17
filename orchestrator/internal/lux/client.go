@@ -12,6 +12,7 @@ package lux
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -713,6 +714,8 @@ type HTTPClient struct {
 	http *http.Client
 	// No timeout: the output stream stays open for as long as a Run runs.
 	stream *http.Client
+	// Exec's deadline for a caller that set none; zero is execTimeout.
+	execTimeout time.Duration
 }
 
 // idleConnsPerHost bounds the connections to lux kept open between
@@ -1135,14 +1138,38 @@ type streamData struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// execTimeout bounds an Exec whose caller set no deadline: a lux that
+// accepts the exec and never sends an exit code would hold the caller
+// forever.
+const execTimeout = 2 * time.Minute
+
+// errExecTimeout is the cause of Exec's own deadline, told apart from the
+// caller's.
+var errExecTimeout = errors.New("exec timed out")
+
 // Exec speaks lux's exec stream: a WebSocket to /v1/runs/{id}/exec whose
 // first message is the command, then the command's output as it comes, and
 // last its exit code. No terminal, and no input: stdin is closed at once.
 //
 // Refusals come before the upgrade, as HTTP errors (409 not_running, 503
 // host_unreachable), and are returned as an *Error like any other call's.
+// A ctx without a deadline gets execTimeout; past it Exec returns a
+// retryable *Error (Code "timeout").
 func (c *HTTPClient) Exec(ctx context.Context, runID string, command []string) (ExecResult, error) {
 	var out ExecResult
+	limit := cmp.Or(c.execTimeout, execTimeout)
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, limit, errExecTimeout)
+		defer cancel()
+	}
+	// late is the error for Exec's own deadline having passed, else nil.
+	late := func() error {
+		if context.Cause(ctx) != errExecTimeout {
+			return nil
+		}
+		return &Error{Status: 0, Code: "timeout", Message: fmt.Sprintf("exec %s timed out after %s", runID, limit)}
+	}
 	u := "ws" + strings.TrimPrefix(c.url, "http") + "/v1/runs/" + runID + "/exec"
 	ws, res, err := websocket.Dial(ctx, u, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + c.key}},
@@ -1156,6 +1183,9 @@ func (c *HTTPClient) Exec(ctx context.Context, runID string, command []string) (
 			}
 			return out, errorFrom(res.StatusCode, body, "exec "+runID)
 		}
+		if err := late(); err != nil {
+			return out, err
+		}
 		if ctx.Err() != nil {
 			return out, ctx.Err()
 		}
@@ -1164,14 +1194,17 @@ func (c *HTTPClient) Exec(ctx context.Context, runID string, command []string) (
 	defer ws.CloseNow()
 	ws.SetReadLimit(4 << 20)
 	if err := wsjson.Write(ctx, ws, map[string]any{"command": command}); err != nil {
-		return out, err
+		return out, cmp.Or(late(), err)
 	}
 	if err := wsjson.Write(ctx, ws, streamData{EOF: true}); err != nil {
-		return out, err
+		return out, cmp.Or(late(), err)
 	}
 	for {
 		var d streamData
 		if err := wsjson.Read(ctx, ws, &d); err != nil {
+			if err := late(); err != nil {
+				return out, err
+			}
 			// Closed without an exit code: the stream ended early (a host
 			// that went away, a stream that fell behind).
 			return out, &Error{Status: 0, Code: "stream_ended", Message: "exec ended before the command did: " + err.Error()}
