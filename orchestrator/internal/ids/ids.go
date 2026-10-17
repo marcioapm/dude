@@ -39,7 +39,7 @@ const (
 	FeedbackBatch = "fbt"
 	FeedbackItem  = "fbi"
 	FeedbackReply = "fbr"
-	// A call dude sent a model directly (migration 139).
+	// A call dude sent a model directly (migration 141).
 	ModelCall = "mcl"
 )
 

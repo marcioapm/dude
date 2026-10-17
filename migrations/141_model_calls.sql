@@ -1,4 +1,4 @@
--- 139_model_calls.sql — dude calls a model directly, and every call is kept.
+-- 141_model_calls.sql — dude calls a model directly, and every call is kept.
 --
 -- The orchestrator sends one Chat Completions request to the LLM proxy for
 -- a tier's model (orchestrator/internal/llm Complete), with no agent and no
@@ -14,9 +14,10 @@
 
 -- The composite keys below make a row naming another organisation's tier
 -- or task impossible, whatever the policy lets a transaction write. Tasks
--- are in tasks (work_items before 026).
-ALTER TABLE model_tiers ADD UNIQUE (id, organization_id);
-ALTER TABLE tasks ADD UNIQUE (id, organization_id);
+-- are in tasks (work_items before 026). 139 and 140 built the unique
+-- indexes concurrently; attaching one holds the table's lock only briefly.
+ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_id_organization_id_key UNIQUE USING INDEX model_tiers_id_organization_id_key;
+ALTER TABLE tasks ADD CONSTRAINT tasks_id_organization_id_key UNIQUE USING INDEX tasks_id_organization_id_key;
 
 ALTER TABLE organizations ADD COLUMN judgement_tier_id text,
   ADD FOREIGN KEY (judgement_tier_id, id) REFERENCES model_tiers (id, organization_id) ON DELETE SET NULL (judgement_tier_id);
