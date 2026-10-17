@@ -22,8 +22,12 @@ export function tooBig(el: Element, win: Window): boolean {
   return r.width > win.innerWidth || r.height > win.innerHeight || r.width < 1 || r.height < 1;
 }
 
-// A url() whose bytes are not in the page's reach: drawing it would need a request.
-const fetchedUrl = (v: string) => /url\(/.test(v) && !/url\(["']?data:/.test(v);
+// Every url() token, a quoted one read whole: a data: SVG's own `url(#g)` is part of its URL, not another token.
+const URL_TOKEN = /url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)]*))\s*\)/g;
+
+// A value naming any url() whose bytes are not in the page's reach (drawing it would need a request), or a url( not read as a token.
+export const fetchedUrl = (v: string) => [...v.matchAll(URL_TOKEN)].some((m) => !(m[1] ?? m[2] ?? m[3]!).trimStart().startsWith("data:"))
+  || /url\(/i.test(v.replace(URL_TOKEN, ""));
 
 /** A computed style as an inline one; null when a property names a url() dude can't copy. */
 function styleText(cs: CSSStyleDeclaration, skip?: string): string | null {

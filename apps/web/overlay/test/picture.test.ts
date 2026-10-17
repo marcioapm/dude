@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { PictureError, cloneWithStyles, contentParts } from "../picture.ts";
+import { PictureError, cloneWithStyles, contentParts, fetchedUrl } from "../picture.ts";
 
 const Window = (globalThis.window as unknown as { constructor: new (o: object) => any }).constructor;
 
@@ -80,6 +80,43 @@ test("pseudo spans count against the 2,000-node cap", async () => {
   expect((await clone(plain)).childElementCount).toBe(1_998);
   const marked = page(`<div id="it">${items}</div>`, { "i|::before": `content: "•"` });
   await expect(clone(marked)).rejects.toThrow(new PictureError("it is too large to draw"));
+});
+
+const DATA = "data:image/png;base64,iVBORw0KGgo=";
+const REMOTE = "https://cdn.test/a.png";
+const noCopy = new PictureError("it has a background image dude can't copy");
+
+test.each([
+  `background-image: url("${DATA}"), url("${REMOTE}")`,
+  `background-image: url("${REMOTE}"), url("${DATA}")`,
+  `background-image: url(${DATA}), url(${DATA}), url(${REMOTE})`,
+  `mask-image: url("${DATA}"), url("${REMOTE}")`,
+  `cursor: url("${DATA}"), url("${REMOTE}"), auto`,
+  `list-style-image: url("${REMOTE}")`,
+  `border-image-source: url("${REMOTE}")`,
+])("a remote url() fails the picture, whichever layer it is: %s", async (style) => {
+  const win = page(`<div id="it"><b style='${style}'>a</b></div>`);
+  await expect(clone(win)).rejects.toThrow(noCopy);
+});
+
+test("data: url()s in every layer are drawn", async () => {
+  const win = page(`<p id="it" style='background-image: url("${DATA}"), url("${DATA}")'>a</p>`);
+  expect((await clone(win)).getAttribute("style")).toContain("background-image:");
+});
+
+test("a value is fetched when any url() in it is not data:, read token by token", () => {
+  const svg = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><rect fill='url(%23g)'/></svg>")`;
+  expect(fetchedUrl(`${svg}, url("${DATA}")`)).toBe(false);
+  expect(fetchedUrl(`${svg}, url("${REMOTE}")`)).toBe(true);
+  expect(fetchedUrl(`url( '${DATA}' ), url(${DATA})`)).toBe(false);
+  expect(fetchedUrl(`image-set(url("${REMOTE}") 1dppx)`)).toBe(true);
+  expect(fetchedUrl(`url("${DATA}"), url(`)).toBe(true);
+  expect(fetchedUrl(`linear-gradient(red, blue)`)).toBe(false);
+});
+
+test("a pseudo whose second background layer is remote is left out", async () => {
+  const win = page(`<p id="it">a</p>`, { "#it|::before": `content: "!"; background-image: url("${DATA}"), url("${REMOTE}")` });
+  expect((await clone(win)).querySelectorAll("span").length).toBe(0);
 });
 
 test("content: strings with escapes, attr(), quotes, counters left out, alt text after /", () => {
