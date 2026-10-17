@@ -82,10 +82,11 @@ readable diff. After editing, regenerate and review
 that diff:
 
 ```bash
-cd orchestrator
-go test ./internal/delivery ./internal/agenttools ./internal/phases -run Golden -update
-git diff internal/delivery/agents/testdata
+go test -C orchestrator ./internal/delivery ./internal/agenttools ./internal/phases -run Golden -update
+git -C orchestrator diff internal/delivery/agents/testdata
 ```
+
+For refusal constants, regenerate first with `go -C orchestrator generate ./internal/refusalgen`.
 
 Without `-update` the test fails on any byte that differs and names the
 first line. `agenttools` and `phases` build only on Linux
