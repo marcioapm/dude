@@ -76,18 +76,22 @@ func contentText(v any) string {
 
 // withholdGitHubRead replaces a GitHub read's result in a completion's
 // payload with its size, as the tool server records it: the model has the
-// text, the ledger does not. A read is known by any name the call had —
+// text, the ledger does not. A call named as a read by any name it had —
 // bare (Claude Code, Codex), server_tool (OpenCode over ACP), announced
-// while pending — or, whatever it was called, by its output carrying a
-// read's note (capOutput withheld it).
+// while pending — has every stream withheld, marked withheldBy "name".
+// Whatever it was called, a stream carrying a read's note was already
+// withheld alone by capOutput, marked withheldBy "content", and the
+// call's other streams are kept: printing the note hides only itself.
 func withholdGitHubRead(names []string, payload map[string]any) {
-	withhold := slices.ContainsFunc(names, func(name string) bool {
+	if !slices.ContainsFunc(names, func(name string) bool {
 		switch strings.TrimPrefix(name, "dude_") {
 		case "github_search", "github_issue", "github_pull_request":
 			return true
 		}
 		return false
-	})
+	}) {
+		return
+	}
 	size := 0
 	for _, k := range []string{"output", "stdout", "stderr"} {
 		out, ok := payload[k].(map[string]any)
@@ -95,7 +99,6 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 			continue
 		}
 		if out["withheld"] == true {
-			withhold = true
 			n, _ := out["bytes"].(int)
 			size += n
 			continue
@@ -105,13 +108,10 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 		omitted, _ := out["omittedBytes"].(int)
 		size += len(head) + len(tail) + omitted
 	}
-	if !withhold {
-		return
-	}
 	for _, k := range []string{"output", "stdout", "stderr"} {
 		delete(payload, k)
 	}
-	payload["output"] = map[string]any{"bytes": size, "withheld": true}
+	payload["output"] = map[string]any{"bytes": size, "withheld": true, "withheldBy": "name"}
 }
 
 // capOutput keeps output whole up to the limit, and otherwise its first and
@@ -119,7 +119,7 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 // result is withheld whole: its note may sit in the part a cut leaves out.
 func capOutput(s string) map[string]any {
 	if delivery.CarriesGitHubRead(s) {
-		return map[string]any{"bytes": len(s), "withheld": true}
+		return map[string]any{"bytes": len(s), "withheld": true, "withheldBy": "content"}
 	}
 	if len(s) <= outputLimit {
 		return map[string]any{"head": s}

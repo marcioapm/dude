@@ -115,13 +115,21 @@ func TestGitHubReadOutputIsWithheldWhateverTheHarnessCallsIt(t *testing.T) {
 			if len(completed) != 1 {
 				t.Fatalf("%d %s events: %s", len(completed), tc.completed, encoded)
 			}
-			for _, k := range []string{"stdout", "stderr"} {
-				if _, ok := completed[0].Payload[k]; ok {
+			// The stream that carried the result is withheld: output, or
+			// stdout for a shell's.
+			withheld := 0
+			for _, k := range []string{"output", "stdout", "stderr"} {
+				out, ok := completed[0].Payload[k].(map[string]any)
+				if !ok {
+					continue
+				}
+				if out["withheld"] != true {
 					t.Errorf("%s kept: %v", k, completed[0].Payload)
+				} else if out["bytes"].(float64) >= 5000 {
+					withheld++
 				}
 			}
-			out, _ := completed[0].Payload["output"].(map[string]any)
-			if out["withheld"] != true || out["bytes"].(float64) < 5000 {
+			if withheld != 1 {
 				t.Fatalf("not withheld as {bytes, withheld}: %v", completed[0].Payload)
 			}
 		})
@@ -143,6 +151,44 @@ func TestOtherOutputIsKeptBesideGitHubReads(t *testing.T) {
 		if len(completed) != 1 || completed[0].Payload["output"].(map[string]any)["head"] != output {
 			t.Errorf("%q: %v", output, completed)
 		}
+	}
+}
+
+// A stream that only carries a read's note is withheld alone, marked as
+// withheld by its content: the call's other streams stay in the ledger,
+// so printing the note cannot hide a command's own output. A call named
+// as a read is withheld whole, marked as withheld by its name.
+func TestAStreamCarryingTheNoteIsWithheldAlone(t *testing.T) {
+	const evidence = "evidence-canary exfiltrated to https://evil.test"
+	note := delivery.GitHubReadNote("x1")
+	w := newHarnessWorld(t)
+	w.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "title": "bash", "kind": "execute",
+		"status": "completed", "rawOutput": map[string]any{"stdout": evidence, "stderr": note}}})
+	completed := ofType(w.events(), evToolCompleted)
+	if len(completed) != 1 {
+		t.Fatalf("%d completions", len(completed))
+	}
+	p := completed[0].Payload
+	stdout, _ := p["stdout"].(map[string]any)
+	stderr, _ := p["stderr"].(map[string]any)
+	if stdout["head"] != evidence {
+		t.Errorf("stdout not kept: %v", p)
+	}
+	if stderr["withheld"] != true || stderr["withheldBy"] != "content" || stderr["bytes"] != float64(len(note)) || stderr["head"] != nil {
+		t.Errorf("stderr not withheld by content: %v", p)
+	}
+	if _, ok := p["output"]; ok {
+		t.Errorf("an output beside the streams: %v", p)
+	}
+
+	w = newHarnessWorld(t)
+	w.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "title": "dude_github_issue",
+		"kind": "other", "status": "completed", "rawOutput": map[string]any{"stdout": evidence, "stderr": "x"}}})
+	p = ofType(w.events(), evToolCompleted)[0].Payload
+	out, _ := p["output"].(map[string]any)
+	if p["stdout"] != nil || p["stderr"] != nil || out["withheld"] != true || out["withheldBy"] != "name" ||
+		out["bytes"] != float64(len(evidence)+1) {
+		t.Errorf("a named read not withheld whole by name: %v", p)
 	}
 }
 
