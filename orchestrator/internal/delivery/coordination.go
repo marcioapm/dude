@@ -412,7 +412,7 @@ func OpenWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, message, how string)
 	case err == nil && current == message:
 		return w, nil
 	case err == nil:
-		return w, refusef("you already wait on the reply to %s: one wait at a time", current)
+		return w, refusef(rYouAlreadyWaitOnReplyOne, current)
 	case !db.IsNotFound(err):
 		return w, err
 	}

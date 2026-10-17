@@ -37,21 +37,20 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 		return Steered{}, "", err
 	}
 	if !live {
-		return Steered{}, "", refusef("you are no longer this task's conductor: another took over from you. Steer nothing")
+		return Steered{}, "", refuseText(rYouAreNoLongerThisTask2)
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, ref.TaskID).Scan(&status); err != nil {
 		return Steered{}, "", err
 	}
 	if Ended(status) {
-		return Steered{}, "", refusef("this task is %s: you are read-only now and steer nothing. Offer to record the change as a "+
-			"follow-up task (create_task), linked to this one, and create it once the person agrees", status)
+		return Steered{}, "", refusef(rThisTaskYouAreReadOnly2, status)
 	}
 	if strings.TrimSpace(text) == "" && len(feedbackIDs) == 0 {
-		return Steered{}, "", refusef("say what to tell the Run: text is required")
+		return Steered{}, "", refuseText(rSayWhatTellRunTextRequired)
 	}
 	if len(text) > SteerTextMax {
-		return Steered{}, "", refusef("a steer is at most %d KiB of text", SteerTextMax>>10)
+		return Steered{}, "", refusef(rSteerAtMostKibText, SteerTextMax>>10)
 	}
 	var taskID, kind, phase, role, rstatus string
 	var current, ending bool
@@ -67,31 +66,31 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 		FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&taskID, &kind, &phase, &role, &rstatus, &current, &ending)
 	switch {
 	case db.IsNotFound(err) || err == nil && taskID != ref.TaskID:
-		return Steered{}, "", refusef("%s is not a Run of your task: you steer only the Runs of this task", runID)
+		return Steered{}, "", refusef(rNotRunYourTaskYouSteer, runID)
 	case err != nil:
 		return Steered{}, "", err
 	case runID == ref.RunID || role == RoleConductor:
-		return Steered{}, "", refusef("%s is a conductor, not a phase Run: steer the Runs you started", runID)
+		return Steered{}, "", refusef(rConductorNotPhaseRunSteerRuns, runID)
 	case kind != "agent":
-		return Steered{}, "", refusef("%s is a branch preview, not an agent: there is nobody to steer", runID)
+		return Steered{}, "", refusef(rBranchPreviewNotAgentThereNobody, runID)
 	case phase == "":
-		return Steered{}, "", refusef("%s is not a phase Run", runID)
+		return Steered{}, "", refusef(rNotPhaseRun, runID)
 	case !current:
-		return Steered{}, "", refusef("%s is a Run of an earlier attempt: steer only the current attempt's", runID)
+		return Steered{}, "", refusef(rRunEarlierAttemptSteerOnlyCurrent, runID)
 	}
 	switch rstatus {
 	case "pending", "scheduled", "starting", "running", "paused":
 		if ending {
-			return Steered{}, "", refusef("%s is ending: it would never read a steer. Wait for it to end, then start another phase", runID)
+			return Steered{}, "", refusef(rEndingWouldNeverReadSteerWait, runID)
 		}
 	default:
-		return Steered{}, "", refusef("%s has ended (%s): start another phase instead of steering it", runID, rstatus)
+		return Steered{}, "", refusef(rHasEndedStartAnotherPhaseInstead, runID, rstatus)
 	}
 	var items []FeedbackItem
 	var words string
 	if len(feedbackIDs) > 0 {
 		if phase != PhaseImplement && phase != PhaseFix {
-			return Steered{}, "", refusef("%s is a %s Run: feedback goes to an implementer or fixer, which can change the code", runID, phase)
+			return Steered{}, "", refusef(rRunFeedbackGoesImplementerOrFixer, runID, phase)
 		}
 		open, err := OpenFeedbackTx(ctx, tx, ref.TaskID, 0)
 		if err != nil {
@@ -100,7 +99,7 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 		for _, id := range feedbackIDs {
 			i := slices.IndexFunc(open, func(it FeedbackItem) bool { return it.ID == id })
 			if i < 0 {
-				return Steered{}, "", refusef("%s is not an open feedback item of this task's current attempt (feedback lists them)", id)
+				return Steered{}, "", refusef(rNotOpenFeedbackItemThisTask, id)
 			}
 			items = append(items, open[i])
 		}

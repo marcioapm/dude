@@ -414,7 +414,7 @@ func define[In, Out any](name string, roles []string,
 				dec := json.NewDecoder(bytes.NewReader(args))
 				dec.DisallowUnknownFields()
 				if err := dec.Decode(&in); err != nil {
-					return nil, refuse("arguments: %v", err)
+					return nil, refuse(rArguments, err)
 				}
 			}
 			return do(ctx, tx, c, in)
@@ -658,9 +658,9 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	limit := t.perRun
 	switch {
 	case recent >= callsPerMinute:
-		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)
+		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
 	case limit > 0 && sameTool >= limit:
-		return refuse("%s is limited to %d calls in a run; this run has used them", tool, limit)
+		return refuse(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
 }
@@ -697,3 +697,6 @@ func structured(out []byte) json.RawMessage {
 	}
 	return out
 }
+
+// refuseText is refuse with a message that has no verbs to fill.
+func refuseText(msg string) error { return refusal{msg: msg} }

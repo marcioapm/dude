@@ -66,18 +66,18 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 			&branch, &reviewRange, &feedbackIDs)
 	switch {
 	case db.IsNotFound(err) || err == nil && runTask != taskID:
-		return "", refusef("%s is not a Run of this task: only this task's Runs are restarted here", in.RunID)
+		return "", refusef(rNotRunThisTaskOnlyThis, in.RunID)
 	case err != nil:
 		return "", err
 	case phase == "" || role == RoleConductor:
-		return "", refusef("%s is not a phase Run: only a phase Run is restarted", in.RunID)
+		return "", refusef(rNotPhaseRunOnlyPhaseRun, in.RunID)
 	case !slices.Contains([]string{"pending", "scheduled", "starting", "running", "paused"}, status):
-		return "", refusef("%s has ended (%s): there is nothing to restart", in.RunID, status)
+		return "", refusef(rHasEndedThereNothingRestart, in.RunID, status)
 	case d == nil || !d.Live() || !slices.Contains(d.State.PendingRunIDs, in.RunID):
-		return "", refusef("%s is not a Run the delivery waits on: only a Run it waits on is restarted", in.RunID)
+		return "", refusef(rNotRunDeliveryWaitsOnOnly, in.RunID)
 	case d.Status != "waiting":
 		// A step running now writes the Runs it waits on as it read them.
-		return "", refusef("the delivery is taking a step now; restart %s again in a moment", in.RunID)
+		return "", refusef(rDeliveryTakingStepNowRestartAgain, in.RunID)
 	}
 	note := clip(strings.TrimSpace(in.Note), noteChars)
 	var tierID string
@@ -172,13 +172,13 @@ func tierForRole(ctx context.Context, tx pgx.Tx, tier, role string) (string, err
 	err := tx.QueryRow(ctx, `SELECT id, model FROM model_tiers WHERE id = $1 OR name = $1 ORDER BY id = $1 DESC LIMIT 1`, tier).
 		Scan(&id, &model)
 	if db.IsNotFound(err) {
-		return "", refusef("no model tier %q: the tiers are the organization's (in Models)", tier)
+		return "", refusef(rNoModelTierTiersAreOrganization, tier)
 	}
 	if err != nil {
 		return "", err
 	}
 	if model == nil {
-		return "", refusef("the tier %q names no model yet: a %s cannot run on it", tier, RoleName(role))
+		return "", refusef(rTierNamesNoModelYetCannot, tier, RoleName(role))
 	}
 	return id, nil
 }

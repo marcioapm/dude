@@ -58,11 +58,11 @@ type nameSessionOut struct {
 func nameSession(ctx context.Context, tx pgx.Tx, c Caller, in nameSessionIn) (nameSessionOut, error) {
 	title := delivery.OneLineTitle(in.Title)
 	if title == "" || utf8.RuneCountInString(title) > delivery.AgentTitleMax {
-		return nameSessionOut{}, refuse("a title of 1 to %d characters, on one line", delivery.AgentTitleMax)
+		return nameSessionOut{}, refuse(rTitle1CharactersOnOneLine, delivery.AgentTitleMax)
 	}
 	_, err := delivery.RenameSession(ctx, tx, c.run(), title, delivery.ByAgent, ledger.ActorAgent, c.RunID)
 	if errors.Is(err, delivery.ErrNamedByPerson) {
-		return nameSessionOut{}, refuse("a member named this session; their name stays: don't rename it")
+		return nameSessionOut{}, refuseText(rMemberNamedThisSessionTheirName)
 	}
 	return nameSessionOut{Title: title}, err
 }
@@ -78,7 +78,7 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 	if key == "" {
 		switch len(projects) {
 		case 0:
-			return delivery.LinkedProject{}, refuse("no project is linked to this session yet: a member links one")
+			return delivery.LinkedProject{}, refuseText(rNoProjectLinkedThisSessionYet)
 		case 1:
 			return projects[0], nil
 		}
@@ -86,14 +86,14 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 		for i, p := range projects {
 			keys[i] = p.Key
 		}
-		return delivery.LinkedProject{}, refuse("name a project: %s", strings.Join(keys, ", "))
+		return delivery.LinkedProject{}, refuse(rNameProject, strings.Join(keys, ", "))
 	}
 	for _, p := range projects {
 		if strings.EqualFold(p.Key, key) || strings.EqualFold(p.Name, key) {
 			return p, nil
 		}
 	}
-	return delivery.LinkedProject{}, refuse("project %s is not linked to this session", key)
+	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
 }
 
 // inProject is the caller as a tool for one project sees it.
@@ -171,7 +171,7 @@ func taskOf(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (Caller, delive
 		return c, p, false, err
 	}
 	if id == "" {
-		return c, p, false, refuse("no task %s in %s", in.Task, p.Key)
+		return c, p, false, refuse(rNoTaskIn, in.Task, p.Key)
 	}
 	scoped := inProject(c, p.ID)
 	scoped.TaskID = id
@@ -214,7 +214,7 @@ func sessionFindings(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, 
 		return findings(ctx, tx, scoped, findingsIn{IDs: in.IDs})
 	}
 	if len(in.IDs) > 0 {
-		return nil, refuse("name the task to read findings in full")
+		return nil, refuseText(rNameTaskReadFindingsInFull)
 	}
 	rows, err := tx.Query(ctx, `SELECT $2 || '-' || t.number, f.id, f.severity::text, f.category, f.status::text
 		FROM review_findings f JOIN tasks t ON t.id = f.task_id
@@ -263,7 +263,7 @@ func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSea
 func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	if err != nil {
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	}
 	if m.ProjectID != "" {
 		projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
@@ -271,7 +271,7 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 			return memory.Memory{}, err
 		}
 		if !slices.ContainsFunc(projects, func(p delivery.LinkedProject) bool { return p.ID == m.ProjectID }) {
-			return memory.Memory{}, refuse("no memory %s", in.ID)
+			return memory.Memory{}, refuse(rNoMemory, in.ID)
 		}
 	}
 	c.ProjectID = m.ProjectID
@@ -341,7 +341,7 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, c Caller, name string) (memory
 	if id, err := epicByTitle(ctx, tx, p.ID, strings.TrimSpace(title)); err != nil || id != "" {
 		return memory.Ref{Type: "epic", ID: id}, err
 	}
-	return memory.Ref{}, refuse("%q is not a task or epic of the linked projects", name)
+	return memory.Ref{}, refuse(rNotTaskOrEpicLinkedProjects, name)
 }
 
 type proposeIn struct {
@@ -358,7 +358,7 @@ type proposeOut struct {
 // now; who may file it is the card's to say, for whoever presses File.
 func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut, error) {
 	if len(in.Items) == 0 || len(in.Items) > 30 {
-		return proposeOut{}, refuse("propose 1 to 30 items")
+		return proposeOut{}, refuseText(rPropose130Items)
 	}
 	projects, err := delivery.SessionProjects(ctx, tx, c.SessionID)
 	if err != nil {
@@ -378,32 +378,32 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		case "epic", "task":
 			p, err := linkedProject(ctx, tx, c, item.Project)
 			if err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			item.Project = p.Key
 			if item.Title == "" || len(item.Title) > 500 {
-				return proposeOut{}, refuse("item %d: a title of 1 to 500 characters", n)
+				return proposeOut{}, refuse(rItemTitle1500Characters, n)
 			}
 			if item.Kind == "epic" {
 				if len(item.Title) > 200 || len(item.Description) > 10_000 {
-					return proposeOut{}, refuse("item %d: an epic's title is at most 200 characters, its description 10,000", n)
+					return proposeOut{}, refuse(rItemEpicTitleAtMost200, n)
 				}
 				if len(item.Notes) > delivery.NotesMax {
-					return proposeOut{}, refuse("item %d: an epic holds at most %d notes", n, delivery.NotesMax)
+					return proposeOut{}, refuse(rItemEpicHoldsAtMostNotes, n, delivery.NotesMax)
 				}
 				for j, text := range item.Notes {
 					if item.Notes[j] = strings.TrimSpace(text); item.Notes[j] == "" || utf8.RuneCountInString(item.Notes[j]) > delivery.NoteTextMax {
-						return proposeOut{}, refuse("item %d: note %d is 1 to %d characters", n, j+1, delivery.NoteTextMax)
+						return proposeOut{}, refuse(rItemNote1Characters, n, j+1, delivery.NoteTextMax)
 					}
 				}
 				newEpics[strings.ToLower(p.Key+"/"+item.Title)] = true
 				break
 			}
 			if len(item.Notes) > 0 {
-				return proposeOut{}, refuse("item %d: notes go on an epic, or as a note item", n)
+				return proposeOut{}, refuse(rItemNotesGoOnEpicOr, n)
 			}
 			if err := checkTaskText(&item.Goal, &item.AcceptanceCriteria, true); err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			if e := strings.TrimSpace(item.Epic); e != "" && !newEpics[strings.ToLower(p.Key+"/"+e)] {
 				id, err := epicByTitle(ctx, tx, p.ID, e)
@@ -411,7 +411,7 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 					return proposeOut{}, err
 				}
 				if id == "" {
-					return proposeOut{}, refuse("item %d: no epic %q in %s, and none proposed before it", n, e, p.Key)
+					return proposeOut{}, refuse(rItemNoEpicInAndNone, n, e, p.Key)
 				}
 			}
 		case "edit", "comment":
@@ -420,18 +420,18 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				return proposeOut{}, err
 			}
 			if id == "" {
-				return proposeOut{}, refuse("item %d: %s is not a task of a linked project", n, item.Task)
+				return proposeOut{}, refuse(rItemNotTaskLinkedProject, n, item.Task)
 			}
 			item.Task = strings.ToUpper(strings.TrimSpace(item.Task))
 			if item.Kind == "comment" {
 				item.Text = strings.TrimSpace(item.Text)
 				if item.Text == "" || len(item.Text) > delivery.ChatMessageMax {
-					return proposeOut{}, refuse("item %d: a comment of 1 to %d bytes", n, delivery.ChatMessageMax)
+					return proposeOut{}, refuse(rItemComment1Bytes, n, delivery.ChatMessageMax)
 				}
 				break
 			}
 			if item.After == nil || item.After.Goal == nil && item.After.AcceptanceCriteria == nil {
-				return proposeOut{}, refuse("item %d: an edit gives after: a new goal, new acceptance criteria, or both", n)
+				return proposeOut{}, refuse(rItemEditGivesAfterNewGoal, n)
 			}
 			var crit []string
 			if item.After.AcceptanceCriteria != nil {
@@ -442,7 +442,7 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				goal = *item.After.Goal
 			}
 			if err := checkTaskText(&goal, &crit, item.After.Goal != nil); err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			// The card shows the task as it is now beside the edit.
 			var nowGoal string
@@ -456,18 +456,18 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		case "note":
 			p, err := linkedProject(ctx, tx, c, item.Project)
 			if err != nil {
-				return proposeOut{}, refuse("item %d: %v", n, err)
+				return proposeOut{}, refuse(rItem, n, err)
 			}
 			item.Project = p.Key
 			item.Epic, item.Text = strings.TrimSpace(item.Epic), strings.TrimSpace(item.Text)
 			if item.Text == "" || utf8.RuneCountInString(item.Text) > delivery.NoteTextMax {
-				return proposeOut{}, refuse("item %d: a note of 1 to %d characters", n, delivery.NoteTextMax)
+				return proposeOut{}, refuse(rItemNote1Characters2, n, delivery.NoteTextMax)
 			}
 			if item.Replaces < 0 {
-				return proposeOut{}, refuse("item %d: replaces is a note's number", n)
+				return proposeOut{}, refuse(rItemReplacesNoteNumber, n)
 			}
 			if item.Epic == "" {
-				return proposeOut{}, refuse("item %d: a note names its epic", n)
+				return proposeOut{}, refuse(rItemNoteNamesItsEpic, n)
 			}
 			if !newEpics[strings.ToLower(p.Key+"/"+item.Epic)] {
 				id, err := epicByTitle(ctx, tx, p.ID, item.Epic)
@@ -475,13 +475,13 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 					return proposeOut{}, err
 				}
 				if id == "" {
-					return proposeOut{}, refuse("item %d: no epic %q in %s, and none proposed before it", n, item.Epic, p.Key)
+					return proposeOut{}, refuse(rItemNoEpicInAndNone, n, item.Epic, p.Key)
 				}
 			} else if item.Replaces != 0 {
-				return proposeOut{}, refuse("item %d: a new epic has no note %d to replace", n, item.Replaces)
+				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
 			}
 		default:
-			return proposeOut{}, refuse("item %d: kind is epic, task, edit, comment or note", n)
+			return proposeOut{}, refuse(rItemKindEpicTaskEditComment, n)
 		}
 		items[i] = item
 	}
@@ -505,23 +505,23 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 			refs []delivery.ProposalRef
 		}{{"blockedBy", it.BlockedBy}, {"blocks", it.Blocks}, {"related", it.Related}} {
 			if len(side.refs) > 0 && it.Kind != "task" {
-				return refuse("item %d: only a task item has relations; relate existing tasks with relate", n)
+				return refuse(rItemOnlyTaskItemHasRelations, n)
 			}
 			for j, r := range side.refs {
 				switch {
 				case r.Item != 0 && r.Key != "":
-					return refuse("item %d: %s names a task by key or by item, not both", n, side.name)
+					return refuse(rItemNamesTaskByKeyOr, n, side.name)
 				case r.Item == n:
-					return refuse("item %d: %s names itself", n, side.name)
+					return refuse(rItemNamesItself, n, side.name)
 				case r.Item != 0 && (r.Item < 0 || r.Item > len(items) || items[r.Item-1].Kind != "task"):
-					return refuse("item %d: %s names item %d, which is not a task of this proposal", n, side.name, r.Item)
+					return refuse(rItemNamesItemWhichNotTask, n, side.name, r.Item)
 				case r.Item == 0:
 					id, _, err := delivery.TaskByKey(ctx, tx, linked, r.Key)
 					if err != nil {
 						return err
 					}
 					if id == "" {
-						return refuse("item %d: %s names %s, which is not a task of a linked project", n, side.name, r.Key)
+						return refuse(rItemNamesWhichNotTaskLinked, n, side.name, r.Key)
 					}
 					k, _ := delivery.TaskKey(r.Key)
 					side.refs[j].Key = k
@@ -560,7 +560,7 @@ func checkProposalRelations(ctx context.Context, tx pgx.Tx, linked []string, ite
 			for k, x := range loop {
 				words[k] = fmt.Sprintf("item %d", x+1)
 			}
-			return refuse("the items wait on each other in a loop: %s. Propose them in an order", strings.Join(words, " waits on "))
+			return refuse(rItemsWaitOnEachOtherIn, strings.Join(words, " waits on "))
 		}
 	}
 	return nil
@@ -589,7 +589,7 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 	}
 	kind := strings.TrimSpace(in.Kind)
 	if kind != "blocks" && kind != "related" {
-		return proposeOut{}, refuse("kind is blocks or related")
+		return proposeOut{}, refuseText(rKindBlocksOrRelated)
 	}
 	var keys [2]string
 	var taskIDs [2]string
@@ -599,13 +599,13 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 			return proposeOut{}, err
 		}
 		if id == "" {
-			return proposeOut{}, refuse("%s is not a task of a linked project", k)
+			return proposeOut{}, refuse(rNotTaskLinkedProject, k)
 		}
 		keys[i], _ = delivery.TaskKey(k)
 		taskIDs[i] = id
 	}
 	if taskIDs[0] == taskIDs[1] {
-		return proposeOut{}, refuse("a task can't be related to itself")
+		return proposeOut{}, refuseText(rTaskCanTBeRelatedItself)
 	}
 	if kind == "blocks" {
 		var loop []string
@@ -613,12 +613,12 @@ func relate(ctx context.Context, tx pgx.Tx, c Caller, in relateIn) (proposeOut, 
 			return proposeOut{}, err
 		}
 		if loop != nil {
-			return proposeOut{}, refuse("that would make a loop: %s. A task can't wait on itself", strings.Join(loop, " → "))
+			return proposeOut{}, refuse(rThatWouldMakeLoopTaskCan, strings.Join(loop, " → "))
 		}
 	}
 	why := strings.TrimSpace(in.Why)
 	if len(why) > 2000 {
-		return proposeOut{}, refuse("why: at most 2000 characters")
+		return proposeOut{}, refuseText(rWhyAtMost2000Characters)
 	}
 	item := delivery.ProposalItem{Kind: "relation", From: keys[0], To: keys[1], RelationKind: kind, Why: why}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), []delivery.ProposalItem{item})
@@ -660,7 +660,7 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 		return askOut{}, err
 	}
 	if open {
-		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
+		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
 	to, toName := "", ""
 	if name := strings.TrimSpace(in.To); name != "" {
@@ -675,7 +675,7 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 			return askOut{}, err
 		}
 		if len(found) != 1 {
-			return askOut{}, refuse("to names one member who can chat; %q is %d of them", name, len(found))
+			return askOut{}, refuse(rNamesOneMemberWhoCanChat, name, len(found))
 		}
 		to, toName = found[0].ID, found[0].Name
 	}

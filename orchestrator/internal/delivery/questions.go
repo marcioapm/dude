@@ -72,7 +72,7 @@ func runes(s string) int { return utf8.RuneCountInString(s) }
 // (case and spaces aside), more than one recommended.
 func NormalizeItems(items []QuestionItem) ([]QuestionItem, error) {
 	if len(items) == 0 || len(items) > MaxQuestionItems {
-		return nil, refusef("ask 1 to %d questions in one call; you asked %d", MaxQuestionItems, len(items))
+		return nil, refusef(rAsk1QuestionsInOneCall, MaxQuestionItems, len(items))
 	}
 	out := make([]QuestionItem, len(items))
 	for i, it := range items {
@@ -84,32 +84,32 @@ func NormalizeItems(items []QuestionItem) ([]QuestionItem, error) {
 			Choices: make([]Choice, len(it.Choices))}
 		switch {
 		case q.Question == "":
-			return nil, refusef("%sthe question is required", n)
+			return nil, refusef(rQuestionRequired, n)
 		case runes(q.Question) > QuestionTextMax:
-			return nil, refusef("%sthe question is too long: at most %d characters", n, QuestionTextMax)
+			return nil, refusef(rQuestionTooLongAtMostCharacters, n, QuestionTextMax)
 		case len(items) > 1 && q.Header == "":
-			return nil, refusef("%sa header is required when you ask several: a few words naming it (at most %d characters)",
+			return nil, refusef(rHeaderRequiredWhenYouAskSeveral,
 				n, QuestionHeaderMax)
 		case runes(q.Header) > QuestionHeaderMax:
-			return nil, refusef("%sthe header %q is too long: at most %d characters", n, q.Header, QuestionHeaderMax)
+			return nil, refusef(rHeaderTooLongAtMostCharacters, n, q.Header, QuestionHeaderMax)
 		case len(it.Choices) > QuestionChoicesMax:
-			return nil, refusef("%sat most %d choices; dude adds a way to answer in their own words", n, QuestionChoicesMax)
+			return nil, refusef(rAtMostChoicesDudeAddsWay, n, QuestionChoicesMax)
 		}
 		recommended := 0
 		for j, c := range it.Choices {
 			c = Choice{Label: strings.TrimSpace(c.Label), Description: strings.TrimSpace(c.Description), Recommended: c.Recommended}
 			switch {
 			case c.Label == "":
-				return nil, refusef("%schoice %d has no label", n, j+1)
+				return nil, refusef(rChoiceHasNoLabel, n, j+1)
 			case runes(c.Label) > ChoiceLabelMax:
-				return nil, refusef("%schoice %q is too long: a label of at most %d characters (say more in its description)",
+				return nil, refusef(rChoiceTooLongLabelAtMost,
 					n, c.Label, ChoiceLabelMax)
 			case runes(c.Description) > ChoiceDescriptionMax:
-				return nil, refusef("%schoice %q: a description of at most %d characters", n, c.Label, ChoiceDescriptionMax)
+				return nil, refusef(rChoiceDescriptionAtMostCharacters, n, c.Label, ChoiceDescriptionMax)
 			}
 			for _, prev := range q.Choices[:j] {
 				if strings.EqualFold(prev.Label, c.Label) {
-					return nil, refusef("%schoices %q and %q read as the same answer: make each one distinct", n, prev.Label, c.Label)
+					return nil, refusef(rChoicesAndReadAsSameAnswer2, n, prev.Label, c.Label)
 				}
 			}
 			if c.Recommended {
@@ -118,7 +118,7 @@ func NormalizeItems(items []QuestionItem) ([]QuestionItem, error) {
 			q.Choices[j] = c
 		}
 		if recommended > 1 {
-			return nil, refusef("%srecommend at most one choice", n)
+			return nil, refusef(rRecommendAtMostOneChoice, n)
 		}
 		out[i] = q
 	}

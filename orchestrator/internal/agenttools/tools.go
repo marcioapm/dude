@@ -89,7 +89,7 @@ type listTasksOut struct {
 func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (any, error) {
 	if in.Peers {
 		if strings.TrimSpace(in.Text) != "" || in.Startable {
-			return nil, refuse("peers lists your peers whole: leave text and startable out")
+			return nil, refuseText(rPeersListsYourPeersWholeLeave)
 		}
 		return listPeers(ctx, tx, c)
 	}
@@ -208,16 +208,15 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	title := strings.TrimSpace(in.Title)
 	switch {
 	case title == "":
-		return createTaskOut{}, refuse("a title is required")
+		return createTaskOut{}, refuseText(rTitleRequired)
 	case utf16Len(strings.TrimFunc(in.Goal, isJSSpace)) < GoalMin:
-		return createTaskOut{}, refuse("a task needs a goal of at least %d characters: say why it matters and what should "+
-			"change, so a person can decide on it without asking you", GoalMin)
+		return createTaskOut{}, refuse(rTaskNeedsGoalAtLeastCharacters, GoalMin)
 	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
-		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
+		return createTaskOut{}, refuse(rTooLongTitleAtMost500, GoalMax)
 	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:
-		return createTaskOut{}, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+		return createTaskOut{}, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	case len(in.BlockedBy)+len(in.Blocks)+len(in.Related) > 0 && !slices.Contains(relationWriters, c.Role):
-		return createTaskOut{}, refuse("a %s can't relate tasks: say what this waits on in the goal, and a person or the conductor relates them", c.Role)
+		return createTaskOut{}, refuse(rCanTRelateTasksSayWhat, c.Role)
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {
@@ -226,7 +225,7 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 			return createTaskOut{}, err
 		}
 		if id == "" {
-			return createTaskOut{}, refuse("no epic called %q in this project (list_tasks shows them)", e)
+			return createTaskOut{}, refuse(rNoEpicCalledInThisProject, e)
 		}
 		epicID = &id
 	}
@@ -274,11 +273,11 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 				return createTaskOut{}, err
 			}
 			if !ok {
-				return createTaskOut{}, refuse("%s: no task %s in this organisation; nothing was created", side.name, k)
+				return createTaskOut{}, refuse(rNoTaskInThisOrganisationNothing, side.name, k)
 			}
 			if err := delivery.AddRelationTx(ctx, tx, c.Org, delivery.Edge{Here: here, Other: other, Side: side.name, RunID: c.RunID}); err != nil {
 				if r, ok := err.(delivery.RelationRefusal); ok {
-					return createTaskOut{}, refuse("%s %s: %s; nothing was created", strings.ReplaceAll(side.name, "_", " "), k, r.Msg)
+					return createTaskOut{}, refuse(rNothingWasCreated, strings.ReplaceAll(side.name, "_", " "), k, r.Msg)
 				}
 				return createTaskOut{}, err
 			}
@@ -354,10 +353,10 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 	var items []delivery.QuestionItem
 	switch {
 	case strings.TrimSpace(question) != "" && len(questions) > 0:
-		return nil, refuse("ask with question or with questions, not both")
+		return nil, refuseText(rAskWithQuestionOrWithQuestions)
 	case len(questions) > 0:
 		if len(choices) > 0 {
-			return nil, refuse("with questions, each question has its own choices")
+			return nil, refuseText(rWithQuestionsEachQuestionHasIts)
 		}
 		for _, q := range questions {
 			item := delivery.QuestionItem{Header: q.Header, Question: q.Question, Multiple: q.Multiple}
@@ -367,7 +366,7 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 			items = append(items, item)
 		}
 	case strings.TrimSpace(question) == "":
-		return nil, refuse("a question is required: question, or questions (1 to %d)", delivery.MaxQuestionItems)
+		return nil, refuse(rQuestionRequiredQuestionOrQuestions1, delivery.MaxQuestionItems)
 	default:
 		items = []delivery.QuestionItem{delivery.SingleItem(question, choices)}
 	}
@@ -384,14 +383,14 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 		return askOut{}, err
 	}
 	if len(in.Actions) > 0 && len(items) > 1 {
-		return askOut{}, refuse("actions go with one question (question and choices), about an escalation")
+		return askOut{}, refuseText(rActionsGoWithOneQuestionQuestion)
 	}
 	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
 	if err != nil {
 		return askOut{}, err
 	}
 	if open {
-		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
+		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
 	// A conductor's question while its task's escalation waits on a person
 	// is that escalation's question.
@@ -401,7 +400,7 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 			return askOut{}, err
 		}
 	} else if len(in.Actions) > 0 {
-		return askOut{}, refuse("actions are a conductor's, for a question about an escalation")
+		return askOut{}, refuseText(rActionsAreConductorForQuestionAbout)
 	}
 	id, err := delivery.AskItemsTx(ctx, tx, c.run(), items)
 	if err != nil {
@@ -448,7 +447,7 @@ var eventType = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){0,3}$`)
 // handles its type.
 func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, error) {
 	if !eventType.MatchString(in.Type) || len(in.Type) > 64 {
-		return emitOut{}, refuse("type %q: lowercase words joined by dots, like progress or tests.finished", in.Type)
+		return emitOut{}, refuse(rTypeLowercaseWordsJoinedByDots, in.Type)
 	}
 	data := in.Data
 	if data == nil {
@@ -464,7 +463,7 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 		}
 	}
 	if raw, _ := json.Marshal(data); len(raw) > 16<<10 {
-		return emitOut{}, refuse("data too large: at most 16 KB")
+		return emitOut{}, refuseText(rDataTooLargeAtMost16)
 	}
 	typ := CustomPrefix + in.Type
 	_, err := ledger.Append(ctx, tx, c.event(typ, map[string]any{"type": in.Type, "data": data}))
@@ -495,11 +494,11 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	reason := strings.TrimSpace(in.Reason)
 	switch {
 	case name == "" || reason == "":
-		return requestRepoOut{}, refuse("name the repository and say why you need it")
+		return requestRepoOut{}, refuseText(rNameRepositoryAndSayWhyYou)
 	case len(reason) > 2000:
-		return requestRepoOut{}, refuse("reason too long: at most 2000 characters")
+		return requestRepoOut{}, refuseText(rReasonTooLongAtMost2000)
 	case in.Write && !slices.Contains(writers, c.Role):
-		return requestRepoOut{}, refuse("a %s may ask to read a repository, not to change it", c.Role)
+		return requestRepoOut{}, refuse(rMayAskReadRepositoryNotChange, c.Role)
 	}
 	// The project's repositories, by name or owner/name (the end of its URL).
 	var repo struct{ ID, Name string }
@@ -508,7 +507,7 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		  AND (lower(name) = lower($2) OR lower(regexp_replace(url, '(\.git)?/*$', '')) LIKE '%/' || lower($3) ESCAPE '\')
 		LIMIT 1`, c.ProjectID, name, db.LikeLiteral(name)).Scan(&repo.ID, &repo.Name)
 	if err == pgx.ErrNoRows {
-		return requestRepoOut{}, refuse("no repository %q in this project (a person can add one to the project)", name)
+		return requestRepoOut{}, refuse(rNoRepositoryInThisProjectPerson, name)
 	}
 	if err != nil {
 		return requestRepoOut{}, err
@@ -523,9 +522,9 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	}
 	switch {
 	case clash > 0:
-		return requestRepoOut{}, refuse("%s is already checked out for this work", repo.Name)
+		return requestRepoOut{}, refuse(rAlreadyCheckedOutForThisWork, repo.Name)
 	case pending >= maxPendingRequests:
-		return requestRepoOut{}, refuse("you have %d requests waiting for a person; wait for them first", pending)
+		return requestRepoOut{}, refuse(rYouHaveRequestsWaitingForPerson, pending)
 	}
 	access := "read"
 	if in.Write {
@@ -539,7 +538,7 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		return requestRepoOut{}, err
 	}
 	if tag.RowsAffected() == 0 {
-		return requestRepoOut{}, refuse("you already asked for %s; a person has not decided yet", repo.Name)
+		return requestRepoOut{}, refuse(rYouAlreadyAskedForPersonHas, repo.Name)
 	}
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvRepositoryRequested,
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {

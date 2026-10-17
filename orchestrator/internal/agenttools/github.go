@@ -131,7 +131,7 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, err
 	}
 	if gh == nil {
-		return read, refuse("this organisation has no GitHub connection: nothing on GitHub can be read")
+		return read, refuseText(rThisOrganisationHasNoGithubConnection)
 	}
 	want := strings.Trim(strings.TrimSpace(read.Slug), "/")
 	slugs, err := readableRepos(ctx, tx, c)
@@ -145,9 +145,9 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 			whose = "the projects linked to this session"
 		}
 		if len(slugs) == 0 {
-			return read, refuse("%s is not a repository you may read: %s have none on GitHub", want, whose)
+			return read, refuse(rNotRepositoryYouMayReadHave, want, whose)
 		}
-		return read, refuse("%s is not a repository you may read: only %s, %s", want, whose, strings.Join(slugs, ", "))
+		return read, refuse(rNotRepositoryYouMayReadOnly, want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
 	// The session's (or, for a conductor with none, the task's) Runs share
@@ -164,7 +164,7 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, err
 	}
 	if reads >= githubReadsPerHour {
-		return read, refuse("at most %d GitHub reads an hour; this session has made them: wait, or work with what you read", githubReadsPerHour)
+		return read, refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
 	}
 	return read, nil
 }
@@ -173,16 +173,16 @@ func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (
 	kind, state := strings.TrimSpace(in.Kind), strings.TrimSpace(in.State)
 	switch {
 	case kind != "issue" && kind != "pr":
-		return githubRead{}, refuse("kind is issue or pr")
+		return githubRead{}, refuseText(rKindIssueOrPr)
 	case state != "" && state != "open" && state != "closed" && state != "all":
-		return githubRead{}, refuse("state is open, closed or all")
+		return githubRead{}, refuseText(rStateOpenClosedOrAll)
 	case len(in.Query) > 256:
-		return githubRead{}, refuse("query: at most 256 characters")
+		return githubRead{}, refuseText(rQueryAtMost256Characters)
 	}
 	for _, term := range strings.Fields(strings.ToLower(in.Query)) {
 		for _, q := range []string{"repo:", "org:", "user:", "owner:"} {
 			if strings.HasPrefix(strings.TrimPrefix(term, "-"), q) {
-				return githubRead{}, refuse("name the repository in repo, not with %s in the query", q)
+				return githubRead{}, refuse(rNameRepositoryInRepoNotWith, q)
 			}
 		}
 	}
@@ -192,21 +192,21 @@ func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (
 
 func readGitHubIssue(ctx context.Context, tx pgx.Tx, c Caller, in githubIssueIn) (githubRead, error) {
 	if in.Number <= 0 {
-		return githubRead{}, refuse("number is the issue's, from 1")
+		return githubRead{}, refuseText(rNumberIssueFrom1)
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_issue", Slug: in.Repo, Number: in.Number})
 }
 
 func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPullRequestIn) (githubRead, error) {
 	if in.Number <= 0 {
-		return githubRead{}, refuse("number is the pull request's, from 1")
+		return githubRead{}, refuseText(rNumberPullRequestFrom1)
 	}
 	files := uniquePaths(in.Files)
 	for i, f := range files {
 		files[i] = strings.TrimSpace(delivery.Unquoted(f))
 	}
 	if len(files) > diffPathsMax {
-		return githubRead{}, refuse("files: at most %d paths at once", diffPathsMax)
+		return githubRead{}, refuse(rFilesAtMostPathsAtOnce, diffPathsMax)
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_pull_request", Slug: in.Repo, Number: in.Number, Files: files})
 }

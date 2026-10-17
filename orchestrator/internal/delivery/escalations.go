@@ -358,37 +358,32 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 		return "", err
 	}
 	if d != nil && d.State.conducted() && d.Live() && d.State.Escalation != nil && d.State.Escalation.Decided != nil {
-		return "", refusef("the escalation (%s) was just decided %s: %s. Ask nothing about it; the delivery carries it "+
-			"out, and you are woken at the next decision", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
+		return "", refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
 			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
 	}
 	if !waitsAtDecide(d) || !d.State.conducted() {
 		if len(actions) > 0 {
-			return "", refusef("actions are for a question about an escalation waiting on a person; there is none")
+			return "", refuseText(rActionsAreForQuestionAboutEscalation)
 		}
 		return "", nil
 	}
 	offered := d.State.Escalation.Actions()
 	if len(items) != 1 {
-		return "", refusef("the task's escalation waits on a person: ask its one question first (question, choices and "+
-			"actions, each one of %s), not %d questions; ask the rest once it is decided", listOr(offered), len(items))
+		return "", refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
 	}
 	choices := items[0].Labels()
 	if len(choices) == 0 || len(actions) != len(choices) {
-		return "", refusef("the task's escalation waits on a person: this question is its question. Offer choices, and "+
-			"actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the "+
-			"escalation, as the banner does, except a waiver or an acceptance of a failed test, which needs the person's own words",
+		return "", refusef(rTaskEscalationWaitsOnPersonThis,
 			listOr(offered))
 	}
 	reason := d.State.Escalation.Reason
 	for _, a := range actions {
 		if !slices.Contains(offered, a) {
-			return "", refusef("%q is not one of this escalation's actions: %s", a, listOr(offered))
+			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
 		// A pick carries no reason of the person's.
 		if NeedsReason(reason, a) {
-			return "", refusef("%q is not a choice: shipping past %s needs the person's own reason. They %s from the "+
-				"banner, or answer your question in their own words", a, strings.ReplaceAll(reason, "_", " "), a)
+			return "", refusef(rNotChoiceShippingPastNeedsPerson, a, strings.ReplaceAll(reason, "_", " "), a)
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
@@ -396,7 +391,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 	// and a click on it would take the first's action.
 	for i, c := range choices {
 		if j := choiceOf(choices[:i], c); j >= 0 {
-			return "", refusef("choices %q and %q read as the same answer (case and spaces aside): make each one distinct",
+			return "", refusef(rChoicesAndReadAsSameAnswer,
 				choices[j], c)
 		}
 	}
@@ -428,8 +423,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	const banner = "a person decides it on the banner, or by answering your question about it (ask_person, the " +
 		"escalation's actions as choices)"
 	if !waitsAtDecide(d) || !d.State.conducted() {
-		return nil, refusef("no escalation waits on a decision now: decide_escalation is only for one the owner handed you "+
-			"with a free answer; %s", banner)
+		return nil, refusef(rNoEscalationWaitsOnDecisionNow, banner)
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
 	var qID, prompt, answer, by, asker string
@@ -439,8 +433,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		FROM questions q WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered'
 		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker, &rawOpts, &rawAnswers)
 	if db.IsNotFound(err) {
-		return nil, refusef("the owner has not answered your question about this escalation: only a person decides it. "+
-			"Ask them, or end your turn; %s", banner)
+		return nil, refusef(rOwnerHasNotAnsweredYourQuestion, banner)
 	}
 	if err != nil {
 		return nil, err
@@ -448,19 +441,17 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	// The answer handed the escalation to the conductor that asked: one
 	// that took over since has not been heard by the owner.
 	if asker != ref.RunID {
-		return nil, refusef("the owner's answer (question %s) was to an earlier conductor's question, not yours: ask them "+
-			"again yourself (ask_person, the escalation's actions as choices); %s", qID, banner)
+		return nil, refusef(rOwnerAnswerQuestionWasEarlierConductor, qID, banner)
 	}
 	owner, err := TaskOwner(ctx, tx, ref.TaskID)
 	if err != nil {
 		return nil, err
 	}
 	if owner != "" && by != owner {
-		return nil, refusef("the answer to your question %s is not the task's owner's: only the owner hands you an "+
-			"escalation; %s", qID, banner)
+		return nil, refusef(rAnswerYourQuestionNotTaskOwner, qID, banner)
 	}
 	if !slices.Contains(d.State.Escalation.Actions(), action) {
-		return nil, refusef("%q is not a way to go on after %s; one of %s", action, d.State.Escalation.Reason,
+		return nil, refusef(rNotWayGoOnAfterOne, action, d.State.Escalation.Reason,
 			listOr(d.State.Escalation.Actions()))
 	}
 	if NeedsReason(d.State.Escalation.Reason, action) {
@@ -477,8 +468,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			words = items[0].Text
 		}
 		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
-			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
-				"they say why in their own words, or decide on the banner", qID, action)
+			return nil, refusef(rOwnerAnswerYourQuestionOneIts, qID, action)
 		}
 		if owner == "" {
 			var admin bool
@@ -487,7 +477,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 				return nil, err
 			}
 			if !admin {
-				return nil, refusef("only the task's owner or an organisation admin can %s this; %s", action, banner)
+				return nil, refusef(rOnlyTaskOwnerOrOrganisationAdmin, action, banner)
 			}
 		}
 	}

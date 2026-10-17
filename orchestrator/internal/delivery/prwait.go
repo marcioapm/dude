@@ -37,15 +37,15 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 		return "", err
 	}
 	if d == nil || d.WorkflowID != w.WorkflowID || !d.waitingOnPR() {
-		return "", refusef("the delivery moved on as you asked; you are woken at its next decision")
+		return "", refuseText(rDeliveryMovedOnAsYouAsked)
 	}
 	if !slices.Contains(prWaitPhases, in.Phase) {
-		return "", refusef("%s cannot start while the delivery waits on its pull requests; it can start %s", in.Phase, listOr(prWaitPhases))
+		return "", refusef(rCannotStartWhileDeliveryWaitsOn, in.Phase, listOr(prWaitPhases))
 	}
 	if held, err := stepHolds(ctx, tx, d.WorkflowID, ""); err != nil {
 		return "", err
 	} else if held {
-		return "", refusef("the delivery is reading what changed on its pull requests now; start %s again in a moment", in.Phase)
+		return "", refusef(rDeliveryReadingWhatChangedOnIts, in.Phase)
 	}
 	var writer, publishing bool
 	if err := tx.QueryRow(ctx, `SELECT `+liveWriter+`, EXISTS (SELECT 1 FROM conductor_publishes WHERE task_id = $1 AND status IN `+publishLive+`)`,
@@ -53,17 +53,17 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 		return "", err
 	}
 	if writer || publishing {
-		return "", refusef("a Run or a publish is changing the task branch now: one writer at a time; start %s once it is done", in.Phase)
+		return "", refusef(rRunOrPublishChangingTaskBranch, in.Phase)
 	}
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
-		return "", refusef("categories are for review, findings for fix")
+		return "", refuseText(rCategoriesAreForReviewFindingsFor)
 	}
 	st := &d.State
 	switch in.Phase {
 	case PhaseReview:
 		for _, c := range in.Categories {
 			if !slices.Contains(reviewCategories(), c) {
-				return "", refusef("no reviewer %q: the categories are %s", c, listOr(reviewCategories()))
+				return "", refusef(rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
 			}
 		}
 		if err := reviewBound(st); err != nil {
@@ -71,7 +71,7 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 		}
 	case PhaseFix:
 		if len(in.FindingIDs) > 0 {
-			return "", refusef("a fix while the pull request waits addresses what you ask in note, not findings: review first")
+			return "", refuseText(rFixWhilePullRequestWaitsAddresses)
 		}
 		repos, err := openPRRepos(ctx, tx, st.PullRequestIDs)
 		if err != nil {
@@ -81,7 +81,7 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 			return "", err
 		}
 		if strings.TrimSpace(in.Note) == "" {
-			return "", refusef("say what the fix is to do (note): no pull request feedback is waiting for it")
+			return "", refuseText(rSayWhatFixDoNoteNo)
 		}
 	}
 	st.Decision = &Pending{Point: PointPRFeedback, Policy: "awaitPullRequest"}

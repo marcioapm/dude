@@ -39,7 +39,7 @@ type messageIn struct {
 func message(ctx context.Context, tx pgx.Tx, c Caller, in messageIn) (delivery.Sent, error) {
 	key := strings.TrimSpace(in.To)
 	if key == "" || strings.ContainsAny(key, ",*") || strings.EqualFold(key, "all") || strings.EqualFold(key, "epic") {
-		return delivery.Sent{}, refuse("a message goes to one peer, by its key: to tell every task on the epic, pin a note")
+		return delivery.Sent{}, refuseText(rMessageGoesOnePeerByIts)
 	}
 	peer, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
 	if err != nil {
@@ -93,7 +93,7 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 	err := tx.QueryRow(ctx, `SELECT m.from_run_id, m.to_task_id, p.key_prefix || '-' || t.number FROM peer_messages m
 		JOIN tasks t ON t.id = m.to_task_id JOIN projects p ON p.id = t.project_id WHERE m.id = $1 FOR NO KEY UPDATE OF m`, id).Scan(&fromRun, &toTask, &toKey)
 	if db.IsNotFound(err) || err == nil && fromRun != c.RunID {
-		return waitOut{}, refuse("%s is not a message you sent: wait only on the reply to your own", id)
+		return waitOut{}, refuse(rNotMessageYouSentWaitOnly, id)
 	}
 	if err != nil {
 		return waitOut{}, err
@@ -105,7 +105,7 @@ func waitForReply(ctx context.Context, tx pgx.Tx, c Caller, in waitIn) (waitOut,
 		WHERE m.reply_to = $1 ORDER BY m.created_at LIMIT 1`, id, toTask).Scan(&r.ID, &r.From, &r.Text, &r.At, &self)
 	switch {
 	case err == nil && self:
-		return waitOut{}, refuse("you closed %s yourself, going ahead on what you assumed: there is nothing to wait for", id)
+		return waitOut{}, refuse(rYouClosedYourselfGoingAheadOn, id)
 	case err == nil:
 		return waitOut{Reply: &r, Next: replyCameNext}, nil
 	case !db.IsNotFound(err):
@@ -137,10 +137,10 @@ func note(ctx context.Context, tx pgx.Tx, c Caller, in noteIn) (delivery.Pinned,
 		return delivery.Pinned{}, err
 	}
 	if epic == "" {
-		return delivery.Pinned{}, refuse("your task is on no epic: there is nowhere to pin a note")
+		return delivery.Pinned{}, refuseText(rYourTaskOnNoEpicThere)
 	}
 	if in.Replaces < 0 {
-		return delivery.Pinned{}, refuse("replaces is a note's number")
+		return delivery.Pinned{}, refuseText(rReplacesNoteNumber)
 	}
 	pinned, err := delivery.PinNoteTx(ctx, tx, c.Org, delivery.PinInput{EpicID: epic, Text: in.Text, Replaces: in.Replaces, Run: c.run()})
 	var refused delivery.NoteRefusal

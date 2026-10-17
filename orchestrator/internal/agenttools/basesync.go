@@ -83,7 +83,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 		return ask, err
 	}
 	if luxRun == "" || luxState != "running" {
-		return ask, refuse("your container is not running as lux sees it; call sync_base again in a moment")
+		return ask, refuseText(rYourContainerNotRunningAsLux)
 	}
 	ask.LuxRunID = luxRun
 	d, err := delivery.ReadDelivery(ctx, tx, c.TaskID)
@@ -119,7 +119,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 		}
 	}
 	if len(ask.Refs) == 0 {
-		return ask, refuse("this Run holds no repository it may change: there is no base to bring in")
+		return ask, refuseText(rThisRunHoldsNoRepositoryMay)
 	}
 	return ask, nil
 }
@@ -131,15 +131,14 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 func fetchBase(ctx context.Context, c Caller, ask baseAsk) (syncBaseOut, error) {
 	out := syncBaseOut{RequestID: baseRequestPrefix(c.RunID) + fmt.Sprint(time.Now().UnixNano())}
 	if c.env.syncBase == nil || c.env.lux == nil {
-		return out, refuse("this dude cannot ask lux for a sync: sync_base is not available here")
+		return out, refuseText(rThisDudeCannotAskLuxFor)
 	}
 	err := c.env.syncBase(ctx, c.Org, c.RunID, ask.LuxRunID, out.RequestID, ask.Refs)
 	if lux.SyncModesRefused(err) {
-		return out, refuse("this lux has no sync modes, so it cannot fetch your base without moving your checkout: " +
-			"sync_base needs a lux with mode fetch. Ask a person to bring the base in, or carry on without it")
+		return out, refuseText(rThisLuxHasNoSyncModes)
 	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		return out, refuse("lux would not fetch your base: %s", le.Message)
+		return out, refuse(rLuxWouldNotFetchYourBase, le.Message)
 	}
 	if err != nil {
 		return out, err

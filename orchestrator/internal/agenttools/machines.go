@@ -94,7 +94,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	var out requestMachineOut
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" || len([]rune(reason)) > 2000 {
-		return out, refuse("say what ran out: the command, its error or exit code (at most 2000 characters)")
+		return out, refuseText(rSayWhatRanOutCommandIts)
 	}
 	var current *delivery.Machine
 	var live, status, control, phase string
@@ -115,15 +115,14 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if pending > 0 {
-		return out, refuse("you are being moved to %s now; ask again once you are there, if it is still too small", cmp.Or(pendingTo, "another size"))
+		return out, refuse(rYouAreBeingMovedNowAsk, cmp.Or(pendingTo, "another size"))
 	}
 	if used >= machineMovesPerRun {
 		on := "your machine"
 		if current != nil {
 			on = current.Name
 		}
-		return out, refuse("This Run has moved %d times, the limit for one Run; a Reset does not give a move back. "+
-			"Carry on on %s, or say in your work what did not fit.", machineMovesPerRun, on)
+		return out, refuse(rThisRunHasMovedTimesLimit, machineMovesPerRun, on)
 	}
 	if current == nil || live == "" || status != "running" || control != "none" {
 		return out, refusal{msg: "this Run is not live and available for a machine move", code: "not_live"}
@@ -138,9 +137,9 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	found, ok := sizes.Named(in.Size)
 	if !ok {
 		if len(choices.Targets) == 0 {
-			return out, refuse("no size named %s. %s", in.Size, choices.Nothing())
+			return out, refuse(rNoSizeNamed, in.Size, choices.Nothing())
 		}
-		return out, refuse("no size named %s; you may move to: %s", in.Size, choices.List())
+		return out, refuse(rNoSizeNamedYouMayMove, in.Size, choices.List())
 	}
 	target := choices.Named(found)
 	names := delivery.PoolNamesOf(pools)
@@ -159,7 +158,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, refusedAs(msg, "not_larger", "not_larger")
 	}
 	if c.env.lux == nil || c.env.validateMachine == nil {
-		return out, refuse("machine validation is unavailable")
+		return out, refuseText(rMachineValidationUnavailable)
 	}
 	before, err := c.env.lux.Get(ctx, live)
 	if err != nil {
@@ -167,7 +166,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	}
 	if err := c.env.validateMachine(ctx, live, current, &target, before); err != nil {
 		if errors.Is(err, delivery.ErrPoolsUnread) {
-			return out, refuse("lux's pools could not be read; ask again shortly")
+			return out, refuseText(rLuxPoolsCouldNotBeRead)
 		}
 		if le, ok := lux.AsError(err); ok {
 			// Unread before, the pools are read once more so the sentence can name them.
@@ -196,7 +195,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	err = delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: c.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.RunID,
 		Role: role, Kind: "raise", ToSizeID: target.SizeID, From: delivery.MoveFrom{Machine: *current, PreviousRaise: previous}, Reason: reason}, true)
 	if errors.Is(err, delivery.ErrMoveUnavailable) {
-		return out, refuse("this Run is no longer available for a machine move")
+		return out, refuseText(rThisRunNoLongerAvailableFor)
 	}
 	if err != nil {
 		return out, err

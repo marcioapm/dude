@@ -102,14 +102,14 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 	paths := uniquePaths(in.Paths)
 	switch {
 	case in.Limit < 0 || in.Offset < 0:
-		return nil, refuse("limit and offset cannot be negative")
+		return nil, refuseText(rLimitAndOffsetCannotBeNegative)
 	case len(paths) > 0 && (in.NameStatus || in.Limit != 0 || in.Offset != 0):
-		return nil, refuse("nameStatus, limit and offset page the file list; with paths, leave them out")
+		return nil, refuseText(rNamestatusLimitAndOffsetPageFile)
 	}
 	runID := strings.TrimSpace(in.Run)
 	if key := strings.TrimSpace(in.Task); key != "" {
 		if runID != "" {
-			return nil, refuse("name a run or a task, not both")
+			return nil, refuseText(rNameRunOrTaskNotBoth)
 		}
 		peer, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
 		if err != nil {
@@ -122,7 +122,7 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 			return nil, err
 		}
 		if runID == "" {
-			return nil, refuse("%s has had no Run yet: nothing has changed", peer.Key)
+			return nil, refuse(rHasHadNoRunYetNothing, peer.Key)
 		}
 		return storedDiff(ctx, tx, runID, paths, in)
 	}
@@ -134,13 +134,13 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 	var task string
 	err := tx.QueryRow(ctx, `SELECT task_id FROM runs WHERE id = $1 AND task_id IS NOT NULL`, runID).Scan(&task)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, refuse("no run %q", runID)
+		return nil, refuse(rNoRun, runID)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if task != c.TaskID {
-		return nil, refuse("run %s is not of your task: only your task's runs can be read", runID)
+		return nil, refuse(rRunNotYourTaskOnlyYour, runID)
 	}
 	return storedDiff(ctx, tx, runID, paths, in)
 }

@@ -1,6 +1,9 @@
 package delivery
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -183,4 +186,41 @@ func TestGoldenMoveRefusals(t *testing.T) {
 		lines = append(lines, [2]string{c.name + " (agent)", c.r.ForAgent()}, [2]string{c.name + " (person)", c.r.ForPerson()})
 	}
 	goldenLines(t, "move-refusals", lines)
+}
+
+// Every refusal format under agents/refusals/, in the golden's order, then
+// any the golden lacks.
+func TestGoldenRefusals(t *testing.T) {
+	var keys []string
+	for _, tm := range agentTemplates.Templates() {
+		if name := tm.Name(); strings.HasPrefix(name, "refusals/") && strings.Count(name, "/") == 3 {
+			keys = append(keys, name)
+		}
+	}
+	want, _ := os.ReadFile(filepath.Join("agents", "testdata", "refusals.golden.md"))
+	order := map[string]int{}
+	for _, line := range strings.Split(string(want), "\n") {
+		if key, ok := strings.CutPrefix(line, "## "); ok {
+			order[key] = len(order)
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		ia, oka := order[a]
+		ib, okb := order[b]
+		switch {
+		case oka && okb:
+			return ia - ib
+		case oka != okb:
+			if oka {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
+	var lines [][2]string
+	for _, key := range keys {
+		lines = append(lines, [2]string{key, render(mustTemplate(key), nil)})
+	}
+	goldenLines(t, "refusals", lines)
 }

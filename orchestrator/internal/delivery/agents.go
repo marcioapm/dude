@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices
+//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -109,10 +109,17 @@ var (
 	replayTmpl               = mustTemplate("briefings/replay")
 )
 
-// mustTemplate is the named template, or a panic naming its file.
+// mustTemplate is the named template, or a panic naming its file. A name
+// longer than a file's ("refusals/delivery/edits/no-commits") is a
+// {{define}} in the file its prefix names, when that file exists.
 func mustTemplate(name string) *template.Template {
 	t := agentTemplates.Lookup(name)
 	if t == nil {
+		for file := path.Dir(name); file != "."; file = path.Dir(file) {
+			if agentTemplates.Lookup(file) != nil {
+				panic(fmt.Sprintf("agents/%s.md defines no %q", file, name))
+			}
+		}
 		panic(fmt.Sprintf("agents/%s.md is missing", name))
 	}
 	return t

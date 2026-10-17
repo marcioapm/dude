@@ -50,11 +50,11 @@ func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) (
 // searchScoped searches within scope (its Project, OrgOnly and Session).
 func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, scope memory.Query) ([]searchHit, error) {
 	if strings.TrimSpace(in.Query) == "" {
-		return nil, refuse("a query is required")
+		return nil, refuseText(rQueryRequired)
 	}
 	for _, t := range in.Types {
 		if !slices.Contains(memory.Types, t) {
-			return nil, refuse("types are memory, task, epic and project, not %q", t)
+			return nil, refuse(rTypesAreMemoryTaskEpicAnd, t)
 		}
 	}
 	emb, _ := c.env.prepared.(memory.Embedded)
@@ -87,14 +87,14 @@ func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	switch {
 	case errors.Is(err, memory.ErrNotFound):
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	case err != nil:
 		return memory.Memory{}, err
 	case m.ProjectID != "" && m.ProjectID != c.ProjectID:
 		// Another project's memory is not this Run's to read.
-		return memory.Memory{}, refuse("no memory %s", in.ID)
+		return memory.Memory{}, refuse(rNoMemory, in.ID)
 	case m.ArchivedAt != nil:
-		return memory.Memory{}, refuse("memory %s was archived: it is no longer held true", in.ID)
+		return memory.Memory{}, refuse(rMemoryWasArchivedNoLongerHeld, in.ID)
 	}
 	return m, nil
 }
@@ -120,7 +120,7 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	case "organization":
 		project = ""
 	default:
-		return rememberOut{}, refuse("scope is project or organization")
+		return rememberOut{}, refuseText(rScopeProjectOrOrganization)
 	}
 	var about []memory.Ref
 	for _, a := range in.About {

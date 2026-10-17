@@ -97,7 +97,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 		return "", err
 	}
 	if !live {
-		return "", refusef("you are no longer this task's conductor: another took over from you. Publish nothing")
+		return "", refuseText(rYouAreNoLongerThisTask3)
 	}
 	d, err := ReadDelivery(ctx, tx, ref.TaskID)
 	if err != nil {
@@ -111,15 +111,15 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	switch {
 	case Ended(status):
-		return "", refusef("this task is %s: you are read-only now and publish nothing. Offer a follow-up task (create_task)", status)
+		return "", refusef(rThisTaskYouAreReadOnly3, status)
 	case d == nil || !d.Live():
-		return "", refusef("this task has no delivery in progress: there is no task branch to publish to")
+		return "", refuseText(rThisTaskHasNoDeliveryIn2)
 	case !d.State.conducted():
 		return "", refusef("%s", refusedPolicy)
 	case readOnly != "":
-		return "", refusef("your checkout is read-only for this conversation: %s", readOnly)
+		return "", refusef(rYourCheckoutReadOnlyForThis, readOnly)
 	case pushBranch == "":
-		return "", refusef("your checkout has no repository you may change: nothing can be published")
+		return "", refuseText(rYourCheckoutHasNoRepositoryYou)
 	}
 	var writer, inFlight bool
 	if err := tx.QueryRow(ctx, `SELECT `+liveWriter+`,
@@ -131,7 +131,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 		return "", refusef("%s", refusedWriter)
 	}
 	if inFlight {
-		return "", refusef("a publish of yours is under way: you are woken when it is done")
+		return "", refuseText(rPublishYoursUnderWayYouAre)
 	}
 	if d.State.Candidate != nil {
 		return "", refusef("%s", refusedCandidate)

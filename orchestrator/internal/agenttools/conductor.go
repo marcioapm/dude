@@ -66,7 +66,7 @@ type findingsOut struct {
 func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, error) {
 	ids := uniquePaths(in.IDs)
 	if len(ids) > findingTextMax {
-		return nil, refuse("at most %d findings by id at once", findingTextMax)
+		return nil, refuse(rAtMostFindingsByIdAt, findingTextMax)
 	}
 	out := findingsOut{Findings: []findingOut{}}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM review_findings WHERE task_id = $1`, c.TaskID).Scan(&out.Total); err != nil {
@@ -347,7 +347,7 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 		return nil, err
 	}
 	if !live {
-		return nil, refuse("you are no longer this task's conductor: another took over from you. Restart nothing")
+		return nil, refuseText(rYouAreNoLongerThisTask)
 	}
 	id, err := delivery.RestartRunTx(ctx, tx, c.Org, c.TaskID, delivery.Restart{RunID: strings.TrimSpace(in.Run), Note: in.Note,
 		Tier: strings.TrimSpace(in.Tier), Actor: delivery.Writer{ActorType: ledger.ActorAgent, ActorID: c.RunID}, Conductor: c.RunID})
@@ -446,14 +446,14 @@ func edgesOf(ctx context.Context, tx pgx.Tx, c Caller, in []relationIn) ([]deliv
 	for _, r := range in {
 		kind := strings.TrimSpace(r.Kind)
 		if kind != delivery.SideBlockedBy && kind != delivery.SideBlocks && kind != delivery.SideRelated {
-			return nil, refuse("a relation's kind is blocked_by, blocks or related, not %q", r.Kind)
+			return nil, refuse(rRelationKindBlockedByBlocksOr, r.Kind)
 		}
 		other, ok, err := delivery.TaskByOrgKey(ctx, tx, r.Task)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, refuse("no task %s in this organisation", r.Task)
+			return nil, refuse(rNoTaskInThisOrganisation, r.Task)
 		}
 		here, err := hereOf(ctx, tx, c)
 		if err != nil {
@@ -493,11 +493,11 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 	}
 	switch {
 	case in.Goal != nil && utf16Len(strings.TrimFunc(*in.Goal, isJSSpace)) < GoalMin:
-		return nil, refuse("a goal of at least %d characters", GoalMin)
+		return nil, refuse(rGoalAtLeastCharacters, GoalMin)
 	case in.Goal != nil && utf16Len(*in.Goal) > GoalMax || len(spec.Criteria) > 50:
-		return nil, refuse("too long: a goal of at most %d characters, at most 50 criteria", GoalMax)
+		return nil, refuse(rTooLongGoalAtMostCharacters, GoalMax)
 	case criteriaLength(spec.Criteria) > CriteriaMax:
-		return nil, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+		return nil, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	}
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
 	return conducted(map[string]any{"updated": true, "next": taskUpdatedNext}, err)
