@@ -14,6 +14,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // goldenWorld is project GLD with task GLD-7 on epic "Billing export",
@@ -108,7 +109,8 @@ func newGoldenWorld(t *testing.T) goldenWorld {
 	}
 	app, owner := dbtest.Open(t)
 	w := goldenWorld{app: app, owner: owner, org: dbtest.Org(t, owner)}
-	w.exec(t, `INSERT INTO people (id, organization_id, name) VALUES ('per_ana', $1, 'Ana'), ('per_bo', $1, 'Bo'), ('per_cy', $1, 'Cy')`)
+	w.exec(t, `INSERT INTO people (id, organization_id, name) VALUES ('per_ana', $1, 'Ana'), ('per_bo', $1, 'Bo'), ('per_cy', $1, 'Cy'),
+		('per_di', $1, 'Di')`)
 	w.exec(t, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_g', $1, 'Billing', 'billing', 'GLD'),
 		('prj_o', $1, 'Operations', 'ops', 'OPS')`)
 	w.exec(t, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -295,13 +297,15 @@ func TestGoldenEpicBriefings(t *testing.T) {
 }
 
 // session sets up the brainstorm session ses_g: its title as given, its
-// people, and, with linked, GLD (two repositories) and OPS (none).
+// people (Cy invited, not accepted), and, with linked, GLD (two
+// repositories) and OPS (none).
 func (w goldenWorld) session(t *testing.T, title, titledBy string, linked bool) {
 	w.exec(t, `INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ses_g', $1, NULLIF($2, ''), NULLIF($3, ''))`, title, titledBy)
 	w.exec(t, `INSERT INTO session_people (session_id, person_id, organization_id, role, invited_at, accepted_at)
 		VALUES ('ses_g', 'per_bo', $1, 'chat', '2026-01-01 10:01Z', '2026-01-01 10:05Z'),
 		('ses_g', 'per_ana', $1, 'owner', '2026-01-01 10:00Z', '2026-01-01 10:00Z'),
-		('ses_g', 'per_cy', $1, 'read', '2026-01-01 10:02Z', NULL)`)
+		('ses_g', 'per_cy', $1, 'read', '2026-01-01 10:02Z', NULL),
+		('ses_g', 'per_di', $1, 'read', '2026-01-01 10:03Z', '2026-01-01 10:06Z')`)
 	if linked {
 		w.exec(t, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ses_g', 'prj_g', $1), ('ses_g', 'prj_o', $1)`)
 		w.exec(t, `INSERT INTO session_repositories (session_id, repository_id, organization_id) VALUES ('ses_g', 'repo_web', $1), ('ses_g', 'repo_api', $1)`)
@@ -378,4 +382,81 @@ func TestGoldenDigestBounds(t *testing.T) {
 		return ConductorDigestTx(ctx, tx, w.org, "wi_g", "", "briefing")
 	})
 	golden(t, "digest-bounded", maskNow(t, got, now))
+}
+
+// conducting gives GLD-7 a live conductor, run_cond1, and a delivery it
+// decides, waiting on its decision at point.
+func (w goldenWorld) conducting(t *testing.T, point, policy string) {
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind, created_at)
+		VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent', '2026-01-02 09:00Z')`)
+	w.delivery(t, "conductorDecision", fmt.Sprintf(`{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor",
+		"policy":{"maxReviewIterations":5,"maxAttemptsPerFinding":2},"decision":{"point":%q,"policy":%q}}`, point, policy))
+}
+
+type goldenStarter struct{}
+
+func (goldenStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {
+	return "wfr_started", false, nil
+}
+
+// What the conductor's decision tools answer, as it reads them, and the
+// line it is woken with for people's feedback.
+func TestGoldenConductorResults(t *testing.T) {
+	ref := func(w goldenWorld) RunRef {
+		return RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
+	}
+	decide := func(action, note string) func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
+		return func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
+			return func(ctx context.Context, tx pgx.Tx) (string, error) {
+				out, err := ConductDecide(ctx, tx, ref(w), action, note)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprint(out["next"]), nil
+			}
+		}
+	}
+	for _, c := range []struct {
+		name, point, policy, setup string
+		do                         func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error)
+	}{
+		{name: "start-phase", point: PointReviewed, policy: "reviewExit",
+			do: func(w goldenWorld) func(ctx context.Context, tx pgx.Tx) (string, error) {
+				return func(ctx context.Context, tx pgx.Tx) (string, error) {
+					return ConductStartPhase(ctx, tx, ref(w), StartPhase{Phase: PhaseReview})
+				}
+			}},
+		{name: "next", point: PointReviewed, policy: "reviewExit", do: decide("next", "")},
+		{name: "ask", point: PointReviewed, policy: "reviewExit", do: decide("ask_person", "Ship without the totals?")},
+		{name: "ask-gate", point: PointBeforePR, policy: "openPullRequest", do: decide("ask_person", "")},
+		{name: "open", point: PointBeforePR, policy: "openPullRequest", setup: "Open", do: decide("open_pull_request", "")},
+		{name: "open-draft", point: PointBeforePR, policy: "openPullRequest", setup: "Draft", do: decide("open_pull_request", "")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newGoldenWorld(t)
+			w.conducting(t, c.point, c.policy)
+			if c.setup != "" {
+				w.exec(t, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, answer, pr_gate_heads)
+					VALUES ('qst_gate', $1, 'wi_g', 'run_cond1', 'Open the pull request?', 'answered', $2, '{}')`, c.setup)
+			}
+			golden(t, "conductor-result-"+c.name, w.in(t, c.do(w)))
+		})
+	}
+	t.Run("feedback-wake", func(t *testing.T) {
+		w := newGoldenWorld(t)
+		w.conducting(t, PointReviewed, "reviewExit")
+		w.exec(t, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor, created_at)
+			VALUES ('fbi_g1', $1, 'wi_g', 1, 'per_ana', 'Rename the flag', 'general', '{"kind":"general"}', '2026-01-02 12:00Z'),
+			('fbi_g2', $1, 'wi_g', 1, 'per_ana', 'And document it', 'general', '{"kind":"general"}', '2026-01-02 12:01Z')`)
+		golden(t, "conductor-wake-feedback", w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			if _, err := SubmitFeedbackTx(ctx, tx, goldenStarter{}, Submission{Org: w.org, TaskID: "wi_g", Person: "per_ana",
+				Key: "k", DraftIDs: []string{"fbi_g1", "fbi_g2"},
+				Writer: Writer{ActorType: "person", ActorID: "per_ana", Person: "per_ana"}}); err != nil {
+				return "", err
+			}
+			var line string
+			err := tx.QueryRow(ctx, `SELECT line FROM conductor_wakes WHERE task_id = 'wi_g' AND kind = $1`, WakeFeedback).Scan(&line)
+			return line, err
+		}))
+	})
 }
