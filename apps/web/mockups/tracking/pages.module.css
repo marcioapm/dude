@@ -1,6 +1,6 @@
 /*
  * Layout the mockup's pages need beyond the design system's components:
- * the board's lead slot and Later shelf (which `Board` would own), the
+ * the board's lead slot (which `Board` would own), the
  * task page additions (apps/web's task screen classes come from app.css),
  * the tasks list, the brief comparison and the meaning page. Tokens only.
  */
@@ -70,117 +70,6 @@
 }
 .leadSlot:empty {
   display: none;
-}
-
-/* -- The Later shelf -- */
-.shelf {
-  display: flex;
-  flex-direction: column;
-  background: var(--ds-color-chrome);
-}
-.shelfHead {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-comfortable);
-  padding: 0 var(--ds-space-16);
-  border: 0;
-  background: transparent;
-  color: var(--ds-color-text-secondary);
-  font: inherit;
-  font-size: var(--ds-text-sm);
-  text-align: left;
-}
-.shelfHead:hover {
-  background: var(--ds-color-hover-wash);
-}
-.shelfLabel {
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
-}
-.shelfCount {
-  color: var(--ds-color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.shelfPeek {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--ds-space-4) var(--ds-space-16);
-  margin-left: var(--ds-space-8);
-  color: var(--ds-color-text-muted);
-  min-width: 0;
-}
-.shelfPeek > span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-4);
-}
-.shelfBody {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ds-space-8);
-  padding: 0 var(--ds-space-16) var(--ds-space-12);
-}
-.shelfCard {
-  display: flex;
-  flex-direction: column;
-  width: 300px;
-  background: var(--ds-color-surface);
-}
-.shelfCardOpen {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-6);
-  padding: var(--ds-space-12);
-  border: 0;
-  background: transparent;
-  color: var(--ds-color-text-secondary);
-  font: inherit;
-  text-align: left;
-}
-.shelfCardOpen:hover {
-  background: var(--ds-color-hover-wash);
-}
-.shelfTop {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  font-size: var(--ds-text-sm);
-}
-.shelfTitle {
-  color: var(--ds-color-text-secondary);
-  font-size: var(--ds-text-md);
-  line-height: var(--ds-leading-snug);
-}
-.shelfGate {
-  display: flex;
-  padding: 0 var(--ds-space-12) var(--ds-space-12);
-}
-.shelfEpic {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-6);
-  min-width: 300px;
-  flex: 1;
-  padding: var(--ds-space-12);
-  background: var(--ds-color-surface);
-  font-size: var(--ds-text-sm);
-}
-.shelfEpicHead {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-  color: var(--ds-color-text-secondary);
-}
-.shelfEpicHead b {
-  color: var(--ds-color-text-primary);
-  font-weight: var(--ds-weight-medium);
-}
-.shelfEpicKeys {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-2);
 }
 
 /* -- Task page additions -- */
@@ -464,6 +353,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* An epic result: the tree's layers glyph in Breadcrumb's muted ink, and its total. */
+.epicGlyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.findCount {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .findGroup {
   padding: var(--ds-space-8) var(--ds-space-6) var(--ds-space-2);

@@ -1,7 +1,7 @@
 /*
  * The tracking-work mockup: the app's shell (the design system's Sidebar,
  * as apps/web lays it out) around the proposed screens for Lifecycle
- * (Later, Close, Archive), Classification (kind, bug fields, priority) and
+ * (Close, Archive), Classification (kind, bug fields, priority) and
  * Finding things (the tasks list, Find work's tokens, the board's chips).
  * A bar above switches screen, theme, density and who is reading; it is
  * not part of the proposal.
@@ -30,9 +30,6 @@ import pageStyles from "./pages.module.css";
 
 export const SCREENS = {
   meaning: "0 · What the words mean",
-  "board-later": "1 · Board with the Later shelf",
-  "defer-dialog": "1 · Put on Later",
-  "deferred-task": "1 · A task on Later",
   "close-dialog": "1 · Close, as a duplicate",
   "closed-wontdo": "1 · Closed: Won't do",
   "closed-duplicate": "1 · Closed: Duplicate (both tasks)",
@@ -51,28 +48,25 @@ export const SCREENS = {
   "tasks-list-archived": "3 · Tasks list: Archived",
   "find-work-tokens": "3 · Find work with tokens",
   "board-filters": "3 · Board filters",
-  narrow: "4 · A deferred bug at 390px",
+  narrow: "4 · A bug at 390px",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
 const params = new URLSearchParams(location.search);
-const first = (params.get("screen") ?? params.get("s") ?? "board-later") as Screen;
+const first = (params.get("screen") ?? params.get("s") ?? "board-kinds") as Screen;
 
 type Place =
-  | { view: "board"; filters: BoardFilters; shelfOpen: boolean; chips: boolean; overlay?: "archive-epic" | "task-dialog" | undefined }
+  | { view: "board"; filters: BoardFilters; chips: boolean; overlay?: "archive-epic" | "task-dialog" | undefined }
   | { view: "task"; key: string; tab: TaskView; overlay: Overlay; split?: string | undefined; before?: boolean | undefined }
   | { view: "list"; list: View }
   | { view: "activity" }
   | { view: "other"; screen: Screen };
 
-const board = (o: Partial<Extract<Place, { view: "board" }>> = {}): Place => ({ view: "board", filters: NO_FILTERS, shelfOpen: false, chips: true, ...o });
+const board = (o: Partial<Extract<Place, { view: "board" }>> = {}): Place => ({ view: "board", filters: NO_FILTERS, chips: true, ...o });
 const page = (key: string, o: Partial<Extract<Place, { view: "task" }>> = {}): Place => ({ view: "task", key, tab: "overview", overlay: null, ...o });
 
 function placeOf(s: Screen): Place {
   switch (s) {
-    case "board-later": return board({ shelfOpen: true, chips: false });
-    case "defer-dialog": return page("CP-62", { overlay: "defer" });
-    case "deferred-task": return page("CP-62");
     case "close-dialog": return page("CP-63", { overlay: "close", before: true });
     case "closed-wontdo": return page("CP-46");
     case "closed-duplicate": return page("CP-63", { split: "CP-62" });
@@ -96,7 +90,7 @@ function placeOf(s: Screen): Place {
 
 function Mock() {
   const theme = useTheme();
-  const [screen, setScreen] = useState<Screen>(first in SCREENS ? first : "board-later");
+  const [screen, setScreen] = useState<Screen>(first in SCREENS ? first : "board-kinds");
   const [place, setPlace] = useState<Place>(() => placeOf(screen));
   const [navOpen, setNavOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -111,8 +105,8 @@ function Mock() {
     const p = place;
     main = (
       <>
-        <BoardPage filters={p.filters} onFilters={(filters) => setPlace({ ...p, filters })} shelfOpen={p.shelfOpen}
-          onShelfOpen={(shelfOpen) => setPlace({ ...p, shelfOpen })} onOpen={openTask} onArchived={() => setPlace({ view: "list", list: "archived" })} showChips={p.chips} />
+        <BoardPage filters={p.filters} onFilters={(filters) => setPlace({ ...p, filters })}
+          onOpen={openTask} onArchived={() => setPlace({ view: "list", list: "archived" })} showChips={p.chips} />
         <ArchiveEpicDialog open={p.overlay === "archive-epic"} onOpenChange={(o) => setPlace({ ...p, overlay: o ? "archive-epic" : undefined })} />
         <TaskDialogBug open={p.overlay === "task-dialog"} onOpenChange={(o) => setPlace({ ...p, overlay: o ? "task-dialog" : undefined })} />
       </>
@@ -158,10 +152,10 @@ function Mock() {
           options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
       </div>
       <div className="mocknote">
-        Reading as {YOU.name} ({ROLE}). Later is a shelf, not a status; Close is a person's decision with a resolution; Archive takes finished work out of everyday views.
+        Reading as {YOU.name} ({ROLE}). Close is a person's decision with a resolution; Archive takes finished work out of everyday views.
       </div>
       <div className={`shell ${finding ? pageStyles["finding"] : ""}`} style={{ flex: 1, minHeight: 0 }}>
-        <Sidebar projects={[world(undefined, true)]} title="dude" you={YOU.id} selected={selected}
+        <Sidebar projects={[world()]} title="dude" you={YOU.id} selected={selected}
           query={finding ? FIND_QUERY : query} onQueryChange={setQuery}
           sessions={finding ? <FindWorkPane /> : undefined}
           onSelect={(ref) => { if (ref.kind === "task") openTask(keyOf(ref.id)); else toBoard(); }}

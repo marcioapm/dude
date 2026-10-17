@@ -1,22 +1,21 @@
 /*
- * Board screens: board-later, board-kinds, board-filters.
+ * Board screens: board-kinds, board-filters, archive-epic-refused,
+ * task-dialog-bug, find-work-tokens.
  *
  * The board is the design system's own `Board`. What the proposal adds:
  * the kind and priority marks on each card's first line (portalled into
  * the real card's top line, standing in for a proposed `cardLead` slot),
- * the Later shelf under the columns (`LaterShelf`, standing in for a
- * proposed `Board later` prop), the filter chips beside the existing
- * relations filter, and the archived count in the header.
+ * the filter chips beside the existing relations filter, and the archived
+ * count in the header.
  */
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Board, RelationChip, StartMenu } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
 import type { BoardCard } from "../../../../packages/design-system/src/util/boardModel.ts";
-import { EPICS, KIND, PRIORITY, ROLE, YOU, archived, firstName, keyOf, laterOf, shelf, task, world, type Kind, type Priority, type Task } from "./data.ts";
-import { KindMark, LaterGate, LaterMark, PriorityMark, ResolutionMark, TaskFilterBar } from "./Marks.tsx";
+import { KIND, PRIORITY, YOU, archived, firstName, keyOf, task, world, type Kind, type Priority, type Task } from "./data.ts";
+import { KindMark, PriorityMark, ResolutionMark, TaskFilterBar } from "./Marks.tsx";
 import styles from "./pages.module.css";
 
 export interface BoardFilters {
@@ -60,79 +59,15 @@ function useLeadSlots(root: HTMLElement | null, version: unknown) {
   return slots;
 }
 
-/** The Later shelf: under the columns, folded to one line by default. */
-export function LaterShelf({ open, onOpenChange, onOpen, keep: k = () => true }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly onOpen: (k: string) => void; readonly keep?: (t: Task) => boolean }) {
-  const items = shelf().filter(k);
-  const own = items.filter((t) => t.later);
-  const epicTasks = items.filter((t) => !t.later);
-  return (
-    <section className={styles["shelf"]} aria-label="Later" data-testid="later-shelf" data-open={open || undefined}>
-      <button type="button" className={styles["shelfHead"]} aria-expanded={open} onClick={() => onOpenChange(!open)}>
-        <Icon name={open ? "chevron-down" : "chevron-right"} size={14} />
-        <Icon name="clock" size={14} />
-        <span className={styles["shelfLabel"]}>Later</span>
-        <span className={styles["shelfCount"]}>{items.length}</span>
-        {!open ? (
-          <span className={styles["shelfPeek"]}>
-            {own.map((t) => <span key={t.key}><span className={styles["mono"]}>{t.key}</span> {t.later!.until ?? "no date"}</span>)}
-            {epicTasks.length ? <span><Icon name="layers" size={12} /> {EPICS.alerts.title} · {epicTasks.length} tasks · {EPICS.alerts.later!.until}</span> : null}
-          </span>
-        ) : <span className={styles["shelfPeek"]}>Not started, and won't be until brought back. Nothing here counts on the board.</span>}
-      </button>
-      {open ? (
-        <div className={styles["shelfBody"]}>
-          {own.map((t) => <ShelfCard key={t.key} t={t} onOpen={onOpen} />)}
-          {epicTasks.length ? <div className={styles["shelfEpic"]} data-deferred="" data-testid="shelf-epic">
-            <span className={styles["shelfEpicHead"]}>
-              <Icon name="layers" size={14} /> <b>{EPICS.alerts.title}</b>
-              <LaterMark until={EPICS.alerts.later!.until} />
-              <span className={styles["muted"]}>put later by {firstName(EPICS.alerts.later!.by)}, with its {epicTasks.length} tasks</span>
-            </span>
-            <span className={styles["shelfEpicKeys"]}>{epicTasks.map((t) => <button key={t.key} type="button" className={styles["linkish"]} onClick={() => onOpen(t.key)}><span className={styles["mono"]}>{t.key}</span> {t.title}</button>)}</span>
-          </div> : null}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function ShelfCard({ t, onOpen }: { readonly t: Task; readonly onOpen: (k: string) => void }) {
-  const l = laterOf(t)!;
-  const reason = l.until ? `${t.key} is on Later until ${l.until}: bring it back to start it.` : `${t.key} is on Later with no date: bring it back to start it.`;
-  const mayBring = ROLE === "owner";
-  return (
-    <div className={styles["shelfCard"]} data-deferred="" data-testid={`shelf-${t.key}`}>
-      <button type="button" className={styles["shelfCardOpen"]} onClick={() => onOpen(t.key)} aria-label={`${t.key} ${t.title}, on Later${l.until ? ` until ${l.until}` : ""}`}>
-        <span className={styles["shelfTop"]}>
-          <span className={styles["mono"]}>{t.key}</span>
-          <KindMark kind={t.kind} quietDefault />
-          <PriorityMark priority={t.priority} />
-          <span className={styles["grow"]} />
-          <LaterMark until={l.until} compact />
-        </span>
-        <span className={styles["shelfTitle"]}>{t.title}</span>
-        <span className={styles["muted"]}>{l.until ? `Comes back on ${l.until}` : "No date: comes back when someone brings it back"} · {firstName(l.by)}</span>
-      </button>
-      <span className={styles["shelfGate"]}>
-        <LaterGate taskKey={t.key} reason={reason} size="sm" starts={[{ id: "start", label: "Start", icon: "play" }]}
-          onBringBack={mayBring ? () => undefined : undefined}
-          bringBackHint={mayBring ? undefined : `Only ${firstName(t.owner)}, the owner, or an admin can bring it back`} />
-      </span>
-    </div>
-  );
-}
-
 export interface BoardPageProps {
   readonly filters: BoardFilters;
   readonly onFilters: (f: BoardFilters) => void;
-  readonly shelfOpen: boolean;
-  readonly onShelfOpen: (o: boolean) => void;
   readonly onOpen: (key: string) => void;
   readonly onArchived: () => void;
   readonly showChips: boolean;
 }
 
-export function BoardPage({ filters, onFilters, shelfOpen, onShelfOpen, onOpen, onArchived, showChips }: BoardPageProps) {
+export function BoardPage({ filters, onFilters, onOpen, onArchived, showChips }: BoardPageProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [root, setRoot] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => setRoot(ref.current), []);
@@ -190,7 +125,6 @@ export function BoardPage({ filters, onFilters, shelfOpen, onShelfOpen, onOpen, 
             <Button variant="primary" size="sm" leadingIcon="plus">New task</Button>
           </span>
         }
-        overview={<LaterShelf open={shelfOpen} onOpenChange={onShelfOpen} onOpen={onOpen} keep={keep(filters)} />}
       />
       {slots.map((s) => {
         const t = task(s.key);

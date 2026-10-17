@@ -8,19 +8,18 @@
 import { useMemo, useState } from "react";
 import { Segmented } from "@dude/design-system/components";
 import { Button, EmptyState, Input, RowMenu } from "@dude/design-system/primitives";
-import { FINISHED, KIND, PRIORITY, ROLE, TASKS, YOU, laterOf, onShelf, type Kind, type Priority, type Task } from "./data.ts";
+import { FINISHED, KIND, PRIORITY, ROLE, TASKS, YOU, type Kind, type Priority, type Task } from "./data.ts";
 import { TaskFilterBar, TaskRow } from "./Marks.tsx";
 import { lifecycleMenu } from "./TaskPage.tsx";
 import styles from "./pages.module.css";
 
-export type View = "all" | "mine" | "bugs" | "needs" | "later" | "archived" | "closed";
+export type View = "all" | "mine" | "bugs" | "needs" | "archived" | "closed";
 
 export const VIEWS: Record<View, { readonly label: string; readonly means: string; readonly keep: (t: Task) => boolean; readonly query: string }> = {
-  all: { label: "Open", means: "Everything not ended, not archived and not on Later.", keep: (t) => !t.archived && !onShelf(t) && !FINISHED.has(t.status), query: "status=open" },
+  all: { label: "Open", means: "Everything not ended and not archived.", keep: (t) => !t.archived && !FINISHED.has(t.status), query: "status=open" },
   mine: { label: "Mine", means: "Open tasks you own.", keep: (t) => !t.archived && !FINISHED.has(t.status) && t.owner.id === YOU.id, query: "status=open&mine=true" },
   bugs: { label: "Bugs", means: "Open bugs, most urgent first.", keep: (t) => !t.archived && t.kind === "bug" && !FINISHED.has(t.status), query: "kind=bug&status=open&sort=priority" },
   needs: { label: "Needs you", means: "An agent of yours is asking, or a plan waits for you.", keep: (t) => !t.archived && (t.status === "awaiting_input" || t.status === "awaiting_confirmation") && t.owner.id === YOU.id, query: "needs=you" },
-  later: { label: "Later", means: "On the shelf, its own or its epic's, by the date it comes back.", keep: (t) => onShelf(t), query: "deferred=true&sort=deferred_until" },
   closed: { label: "Closed", means: "Ended: merged, marked done, failed, stopped or closed. Archived ones are under Archived.", keep: (t) => !t.archived && FINISHED.has(t.status), query: "status=done,failed,aborted" },
   archived: { label: "Archived", means: "Out of every other view and count. Unarchive puts one back.", keep: (t) => Boolean(t.archived), query: "archived=only" },
 };
@@ -70,20 +69,17 @@ export function TasksList({ view, onView, onOpen, kindPreset = null }: { readonl
       <div className={styles["listBody"]}>
         {rows.length === 0 ? <EmptyState compact icon="search" title="Nothing here" description={view === "needs" ? "No agent of yours is asking anything." : "No task matches."} /> : (
           <ul className={styles["listRows"]} aria-label={`${v.label} tasks`}>
-            {rows.map((t) => {
-              const l = laterOf(t);
-              return (
-                <TaskRow key={t.key} onOpen={onOpen}
-                  row={{ key: t.key, title: t.title, status: t.status, kind: t.kind, priority: t.priority, epic: t.epic ? (t.epic === "billing" ? "Billing v2" : t.epic === "webhooks" ? "Webhook reliability" : "Usage alerts") : undefined,
-                    owner: t.owner, age: age(t), later: l?.until ?? null, onShelf: onShelf(t), archived: Boolean(t.archived), resolution: t.resolution, duplicateOf: t.duplicateOf }}
-                  menu={<RowMenu size="sm" label={`Actions for ${t.key}`} items={lifecycleMenu(t, () => undefined)} />} />
-              );
-            })}
+            {rows.map((t) => (
+              <TaskRow key={t.key} onOpen={onOpen}
+                row={{ key: t.key, title: t.title, status: t.status, kind: t.kind, priority: t.priority, epic: t.epic ? (t.epic === "billing" ? "Billing v2" : t.epic === "webhooks" ? "Webhook reliability" : "Usage alerts") : undefined,
+                  owner: t.owner, age: age(t), archived: Boolean(t.archived), resolution: t.resolution, duplicateOf: t.duplicateOf }}
+                menu={<RowMenu size="sm" label={`Actions for ${t.key}`} items={lifecycleMenu(t, () => undefined)} />} />
+            ))}
           </ul>
         )}
         <div className={styles["listFoot"]}>
           <span>{rows.length} shown · by priority, then newest · the next page loads on scroll (cursor on created_at, id)</span>
-          {ROLE === "member" ? <span>Close, Later and Archive are the owner's: each menu says whose.</span> : null}
+          {ROLE === "member" ? <span>Close and Archive are the owner's: each menu says whose.</span> : null}
         </div>
       </div>
     </div>

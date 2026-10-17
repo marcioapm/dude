@@ -1,11 +1,11 @@
 /*
- * The task page in every state the proposal adds: on the Later shelf
- * (deferred-task, narrow), closed with a resolution (closed-wontdo,
- * closed-duplicate), archived, a bug with its report and its cause
- * (bug-task, introduced-by-proposed), and its Activity
- * (activity-lifecycle). The frame is the app's task screen (apps/web's
- * taskTop / taskHead / taskNotices / taskPane classes from app.css); the
- * Overview rail is PageWithRail as the app opts Overview into it.
+ * The task page in every state the proposal adds: closed with a
+ * resolution (closed-wontdo, closed-duplicate), archived, a bug with its
+ * report and its cause (bug-task, introduced-by-proposed, narrow), and its
+ * Activity (activity-lifecycle). The frame is the app's task screen
+ * (apps/web's taskTop / taskHead / taskNotices / taskPane classes from
+ * app.css); the Overview rail is PageWithRail as the app opts Overview
+ * into it.
  */
 
 import { useState, type ReactNode } from "react";
@@ -15,15 +15,15 @@ import {
 import { Icon } from "@dude/design-system";
 import { Button, Callout, RowMenu, Tab, TabList, TabPanel, Tabs, Tooltip, type RowMenuItem } from "@dude/design-system/primitives";
 import relStyles from "../../../../packages/design-system/src/components/Relations.module.css";
-import { EPICS, FINISHED, KIND, NOT_STARTED, P, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, isOwner, laterOf, task, type Task } from "./data.ts";
-import { ArchivedMark, IntroducedByChip, KindMark, LaterGate, LaterMark, PriorityMark, ResolutionMark } from "./Marks.tsx";
-import { ArchiveDialog, CloseDialog, DeferDialog } from "./Dialogs.tsx";
+import { EPICS, FINISHED, KIND, NOT_STARTED, P, PRIORITY, RESOLUTION, ROLE, TASKS, firstName, isOwner, task, type Task } from "./data.ts";
+import { ArchivedMark, IntroducedByChip, KindMark, PriorityMark, ResolutionMark } from "./Marks.tsx";
+import { ArchiveDialog, CloseDialog } from "./Dialogs.tsx";
 import styles from "./pages.module.css";
 
 export type TaskView = "overview" | "activity";
-export type Overlay = null | "defer" | "close" | "archive" | "archive-epic";
+export type Overlay = null | "close" | "archive" | "archive-epic";
 
-/** Who may close, defer and archive: the owner, or an org admin. Ana is the owner of most; Márcio is a member. */
+/** Who may close and archive: the owner, or an org admin. Ana is the owner of most; Márcio is a member. */
 const mayManage = (t: Task) => ROLE === "owner" && isOwner(t);
 const notYours = (t: Task) => `Only ${firstName(t.owner)}, the owner, or an admin can do this`;
 
@@ -33,13 +33,9 @@ export function lifecycleMenu(t: Task, open: (o: Overlay) => void): RowMenuItem[
   const why = may ? undefined : notYours(t);
   const live = t.status === "running" || t.status === "awaiting_input";
   const finished = FINISHED.has(t.status);
-  const later = laterOf(t);
   return [
     { id: "edit", label: "Edit", icon: "edit" },
     { kind: "separator" },
-    later
-      ? { id: "back", label: "Bring it back", icon: "arrow-up", disabled: !may, disabledReason: why, description: later.until ? `Back in Backlog now, not on ${later.until}` : "Back in Backlog now" }
-      : { id: "defer", label: "Later…", icon: "clock", disabled: !may || live || finished, disabledReason: why ?? (live ? "Stop its agents first: work in progress can't go on the shelf" : finished ? "It has ended: nothing to put off" : undefined), onSelect: () => open("defer") },
     { id: "close", label: finished ? "Closed" : "Close…", icon: "circle-x", disabled: !may || live || finished, disabledReason: why ?? (live ? "Stop its agents first, then close it" : finished ? "Already ended" : undefined), onSelect: () => open("close") },
     t.archived
       ? { id: "unarchive", label: "Unarchive", icon: "archive", disabled: !may, disabledReason: why }
@@ -64,28 +60,22 @@ export interface TaskPageProps {
 export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard, menuOpen, beforeClose }: TaskPageProps) {
   const t0 = task(k);
   const t: Task = beforeClose ? { ...t0, status: "received", resolution: undefined, duplicateOf: undefined, blockedBy: undefined } : t0;
-  const later = laterOf(t);
   const may = mayManage(t);
   const [introduced, setIntroduced] = useState(t.bug?.introducedBy?.state ?? null);
   const items = lifecycleMenu(t, onOverlay);
   const epic = t.epic ? EPICS[t.epic].title : null;
   const starts = [{ id: "talk", label: "Talk it through", icon: "message" as const }, { id: "deliver", label: "Deliver", icon: "zap" as const }];
-  const laterReason = later ? (later.epic
-    ? `${t.key} is in ${later.epic}, which is on Later until ${later.until}: bring the epic back to start it.`
-    : later.until ? `${t.key} is on Later until ${later.until}: bring it back to start it.` : `${t.key} is on Later with no date: bring it back to start it.`) : "";
 
   let actions: ReactNode = null;
   if (t.archived) actions = null;
-  else if (later && NOT_STARTED.has(t.status)) {
-    actions = <LaterGate taskKey={t.key} reason={laterReason} starts={starts} onBringBack={may ? () => undefined : undefined} bringBackHint={may ? undefined : notYours(t)} />;
-  } else if (NOT_STARTED.has(t.status) && (t.blockedBy ?? []).length) {
+  else if (NOT_STARTED.has(t.status) && (t.blockedBy ?? []).length) {
     actions = <StartGate blockers={(t.blockedBy ?? []).map((b) => ({ key: b, title: task(b).title, status: task(b).status }))} starts={starts} onStartAnyway={() => undefined} />;
   } else if (NOT_STARTED.has(t.status)) {
     actions = <><Button leadingIcon="message">Talk it through</Button><Button leadingIcon="zap">Deliver</Button></>;
   }
 
   return (
-    <div className="screen taskScreen" data-testid="task-screen" data-deferred={later && !t.archived ? "" : undefined}>
+    <div className="screen taskScreen" data-testid="task-screen">
       <header className={`taskTop ${styles["top"]}`}>
         <div className="taskCrumbs">
           <Breadcrumb items={[
@@ -110,7 +100,6 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
             <span className="ds-mono">{t.key}</span>
             <KindMark kind={t.kind} variant="word" />
             <PriorityMark priority={t.priority} showDefault />
-            {later ? <LaterMark until={later.until} /> : null}
             {t.archived ? <ArchivedMark /> : null}
             <span>created {Math.round(t.hoursInStatus / 24) || 1}d ago</span>
           </div>
@@ -150,7 +139,6 @@ export function TaskPage({ k, view, onView, overlay, onOverlay, onOpen, onBoard,
         </TabPanel>
       </Tabs>
 
-      <DeferDialog open={may && overlay === "defer"} onOpenChange={(o) => onOverlay(o ? "defer" : null)} t={t} />
       <CloseDialog open={may && overlay === "close"} onOpenChange={(o) => onOverlay(o ? "close" : null)} t={t} />
       <ArchiveDialog open={may && overlay === "archive"} onOpenChange={(o) => onOverlay(o ? "archive" : null)} t={t} />
     </div>
@@ -168,9 +156,8 @@ const GOALS: Record<string, string> = {
   "CP-34": "Under load the webhook endpoint returns 500s.",
 };
 
-/** What the page says before its tabs: why it can't start, why it ended, that it is archived. */
+/** What the page says before its tabs: why it ended, that it is archived. */
 function Notices({ t, may, onOpen }: { readonly t: Task; readonly may: boolean; readonly onOpen: (k: string) => void }) {
-  const later = laterOf(t);
   const out: ReactNode[] = [];
   if (t.archived) {
     out.push(
@@ -181,15 +168,6 @@ function Notices({ t, may, onOpen }: { readonly t: Task; readonly may: boolean; 
           {may ? <Button size="sm" variant="secondary" leadingIcon="archive" data-lifecycle-action="">Unarchive</Button>
             : <DisabledWithHint label="Unarchive" hint={`Only ${firstName(t.owner)}, the owner, or an admin can unarchive this`} />}
         </div>
-      </Callout>,
-    );
-  }
-  if (later && !t.archived) {
-    out.push(
-      <Callout key="later" tone="neutral" data-testid="later-callout">
-        <span className={styles["callTitle"]}>{later.epic ? `On Later with ${later.epic}, until ${later.until}.` : later.until ? `On Later until ${later.until}.` : "On Later, with no date."}</span>{" "}
-        {later.epic ? "Its epic was put off, so nothing in it starts: not Deliver, not Talk it through, not an agent." : `${firstName(later.by)} put it off. Nothing starts it: not Deliver, not Talk it through, not an agent.`}{" "}
-        {later.until ? `It comes back to Backlog on ${later.until}, at the start of the day (UTC), and still waits for someone to start it.` : "It stays here until someone brings it back."}
       </Callout>,
     );
   }
@@ -262,7 +240,6 @@ function BugReport({ t, introduced, setIntroduced, onOpen }: { readonly t: Task;
 }
 
 function Rail({ t, introduced }: { readonly t: Task; readonly introduced: string | null; readonly setIntroduced: (s: "proposed" | "confirmed" | null) => void; readonly onOpen: (k: string) => void }) {
-  const later = laterOf(t);
   return (
     <PageRail aria-label="About this task">
       <PageRailBlock label="This task">
@@ -271,7 +248,6 @@ function Rail({ t, introduced }: { readonly t: Task; readonly introduced: string
           <span className={styles["railFact"]}><span>Priority</span><span><PriorityMark priority={t.priority} showDefault /> <span className={styles["muted"]}>{PRIORITY[t.priority].line}</span></span></span>
           <span className={styles["railFact"]}><span>Status</span><StatusMark status={t.status} size="sm" /></span>
           {t.resolution ? <span className={styles["railFact"]}><span>Resolution</span><ResolutionMark resolution={t.resolution} of={t.duplicateOf} /></span> : null}
-          {later ? <span className={styles["railFact"]}><span>Later</span><span>{later.until ? `until ${later.until}` : "no date"} · {firstName(later.by)}</span></span> : null}
           {t.bug?.introducedBy && introduced ? <span className={styles["railFact"]}><span>Introduced by</span><span className="ds-mono">{introduced === "proposed" ? "likely " : ""}{t.bug.introducedBy.key}</span></span> : null}
           <span className={styles["railFact"]}><span>Epic</span><span>{t.epic ? EPICS[t.epic].title : "No epic"}</span></span>
         </div>
@@ -341,21 +317,6 @@ export function ActivityLines({ k }: { readonly k: string }) {
         <TimelineItem who={ana} when="2d" data-testid="line-unarchived">
           <b>Ana</b> unarchived <b>CP-29</b>
         </TimelineItem>
-        <TimelineItem who={dude} when="today, 00:00" data-testid="line-came-back">
-          <b>CP-62</b> came back from Later, as <b>Ana</b> set it: it is in Backlog, not started
-        </TimelineItem>
-        <TimelineItem who={ana} when="2d" data-testid="line-deferred" quote="After the invoice work: nobody exports with commas yet.">
-          <b>Ana</b> put <b>CP-62</b> on Later until 3 Nov
-        </TimelineItem>
-        <TimelineItem who={ana} when="3d" data-testid="line-brought-back">
-          <b>Ana</b> brought <b>CP-47</b> back from Later
-        </TimelineItem>
-        <TimelineItem who={conductor} when="4d" data-testid="line-agent-deferred" quote="Waits on the Stripe answer from CP-38; nothing to do until then.">
-          <b>Ana's conductor</b> put <b>CP-64</b> on Later, with no date
-        </TimelineItem>
-        <TimelineItem who={ana} when="4d" data-testid="line-epic-deferred">
-          <b>Ana</b> put the epic <b>Usage alerts</b> on Later until 1 Dec — its 2 tasks can't start until then
-        </TimelineItem>
         <TimelineItem who={ana} when="5d" data-testid="line-closed-duplicate">
           <b>Ana</b> closed <b>CP-63</b> as a duplicate of <b>CP-62</b> — <b>CP-47</b>, which waited on CP-63, now waits on CP-62
         </TimelineItem>
@@ -379,9 +340,6 @@ export function ActivityLines({ k }: { readonly k: string }) {
         </TimelineItem>
         <TimelineItem who={brainstorm} when="10d" data-testid="line-filed">
           <b>Ana</b> filed <b>CP-60</b> as a P0 bug, as <b>Ana's Brainstorm</b> proposed
-        </TimelineItem>
-        <TimelineItem who={dude} when="10d" data-testid="line-refused">
-          A start of <b>CP-64</b> by <b>Ana's conductor</b> was refused: it is on Later
         </TimelineItem>
       </Timeline>
       <p className={styles["muted"]} style={{ marginTop: 16 }}>Every new line at once, for reading; on a real task each line sits on the task it is about ({t.key}'s own are a subset).</p>

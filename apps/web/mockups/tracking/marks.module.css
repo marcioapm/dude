@@ -1,5 +1,5 @@
 /*
- * The proposed marks, gate, chip and row. Tokens only; no radius but the
+ * The proposed marks, chip and row. Tokens only; no radius but the
  * DS's control/mark radii, no borders but a field's edge and focus.
  */
 
@@ -41,33 +41,14 @@
   color: var(--ds-color-text-muted);
 }
 
-/* -- LaterMark / ArchivedMark: neutral, muted. -- */
-.later {
+/* -- ArchivedMark: neutral, muted. -- */
+.archivedMark {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-4);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
-}
-
-/* -- LaterGate: StartGate's anatomy. -- */
-.gate {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
-.gateTrigger {
-  display: inline-flex;
-  border-radius: var(--ds-radius-control);
-}
-.gateTrigger:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
-}
-.gateTrigger > button {
-  pointer-events: none;
 }
 
 /* -- IntroducedByChip -- */

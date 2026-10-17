@@ -1,13 +1,12 @@
 /*
  * The design-system pieces this proposal adds, drawn here and specified in
  * docs/design/tracking-work.md: KindMark, PriorityMark, ResolutionMark,
- * LaterMark, LaterGate (the start refused for the shelf), IntroducedByChip,
- * TaskFilterBar and TaskRow. Built from the real primitives (Icon, Badge,
- * Button, Tooltip, RowMenu) and tokens only; nothing in
- * packages/design-system is changed.
+ * ArchivedMark, IntroducedByChip, TaskFilterBar and TaskRow. Built from the
+ * real primitives (Icon, Badge, Button, Tooltip, RowMenu) and tokens only;
+ * nothing in packages/design-system is changed.
  */
 
-import { useId, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Icon, type IconName } from "@dude/design-system";
 import { PersonAvatar, RefLead, StatusMark } from "@dude/design-system/components";
 import { Badge, Button, RowMenu, Tooltip, type RowMenuItem } from "@dude/design-system/primitives";
@@ -85,67 +84,14 @@ export function ResolutionMark({ resolution, of }: { readonly resolution: Resolu
 }
 
 // ---------------------------------------------------------------------------
-// LaterMark and ArchivedMark: neutral, never a tone. Waiting by choice needs nobody.
+// ArchivedMark: neutral, never a tone. Put-away work needs nobody.
 // ---------------------------------------------------------------------------
-
-export function LaterMark({ until, compact }: { readonly until: string | null; readonly compact?: boolean | undefined }) {
-  const words = until ? `Later · ${until}` : "Later";
-  return (
-    <span className={styles["later"]} data-testid="later-mark" title={until ? `On the Later shelf until ${until}` : "On the Later shelf until someone brings it back"}>
-      <Icon name="clock" size={12} />
-      {compact ? (until ?? "Later") : words}
-    </span>
-  );
-}
 
 export function ArchivedMark() {
   return (
-    <span className={styles["later"]} data-testid="archived-mark">
+    <span className={styles["archivedMark"]} data-testid="archived-mark">
       <Icon name="archive" size={12} />
       Archived
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// LaterGate: the start of a task on the shelf, refused with its reason, and
-// the one way out. StartGate's shape: the ways stay, disabled, reachable.
-// ---------------------------------------------------------------------------
-
-export interface LaterGateProps {
-  readonly taskKey: string;
-  /** "Later until 3 Nov", or the epic's shelf. */
-  readonly reason: string;
-  readonly starts: ReadonlyArray<{ readonly id: string; readonly label: string; readonly icon: IconName }>;
-  /** Bring it back, for whoever may; absent with `bringBackHint` for a reader who may not. */
-  readonly onBringBack?: (() => void) | undefined;
-  readonly bringBackHint?: string | undefined;
-  readonly size?: "sm" | "md" | undefined;
-}
-
-export function LaterGate({ reason, starts, onBringBack, bringBackHint, size = "md" }: LaterGateProps) {
-  const reasonId = useId();
-  const hintId = useId();
-  return (
-    <span className={styles["gate"]} data-testid="later-gate">
-      <span id={reasonId} className="ds-sr-only">{reason}</span>
-      {starts.map((s) => (
-        <Tooltip key={s.id} content={reason} side="bottom">
-          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label={s.label} aria-describedby={reasonId} data-testid={`later-${s.id}`} data-start-control="">
-            <Button variant="secondary" size={size} leadingIcon={s.icon} disabled>{s.label}</Button>
-          </span>
-        </Tooltip>
-      ))}
-      {onBringBack ? (
-        <Button variant={size === "sm" ? "quiet" : "secondary"} size={size} leadingIcon="arrow-up" onClick={onBringBack} data-testid="bring-back" data-lifecycle-action="">Bring it back</Button>
-      ) : (
-        <Tooltip content={bringBackHint ?? ""} side="bottom">
-          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label="Bring it back" aria-describedby={hintId} data-lifecycle-action="">
-            <span id={hintId} className="ds-sr-only" data-lifecycle-hint="">{bringBackHint}</span>
-            <Button variant="quiet" size={size} leadingIcon="arrow-up" disabled>Bring it back</Button>
-          </span>
-        </Tooltip>
-      )}
     </span>
   );
 }
@@ -249,8 +195,6 @@ export interface TaskRowData {
   readonly epic?: string | undefined;
   readonly owner: Person;
   readonly age: string;
-  readonly later?: string | null | undefined;
-  readonly onShelf?: boolean | undefined;
   readonly archived?: boolean | undefined;
   readonly resolution?: Resolution | undefined;
   readonly duplicateOf?: string | undefined;
@@ -268,7 +212,6 @@ export function TaskRow({ row, menu, onOpen }: { readonly row: TaskRowData; read
         <span className={styles["rowTitle"]}>{row.title}</span>
         <span className={styles["rowFacts"]}>
           {row.resolution ? <ResolutionMark resolution={row.resolution} of={row.duplicateOf} /> : null}
-          {row.onShelf ? <LaterMark until={row.later ?? null} /> : null}
           {row.archived ? <ArchivedMark /> : null}
         </span>
         <span className={styles["rowEpic"]}>{row.epic ?? ""}</span>

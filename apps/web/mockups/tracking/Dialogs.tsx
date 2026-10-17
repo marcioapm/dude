@@ -1,10 +1,10 @@
 /*
- * The lifecycle dialogs (defer-dialog, close-dialog, archive-task,
- * archive-epic-refused) and the task dialog's kind, priority and bug
- * fields (task-dialog-bug). Every one is the design system's `Dialog` with
- * its own fields: ChoiceList for a decision whose options need a sentence,
- * Input for the date, SearchPicker for the duplicate, Textarea for a note,
- * MarkdownEditor for the goal and the steps.
+ * The lifecycle dialogs (close-dialog, archive-task, archive-epic-refused)
+ * and the task dialog's kind, priority and bug fields (task-dialog-bug).
+ * Every one is the design system's `Dialog` with its own fields:
+ * ChoiceList for a decision whose options need a sentence, SearchPicker
+ * for the duplicate, Textarea for a note, MarkdownEditor for the goal and
+ * the steps.
  */
 
 import { useCallback, useState } from "react";
@@ -18,49 +18,6 @@ import styles from "./pages.module.css";
 const context = (t: Task) => (
   <Breadcrumb size="sm" current={false} items={[{ id: "p", label: "control-plane" }, ...(t.epic ? [{ id: "e", label: EPICS[t.epic].title, icon: "layers" as const }] : []), { id: "k", label: t.key, mono: true }]} />
 );
-
-// ---------------------------------------------------------------------------
-// defer-dialog
-// ---------------------------------------------------------------------------
-
-export function DeferDialog({ open, onOpenChange, t }: { readonly open: boolean; readonly onOpenChange: (o: boolean) => void; readonly t: Task }) {
-  const [when, setWhen] = useState<"date" | "none">("date");
-  const [date, setDate] = useState("2026-11-03");
-  const waiting = TASKS.filter((x) => (x.blockedBy ?? []).includes(t.key));
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} size="md" context={context(t)} title={`Put ${t.key} on Later`}
-      description="It leaves Backlog for the Later shelf, and nothing can start it while it is there. Its status, its history and its relations don't change."
-      footerStart={<KeyHint keys={["mod", "Enter"]}>put on Later</KeyHint>}
-      footer={<><Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button><Button variant="primary" leadingIcon="clock" data-testid="defer-confirm">Put on Later</Button></>}>
-      <FormStack>
-        <ChoiceList label="When it comes back" value={when} onChange={setWhen} data-testid="defer-when"
-          options={[
-            { value: "date", label: "On a date", icon: "clock", description: "Back in Backlog at the start of that day (UTC). Coming back starts nothing: it waits to be started, as before." },
-            { value: "none", label: "No date", icon: "pause", description: "On the shelf until someone brings it back." },
-          ]} />
-        {when === "date" ? (
-          <div className={styles["row2"]}>
-            <Input label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} hint="Monday 3 November 2026" />
-            <div className={styles["stack"]} style={{ gap: 4 }}>
-              <span className={styles["muted"]}>Quick picks</span>
-              <span className={styles["callActions"]} style={{ marginTop: 0 }}>
-                <Button size="sm" variant="quiet" onClick={() => setDate("2026-10-23")}>In a week</Button>
-                <Button size="sm" variant="quiet" onClick={() => setDate("2026-11-02")}>Next month</Button>
-                <Button size="sm" variant="quiet" onClick={() => setDate("2027-01-04")}>Next quarter</Button>
-              </span>
-            </div>
-          </div>
-        ) : null}
-        <Textarea label="Why (optional)" rows={2} placeholder="Said in Activity, so the next reader knows." defaultValue="After the invoice work: nobody exports with commas yet." />
-        {waiting.length ? (
-          <Callout tone="neutral">
-            {waiting.map((w) => w.key).join(", ")} {waiting.length === 1 ? "waits" : "wait"} on {t.key}, and will keep waiting while it is on the shelf.
-          </Callout>
-        ) : null}
-      </FormStack>
-    </Dialog>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // close-dialog
