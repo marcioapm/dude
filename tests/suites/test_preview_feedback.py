@@ -131,14 +131,6 @@ def _open_comment(ctx, page: Page) -> Page:
     return pv
 
 
-def _escalated_on(client: ApiClient, task: dict, item_id: str) -> bool:
-    """The delivery stopped for a person on the item the fixers left open: the task's escalation is the review
-    loop's "stuck" exit naming it. The API shows an escalation only while the task awaits input and nothing has
-    decided it, and the orchestrator writes it with that status, after which no Run starts until a decision."""
-    e = client.get(f"/v1/tasks/{task['id']}").json().get("escalation") or {}
-    return e.get("reason") == "stuck" and (e.get("detail") or {}).get("feedbackIds") == [item_id]
-
-
 def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> dict:
     """The servers read showing the preview again, its web server ready: the web server as it says.
 
@@ -149,9 +141,13 @@ def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> di
     """
     # Between two of the delivery's Runs the read is briefly the preview's again, so wait for where it ends: the
     # scripted fixer never answers the item, and after its one fix (maxAttemptsPerFinding 1) the review loop escalates
-    # it as stuck (workflow.go escalate), the only state here that starts no further Run until a person decides.
-    wait_until(lambda: _escalated_on(client, task, item_id),
-               timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
+    # it as stuck (workflow.go escalate), the only state here that starts no further Run until a person decides. The
+    # API shows an escalation only while nothing has decided it.
+    def stuck_on_the_item() -> bool:
+        e = client.get(f"/v1/tasks/{task['id']}").json().get("escalation") or {}
+        return e.get("reason") == "stuck" and (e.get("detail") or {}).get("feedbackIds") == [item_id]
+
+    wait_until(stuck_on_the_item, timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
                       timeout=60, message="the servers read never came back to the preview after the delivery rested")
     if read["run"].get("asleep"):
