@@ -43,3 +43,5 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 {{- define "refusals/words/not-moved-refused"}}{{.Repo}} was refused: {{clip (oneLine .Why) 160}}{{end}}
 
 {{- define "refusals/words/not-moved-stalled"}}{{.Repo}} could not be confirmed at {{.Head}}{{end}}
+
+{{- define "refusals/words/read-only-cause"}}this lux cannot keep your checkout current{{with .}} ({{.}}){{end}}{{end}}
