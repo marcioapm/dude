@@ -246,6 +246,9 @@ type specRepo struct {
 	Path string
 	// Its setup script, run once per checkout before the agent (SetupInit).
 	Setup string
+	// Branches lux syncs into the checkout from others (syncedBranches):
+	// the final diff is against what of them the Run merged, too.
+	Synced []string
 }
 
 func (r specRepo) path() string {
@@ -279,6 +282,20 @@ func repoSetups(repos []specRepo) []Setup {
 	out := make([]Setup, 0, len(repos))
 	for _, r := range repos {
 		out = append(out, Setup{Name: lux.SpecName(r.Name), Path: r.path(), Script: r.Setup})
+	}
+	return out
+}
+
+// repoSynced is, by spec name, where in the checkout lux leaves each
+// branch it syncs into it: refs/remotes/lux/<branch>, set to the commit its
+// git.sync reports (runs.synced_bases), so the hook, fixed at submit, folds
+// in what a live read is given from the database.
+func repoSynced(repos []specRepo) map[string][]string {
+	out := map[string][]string{}
+	for _, r := range repos {
+		for _, branch := range r.Synced {
+			out[lux.SpecName(r.Name)] = append(out[lux.SpecName(r.Name)], "refs/remotes/lux/"+branch)
+		}
 	}
 	return out
 }
@@ -333,7 +350,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			Workdir: workdir(in.Repos),
 			// On every stop lux can see coming, the checkout's final diff
 			// (livediff.go). A session's agent changes nothing: none.
-			BeforeStop: beforeStop(repoRefs(in.Repos)),
+			BeforeStop: beforeStop(repoRefs(in.Repos), repoSynced(in.Repos)),
 		},
 		Volumes: []lux.Volume{
 			// The checkout, and the agent's session transcript: the two

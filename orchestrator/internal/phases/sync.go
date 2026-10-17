@@ -1397,7 +1397,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var promptRepos []delivery.PromptRepo
 	for _, repo := range repos {
 		ref, readOnly := checkoutOf(r, repo, taskBranch)
-		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly, Setup: repo.SetupScript})
+		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly,
+			Setup: repo.SetupScript, Synced: syncedBranches(r, repo, taskBranch)})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role

@@ -341,12 +341,13 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 // the artifact collector finds it (FinalDiffPrefix). refs is each
 // repository's starting point as the spec names it — the commit, or the
 // branch lux checks out — since the hook runs before dude has heard where
-// the checkout started.
-func beforeStop(refs map[string]string) *lux.BeforeStop {
+// the checkout started; synced, the refs lux leaves what it syncs into it
+// at (repoSynced), standing for the commits a live read is given.
+func beforeStop(refs map[string]string, synced map[string][]string) *lux.BeforeStop {
 	if len(refs) == 0 {
 		return nil
 	}
-	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, nil), Timeout: FinalDiffTimeout}
+	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, synced), Timeout: FinalDiffTimeout}
 }
 
 // recordFinalDiff records the diff the beforeStop hook left, one patch per

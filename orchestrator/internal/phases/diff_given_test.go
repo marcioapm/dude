@@ -207,6 +207,18 @@ func TestWhatCannotBeFoldedInLeavesTheDiffAgainstTheStart(t *testing.T) {
 	}
 }
 
+// The beforeStop hook, fixed at submit, names the refs lux leaves its
+// syncs at, in the live read's order; a repository lux syncs nothing into
+// keeps today's arguments.
+func TestTheHookIsGivenTheRefsLuxSyncsInto(t *testing.T) {
+	spec := buildSpec(AgentConfig{}, specInput{Phase: "", Role: "conductor", Model: "m", Repos: []specRepo{
+		{Name: "api", Ref: "dude/wi_1", Synced: []string{"dude/wi_1", "main"}}, {Name: "web", Ref: "abc123"}}})
+	got := strings.Join(spec.Workload.BeforeStop.Command[5:], "|")
+	if got != "api|/workspace/repos/api|dude/wi_1 refs/remotes/lux/dude/wi_1 refs/remotes/lux/main|web|/workspace/repos/web|abc123" {
+		t.Errorf("args %q", got)
+	}
+}
+
 // The command passes each repository's given commits after its start, in
 // order, and none when there are none: what the push scan runs is today's.
 func TestTheDiffCommandCarriesEachRepositorysGivenCommits(t *testing.T) {
