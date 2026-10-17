@@ -772,6 +772,8 @@ func TestAConductorsPublishLeavesOutTheMainItMerged(t *testing.T) {
 		e := newEditing(t)
 		e.wokenWith(e.task, "after implement")
 		e.current()
+		// This case starts without any lux fetch reports, including task-branch syncs.
+		mustExec(t, e.owner, `UPDATE runs SET synced_bases = '{}', sync_history = '{}' WHERE id = $1`, e.cond)
 		e.gh.CommitFiles("main", "Someone else's work", onMain)
 		e.git("fetch", "-q", "origin", "main")
 		e.git("merge", "-q", "--no-edit", "FETCH_HEAD")

@@ -45,6 +45,10 @@ func TestASilentConductorIsInterruptedOncePerSilence(t *testing.T) {
 	if n := w.count(silentInterrupts); n != 1 {
 		t.Fatalf("interrupts = %d, want 1", n)
 	}
+	var directive string
+	if err := w.owner.QueryRow(w.ctx, `SELECT text FROM directives WHERE run_id = $1 AND interrupt`, w.run.ID).Scan(&directive); err != nil || directive != silentTurnNudge {
+		t.Fatalf("silent directive %q: %v", directive, err)
+	}
 	if n := w.count(silentNotices); n != 1 {
 		t.Fatalf("run.turn_stopped events = %d, want 1", n)
 	}
@@ -104,6 +108,9 @@ func TestAResumedConductorIsNotJudgedOnItsParkedTime(t *testing.T) {
 	w.exec(`UPDATE runs SET agent_busy_at = now() - interval '2 hours', agent_active_at = now() - interval '2 hours',
 		open_tool_calls_at = '{}', left_running_at = NULL WHERE id = $1`, w.run.ID)
 	w.whilePaused()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NULL AND agent_active_at IS NULL`); n != 1 {
+		t.Fatal("resume retained the parked turn's activity clocks")
+	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'resuming'`); n != 1 {
 		t.Fatal("the resume was not accepted as resuming: the case is not the one under test")
 	}
@@ -118,6 +125,23 @@ func TestAResumedConductorIsNotJudgedOnItsParkedTime(t *testing.T) {
 	w.interruptSilent()
 	if n := w.count(silentInterrupts); n != 0 {
 		t.Fatalf("a resumed conductor got %d interrupts for its parked time, want none", n)
+	}
+}
+
+func TestAHostMoveDoesNotInterruptTheSameSilenceTwice(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("41 minutes", "")
+	w.interruptSilent()
+	w.exec(`UPDATE runs SET lux_state = 'resuming', left_running_at = now() - interval '30 minutes' WHERE id = $1`, w.run.ID)
+	w.follow(running(2))
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 1 {
+		t.Fatalf("host move interrupted the same silence again: %d", n)
+	}
+	w.exec(`UPDATE runs SET stuck_fingerprint = 'tool-call', lux_state = 'resuming', left_running_at = now() - interval '1 minute' WHERE id = $1`, w.run.ID)
+	w.follow(running(3))
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'tool-call'`); n != 1 {
+		t.Fatal("host move changed an open-tool fingerprint")
 	}
 }
 

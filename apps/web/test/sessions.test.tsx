@@ -257,7 +257,7 @@ describe("a brainstorm session's page", () => {
     await settle();
     const notice = page.querySelector('[data-kind="stopped"]');
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toContain("Stopped Brainstorm's turn: its model gave no answer for 10\u00a0min.");
+    expect(notice!.textContent).toBe("Stopped Brainstorm's turn: its model gave no answer for 10\u00a0min.");
   });
 
   test("its conversation: each member's message signed, dude's briefing without the first message, the agent's answer", async () => {

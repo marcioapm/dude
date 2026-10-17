@@ -408,7 +408,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
+		if _, err := tx.Exec(ctx, `UPDATE runs r SET lux_state = $2,
+			stuck_fingerprint = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
+				AND stuck_fingerprint = `+silentFingerprint+`
+				THEN 'silent:' || extract(epoch FROM COALESCE(`+backFromAway("agent_active_at")+`, agent_busy_at))::text
+				ELSE stuck_fingerprint END,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
 				ELSE files_changed_at END,

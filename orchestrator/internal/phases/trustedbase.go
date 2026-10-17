@@ -54,6 +54,10 @@ func recordSyncedBase(ctx context.Context, tx pgx.Tx, runID string, raw json.Raw
 	}
 	_, err := tx.Exec(ctx, `UPDATE runs SET synced_bases = synced_bases
 			|| jsonb_build_object($2::text, COALESCE(synced_bases->$2, '{}'::jsonb) || jsonb_build_object($3::text, $4::text))
+		, sync_history = sync_history || jsonb_build_object($2::text,
+			COALESCE(sync_history->$2, '{}'::jsonb) || jsonb_build_object($3::text,
+				CASE WHEN COALESCE(sync_history->$2->$3, '[]'::jsonb) ? $4::text
+				THEN sync_history->$2->$3 ELSE COALESCE(sync_history->$2->$3, '[]'::jsonb) || to_jsonb($4::text) END))
 		WHERE id = $1`, runID, res.Repo, res.Ref, res.To)
 	return err
 }
