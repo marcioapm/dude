@@ -699,7 +699,7 @@ test("140 and 141 build tasks' and tiers' (id, organization_id) keys outside a t
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_b', 'org_b', 'B', 'b', 'B')`;
     await sql`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('tsk_b', 'org_b', 'prj_b', 1, 'T', 'G')`;
     const [tierB] = await sql`SELECT id FROM model_tiers WHERE organization_id = 'org_b' LIMIT 1`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["140_tasks_id_org_idx.sql", "141_model_tiers_id_org_idx.sql", "142_model_calls.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["140_tasks_id_org_idx.sql", "141_model_tiers_id_org_idx.sql", "142_model_calls.sql", "143_task_lifecycle.sql", "144_task_lifecycle_rules.sql"]);
     const keys = await sql`SELECT c.conrelid::regclass::text AS tbl, i.indisvalid AS valid FROM pg_constraint c JOIN pg_index i ON i.indexrelid = c.conindid
       WHERE c.contype = 'u' AND c.conname IN ('tasks_id_organization_id_key', 'model_tiers_id_organization_id_key') ORDER BY 1`;
     expect([...keys]).toEqual([{ tbl: "model_tiers", valid: true }, { tbl: "tasks", valid: true }]);
@@ -735,7 +735,7 @@ test("142 rebuilds a key an interrupted 140 left invalid, and 140 and 141 run ag
       WHERE c.relname IN ('tasks_id_organization_id_key', 'model_tiers_id_organization_id_key') ORDER BY 1`];
     expect(await validity()).toEqual([{ name: "model_tiers_id_organization_id_key", valid: true }, { name: "tasks_id_organization_id_key", valid: false }]);
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["142_model_calls.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["142_model_calls.sql", "143_task_lifecycle.sql", "144_task_lifecycle_rules.sql"]);
     const keys = async () => [...await sql`SELECT c.conname AS name, i.indisvalid AS valid FROM pg_constraint c JOIN pg_index i ON i.indexrelid = c.conindid
       WHERE c.contype = 'u' AND c.conname IN ('tasks_id_organization_id_key', 'model_tiers_id_organization_id_key') ORDER BY 1`];
     const attached = [{ name: "model_tiers_id_organization_id_key", valid: true }, { name: "tasks_id_organization_id_key", valid: true }];
