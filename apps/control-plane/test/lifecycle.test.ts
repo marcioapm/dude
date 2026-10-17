@@ -112,6 +112,35 @@ const refusals = async (id: string, reason: string) =>
   ((await owner`SELECT count(*)::int AS n FROM events WHERE task_id = ${id} AND event_type = 'task.start_refused'
     AND payload->>'path' = 'create_run' AND payload->>'reason' = ${reason}`)[0] as { n: number }).n;
 
+test("the lifecycle routes forward the person's decision to the orchestrator, and answer as it answered", async () => {
+  forwarded.length = 0;
+  const t = await task();
+  expect((await call("POST", `/v1/tasks/${t}/close`, { resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false })).status).toBe(200);
+  expect((await call("POST", `/v1/tasks/${t}/reopen`)).status).toBe(200);
+  const archived = await call("POST", `/v1/tasks/${t}/archive`);
+  expect(archived.status).toBe(409);
+  expect(((await archived.json()) as { error: { code: string } }).error.code).toBe("not_ended");
+  expect((await call("POST", `/v1/tasks/${t}/unarchive`)).status).toBe(200);
+  expect((await call("POST", `/v1/epics/epc_x/archive`, { withEndedTasks: true })).status).toBe(409);
+  expect((await call("POST", `/v1/epics/epc_x/unarchive`)).status).toBe(200);
+  expect(forwarded.map((f) => `${f.method} ${f.path}`)).toEqual([
+    `POST /internal/tasks/${t}/close`, `POST /internal/tasks/${t}/reopen`, `POST /internal/tasks/${t}/archive`,
+    `POST /internal/tasks/${t}/unarchive`, "POST /internal/epics/epc_x/archive", "POST /internal/epics/epc_x/unarchive",
+  ]);
+  expect(forwarded[0]!.body).toEqual({ resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false });
+  expect(forwarded[4]!.body).toEqual({ withEndedTasks: true });
+});
+
+test("what Close could never accept is refused before the orchestrator is asked", async () => {
+  forwarded.length = 0;
+  const t = await task();
+  for (const body of [{ resolution: "nothing_to_merge" }, { resolution: "obsolete" }, {}, { resolution: "wont_do", note: "x".repeat(2001) }]) {
+    expect((await call("POST", `/v1/tasks/${t}/close`, body)).status).toBe(400);
+  }
+  expect((await call("POST", `/v1/tasks/${t}/archive`, { resolution: "nothing_to_merge" })).status).toBe(400);
+  expect(forwarded).toEqual([]);
+});
+
 test("path 8: a closed task's bare Run is refused as closed before its blockers, and allowed once reopened", async () => {
   const blocker = await task();
   const t = await task();

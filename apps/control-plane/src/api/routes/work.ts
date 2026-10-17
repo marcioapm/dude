@@ -253,6 +253,47 @@ async function markTaskDone(ctx: RequestContext): Promise<Response> {
     "{}", ctx.principal);
 }
 
+// Close and Close and archive (docs/design/tracking-work.md, "Data, API,
+// events"): the orchestrator owns the rules, the status move and the
+// guard; this validates the shape and forwards, as Mark done.
+const closeInput = z.object({
+  resolution: z.enum(["wont_do", "duplicate", "cant_reproduce"]),
+  duplicateOf: z.string().min(1).max(200).optional(),
+  note: z.string().max(2000).optional(),
+  removeRelations: z.boolean().optional(),
+}).strict();
+
+const archiveInput = closeInput.partial({ resolution: true });
+
+/** Close a task, saying why: owner or admin. */
+async function closeTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, closeInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/close`,
+    JSON.stringify(input), ctx.principal);
+}
+
+/** Archive a task: one not ended is closed with the resolution given, in one transaction. */
+async function archiveTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, archiveInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/archive`,
+    JSON.stringify(input), ctx.principal);
+}
+
+/** Reopen and Unarchive take no body. */
+function lifecycleStep(path: "reopen" | "unarchive", what: "tasks" | "epics" = "tasks") {
+  return (ctx: RequestContext): Promise<Response> =>
+    orchestrator(ctx.principal.organizationId, "POST", `/internal/${what}/${encodeURIComponent(ctx.params.id!)}/${path}`, "{}", ctx.principal);
+}
+
+const epicArchiveInput = z.object({ withEndedTasks: z.boolean().optional() }).strict();
+
+/** Archive an epic with its tasks, or with withEndedTasks its ended ones alone. */
+async function archiveEpic(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, epicArchiveInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/epics/${encodeURIComponent(ctx.params.id!)}/archive`,
+    JSON.stringify(input), ctx.principal);
+}
+
 /** Its owner decides how delivery goes on after it stopped for them. */
 async function decideTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decide`,
@@ -430,7 +471,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`task ${taskId} not found`);
   if ("raced" in result) throw conflict("a run for this attempt was created concurrently; retry");
   if ("blocked" in result) throw await refusedStart(ctx, taskId, "create_run", result.blocked);
-  if ("refused" in result) throw await refusedLifecycleStart(ctx, taskId, "create_run", result.refused, result.message);
+  if ("refused" in result && result.refused) throw await refusedLifecycleStart(ctx, taskId, "create_run", result.refused, result.message);
   return json(result.run, 201);
 }
 
@@ -611,6 +652,12 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/runs", createRun);
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
+  router.post("/v1/tasks/:id/close", closeTask);
+  router.post("/v1/tasks/:id/reopen", lifecycleStep("reopen"));
+  router.post("/v1/tasks/:id/archive", archiveTask);
+  router.post("/v1/tasks/:id/unarchive", lifecycleStep("unarchive"));
+  router.post("/v1/epics/:id/archive", archiveEpic);
+  router.post("/v1/epics/:id/unarchive", lifecycleStep("unarchive", "epics"));
   router.post("/v1/tasks/:id/decide", decideTask);
   router.post("/v1/tasks/:id/chat", chatTask);
   router.post("/v1/tasks/:id/retry", retryConductor);
