@@ -334,7 +334,7 @@ func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
 	}
 	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
 	w.until("integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1], s.Intercept = false, nil })
 	w.until("integrated and waiting again", func() bool {
 		w.sync()
 		return w.count(integrationCompleted, wi) == 1 &&
