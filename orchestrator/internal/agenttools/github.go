@@ -113,16 +113,14 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 	return slugs, nil
 }
 
-// A session's and a task's GitHub reads in the last hour. Each predicate
-// matches its partial index (migrations 134, 135) with literals, as a
-// parameter would not prove the index's WHERE.
+// A session's and a task's GitHub reads in the last hour. Both share one
+// predicate, the WHERE of their partial indexes (migrations 134, 135),
+// written with literals, as a parameter would not prove the index's WHERE.
 const (
-	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1
-		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
+	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
 		AND occurred_at > now() - interval '1 hour'`
-	githubReadsByTask = `SELECT count(*) FROM events WHERE task_id = $1
-		AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request')
-		AND occurred_at > now() - interval '1 hour'`
+	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
+	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
 )
 
 // checkGitHubRead holds a read to the repositories the caller may read and
