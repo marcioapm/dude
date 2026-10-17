@@ -1,10 +1,8 @@
 package delivery
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -88,15 +86,11 @@ func maskNow(t *testing.T, s string, now time.Time) string {
 
 // requireTestDatabase fails where dbtest.Open would skip: under -update a
 // skipped briefing golden would be left as it was while the run reports ok.
-// The address and credentials are dbtest's.
 func requireTestDatabase(t *testing.T) {
 	t.Helper()
-	host := cmp.Or(os.Getenv("DUDE_TEST_PG"), "localhost:5433")
-	conn, err := pgx.Connect(context.Background(), "postgres://dude:dude@"+host+"/postgres")
-	if err != nil {
-		t.Fatalf("-update needs the test database (DUDE_TEST_PG, default localhost:5433) to rewrite the briefing goldens: %v", err)
+	if err := dbtest.Reachable(context.Background()); err != nil {
+		t.Fatalf("-update needs the test database to rewrite the briefing goldens: %v", err)
 	}
-	conn.Close(context.Background())
 }
 
 func newGoldenWorld(t *testing.T) goldenWorld {
