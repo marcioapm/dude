@@ -3192,9 +3192,6 @@ func (e errCannotResume) Unwrap() error { return e.err }
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
 
-// retryLater backs a Run off after a failure that may pass. A lux Run lux
-// no longer has will not come back, whichever call found out: that fails
-// the Run instead of retrying it forever.
 // retryOrFail: a request lux refused, and would refuse again, fails the Run
 // with lux's reason; anything else is tried again later.
 func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refused string) error {
@@ -3204,19 +3201,39 @@ func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refus
 	return s.retryLater(ctx, r, cause)
 }
 
+// Back-off of retryLater: retryBase doubling with each failure in a row, up
+// to retryMax. A failure is in a row with the last when it comes within
+// retryGrace of the retry that one scheduled being due.
+const (
+	retryBase  = 5 * time.Second
+	retryMax   = 5 * time.Minute
+	retryGrace = time.Minute
+)
+
+// retryStreak is a Run's failures in a row counting this one (SQL; the
+// row's values before the UPDATE that sets them).
+const retryStreak = `(CASE WHEN retry_due_at IS NOT NULL AND now() <= retry_due_at + make_interval(secs => $5)
+	THEN retry_failures + 1 ELSE 1 END)`
+
+// retryWait is the back-off for retryStreak, or the forge's wait ($4) when
+// longer: GitHub penalises requests made during a limit it asked to be
+// waited out.
+const retryWait = `GREATEST(LEAST(make_interval(secs => $2 * power(2, LEAST(` + retryStreak + ` - 1, 16))),
+	make_interval(secs => $3)), make_interval(secs => $4))`
+
+// retryLater backs a Run off after a failure that may pass. A lux Run lux
+// no longer has will not come back, whichever call found out: that fails
+// the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
 	if lux.IsNotFound(cause) {
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
-	// GitHub penalises requests made during a limit it asked to be waited out.
-	delay := 5 * time.Second
-	if wait := forge.RetryAfter(cause); wait > delay {
-		delay = wait
-	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
-			r.ID, delay.Seconds())
+		_, err := tx.Exec(ctx, `UPDATE runs SET retry_failures = `+retryStreak+`,
+				retry_due_at = now() + `+retryWait+`, next_attempt_at = now() + `+retryWait+`
+			WHERE id = $1`,
+			r.ID, retryBase.Seconds(), retryMax.Seconds(), forge.RetryAfter(cause).Seconds(), retryGrace.Seconds())
 		return err
 	})
 }
