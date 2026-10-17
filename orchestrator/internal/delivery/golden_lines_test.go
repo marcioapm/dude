@@ -98,3 +98,21 @@ func TestGoldenDeliveryLines(t *testing.T) {
 	}
 	goldenTexts(t, "delivery-lines", lines)
 }
+
+// The conductor's facts on work taken over, a test's verdict and people's
+// open feedback.
+func TestGoldenDecisionFacts(t *testing.T) {
+	review := &Source{HeadBranch: "ana/csv", BaseBranch: "main"}
+	carry := &Source{HeadBranch: "ana/csv", BaseBranch: "main", Mode: ModeContinue}
+	var lines [][2]string
+	add := func(name, text string) { lines = append(lines, [2]string{name, text}) }
+	add("took-over-review", tookOverLine(review, "0123456789abcdef", 4))
+	add("took-over-continue", tookOverLine(carry, "0123456789abcdef", 4))
+	add("test-failed", testFailedLine("run_t", []int{1, 3}, 2, 1))
+	add("test-passed", testPassedLine("run_t"))
+	add("nothing-to-add", nothingToAdd)
+	for _, when := range []string{feedbackOpen, feedbackAfterFix, feedbackAfterIntegration, feedbackBeforePR, feedbackReadyToRead} {
+		add("feedback-"+when, feedbackOpenLine(when, 3))
+	}
+	goldenTexts(t, "decision-facts", lines)
+}
