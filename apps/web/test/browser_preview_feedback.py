@@ -286,8 +286,16 @@ class CommentingOnAPreview(unittest.TestCase):
         wait_ov(pv, "ov-comment-box")
         pv.wait_for_function("() => window.__ovRoot.querySelector('[data-testid=ov-comment-box] img.thumb') || window.__ovRoot.querySelector('[data-testid=ov-picture-failed]')", timeout=10_000)
         self.assertEqual(ov_count(pv, "ov-picture-failed"), 0, ov_text(pv, "ov-picture-failed"))
-        # The picture, decoded in the page: pixels of each pure colour the promo shows, counted.
-        counts = ov(pv, """async (r) => {
+        # Each pure colour the promo shows, its share of a 64x32 CSS-pixel box that must show, and what draws it.
+        colours = {
+            "red": ([230, 0, 0], 1 / 2, "the ::before badge"),
+            "magenta": ([200, 0, 200], 1 / 2, "the ::after data: SVG icon"),
+            "blue": ([0, 0, 230], 1 / 2, "the canvas"),
+            "green": ([0, 200, 0], 1 / 4, "the video's left half"),
+            "yellow": ([240, 240, 0], 1 / 4, "the video's right half"),
+        }
+        # The picture, decoded in the page: pixels of each colour counted.
+        counts = ov(pv, """async (r, { want, width }) => {
           const img = new Image();
           img.src = r.querySelector('[data-testid=ov-comment-box] img.thumb').src;
           await img.decode();
@@ -296,20 +304,16 @@ class CommentingOnAPreview(unittest.TestCase):
           const g = c.getContext('2d');
           g.drawImage(img, 0, 0);
           const d = g.getImageData(0, 0, c.width, c.height).data;
-          const want = { red: [230, 0, 0], magenta: [200, 0, 200], blue: [0, 0, 230], green: [0, 200, 0], yellow: [240, 240, 0] };
-          const n = { red: 0, magenta: 0, blue: 0, green: 0, yellow: 0, scale: c.width / %d };
+          const n = { scale: c.width / width };
+          for (const k in want) n[k] = 0;
           for (let i = 0; i < d.length; i += 4)
             for (const [k, [R, G, B]] of Object.entries(want))
               if (Math.abs(d[i] - R) < 24 && Math.abs(d[i + 1] - G) < 24 && Math.abs(d[i + 2] - B) < 24) n[k]++;
           return n;
-        }""" % (b["width"] + 16))
-        # Each is 64x32 CSS pixels on the page (the video's halves 32x32): at least half of that area must show.
+        }""", {"want": {k: rgb for k, (rgb, _, _) in colours.items()}, "width": int(b["width"] + 16)})
         area = 64 * 32 * counts["scale"] ** 2
-        self.assertGreater(counts["red"], area / 2, f"the ::before badge is missing: {counts}")
-        self.assertGreater(counts["magenta"], area / 2, f"the ::after data: SVG icon is missing: {counts}")
-        self.assertGreater(counts["blue"], area / 2, f"the canvas is missing: {counts}")
-        self.assertGreater(counts["green"], area / 4, f"the video's left half is missing: {counts}")
-        self.assertGreater(counts["yellow"], area / 4, f"the video's right half is missing: {counts}")
+        for colour, (_, share, what) in colours.items():
+            self.assertGreater(counts[colour], area * share, f"{what} is missing: {counts}")
         self.assertEqual(set(self.overlay_requests), {f"{DUDE}/feedback/overlay.js", "https://status.widgets.test/"}, self.overlay_requests)
         self.assertEqual(self.errors, [])
 
