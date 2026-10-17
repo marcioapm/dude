@@ -1,14 +1,65 @@
 package agenttools
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
+
+// firstKey is the first key of the JSON object out.
+func firstKey(t *testing.T, out []byte) string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(out))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("not an object: %v %v", tok, err)
+	}
+	tok, err := dec.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := tok.(string)
+	return key
+}
+
+// Every read's result begins with its note, whole or cut to the budget,
+// so a harness keeping only a result's head keeps what says it is a read.
+func TestEveryReadResultBeginsWithItsNote(t *testing.T) {
+	w := wrapper{id: "first"}
+	long := strings.Repeat("Retries count twice. ", 400)
+	big := forge.IssueRead{IssueLine: forge.IssueLine{Number: 7, Title: "t"}, Body: long}
+	for range 50 {
+		big.Comments = append(big.Comments, forge.IssueComment{Author: "bo", Body: long})
+	}
+	for _, tc := range []struct {
+		name string
+		v    map[string]any
+	}{
+		{"search", w.search([]forge.IssueLine{{Number: 1, Title: "a"}}, 1)},
+		{"issue", w.issue(forge.IssueRead{IssueLine: forge.IssueLine{Number: 7, Title: "t"}, Body: "b"})},
+		{"pull request", w.pullRequest(forge.PullRequestRead{IssueLine: forge.IssueLine{Number: 8}, Body: "b"}, nil)},
+		{"issue past the budget", w.issue(big)},
+		{"pull request past the budget", w.pullRequest(threadShape(), nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := w.fit(tc.v)
+			if err != nil || !json.Valid(out) {
+				t.Fatalf("fit: %v", err)
+			}
+			if k := firstKey(t, out); k != "external" {
+				t.Fatalf("first key %q, want external: %.120s", k, out)
+			}
+			if !delivery.CarriesGitHubRead(string(out[:min(len(out), 60)])) {
+				t.Fatalf("a 60-byte prefix is not known for a read: %.60s", out)
+			}
+		})
+	}
+}
 
 func TestCappedFileListingDoesNotClaimTailUnchanged(t *testing.T) {
 	p := forge.PullRequestRead{}
@@ -73,7 +124,7 @@ func TestFitBatchesLargeThreadShape(t *testing.T) {
 	w := wrapper{id: "budget"}
 	calls := 0
 	marshal := marshalResult
-	marshalResult = func(v any) ([]byte, error) { calls++; return marshal(v) }
+	marshalResult = func(v map[string]any) ([]byte, error) { calls++; return marshal(v) }
 	t.Cleanup(func() { marshalResult = marshal })
 	out, err := w.fit(w.pullRequest(threadShape(), nil))
 	if err != nil || len(out) > resultCap || calls > 2 || !json.Valid(out) || !strings.Contains(string(out), cutMark) {

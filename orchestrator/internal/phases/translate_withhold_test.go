@@ -9,12 +9,12 @@ import (
 )
 
 // githubReadResult is a GitHub read's result as the tool server returns
-// it, longer than the ledger's output cap, its note past the kept head:
+// it, longer than the ledger's output cap: its note first, then the
 // canary at the start of the quoted body.
 func githubReadResult(canary string, escaped bool) string {
 	const id = "ab12cd34"
 	filler := strings.Repeat("Retries count twice. ", 300)
-	out, _ := json.Marshal(map[string]any{
+	out, _ := delivery.GitHubReadJSON(map[string]any{
 		"body":     delivery.ExternalText(id, canary+" "+filler),
 		"comments": []any{map[string]any{"author": delivery.ExternalText(id, "bo"), "body": delivery.ExternalText(id, filler)}},
 		"external": delivery.GitHubReadNote(id),
@@ -33,8 +33,12 @@ func githubReadResult(canary string, escaped bool) string {
 // Run's own call and a child's, a completion, an error, and the updates
 // that carry output before it.
 func TestGitHubReadOutputIsWithheldWhateverTheHarnessCallsIt(t *testing.T) {
-	const canary = "private-github-body-canary"
+	// Short enough to sit whole in a 200-byte head, after the note.
+	const canary = "gh-body-canary"
 	result := githubReadResult(canary, false)
+	if !strings.Contains(result[:200], canary) {
+		t.Fatalf("the canary is past the 200-byte head: %s", result[:200])
+	}
 	acp := func(status, title, kind string, output string) map[string]any {
 		u := map[string]any{"toolCallId": "read1", "status": status, "title": title, "kind": kind}
 		if output != "" {
@@ -77,6 +81,9 @@ func TestGitHubReadOutputIsWithheldWhateverTheHarnessCallsIt(t *testing.T) {
 			acp("pending", "dude_github_issue", "other", ""), acp("failed", "", "other", "GitHub refused reading acme/target#7: github 403: "+canary+" "+strings.Repeat("x", 5000))}, evToolCompleted},
 		{"acp aliased", []map[string]any{
 			acp("in_progress", "read_issue", "fetch", ""), acp("completed", "read_issue", "fetch", result)}, evToolCompleted},
+		// A harness that records only the head of a large result.
+		{"acp aliased cut at 200 bytes", []map[string]any{
+			acp("in_progress", "read_issue", "fetch", ""), acp("completed", "read_issue", "fetch", result[:200])}, ""},
 		{"acp described title", []map[string]any{
 			acp("in_progress", "Read issue 7 of acme/target", "other", ""), acp("completed", "", "other", result)}, evToolCompleted},
 		{"acp failed", []map[string]any{acp("in_progress", "github", "other", ""), acp("failed", "", "other", result)}, evToolCompleted},

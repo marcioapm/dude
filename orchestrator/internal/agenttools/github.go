@@ -220,7 +220,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		return nil, err
 	}
 	w := newWrapper()
-	var out any
+	var out map[string]any
 	switch read.Tool {
 	case "github_search":
 		state := read.State
@@ -523,10 +523,11 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	return pr
 }
 
-// fit encodes a result within resultCap. Past it, one pass in fitRank's
-// order gives each text what the budget has left and ends lists once it
-// runs out, then the tree is encoded once more, and "cut" says so.
-func (w wrapper) fit(v any) (json.RawMessage, error) {
+// fit encodes a result within resultCap, its note first. Past it, one
+// pass in fitRank's order gives each text what the budget has left and
+// ends lists once it runs out, then the tree is encoded once more, and
+// "cut" says so.
+func (w wrapper) fit(v map[string]any) (json.RawMessage, error) {
 	out, err := marshalResult(v)
 	if err != nil || len(out) <= resultCap {
 		return out, err
@@ -581,7 +582,7 @@ func (w wrapper) fit(v any) (json.RawMessage, error) {
 	return marshalResult(m)
 }
 
-var marshalResult = json.Marshal
+var marshalResult = delivery.GitHubReadJSON
 
 // fitRank is the order fit spends the budget in: the note saying the
 // quotes are data, then what the item is, then the flags saying what is
