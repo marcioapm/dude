@@ -528,7 +528,7 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 // While a pull request's fix is checked, what a Run publishes goes to the
 // candidate branch.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
-	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
+	in := PhaseRun{TaskID: st.TaskID, Phase: phase, WorkflowID: sc.WorkflowRunID, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
 	if st.Candidate != nil && Publishes[phase] {
 		in.Branch = st.Candidate.Branch
 	}
@@ -1612,7 +1612,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 		if existing == "" {
 			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-				if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+				if _, err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
 					return err
 				}
 				var writer bool

@@ -473,10 +473,40 @@ func TestAClosedParkedDeliveryStartsNoImplementerOnTheUnblock(t *testing.T) {
 	}
 	// Close committing after the step's own check: its insert refuses, in
 	// the transaction that holds the delivery.
-	_, err := (&delivery.Store{DB: w.app}).CreatePhaseRun(context.Background(), w.org,
-		delivery.PhaseRun{TaskID: task, Phase: delivery.PhaseImplement, Key: "late-implement"})
+	store := &delivery.Store{DB: w.app}
+	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1`, task)
+	_, err := store.CreatePhaseRun(context.Background(), w.org,
+		delivery.PhaseRun{TaskID: task, WorkflowID: wf, Phase: delivery.PhaseImplement, Key: "late-implement"})
 	if !errors.Is(err, delivery.ErrDeliveryEnded) || w.phaseRuns(task, "implement") != 0 {
 		t.Fatalf("an implementer created on a closed task: %v, %d Runs", err, w.phaseRuns(task, "implement"))
+	}
+	// Close and Reopen both commit after the step's own check: the task is
+	// open again, but the delivery the step belongs to has ended. The step
+	// above parked it, so it is ended again as Close leaves it.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL, awaiting_signals = '[]'::jsonb,
+		locked_by = NULL, locked_until = NULL WHERE task_id = $1`, task)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/reopen", map[string]any{}); status != 200 {
+		t.Fatalf("reopen: %d %v", status, body)
+	}
+	_, err = store.CreatePhaseRun(context.Background(), w.org,
+		delivery.PhaseRun{TaskID: task, WorkflowID: wf, Phase: delivery.PhaseImplement, Key: "late-implement-reopened"})
+	if !errors.Is(err, delivery.ErrDeliveryEnded) || w.phaseRuns(task, "implement") != 0 {
+		t.Fatalf("an implementer for an ended delivery after reopen: %v, %d Runs", err, w.phaseRuns(task, "implement"))
+	}
+	// A new delivery started since (B): the first one's step still makes
+	// no implementer, and B's Runs are its own.
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/deliver", map[string]any{"override": true}); status != 201 {
+		t.Fatalf("deliver after reopen: %d %v", status, body)
+	}
+	b := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, task)
+	before := w.phaseRuns(task, "implement")
+	_, err = store.CreatePhaseRun(context.Background(), w.org,
+		delivery.PhaseRun{TaskID: task, WorkflowID: wf, Phase: delivery.PhaseImplement, Key: "late-implement-replaced"})
+	if !errors.Is(err, delivery.ErrDeliveryEnded) || w.phaseRuns(task, "implement") != before {
+		t.Fatalf("an implementer for a replaced delivery: %v, %d Runs, want %d", err, w.phaseRuns(task, "implement"), before)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE id = $1 AND status IN ('running', 'waiting')`, b); n != 1 {
+		t.Fatal("the refused insert touched the live delivery")
 	}
 }
 

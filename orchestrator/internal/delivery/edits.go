@@ -180,12 +180,14 @@ func RefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 }
 
 // lockAndRefuseWhileMovingTx is RefuseWhileMovingTx for a caller that
-// does not hold the delivery's row: it locks it first, for the rest of tx.
-func lockAndRefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) error {
-	if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
-		return err
+// does not hold the delivery's row: it locks it first, for the rest of tx,
+// and returns it (nil for none).
+func lockAndRefuseWhileMovingTx(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, error) {
+	d, err := LoadDelivery(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
 	}
-	return RefuseWhileMovingTx(ctx, tx, taskID)
+	return d, RefuseWhileMovingTx(ctx, tx, taskID)
 }
 
 // RefuseUnmovedTx settles a conductor's publishes that have not moved

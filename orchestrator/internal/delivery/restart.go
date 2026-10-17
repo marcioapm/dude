@@ -100,7 +100,7 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	var prFeedback []forge.ActionableFeedback
 	_ = json.Unmarshal(feedback, &prFeedback)
 	newID, err := createPhaseRunTx(ctx, tx, org, PhaseRun{
-		TaskID: taskID, Phase: phase, BaseRefs: d.State.Heads, ParentRunID: d.State.HeadRunID, Attempt: attempt,
+		TaskID: taskID, Phase: phase, WorkflowID: d.WorkflowID, BaseRefs: d.State.Heads, ParentRunID: d.State.HeadRunID, Attempt: attempt,
 		Category: category, FindingIDs: findingIDs, BlockingSeverities: blocking, PRFeedback: prFeedback,
 		FeedbackItemIDs: feedbackIDs,
 		ConductorRunID:  conductorRun, ConductorNote: conductorNote,

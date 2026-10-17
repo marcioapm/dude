@@ -57,12 +57,23 @@ func ReadDelivery(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, err
 }
 
 func readDelivery(ctx context.Context, tx pgx.Tx, taskID, lock string) (*Delivery, error) {
+	return scanDelivery(tx.QueryRow(ctx, `SELECT w.id, w.status::text, w.step, w.state, t.status::text
+		FROM tasks t JOIN workflow_runs w ON w.task_id = t.id AND w.workflow_type = $2
+		WHERE t.id = $1 ORDER BY w.created_at DESC LIMIT 1`+lock, taskID, WorkflowType))
+}
+
+// loadDeliveryByID is LoadDelivery for one delivery of the task, latest or
+// not; nil when the task has none by that id.
+func loadDeliveryByID(ctx context.Context, tx pgx.Tx, taskID, workflowID string) (*Delivery, error) {
+	return scanDelivery(tx.QueryRow(ctx, `SELECT w.id, w.status::text, w.step, w.state, t.status::text
+		FROM tasks t JOIN workflow_runs w ON w.task_id = t.id AND w.workflow_type = $3
+		WHERE t.id = $1 AND w.id = $2 FOR UPDATE OF w`, taskID, workflowID, WorkflowType))
+}
+
+func scanDelivery(row pgx.Row) (*Delivery, error) {
 	var d Delivery
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT w.id, w.status::text, w.step, w.state, t.status::text
-		FROM tasks t JOIN workflow_runs w ON w.task_id = t.id AND w.workflow_type = $2
-		WHERE t.id = $1 ORDER BY w.created_at DESC LIMIT 1`+lock, taskID, WorkflowType).
-		Scan(&d.WorkflowID, &d.Status, &d.Step, &raw, &d.TaskStatus)
+	err := row.Scan(&d.WorkflowID, &d.Status, &d.Step, &raw, &d.TaskStatus)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}
