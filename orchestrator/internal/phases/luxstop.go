@@ -75,8 +75,7 @@ const machineParked = `(` + delivery.MoveUnsettled + ` AND (r.control <> 'none' 
 
 // movedNudge is what an agent lux moved mid-turn is told once it runs on
 // its new host.
-const movedNudge = "Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace " +
-	"and conversation are as you left them; processes you had running are not. Carry on with your task where you left off."
+var movedNudge = delivery.MustText("notices/host-moved").Render(nil)
 
 // luxStopWords says why lux stopped the Run, for a person. timeout is the
 // Run's time limit as configured.

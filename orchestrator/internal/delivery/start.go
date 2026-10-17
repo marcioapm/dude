@@ -24,8 +24,7 @@ const (
 
 // TalkItThrough is what a person who pressed Talk it through says to the
 // conductor first: the task is the subject, and nothing is built yet.
-const TalkItThrough = "Let's talk this task through before anything is built. Read it and the code, then ask me " +
-	"what you need to know, or propose a plan."
+var TalkItThrough = render(mustTemplate("notices/told/talk-it-through"), nil)
 
 // Starter starts a workflow in the caller's transaction (workflow.Runtime).
 type Starter interface {

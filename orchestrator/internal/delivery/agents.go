@@ -12,7 +12,7 @@ import (
 
 // What dude tells agents lives in Markdown under agents/ (its README says
 // how to edit it). roles/ holds each role's replaceable instructions as
-// plain text; contracts/ and briefings/ are text/template files, each
+// plain text; every other directory holds text/template files, each
 // named by its path without ".md" ("contracts/commit"). A file's one
 // trailing newline is not part of its text. Every file is read and parsed
 // when the package initialises, and every name Go renders is resolved then
@@ -20,10 +20,10 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings
+//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
-var agentTemplates = must(parseAgentTemplates(agentFiles))
+var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
 
 // The templates rendered with data, resolved at init by mustTemplate.
 var (
@@ -62,6 +62,7 @@ var (
 	machineOfferTmpl           = mustTemplate("contracts/machine-offer")
 	prFeedbackTmpl             = mustTemplate("contracts/pr-feedback")
 	prFeedbackBotsTmpl         = mustTemplate("contracts/pr-feedback-bots")
+	prPhaseStartedTmpl         = mustTemplate("results/pr-phase-started")
 	projectNotesTmpl           = mustTemplate("contracts/project-notes")
 	restartedTmpl              = mustTemplate("contracts/restarted")
 	reviewTmpl                 = mustTemplate("contracts/review")
@@ -73,19 +74,59 @@ var (
 	taskImplementedTmpl        = mustTemplate("contracts/task-implemented")
 	taskUnderReviewTmpl        = mustTemplate("contracts/task-under-review")
 	workspaceTmpl              = mustTemplate("contracts/workspace")
+
+	baseMovedTmpl          = mustTemplate("wakes/base-moved")
+	decisionWaitingTmpl    = mustTemplate("wakes/decision-waiting")
+	escalatedTmpl          = mustTemplate("wakes/escalated")
+	escalationAnsweredTmpl = mustTemplate("wakes/escalation-answered")
+	escalationOnBannerTmpl = mustTemplate("wakes/escalation-on-banner")
+	prEndedTmpl            = mustTemplate("wakes/pr-ended")
+	publishedTmpl          = mustTemplate("wakes/published")
+	publishRefusedTmpl     = mustTemplate("wakes/publish-refused")
+	publishStalledTmpl     = mustTemplate("wakes/publish-stalled")
+	runAsksTmpl            = mustTemplate("wakes/run-asks")
+	runFailedTmpl          = mustTemplate("wakes/run-failed")
+	stalledTmpl            = mustTemplate("wakes/stalled")
+	steerFailedTmpl        = mustTemplate("wakes/steer-failed")
+	steerReadTmpl          = mustTemplate("wakes/steer-read")
+	unblockedTmpl          = mustTemplate("wakes/unblocked")
+	wakeNoteTmpl           = mustTemplate("wakes/note")
+
+	alreadyAnsweredTmpl = mustTemplate("notices/already-answered")
+	messageTmpl         = mustTemplate("notices/message")
+	messageHeldTmpl     = mustTemplate("notices/message-held")
+	noteAddedTmpl       = mustTemplate("notices/note-added")
+	noteReplacedTmpl    = mustTemplate("notices/note-replaced")
+	noteRetiredTmpl     = mustTemplate("notices/note-retired")
+	peerEndedTmpl       = mustTemplate("notices/peer-ended")
+
+	moveRefusedSaidTmpl   = mustTemplate("results/machine-refused/said")
+	moveRefusedAdviceTmpl = mustTemplate("results/machine-refused/advice")
+
+	integrationFixTmpl       = mustTemplate("briefings/integration-fix")
+	integrationMergeWhenTmpl = mustTemplate("briefings/integration-merge-when")
+	integrationReviewTmpl    = mustTemplate("briefings/integration-review")
+	replayTmpl               = mustTemplate("briefings/replay")
 )
 
-// mustTemplate is the named template, or a panic naming its file.
+// mustTemplate is the named template, or a panic naming its file. A name
+// longer than a file's ("refusals/delivery/edits/no-commits") is a
+// {{define}} in the file its prefix names, when that file exists.
 func mustTemplate(name string) *template.Template {
 	t := agentTemplates.Lookup(name)
 	if t == nil {
+		for file := path.Dir(name); file != "."; file = path.Dir(file) {
+			if agentTemplates.Lookup(file) != nil {
+				panic(fmt.Sprintf("agents/%s.md defines no %q", file, name))
+			}
+		}
 		panic(fmt.Sprintf("agents/%s.md is missing", name))
 	}
 	return t
 }
 
-// must is v, or a panic with err: for what the package loads at init.
-func must[T any](v T, err error) T {
+// mustLoad is v, or a panic with err: for what the package loads at init.
+func mustLoad[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
 	}
@@ -198,6 +239,48 @@ func render(t *template.Template, data any) string {
 // once, keyed by the rest of its name. Each of want must be among them.
 func agentTexts(prefix string, want ...string) map[string]string {
 	return agentTextsIn(agentTemplates, prefix, want...)
+}
+
+// Text is one agents/ template for another package to render, resolved
+// when it is made: a package-level Text panics at init if its file is
+// missing.
+type Text struct{ t *template.Template }
+
+// MustText is the template name ("results/steer"), or a panic naming its file.
+func MustText(name string) Text { return Text{mustTemplate(name)} }
+
+// Render executes the template with data (see render).
+func (x Text) Render(data any) string { return render(x.t, data) }
+
+// ToolText is agents/tools/<key>.md rendered with data: a tool's
+// description ("list_tasks", "session/list_tasks"), or the tools' shared
+// text ("common/server-instructions"). A missing file panics.
+func ToolText(key string, data any) string {
+	return render(mustTemplate("tools/"+key), data)
+}
+
+// ToolParameter is the description of the parameter at path ("questions",
+// "questions.header" for a field of its items) of the tool whose text is
+// key: the template "tools/<key>/<path>" its file defines. ok is false
+// when the file defines none.
+func ToolParameter(key, path string) (text string, ok bool) {
+	t := agentTemplates.Lookup("tools/" + key + "/" + path)
+	if t == nil {
+		return "", false
+	}
+	return render(t, nil), true
+}
+
+// ToolParameters are the parameter paths the tool whose text is key has
+// descriptions for.
+func ToolParameters(key string) []string {
+	var out []string
+	for _, t := range agentTemplates.Templates() {
+		if path, ok := strings.CutPrefix(t.Name(), "tools/"+key+"/"); ok {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func agentTextsIn(set *template.Template, prefix string, want ...string) map[string]string {

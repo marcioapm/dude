@@ -29,117 +29,41 @@ const maxPendingRequests = 3
 
 // The tools, and which roles have them (docs/design/agent-tools.md).
 var tools = []tool{
-	define("list_machine_sizes", "The larger machine sizes this Run may move to, with their pools.", machineRoles, listMachineSizes).
+	define("list_machine_sizes", machineRoles, listMachineSizes).
 		describe(machineOffer(false)),
-	define("request_machine", "Move to a larger machine.", machineRoles, requestMachine).describe(machineOffer(true)),
-	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
-		"asked for them, and each one's relations: what it is blocked by (and whether that merged), what it blocks, "+
-		"what it is related to, and whether it can start — optionally only those mentioning some text, or only "+
-		"those that can start (startable). Use it before creating work, to find what already exists. "+
-		"With peers: true, your peers instead (the other tasks on your epic): each one's phase, "+
-		"whether its Run is live or parked, branch and head, files changed, its agent's last words, and its messages "+
-		"waiting for you.", nil, listTasks),
-	define("list_epics", "The project's epics, in priority order, with how many tasks each has and how many "+
-		"are still open.", nil, listEpics),
-	define("ask_person", askDescription+" After calling it, end your turn: the answers are your next message.",
-		[]string{"implementer", "investigator", "conductor"}, askPerson),
-	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
-		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
-		"your chat and the run's events.", nil, emitEvent).limit(eventsPerRun),
-	define("list_repositories", "The project's repositories: which this work has checked out (and whether it may "+
-		"change them), and which it could ask for with request_repository. Not for waiting on a request: you are "+
-		"told when one is decided.", nil, listRepositories),
-	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
-		"to read code this depends on, or (an implementer) to change it too. A person decides. Carry on meanwhile if "+
-		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
-		"or told it was declined.",
-		nil, requestRepository).limit(requestsPerRun),
-	define("create_task", fmt.Sprintf("Record a piece of work you found that is outside your task — a bug, a "+
-		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. The goal is required (at least %d characters): say why it matters and what should change. "+
-		"A conductor or investigator may relate it (blockedBy, blocks, related: task keys); a refused relation "+
-		"refuses the whole create.", GoalMin), creators, createTask).limit(createsPerRun),
-	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
-		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
-		"Search before you investigate something that may already be known, and before you remember something.",
-		nil, searchMemory).before(embedQuery),
-	define("get_memory", "Read one memory in full, by the id search_memory gave, with where it was learned "+
-		"and what it is about.", nil, getMemory),
-	define("remember", "Save something worth knowing next time, for every agent and person on this project: "+
-		"a fact that holds (\"the billing API paginates by cursor\"), a procedure that works, a trap and its way "+
-		"around. It is live at once, and marked as yours. Search first so you do not save it twice; do not save "+
-		"what the code or the task already says.", nil, remember).limit(remembersPerRun),
-	define("run_diff", "What a Run of your task changed: this Run's checkout, uncommitted work included, against "+
-		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
-		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
-		"With paths, those files' changes as unified diff text, at most 2,000 lines in all. With task (a peer's key), "+
-		"that peer's code as dude last stored it, the same way.", nil, runDiff),
-	define("findings", "Your task's review findings, open and most severe first: each one's id, severity, "+
-		"category, file:line, status and how it was settled (fixed by which Run, accepted by a person, or open after "+
-		"so many fix attempts). Name ids (at most 20) to read those in full: title, description, suggested fix and "+
-		"the resolution note.", conductors, findings),
-	define("pull_requests", "Your task's pull requests: state, head commit, checks (each one's status), review "+
-		"(each reviewer's word), unresolved threads, and the feedback people left — author, kind, path, a short "+
-		"excerpt, and whether a fixer was sent it.", conductors, pullRequests),
-	define("start_phase", "Take the decision the delivery waits on by starting a phase from the task's head: "+
-		"implement, review (some or all categories), fix (some or all open findings; at pull request feedback, the "+
-		"feedback), simplify or test. The workflow creates the Runs as it creates its own, waits for them, and wakes "+
-		"you at the next decision. While the delivery waits on its pull requests with nothing running, fix (say what, "+
-		"in note), review or test start too, on the pull request's branch, and it waits on them again after. Refused "+
-		"when you do not take the task's decisions, while a Run or publish is changing the branch, or past the policy's "+
-		"bounds: then ask the person.", conductors, startPhase),
-	define("steer", "Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: "+
-		"your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong "+
-		"way, or to add something the person just said; start another phase only once a Run has ended. interrupt "+
-		"stops its turn so it hears this now: only when its current work is wasted. You are woken when it reads it, "+
-		"or if it never will. Allowed whoever takes the decisions; refused for a Run that ended, another task's or an "+
-		"earlier attempt's.", conductors, steer),
-	define("restart_run", "Restart a phase Run of this task that the delivery waits on: it is stopped, and a new Run of the same "+
-		"phase and category takes its place in the same step, starting fresh from the task's head, told your note. The "+
-		"old Run's uncommitted work is lost and its agent's context with it: to keep them, steer instead. tier runs the "+
-		"new Run on another of the organization's model tiers. Refused for another task's Run, one the delivery does not "+
-		"wait on, or one that ended.", conductors, restartRun),
-	define("decide", "Take the decision the delivery waits on: next (what Deliver would do now), ask_person (a "+
-		"question for the person in the note; before the pull request, the fixed question Open / Draft / Show me the "+
-		"diff / Another round), wait (at pull request feedback: leave it), or open_pull_request — accepted only after "+
-		"the person answered Open or Draft to that question, at the task's current head.", conductors, decide),
-	define("dismiss_finding", "Leave an open review finding as it is, with the reason — shown with the finding, as a "+
-		"person accepting one is. Only while you take the task's decisions.", conductors, dismissFinding),
-	define("decide_escalation", "Decide the escalation the delivery is stopped at (retry, accept, waive, resume, done, wait or "+
-		"stop, as it offers), with a note: only after the task's owner answered your question about this escalation in "+
-		"their own words, handing it to you; otherwise the person decides on the banner. A choice they pick decides "+
-		"it without you, except a waiver or an acceptance of a failed test, which is never a choice: it needs the "+
-		"person's own words. Allowed once per escalation.", conductors, decideEscalation),
-	define("update_task", "Write what Chat settled into the task: its goal, its acceptance criteria, or both "+
-		"(criteria replace the list). Do it before you start the implementer, whenever you and the person agreed "+
-		"something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has "+
-		"started on this attempt. Its relations (addRelations, removeRelations: blocked_by, blocks, related, by task key) "+
-		"may change at any status, when you learn this needs other work merged first; you remove only relations this "+
-		"task's agents added.", conductors, updateTask),
-	around(define("reply_on_pull_request", "Answer on one of your task's pull requests, as dude's GitHub login: for a "+
-		"question that came from there (a Chat message from a GitHub person names the pull request and the comment). "+
-		"in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull "+
-		"request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. "+
-		"Refused for another task's pull request; GitHub refusing it is said, and nothing is posted. A fixer answering pull "+
-		"request feedback replies only to the comments in its feedback, in_reply_to each.",
-		prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
-	define("publish", "Publish what you committed in your checkout to the task branch, as a phase's work is: lux "+
-		"pushes it, then dude fast-forwards the task branch to it. Only for small, well-understood changes while you "+
-		"take the decisions: refused while an implementer or fixer is at work, when your checkout is behind the task "+
-		"branch (git merge lux/<branch> first), with nothing committed, or past the project's limit of changed lines "+
-		"and files (then delegate: start_phase implement). Answers at once; you are woken when it is published or "+
-		"refused. Run a review before the pull request: the gate refuses an unreviewed commit of yours.",
-		conductors, publish),
+	define("request_machine", machineRoles, requestMachine).describe(machineOffer(true)),
+	define("list_tasks", nil, listTasks),
+	define("list_epics", nil, listEpics),
+	define("ask_person", []string{"implementer", "investigator", "conductor"}, askPerson),
+	define("emit_event", nil, emitEvent).limit(eventsPerRun),
+	define("list_repositories", nil, listRepositories),
+	define("request_repository", nil, requestRepository).limit(requestsPerRun),
+	define("create_task", creators, createTask).limit(createsPerRun),
+	define("search_memory", nil, searchMemory).before(embedQuery),
+	define("get_memory", nil, getMemory),
+	define("remember", nil, remember).limit(remembersPerRun),
+	define("run_diff", nil, runDiff),
+	define("findings", conductors, findings),
+	define("pull_requests", conductors, pullRequests),
+	define("start_phase", conductors, startPhase),
+	define("steer", conductors, steer),
+	define("restart_run", conductors, restartRun),
+	define("decide", conductors, decide),
+	define("dismiss_finding", conductors, dismissFinding),
+	define("decide_escalation", conductors, decideEscalation),
+	define("update_task", conductors, updateTask),
+	around(define("reply_on_pull_request", prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
+	define("publish", conductors, publish),
 }
 
 // ---- list_tasks --------------------------------------------------------------
 
 type listTasksIn struct {
-	Text      string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
-	Peers     bool   `json:"peers,omitempty" jsonschema:"your peers instead: the other tasks on your epic, each with its phase, live or parked, branch and head, files changed, its agent's last words and the messages it has waiting for you; your own task is marked self"`
-	Startable bool   `json:"startable,omitempty" jsonschema:"only tasks not started with nothing unmerged in front of them"`
-	Archived  bool   `json:"archived,omitempty" jsonschema:"include archived tasks, which are left out otherwise; each is marked archived"`
-	Closed    bool   `json:"closed,omitempty" jsonschema:"only tasks a person closed (won't do, duplicate, can't reproduce)"`
+	Text      string `json:"text,omitempty"`
+	Peers     bool   `json:"peers,omitempty"`
+	Startable bool   `json:"startable,omitempty"`
+	Archived  bool   `json:"archived,omitempty"`
+	Closed    bool   `json:"closed,omitempty"`
 }
 
 type taskOut struct {
@@ -171,7 +95,7 @@ type listTasksOut struct {
 func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (any, error) {
 	if in.Peers {
 		if strings.TrimSpace(in.Text) != "" || in.Startable || in.Archived || in.Closed {
-			return nil, refuse("peers lists your peers whole: leave text, startable, archived and closed out")
+			return nil, refuseText(rPeersListsYourPeersWholeLeave)
 		}
 		return listPeers(ctx, tx, c)
 	}
@@ -244,13 +168,13 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (lis
 var relationWriters = []string{delivery.RoleConductor, "investigator"}
 
 type createTaskIn struct {
-	Title              string   `json:"title" jsonschema:"what should change, in one line"`
-	Goal               string   `json:"goal" jsonschema:"required: why it matters, what should change, and any detail another agent or a person needs; see the tool's description for the minimum"`
-	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
-	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
-	BlockedBy          []string `json:"blockedBy,omitempty" jsonschema:"conductor, investigator: task keys (CP-41) the new task can't start before they are merged"`
-	Blocks             []string `json:"blocks,omitempty" jsonschema:"conductor, investigator: task keys that can't start before the new task is merged"`
-	Related            []string `json:"related,omitempty" jsonschema:"conductor, investigator: task keys related to it, gating nothing"`
+	Title              string   `json:"title"`
+	Goal               string   `json:"goal"`
+	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty"`
+	Epic               string   `json:"epic,omitempty"`
+	BlockedBy          []string `json:"blockedBy,omitempty"`
+	Blocks             []string `json:"blocks,omitempty"`
+	Related            []string `json:"related,omitempty"`
 }
 
 type createTaskOut struct {
@@ -300,16 +224,15 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	title := strings.TrimSpace(in.Title)
 	switch {
 	case title == "":
-		return createTaskOut{}, refuse("a title is required")
+		return createTaskOut{}, refuseText(rTitleRequired)
 	case utf16Len(strings.TrimFunc(in.Goal, isJSSpace)) < GoalMin:
-		return createTaskOut{}, refuse("a task needs a goal of at least %d characters: say why it matters and what should "+
-			"change, so a person can decide on it without asking you", GoalMin)
+		return createTaskOut{}, refuse(rTaskNeedsGoalAtLeastCharacters, GoalMin)
 	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
-		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
+		return createTaskOut{}, refuse(rTooLongTitleAtMost500, GoalMax)
 	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:
-		return createTaskOut{}, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+		return createTaskOut{}, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	case len(in.BlockedBy)+len(in.Blocks)+len(in.Related) > 0 && !slices.Contains(relationWriters, c.Role):
-		return createTaskOut{}, refuse("a %s can't relate tasks: say what this waits on in the goal, and a person or the conductor relates them", c.Role)
+		return createTaskOut{}, refuse(rCanTRelateTasksSayWhat, c.Role)
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {
@@ -318,7 +241,7 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 			return createTaskOut{}, err
 		}
 		if id == "" {
-			return createTaskOut{}, refuse("no epic called %q in this project (list_tasks shows them)", e)
+			return createTaskOut{}, refuse(rNoEpicCalledInThisProject, e)
 		}
 		epicID = &id
 	}
@@ -366,11 +289,11 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 				return createTaskOut{}, err
 			}
 			if !ok {
-				return createTaskOut{}, refuse("%s: no task %s in this organisation; nothing was created", side.name, k)
+				return createTaskOut{}, refuse(rNoTaskInThisOrganisationNothing, side.name, k)
 			}
 			if err := delivery.AddRelationTx(ctx, tx, c.Org, delivery.Edge{Here: here, Other: other, Side: side.name, RunID: c.RunID}); err != nil {
 				if r, ok := err.(delivery.RelationRefusal); ok {
-					return createTaskOut{}, refuse("%s %s: %s; nothing was created", strings.ReplaceAll(side.name, "_", " "), k, r.Msg)
+					return createTaskOut{}, refuse(rNothingWasCreated, strings.ReplaceAll(side.name, "_", " "), k, r.Msg)
 				}
 				return createTaskOut{}, err
 			}
@@ -414,33 +337,25 @@ func listEpics(ctx context.Context, tx pgx.Tx, c Caller, _ listEpicsIn) ([]epicO
 
 // ---- ask_person -------------------------------------------------------------
 
-// askDescription is how ask_person reads to a model, in tasks and sessions.
-const askDescription = "Ask a person for decisions only a person can make — the task is ambiguous in a way that " +
-	"changes what you build, or two reasonable readings conflict. Do not ask about anything you can decide or find out " +
-	"yourself. When you have several such decisions, ask them together in one call (questions, up to 4) rather than " +
-	"one at a time. Give each a short header and, when there are sensible options, choices with a one-line description " +
-	"of why; mark the one you would pick recommended. Never add an \"other\" choice: dude always lets the person answer " +
-	"in their own words. One question alone may be asked as question and choices."
-
 // askItemIn is one question of ask_person's questions.
 type askItemIn struct {
-	Header   string        `json:"header" jsonschema:"a few words naming it, shown as its tab (at most 24 characters), like Retry scope"`
-	Question string        `json:"question" jsonschema:"the question, with enough context to answer it (at most 4000 characters)"`
-	Choices  []askChoiceIn `json:"choices,omitempty" jsonschema:"0 to 6 answers to offer, when there are sensible options; never an other or something-else choice: dude adds one"`
-	Multiple bool          `json:"multiple,omitempty" jsonschema:"the person may pick several choices (default one)"`
+	Header   string        `json:"header"`
+	Question string        `json:"question"`
+	Choices  []askChoiceIn `json:"choices,omitempty"`
+	Multiple bool          `json:"multiple,omitempty"`
 }
 
 type askChoiceIn struct {
-	Label       string `json:"label" jsonschema:"the answer, short (at most 120 characters)"`
-	Description string `json:"description,omitempty" jsonschema:"one line on what it means or why (at most 300 characters)"`
-	Recommended bool   `json:"recommended,omitempty" jsonschema:"the one you would pick, shown as your suggestion; at most one per question"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 type askIn struct {
-	Question  string      `json:"question,omitempty" jsonschema:"one question, with enough context to answer it; or use questions instead"`
-	Choices   []string    `json:"choices,omitempty" jsonschema:"with question: answers to offer, when there are some"`
-	Questions []askItemIn `json:"questions,omitempty" jsonschema:"1 to 4 questions asked together, each with a header and its own choices; the person answers them all at once"`
-	Actions   []string    `json:"actions,omitempty" jsonschema:"a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it, except a waiver or an acceptance of a failed test, which needs the person's own words"`
+	Question  string      `json:"question,omitempty"`
+	Choices   []string    `json:"choices,omitempty"`
+	Questions []askItemIn `json:"questions,omitempty"`
+	Actions   []string    `json:"actions,omitempty"`
 }
 
 type askOut struct {
@@ -454,10 +369,10 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 	var items []delivery.QuestionItem
 	switch {
 	case strings.TrimSpace(question) != "" && len(questions) > 0:
-		return nil, refuse("ask with question or with questions, not both")
+		return nil, refuseText(rAskWithQuestionOrWithQuestions)
 	case len(questions) > 0:
 		if len(choices) > 0 {
-			return nil, refuse("with questions, each question has its own choices")
+			return nil, refuseText(rWithQuestionsEachQuestionHasIts)
 		}
 		for _, q := range questions {
 			item := delivery.QuestionItem{Header: q.Header, Question: q.Question, Multiple: q.Multiple}
@@ -467,7 +382,7 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 			items = append(items, item)
 		}
 	case strings.TrimSpace(question) == "":
-		return nil, refuse("a question is required: question, or questions (1 to %d)", delivery.MaxQuestionItems)
+		return nil, refuse(rQuestionRequiredQuestionOrQuestions1, delivery.MaxQuestionItems)
 	default:
 		items = []delivery.QuestionItem{delivery.SingleItem(question, choices)}
 	}
@@ -484,14 +399,14 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 		return askOut{}, err
 	}
 	if len(in.Actions) > 0 && len(items) > 1 {
-		return askOut{}, refuse("actions go with one question (question and choices), about an escalation")
+		return askOut{}, refuseText(rActionsGoWithOneQuestionQuestion)
 	}
 	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
 	if err != nil {
 		return askOut{}, err
 	}
 	if open {
-		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
+		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
 	// A conductor's question while its task's escalation waits on a person
 	// is that escalation's question.
@@ -501,7 +416,7 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 			return askOut{}, err
 		}
 	} else if len(in.Actions) > 0 {
-		return askOut{}, refuse("actions are a conductor's, for a question about an escalation")
+		return askOut{}, refuseText(rActionsAreConductorForQuestionAbout)
 	}
 	id, err := delivery.AskItemsTx(ctx, tx, c.run(), items)
 	if err != nil {
@@ -513,19 +428,24 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 			id, escalation, acts); err != nil {
 			return askOut{}, err
 		}
-		return askOut{QuestionID: id, Next: "End your turn now. The owner picking a choice decides the escalation, as the " +
-			"banner does; an answer in their own words is your next message, and lets you decide it with decide_escalation."}, nil
+		return askOut{QuestionID: id, Next: askNext(true)}, nil
 	}
-	return askOut{QuestionID: id, Next: "End your turn now. The person's answer will be your next message."}, nil
+	return askOut{QuestionID: id, Next: askNext(false)}, nil
+}
+
+// askNext is what ask_person tells the agent to do next; escalation, for a
+// conductor's question about its task's escalation.
+func askNext(escalation bool) string {
+	return askResult.Render(struct{ Escalation bool }{escalation})
 }
 
 // ---- emit_event -------------------------------------------------------------
 
 type emitIn struct {
-	Type string `json:"type" jsonschema:"what kind of event: lowercase words and dots, like progress or tests.finished"`
+	Type string `json:"type"`
 	// Any JSON value. (Not json.RawMessage: its schema reads as an array of
 	// bytes, and a model follows the schema.)
-	Data any `json:"data,omitempty" jsonschema:"anything to go with it: an object like {\"done\": 3, \"of\": 10} (at most 16 KB)"`
+	Data any `json:"data,omitempty"`
 }
 
 type emitOut struct {
@@ -543,7 +463,7 @@ var eventType = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){0,3}$`)
 // handles its type.
 func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, error) {
 	if !eventType.MatchString(in.Type) || len(in.Type) > 64 {
-		return emitOut{}, refuse("type %q: lowercase words joined by dots, like progress or tests.finished", in.Type)
+		return emitOut{}, refuse(rTypeLowercaseWordsJoinedByDots, in.Type)
 	}
 	data := in.Data
 	if data == nil {
@@ -559,7 +479,7 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 		}
 	}
 	if raw, _ := json.Marshal(data); len(raw) > 16<<10 {
-		return emitOut{}, refuse("data too large: at most 16 KB")
+		return emitOut{}, refuseText(rDataTooLargeAtMost16)
 	}
 	typ := CustomPrefix + in.Type
 	_, err := ledger.Append(ctx, tx, c.event(typ, map[string]any{"type": in.Type, "data": data}))
@@ -569,10 +489,10 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 // ---- request_repository ---------------------------------------------------
 
 type requestRepoIn struct {
-	Repository string `json:"repository" jsonschema:"the repository's name, or owner/name, as the organization knows it"`
-	Write      bool   `json:"write,omitempty" jsonschema:"you need to change it (it gets its own pull request); otherwise read only"`
-	Reason     string `json:"reason" jsonschema:"why this work needs it, for the person deciding"`
-	Wait       bool   `json:"wait,omitempty" jsonschema:"you cannot go on without it: end your turn after asking, and you are resumed when a person decides (otherwise carry on; a later phase gets it if approved)"`
+	Repository string `json:"repository"`
+	Write      bool   `json:"write,omitempty"`
+	Reason     string `json:"reason"`
+	Wait       bool   `json:"wait,omitempty"`
 }
 
 type requestRepoOut struct {
@@ -590,11 +510,11 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	reason := strings.TrimSpace(in.Reason)
 	switch {
 	case name == "" || reason == "":
-		return requestRepoOut{}, refuse("name the repository and say why you need it")
+		return requestRepoOut{}, refuseText(rNameRepositoryAndSayWhyYou)
 	case len(reason) > 2000:
-		return requestRepoOut{}, refuse("reason too long: at most 2000 characters")
+		return requestRepoOut{}, refuseText(rReasonTooLongAtMost2000)
 	case in.Write && !slices.Contains(writers, c.Role):
-		return requestRepoOut{}, refuse("a %s may ask to read a repository, not to change it", c.Role)
+		return requestRepoOut{}, refuse(rMayAskReadRepositoryNotChange, c.Role)
 	}
 	// The project's repositories, by name or owner/name (the end of its URL).
 	var repo struct{ ID, Name string }
@@ -603,7 +523,7 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		  AND (lower(name) = lower($2) OR lower(regexp_replace(url, '(\.git)?/*$', '')) LIKE '%/' || lower($3) ESCAPE '\')
 		LIMIT 1`, c.ProjectID, name, db.LikeLiteral(name)).Scan(&repo.ID, &repo.Name)
 	if err == pgx.ErrNoRows {
-		return requestRepoOut{}, refuse("no repository %q in this project (a person can add one to the project)", name)
+		return requestRepoOut{}, refuse(rNoRepositoryInThisProjectPerson, name)
 	}
 	if err != nil {
 		return requestRepoOut{}, err
@@ -618,9 +538,9 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	}
 	switch {
 	case clash > 0:
-		return requestRepoOut{}, refuse("%s is already checked out for this work", repo.Name)
+		return requestRepoOut{}, refuse(rAlreadyCheckedOutForThisWork, repo.Name)
 	case pending >= maxPendingRequests:
-		return requestRepoOut{}, refuse("you have %d requests waiting for a person; wait for them first", pending)
+		return requestRepoOut{}, refuse(rYouHaveRequestsWaitingForPerson, pending)
 	}
 	access := "read"
 	if in.Write {
@@ -634,20 +554,22 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		return requestRepoOut{}, err
 	}
 	if tag.RowsAffected() == 0 {
-		return requestRepoOut{}, refuse("you already asked for %s; a person has not decided yet", repo.Name)
+		return requestRepoOut{}, refuse(rYouAlreadyAskedForPersonHas, repo.Name)
 	}
 	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvRepositoryRequested,
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
 		return requestRepoOut{}, err
 	}
-	next := "Do not wait or check for it: a person may take a while. Carry on with what you can without " +
-		repo.Name + ". If they approve while you work, you will be paused and resumed with it checked out, and " +
-		"told where, in a message; if not, a message will say so."
-	if in.Wait {
-		next = "End your turn now. When a person decides, you are resumed: with " + repo.Name +
-			" checked out, and told where, or told it was declined."
-	}
-	return requestRepoOut{RequestID: id, Status: "pending", Next: next}, nil
+	return requestRepoOut{RequestID: id, Status: "pending", Next: requestRepositoryNext(repo.Name, in.Wait)}, nil
+}
+
+// requestRepositoryNext is what request_repository tells the agent to do
+// next about repo; wait, when it asked to wait for the decision.
+func requestRepositoryNext(repo string, wait bool) string {
+	return requestRepositoryResult.Render(struct {
+		Repo string
+		Wait bool
+	}{repo, wait})
 }
 
 // ---- list_repositories ----------------------------------------------------

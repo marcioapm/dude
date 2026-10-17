@@ -190,8 +190,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if added, ok := bySpec[name]; ok {
 			in.AddRepositories = append(in.AddRepositories, added)
 			// Written before lux clones it, so hedged: settleClone tells a failure.
-			told = append(told, fmt.Sprintf("A member linked %s/%s; it is checked out at %s (read only) unless dude tells you its clone failed.",
-				repo.Key, repo.Name, added.Path))
+			told = append(told, linkedTold(repo.Key, repo.Name, added.Path))
 		}
 	}
 	if len(in.AddRepositories) > 0 {
@@ -205,3 +204,11 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 	}
 	return nil
 }
+
+// linkedTold is what a session's agent is told of a repository a member
+// linked, checked out at path.
+func linkedTold(key, name, path string) string {
+	return linked.Render(struct{ Key, Name, Path string }{key, name, path})
+}
+
+var linked = delivery.MustText("notices/linked")

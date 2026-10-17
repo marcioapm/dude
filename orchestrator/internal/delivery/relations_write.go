@@ -96,7 +96,7 @@ func lockRelations(ctx context.Context, tx pgx.Tx, org string) error {
 // names its own task, exists already, or for blocks would close a loop.
 func AddRelationTx(ctx context.Context, tx pgx.Tx, org string, e Edge) error {
 	if e.Here.ID == e.Other.ID {
-		return RelationRefusal{Code: "self", Msg: "a task can't be related to itself"}
+		return RelationRefusal{Code: "self", Msg: mTaskCanTBeRelatedItself}
 	}
 	from, to, kind := e.ends()
 	if err := lockRelations(ctx, tx, org); err != nil {
@@ -108,7 +108,7 @@ func AddRelationTx(ctx context.Context, tx pgx.Tx, org string, e Edge) error {
 		return err
 	}
 	if exists {
-		return RelationRefusal{Code: "duplicate", Msg: fmt.Sprintf("%s and %s are already related", e.Here.Key, e.Other.Key)}
+		return RelationRefusal{Code: "duplicate", Msg: fmt.Sprintf(mAndAreAlreadyRelated, e.Here.Key, e.Other.Key)}
 	}
 	if kind == "blocks" {
 		var loop []string
@@ -117,7 +117,7 @@ func AddRelationTx(ctx context.Context, tx pgx.Tx, org string, e Edge) error {
 		}
 		if loop != nil {
 			return RelationRefusal{Code: "cycle", Loop: loop,
-				Msg: fmt.Sprintf("that would make a loop: %s. A task can't wait on itself", strings.Join(loop, " → "))}
+				Msg: fmt.Sprintf(mThatWouldMakeLoopTaskCan, strings.Join(loop, " → "))}
 		}
 	}
 	why := strings.TrimSpace(e.Why)
@@ -174,9 +174,9 @@ func RemoveAgentRelationTx(ctx context.Context, tx pgx.Tx, org string, e Edge, o
 	}
 	switch {
 	case ours == nil:
-		return RelationRefusal{Code: "not_found", Msg: fmt.Sprintf("%s has no %s relation with %s", e.Here.Key, strings.ReplaceAll(e.Side, "_", " "), e.Other.Key)}
+		return RelationRefusal{Code: "not_found", Msg: fmt.Sprintf(mHasNoRelationWith, e.Here.Key, strings.ReplaceAll(e.Side, "_", " "), e.Other.Key)}
 	case !*ours:
-		return RelationRefusal{Code: "not_ours", Msg: fmt.Sprintf("you can remove only a relation this task's agents added; ask %s, its owner", ownerName)}
+		return RelationRefusal{Code: "not_ours", Msg: fmt.Sprintf(mYouCanRemoveOnlyRelationThis, ownerName)}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM task_relations WHERE from_task_id = $1 AND to_task_id = $2 AND kind = $3::task_relation_kind`,
 		from.ID, to.ID, kind); err != nil {
@@ -346,31 +346,17 @@ func RelationLine(r *TaskRelationsOut) string {
 	if r == nil {
 		return ""
 	}
-	var parts []string
-	var open []string
+	var open, blocks []string
 	for _, b := range r.BlockedBy {
 		if !b.Merged {
 			open = append(open, fmt.Sprintf("%s (%s)", b.Key, b.Status))
 		}
 	}
-	if len(open) > 0 {
-		parts = append(parts, "blocked by "+strings.Join(open, ", "))
+	for _, b := range r.Blocks {
+		blocks = append(blocks, b.Key)
 	}
-	if len(r.Blocks) > 0 {
-		keys := make([]string, len(r.Blocks))
-		for i, b := range r.Blocks {
-			keys[i] = b.Key
-		}
-		parts = append(parts, "blocks "+strings.Join(keys, ", "))
-	}
-	if len(r.Related) > 0 {
-		parts = append(parts, "related "+strings.Join(r.Related, ", "))
-	}
-	if r.DuplicateOf != "" {
-		parts = append(parts, "duplicate of "+r.DuplicateOf)
-	}
-	if len(r.DuplicatedBy) > 0 {
-		parts = append(parts, "duplicated by "+strings.Join(r.DuplicatedBy, ", "))
-	}
-	return strings.Join(parts, " · ")
+	return render(relationLineTmpl, struct {
+		Open, Blocks, Related, DuplicatedBy []string
+		DuplicateOf                         string
+	}{open, blocks, r.Related, r.DuplicatedBy, r.DuplicateOf})
 }

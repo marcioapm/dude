@@ -108,7 +108,7 @@ func lockTask(ctx context.Context, tx pgx.Tx, taskID string) (projectID, status 
 	err = tx.QueryRow(ctx, `SELECT project_id, status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).
 		Scan(&projectID, &status)
 	if db.IsNotFound(err) {
-		return "", "", escalationErr("not_found", "task %s not found", taskID)
+		return "", "", escalationErr("not_found", mTaskNotFound, taskID)
 	}
 	return projectID, status, err
 }
@@ -125,7 +125,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	if d == nil || d.TaskStatus != "awaiting_input" || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
-		return escalationErr("conflict", "delivery of task %s is not waiting for a decision", taskID)
+		return escalationErr("conflict", mDeliveryTaskNotWaitingForDecision, taskID)
 	}
 	st := d.State
 	e := st.Escalation
@@ -140,7 +140,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		}
 	}
 	if !slices.Contains(e.Actions(), in.Action) {
-		return escalationErr("bad_request", "%q is not a way to go on after %s; one of %s",
+		return escalationErr("bad_request", mNotWayGoOnAfterOne,
 			in.Action, e.Reason, strings.Join(e.Actions(), ", "))
 	}
 	if in.Authorize != nil {
@@ -153,7 +153,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		// Shipping past a criterion nobody saw work is on the record, with
 		// why.
 		if note == "" {
-			return escalationErr("bad_request", "%s needs a note: say why the task may ship with %s", in.Action,
+			return escalationErr("bad_request", mNeedsNoteSayWhyTaskMay, in.Action,
 				map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
 		}
 		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
@@ -253,16 +253,26 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.Conductor != "":
 		return nil
 	case in.QuestionID != "":
-		line = fmt.Sprintf("The owner's answer to your question %s decided the escalation: %s. The delivery goes on.",
-			in.QuestionID, in.Action)
+		line = escalationAnsweredLine(in.QuestionID, in.Action)
 	case len(closed) > 0:
-		line = fmt.Sprintf("The person decided the escalation on the banner: %s. Your question %s about it is closed. "+
-			"The delivery goes on.", in.Action, closed[0].ID)
+		line = escalationOnBannerLine(in.Action, closed[0].ID)
 	default:
 		return nil
 	}
 	_, err = RecordWakeTx(ctx, tx, org, taskID, "escalation", key+":decided", line)
 	return err
+}
+
+// escalationAnsweredLine tells the conductor the owner's answer to its
+// question decided the escalation.
+func escalationAnsweredLine(questionID, action string) string {
+	return render(escalationAnsweredTmpl, struct{ QuestionID, Action string }{questionID, action})
+}
+
+// escalationOnBannerLine tells the conductor the person decided the
+// escalation on the banner, closing its question about it.
+func escalationOnBannerLine(action, questionID string) string {
+	return render(escalationOnBannerTmpl, struct{ QuestionID, Action string }{questionID, action})
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
@@ -326,11 +336,7 @@ func waitsAtDecide(d *Delivery) bool {
 // carries: what the conductor proposed, what the owner said, and the
 // conductor's own word when it decided.
 func escalationNote(proposal, answer, conductorNote string) string {
-	parts := []string{"The conductor proposed: " + clip(oneLine(proposal), 1500), "The owner answered: " + clip(oneLine(answer), 1000)}
-	if n := strings.TrimSpace(conductorNote); n != "" {
-		parts = append(parts, "The conductor decided: "+clip(oneLine(n), 1000))
-	}
-	return strings.Join(parts, "\n")
+	return render(escalationNoteTmpl, struct{ Proposal, Answer, Decided string }{proposal, answer, strings.TrimSpace(conductorNote)})
 }
 
 // EscalationQuestion is what ask_person records for a conductor while its
@@ -348,37 +354,32 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 		return "", err
 	}
 	if d != nil && d.State.conducted() && d.Live() && d.State.Escalation != nil && d.State.Escalation.Decided != nil {
-		return "", refusef("the escalation (%s) was just decided %s: %s. Ask nothing about it; the delivery carries it "+
-			"out, and you are woken at the next decision", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
+		return "", refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
 			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
 	}
 	if !waitsAtDecide(d) || !d.State.conducted() {
 		if len(actions) > 0 {
-			return "", refusef("actions are for a question about an escalation waiting on a person; there is none")
+			return "", refuseText(rActionsAreForQuestionAboutEscalation)
 		}
 		return "", nil
 	}
 	offered := d.State.Escalation.Actions()
 	if len(items) != 1 {
-		return "", refusef("the task's escalation waits on a person: ask its one question first (question, choices and "+
-			"actions, each one of %s), not %d questions; ask the rest once it is decided", listOr(offered), len(items))
+		return "", refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
 	}
 	choices := items[0].Labels()
 	if len(choices) == 0 || len(actions) != len(choices) {
-		return "", refusef("the task's escalation waits on a person: this question is its question. Offer choices, and "+
-			"actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the "+
-			"escalation, as the banner does, except a waiver or an acceptance of a failed test, which needs the person's own words",
+		return "", refusef(rTaskEscalationWaitsOnPersonThis,
 			listOr(offered))
 	}
 	reason := d.State.Escalation.Reason
 	for _, a := range actions {
 		if !slices.Contains(offered, a) {
-			return "", refusef("%q is not one of this escalation's actions: %s", a, listOr(offered))
+			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
 		// A pick carries no reason of the person's.
 		if NeedsReason(reason, a) {
-			return "", refusef("%q is not a choice: shipping past %s needs the person's own reason. They %s from the "+
-				"banner, or answer your question in their own words", a, strings.ReplaceAll(reason, "_", " "), a)
+			return "", refusef(rNotChoiceShippingPastNeedsPerson, a, strings.ReplaceAll(reason, "_", " "), a)
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
@@ -386,7 +387,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 	// and a click on it would take the first's action.
 	for i, c := range choices {
 		if j := choiceOf(choices[:i], c); j >= 0 {
-			return "", refusef("choices %q and %q read as the same answer (case and spaces aside): make each one distinct",
+			return "", refusef(rChoicesAndReadAsSameAnswer,
 				choices[j], c)
 		}
 	}
@@ -394,15 +395,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 }
 
 // decidedBy says who took a decision, for a refusal.
-func decidedBy(h *HumanDecision) string {
-	switch {
-	case h.Conductor != "":
-		return "by the conductor " + h.Conductor + " (decide_escalation)"
-	case h.QuestionID != "":
-		return "by the owner's answer to question " + h.QuestionID
-	}
-	return "by a person on the banner"
-}
+func decidedBy(h *HumanDecision) string { return render(decidedByTmpl, h) }
 
 // ConductDecideEscalation is decide_escalation: the conductor decides the
 // escalation the delivery waits on, only on the task's owner's free answer
@@ -418,8 +411,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	const banner = "a person decides it on the banner, or by answering your question about it (ask_person, the " +
 		"escalation's actions as choices)"
 	if !waitsAtDecide(d) || !d.State.conducted() {
-		return nil, refusef("no escalation waits on a decision now: decide_escalation is only for one the owner handed you "+
-			"with a free answer; %s", banner)
+		return nil, refusef(rNoEscalationWaitsOnDecisionNow, banner)
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
 	var qID, prompt, answer, by, asker string
@@ -429,8 +421,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		FROM questions q WHERE q.task_id = $1 AND q.escalation = $2 AND q.status = 'answered'
 		ORDER BY q.answered_at DESC, q.id DESC LIMIT 1`, ref.TaskID, key).Scan(&qID, &prompt, &answer, &by, &asker, &rawOpts, &rawAnswers)
 	if db.IsNotFound(err) {
-		return nil, refusef("the owner has not answered your question about this escalation: only a person decides it. "+
-			"Ask them, or end your turn; %s", banner)
+		return nil, refusef(rOwnerHasNotAnsweredYourQuestion, banner)
 	}
 	if err != nil {
 		return nil, err
@@ -438,19 +429,17 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	// The answer handed the escalation to the conductor that asked: one
 	// that took over since has not been heard by the owner.
 	if asker != ref.RunID {
-		return nil, refusef("the owner's answer (question %s) was to an earlier conductor's question, not yours: ask them "+
-			"again yourself (ask_person, the escalation's actions as choices); %s", qID, banner)
+		return nil, refusef(rOwnerAnswerQuestionWasEarlierConductor, qID, banner)
 	}
 	owner, err := TaskOwner(ctx, tx, ref.TaskID)
 	if err != nil {
 		return nil, err
 	}
 	if owner != "" && by != owner {
-		return nil, refusef("the answer to your question %s is not the task's owner's: only the owner hands you an "+
-			"escalation; %s", qID, banner)
+		return nil, refusef(rAnswerYourQuestionNotTaskOwner, qID, banner)
 	}
 	if !slices.Contains(d.State.Escalation.Actions(), action) {
-		return nil, refusef("%q is not a way to go on after %s; one of %s", action, d.State.Escalation.Reason,
+		return nil, refusef(rNotWayGoOnAfterOne, action, d.State.Escalation.Reason,
 			listOr(d.State.Escalation.Actions()))
 	}
 	if NeedsReason(d.State.Escalation.Reason, action) {
@@ -467,8 +456,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			words = items[0].Text
 		}
 		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
-			return nil, refusef("the owner's answer to your question %s is one of its choices, not their reason: to %s, "+
-				"they say why in their own words, or decide on the banner", qID, action)
+			return nil, refusef(rOwnerAnswerYourQuestionOneIts, qID, action)
 		}
 		if owner == "" {
 			var admin bool
@@ -477,7 +465,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 				return nil, err
 			}
 			if !admin {
-				return nil, refusef("only the task's owner or an organisation admin can %s this; %s", action, banner)
+				return nil, refusef(rOnlyTaskOwnerOrOrganisationAdmin, action, banner)
 			}
 		}
 	}
@@ -490,9 +478,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "questionId": qID,
-		"next": "The delivery carries it out now, as the banner's would. You are woken at the next decision."}, nil
+	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext}, nil
 }
+
+// escalationDecidedNext is what decide_escalation answers once it decided.
+var escalationDecidedNext = render(mustTemplate("results/escalation-decided"), nil)
 
 // TaskOwner is the task's owner: its first active person, "" for none.
 func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
@@ -535,7 +525,7 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 		return err
 	}
 	if int(tag.RowsAffected()) != len(runIDs) {
-		return escalationErr("not_kept", "what stopped is no longer kept to resume; try again or start over")
+		return escalationErr("not_kept", "%s", mWhatStoppedNoLongerKeptResume)
 	}
 	if note == "" {
 		return nil
@@ -553,13 +543,12 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 func changedTask(title, goal string, rawCriteria []byte) string {
 	var criteria []string
 	_ = json.Unmarshal(rawCriteria, &criteria)
-	// A resume carries no images, so the changed text names them only.
-	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title,
-		strings.TrimSpace(ImagesAsText(goal)))
+	list := ""
 	if len(criteria) > 0 {
-		text += "\n\nAcceptance criteria:\n" + CriteriaList(CriteriaImagesAsText(criteria))
+		list = CriteriaList(CriteriaImagesAsText(criteria))
 	}
-	return text
+	// A resume carries no images, so the changed text names them only.
+	return render(taskChangedTmpl, struct{ Title, Goal, Criteria string }{title, strings.TrimSpace(ImagesAsText(goal)), list})
 }
 
 // ReleaseKeptTx lets a task's stopped Runs go — a retry or a start over
