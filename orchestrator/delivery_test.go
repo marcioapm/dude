@@ -4205,7 +4205,9 @@ func TestAPermissionGitHubWillNotShareIsNotPermitted(t *testing.T) {
 }
 
 // Feedback that arrives with falling behind is fixed even when GitHub
-// fails the branch update; and the update is not made under a fix at work.
+// fails the branch update, and the update is asked for again, once, back
+// in review. That an update GitHub makes is never under a fix at work is
+// TestABranchIsNotUpdatedUnderTheFixItsOwnSyncStarted's.
 func TestAFailedBranchUpdateLosesNoFeedback(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
@@ -4216,9 +4218,12 @@ func TestAFailedBranchUpdateLosesNoFeedback(t *testing.T) {
 	w.gh.Set(func(s *fakegithub.Server) { s.UpdateDown = false })
 	w.until("the branch updated once back in review", func() bool {
 		w.sync()
-		return w.taskStatus(wi) == "review" && w.count(`SELECT count(*) FROM events WHERE task_id = $1
-			AND event_type = 'pull_request.action' AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL`, wi) == 1
+		return w.taskStatus(wi) == "review" && w.branchUpdates(wi) == 1
 	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'
+		AND pr_feedback <> '[]'::jsonb`, wi); n != 1 {
+		t.Errorf("%d fixes of the feedback completed", n)
+	}
 }
 
 // A stuck-CI signal that waited while a person decided is not acted on

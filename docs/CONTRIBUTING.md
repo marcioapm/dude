@@ -128,6 +128,21 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   a branch that does not exist — and the orchestrator fast-forwards the work
   item's branch to it through GitHub, never forcing. The next phase checks
   out that commit.
+- **A task branch only ever fast-forwards**, but for one case
+  (`internal/advance`: a phase's publish, a conductor's, and the promotion
+  of a pull request's checked candidate): a writer refused only because
+  its base was merged into the branch under it — dude's own update, a
+  person's **Update branch**, GitHub's — is merged in on GitHub
+  (`/merges`), and that merge is the next phase's start, or the pull
+  request's head. "Only merges" is read from GitHub's compares. Every commit on the
+  branch's first-parent line since the writer's start must be a
+  two-parent merge. The base must contain its second parent. It must be
+  GitHub's verified `web-flow` merge. Its changes must be exactly its
+  automatic merge's, with no extra edit. A manually resolved or unknown
+  merge is refused. Anything else under the writer is refused as before:
+  a person's commit, a rebase or a force-push. The PR
+  syncer asks for no automatic update in a sync that has just signalled
+  the workflow: fewer such merges, not none.
 - **Every Run is on a machine size.** The organisation's sizes
   (`machine_sizes`) are named by each role's settings and a project's
   previews; the spec carries the size as `resources` and its pool, by

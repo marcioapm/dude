@@ -401,6 +401,8 @@ export const EventTypes = {
   RepoMaterialized: "repo.materialized",
   RepoBranchCreated: "repo.branch_created",
   GitCommitCreated: "git.commit_created",
+  /** A phase Run is about to merge its commit into the task branch on GitHub. Payload: `{ repo, commit }`. */
+  GitMergeAttempted: "git.merge_attempted",
   GitPushCompleted: "git.push_completed",
 
   // Review
@@ -445,6 +447,12 @@ export const EventTypes = {
    * not_found, too_large, forbidden, refused, unavailable) and the HTTP status.
    */
   GitHubRead: "github.read",
+  /**
+   * dude is about to merge a checked fix into an open pull request's branch
+   * on GitHub, because GitHub merged the base into that branch while the fix
+   * was checked. Payload: `{ repo, branch, candidate, round, commit }`.
+   */
+  PullRequestFixMergeAttempted: "pull_request.fix_merge_attempted",
 
   // Agent sessions
   SessionStarted: "agent.session.started",

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/advance"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -1900,7 +1901,9 @@ const ReasonPullRequestMoved = "pull_request_moved"
 // promoteCandidate moves each pull request's branch to the candidate's
 // head, once its review and test passed (or a person settled the test):
 // a fast-forward from the head the fix started from, never a force. A
-// branch someone moved meanwhile is not overwritten: a person decides.
+// branch GitHub only merged the base into meanwhile gets the candidate
+// merged in on top, and that merge is the pull request's head. A branch
+// someone moved otherwise is not overwritten: a person decides.
 func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
@@ -1946,9 +1949,27 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 			repos = append(repos, repo)
 		}
 	}
+	bases, err := w.s.baseBranches(ctx, sc.OrganizationID, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	// The candidate's head, merged in by this promotion: adopted after a
+	// lost answer only when recorded before POST /merges was sent.
+	attempted := func(repo string) func() (bool, error) {
+		return func() (bool, error) { return w.s.fixMergeAttempted(ctx, sc.OrganizationID, st, repo, st.Heads[repo]) }
+	}
 	for _, repo := range repos {
-		if at[repo] != c.From[repo] {
-			return w.candidateRefused(ctx, sc, st, repo, at[repo], moved)
+		if at[repo] == c.From[repo] {
+			continue
+		}
+		// Moved only by GitHub's merges of the base: the candidate is
+		// merged in on top (advance.Existing). Anything else a person decides.
+		v, _, err := advance.Admit(ctx, gh, slugs[repo], bases[repo], c.From[repo], at[repo], st.Heads[repo], attempted(repo))
+		if err != nil {
+			return workflow.Result{}, forgeWait(err)
+		}
+		if v == advance.Refuse {
+			return w.candidateRefused(ctx, sc, st, repo, at[repo], moved, nil)
 		}
 	}
 	for _, repo := range repos {
@@ -1975,13 +1996,22 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 				}
 			}
 		} else {
-			err = gh.FastForwardExisting(ctx, slugs[repo], st.Branch, to)
+			var adv advance.Result
+			adv, err = advance.Existing(ctx, gh, slugs[repo], st.Branch, bases[repo], c.From[repo], to, attempted(repo), func() error {
+				return w.s.fixMergeAttemptTx(ctx, sc.OrganizationID, st, repo, to)
+			})
+			if err == nil {
+				to = adv.Head
+			}
 		}
 		var fe *forge.Error
-		if errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
-			// Someone pushed, created or deleted the branch between the read and the move.
+		var conflict *advance.ErrBaseMergeConflict
+		var unsafe *advance.ErrUnsafeMerge
+		if errors.As(err, &conflict) || errors.As(err, &unsafe) || errors.As(err, &fe) && (fe.Status == 422 || fe.NotFound()) {
+			// Someone pushed, created or deleted the branch between the read
+			// and the move, or the candidate would not merge over the base.
 			found, _ := gh.BranchSHA(ctx, slugs[repo], st.Branch)
-			return w.candidateRefused(ctx, sc, st, repo, found, moved)
+			return w.candidateRefused(ctx, sc, st, repo, found, moved, err)
 		}
 		if err != nil {
 			return workflow.Result{}, forgeWait(err)
@@ -1991,6 +2021,8 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
 	}
+	// A merge of the candidate over the base is the head from here on.
+	maps.Copy(st.Heads, moved)
 	for repo := range moved {
 		// Best effort: on the pull request's line now, it is clutter.
 		_ = gh.DeleteBranch(ctx, slugs[repo], c.Branch)
@@ -2016,11 +2048,15 @@ const forgeWaitMin = 5 * time.Second
 // candidate's head): recorded, their reviewers asked again and their
 // descriptions brought up to them. The delivery goes on from what each
 // branch holds; the candidate's resolutions hold only in the moved ones
-// (CandidateMovedTx), and are reopened in the rest.
-func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string, moved map[string]string) (workflow.Result, error) {
+// (CandidateMovedTx), and are reopened in the rest. cause, when set, is
+// GitHub's refusal of the move or of merging the candidate in.
+func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, st *State, repo, found string, moved map[string]string, cause error) (workflow.Result, error) {
 	c := st.Candidate
 	detail := map[string]any{"repo": repo, "expected": c.From[repo], "found": found, "candidate": st.Heads[repo],
 		"branch": c.Branch}
+	if cause != nil {
+		detail["error"] = cause.Error()
+	}
 	if n, err := w.s.pullRequestNumber(ctx, sc.OrganizationID, st, repo); err != nil {
 		return workflow.Result{}, err
 	} else if n > 0 {

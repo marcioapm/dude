@@ -1040,6 +1040,36 @@ func (g *GitHub) Head(ctx context.Context, slug string, number int) (string, err
 	return p.Head.SHA, nil
 }
 
+// CommitProvenance is the identity GitHub verified for a commit.
+type CommitProvenance struct {
+	Login    string
+	Verified bool
+}
+
+// CommitProvenance reads the commit identity and signature verification GitHub
+// returned for sha. Web-flow is GitHub's identity for merges made through the
+// web/API merge flow.
+func (g *GitHub) CommitProvenance(ctx context.Context, slug, sha string) (CommitProvenance, error) {
+	var c struct {
+		Committer *struct {
+			Login string `json:"login"`
+		} `json:"committer"`
+		Commit struct {
+			Verification struct {
+				Verified bool `json:"verified"`
+			} `json:"verification"`
+		} `json:"commit"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s", slug, sha), nil, &c); err != nil {
+		return CommitProvenance{}, err
+	}
+	var login string
+	if c.Committer != nil {
+		login = c.Committer.Login
+	}
+	return CommitProvenance{Login: login, Verified: c.Commit.Verification.Verified}, nil
+}
+
 // CommitAuthor is who made a commit, by GitHub login when GitHub knows
 // the address, else by the name in the commit.
 func (g *GitHub) CommitAuthor(ctx context.Context, slug, sha string) (string, error) {
@@ -1167,13 +1197,37 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
-// MergeBase merges an exact base commit into the task branch without a PR.
+// MergeBase merges head, an exact commit, into branch on GitHub without a
+// pull request: the merge commit's first parent is branch's head, its
+// second head. "" with no error when branch already contains head (204);
+// GitHub refuses a conflict with 409.
 func (g *GitHub) MergeBase(ctx context.Context, slug, branch, head string) (string, error) {
+	m, err := g.MergeCommit(ctx, slug, branch, head)
+	return m.SHA, err
+}
+
+// Merged is a merge commit GitHub made, with its parents, first parent
+// first.
+type Merged struct {
+	SHA     string
+	Parents []string
+}
+
+// MergeCommit is MergeBase with the merge's parents, as GitHub answers
+// them: the first is the head branch was at when GitHub merged.
+func (g *GitHub) MergeCommit(ctx context.Context, slug, branch, head string) (Merged, error) {
 	var out struct {
-		SHA string `json:"sha"`
+		SHA     string `json:"sha"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
 	}
 	err := g.do(ctx, "POST", "/repos/"+slug+"/merges", map[string]string{"base": branch, "head": head}, &out)
-	return out.SHA, err
+	m := Merged{SHA: out.SHA}
+	for _, p := range out.Parents {
+		m.Parents = append(m.Parents, p.SHA)
+	}
+	return m, err
 }
 
 // ClosePullRequest closes a pull request without merging it. One already
@@ -1302,10 +1356,30 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 // commits head has that base lacks (AheadBy) and the reverse (BehindBy:
 // base is an ancestor of head only at 0), and each changed file's lines.
 type Comparison struct {
-	AheadBy  int            `json:"ahead_by"`
-	BehindBy int            `json:"behind_by"`
-	Files    []ComparedFile `json:"files"`
+	AheadBy   int            `json:"ahead_by"`
+	BehindBy  int            `json:"behind_by"`
+	Files     []ComparedFile `json:"files"`
+	MergeBase string         `json:"merge_base_commit"`
 }
+
+// CommitComparison is the ancestry-bearing form used by phase advancement.
+type CommitComparison struct {
+	Comparison
+	Commits      []ComparedCommit `json:"commits"`
+	TotalCommits int              `json:"total_commits"`
+}
+
+// ComparedCommit is one commit of a comparison, with its parents, first
+// parent first.
+type ComparedCommit struct {
+	SHA     string `json:"sha"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+// CompareCommitCap is the most commits GitHub's compare lists.
+const CompareCommitCap = 250
 
 // ComparedFile is one file of a Comparison; PreviousFilename is a rename's
 // or copy's other side.
@@ -1337,8 +1411,14 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 	return cmp, err
 }
 
-// FastForward moves branch to sha, creating it if it does not exist.
-//
+// CompareCommits returns the ancestry-bearing compare response for phase
+// advancement. Ordinary callers use Compare and do not materialize commits.
+func (g *GitHub) CompareCommits(ctx context.Context, slug, base, head string) (CommitComparison, error) {
+	var cmp CommitComparison
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s", slug, base, head), nil, &cmp)
+	return cmp, err
+}
+
 // Never forced: GitHub refuses the update unless sha descends from the
 // branch's current commit, so a person who pushed to the branch in the
 // meantime is never overwritten. That refusal is reported as an error.

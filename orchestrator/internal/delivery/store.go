@@ -53,6 +53,10 @@ const (
 	// review from whoever had reviewed an older head (rerequestReviews).
 	EvPullRequestReviewRerequested = "pull_request.review_rerequested"
 	EvGitCommitCreated             = "git.commit_created"
+	// A phase Run is about to ask GitHub to merge its commit into the task
+	// branch (POST /merges): what lets a retry adopt that merge as its own.
+	// On the Run; payload { repo, commit }.
+	EvGitMergeAttempted = "git.merge_attempted"
 	// An implementer on work to continue committed nothing: the goal was
 	// met already, and the work is reviewed on its unchanged head. On the Run.
 	EvNothingToAdd = "run.nothing_to_add"

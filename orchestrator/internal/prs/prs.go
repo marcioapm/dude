@@ -464,10 +464,16 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	// Behind and clean: brought up to date on GitHub, if the organization
 	// wants that — after the workflow has heard what this sync found, so a
-	// failure here loses nothing, and only while it waits on the pull
-	// request: a fix at work starts from the old head, and a merge commit
-	// under it would refuse its push.
-	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowStep == "awaitPullRequest" {
+	// failure here loses nothing. Not while it works on the pull request,
+	// as far as this sync can tell: workflowStep was read before the
+	// signal, and a sync that signalled may have started a fix from the
+	// old head. That only makes a merge under a writer rarer (another
+	// sync, a person's Update branch, GitHub's own still land one); what
+	// makes one harmless is the writer's publish merging itself in
+	// (advance.Branch), and promotion merging a checked candidate in over
+	// it (delivery promoteCandidate). Checking a candidate is never
+	// awaitPullRequest, so no update is asked for during it.
+	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowStep == "awaitPullRequest" && signal == nil {
 		s.updateBranch(ctx, org, gh, slug, pr, status.HeadSHA)
 	}
 	return nil

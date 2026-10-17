@@ -34,6 +34,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/advance"
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -95,6 +96,9 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
+	// For tests: called as a publish looks up its Run's git.merge_attempted
+	// (mergeAttempted).
+	MergeAttemptLookup func()
 	// How long a turn lux's stop broke waits for lux's reason, and a
 	// move for lux to run the Run again (luxstop.go); zero takes heldWait
 	// and moveWait.
@@ -2048,12 +2052,21 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if acc.Full != "" {
 			s.Log.Info("a phase's publish is counted in full", "run", r.ID, "repo", repo.Name, "why", acc.Full)
 		}
-		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
+		attempted := func() (bool, error) { return s.mergeAttempted(ctx, r, repo.Name, res.Commit) }
+		adv, err := advance.Branch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
+			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,
+					map[string]any{"repo": repo.Name, "commit": res.Commit})
+			})
+		})
+		if err != nil {
 			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault.
 		_ = gh.DeleteBranch(ctx, slug, res.Branch)
-		heads[repo.Name] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(acc.Paths), Base: base}
+		// The head is the branch's (a merge, when the base was merged in
+		// under the Run); the change is the Run's own, base...commit.
+		heads[repo.Name] = delivery.RunHead{SHA: adv.Head, ChangedPaths: db.NonNil(acc.Paths), Base: base}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
@@ -2061,7 +2074,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(),
 				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
 				WHERE task_id = $1 AND repository_id = $2 AND head_branch = $4 AND state IN ('open', 'draft')
-				  AND head_sha IS DISTINCT FROM $3`, r.TaskID, repo.ID, res.Commit, branch); err != nil {
+				  AND head_sha IS DISTINCT FROM $3`, r.TaskID, repo.ID, adv.Head, branch); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `UPDATE runs SET files_changed_at = now() WHERE id = $1`, r.ID); err != nil {
@@ -2071,16 +2084,31 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			var said bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2
 				AND payload->>'repo' = $3 AND payload->>'headSha' = $4)`,
-				r.ID, delivery.EvGitCommitCreated, repo.Name, res.Commit).Scan(&said); err != nil || said {
+				r.ID, delivery.EvGitCommitCreated, repo.Name, adv.Head).Scan(&said); err != nil || said {
 				return err
 			}
-			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-				"repo": repo.Name, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": acc.Paths})
+			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent,
+				adv.Payload(map[string]any{"repo": repo.Name, "baseSha": base, "branch": branch, "changedPaths": acc.Paths}))
 		}); err != nil {
 			return nil, "", err
 		}
 	}
 	return heads, branch, nil
+}
+
+// mergeAttempted says whether the Run recorded, before a POST /merges,
+// asking GitHub to merge commit into repo's task branch: only then is a
+// merge of commit found on the branch the Run's own.
+func (s *Syncer) mergeAttempted(ctx context.Context, r phaseRun, repo, commit string) (bool, error) {
+	if s.MergeAttemptLookup != nil {
+		s.MergeAttemptLookup()
+	}
+	var attempted bool
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2
+			AND payload->>'repo' = $3 AND payload->>'commit' = $4)`, r.ID, delivery.EvGitMergeAttempted, repo, commit).Scan(&attempted)
+	})
+	return attempted, err
 }
 
 // reportFindings parses what a reviewer said and records it as findings.

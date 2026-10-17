@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -110,6 +111,12 @@ type Server struct {
 	OpenAs map[string]string
 	// LoseOpenResponses creates the pull request, then answers 502.
 	LoseOpenResponses int
+	// LoseMergeResponses makes the merge POST /merges asks for, then
+	// answers 502.
+	LoseMergeResponses int
+	// CompareAnswer, when set, may change a compare's answer before it is
+	// sent: base and head as the request named them.
+	CompareAnswer     func(base, head string, answer map[string]any)
 	ReceiveStatus     int
 	ReceiveBody       string
 	ReceiveHeaders    http.Header
@@ -258,6 +265,114 @@ func (s *Server) CommitOnTop(branch, message string) string {
 		return ""
 	}
 	return sha
+}
+
+// CommitFiles commits files (path → content) on top of a branch, as a
+// person pushing their own work does; its SHA.
+func (s *Server) CommitFiles(branch, message string, files map[string]string) string {
+	cur := s.SHA(branch)
+	tree, err := s.treeWith(cur, files)
+	if err != nil {
+		return ""
+	}
+	sha, err := s.gitAs("Alice", "commit-tree", tree, "-p", cur, "-m", message)
+	if err != nil {
+		return ""
+	}
+	if _, err := s.git("update-ref", "refs/heads/"+branch, sha, cur); err != nil {
+		return ""
+	}
+	return sha
+}
+
+// MergeInto merges from into branch on GitHub, as its Update branch button
+// does: a merge commit whose first parent is the branch's head and whose
+// second is from's. resolved overrides files of the merged tree, as a
+// person resolving a conflict in GitHub's editor does. Its SHA, "" when
+// git cannot merge them and resolved leaves the conflict.
+func (s *Server) MergeInto(branch, from string, resolved map[string]string) string {
+	return s.mergeAs("GitHub", branch, s.SHA(from), "Merge branch '"+from+"' into "+branch, resolved)
+}
+
+// MergeLocally is MergeInto made by a person on their own machine and
+// pushed: the same parents, but not GitHub's commit.
+func (s *Server) MergeLocally(branch, from string, resolved map[string]string) string {
+	return s.mergeAs("Alice", branch, s.SHA(from), "Merge branch '"+from+"' into "+branch, resolved)
+}
+
+// MergeCommit merges the commit sha into branch on GitHub, as POST
+// /merges does; its SHA, "" when they conflict.
+func (s *Server) MergeCommit(branch, sha string) string {
+	return s.mergeAs("GitHub", branch, sha, "Merge "+sha+" into "+branch, nil)
+}
+
+// MergeCommitResolved is MergeCommit with files of the merged tree
+// overridden by resolved: GitHub's merge commit carrying other content.
+func (s *Server) MergeCommitResolved(branch, sha string, resolved map[string]string) string {
+	return s.mergeAs("GitHub", branch, sha, "Merge "+sha+" into "+branch, resolved)
+}
+
+func (s *Server) mergeAs(name, branch, other, message string, resolved map[string]string) string {
+	head := s.SHA(branch)
+	out, err := s.git("merge-tree", "--write-tree", head, other)
+	tree, _, _ := strings.Cut(out, "\n")
+	if err != nil && len(resolved) == 0 {
+		return ""
+	}
+	if tree, err = s.treeWith(tree, resolved); err != nil {
+		return ""
+	}
+	sha, err := s.gitAs(name, "commit-tree", tree, "-p", head, "-p", other, "-m", message)
+	if err != nil {
+		return ""
+	}
+	if _, err := s.git("update-ref", "refs/heads/"+branch, sha, head); err != nil {
+		return ""
+	}
+	return sha
+}
+
+// treeWith is the tree of treeish with files written over it.
+func (s *Server) treeWith(treeish string, files map[string]string) (string, error) {
+	index := s.Repo + "/index-" + strconv.FormatInt(nextID.Add(1), 10)
+	defer os.Remove(index)
+	env := []string{"GIT_INDEX_FILE=" + index}
+	if _, err := s.gitEnv(env, "read-tree", treeish); err != nil {
+		return "", err
+	}
+	for path, content := range files {
+		blob, err := s.gitIn(content, "hash-object", "-w", "--stdin")
+		if err != nil {
+			return "", err
+		}
+		if _, err := s.gitEnv(env, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path); err != nil {
+			return "", err
+		}
+	}
+	return s.gitEnv(env, "write-tree")
+}
+
+func (s *Server) gitEnv(env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
+	cmd.Env = append(cmd.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func (s *Server) gitIn(stdin string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// Parents lists a commit's parents, first parent first.
+func (s *Server) Parents(sha string) []string {
+	out, err := s.git("rev-list", "--parents", "-n", "1", sha)
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(out)[1:]
 }
 
 // Log lists a branch's commit subjects, newest first.
@@ -438,7 +553,7 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 409, "Merge conflict")
 			return
 		}
-		sha, err := s.gitAs("Acme", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
+		sha, err := s.gitAs("GitHub", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
 		if err == nil {
 			_, err = s.git("update-ref", "refs/heads/"+in.Base, sha, from)
 		}
@@ -446,7 +561,22 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 409, "Branch moved")
 			return
 		}
-		write(w, 201, map[string]string{"sha": sha})
+		s.mu.Lock()
+		lost := s.LoseMergeResponses > 0
+		if lost {
+			s.LoseMergeResponses--
+		}
+		s.mu.Unlock()
+		if lost {
+			fail(w, 502, "response lost")
+			return
+		}
+		// As GitHub answers: the merge commit, with its parents.
+		parents := []any{}
+		for _, p := range s.Parents(sha) {
+			parents = append(parents, map[string]string{"sha": p})
+		}
+		write(w, 201, map[string]any{"sha": sha, "parents": parents})
 	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls", func(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +698,15 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 404, "No commit found")
 			return
 		}
-		write(w, 200, map[string]any{"author": nil, "commit": map[string]any{"author": map[string]string{"name": out}}})
+		committer := map[string]string{"name": "Alice"}
+		verified := false
+		if out == "GitHub" {
+			committer = map[string]string{"name": "GitHub"}
+			verified = true
+		}
+		write(w, 200, map[string]any{"author": nil, "committer": map[string]string{"login": map[bool]string{true: "web-flow", false: ""}[verified]}, "commit": map[string]any{
+			"author": map[string]string{"name": out}, "committer": committer,
+			"verification": map[string]bool{"verified": verified}}})
 	})
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/update-branch", func(w http.ResponseWriter, r *http.Request) {
 		p := s.number(w, r)
@@ -587,12 +725,29 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 422, "merge conflict between base and head")
 			return
 		}
-		// A merge commit of the base into the head, as GitHub makes.
-		tree, _ := s.git("rev-parse", "refs/heads/"+p.Head+"^{tree}")
+		var in struct {
+			ExpectedHeadSHA string `json:"expected_head_sha"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		head := s.SHA(p.Head)
+		if in.ExpectedHeadSHA != "" && in.ExpectedHeadSHA != head {
+			fail(w, 422, "Head branch was modified. Review and try again.")
+			return
+		}
+		base := s.SHA(p.Base)
+		tree, err := s.git("merge-tree", "--write-tree", head, base)
+		if err != nil {
+			fail(w, 422, "merge conflict between base and head")
+			return
+		}
+		// The old head guards the ref update even if it moves during the merge.
 		sha, err := s.gitAs("GitHub", "commit-tree", tree,
-			"-p", "refs/heads/"+p.Head, "-p", "refs/heads/"+p.Base, "-m", "Merge branch '"+p.Base+"' into "+p.Head)
+			"-p", head, "-p", base, "-m", "Merge branch '"+p.Base+"' into "+p.Head)
 		if err == nil {
-			_, err = s.git("update-ref", "refs/heads/"+p.Head, sha)
+			_, err = s.git("update-ref", "refs/heads/"+p.Head, sha, head)
 		}
 		if err != nil {
 			fail(w, 422, sha)
@@ -1244,8 +1399,34 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	ahead, _ := s.git("rev-list", "--count", base+".."+head)
 	n, _ := strconv.Atoi(behind)
 	a, _ := strconv.Atoi(ahead)
-	write(w, 200, map[string]any{"files": files, "behind_by": n, "ahead_by": a})
+	// Head's commits base lacks, oldest first, each with its parents: at
+	// most compareCommitCap, as GitHub lists them.
+	commits := []any{}
+	if out, _ := s.git("rev-list", "--reverse", "--parents", base+".."+head); out != "" {
+		for _, line := range strings.Split(out, "\n") {
+			f := strings.Fields(line)
+			parents := []any{}
+			for _, p := range f[1:] {
+				parents = append(parents, map[string]string{"sha": p})
+			}
+			if len(commits) < compareCommitCap {
+				commits = append(commits, map[string]any{"sha": f[0], "parents": parents})
+			}
+		}
+	}
+	answer := map[string]any{"files": files, "behind_by": n, "ahead_by": a, "commits": commits, "total_commits": a}
+	s.mu.Lock()
+	rewrite := s.CompareAnswer
+	s.mu.Unlock()
+	if rewrite != nil {
+		rewrite(base, head, answer)
+	}
+	write(w, 200, answer)
 }
+
+// compareCommitCap is the most commits GitHub's compare lists
+// (forge.CompareCommitCap).
+const compareCommitCap = 250
 
 func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {
 	branch := r.PathValue("branch")
@@ -1265,8 +1446,10 @@ func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if out, err := s.git("update-ref", "refs/heads/"+branch, in.SHA); err != nil {
-		fail(w, 422, out)
+	// Only from the commit judged: a branch moved since is refused, as
+	// GitHub's update is atomic.
+	if _, err := s.git("update-ref", "refs/heads/"+branch, in.SHA, cur); err != nil {
+		fail(w, 422, "Update is not a fast forward")
 		return
 	}
 	write(w, 200, map[string]any{"ref": "refs/heads/" + branch})
