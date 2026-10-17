@@ -246,7 +246,12 @@ function RecentJudgements({ client }: { client: ApiClient }) {
           </THead>
           <TBody>
             {data.calls.map((c) => (
-              <Tr key={c.id} interactive onClick={() => setOpen(c)} onKeyDown={(e) => e.key === "Enter" && setOpen(c)}
+              <Tr key={c.id} interactive onClick={() => setOpen(c)} aria-label={`Open the judgement: ${c.question}`}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  setOpen(c);
+                }}
                 data-testid="judgement-row" data-call={c.id}>
                 <Td wrap>
                   <EntityLine size="sm" wrap name={c.question} detail={c.about} />

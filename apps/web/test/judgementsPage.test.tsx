@@ -171,6 +171,27 @@ describe("the Judgements page", () => {
     expect(failed.textContent).toBe("No answer. no answer from the LLM proxy in 1m0s. The caller fell back to what it does without a judgement.");
   });
 
+  test("a row says what it opens, and opens on Enter or Space", async () => {
+    const client = new Judging("a");
+    client.calls = [CALL];
+    const container = await show(client);
+    const row = await until(() => container.querySelector<HTMLElement>("[data-testid=judgement-row]"), "the row");
+    expect(row.getAttribute("aria-label")).toBe("Open the judgement: Should the fixer act on this comment?");
+    const close = async () => {
+      const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+      await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Close")!);
+      await until(() => (document.querySelector("[role=dialog]") ? null : true), "the dialog closed");
+    };
+    for (const key of ["Enter", " "]) {
+      const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      await act(async () => void row.dispatchEvent(ev));
+      expect(ev.defaultPrevented).toBe(true);
+      await close();
+    }
+    await act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
   test("a member reads it all and changes nothing: the picker is disabled, no test question", async () => {
     const client = new Judging("a");
     client.settings = { tierId: "mtr_coder", canEdit: false };
