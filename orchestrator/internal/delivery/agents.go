@@ -103,6 +103,7 @@ var (
 	integrationFixTmpl       = mustTemplate("briefings/integration-fix")
 	integrationMergeWhenTmpl = mustTemplate("briefings/integration-merge-when")
 	integrationReviewTmpl    = mustTemplate("briefings/integration-review")
+	replayTmpl               = mustTemplate("briefings/replay")
 )
 
 // mustTemplate is the named template, or a panic naming its file.

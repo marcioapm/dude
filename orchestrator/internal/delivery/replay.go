@@ -94,9 +94,7 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 }
 
 // replayHeading is the rendered replay under its heading and lead.
-func replayHeading(body string) string {
-	return "## The conversation so far\n\n" + replayLead + "\n\n" + body
-}
+func replayHeading(body string) string { return render(replayTmpl, body) }
 
 // fromCompaction is where the replay starts: the newest compaction summary
 // the agent's harness kept (agent.context.compacted), with the Run whose
@@ -247,9 +245,6 @@ func joinReplay(start replayStart, entries []replayEntry, omitted int) string {
 	}
 	return out
 }
-
-const replayLead = "What was said here before you, oldest first, from dude's record (\"You\" is this conversation's agent, " +
-	"before you). Tool calls show their input and output, cut where long; thoughts are not kept. Images are named, not attached."
 
 func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, error) {
 	// A session renamed before its first Run has events and nothing to
