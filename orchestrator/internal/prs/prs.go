@@ -60,6 +60,7 @@ type tracked struct {
 	Number, BehindBy, UnresolvedThreads                                                        int
 	HadCI                                                                                      bool
 	HeadSeenAt                                                                                 *time.Time
+	ChecksPendingSince                                                                         *time.Time
 	FeedbackCursor                                                                             *time.Time
 	UpdatedAt                                                                                  time.Time
 	ReviewsJSON                                                                                []byte
@@ -91,12 +92,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
-			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.feedback_cursor,
+			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.checks_pending_since, pr.feedback_cursor,
 			pr.reviews_json, pr.checks_json, pr.updated_at
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
-				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.ChecksJSON, &pr.UpdatedAt)
+				&pr.HadCI, &pr.HeadSeenAt, &pr.ChecksPendingSince, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.ChecksJSON, &pr.UpdatedAt)
 	}); err != nil {
 		return err
 	}
@@ -143,6 +144,16 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	hadCI := pr.HadCI || status.Checks != forge.ChecksUnknown
 	if status.Checks == forge.ChecksUnknown && pr.HadCI && !ended && time.Since(headSeenAt) < grace {
 		status.Checks = forge.ChecksPending
+	}
+	// What ci_stuck's patience counts from: when the checks on this head
+	// went pending, not when the head was first seen.
+	var pendingSince *time.Time
+	if status.Checks == forge.ChecksPending {
+		now := time.Now()
+		pendingSince = &now
+		if !newHead && pr.ChecksPendingSince != nil {
+			pendingSince = pr.ChecksPendingSince
+		}
 	}
 	// A head dude did not push: a person pushed, or GitHub's Update
 	// branch did. The next fix starts from it (delivery prFix).
@@ -295,11 +306,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		tag, err := tx.Exec(ctx, `UPDATE pull_requests SET state = $2::pull_request_state, checks = $3::check_state,
 			review = $4::review_state, head_sha = $5, last_polled_at = now(), feedback_cursor = $6, updated_at = now(),
 			had_ci = $8, head_seen_at = $7, mergeable_state = $9, behind_by = $10, checks_json = $11::jsonb,
-			reviews_json = $12::jsonb, unresolved_threads = $13,
+			reviews_json = $12::jsonb, unresolved_threads = $13, checks_pending_since = $15,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
 			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
 			WHERE id = $1 AND updated_at = $14`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
-			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt)
+			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt, pendingSince)
 		if err != nil {
 			return err
 		}
@@ -450,7 +461,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	stuckFor := 0 // how many of the organization's patiences checks have been pending on this head
 	if signal == nil && status.Checks == forge.ChecksPending && isOpen(status.State) {
-		stuckFor = int(time.Since(headSeenAt) / gh.Settings.CIStuck())
+		stuckFor = int(time.Since(*pendingSince) / gh.Settings.CIStuck())
 	}
 	if stuckFor > 0 {
 		// Pending past the organization's patience on this head: CI that
@@ -459,6 +470,16 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	if signal != nil && workflowRunID != "" {
 		if err := s.signal(ctx, org, pr, status, signal, permitted, recorded, stuckFor, workflowRunID); err != nil {
+			return err
+		}
+	}
+	// Checks no longer pending while a person is asked about them being
+	// stuck: the delivery waits on the pull request again, as their wait
+	// would have it.
+	if workflowStep == "decide" && (status.Checks == forge.ChecksPassing || status.Checks == forge.ChecksFailing) && isOpen(status.State) {
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			return delivery.ChecksFinishedTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number, status.Checks)
+		}); err != nil {
 			return err
 		}
 	}

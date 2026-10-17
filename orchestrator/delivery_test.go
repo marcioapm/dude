@@ -3852,7 +3852,7 @@ func TestCIStuckPendingIsEscalated(t *testing.T) {
 	w.gh.SetChecks("pending")
 	wi := w.reviewing()
 	w.sync()
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
 	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != "ci_stuck" {
 		t.Errorf("escalated for %q", r)
@@ -3868,7 +3868,7 @@ func TestCIStuckPendingIsEscalated(t *testing.T) {
 	if s := w.taskStatus(wi); s != "review" {
 		t.Fatalf("asked again at once: %s", s)
 	}
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '121 minutes' WHERE task_id = $1`, wi)
 	w.until("asked again", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
 		AND payload->>'reason' = 'ci_stuck'`, wi); n != 2 {
