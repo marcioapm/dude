@@ -65,6 +65,11 @@ export interface FindingRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   readonly suggestedFix?: string | undefined;
   /** Why it was resolved / accepted / superseded. */
   readonly resolutionNote?: string | undefined;
+  /**
+   * The status's word when the app knows a closer one than the status's
+   * own (an accepted finding a person waived: "Waived"). Its glyph stays.
+   */
+  readonly statusLabel?: string | undefined;
   /** How many fix rounds have tried; shown when > 0. */
   readonly fixAttempts?: number | undefined;
   /**
@@ -97,6 +102,7 @@ export function FindingRow({
   description,
   suggestedFix,
   resolutionNote,
+  statusLabel,
   fixAttempts,
   fixedIn,
   onOpenLocation,
@@ -107,7 +113,8 @@ export function FindingRow({
   ...rest
 }: FindingRowProps) {
   const sev = FINDING_SEVERITY_SPECS[severity];
-  const st = FINDING_STATUS_SPECS[status];
+  const spec = FINDING_STATUS_SPECS[status];
+  const st = statusLabel ? { ...spec, label: statusLabel } : spec;
   const bodyId = useId();
   const hasBody = Boolean(description || suggestedFix || resolutionNote);
   const disc = useDisclosure({ expanded, defaultExpanded, onExpandedChange });

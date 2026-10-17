@@ -203,3 +203,69 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
     # The person's edit and dude's one, which sent the body alone.
     assert [n for n, _ in fake_github.body_edits] == [number, number], fake_github.body_edits
     assert list(fake_github.body_edits[1][1]) == ["body"], fake_github.body_edits
+
+
+def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
+):
+    """A comment brings a fixer whose fix is reviewed and tested on a
+    candidate. At the promoted head, the task page and PR have fresh
+    verification. The Go integration tests check the strict ordering of
+    the completed test and the branch move."""
+    task = _deliver_with_tester(client, forge_project, "fake/scripted", "Greet, then rename it")
+    pr = _pull_request(client, task["id"])
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the task never waited on the pull request")
+    before = fake_github.branch_sha(pr["headBranch"])
+    tests_before = [r["id"] for r in client.task_runs(task["id"]) if r["phase"] == "test"]
+
+    fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
+
+    # While the candidate is checked the pull request still holds `before`:
+    # its verdict there is never stale, whatever the candidate's heads, and
+    # a verdict at the candidate's current head is the candidate's.
+    while_checked: list[bool] = []
+    at_candidate: list[dict] = []
+
+    def moved():
+        if (sha := fake_github.branch_sha(pr["headBranch"])) != before:
+            return sha
+        if candidate := fake_github.branch_sha(f"{pr['headBranch']}-candidate"):
+            verdicts = client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
+            at_pr = next((v for v in verdicts if v["heads"].get("greeter") == before), None)
+            at_head = next((v for v in verdicts if v["heads"].get("greeter") == candidate), None)
+            if fake_github.branch_sha(pr["headBranch"]) == before and \
+                    fake_github.branch_sha(f"{pr['headBranch']}-candidate") == candidate:
+                if at_pr is not None:
+                    while_checked.append(at_pr["stale"])
+                if at_head is not None and candidate != before:
+                    at_candidate.append(at_head)
+        return None
+
+    head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
+    assert while_checked and not any(while_checked), while_checked
+    assert all(v["candidate"] is True for v in at_candidate), at_candidate
+    runs = client.task_runs(task["id"])
+    fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
+    assert fix["branch"] == f"{pr['headBranch']}-candidate", fix
+    assert any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix" for r in runs), [r["phase"] for r in runs]
+
+    latest = wait_until(lambda: next((v for v in client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
+                                      if v["heads"].get("greeter") == head), None), timeout=30,
+                        message="no verdict at the pull request's new head")
+    assert latest["stale"] is False, latest
+    # The verdict at the new head is the candidate's, recorded before the
+    # move; the step after the move refreshes the description.
+    fresh = f"Tested at `{head[:7]}`."
+    body = wait_until(lambda: (b if fresh in (b := fake_github.pulls[pr["number"]].body) else None), timeout=30,
+                      message="the pull request's description was not refreshed at its new head")
+    assert "Stale" not in body, body
+
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    expect(page.get_by_test_id("phase").filter(has_text="of the pull request's fix").first).to_be_visible()
+    page.get_by_role("tab", name="Findings").click()
+    section = page.get_by_test_id("verification")
+    expect(section.get_by_test_id("verification-heads")).to_have_text(f"tested at {head[:7]}")
+    expect(section.get_by_test_id("verification-stale")).to_have_count(0)
+    assert console_errors == []

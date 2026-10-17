@@ -823,7 +823,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   {r.startedAt ? <> · <Duration since={r.startedAt} until={r.endedAt} live={r.status === "running"} tone="muted" /></> : null}
                 </Button>
               ) }))} />
-              <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix").length) }]} />
+              {/* The reviewers' fixes: a fix the tester or a pull request's feedback sent is not one. */}
+              <KeyValueList items={[{ label: "Fix runs", value: String(phases.filter((r) => r.phase === "fix" && fixFor(r, phases, findings, prEvents, createdFor.get(r.id)) === "review").length) }]} />
               <p className="muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
             <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
@@ -834,7 +835,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
                   category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}
-                  suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} fixAttempts={f.fixAttempts}
+                  suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} statusLabel={findingStatusLabel(f)} fixAttempts={f.fixAttempts}
                   fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />
               )} />
           ) : many ? (
@@ -1068,28 +1069,74 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
 
 /**
  * What woke a step, when the record says: a fix for the review's findings,
- * for a pull request's feedback (and whose), a re-review of a fix. Only
- * what can be read from the runs, findings and events; nothing guessed.
- * Exported for its unit test: the step row is its only caller.
+ * for the test's, for a pull request's feedback (and whose); a review of
+ * the simplifier's diff or of a pull request's fix; a re-review of a fix;
+ * a simplification or a test of a pull request's fix. Only what can be
+ * read from the runs, findings and events; nothing guessed. Exported for
+ * its unit test: the step row is its only caller.
  */
 export function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[],
   created?: Record<string, unknown>): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
-    // What the fix was started for, when its run.created says; an adopted
-    // pull request is recorded as opened before its first review.
-    if (Array.isArray(created?.findingIds) && created.findingIds.length > 0) return "for the review";
-    if (typeof created?.prFeedbackCount === "number" && created.prFeedbackCount > 0) return prFeedbackReason(prEvents, run.createdAt);
-    if (prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))) {
-      return prFeedbackReason(prEvents, run.createdAt);
+    switch (fixFor(run, phases, findings, prEvents, created)) {
+      case "pull_request": return prFeedbackReason(prEvents, run.createdAt);
+      case "test": return "for the test";
+      case "review": return "for the review";
     }
-    return "for the review";
   }
+  // A pull request's fix is reviewed, simplified, its simplification
+  // reviewed and tested on its candidate. An adopted pull request is
+  // recorded as opened before its first test: only a feedback fix before a
+  // step makes it one of that fix.
+  const ofPullRequestFix = () => earlier.some((r) => r.attempt === run.attempt &&
+    (r.reviewOf === "pull_request_fix" || (r.phase === "fix" && fixFor(r, phases, findings, prEvents) === "pull_request")));
+  if (run.phase === "review" && run.reviewOf === "simplify" && ofPullRequestFix()) return "of the simplifier's diff on the pull request's fix";
+  if (run.phase === "review" && run.reviewOf) return REVIEW_OF[run.reviewOf];
+  if ((run.phase === "test" || run.phase === "simplify") && ofPullRequestFix()) return "of the pull request's fix";
   if (run.phase === "review" && earlier.some((r) => r.phase === "fix")) {
     const found = findings.filter((f) => f.runId === run.id).length;
     return found === 0 ? "no findings" : undefined;
   }
   return undefined;
+}
+
+/**
+ * A finding's status in a word closer than its own, when it has one: a
+ * tester's finding a person waived is Waived, as the criteria it blocked
+ * are. Its status stays accepted; the orchestrator's resolution note says
+ * how it was settled (delivery.WaivedNote).
+ */
+export function findingStatusLabel(f: Pick<Finding, "status" | "resolutionNote">): string | undefined {
+  return f.status === "accepted" && (f.resolutionNote ?? "").startsWith(WAIVED_NOTE) ? "Waived" : undefined;
+}
+
+/** delivery.WaivedNote. */
+const WAIVED_NOTE = "waived by a person: ";
+
+/** What a review limited to a range checks, as its step says it. */
+const REVIEW_OF: Readonly<Record<NonNullable<Run["reviewOf"]>, string>> = {
+  simplify: "of the simplifier's diff",
+  pull_request_fix: "of the pull request's fix",
+};
+
+/**
+ * Whose findings a fix Run was sent: the tester's (any of them is), the
+ * reviewers', or a pull request's feedback. What its run.created says
+ * decides first: an adopted pull request is recorded as opened before its
+ * first review, so when it opened decides only when the record says neither.
+ */
+export function fixFor(run: Run, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[],
+  created?: Record<string, unknown>): "review" | "test" | "pull_request" {
+  const tests = new Set(phases.filter((r) => r.phase === "test").map((r) => r.id));
+  // A Run read from an older backend lists none; its run.created may.
+  const createdIds = Array.isArray(created?.findingIds) ? created.findingIds.filter((id): id is string => typeof id === "string") : [];
+  const ids = run.findingIds?.length ? run.findingIds : createdIds;
+  if (findings.some((f) => ids.includes(f.id) && f.runId && tests.has(f.runId))) return "test";
+  if (ids.length > 0) return "review";
+  if (typeof created?.prFeedbackCount === "number" && created.prFeedbackCount > 0) return "pull_request";
+  return prEvents.some((e) => e.eventType === "pull_request.opened" && instant(e.occurredAt) < instant(run.createdAt))
+    ? "pull_request" : "review";
 }
 
 /** Which pull request feedback, at or before `at`, a fix answered. */
@@ -1114,7 +1161,7 @@ function PhaseStep({ run, findings, plan, why, nothingAdded, onOpen }: {
   const note = run.status === "failed" && run.error
     ? <span title={run.error}>{shortError(run.error, 80)}</span>
     : run.phase === "review" && run.status === "completed"
-      ? findings.length === 0 ? "no findings" : `${blocking.length} blocking${findings.length > blocking.length ? `, ${findings.length - blocking.length} more` : ""}`
+      ? `${run.reviewOf && why ? `${why} · ` : ""}${findings.length === 0 ? "no findings" : `${blocking.length} blocking${findings.length > blocking.length ? `, ${findings.length - blocking.length} more` : ""}`}`
       : why;
   return (
     <StepRow
@@ -1264,6 +1311,7 @@ export function feedbackLine(e: PersistedEvent, doer: (runId: string | null) => 
       return { subject: true, text: <>resolved {items}{typeof p.commit === "string"
         ? <> in <code>{p.commit.slice(0, 7)}</code><span className="muted"> · counts once that commit is published</span></> : null}</> };
     case EventTypes.FeedbackReopened:
+      if (p.why === "pull_request_ended") return { subject: false, text: <>{items} opened again<span className="muted"> · its pull request ended while the fix was checked; a fixer checks it again on the follow-up pull request</span></> };
       if (typeof p.why === "string") return { subject: false, text: <>{items} opened again<span className="muted"> · the commit that resolved it was not published</span></> };
       return { subject: true, text: <>reopened {items}{routed}</> };
     default:

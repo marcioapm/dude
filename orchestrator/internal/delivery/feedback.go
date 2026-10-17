@@ -51,6 +51,17 @@ const (
 	EvFeedbackOutdated  = "feedback.outdated"
 )
 
+// Why dude reopened an agent's resolution (feedback.reopened's why).
+const (
+	// The Run ended (failed, aborted) without publishing.
+	ReopenUnpublished = "unpublished"
+	// The Run published, and the commit is not in it; or its candidate
+	// round ended before the pull request took it.
+	ReopenNotPublished = "not_published"
+	// Its candidate's pull request merged or closed while it was checked.
+	ReopenPullRequestEnded = "pull_request_ended"
+)
+
 // WakeFeedback is the conductor's reason for feedback (conductor_wakes).
 const WakeFeedback = "feedback"
 
@@ -847,7 +858,7 @@ func reopenUnpublishedTx(ctx context.Context, tx pgx.Tx, runID string) error {
 		}
 		ref := RunRef{Org: r.Org, TaskID: r.TaskID, RunID: runID}
 		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
-			map[string]any{"itemId": r.ID, "why": "unpublished"})); err != nil {
+			map[string]any{"itemId": r.ID, "why": ReopenUnpublished})); err != nil {
 			return err
 		}
 	}
@@ -1206,34 +1217,60 @@ func ResolutionHolds(ctx context.Context, cmp Comparer, repo, base, head, commit
 // open again for the next fixer. A resolution left out of held is
 // reopened: its commit was not published.
 func SettleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
+	return settleResolutionsTx(ctx, tx, org, runID, held, true)
+}
+
+// SettleCandidateResolutionsTx is SettleResolutionsTx for a Run that
+// published to a candidate branch: what does not hold is reopened, and
+// what holds stays pending (still blocking) until the pull request's
+// branch reaches the candidate's head (CandidateMovedTx).
+func SettleCandidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
+	return settleResolutionsTx(ctx, tx, org, runID, held, false)
+}
+
+func settleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool, verify bool) error {
 	pending, err := PendingResolutionsTx(ctx, tx, runID)
 	if err != nil {
 		return err
 	}
 	for _, p := range pending {
 		ref := RunRef{Org: org, TaskID: p.TaskID, RunID: runID}
-		if held[p.ID] {
-			if _, err := tx.Exec(ctx, `UPDATE feedback_items SET resolved_verified_at = now(), updated_at = now() WHERE id = $1`, p.ID); err != nil {
-				return err
-			}
-			if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackResolved, ledger.ActorSystem,
-				map[string]any{"itemId": p.ID, "commit": p.Commit, "repo": p.Repo, "verified": true})); err != nil {
-				return err
-			}
-			continue
+		var err error
+		switch {
+		case !held[p.ID]:
+			err = reopenResolutionTx(ctx, tx, ref, p.ID, ReopenNotPublished, "its commit is not in what was published")
+		case verify:
+			err = verifyResolutionTx(ctx, tx, ref, p.ID, p.Commit, p.Repo)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+` WHERE id = $1`, p.ID); err != nil {
-			return err
-		}
-		if _, err := historyTx(ctx, tx, org, p.ID, "reopen", "", runID, "its commit is not in what was published", ""); err != nil {
-			return err
-		}
-		if _, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
-			map[string]any{"itemId": p.ID, "why": "not_published"})); err != nil {
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// verifyResolutionTx counts item's resolution by ref's Run, at commit in repo.
+func verifyResolutionTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemID, commit, repo string) error {
+	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET resolved_verified_at = now(), updated_at = now() WHERE id = $1`, itemID); err != nil {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackResolved, ledger.ActorSystem,
+		map[string]any{"itemId": itemID, "commit": commit, "repo": repo, "verified": true}))
+	return err
+}
+
+// reopenResolutionTx puts item's resolution by ref's Run back to open, with
+// why (feedback.reopened) and body (the item's history).
+func reopenResolutionTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemID, why, body string) error {
+	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET `+reopenAgentResolution+` WHERE id = $1`, itemID); err != nil {
+		return err
+	}
+	if _, err := historyTx(ctx, tx, ref.Org, itemID, "reopen", "", ref.RunID, body, ""); err != nil {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ref.Event(EvFeedbackReopened, ledger.ActorSystem,
+		map[string]any{"itemId": itemID, "why": why}))
+	return err
 }
 
 // ---- reading, for an agent ---------------------------------------------

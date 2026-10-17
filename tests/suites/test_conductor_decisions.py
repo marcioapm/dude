@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, query, wait_until
+from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
 
 def _conducting(client: ApiClient, forge_project: dict) -> dict:
@@ -104,6 +104,8 @@ def test_talk_it_through_to_a_pull_request(client: ApiClient, forge_project: dic
     wait_until(lambda: len(_phases(client, task["id"], "review")) == 2, timeout=60, message="no second review")
     _waiting_on(client, task["id"], "after_review", "the clean round never came back to the conductor")
     _say(client, task["id"], "Clean; go on.", _tool("decide", {"action": "next"}))
+    # The simplifier's diff is reviewed whoever decides; the conductor triages that round too.
+    narrow = finish_simplifier_review(client, owner_dsn, task["id"])
 
     # Before the pull request: refused without the person's word; the gate's question; Open.
     _waiting_on(client, task["id"], "before_pull_request", "the delivery never waited before the pull request")
@@ -124,10 +126,13 @@ def test_talk_it_through_to_a_pull_request(client: ApiClient, forge_project: dic
                      timeout=90, message="the pull request never opened")
     assert len(prs) == 1
     wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=60, message="the task never went to review")
-    # Every phase Run was the conductor's, and each decision was recorded.
-    assert all(r["conductorRunId"] == conductor for r in client.task_runs(task["id"]) if r["phase"])
+    # Every phase Run was the conductor's, except the review of the
+    # simplifier's diff, which the workflow runs whoever decides; and each decision was recorded.
+    runs = client.task_runs(task["id"])
+    assert all(r["conductorRunId"] == conductor for r in runs if r["phase"] and r["id"] not in narrow)
+    assert [r for r in runs if r["id"] in narrow and r["reviewOf"] == "simplify" and r["conductorRunId"] is None], runs
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
-    assert decided == ["start_phase", "next", "start_phase", "start_phase", "next", "open_pull_request"], decided
+    assert decided == ["start_phase", "next", "start_phase", "start_phase", "next", "next", "open_pull_request"], decided
 
 
 def _parked(client: ApiClient, run_id: str, message: str) -> None:

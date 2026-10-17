@@ -134,6 +134,21 @@ type PhaseRun struct {
 	// A restart (RestartRunTx): what its agent is told of why, and the
 	// model tier it runs on in place of its role's, "" for the role's.
 	RestartNote, Tier string
+	// A review limited to a range of commits; nil reviews the whole branch.
+	ReviewRange *ReviewRange
+	// A publishing Run: the branch dude fast-forwards to what it pushed
+	// (runs.branch), "" for the task branch. A candidate for an open pull
+	// request's fix (CandidateBranch) is checked before the pull request
+	// shows it.
+	Branch string
+}
+
+// ReviewRange is the range a review covers: from Base, per repository,
+// to the head it checks out; Of says why (RangeSimplify,
+// RangePullRequestFix), which the reviewer is told.
+type ReviewRange struct {
+	Of   string            `json:"of"`
+	Base map[string]string `json:"base"`
 }
 
 // CreatePhaseRun creates a Run for one phase, pending, for the lux
@@ -174,18 +189,23 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 	}
 	feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
 	bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
+	var reviewRange []byte
+	if in.ReviewRange != nil && len(in.ReviewRange.Base) > 0 {
+		reviewRange, _ = json.Marshal(in.ReviewRange)
+	}
 	runID = ids.New(ids.Run)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
-		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override, feedback_item_ids)
+		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
+		                  review_range, branch, feedback_item_ids)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
-		db.NonNil(in.FeedbackItemIDs)); err != nil {
+		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs)); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {
@@ -259,6 +279,9 @@ type Outcome struct {
 	// It published something for people (an artifact), which is work even
 	// when no repository changed.
 	Published bool
+	// The commit each repository's checkout started from, as lux reported
+	// it (runs.base_shas).
+	Bases map[string]string
 }
 
 // advance is where the work stands after this phase: the heads it moved,
@@ -409,6 +432,7 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 		if err != nil {
 			return err
 		}
+		o.Bases = readBases(heads)
 		o.Succeeded, o.Error = status == "completed", deref(errText)
 		o.Heads, o.ChangedPaths, err = ReadHeads(heads)
 		return err
@@ -416,10 +440,26 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 	return o, err
 }
 
-// RunHead is what a phase Run left in one repository it changed.
+// RunHead is what a phase Run left in one repository it changed, and the
+// commit its checkout started from there ("" in a Run from before it was
+// kept).
 type RunHead struct {
 	SHA          string   `json:"sha"`
 	ChangedPaths []string `json:"changedPaths"`
+	Base         string   `json:"base,omitempty"`
+}
+
+// readBases is runs.heads' starting commit per repository that has one.
+func readBases(raw []byte) map[string]string {
+	var heads map[string]RunHead
+	_ = json.Unmarshal(raw, &heads)
+	out := map[string]string{}
+	for name, h := range heads {
+		if h.Base != "" {
+			out[name] = h.Base
+		}
+	}
+	return out
 }
 
 // ReadHeads reads runs.heads: the commit per repository, and every changed
@@ -966,45 +1006,44 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 // pullRequestText is a task's pull request title and body, rendered
 // from what the ledger recorded.
 func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
-	taskID := st.TaskID
-	var title, goal string
+	var title, goal, review, verification string
 	var criteria []string
-	var findings []struct{ Category, Severity, Status, Title string }
-	var reviewers int
-	var verified *prVerification
-	var link string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, taskID).
+		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, st.TaskID).
 			Scan(&title, &goal, &raw); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(raw, &criteria)
-		rows, err := tx.Query(ctx, `SELECT category || COALESCE(' · ' || topic, ''), severity::text, status::text, title FROM review_findings
-			WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, taskID, st.Attempt)
-		if err != nil {
+		var err error
+		if review, err = reviewText(ctx, tx, st); err != nil {
 			return err
 		}
-		if findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, Severity, Status, Title string }]); err != nil {
-			return err
-		}
-		if verified, err = latestVerification(ctx, tx, st); err != nil {
-			return err
-		}
-		if link, err = taskLink(ctx, tx, taskID); err != nil {
-			return err
-		}
-		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
-			WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
-			taskID, st.Attempt).Scan(&reviewers)
+		verification, _, err = verificationText(ctx, tx, st)
+		return err
 	})
-	body := prBody(goal, criteria, findings, reviewers)
-	if v := verificationSection(verified, st.Heads, link); v != "" {
-		// Before the factory's sign-off line.
-		i := strings.LastIndex(body, "---\n\nOpened by the dude factory.")
-		body = body[:i] + markedVerification(v) + "\n\n" + body[i:]
+	return title, prBody(goal, criteria, review, verification), err
+}
+
+// reviewText is the pull request's Review section for the attempt's
+// findings, "" when there are none.
+func reviewText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
+	rows, err := tx.Query(ctx, `SELECT category || COALESCE(' · ' || topic, ''), severity::text, `+shownStatus+`, title FROM review_findings
+		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
+	if err != nil {
+		return "", err
 	}
-	return title, body, err
+	findings, err := pgx.CollectRows(rows, pgx.RowToStructByPos[prFinding])
+	if err != nil || len(findings) == 0 {
+		return "", err
+	}
+	var reviewers int
+	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
+		WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND ($2 = 0 OR attempt = $2)`,
+		st.TaskID, st.Attempt).Scan(&reviewers); err != nil {
+		return "", err
+	}
+	return reviewSection(findings, reviewers), nil
 }
 
 // taskLink is the task's page in dude, where its evidence is: on the
@@ -1127,27 +1166,43 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	return id, err
 }
 
-func prBody(goal string, criteria []string, findings []struct{ Category, Severity, Status, Title string }, reviewers int) string {
+type prFinding struct{ Category, Severity, Status, Title string }
+
+// prBody is a pull request's description: the goal and criteria, then
+// dude's Review and Verification sections, each between its markers so a
+// refresh replaces only it (refreshBodies), then the sign-off.
+func prBody(goal string, criteria []string, review, verification string) string {
 	// An attachment: URL means nothing on the forge; the image is named instead.
 	sections := []string{strings.TrimSpace(ImagesAsText(goal))}
 	if len(criteria) > 0 {
 		sections = append(sections, "## Acceptance criteria\n"+bullets(CriteriaImagesAsText(criteria)))
 	}
-	if len(findings) > 0 {
-		addressed := 0
-		var lines []string
-		for _, f := range findings {
-			if f.Status != "open" {
-				addressed++
-			}
-			lines = append(lines, fmt.Sprintf("- `%s` **%s** — %s _(%s)_", f.Severity, f.Category, f.Title, f.Status))
-		}
-		sections = append(sections, fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
-			len(findings), reviewers, addressed, strings.Join(lines, "\n")))
+	if review != "" {
+		sections = append(sections, markedReview(review))
 	}
-	sections = append(sections, "---\n\nOpened by the dude factory.")
+	if verification != "" {
+		sections = append(sections, markedVerification(verification))
+	}
+	sections = append(sections, signOff)
 	return joinNonEmpty(sections, "\n\n")
 }
+
+func reviewSection(findings []prFinding, reviewers int) string {
+	addressed := 0
+	var lines []string
+	for _, f := range findings {
+		if f.Status != "open" {
+			addressed++
+		}
+		lines = append(lines, fmt.Sprintf("- `%s` **%s** — %s _(%s)_", f.Severity, f.Category, f.Title, f.Status))
+	}
+	return fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
+		len(findings), reviewers, addressed, strings.Join(lines, "\n"))
+}
+
+// signOff is the line every pull request dude opens ends with, before any
+// note naming its siblings.
+const signOff = "---\n\nOpened by the dude factory."
 
 // PullRequestState is a task's pull request as last synced from the forge,
 // with what finds it on GitHub.
