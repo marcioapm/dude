@@ -1,6 +1,7 @@
 /**
  * A picture of one element, drawn from the page itself: the element and
- * its descendants cloned with every computed style inlined, laid out in
+ * its descendants (with their ::before and ::after) cloned with every
+ * computed style inlined, laid out in
  * an SVG foreignObject, drawn into a canvas and outlined. No screen
  * capture and no request: an image the page has already loaded is copied
  * through a canvas, and one the page may not read (another origin without
@@ -21,17 +22,78 @@ export function tooBig(el: Element, win: Window): boolean {
   return r.width > win.innerWidth || r.height > win.innerHeight || r.width < 1 || r.height < 1;
 }
 
-function inlineStyles(from: Element, to: Element, win: Window): void {
-  const cs = win.getComputedStyle(from);
+// A url() whose bytes are not in the page's reach: drawing it would need a request.
+const fetchedUrl = (v: string) => /url\(/.test(v) && !/url\(["']?data:/.test(v);
+
+/** A computed style as an inline one; null when a property names a url() dude can't copy. */
+function styleText(cs: CSSStyleDeclaration, skip?: string): string | null {
   let css = "";
   for (let i = 0; i < cs.length; i++) {
     const p = cs[i]!;
-    let v = cs.getPropertyValue(p);
-    // A background another origin serves would draw as nothing: the picture fails instead.
-    if (/url\(/.test(v) && !/url\(["']?data:/.test(v)) throw new PictureError("it has a background image dude can't copy");
+    if (p === skip) continue;
+    const v = cs.getPropertyValue(p);
+    if (fetchedUrl(v)) return null;
     css += `${p}:${v};`;
   }
+  return css;
+}
+
+function inlineStyles(from: Element, to: Element, win: Window): void {
+  const css = styleText(win.getComputedStyle(from));
+  // A background another origin serves would draw as nothing: the picture fails instead.
+  if (css === null) throw new PictureError("it has a background image dude can't copy");
   to.setAttribute("style", css);
+}
+
+const unescapeCss = (s: string) => s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (_, hex: string | undefined, ch: string | undefined) =>
+  hex ? String.fromCodePoint(parseInt(hex, 16)) : ch!);
+
+/**
+ * What a computed `content` shows, as text and data-URL images; null when
+ * it names an image only a request could get. Counters are left out: no
+ * API gives their value. What follows a top-level `/` is alt text.
+ */
+export function contentParts(content: string, el: Element, quotes: string): (string | { img: string })[] | null {
+  const q = quotes === "auto" ? ["\u201c", "\u201d"] : [...quotes.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => unescapeCss(m[1]!));
+  const parts: (string | { img: string })[] = [];
+  const token = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|url\(\s*["']?([^"')]*)["']?\s*\)|attr\(\s*([\w-]+)[^)]*\)|counters?\((?:[^)"']|"[^"]*"|'[^']*')*\)|(open|close)-quote|(\/)/g;
+  for (const m of content.matchAll(token)) {
+    if (m[6]) break;
+    if (m[1] !== undefined || m[2] !== undefined) parts.push(unescapeCss(m[1] ?? m[2]!));
+    else if (m[3] !== undefined) {
+      if (!m[3].startsWith("data:")) return null;
+      parts.push({ img: m[3] });
+    } else if (m[4]) parts.push(el.getAttribute(m[4]) ?? "");
+    else if (m[5]) parts.push(q[m[5] === "open" ? 0 : 1] ?? "");
+  }
+  return parts;
+}
+
+// Elements browsers draw no ::before / ::after for.
+const NO_PSEUDO = new Set(["img", "input", "textarea", "select", "br", "hr", "wbr", "canvas", "video", "audio", "iframe", "frame", "embed", "object"]);
+
+/** The element's ::before or ::after as a styled span, or null when it has none dude can draw. */
+function pseudoSpan(el: Element, which: "::before" | "::after", win: Window, count: () => void): Element | null {
+  const cs = win.getComputedStyle(el, which);
+  const content = cs.getPropertyValue("content");
+  if (!content || content === "none" || content === "normal") return null;
+  const parts = contentParts(content, el, cs.getPropertyValue("quotes") || "auto");
+  // `content` is dropped from the span's style: on an element, a url() there would replace it.
+  const css = parts && styleText(cs, "content");
+  if (parts === null || css === null) return null;
+  count();
+  const span = win.document.createElement("span");
+  span.setAttribute("style", css);
+  for (const p of parts) {
+    if (typeof p === "string") span.append(p);
+    else {
+      count();
+      const img = win.document.createElement("img");
+      img.setAttribute("src", p.img);
+      span.append(img);
+    }
+  }
+  return span;
 }
 
 function imageData(img: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement, doc: Document): string {
@@ -51,17 +113,24 @@ function imageData(img: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement,
 // Nodes cloned between yields to the page, so a large element doesn't hold the main thread for its whole walk.
 const NODES_PER_YIELD = 200;
 
-async function cloneWithStyles(root: Element, win: Window): Promise<Element> {
+/** The element and its descendants with styles inlined; ::before and ::after spans count against MAX_NODES. */
+export async function cloneWithStyles(root: Element, win: Window): Promise<Element> {
   // Counted before any style is read: an element over the cap costs one native count, not a walk.
   if (root.getElementsByTagName("*").length + 1 > MAX_NODES) throw new PictureError("it is too large to draw");
-  let nodes = 0;
+  let nodes = 0, nextPause = NODES_PER_YIELD;
+  const count = () => {
+    if (++nodes > MAX_NODES) throw new PictureError("it is too large to draw");
+  };
   const pause = () => new Promise<void>((r) => {
     if (win.requestAnimationFrame) win.requestAnimationFrame(() => r());
     else win.setTimeout(r, 0);
   });
   const walk = async (el: Element): Promise<Element> => {
-    if (++nodes > MAX_NODES) throw new PictureError("it is too large to draw");
-    if (nodes % NODES_PER_YIELD === 0) await pause();
+    count();
+    if (nodes >= nextPause) {
+      nextPause = nodes + NODES_PER_YIELD;
+      await pause();
+    }
     const name = el.localName;
     let out: Element;
     if (name === "canvas" || name === "video") {
@@ -77,10 +146,15 @@ async function cloneWithStyles(root: Element, win: Window): Promise<Element> {
         if (src && !src.startsWith("data:")) out.setAttribute("src", imageData(el as HTMLImageElement, win.document));
       }
       if (name === "input" || name === "textarea") out.setAttribute("value", (el as HTMLInputElement).value);
+      const pseudo = !NO_PSEUDO.has(name);
+      const before = pseudo && pseudoSpan(el, "::before", win, count);
+      if (before) out.appendChild(before);
       for (const c of el.childNodes) {
         if (c.nodeType === 1) out.appendChild(await walk(c as Element));
         else if (c.nodeType === 3) out.appendChild(c.cloneNode());
       }
+      const after = pseudo && pseudoSpan(el, "::after", win, count);
+      if (after) out.appendChild(after);
     }
     inlineStyles(el, out, win);
     return out;
