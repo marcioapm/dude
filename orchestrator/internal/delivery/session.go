@@ -369,7 +369,7 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 	return strings.Join(sections, "\n\n")
 }
 
-var brainstormToolsNote = render("contracts/brainstorm-tools", nil)
+var brainstormToolsNote = render("contracts/brainstorm-tools", struct{ ExternalTextNote string }{ExternalTextNote})
 
 // brainstormWebNote is said only to a brainstorm whose network is
 // unrestricted (phases' Syncer.brainstormAnywhere), from brainstorm_anywhere

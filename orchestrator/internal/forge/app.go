@@ -373,12 +373,37 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := g.http.Do(req)
+	agentRead := isAgentRead(ctx)
+	client := g.http
+	if agentRead {
+		if err := reserveAgentRequest(target, authorization, g.rateResource(target)); err != nil {
+			return err
+		}
+		copy := *client
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copy
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return &Unreachable{err}
 	}
 	defer res.Body.Close()
-	data, err := io.ReadAll(res.Body)
+	noteRate(target, authorization, res.Header)
+	var response io.Reader = res.Body
+	const agentResponseMax = 4 << 20
+	if agentRead {
+		response = io.LimitReader(res.Body, agentResponseMax+1)
+		// A redirect's body is another location's answer: drained unread.
+		if res.StatusCode >= 300 && res.StatusCode < 400 {
+			_, _ = io.Copy(io.Discard, response)
+			return g.redirectRefusal(method, target, res.StatusCode)
+		}
+	}
+	data, err := io.ReadAll(response)
+	if agentRead && len(data) > agentResponseMax {
+		return &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
+			Message: "GitHub response exceeds the agent read limit (4 MiB)"}
+	}
 	if err != nil {
 		return &Unreachable{err}
 	}
@@ -398,4 +423,34 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+// rateResource is the rate limit GitHub counts a request to target on, by
+// its exact endpoint: a repository named graphql or search is core's.
+func (g *GitHub) rateResource(target string) string {
+	switch {
+	case target == g.graphqlURL():
+		return "graphql"
+	case strings.HasPrefix(target, g.cred.APIBaseURL+"/search/"):
+		return "search"
+	}
+	return "core"
+}
+
+// redirectRefusal is an agent read's refusal of a redirect, in dude's
+// words. A permanent one of a repository's own path says it moved; of a
+// path under it, that the item moved, which itemMoved tells apart from a
+// renamed repository.
+func (g *GitHub) redirectRefusal(method, target string, status int) error {
+	path, _, _ := strings.Cut(strings.TrimPrefix(target, g.cred.APIBaseURL), "?")
+	if status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect {
+		switch parts := strings.Split(strings.TrimPrefix(path, "/"), "/"); {
+		case len(parts) == 3 && parts[0] == "repos":
+			return &Error{Status: status, Refusal: RefusalMoved, Message: "GitHub says the repository has moved (renamed or transferred)"}
+		case len(parts) > 3 && parts[0] == "repos":
+			return &Error{Status: status, Refusal: RefusalMovedItem, Message: "GitHub says the item has moved (renamed repository or transferred issue)"}
+		}
+	}
+	return &Error{Status: status, Refusal: RefusalRedirect,
+		Message: fmt.Sprintf("GitHub answered %s %s with a redirect, which an agent's read does not follow", method, path)}
 }

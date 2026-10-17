@@ -248,12 +248,18 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	id, _ := payload["callId"].(string)
 	name, _ := payload["tool"].(string)
 	if c == nil {
+		// The pending announcement's name is lost when dude restarts between
+		// it and the completion; what survives the restart is the result's
+		// note, which capOutput withholds whatever the call is named.
+		names := []string{name, t.announced[id]}
 		if seen, ok := t.seenCalls[id]; ok {
 			name = seen
 		}
 		delete(t.openCalls, id)
 		delete(t.waitsOn, id)
+		delete(t.announced, id)
 		payload["tool"] = name
+		withholdGitHubRead(append(names, name), payload)
 		if isEdit(name) {
 			s.pokeDiff(t.run.ID)
 		}
@@ -265,11 +271,13 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	if err := t.startChild(ctx, tx, s, c); err != nil {
 		return err
 	}
+	reported := name
 	if seen, ok := c.Calls[id]; ok {
 		name = seen
 	}
 	delete(c.Calls, id)
 	payload["tool"] = name
+	withholdGitHubRead([]string{reported, name}, payload)
 	if isEdit(name) {
 		s.pokeDiff(t.run.ID)
 	}

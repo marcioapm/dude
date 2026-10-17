@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -61,5 +62,19 @@ func TestColourReachesTheChatUntouched(t *testing.T) {
 	out := "\x1b[31mFAILED\x1b[0m test_x.py::\x1b[1mtest_a\x1b[0m\n"
 	if got := capOutput(out)["head"]; got != out {
 		t.Errorf("got %q", got)
+	}
+}
+
+// A named read's size is the sum of its streams', whether their counts are
+// ints, as capOutput writes them, or float64s, as a decoded payload has.
+func TestANamedReadCountsDecodedStreamSizes(t *testing.T) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(`{"stdout":{"bytes":5000,"withheld":true,"withheldBy":"content"},
+		"stderr":{"head":"ab","tail":"cd","omittedBytes":96}}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	withholdGitHubRead([]string{"github_issue"}, payload)
+	if out, _ := payload["output"].(map[string]any); out["bytes"] != 5100 {
+		t.Fatalf("withheld as %v, want 5100 bytes", payload)
 	}
 }

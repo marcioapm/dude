@@ -159,8 +159,10 @@ type Run struct {
 	// dude tools the agent called: "tool status".
 	ToolCalls []string
 	// The id the agent's last dude tool call answered with: CallTools'
-	// arguments name it as {{last.id}} (a message it then waits on).
+	// arguments name it as {{last.id}} (a message it then waits on); and
+	// that answer whole, whose fields they name as {{last.PATH}}.
 	lastID      string
+	lastAnswer  []byte
 	Cancelled   bool
 	Stopped     int
 	Resumed     int
@@ -1844,12 +1846,13 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// As the brief says: no merge of a lux/<base> never fetched.
 		return http.StatusOK
 	}
+	id, from := InboxLast(run.Inputs)
+	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
+	args = lastFields(run.lastAnswer, args)
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
 		return http.StatusOK
 	}
-	id, from := InboxLast(run.Inputs)
-	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
 	if tool == "sync_base" {
 		// As an agent following sync_base's answers, it calls again while
@@ -1879,9 +1882,42 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	if err == nil && status != 0 && status < 300 {
 		var answer struct{ ID string }
 		_ = json.Unmarshal(body, &answer)
-		run.lastID = answer.ID
+		run.lastID, run.lastAnswer = answer.ID, body
 	}
 	return status
+}
+
+var lastField = regexp.MustCompile(`\{\{last\.([A-Za-z0-9_.]+)\}\}`)
+
+// lastFields puts the fields of the last answer that args name
+// ({{last.items.0.number}}) in its place, as JSON string content: a
+// string's characters escaped, without its quotes; "" for one not there.
+func lastFields(answer []byte, args string) string {
+	var tree any
+	_ = json.Unmarshal(answer, &tree)
+	return lastField.ReplaceAllStringFunc(args, func(m string) string {
+		v := tree
+		for _, key := range strings.Split(lastField.FindStringSubmatch(m)[1], ".") {
+			switch t := v.(type) {
+			case map[string]any:
+				v = t[key]
+			case []any:
+				i, err := strconv.Atoi(key)
+				if err != nil || i < 0 || i >= len(t) {
+					return ""
+				}
+				v = t[i]
+			default:
+				return ""
+			}
+		}
+		if s, ok := v.(string); ok {
+			b, _ := json.Marshal(s)
+			return string(b[1 : len(b)-1])
+		}
+		b, _ := json.Marshal(v)
+		return string(b)
+	})
 }
 
 // saidOfTool says a failed call in the agent's reply, as an agent would

@@ -194,10 +194,15 @@ func pushWorkspace(work, bare, branch, base string) (string, error) {
 // went wrong is said in its reply. Callers hold s.mu.
 func (s *Server) localCall(run *Run, tool, args string) {
 	var in struct {
-		Path, Content, Message, Description, Repo string
-		Args                                      []string
+		Path, Content, Message, Description, Repo, Text string
+		Args                                            []string
 	}
 	_ = json.Unmarshal([]byte(args), &in)
+	if tool == fakeagent.LocalSay {
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": in.Text + "\n"}})
+		return
+	}
 	var problem string
 	switch tool {
 	case fakeagent.LocalWrite:

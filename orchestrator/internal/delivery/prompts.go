@@ -362,7 +362,7 @@ func (in PromptInput) instructions(role string) (lead, tail []string) {
 
 // conductorToolsNote is the conductor's own tools: the read ones, its
 // decisions, and create_task for a change it is asked for.
-var conductorToolsNote = render("contracts/conductor-tools", nil)
+var conductorToolsNote = render("contracts/conductor-tools", struct{ ExternalTextNote string }{ExternalTextNote})
 
 // ConductorPrompt is a conductor's first prompt: dude's briefing and the
 // person's message (written once, when it was created), then how it works.
