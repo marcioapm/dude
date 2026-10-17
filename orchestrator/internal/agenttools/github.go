@@ -462,10 +462,18 @@ func (w wrapper) issue(i forge.IssueRead) map[string]any {
 	if i.PullRequest {
 		out["pullRequest"] = "a pull request: github_pull_request reads its reviews, threads, checks and files"
 	}
-	if i.CommentCount > len(i.Comments) {
-		out["moreComments"] = fmt.Sprintf("%s: the first %d of %d comments", cutMark, len(i.Comments), i.CommentCount)
+	if more := commentsCut(len(i.Comments), i.CommentCount); more != "" {
+		out["moreComments"] = more
 	}
 	return out
+}
+
+// commentsCut says only shown of total comments were kept; "" for all.
+func commentsCut(shown, total int) string {
+	if total <= shown {
+		return ""
+	}
+	return fmt.Sprintf("%s: the first %d of %d comments", cutMark, shown, total)
 }
 
 type ghReviewOut struct {
@@ -504,11 +512,8 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	}
 	threads := []ghThreadOut{}
 	for _, t := range p.Threads {
-		out := ghThreadOut{Path: w.text(t.Path, textCap), Line: t.Line, Outdated: t.Outdated, Comments: w.comments(t.Comments)}
-		if t.CommentCount > len(t.Comments) {
-			out.More = fmt.Sprintf("%s: the first %d of %d comments", cutMark, len(t.Comments), t.CommentCount)
-		}
-		threads = append(threads, out)
+		threads = append(threads, ghThreadOut{Path: w.text(t.Path, textCap), Line: t.Line, Outdated: t.Outdated,
+			Comments: w.comments(t.Comments), More: commentsCut(len(t.Comments), t.CommentCount)})
 	}
 	checks := []ghCheckOut{}
 	for _, c := range p.Checks {
