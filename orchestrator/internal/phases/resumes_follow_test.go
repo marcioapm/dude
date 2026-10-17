@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -492,15 +493,75 @@ func (f *refusingLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run,
 
 func (f *refusingLux) Cancel(context.Context, string) error { return nil }
 
-// A timing statement waiting on a lock while the Run's batch has a short
-// deadline fails on its own budget, inside that deadline: the Run's
-// update after it goes through on the same transaction.
+// Timing gets at most half of what remains of the Run's deadline, and is
+// skipped once too little remains: the Run keeps the rest for its batch.
+func TestTimingTakesAtMostHalfOfTheRunsRemainingDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		budget := func(left time.Duration) (lock, statement time.Duration, ok bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), left)
+			defer cancel()
+			return timingBudget(ctx)
+		}
+		if lock, statement, ok := timingBudget(context.Background()); !ok || lock != timingLockTimeout || statement != timingStatementTimeout {
+			t.Errorf("no deadline: lock %s, statement %s, ok %v; want the defaults", lock, statement, ok)
+		}
+		if lock, statement, ok := budget(time.Hour); !ok || lock != timingLockTimeout || statement != timingStatementTimeout {
+			t.Errorf("an hour left: lock %s, statement %s, ok %v; want the defaults", lock, statement, ok)
+		}
+		if lock, statement, ok := budget(180 * time.Millisecond); !ok || lock != 90*time.Millisecond || statement != lock {
+			t.Errorf("180ms left: lock %s, statement %s, ok %v; want both 90ms", lock, statement, ok)
+		}
+		if lock, statement, ok := budget(10 * time.Millisecond); !ok || lock != 5*time.Millisecond || statement != lock {
+			t.Errorf("10ms left: lock %s, statement %s, ok %v; want both 5ms", lock, statement, ok)
+		}
+		if lock, statement, ok := budget(8 * time.Millisecond); ok {
+			t.Errorf("8ms left: lock %s, statement %s; want timing skipped", lock, statement)
+		}
+	})
+}
+
+// A rolling deadline lets bestEffort see a short budget without cancelling
+// real database I/O if the host is descheduled.
+type shortTimingDeadline struct{ context.Context }
+
+func (shortTimingDeadline) Deadline() (time.Time, bool) {
+	return time.Now().Add(180 * time.Millisecond), true
+}
+
+// bestEffort applies the Run's deadline budget to timing statements.
+func TestBestEffortAppliesTheRunsDeadlineBudget(t *testing.T) {
+	w := newResumeWorld(t)
+	var lockMS, statementMS float64
+	called := false
+	var queryErr error
+	err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		w.s.bestEffort(shortTimingDeadline{w.ctx}, tx, w.run, "budget", func(ctx context.Context, tx pgx.Tx) error {
+			called = true
+			queryErr = tx.QueryRow(ctx, `SELECT
+				EXTRACT(EPOCH FROM current_setting('lock_timeout')::interval) * 1000,
+				EXTRACT(EPOCH FROM current_setting('statement_timeout')::interval) * 1000`).
+				Scan(&lockMS, &statementMS)
+			return queryErr
+		})
+		return queryErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || lockMS <= 0 || lockMS > 90 || statementMS != lockMS {
+		t.Fatalf("callback %v, lock %gms, statement %gms; want both in (0, 90]ms", called, lockMS, statementMS)
+	}
+}
+
+// A timing statement waiting on a lock fails on its own budget, leaving the
+// Run's transaction usable for its update. The deadline is generous so that
+// only that budget, never host load, can end the wait.
 func TestATimingLockWaitInsideTheRunsDeadlineLeavesTheRunsTransactionUsable(t *testing.T) {
 	w := newResumeWorld(t)
 	w.resume(stoppedOnHost1(time.Now()))
 	w.lockResume(2)
 	tr := &translator{run: w.run}
-	ctx, cancel := context.WithTimeout(w.ctx, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(w.ctx, 5*time.Second)
 	defer cancel()
 	err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 		tr.resumeBusy(ctx, tx, w.s, 2)
