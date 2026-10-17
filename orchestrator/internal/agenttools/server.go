@@ -76,6 +76,7 @@ type Server struct {
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
+	Child                                       bool
 	RunID, Org, ProjectID, TaskID, Role, Status string
 	// A session's agent: its session, in place of a task and project.
 	SessionID string
@@ -174,7 +175,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []entry{}
 	for _, t := range allTools() {
-		if t.allowed(c.Role) {
+		if t.allowed(c.Role) && (!c.Child || childToolAllowed(t.name)) {
 			out = append(out, entry{t.name, s.descriptionFor(r.Context(), c, t)})
 		}
 	}
@@ -241,6 +242,14 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
+	if err == nil {
+		err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child)
+		})
+		if err != nil {
+			return c, err
+		}
+	}
 	switch c.Status {
 	case "completed", "failed", "aborted":
 		return c, errUnknown
@@ -256,7 +265,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 			"see and add to the project's work. What you create is marked as yours and waits for a person.",
 	})
 	for _, t := range allTools() {
-		if !t.allowed(c.Role) {
+		if !t.allowed(c.Role) || c.Child && !childToolAllowed(t.name) {
 			continue
 		}
 		handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -470,6 +479,18 @@ const (
 // transaction as what the tool did (for a tool split by outside, the
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		var child bool
+		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&child); err != nil {
+			return err
+		}
+		if child && !childToolAllowed(t.name) {
+			return refuse("independent report children cannot mutate workflow or start Runs")
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
 		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait)}
@@ -569,6 +590,14 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 	}
 	return out, err
+}
+
+func childToolAllowed(name string) bool {
+	switch name {
+	case "list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event":
+		return true
+	}
+	return false
 }
 
 // recordRefusal records what a refused call says of itself, once the

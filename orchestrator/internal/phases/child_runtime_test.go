@@ -1,0 +1,221 @@
+package phases
+
+import (
+	"context"
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"strings"
+	"testing"
+)
+
+func TestChildRuntimeWriterFence(t *testing.T) {
+	w := newResumeWorld(t)
+	if err := dbtest.Reachable(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE runs SET source_kind = 'task_conductor', parent_run_id = id,
+		child_profile = 'implementer', child_capabilities = '{"publishCode":true}' WHERE id = $1`, w.run.ID)
+	if err := w.s.submit(w.ctx, w.run); err == nil {
+		t.Fatal("writer child reached submission instead of being held")
+	}
+	if _, _, err := w.s.publish(w.ctx, w.run); err == nil {
+		t.Fatal("writer child reached publication")
+	}
+}
+
+func TestChildParentEndCancellation(t *testing.T) {
+	for _, ending := range []string{"task", "conductor"} {
+		t.Run(ending, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,lux_state) VALUES('run_parent',$1,$2,$3,1,'conductor','running','terminated')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',child_profile='investigator',phase='investigate',role='investigator',child_capabilities='{}',status='running',control='none' WHERE id=$1`, w.run.ID)
+			fake := w.onCallLux(nil)
+			if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+				if err := delivery.LockChat(w.ctx, tx, w.run.TaskID); err != nil {
+					return err
+				}
+				if ending == "task" {
+					_, err := delivery.SetTaskStatusTx(w.ctx, tx, w.run.Org, w.run.ProjectID, w.run.TaskID, "", "done", "ended")
+					return err
+				}
+				return delivery.EndConductor(w.ctx, tx, delivery.RunRef{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, RunID: "run_parent"}, "ended")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.Calls()) != 0 {
+				t.Fatal("parent-end transaction called lux")
+			}
+			r := w.run
+			r.SourceKind = "task_conductor"
+			r.Status = "running"
+			r.Phase = "investigate"
+			r.Control = "abort"
+			var reason string
+			if err := w.owner.QueryRow(w.ctx, `SELECT child_stop_reason FROM runs WHERE id=$1`, r.ID).Scan(&reason); err != nil || reason != "parent-ended" {
+				t.Fatalf("end marker %s %v", reason, err)
+			}
+			if _, err := w.s.advance(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.Calls()) != 1 {
+				t.Fatalf("cancel calls %v", fake.Calls())
+			}
+		})
+	}
+}
+
+type childTerminalLux struct {
+	*sweepLux
+	frames []lux.Frame
+}
+
+func (f *childTerminalLux) Output(_ context.Context, _, _ string, _ int64, fn func(lux.Frame) error) error {
+	for _, frame := range f.frames {
+		if err := fn(frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (f *childTerminalLux) Cost(context.Context, string) (lux.RunCost, error) {
+	return lux.RunCost{}, &lux.Error{Status: 404, Code: "not_found"}
+}
+
+func TestChildTerminalCollection(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('run_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state) VALUES('wf_terminal',$1,$2,'task.delivery','terminal','waiting','awaitPullRequest','{"attempt":1}')`, w.run.Org, w.run.TaskID)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',phase='investigate',role='investigator',child_profile='investigator',child_capabilities='{}',status='completed',ended_at=now() WHERE id=$1`, w.run.ID)
+	store := &delivery.Store{DB: w.s.DB}
+	if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 0 {
+		t.Fatalf("settled before late collection %d %v", n, err)
+	}
+	fake := &childTerminalLux{sweepLux: &sweepLux{listed: []lux.Artifact{{ID: "art_child_terminal", Path: lux.PublishedPrefix + "report.md", Available: true, Version: 1, Epoch: 1, SHA256: "abc", Size: 10}}}, frames: []lux.Frame{spoke(1), record(1, "lux.activity", map[string]any{"activity": "idle"})}}
+	a := &Artifacts{DB: w.s.DB, Lux: fake, Log: w.s.Log}
+	if n, err := a.Sweep(w.ctx); err != nil || n != 1 {
+		t.Fatalf("collect %d %v", n, err)
+	}
+	if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 1 {
+		t.Fatalf("settlement %d %v", n, err)
+	}
+	var artifacts []string
+	if err := w.owner.QueryRow(w.ctx, `SELECT artifact_ids FROM child_results WHERE child_run_id=$1`, w.run.ID).Scan(&artifacts); err != nil || len(artifacts) != 1 {
+		t.Fatalf("late artifact %v %v", artifacts, err)
+	}
+	var reply string
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) (err error) { reply, err = delivery.RunReplyTx(w.ctx, tx, w.run.ID); return err }); err != nil || !strings.Contains(reply, "On it.") {
+		t.Fatalf("late report %q %v", reply, err)
+	}
+	if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
+		t.Fatalf("parent directive %d %v", n, err)
+	}
+}
+
+func TestChildReportSpec(t *testing.T) {
+	for _, profile := range []string{"investigator", "reviewer", "qa_browser"} {
+		t.Run(profile, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			phase := delivery.PhaseForPromptRole(profile)
+			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,phase=$2::run_phase,role=$3::agent_role,
+			child_profile=$4,child_capabilities='{}',child_prompt='Investigate the exact regression.',lux_run_id=NULL WHERE id=$1`, w.run.ID, phase, delivery.RoleForPhase[phase], profile)
+			w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+			w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object($2::text,jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org, profile)
+			r := w.run
+			r.SourceKind = "task_conductor"
+			r.Phase = phase
+			r.Role = delivery.RoleForPhase[phase]
+			r.Attempt = 1
+			r.LuxRunID = ""
+			spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(spec.Workload.Prompt, "Investigate the exact regression.") {
+				t.Fatalf("override absent: %s", spec.Workload.Prompt)
+			}
+			if spec.Git != nil && spec.Git.Push != nil {
+				t.Fatal("report child got push authority")
+			}
+		})
+	}
+}
+
+func TestChildRuntimeIsolation(t *testing.T) {
+	for _, action := range []string{"finish", "fail", "idle", "abort"} {
+		t.Run(action, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`UPDATE tasks SET status='running' WHERE id=$1`, w.run.TaskID)
+			w.exec(`INSERT INTO runs (id,organization_id,project_id,task_id,attempt,role,status) VALUES ('run_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state) VALUES('wf_child',$1,$2,'task.delivery','child','waiting','awaitPullRequest',jsonb_build_object('taskId',$2::text,'projectId',$3::text,'attempt',1,'heads',jsonb_build_object('repo','preserved'),'pendingRunIds',jsonb_build_array($4::text)))`, w.run.Org, w.run.TaskID, w.run.ProjectID, w.run.ID)
+			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',phase='investigate',role='investigator',child_profile='investigator',child_capabilities='{}',status='running',control='none',lux_state='running',lux_stop_reason=NULL,turn_done_at=now() WHERE id=$1`, w.run.ID)
+			r := w.run
+			r.SourceKind = "task_conductor"
+			r.Phase = "investigate"
+			r.Role = "investigator"
+			r.Status = "running"
+			r.LuxState = "running"
+			r.DudePause = ""
+			r.TurnDone = true
+			fake := w.onCallLux(nil)
+			snapshot := func() string {
+				var raw string
+				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object('t',to_jsonb(t),'w',to_jsonb(w))::text FROM tasks t JOIN workflow_runs w ON w.task_id=t.id WHERE t.id=$1`, r.TaskID).Scan(&raw); err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			before := snapshot()
+			switch action {
+			case "finish":
+				if _, err := w.s.finish(w.ctx, r); err != nil {
+					t.Fatal(err)
+				}
+			case "fail":
+				if err := w.s.fail(w.ctx, r, "child failure"); err != nil {
+					t.Fatal(err)
+				}
+			case "idle":
+				w.exec(`UPDATE runs SET turn_done_at=NULL,agent_active_at=now() WHERE id=$1`, r.ID)
+				if err := w.owner.QueryRow(w.ctx, `SELECT agent_active_at FROM runs WHERE id=$1`, r.ID).Scan(&r.QuietSince); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.s.requestPause(w.ctx, r, "idle", "quiet"); err != nil {
+					t.Fatal(err)
+				}
+			case "abort":
+				if err := (&delivery.Store{DB: w.s.DB}).AbortChild(w.ctx, r.Org, r.TaskID, r.ID); err != nil {
+					t.Fatal(err)
+				}
+				r.Control = "abort"
+				if _, err := w.s.advance(w.ctx, r); err != nil {
+					t.Fatal(err)
+				}
+				if len(fake.Calls()) != 1 {
+					t.Fatalf("cancellation calls %v", fake.Calls())
+				}
+			}
+			if snapshot() != before {
+				t.Fatal("child mutated task/workflow")
+			}
+			if action != "idle" {
+				signals := 0
+				if _, err := NotifyFinished(w.ctx, w.s.DB, func(_ context.Context, _, _, _, _, _ string) error { signals++; return nil }); err != nil {
+					t.Fatal(err)
+				}
+				if signals != 0 {
+					t.Fatal("child signalled workflow")
+				}
+				if err := w.s.DB.InOrg(w.ctx, r.Org, func(tx pgx.Tx) error {
+					var n int
+					return tx.QueryRow(w.ctx, `SELECT count(*) FROM child_results`).Scan(&n)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

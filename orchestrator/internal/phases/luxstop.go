@@ -530,6 +530,9 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 				return err
 			}
 		}
+		if r.SourceKind != "" {
+			return nil
+		}
 		return delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID)
 	})
 	return taken, changes, err

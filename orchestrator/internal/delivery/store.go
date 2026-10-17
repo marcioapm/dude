@@ -589,6 +589,10 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 	}
 	if Ended(status) {
 		// Its peers waiting on a reply from it would wait for ever.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false
+			WHERE task_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, taskID); err != nil {
+			return false, err
+		}
 		if _, err := PeerEndedTx(ctx, tx, org, taskID, status); err != nil {
 			return false, err
 		}

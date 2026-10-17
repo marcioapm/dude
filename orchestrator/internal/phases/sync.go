@@ -151,6 +151,7 @@ const stopPause = "pause"
 // conductor's (Phase "", Role conductor), which the syncer drives the same
 // way except where conductor() says otherwise.
 type phaseRun struct {
+	SourceKind                                         string
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
 	// A session's agent: no task, no project.
 	SessionID                         string
@@ -271,7 +272,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
 	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
-	r.retry_failures, r.retry_due_at`
+	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, '')`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -440,7 +441,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
 		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
-		&r.RetryFailures, &r.RetryDueAt)
+		&r.RetryFailures, &r.RetryDueAt, &r.SourceKind)
 	if err != nil {
 		return r, err
 	}
@@ -532,7 +533,7 @@ type pending struct{ brainstorms, unheard, unheardBrainstorms, stalls, failed, w
 var (
 	stuckBrainstorms = `runs r WHERE ` + stuckBrainstorm
 	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
-	failedForWake    = `runs r WHERE ` + delivery.FailedForConductor
+	failedForWake    = `runs r WHERE r.source_kind IS NULL AND ` + delivery.FailedForConductor
 	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
 )
 
@@ -574,6 +575,9 @@ func (s *Syncer) pending(ctx context.Context) pending {
 // earlier step ran: that one may have made work for it (a stall report is
 // a conductor's reason to wake).
 func (s *Syncer) beforeDue(ctx context.Context) error {
+	if _, err := (&delivery.Store{DB: s.DB}).EnqueueChildResults(ctx); err != nil {
+		return err
+	}
 	p, ran := s.pending(ctx), false
 	if p.brainstorms {
 		ran = true
@@ -724,6 +728,21 @@ func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 // advance moves one Run on by whatever its state calls for. Returns whether
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
+	if r.SourceKind != "" && r.Control != "abort" && r.Status != "failed" && r.Status != "aborted" {
+		if err := s.childExecutionAllowed(ctx, r); err != nil {
+			return false, err
+		}
+	}
+	if r.SourceKind != "" && r.Control == "abort" {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET status='aborted', ended_at=COALESCE(ended_at,now()), keep=false WHERE id=$1 AND source_kind IS NOT NULL AND status IN ('pending','scheduled','starting','running','paused')`, r.ID)
+			return err
+		}); err != nil {
+			return true, err
+		}
+		r.Status, r.Keep = "aborted", false
+		return true, s.end(ctx, r)
+	}
 	switch {
 	case r.Status == statusAborted || r.Status == "failed":
 		return true, s.end(ctx, r)
@@ -1042,6 +1061,9 @@ func (s *Syncer) handOverUnheardBrainstorms(ctx context.Context) error {
 // a library image waits, still pending, until its image has the current
 // dude layer, and fails before lux if it cannot have it.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
+	if err := s.childExecutionAllowed(ctx, r); err != nil {
+		return err
+	}
 	image, got, nested, err := s.image(ctx, r)
 	var waiting images.Waiting
 	var refused images.Refused
@@ -1231,6 +1253,9 @@ const EvImagePreparing = "run.image_preparing"
 // transaction as its text: submit sends exactly these. And the project
 // secrets the spec declares (projectsecrets.go), with their values.
 func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, []lux.Secret, error) {
+	if err := s.childExecutionAllowed(ctx, r); err != nil {
+		return lux.Spec{}, runSizes{}, nil, nil, err
+	}
 	if r.brainstorm() {
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, sizes, nil, nil, err
@@ -1794,6 +1819,19 @@ func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Fram
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
+	if r.SourceKind != "" {
+		if err := s.childExecutionAllowed(ctx, r); err != nil {
+			return false, err
+		}
+		if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+			return true, err
+		}
+		s.unfollow(r.ID)
+		return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET status='completed', ended_at=now(), lux_stop_reason='complete', keep=false WHERE id=$1 AND status IN ('scheduled','starting','running') AND control <> 'abort'`, r.ID)
+			return err
+		})
+	}
 	// Pushed when it names a branch and holds a repository it may push —
 	// as lux was told, at submit or as a resume added one. Work on nothing
 	// it may change publishes only what it wrote for people.
@@ -2051,6 +2089,15 @@ func lookupBase(bases map[string]string, repos []delivery.Repository, name strin
 // Repositories that did not move are left alone — no branch, no PR — and a
 // read-only one is never pushed at all (lux reports it "skipped").
 func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, string, error) {
+	var child bool
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, r.ID).Scan(&child)
+	}); err != nil {
+		return nil, "", err
+	}
+	if child {
+		return nil, "", fmt.Errorf("independent child publication is held until writer integration")
+	}
 	if r.talker() {
 		// Read-only: its spec names no push branch, and nothing it holds
 		// may move the task's branch.
@@ -2509,7 +2556,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		parked := err == nil && last == evParked
-		if parked && taskStatus != "" && r.TaskID != "" {
+		if parked && taskStatus != "" && r.TaskID != "" && r.SourceKind == "" {
 			// The flag its idle park raised, lowered.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,
 				"a person resumed the agent"); err != nil {
@@ -2518,7 +2565,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		// A phase agent taken back up, from a park or a person's pause, may
 		// have been the last thing the task waited on a person for.
-		if !r.talker() {
+		if !r.talker() && r.SourceKind == "" {
 			if err := delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID); err != nil {
 				return err
 			}
@@ -2714,7 +2761,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			return err
 		}
 		var taskStatus string
-		if kind == "idle" && !r.talker() {
+		if kind == "idle" && !r.talker() && r.SourceKind == "" {
 			// Raised for a person to look at, from whatever it was (running,
 			// in review); put back when the Run is taken up again. Not for a
 			// conductor's: it changes nothing about the task, and its park
@@ -3439,6 +3486,10 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 // key names this finish, for the signal's idempotency: a Run taken back up
 // after it failed or was aborted finishes again, and that is a new signal.
 func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx context.Context, org, workflowRunID, runID, status, key string) error) (int, error) {
+	children, err := settleCollectedChildren(ctx, &delivery.Store{DB: database})
+	if err != nil {
+		return 0, err
+	}
 	type finished struct{ ID, Org, Status, WorkflowRunID, Key string }
 	var runs []finished
 	if err := database.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
@@ -3450,7 +3501,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 			-- before attempts were kept in its state is any attempt's.)
 			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
 			  AND COALESCE(NULLIF(w.state->>'attempt', '')::int, r.attempt) = r.attempt
-			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
+			WHERE r.phase IS NOT NULL AND r.source_kind IS NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
 			  -- Work that changes no code is judged by what it published, so
 			  -- that waits for lux to report it. Work on code is judged by its
@@ -3466,7 +3517,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 	}); err != nil {
 		return 0, err
 	}
-	handled := 0
+	handled := children
 	for _, r := range runs {
 		if err := signal(ctx, r.Org, r.WorkflowRunID, r.ID, r.Status, r.Key); err != nil {
 			// One workflow that cannot be signalled must not stall the rest.

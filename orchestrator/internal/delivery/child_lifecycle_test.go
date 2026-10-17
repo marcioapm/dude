@@ -367,6 +367,98 @@ func TestChildResultBounds(t *testing.T) {
 	}
 }
 
+func TestChildAtomicEnqueue(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("transport")
+	w.exec(`UPDATE runs SET heads='{"repo":{"sha":"0123456789012345678901234567890123456789","branch":"work"}}' WHERE id=$1`, id)
+	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	before := w.snapshot()
+	type answer struct {
+		n   int
+		err error
+	}
+	results := make(chan answer, 2)
+	for i := 0; i < 2; i++ {
+		go func() { n, err := (&Store{DB: w.s.DB}).EnqueueChildResults(w.ctx); results <- answer{n, err} }()
+	}
+	wins := 0
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		wins += r.n
+	}
+	if wins != 1 {
+		t.Fatalf("enqueues %d, want 1", wins)
+	}
+	var directives, receipts int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*),count(*) FILTER (WHERE consumed_at IS NOT NULL AND directive_id IS NOT NULL) FROM child_result_outbox`).Scan(&directives, &receipts); err != nil {
+		t.Fatal(err)
+	}
+	if directives != 1 || receipts != 1 || w.count("directives") != 1 {
+		t.Fatalf("outbox %d receipts %d directives %d", directives, receipts, w.count("directives"))
+	}
+	if n, err := (&Store{DB: w.s.DB}).EnqueueChildResults(w.ctx); err != nil || n != 0 {
+		t.Fatalf("restart enqueue %d %v", n, err)
+	}
+	var text string
+	var commits map[string]string
+	if err := w.owner.QueryRow(w.ctx, `SELECT d.text,r.commits FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id JOIN child_results r USING(parent_run_id,child_run_id,generation)`).Scan(&text, &commits); err != nil {
+		t.Fatal(err)
+	}
+	if commits["repo"] != "0123456789012345678901234567890123456789" {
+		t.Fatalf("lost object-valued head %v", commits)
+	}
+	var summary []byte
+	if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale) FROM child_results`).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	want, err := childResultText(summary)
+	if err != nil || text != want {
+		t.Fatalf("directive mismatch %q %v", text, err)
+	}
+	if w.snapshot() != before {
+		t.Fatal("notification mutated workflow/PR/task")
+	}
+}
+
+func TestChildNotificationStaysWithParent(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("immutable")
+	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE runs SET status='paused',dude_pause=NULL WHERE id='run_parent'`)
+	if n, err := w.s.EnqueueChildResults(w.ctx); err != nil || n != 1 {
+		t.Fatalf("paused enqueue %d %v", n, err)
+	}
+	var control string
+	if err := w.owner.QueryRow(w.ctx, `SELECT control::text FROM runs WHERE id='run_parent'`).Scan(&control); err != nil || control != "none" {
+		t.Fatalf("person pause changed %s %v", control, err)
+	}
+	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('run_new_parent',$1,'prj_life','wi_life',3,'conductor','running')`, w.org)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if err := LockChat(w.ctx, tx, "wi_life"); err != nil {
+			return err
+		}
+		_, err := HandOver(w.ctx, tx, w.in.Parent.Run, true)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM directives WHERE run_id='run_new_parent'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("retargeted directives %d %v", n, err)
+	}
+	if n, err := w.s.EnqueueChildResults(w.ctx); err != nil || n != 0 {
+		t.Fatalf("requeued %d %v", n, err)
+	}
+}
+
 func TestChildEndedParentRestart(t *testing.T) {
 	w := newChildWorld(t)
 	id := w.child("ended-parent")

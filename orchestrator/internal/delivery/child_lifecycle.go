@@ -3,10 +3,12 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
 type ChildOutcome struct {
@@ -98,8 +100,9 @@ func (s *Store) SettleChild(ctx context.Context, org, childID string, outcome Ch
 			SELECT r.organization_id, r.task_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
 			(SELECT count(*) FROM review_findings WHERE run_id = r.id),
 			(SELECT count(*) FROM acceptance_verdicts WHERE run_id = r.id),
-			COALESCE((SELECT jsonb_object_agg(k, v) FROM (SELECT key AS k, value AS v FROM jsonb_each_text(r.heads)
-			  WHERE key ~ '^[A-Za-z0-9_.-]{1,100}$' AND value ~ '^[0-9a-f]{40,64}$' ORDER BY key LIMIT 100) refs), '{}'),
+			COALESCE((SELECT jsonb_object_agg(k, v) FROM (SELECT k, v FROM (SELECT key AS k,
+			  CASE jsonb_typeof(value) WHEN 'object' THEN value->>'sha' ELSE value #>> '{}' END AS v FROM jsonb_each(r.heads)) normalized
+			  WHERE k ~ '^[A-Za-z0-9_.-]{1,100}$' AND v ~ '^[0-9a-f]{40,64}$' ORDER BY k LIMIT 100) refs), '{}'),
 			ARRAY(SELECT id FROM artifacts WHERE run_id = r.id ORDER BY id LIMIT 100),
 			GREATEST(0, run_model_usd(r))::double precision, $3
 			FROM runs r WHERE r.id = $1`, childID, status, !c.Actionable)
@@ -152,26 +155,36 @@ func (s *Store) ConsumeChildResult(ctx context.Context, org, parentID, childID s
 
 func (s *Store) AbortChild(ctx context.Context, org, taskID, childID string) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		c, err := lockChild(ctx, tx, childID)
-		if err != nil {
-			return err
-		}
-		if c.TaskID != taskID {
-			return refusef("child does not belong to this task")
-		}
-		_, err = tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
-			child_stop_reason = 'aborted', control_reason = 'child aborted', keep = false
-			WHERE id = $1 AND child_stop_reason IS NULL AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, childID)
-		return err
+		return AbortChildTx(ctx, tx, taskID, childID)
 	})
 }
 
+func AbortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID string) error {
+	c, err := lockChild(ctx, tx, childID)
+	if err != nil {
+		return err
+	}
+	if c.TaskID != taskID {
+		return refusef("child does not belong to this task")
+	}
+	_, err = tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
+			child_stop_reason = 'aborted', control_reason = 'child aborted', keep = false
+			WHERE id = $1 AND child_stop_reason IS NULL AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, childID)
+	return err
+}
+
 func (s *Store) RestartChild(ctx context.Context, org, taskID, childID, key string) (string, error) {
+	var id string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) { id, err = RestartChildTx(ctx, tx, org, taskID, childID, key); return err })
+	return id, err
+}
+
+func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key string) (string, error) {
 	if key == "" {
 		return "", refusef("a restart idempotency key is required")
 	}
 	var id string
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	err := func() error {
 		c, err := lockChild(ctx, tx, childID)
 		if err != nil {
 			return err
@@ -216,7 +229,7 @@ func (s *Store) RestartChild(ctx context.Context, org, taskID, childID, key stri
 			control = CASE WHEN status IN ('pending', 'scheduled', 'starting', 'running', 'paused') THEN 'abort'::run_control ELSE control END,
 			control_requested_at = now(), keep = false WHERE id = $1`, childID, id)
 		return err
-	})
+	}()
 	return id, err
 }
 
@@ -246,4 +259,79 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 			AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused') AND child_stop_reason IS DISTINCT FROM 'parent-ended'`, taskID, parentID)
 		return err
 	})
+}
+
+// EnqueueChildResults claims bounded work and commits the parent's durable input
+// and receipt together. A crash rolls both back; lux transport happens later.
+func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
+	type pending struct {
+		Org, Parent, Child string
+		Generation         int
+	}
+	var todo []pending
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT organization_id, parent_run_id, child_run_id, generation FROM child_result_outbox
+			WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
+			ORDER BY created_at LIMIT 50`)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[pending])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range todo {
+		err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
+			c, err := lockChild(ctx, tx, p.Child)
+			if err != nil {
+				return err
+			}
+			token := ids.New(ids.Directive)
+			tag, err := tx.Exec(ctx, `UPDATE child_result_outbox SET claimed_by = $4, claimed_until = now() + interval '1 minute'
+				WHERE parent_run_id = $1 AND child_run_id = $2 AND generation = $3 AND consumed_at IS NULL AND stale_at IS NULL
+				AND (claimed_until IS NULL OR claimed_until < now())`, p.Parent, p.Child, p.Generation, token)
+			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			if !c.Actionable || c.ParentID != p.Parent {
+				if _, err := tx.Exec(ctx, `UPDATE child_results SET stale = true WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation); err != nil {
+					return err
+				}
+				_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET stale_at=now(), claimed_by=NULL, claimed_until=NULL WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation)
+				return err
+			}
+			var summary []byte
+			if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,
+				'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale)
+				FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary); err != nil {
+				return err
+			}
+			text, err := childResultText(summary)
+			if err != nil {
+				return err
+			}
+			directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL
+				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, directive, token)
+			if err == nil {
+				n++
+			}
+			return err
+		})
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func childResultText(summary []byte) (string, error) {
+	var out strings.Builder
+	err := mustTemplate("contracts/child-result").Execute(&out, string(summary))
+	return out.String(), err
 }

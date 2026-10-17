@@ -135,6 +135,30 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 	if !settled && !r.Overdue {
 		return a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { return a.askAgainLater(ctx, tx, r) })
 	}
+	var child bool
+	if err := a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL AND status IN ('completed','failed','aborted') FROM runs WHERE id=$1`, r.ID).Scan(&child)
+	}); err != nil {
+		return err
+	}
+	if child {
+		// Drain the terminal stream before taking an immutable result snapshot:
+		// the idle frame can precede the final report and cost records.
+		s := &Syncer{DB: a.DB, Lux: a.Lux, Log: a.Log}
+		if s.Log == nil {
+			s.Log = slog.Default()
+		}
+		if err := s.followOutput(ctx, phaseRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID, SourceKind: "task_conductor"}); err != nil && !lux.IsNotFound(err) {
+			return a.later(ctx, r, err)
+		}
+		luxErr, dbErr := (&Costs{DB: a.DB, Lux: a.Lux, Log: a.Log}).read(ctx, costRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID})
+		if dbErr != nil {
+			return dbErr
+		}
+		if luxErr != nil && !lux.IsNotFound(luxErr) {
+			return a.later(ctx, r, luxErr)
+		}
+	}
 	found, err := a.Lux.Artifacts(ctx, r.LuxRunID)
 	if lux.IsNotFound(err) {
 		found, err = nil, nil // lux no longer has it: nothing more will come
