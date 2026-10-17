@@ -1,13 +1,29 @@
 package phases
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+// backoffOf is how long until Run id's next attempt (0 for none) and its
+// failures in a row.
+func backoffOf(t *testing.T, ctx context.Context, owner *pgx.Conn, id string) (time.Duration, int) {
+	t.Helper()
+	var secs float64
+	var failures int
+	if err := owner.QueryRow(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM next_attempt_at - now())::float8, 0), retry_failures
+		FROM runs WHERE id = $1`, id).Scan(&secs, &failures); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(secs * float64(time.Second)), failures
+}
 
 // A Run whose lux call keeps failing is retried 5 s later, then 10 s, 20 s
 // and so on up to a minute, sweep after sweep; a failure long after the
@@ -19,16 +35,6 @@ func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 	// unavailable.
 	r, fake := endedRun(t, w, "failed", "running", false)
 	fake.err = map[string]error{r.LuxRunID: &lux.Error{Status: 503, Code: "unavailable"}}
-	backoff := func() (time.Duration, int) {
-		t.Helper()
-		var secs float64
-		var failures int
-		if err := w.owner.QueryRow(w.ctx, `SELECT EXTRACT(EPOCH FROM next_attempt_at - now())::float8, retry_failures
-			FROM runs WHERE id = $1`, r.ID).Scan(&secs, &failures); err != nil {
-			t.Fatal(err)
-		}
-		return time.Duration(secs * float64(time.Second)), failures
-	}
 	// sweepLate sweeps once the last retry is due and was due dueAgo ago,
 	// as a sweep after waiting it out finds it.
 	sweepLate := func(dueAgo string, want time.Duration, wantFailures int) {
@@ -41,7 +47,7 @@ func TestARetryBacksOffWhileItsFailuresComeInARow(t *testing.T) {
 		if got := len(fake.Calls()); got != calls+1 {
 			t.Fatalf("the sweep asked lux %d times, want once", got-calls)
 		}
-		got, failures := backoff()
+		got, failures := backoffOf(t, w.ctx, w.owner, r.ID)
 		if got > want+250*time.Millisecond || got < want-2*time.Second || failures != wantFailures {
 			t.Fatalf("backed off %v after %d failures in a row, want %v after %d", got, failures, want, wantFailures)
 		}
@@ -78,16 +84,7 @@ func TestARetryThatSucceedsEndsTheStreak(t *testing.T) {
 		fake.err = errs
 		fake.mu.Unlock()
 	}
-	streak := func() (time.Duration, int) {
-		t.Helper()
-		var secs float64
-		var failures int
-		if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM next_attempt_at - now())::float8, 0), retry_failures
-			FROM runs WHERE id = $1`, r.ID).Scan(&secs, &failures); err != nil {
-			t.Fatal(err)
-		}
-		return time.Duration(secs * float64(time.Second)), failures
-	}
+	streak := func() (time.Duration, int) { t.Helper(); return backoffOf(t, w.ctx, w.owner, r.ID) }
 	sweep := func() {
 		t.Helper()
 		if _, err := w.s.Sweep(w.ctx); err != nil {
@@ -137,13 +134,7 @@ func TestARetryThatFailsWithoutAnErrorStaysInTheStreak(t *testing.T) {
 	if _, err := w.s.Sweep(w.ctx); err != nil {
 		t.Fatal(err)
 	}
-	var secs float64
-	var failures int
-	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM next_attempt_at - now())::float8, 0), retry_failures
-		FROM runs WHERE id = $1`, w.id).Scan(&secs, &failures); err != nil {
-		t.Fatal(err)
-	}
-	if got := time.Duration(secs * float64(time.Second)); failures != 2 || got > 10*time.Second+250*time.Millisecond || got < 8*time.Second {
+	if got, failures := backoffOf(t, w.ctx, w.owner, w.id); failures != 2 || got > 10*time.Second+250*time.Millisecond || got < 8*time.Second {
 		t.Fatalf("backed off %v after %d failures in a row, want 10s after 2", got, failures)
 	}
 }
