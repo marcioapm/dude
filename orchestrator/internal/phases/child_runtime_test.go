@@ -100,8 +100,20 @@ func TestChildCancelReleasesLocks(t *testing.T) {
 
 type childTerminalLux struct {
 	*sweepLux
-	frames []lux.Frame
-	output func(context.Context) error
+	frames    []lux.Frame
+	output    func(context.Context) error
+	submitted []lux.Spec
+	inputs    []lux.InputRequest
+}
+
+func (f *childTerminalLux) Submit(_ context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	f.submitted = append(f.submitted, spec)
+	return lux.Run{ID: "lux_" + key, State: "running"}, nil
+}
+func (f *childTerminalLux) Stop(context.Context, string) error { return nil }
+func (f *childTerminalLux) Input(_ context.Context, _ string, in lux.InputRequest) error {
+	f.inputs = append(f.inputs, in)
+	return nil
 }
 
 func (f *childTerminalLux) Output(ctx context.Context, _, _ string, _ int64, fn func(lux.Frame) error) error {
@@ -235,6 +247,99 @@ func TestChildTerminalCollection(t *testing.T) {
 	}
 	if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
 		t.Fatalf("parent directive %d %v", n, err)
+	}
+}
+
+func TestChildStitchedRoleRoundTrip(t *testing.T) {
+	for _, profile := range []string{"reviewer", "qa_browser"} {
+		t.Run(profile, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`UPDATE tasks SET status='running',acceptance_criteria='["It works"]' WHERE id=$1`, w.run.TaskID)
+			w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('run_round_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state) VALUES('wf_round',$1,$2,'task.delivery','round','waiting','awaitPullRequest',jsonb_build_object('attempt',1,'taskId',$2::text,'projectId',$3::text))`, w.run.Org, w.run.TaskID, w.run.ProjectID)
+			w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+			w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object($2::text,jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org, profile)
+			store := &delivery.Store{DB: w.s.DB}
+			id, err := store.StartChild(w.ctx, delivery.StartChildInput{Parent: delivery.ChildParent{Kind: delivery.ChildParentTaskConductor, Run: delivery.RunRef{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, RunID: "run_round_parent"}}, Profile: profile, Key: "round"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake := &childTerminalLux{sweepLux: &sweepLux{}}
+			w.s.Lux = fake
+			w.s.Agent.DefaultImage = "test/image:latest"
+			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			r := phaseRun{ID: id, Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, Phase: delivery.PhaseForPromptRole(profile), Role: delivery.RoleForPhase[delivery.PhaseForPromptRole(profile)], SourceKind: "task_conductor", Status: "pending", Control: "none", Attempt: 1}
+			if _, err := w.s.advance(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.submitted) != 1 {
+				t.Fatalf("dispatcher submissions %d", len(fake.submitted))
+			}
+			r.LuxRunID = "lux_" + id
+			r.LuxState = "running"
+			r.Status = "running"
+			w.exec(`UPDATE runs SET status='running' WHERE id=$1`, id)
+			report := "```yaml\nseverity: high\ncategory: correctness\ntitle: Reported defect\ndescription: Reproduced defect\n```"
+			if profile == "qa_browser" {
+				report = "```yaml\ncriterion: 1\nstatus: pass\nevidence: evidence.txt\nobserved: It works\n```"
+			}
+			frame := spoke(1)
+			frame = record(1, "acp.agent_message_chunk", map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": report}})
+			fake.frames = []lux.Frame{frame, record(1, "lux.activity", map[string]any{"activity": "idle"})}
+			if err := w.s.followOutput(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.s.finish(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 0 {
+				t.Fatalf("early settlement %d %v", n, err)
+			}
+			fake.frames = nil
+			fake.listed = []lux.Artifact{{ID: "art_round", Path: lux.PublishedPrefix + "evidence.txt", Available: true, Epoch: 1, Version: 1, SHA256: "abc", Size: 3}}
+			if _, err := (&Artifacts{DB: w.s.DB, Lux: fake, Log: w.s.Log}).Sweep(w.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 1 {
+				t.Fatalf("settle %d %v", n, err)
+			}
+			var findings, verdicts int
+			if err := w.owner.QueryRow(w.ctx, `SELECT findings,verdicts FROM child_results WHERE child_run_id=$1`, id).Scan(&findings, &verdicts); err != nil {
+				t.Fatal(err)
+			}
+			if profile == "reviewer" && findings != 1 || profile == "qa_browser" && verdicts != 1 {
+				t.Fatalf("role results %d/%d", findings, verdicts)
+			}
+			if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
+				t.Fatalf("enqueue %d %v", n, err)
+			}
+			var directive string
+			if err := w.owner.QueryRow(w.ctx, `SELECT directive_id FROM child_result_outbox WHERE child_run_id=$1`, id).Scan(&directive); err != nil {
+				t.Fatal(err)
+			}
+			parent := phaseRun{ID: "run_round_parent", Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, Role: "conductor", Status: "running", LuxState: "running", LuxRunID: "lux_parent"}
+			if _, err := w.s.deliverDirectives(w.ctx, parent); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.inputs) != 1 {
+				t.Fatalf("parent inputs %d", len(fake.inputs))
+			}
+			tr := &translator{run: parent}
+			if err := w.s.DB.InOrg(w.ctx, r.Org, func(tx pgx.Tx) error {
+				typ, data := accepted(directive, true, "next_step")
+				if err := tr.shimEvent(w.ctx, tx, w.s, typ, data, 1); err != nil {
+					return err
+				}
+				typ, data = consumed(directive)
+				return tr.shimEvent(w.ctx, tx, w.s, typ, data, 1)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var delivered bool
+			if err := w.owner.QueryRow(w.ctx, `SELECT delivered_at IS NOT NULL FROM directives WHERE id=$1`, directive).Scan(&delivered); err != nil || !delivered {
+				t.Fatalf("receipt %v %v", delivered, err)
+			}
+		})
 	}
 }
 
