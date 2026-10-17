@@ -155,6 +155,21 @@ func TestAConductorsDiffLeavesOutTheTaskBranchItWasFastForwardedTo(t *testing.T)
 	}
 }
 
+func TestTheDiffIgnoresCheckoutReplacementObjects(t *testing.T) {
+	g := newGivenRepo(t, "task")
+	s := g.startedAt
+	m := g.someoneCommits("main", "m.txt", "merged base\n")
+	g.git("merge", "-q", "--no-edit", "lux/main")
+	a := g.commit(g.dir, "own.txt", "the run's work\n", "A")
+	tree := g.git("rev-parse", a+"^{tree}")
+	r := g.in(g.dir, "commit-tree", tree, "-p", s, "-m", "replacement")
+	g.git("replace", m, r)
+
+	if got := diffPaths(g.diff("task " + m)); !slices.Equal(got, []string{"own.txt"}) {
+		t.Fatalf("replacement hid the Run's work: %v", got)
+	}
+}
+
 // What cannot be folded in leaves the diff as it is today, byte for byte:
 // a given commit the checkout lacks, or a ref it never had; one fetched but
 // not merged; a merge of the start with it that conflicts; and a git

@@ -252,6 +252,7 @@ func num(n int) *int { return &n }
 // which keeps its own copy. A failed publish exits 3 after trying every
 // repository.
 const diffScript = `set -u
+export GIT_NO_REPLACE_OBJECTS=1
 dest=$1; shift
 recorded=
 if [ "$dest" = artifacts ]; then
