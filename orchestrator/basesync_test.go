@@ -288,6 +288,42 @@ func TestIntegrationRejectsAStaleConflictAndKeepsFeedback(t *testing.T) {
 	}
 }
 
+// A sync can read a pull request as behind while it already conflicts: its
+// mergeability and its distance from the base are two reads, and the base
+// may move between them. GitHub refuses that update (422); the refusal is
+// recorded once and the next sync, reading the conflict, integrates.
+func TestARefusedUpdateOfAConflictingBranchIsIntegrated(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.gh.AdvanceBase("main", "Base moved")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.HasSuffix(r.URL.Path, "/update-branch") {
+				w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+			}
+			return 0
+		}
+	})
+	w.until("integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'update-branch' AND payload->>'refused' LIKE '%merge conflict%'`, wi); n != 1 {
+		t.Fatalf("%d refused updates recorded", n)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("integrated and waiting again", func() bool {
+		w.sync()
+		return w.count(integrationCompleted, wi) == 1 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='awaitPullRequest' AND status='waiting'`, wi) == 1
+	})
+	if r := w.escalationReason(wi); r != "" {
+		t.Fatal(r)
+	}
+	if out := gitOut(t, w.gh.Repo, "rev-list", "--count", w.gh.Pull(1).Head+"..main"); out != "0" {
+		t.Fatal("base not integrated", out)
+	}
+}
+
 func TestIntegrationStillConflictingEscalatesWithoutLooping(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
