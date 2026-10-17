@@ -18,3 +18,7 @@ This Run has moved 3 times, the limit for one Run; a Reset does not give a move 
 
 The larger machine sizes this Run may move to: none. You run on XL (8 CPUs · 32 GiB · 80 GiB), ORG's largest size: there is none larger to ask for. Use fewer workers or less data, and say in your work what did not fit.
 
+## moving-to-a-removed-size
+
+you are being moved to another size now; ask again once you are there, if it is still too small
+

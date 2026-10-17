@@ -37,7 +37,11 @@ func TestGoldenMachineToolWords(t *testing.T) {
 	say("limit-no-machine", refused(`{"size":"Large","reason":"oom"}`))
 	mustExec(t, f.owner, `DELETE FROM machine_moves WHERE run_id = 'run_mach'`)
 	mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_xl","name":"XL","cpus":8,"memoryMiB":32768,"diskGiB":80,"poolId":"pool_high","from":"task"}' WHERE id = 'run_mach'`)
-	say("another-size", delivery.MustText("results/machines/another-size").Render(nil))
+	say("list-largest", toolDescriptions(t, f, token)["list_machine_sizes"])
+	// A pending move whose size was deleted (to_size_id SET NULL) names none.
+	mustExec(t, f.owner, `INSERT INTO machine_moves (id, organization_id, task_id, run_id, role, kind, from_size, to_size_id, apply)
+		VALUES ('mmv_gone', $1, $2, 'run_mach', 'reviewer', 'raise', '{}', NULL, 'resize')`, f.org, f.item)
+	say("moving-to-a-removed-size", refused(`{"size":"Large","reason":"oom"}`))
 	org := f.str(t, `SELECT name FROM organizations WHERE id = $1`, f.org)
 	path := filepath.Join("..", "delivery", "agents", "testdata", "results-machines.golden.md")
 	got := strings.ReplaceAll(b.String(), org+"'s", "ORG's")
