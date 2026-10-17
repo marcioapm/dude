@@ -23,7 +23,7 @@ import (
 //go:embed agents/roles/*.md agents/contracts agents/briefings
 var agentFiles embed.FS
 
-var agentTemplates = must(parseAgentTemplates(agentFiles))
+var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
 
 // The templates rendered with data, resolved at init by mustTemplate.
 var (
@@ -84,8 +84,8 @@ func mustTemplate(name string) *template.Template {
 	return t
 }
 
-// must is v, or a panic with err: for what the package loads at init.
-func must[T any](v T, err error) T {
+// mustLoad is v, or a panic with err: for what the package loads at init.
+func mustLoad[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
 	}
