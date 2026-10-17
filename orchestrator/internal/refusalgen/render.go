@@ -1,4 +1,4 @@
-//go:generate go run ./cmd
+//go:generate go run ./cmd ../..
 
 // Package refusalgen renders Go format constants without importing their consumers.
 package refusalgen

@@ -1,6 +1,8 @@
+// Command cmd writes the generated refusal files; its one argument is the orchestrator module root.
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -8,7 +10,11 @@ import (
 )
 
 func main() {
-	root := filepath.Join("..", "..")
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: cmd <orchestrator module root>")
+		os.Exit(2)
+	}
+	root := os.Args[1]
 	out, err := refusalgen.Render(os.DirFS(root))
 	if err != nil {
 		panic(err)
