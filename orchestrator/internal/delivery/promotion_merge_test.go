@@ -9,7 +9,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-func must(t *testing.T, c *pgx.Conn, sql string, args ...any) {
+func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	t.Helper()
 	if _, err := c.Exec(context.Background(), sql, args...); err != nil {
 		t.Fatal(err)
@@ -23,8 +23,8 @@ func TestAPromotionsMergeAttemptIsItsCandidatesOwn(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	ctx := context.Background()
-	must(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_m', $1, 'P', 'p', 'P')`, org)
-	must(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_m', $1, 'P', 'p', 'P')`, org)
+	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
 		VALUES ('wi_m', $1, 'prj_m', 1, 'Greet', 'greet', 'running')`, org)
 	s := &Store{DB: app}
 	const commit = "c0ffee0000000000000000000000000000000000"
@@ -65,13 +65,13 @@ func TestAPromotionJudgesAgainstTheTasksBase(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	ctx := context.Background()
-	must(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_n', $1, 'P', 'p', 'P')`, org)
-	must(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_n', $1, 'P', 'p', 'P')`, org)
+	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ('repo_n1', $1, 'prj_n', 'target', 'git://x/target.git', 'main'),
 		       ('repo_n2', $1, 'prj_n', 'web', 'git://x/web.git', 'trunk')`, org)
-	must(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
 		VALUES ('wi_n', $1, 'prj_n', 1, 'Greet', 'greet', 'running')`, org)
-	must(t, owner, `INSERT INTO task_repositories (task_id, repository_id, organization_id, access)
+	mustExec(t, owner, `INSERT INTO task_repositories (task_id, repository_id, organization_id, access)
 		VALUES ('wi_n', 'repo_n1', $1, 'write'), ('wi_n', 'repo_n2', $1, 'write')`, org)
 	got, err := (&Store{DB: app}).baseBranches(ctx, org, &State{TaskID: "wi_n", Bases: map[string]string{"target": "release/2"}})
 	if err != nil {
