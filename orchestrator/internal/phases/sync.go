@@ -84,6 +84,9 @@ type Syncer struct {
 	// For tests: how long a conductor's input waits for its checkout's
 	// sync to be reported; zero is checkoutSyncWait.
 	CheckoutSyncWait time.Duration
+	// For tests: how long a finished turn waits for lux's git.checkout;
+	// zero is baseWait.
+	BaseWait time.Duration
 	// For tests: the budget of a sweep's stall reports for asking lux;
 	// zero is stallLuxBudget.
 	StallLuxBudget time.Duration
@@ -434,14 +437,27 @@ const sweepBatch = 1000
 
 // actionable (SQL, over runFrom): a Run the sweep has something to do for
 // now, sorted ahead of those it only follows. A finished phase is
-// collected. A conductor's finished turn is work only when something is
-// queued for it, its warm period is over, or its container stopped: a
-// warm, quiet conductor waits for a person, and a thousand of them must
-// not keep a newer pending Run out of the batch.
+// collected, unless it is waiting for its checkout's base (baseWaiting).
+// A conductor's finished turn is work only when something is queued for
+// it, its warm period is over, or its container stopped: a warm, quiet
+// conductor waits for a person, and a thousand of them, or of phase Runs
+// waiting for a base, must not keep a newer pending Run out of the batch.
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
-	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
-		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT ` + baseWaiting + `) OR ` + unsentDirective + `
+		OR (r.phase IS NULL AND r.turn_done_at < now() - make_interval(secs => lim.warm_secs))
 		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
+
+// baseMissing (SQL, over runs r): a repository the Run pushes has no
+// recorded base (git.checkout) yet.
+const baseMissing = `EXISTS (SELECT 1 FROM unnest(r.lux_pushes) p WHERE NOT r.base_shas ? p)`
+
+// baseWaiting (SQL, over runs r; $6 the base wait in seconds): finish
+// would wait for the Run's checkout bases — live, pushing, not yet asked
+// to push, a base missing and its turn ended within the wait. lux
+// reporting the Run over ends the wait as well; actionable checks that.
+const baseWaiting = `(r.status IN ('scheduled', 'starting', 'running') AND COALESCE(r.push_branch, '') <> ''
+	AND r.push_result IS NULL AND COALESCE(r.push_request_id, '') = '' AND ` + baseMissing + `
+	AND r.turn_done_at > now() - make_interval(secs => $6::float8))`
 
 // due is what one sweep takes up: every live Run, not the oldest N — a Run
 // with nothing to do still needs its stream followed, and a paused, idle
@@ -465,7 +481,7 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 	var runs []phaseRun
 	b := &pgx.Batch{}
 	b.Queue(`SELECT set_config('jit', 'off', true)`)
-	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit)...).Query(func(rows pgx.Rows) (err error) {
+	b.Queue(dueQuery, append(s.limits(), s.RetryAhead.Seconds(), limit, s.baseWait().Seconds())...).Query(func(rows pgx.Rows) (err error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
 		return err
 	})
@@ -474,7 +490,8 @@ func (s *Syncer) dueIn(ctx context.Context, tx pgx.Tx, limit int) ([]phaseRun, e
 }
 
 // dueQuery is due's selection. Its parameters: runFrom's $1–$3, $4 how far
-// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch.
+// ahead a back-off counts as over (RetryAhead, seconds), $5 the batch, $6
+// the base wait (seconds).
 const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			WHERE ` + sweptRuns + `
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -1744,6 +1761,22 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
 	if pushes && r.PushResult == nil {
+		if r.PushRequestID == "" {
+			// lux's git.checkout, which says where each checkout started,
+			// trails the agent's records like any lifecycle event: a turn
+			// read before it waits for it, and nothing is pushed without it.
+			bases, missing, over, err := s.checkoutBases(ctx, r)
+			if err != nil {
+				return true, err
+			}
+			if missing {
+				if over || lux.Terminal(r.LuxState) {
+					return true, s.failKept(ctx, r, errNoBase.Error())
+				}
+				return false, nil
+			}
+			r.BaseSHAs = bases
+		}
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
 		// the agent's own records by up to a second, so the state recorded
@@ -1862,6 +1895,34 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+// baseWait is how long after its turn ended a Run waits for lux to say
+// where a checkout it pushes started. lux flushes lifecycle events on a
+// timer and they trail the agent's records by about a second; two minutes
+// covers a lux restart or a stalled event stream, and is short enough that
+// a lux that lost the event fails the Run while its container is still
+// worth resuming.
+const baseWait = 2 * time.Minute
+
+// checkoutBases reads r's recorded bases afresh: the follower may have
+// recorded git.checkout since the sweep read the Run. missing: a
+// repository the Run pushes has no base yet; over: its turn ended longer
+// than the base wait ago.
+func (s *Syncer) checkoutBases(ctx context.Context, r phaseRun) (bases map[string]string, missing, over bool, err error) {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT r.base_shas, `+baseMissing+`,
+				COALESCE(r.turn_done_at <= now() - make_interval(secs => $2), false)
+			FROM runs r WHERE r.id = $1`, r.ID, s.baseWait().Seconds()).Scan(&bases, &missing, &over)
+	})
+	return bases, missing, over, err
+}
+
+func (s *Syncer) baseWait() time.Duration {
+	if s.BaseWait == 0 {
+		return baseWait
+	}
+	return s.BaseWait
 }
 
 // resolutionsHeld weighs the feedback r resolved with a commit against
