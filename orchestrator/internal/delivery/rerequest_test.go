@@ -733,6 +733,20 @@ func (f *rerequestFixture) advisoryLocks() int {
 	return n
 }
 
+// untilNoAdvisoryLocks is advisoryLocks once it reads 0, or at within. A
+// connection pgx closes after a failed statement is gone on the client at
+// once, but its backend frees its session locks only when it exits, after.
+func (f *rerequestFixture) untilNoAdvisoryLocks(within time.Duration) int {
+	f.t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		if n := f.advisoryLocks(); n == 0 || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A lock whose release fails is not pooled: when the holder's session
 // ended, or no longer holds the lock, unlock closes the connection, which
 // frees the lock, and the next re-request of the same head runs.
@@ -838,7 +852,7 @@ func TestARerequestThatPanicsOrIsCanceledFreesItsSlotAndLock(t *testing.T) {
 			f.usePool(4)
 			head := f.fix("target")
 			tc.end(f, head)
-			if n, out := f.advisoryLocks(), f.s.DB.Pool.Stat().AcquiredConns(); n != 0 || out != 0 {
+			if n, out := f.untilNoAdvisoryLocks(5*time.Second), f.s.DB.Pool.Stat().AcquiredConns(); n != 0 || out != 0 {
 				t.Fatalf("after the holder ended: %d advisory locks, %d connections out", n, out)
 			}
 			if err := f.rerequest(map[string]string{"target": head}); err != nil {
