@@ -334,12 +334,11 @@ func TestANoMergeIntegrationLeavesWhatItPublishedElsewhereOnTheCandidate(t *test
 	if got := w.web.SHA(delivery.BranchFor(wi, 1)); got != "" {
 		t.Fatalf("web's task branch is at %s: an integration never promoted moved it", got)
 	}
-	var head string
-	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', '') FROM workflow_runs
-		WHERE task_id = $1`, wi).Scan(&head); err != nil {
-		t.Fatal(err)
+	if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
+		t.Fatal(code, body)
 	}
-	if head != "" {
-		t.Fatalf("the delivery's web head %q, want none: web's task branch holds nothing", head)
+	w.until("a second integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
+	if n := w.count(integrationRuns+` AND base_refs->>'web' = $2`, wi, pushed); n != 0 {
+		t.Fatalf("the retry started from the abandoned web candidate head %s", pushed)
 	}
 }

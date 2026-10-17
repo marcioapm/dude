@@ -15,11 +15,15 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // checkedAt says what dude had not finished at sha in the task's target
@@ -135,5 +139,116 @@ func TestAnIntegrationReachesThePullRequestOnlyOnceReviewedAndTested(t *testing.
 				t.Fatalf("integration Runs on the candidate %d, want 1", n)
 			}
 		})
+	}
+}
+
+// A person's push during integration refuses promotion and keeps the
+// conflict comment for the fix after they choose to wait.
+func TestAnIntegrationPersonPushKeepsConflictFeedback(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	var once sync.Once
+	var person, branch string
+	armed := w.gated(func(step, next string) {
+		if step == "awaitPRFix" && next == "review" {
+			once.Do(func() { person = w.commitFileIn(w.gh.Repo, branch, "PERSON.md", "mine\n", "A person's push") })
+		}
+	})
+	wi := w.reviewing()
+	branch = w.gh.Pull(1).Head
+	w.conflictWithMovedBase()
+	w.gh.Comment(1, "alice", "Please keep this comment.")
+	armed.Store(true)
+	w.until("refused", func() bool { w.sync(); return w.escalationReason(wi) != "" })
+	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q", r)
+	}
+	if got := w.gh.SHA(branch); got != person || person == "" {
+		t.Fatalf("PR at %s, want the person's %s", got, person)
+	}
+	if n := w.count(integrationCompleted, wi); n != 0 {
+		t.Fatalf("integration-completed %d on a refused promotion", n)
+	}
+	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
+		t.Fatal(code, body)
+	}
+	w.until("a fix given the comment", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%keep this comment%'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-refused' AND payload->>'cause'=$2`, wi, delivery.ReasonPullRequestMoved); n != 1 {
+		t.Fatalf("integration-refused lines %d", n)
+	}
+}
+
+// A failed integration test is fixed and tested on the candidate before the
+// pull request branch moves to the promoted head.
+func TestAnIntegrationTestFixStaysOnCandidate(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.task()
+	w.names(wi, w.repoID)
+	p := scriptedPolicy()
+	p.Test = true
+	w.start(wi, p)
+	w.until("PR waiting", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	branch := w.gh.Pull(1).Head
+	before := len(w.gh.BranchLog(branch))
+	w.onModel("qa_browser", fakeagent.TestFailOnceModel)
+	w.conflictOnFactory()
+	w.until("integration completed", func() bool {
+		w.sync()
+		if r := w.escalationReason(wi); r != "" {
+			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
+		}
+		return w.count(integrationCompleted, wi) == 1
+	})
+	moves := w.gh.BranchLog(branch)[before:]
+	if len(moves) != 1 {
+		t.Fatalf("PR branch moved %d times: %v", len(moves), moves)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed' AND base_refs->>'target' = $2`, wi, moves[0]); n != 1 {
+		t.Fatalf("tests completed at the promoted head: %d", n)
+	}
+	if tests := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND creation_key LIKE '%:integration:%'`, wi); tests < 2 {
+		t.Fatalf("integration tests %d, want at least 2", tests)
+	}
+	if fixes := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND branch LIKE '%-candidate'`, wi); fixes < 2 {
+		t.Fatalf("candidate fixes %d, want at least 2", fixes)
+	}
+}
+
+// A person may accept an integration review after all reviewers failed; the
+// accepted candidate is promoted without starting another review round.
+func TestAnAcceptedFailedIntegrationReviewIsPromoted(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	scripted := w.lux.Decide
+	var crashing atomic.Bool
+	crashing.Store(true)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "review" && crashing.Load() {
+			return fakelux.Behaviour{Crash: true}
+		}
+		return scripted(spec)
+	}
+	w.conflictWithMovedBase()
+	w.until("review_failed", func() bool { w.sync(); return w.escalationReason(wi) != "" })
+	if r := w.escalationReason(wi); r != "review_failed" {
+		t.Fatalf("escalated %q", r)
+	}
+	crashing.Store(false)
+	reviews := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi)
+	if code, body := w.decide(w.person("owner"), wi, "accept", "Read the merge myself."); code != 200 {
+		t.Fatal(code, body)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("promoted", func() bool { w.sync(); return w.gh.SHA(branch) != before && w.count(integrationCompleted, wi) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi); n != reviews {
+		t.Fatalf("%d reviews after the person accepted", n-reviews)
 	}
 }

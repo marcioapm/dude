@@ -1854,7 +1854,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		st.PendingRunIDs, st.Heads, st.ChangedPaths = nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)
 		// Nothing published to the conflicting repository is no merge: its
 		// review and test would judge the head that conflicts. A push to
-		// another repository is still where that one's work stands.
+		// another repository stays on the candidate, never promoted.
 		if _, merged := out.Heads[st.Integration.Repo]; !merged {
 			return w.integrationFailure(ctx, sc, st, causeNoMerge, reasonNoMerge)
 		}
@@ -2066,6 +2066,13 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	// The candidate goes no further: its resolutions hold where it moved.
 	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
+	}
+	// A person's push refused an integration candidate; close its live
+	// resolving-conflicts activity before escalating the moved pull request.
+	if st.Integration != nil {
+		if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": ReasonPullRequestMoved}); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	// What the pull request shows is what the delivery stands on now; a
 	// retry fixes the same feedback again from there.

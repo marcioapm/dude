@@ -1483,7 +1483,8 @@ func (s *Server) moved(branch, sha string) {
 
 // BranchLog is every head the API moved branch to (a fast-forward, a
 // create, a merge into it, an update-branch), oldest first: what anyone
-// reading the branch on GitHub could have seen it at.
+// reading the branch on GitHub could have seen it at. Git pushes through
+// the smart HTTP path are not recorded.
 func (s *Server) BranchLog(branch string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
