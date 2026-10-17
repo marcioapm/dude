@@ -75,15 +75,15 @@ func parentsOf(parents []string) string {
 // is the one way a writer's publish moves a task branch: a fast-forward,
 // never a force, then Settle with its answer.
 func Branch(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted func() (bool, error), beforeMerge ...func() error) (Result, error) {
-	refusal := gh.FastForward(ctx, slug, branch, commit)
-	return Settle(ctx, gh, slug, branch, baseBranch, start, commit, refusal, attempted, beforeMerge...)
+	return Settle(ctx, gh, slug, branch, baseBranch, start, commit,
+		gh.FastForward(ctx, slug, branch, commit), attempted, beforeMerge...)
 }
 
 // Existing is Branch for a branch that must exist already: a deleted one
 // is GitHub's refusal, never created again.
 func Existing(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, start, commit string, attempted func() (bool, error), beforeMerge ...func() error) (Result, error) {
-	refusal := gh.FastForwardExisting(ctx, slug, branch, commit)
-	return Settle(ctx, gh, slug, branch, baseBranch, start, commit, refusal, attempted, beforeMerge...)
+	return Settle(ctx, gh, slug, branch, baseBranch, start, commit,
+		gh.FastForwardExisting(ctx, slug, branch, commit), attempted, beforeMerge...)
 }
 
 // Settle goes on from a fast-forward of branch to commit that answered
