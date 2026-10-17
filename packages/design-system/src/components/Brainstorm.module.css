@@ -200,7 +200,6 @@
    margin, as a ChatEvent's — no frame, no tone, the chevron at its end. */
 .folded {
   min-width: 0;
-  max-width: 860px;
 }
 .foldedOpen {
   background: var(--ds-color-surface);
