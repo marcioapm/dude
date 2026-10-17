@@ -161,6 +161,77 @@ func TestAConductorsActionIsInThePullRequestRecordWithoutAWebhook(t *testing.T) 
 	}
 }
 
+// rerunRefusedWith makes GitHub answer each Actions job rerun with status
+// while it is set (0 lets it through); the reruns it was asked for.
+func (w *world) rerunRefusedWith(status *atomic.Int32) *atomic.Int32 {
+	asked := &atomic.Int32{}
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/actions/jobs/77/rerun") {
+				asked.Add(1)
+				return int(status.Load())
+			}
+			return 0
+		}
+	})
+	return asked
+}
+
+// GitHub refusing a rerun outright (a workflow still running) reruns
+// nothing, so the head's one rerun is not spent: asked again, dude asks
+// GitHub again, and that rerun, once it happens, is the head's.
+func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	var status atomic.Int32
+	status.Store(http.StatusConflict)
+	asked := w.rerunRefusedWith(&status)
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "ask again once CI on this head has finished")
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'released' IN (SELECT id FROM events WHERE task_id = $1 AND payload->>'claimed' = 'true')`, task); n != 1 {
+		t.Errorf("%d releases of the claim recorded, want 1", n)
+	}
+	status.Store(0)
+	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.JobsRerun, []int64{77}) {
+			t.Errorf("jobs re-run %v", s.JobsRerun)
+		}
+	})
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "already")
+	if n := asked.Load(); n != 2 {
+		t.Errorf("GitHub was asked %d times, want 2", n)
+	}
+}
+
+// A rerun whose outcome is unknown (GitHub failing, not refusing) keeps the
+// head's claim: it may have happened, and is not asked again.
+func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	var status atomic.Int32
+	status.Store(http.StatusBadGateway)
+	asked := w.rerunRefusedWith(&status)
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "may or may not have happened")
+	status.Store(0)
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "already")
+	if n := asked.Load(); n != 1 {
+		t.Errorf("GitHub was asked %d times, want 1", n)
+	}
+}
+
 // Two simultaneous reruns claim the head before GitHub is asked: exactly
 // one request reaches GitHub, and the other is refused.
 func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
