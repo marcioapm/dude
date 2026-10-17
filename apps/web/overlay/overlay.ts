@@ -299,8 +299,7 @@ export class Overlay {
   }
 
   #applyTheme(): void {
-    const theme = this.theme;
-    if (this.#top.getAttribute("data-theme") !== theme) this.#top.setAttribute("data-theme", theme);
+    if (this.#top.getAttribute("data-theme") !== this.theme) this.#top.setAttribute("data-theme", this.theme);
   }
 
   readonly #onOsTheme = (): void => {
