@@ -597,6 +597,8 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.beforeDue(ctx); err != nil {
 		return 0, err
 	}
+	slots, _ := s.pools()
+	busy := slots.busyIDs()
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
@@ -605,7 +607,6 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	// hold up submitting, following and steering every other Run. A Run an
 	// earlier pass is still advancing is left to it: two advances of one Run
 	// must never run at once.
-	slots, _ := s.pools()
 	wait := s.passWait()
 	defer wait.stop()
 	// Buffered for every Run, so work finishing after the pass returned
@@ -613,6 +614,11 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	results := make(chan bool, len(runs))
 	started := 0
 	for _, r := range runs {
+		// Its row was read while an earlier advance was still changing it;
+		// the next pass reads it fresh.
+		if busy[r.ID] {
+			continue
+		}
 		if !slots.claim(r.ID) {
 			continue
 		}

@@ -15,13 +15,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// hangLux holds the first cancel of each lux Run in hang until release,
-// then refuses it as lux unavailable; every other cancel succeeds. It
-// counts cancels per lux Run and how many of one were in flight at once.
+// hangLux holds the first cancel of each lux Run in hang until release
+// (its own gate if it has one, else open), then refuses it as lux
+// unavailable; every other cancel succeeds. It counts cancels per lux Run
+// and how many of one were in flight at once.
 type hangLux struct {
 	lux.Client
 	hang    map[string]bool
 	open    chan struct{}
+	gates   map[string]chan struct{}
 	mu      sync.Mutex
 	calls   map[string]int
 	running map[string]int
@@ -29,12 +31,19 @@ type hangLux struct {
 }
 
 func newHangLux(hung ...string) *hangLux {
-	h := &hangLux{hang: map[string]bool{}, open: make(chan struct{}),
+	h := &hangLux{hang: map[string]bool{}, open: make(chan struct{}), gates: map[string]chan struct{}{},
 		calls: map[string]int{}, running: map[string]int{}, most: map[string]int{}}
 	for _, id := range hung {
 		h.hang[id] = true
 	}
 	return h
+}
+
+// gate makes id's hung cancel wait for the returned channel instead of open.
+func (h *hangLux) gate(id string) chan struct{} {
+	g := make(chan struct{})
+	h.hang[id], h.gates[id] = true, g
+	return g
 }
 
 func (h *hangLux) Cancel(ctx context.Context, id string) error {
@@ -43,13 +52,17 @@ func (h *hangLux) Cancel(ctx context.Context, id string) error {
 	first := h.calls[id] == 1
 	h.running[id]++
 	h.most[id] = max(h.most[id], h.running[id])
+	release := h.open
+	if g, ok := h.gates[id]; ok {
+		release = g
+	}
 	h.mu.Unlock()
 	defer func() { h.mu.Lock(); h.running[id]--; h.mu.Unlock() }()
 	if !first || !h.hang[id] {
 		return nil
 	}
 	select {
-	case <-h.open:
+	case <-release:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -197,6 +210,74 @@ func TestASweepWithEverySlotHeldReturnsAfterItsWait(t *testing.T) {
 	w.sweep(sweepSlots + 1)
 	if calls, _ := fake.count("lbehind"); calls != 1 {
 		t.Errorf("the Run behind the hung ones was asked %d times once they were let go, want once", calls)
+	}
+}
+
+// A Run whose earlier advance ends during a pass that read it while it was
+// still busy is not advanced again from that row: once per pass at most,
+// and not before the back-off its advance wrote is over.
+func TestARunFreedMidPassIsNotAdvancedFromItsStaleRow(t *testing.T) {
+	var hung []string
+	for i := range sweepSlots - 1 {
+		hung = append(hung, fmt.Sprintf("hung%d", i))
+	}
+	luxIDs := make([]string, len(hung))
+	for i, id := range hung {
+		luxIDs[i] = "l" + id
+	}
+	fake := newHangLux(luxIDs...)
+	gx := fake.gate("lx")
+	w := newSweepWorld(t, fake)
+	w.s.RetryAhead = 0
+	w.failed(hung...)
+	w.failed("x")
+	slots, _ := w.s.pools()
+
+	// The hung Runs and x fill every slot.
+	w.sweep(0)
+	// A Run sorted before x, so the next pass waits for a slot on it
+	// before it reaches x.
+	w.failed("behind")
+	w.run(`UPDATE runs SET created_at = (SELECT created_at FROM runs WHERE id = 'x') - interval '1 millisecond' WHERE id = 'behind'`)
+
+	w.s.SweepWait = 5 * time.Second
+	done := make(chan int, 1)
+	go func() {
+		n, err := w.s.Sweep(w.ctx)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- n
+	}()
+	for deadline := time.Now().Add(10 * time.Second); !slots.busyIDs()["behind"]; {
+		if time.Now().After(deadline) {
+			t.Fatal("the pass never reached the Run before x")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// x fails as lux unavailable and is backed off; its slot goes to the
+	// Run before it, whose cancel succeeds and frees the slot again.
+	close(gx)
+	if n := <-done; n != 1 {
+		t.Errorf("the pass advanced %d Runs, want 1 (the one before x)", n)
+	}
+	if calls, most := fake.count("lx"); calls != 1 || most != 1 {
+		t.Fatalf("x was asked %d times, %d at once, in the pass that read it busy; want once", calls, most)
+	}
+	if calls, _ := fake.count("lbehind"); calls != 1 {
+		t.Errorf("the Run before x was asked %d times, want once", calls)
+	}
+
+	// Its back-off holds: x is not due for 5 s.
+	w.s.SweepWait = 0
+	w.sweep(0)
+	if calls, _ := fake.count("lx"); calls != 1 {
+		t.Errorf("x was asked %d times before its back-off was over, want once", calls)
+	}
+	w.run(`UPDATE runs SET next_attempt_at = now() WHERE id = 'x'`)
+	w.sweep(1)
+	if calls, most := fake.count("lx"); calls != 2 || most != 1 {
+		t.Errorf("x was asked %d times, %d at once, once due; want twice, one at a time", calls, most)
 	}
 }
 

@@ -34,6 +34,17 @@ func (p *pool) claim(id string) bool {
 	return true
 }
 
+// busyIDs is a copy of the ids claimed now.
+func (p *pool) busyIDs() map[string]bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := make(map[string]bool, len(p.busy))
+	for id := range p.busy {
+		ids[id] = true
+	}
+	return ids
+}
+
 func (p *pool) unclaim(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
