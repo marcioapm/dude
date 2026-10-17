@@ -133,9 +133,9 @@ func TestAHugeLogIsReadToItsCapOnly(t *testing.T) {
 		t.Errorf("%d bytes, ends %q", len(out), out[max(0, len(out)-80):])
 	}
 	// A line longer than the reader's buffer is kept to its start.
-	long := strings.Repeat("y", 200<<10) + "\n##[error]boom\n"
+	long := strings.Repeat("y", 64<<10) + strings.Repeat("z", 136<<10) + "\n##[error]boom\n"
 	if out, err := logTail(strings.NewReader(long), 8000); err != nil || !strings.HasSuffix(out, "\n##[error]boom") ||
-		strings.Count(out, "y") > logLineMax {
+		out != strings.Repeat("y", logLineMax)+"\n##[error]boom" {
 		t.Errorf("long line: %v, %d bytes", err, len(out))
 	}
 }
