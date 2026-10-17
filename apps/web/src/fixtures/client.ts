@@ -16,6 +16,8 @@ import type { NavProject } from "@dude/design-system";
 import { canStart, canStop, feedbackHolds } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
+import { EventTypes, PULL_REQUEST_OPEN, STOP_AGENTS_FIRST, UNARCHIVE_FIRST, closedBy, lifecycleBusy, lifecycleEnded } from "@dude/domain";
+import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
@@ -420,6 +422,64 @@ export class FixtureClient extends ApiClient {
     this.#recovery = null;
     this.#task = { ...this.#task, status: "running" };
     return { action };
+  }
+
+  // Lifecycle, as the orchestrator answers it (delivery/lifecycle_write.go): the same refusals, by code.
+  #lifecycleEvent(eventType: string, payload: Record<string, unknown>, causationId: string | null = null): string {
+    const cursor = (this.#events.at(-1)?.cursor ?? 10_000) + 1;
+    const eventId = `evt_life_${cursor}`;
+    this.#events = [...this.#events, { ...this.#events[0]!, cursor, eventId, eventType, occurredAt: new Date().toISOString(), runId: null,
+      actor: { type: "human", id: YOU, name: "Márcio Martins" }, causationId, payload }];
+    return eventId;
+  }
+  #closeHere(d: CloseDecision, andArchived: boolean): string {
+    const t = this.#task;
+    if (t.archivedAt) throw new ApiError(409, "archived", `${t.key} is archived: unarchive it first.`);
+    const busy = lifecycleBusy(t.status);
+    if (busy === "running") throw new ApiError(409, "running", `${STOP_AGENTS_FIRST}: ${t.key} is in progress.`);
+    if (busy === "review") throw new ApiError(409, "review", `${PULL_REQUEST_OPEN}: ${t.key} is in review.`);
+    this.#task = { ...t, status: "aborted", resolution: d.resolution, duplicateOf: d.duplicateOf ?? null,
+      closedBy: { id: YOU, name: PEOPLE[0]!.name, photoUrl: null, online: true } };
+    return this.#lifecycleEvent(EventTypes.TaskClosed, { resolution: d.resolution, ...(d.duplicateOf ? { duplicateOf: d.duplicateOf } : {}),
+      ...(d.note ? { note: d.note } : {}), ...(andArchived ? { andArchived: true } : {}) });
+  }
+  override async closeTask(_taskId: string, d: CloseDecision): Promise<unknown> {
+    await wait(150);
+    if (lifecycleEnded(this.#task.status, this.#task.resolution)) throw new ApiError(409, "conflict", `${this.#task.key} has already ended.`);
+    this.#closeHere(d, false);
+    return { resolution: d.resolution };
+  }
+  override async reopenTask(_taskId: string): Promise<unknown> {
+    await wait(150);
+    const t = this.#task;
+    if (t.archivedAt) throw new ApiError(409, "archived", `${t.key} is archived. ${UNARCHIVE_FIRST}.`);
+    if (!closedBy(t.resolution)) throw new ApiError(409, "conflict", `${t.key} isn't closed: there is nothing to reopen.`);
+    this.#lifecycleEvent(EventTypes.TaskReopened, { was: t.resolution });
+    this.#task = { ...t, status: "received", resolution: null, duplicateOf: null, closedBy: null };
+    return { status: "received" };
+  }
+  override async archiveTask(_taskId: string, d?: CloseDecision): Promise<unknown> {
+    await wait(150);
+    const t = this.#task;
+    if (t.archivedAt) throw new ApiError(409, "conflict", `${t.key} is already archived.`);
+    let cause: string | null = null;
+    if (!lifecycleEnded(t.status, t.resolution)) {
+      if (!d?.resolution) throw new ApiError(409, "not_ended", `${t.key} hasn't ended: archiving it needs a resolution.`);
+      cause = this.#closeHere(d, true);
+    }
+    this.#task = { ...this.#task, archivedAt: new Date().toISOString(), archivedBy: { id: YOU, name: PEOPLE[0]!.name, photoUrl: null, online: true } };
+    this.#lifecycleEvent(EventTypes.TaskArchived, cause ? { viaClose: true } : {}, cause);
+    return { key: t.key };
+  }
+  override async unarchiveTask(_taskId: string): Promise<unknown> {
+    await wait(150);
+    if (!this.#task.archivedAt) throw new ApiError(409, "conflict", `${this.#task.key} isn't archived.`);
+    this.#task = { ...this.#task, archivedAt: null, archivedBy: null };
+    this.#lifecycleEvent(EventTypes.TaskUnarchived, {});
+    return {};
+  }
+  override archivedTasks(_projectId: string): Promise<{ tasks: TaskDetail[] }> {
+    return Promise.resolve({ tasks: this.#task.archivedAt ? [this.#task] : [] });
   }
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */

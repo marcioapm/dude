@@ -91,6 +91,7 @@ import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
+import { TaskMenu, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -322,6 +323,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
   // What it waits on and what waits on it: with the page's reads, and on relations.changed.
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
+  // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
+  const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
+  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting, onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);
@@ -520,8 +524,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Overview's StartChoice cards offer both then; the header's buttons are for every other tab.
   const startInHeader = startable && tab !== "overview";
   const stopped = item.status === "aborted" || item.status === "failed";
-  // The pick-up is the current attempt's: an earlier one is only to read.
-  const stop = stopped && !earlier ? stopOfTask : null;
+  // The pick-up is the current attempt's: an earlier one is only to read. A
+  // closed task is picked back up by none of the ways: its notice offers Reopen.
+  const stop = stopped && !earlier && !item.resolution && !item.archivedAt ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
@@ -602,6 +607,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Button variant="quiet" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
             Edit
           </Button>
+          {!earlier ? <TaskMenu items={lifecycle.items} /> : null}
         </span>
       </header>
 
@@ -611,6 +617,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
+            {!earlier ? lifecycle.marks : null}
             {driver}
             {!earlier ? <MergeHoldChip count={feedback.blocking} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
@@ -636,9 +643,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
+          {!earlier ? lifecycle.notice : null}
+          {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
           {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
           {item.escalation && !earlier ? (
@@ -661,6 +670,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       {editing ? (
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
+      {lifecycle.dialogs}
       {pickingUp && stop && recovery ? (
         <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
           onEdit={() => {

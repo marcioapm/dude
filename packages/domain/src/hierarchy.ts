@@ -438,6 +438,14 @@ export const taskSchema = z.object({
   handedBack: z.boolean().default(false),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
+  /** Why a person ended it (lifecycle.ts); null while it hasn't. */
+  resolution: z.enum(["wont_do", "duplicate", "cant_reproduce", "nothing_to_merge"]).nullable().default(null),
+  /** Closed as a duplicate of this key. */
+  duplicateOf: z.string().nullable().default(null),
+  /** Put away, and by whom: out of every everyday view. */
+  archivedAt: z.string().nullable().default(null),
+  archivedBy: personRefSchema.nullable().default(null),
+  closedBy: personRefSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
@@ -477,6 +485,8 @@ export const recoveryOptionsSchema = z.object({
   attempt: z.number().int(),
   /** Until when a resume can: when the first of the kept Runs stops being kept. */
   keptUntil: z.string().nullable(),
+  /** Set when a person closed or archived it: no way is open, the page offers Reopen or Unarchive. */
+  refused: z.enum(["closed", "archived"]).nullable().optional(),
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 

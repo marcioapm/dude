@@ -27,7 +27,7 @@ import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
-import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
+import { ArchiveEpicConfirm, DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { InboxScreen } from "./screens/InboxScreen.tsx";
 import { NotFound } from "./screens/NotFound.tsx";
@@ -36,6 +36,7 @@ import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
+import { ArchivedTasks } from "./screens/ArchivedTasks.tsx";
 import { EpicCoordination } from "./screens/EpicCoordination.tsx";
 import type { EpicView } from "./place.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
@@ -63,11 +64,12 @@ type Open =
   | { kind: "task"; projectId: string; epicId: string | null; editing?: string }
   | Extract<Intent, { kind: "newEpic" }>
   | Extract<Intent, { kind: "editEpic" }>
-  | Extract<Intent, { kind: "deleteEpic" }>;
+  | Extract<Intent, { kind: "deleteEpic" }>
+  | Extract<Intent, { kind: "archiveEpic" }>;
 
 const GROUP_BY_EPIC = "dude.board.groupByEpic";
 
-const OPENS_A_DIALOG: ReadonlySet<Intent["kind"]> = new Set(["newTask", "editTask", "newEpic", "editEpic", "deleteEpic"]);
+const OPENS_A_DIALOG: ReadonlySet<Intent["kind"]> = new Set(["newTask", "editTask", "newEpic", "editEpic", "deleteEpic", "archiveEpic"]);
 
 /**
  * Where something sits: its project, its epic when it has one, and its work
@@ -166,6 +168,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
   const [groupByEpic, setGroupByEpic] = useState(() => localStorage.getItem(GROUP_BY_EPIC) === "1");
+  // The board's "N archived" opens its project's archived list above the epics.
+  const [showArchived, setShowArchived] = useState(false);
   const { toast } = useToast();
 
   /** Move to a place, as a step Back can undo — or, with `replace`, in place of this one. */
@@ -527,13 +531,22 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             <LitEpicOrder lit={litCard} project={project} epic={epic} onOpen={openByKey} />
             <EpicMetricsSection client={client} epicId={epic.id} version={version} />
           </>
-        ) : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
+        ) : <>
+          {showArchived ? <ArchivedTasks client={client} projectId={project.id} version={version} onOpen={(id) => go(inTree({ kind: "task", id }))} /> : null}
+          <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />
+        </>}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         filter={boardFilter}
         onFilterChange={setBoardFilter}
         onHighlightChange={litCard.set}
         cardStart={cardStart}
+        archivedHint={!epic && project.archivedCount ? (
+          <Button size="sm" variant="quiet" aria-expanded={showArchived} data-testid="archived-hint"
+            onClick={() => setShowArchived((s) => !s)}>
+            {project.archivedCount} archived
+          </Button>
+        ) : undefined}
         groupBy={groupByEpic ? "epic" : null}
         laneMenu={(lane) => {
           if (!lane.epic) return null;
@@ -585,6 +598,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
               onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, epic) })}>
               Edit epic
+            </Button>
+            <Button size="sm" variant="quiet" leadingIcon="archive" data-testid="archive-epic-button"
+              onClick={() => act({ kind: "archiveEpic", epic: epicRef(project.id, epic), tasks: epic.tasks })}>
+              Archive…
             </Button>
             {newTask}
           </>} />
@@ -806,6 +823,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }), true);
           }}
         />
+      ) : null}
+      {open?.kind === "archiveEpic" ? (
+        <ArchiveEpicConfirm client={client} epic={open.epic} tasks={open.tasks} onClose={close}
+          onArchived={() => {
+            saved();
+            if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }), true);
+          }} />
       ) : null}
       <main className={flush ? "main flush" : "main"} id="main" tabIndex={-1}>
         {/* The sidebar is a drawer on a narrow screen; this opens it. */}

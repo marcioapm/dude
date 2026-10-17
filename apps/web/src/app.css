@@ -1588,3 +1588,43 @@ body {
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-secondary);
 }
+/* The board's archived list: one row per archived epic or task. */
+.archivedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.archivedList li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.archivedLead {
+  color: var(--ds-color-text-muted);
+}
+.archivedTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--ds-color-text-secondary);
+}
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.linkish:hover {
+  color: var(--ds-color-text-primary);
+  text-decoration: underline;
+}

@@ -9,10 +9,10 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock } from "@dude/design-system/components";
+import { ArchiveEpicDialog, MachineChip, MachineRaises, MachineTip, SessionFacts, SessionRailBlock, hasEnded } from "@dude/design-system/components";
 import { MIB, gib, type AgentMachine, type Machine } from "@dude/domain";
 import { raisedProvenance, raisedRows, roleLabel, taskRaisedMachines } from "../machines.ts";
-import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
+import { firstName, type NavEpic, type NavProject, type NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { Dialog, Button, Callout, Input, Textarea } from "@dude/design-system/primitives";
 import type { ApiClient, Epic, TaskDetail } from "../api/client.ts";
@@ -105,6 +105,7 @@ export type Intent =
   | { kind: "newEpic"; projectId: string }
   | { kind: "editEpic"; epic: EpicRef }
   | { kind: "deleteEpic"; epic: EpicRef }
+  | { kind: "archiveEpic"; epic: EpicRef; tasks: NavEpic["tasks"] }
   | { kind: "projectSettings"; projectId: string; page?: string }
   | { kind: "moveEpic"; epicId: string; position: number }
   | { kind: "moveTask"; taskId: string; epicId: string | null };
@@ -150,6 +151,7 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
           onSelect: () => act({ kind: "moveEpic", epicId: epic.id, position: index + 1 }),
         },
         { kind: "separator" },
+        { id: "archive", label: "Archive epic…", icon: "archive", onSelect: () => act({ kind: "archiveEpic", epic: target, tasks: epic.tasks }) },
         { id: "delete", label: "Delete epic", tone: "danger", onSelect: () => act({ kind: "deleteEpic", epic: target }) },
       ];
     }
@@ -239,6 +241,27 @@ export function EpicDialog(props: {
         disabled={description === null} placeholder={description === null ? "Loading…" : undefined}
         maxLength={10_000} onChange={(e) => setDescription(e.target.value)} />
     </FormDialog>
+  );
+}
+
+/**
+ * Archive an epic: its tasks read from the tree, split into those that have
+ * ended and those that haven't. With none unfinished it archives the epic
+ * and them; otherwise its one action archives the ended ones. The server
+ * decides again and says why if the tree was behind.
+ */
+export function ArchiveEpicConfirm(props: { client: ApiClient; epic: EpicRef; tasks: NavEpic["tasks"]; onClose: () => void; onArchived: () => void }) {
+  const { busy, problem, save } = useSave();
+  const ref = (t: NavEpic["tasks"][number]) => ({ key: t.key ?? t.id, title: t.title, status: t.status });
+  const unfinished = props.tasks.filter((t) => !hasEnded(t)).map((t) => ({ ...ref(t), owner: t.people?.[0] ? firstName(t.people[0].name) : undefined }));
+  const ended = props.tasks.filter((t) => hasEnded(t)).map(ref);
+  return (
+    <ArchiveEpicDialog open onOpenChange={(o) => !o && props.onClose()} epic={props.epic.title} unfinished={unfinished} ended={ended}
+      problem={problem} busy={busy}
+      onConfirm={() => void save(() => props.client.archiveEpic(props.epic.id, unfinished.length > 0), () => {
+        props.onClose();
+        props.onArchived();
+      }, unfinished.length > 0 ? `${ended.length} ended task${ended.length === 1 ? "" : "s"} archived` : `${props.epic.title} archived`)} />
   );
 }
 
