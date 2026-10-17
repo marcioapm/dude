@@ -495,7 +495,5 @@ func firstName(name string) string {
 // talkWhenUnblocked is what the conductor started by an unblocked task's
 // Talk it through is told first: first set it, by merged.
 func talkWhenUnblocked(first, by string) string {
-	return fmt.Sprintf("%s set this task to be talked through once nothing was in front of it, and %s merged. "+
-		"Read the task and the merged code, then ask %s what you need to know, or propose a plan. Nothing is built until they agree.",
-		first, by, first)
+	return render(talkWhenUnblockedTmpl, struct{ First, By string }{first, by})
 }

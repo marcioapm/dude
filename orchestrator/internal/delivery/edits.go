@@ -767,17 +767,7 @@ func MidOperationRefusal(repo, op string) string {
 // publishRefusedWhy is why a publish is refused as it lands: case, with
 // what it names (the read-only reason, the task's status).
 func publishRefusedWhy(c, what string) string {
-	switch c {
-	case "not-conductor":
-		return "you are no longer this task's conductor"
-	case "read-only":
-		return "your checkout is read-only for this conversation: " + what
-	case "no-delivery":
-		return "this task has no delivery in progress"
-	case "ended":
-		return "this task is " + what
-	}
-	return "the task was started over since you published"
+	return render(publishLandingTmpl, struct{ Case, What string }{c, what})
 }
 
 // notMovedParts are the repositories a publish did not move: refused (with
@@ -785,10 +775,10 @@ func publishRefusedWhy(c, what string) string {
 func notMovedParts(refused, stalled map[string]string) []string {
 	var notMoved []string
 	for _, repo := range slices.Sorted(maps.Keys(refused)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
+		notMoved = append(notMoved, render(notMovedRefusedTmpl, struct{ Repo, Why string }{repo, refused[repo]}))
 	}
 	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s could not be confirmed at %s", repo, short(stalled[repo])))
+		notMoved = append(notMoved, render(notMovedStalledTmpl, struct{ Repo, Head string }{repo, short(stalled[repo])}))
 	}
 	return notMoved
 }

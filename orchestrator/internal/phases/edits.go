@@ -267,4 +267,4 @@ func oneLineClip(s string, n int) string {
 
 // checkoutReadOnlyTold is what a conductor whose checkout this lux cannot
 // keep current is told.
-const checkoutReadOnlyTold = "Your checkout cannot be kept current by this lux: do not edit; publish is refused. Delegate changes (start_phase)."
+var checkoutReadOnlyTold = delivery.MustText("notices/told/checkout-read-only").Render(nil)

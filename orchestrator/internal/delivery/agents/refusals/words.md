@@ -31,3 +31,15 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 {{- define "refusals/words/too-big"}}this is %d lines in %d files, past the conductor's limit of %d lines / %d files: delegate this (start_phase implement){{end}}
 
 {{- define "refusals/words/binary"}}%s has a change GitHub shows no lines for (a binary file, a rename or mode change with no edits, or a diff too large to show), past the conductor's limit: delegate this (start_phase implement){{end}}
+
+{{- define "refusals/words/publish-landing"}}
+{{- if eq .Case "not-conductor"}}you are no longer this task's conductor
+{{- else if eq .Case "read-only"}}your checkout is read-only for this conversation: {{.What}}
+{{- else if eq .Case "no-delivery"}}this task has no delivery in progress
+{{- else if eq .Case "ended"}}this task is {{.What}}
+{{- else}}the task was started over since you published
+{{- end}}{{end}}
+
+{{- define "refusals/words/not-moved-refused"}}{{.Repo}} was refused: {{clip (oneLine .Why) 160}}{{end}}
+
+{{- define "refusals/words/not-moved-stalled"}}{{.Repo}} could not be confirmed at {{.Head}}{{end}}

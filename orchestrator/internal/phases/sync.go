@@ -3360,15 +3360,18 @@ func short(sha string) string {
 // approvedRepoTold is what an agent is told of a repository a person
 // approved for it, checked out at path; write, when it may change it.
 func approvedRepoTold(name, path string, write bool) string {
-	note := "read only"
-	if write {
-		note = "you may change it; commit there and it gets its own pull request"
-	}
-	return fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", name, path, note)
+	return approvedRepo.Render(struct {
+		Name, Path string
+		Write      bool
+	}{name, path, write})
 }
 
 // approvedTold is what an agent is told when a person approved its
 // requests for repositories: each one's approvedRepoTold.
-func approvedTold(told []string) string {
-	return "A person approved your request. " + strings.Join(told, " ") + " Carry on."
-}
+func approvedTold(told []string) string { return approved.Render(told) }
+
+// What a Run is told of repositories a person approved for it.
+var (
+	approved     = delivery.MustText("notices/told/approved")
+	approvedRepo = delivery.MustText("notices/told/approved-repo")
+)
