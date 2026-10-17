@@ -6,11 +6,11 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ArchiveDialog, ArchivedMark, CloseDialog, ResolutionMark, hasEnded, isClosed, lifecycleMenuItems,
+import { ArchiveDialog, ArchivedMark, CloseDialog, ResolutionMark, hasEnded, lifecycleMenuItems,
   type CloseDecision, type LifecycleTaskRef } from "@dude/design-system/components";
 import { Button, Callout, RowMenu } from "@dude/design-system/primitives";
 import { firstName, scopeTasks, type NavProject } from "@dude/design-system";
-import { RESOLUTION_LABEL, notStarted } from "@dude/domain";
+import { RESOLUTION_LABEL, closedBy, notStarted } from "@dude/domain";
 import type { ApiClient, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
@@ -86,11 +86,11 @@ export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, o
   const ref: LifecycleTaskRef = { key: task.key ?? task.id, title: task.title, status: task.status };
   const marks = (
     <>
-      {task.resolution && task.resolution !== "nothing_to_merge" ? <ResolutionMark resolution={task.resolution} of={task.duplicateOf ?? undefined} /> : null}
+      {closedBy(task.resolution) ? <ResolutionMark resolution={task.resolution!} of={task.duplicateOf ?? undefined} /> : null}
       {archived ? <ArchivedMark /> : null}
     </>
   );
-  const closed = isClosed(life);
+  const closed = closedBy(life.resolution);
   const by = (p: TaskDetail["closedBy"]) => (p ? ` by ${firstName(p.name)}` : "");
   const notice = archived ? (
     <Callout tone="neutral" data-testid="archived-notice">

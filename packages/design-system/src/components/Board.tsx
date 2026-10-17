@@ -1,5 +1,5 @@
 import { memo, useCallback, useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
-import type { AgentRole } from "@dude/domain";
+import { closedBy, type AgentRole } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
@@ -541,12 +541,13 @@ function DefaultMarks({ card }: { readonly card: BoardCard }) {
   const blockers = card.blocked ? wi.blockedBy ?? [] : [];
   const holds = wi.blocks ?? [];
   // A closed task's resolution, where "stopped" would otherwise say it.
-  const closed = wi.resolution && wi.resolution !== "nothing_to_merge" ? wi.resolution : null;
+  const closed = closedBy(wi.resolution) ? wi.resolution! : null;
   if (blockers.length === 0 && holds.length === 0 && !closed) return null;
   const auto = blockers.length && wi.autoStart ? wi.autoStart : null;
   return (
     <span className={styles["marks"]}>
-      {closed ? <ResolutionMark resolution={closed} of={wi.duplicateOf} /> : null}      {blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null}
+      {closed ? <ResolutionMark resolution={closed} of={wi.duplicateOf} /> : null}
+      {blockers.length ? <RelationChip kind="blocked-by" tasks={blockers} /> : null}
       {holds.length ? <RelationChip kind="blocks" tasks={holds} /> : null}
       {auto ? (
         <span className={styles["marksLine"]}>
@@ -666,7 +667,7 @@ function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readon
   if (w) return <><b>{w.title ?? ROLE_LABEL[w.role]}</b>{w.activity ?? "working"}</>;
   const where: Partial<Record<NavTask["status"], string>> = {
     review: "waiting on GitHub", ready_to_merge: "ready to merge", done: doneWords(task), failed: "failed",
-    aborted: task.resolution && task.resolution !== "nothing_to_merge" ? "closed" : "stopped",
+    aborted: closedBy(task.resolution) ? "closed" : "stopped",
     queued: "not started", received: "not started", intake: "being shaped", awaiting_confirmation: "plan to confirm",
   };
   return <><b>{names || statusSpec(task.status).label}</b>{where[task.status] ?? statusSpec(task.status).label.toLowerCase()}</>;

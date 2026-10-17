@@ -6,7 +6,7 @@
  */
 
 import { useState, useId, type ReactNode } from "react";
-import { RESOLUTION_LABEL, keyList, lifecycleBusy, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
+import { RESOLUTION_LABEL, closedBy, keyList, lifecycleBusy, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -78,11 +78,6 @@ export function hasEnded(t: LifecycleTask): boolean {
   return t.status === "done" || (t.status === "aborted" && Boolean(t.resolution));
 }
 
-/** Closed by a person: a resolution other than delivery's Nothing to merge. */
-export function isClosed(t: LifecycleTask): boolean {
-  return Boolean(t.resolution) && t.resolution !== "nothing_to_merge";
-}
-
 const BUSY_WORDS = { running: "Stop its agents first", review: "It has a pull request open" } as const;
 
 /**
@@ -95,7 +90,7 @@ export function lifecycleMenuItems(t: LifecycleTask, o: LifecycleMenuOptions): R
   const busy = lifecycleBusy(t.status);
   const reason = (state?: string | undefined) => o.notYours ?? state;
   const items: RowMenuItem[] = [];
-  if (isClosed(t)) {
+  if (closedBy(t.resolution)) {
     items.push({ id: "reopen", label: "Reopen", icon: "retry", onSelect: o.onReopen,
       disabled: Boolean(o.notYours || t.archived), disabledReason: reason(t.archived ? "Unarchive it first, then reopen it" : undefined) });
   } else {

@@ -362,7 +362,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	*claimed = generation
 	var put bool
 	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text,
-			t.archived_at IS NOT NULL OR (t.resolution IS NOT NULL AND t.resolution <> 'nothing_to_merge')
+			COALESCE(task_start_refusal(t.id) IN ('archived', 'closed'), false)
 		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status, &put); err != nil {
 		return err
 	}
