@@ -49,8 +49,14 @@ const (
 	diffPathsMax       = 20
 )
 
-// cutMark ends a text dude shortened.
-var cutMark = githubText("cut", nil)
+var (
+	cutMark          = githubText("cut", nil)
+	whoseTask        = githubText("whose-task", nil)
+	whoseSession     = githubText("whose-session", nil)
+	issuePullRequest = githubText("issue-pull-request", nil)
+	noDiff           = githubText("no-diff", nil)
+	budgetCut        = githubText("budget-cut", cutMark)
+)
 
 // githubText renders delivery/agents/results/github.md's text name.
 func githubText(name string, data any) string { return githubTexts[name].Render(data) }
@@ -153,9 +159,9 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 	}
 	i := slices.IndexFunc(slugs, func(s string) bool { return strings.EqualFold(s, want) })
 	if i < 0 {
-		whose := githubText("whose-task", nil)
+		whose := whoseTask
 		if c.Role == delivery.RoleBrainstorm {
-			whose = githubText("whose-session", nil)
+			whose = whoseSession
 		}
 		if len(slugs) == 0 {
 			return read, refuse(rNotRepositoryYouMayReadHave, want, whose)
@@ -453,7 +459,7 @@ func (w wrapper) issue(i forge.IssueRead) map[string]any {
 	out := map[string]any{"issue": w.line(i.IssueLine), "body": w.text(i.Body, textCap), "comments": w.comments(i.Comments),
 		"external": w.note()}
 	if i.PullRequest {
-		out["pullRequest"] = githubText("issue-pull-request", nil)
+		out["pullRequest"] = issuePullRequest
 	}
 	if more := commentsCut(len(i.Comments), i.CommentCount); more != "" {
 		out["moreComments"] = more
@@ -527,7 +533,7 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		if slices.Contains(paths, f.Path) {
 			out.Diff = w.text(f.Patch, diffCap)
 			if f.Patch == "" {
-				out.Diff = githubText("no-diff", nil)
+				out.Diff = noDiff
 			}
 		}
 		files = append(files, out)
@@ -618,7 +624,7 @@ func (w wrapper) fit(v map[string]any) (json.RawMessage, error) {
 		}
 	}
 	budget(m)
-	m["cut"] = githubText("budget-cut", cutMark)
+	m["cut"] = budgetCut
 	return marshalResult(m)
 }
 

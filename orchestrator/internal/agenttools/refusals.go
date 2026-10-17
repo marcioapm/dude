@@ -84,6 +84,7 @@ const (
 	rLuxPoolsCouldNotBeRead                = "lux's pools could not be read; ask again shortly"
 	rThisRunNoLongerAvailableFor           = "this Run is no longer available for a machine move"
 	rQueryRequired                         = "a query is required"
+	rNoTaskOrEpicInThisProject             = "no task %q or epic %q in this project (list_tasks shows them)"
 	rTypesAreMemoryTaskEpicAnd             = "types are memory, task, epic and project, not %q"
 	rMemoryWasArchivedNoLongerHeld         = "memory %s was archived: it is no longer held true"
 	rScopeProjectOrOrganization            = "scope is project or organization"

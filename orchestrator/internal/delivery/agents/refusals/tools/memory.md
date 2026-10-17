@@ -2,6 +2,8 @@
 
 {{- define "refusals/tools/memory/types-are-memory-task-epic-and"}}types are memory, task, epic and project, not %q{{end}}
 
+{{- define "refusals/tools/memory/no-task-or-epic-in-this-project"}}no task %q or epic %q in this project (list_tasks shows them){{end}}
+
 {{- define "refusals/tools/memory/memory-was-archived-no-longer-held"}}memory %s was archived: it is no longer held true{{end}}
 
 {{- define "refusals/tools/memory/scope-project-or-organization"}}scope is project or organization{{end}}

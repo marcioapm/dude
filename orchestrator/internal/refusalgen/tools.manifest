@@ -86,6 +86,7 @@ var (
 	rLuxPoolsCouldNotBeRead                = delivery.MustText("refusals/tools/machines/lux-pools-could-not-be-read").Render(nil)
 	rThisRunNoLongerAvailableFor           = delivery.MustText("refusals/tools/machines/this-run-no-longer-available-for").Render(nil)
 	rQueryRequired                         = delivery.MustText("refusals/tools/memory/query-required").Render(nil)
+	rNoTaskOrEpicInThisProject             = delivery.MustText("refusals/tools/memory/no-task-or-epic-in-this-project").Render(nil)
 	rTypesAreMemoryTaskEpicAnd             = delivery.MustText("refusals/tools/memory/types-are-memory-task-epic-and").Render(nil)
 	rMemoryWasArchivedNoLongerHeld         = delivery.MustText("refusals/tools/memory/memory-was-archived-no-longer-held").Render(nil)
 	rScopeProjectOrOrganization            = delivery.MustText("refusals/tools/memory/scope-project-or-organization").Render(nil)

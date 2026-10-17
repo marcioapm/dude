@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -164,5 +163,5 @@ func resolveAbout(ctx context.Context, tx pgx.Tx, project, name string) (memory.
 	if id, err = epicByTitle(ctx, tx, project, name); err != nil || id != "" {
 		return memory.Ref{Type: "epic", ID: id}, err
 	}
-	return memory.Ref{}, refuse("%s", fmt.Sprintf("no task %q or epic %q in this project (list_tasks shows them)", name, name))
+	return memory.Ref{}, refuse(rNoTaskOrEpicInThisProject, name, name)
 }

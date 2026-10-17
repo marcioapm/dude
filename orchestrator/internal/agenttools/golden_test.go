@@ -126,8 +126,9 @@ func serverInstructions(t *testing.T) string {
 func TestAMissingToolParameterNamesItsFile(t *testing.T) {
 	defer func() {
 		msg := fmt.Sprint(recover())
-		if !strings.Contains(msg, "agents/tools/ask_person.md") {
-			t.Errorf("panic %q does not name the file", msg)
+		want := "agents/tools/ask_person.md describes actions, which the tool has no parameter called"
+		if msg != want {
+			t.Errorf("panic %q, want %q", msg, want)
 		}
 	}()
 	schema, err := jsonschema.For[struct{}](nil)
