@@ -137,6 +137,16 @@ def test_the_fake_updates_a_branch_only_as_github_does(fake_github: FakeGitHub):
     assert resp.status_code == 422, resp.text
     assert resp.json()["message"] == "merge conflict between base and head"
     assert fake_github.branch_sha("b") == head
+    # A pull request flagged conflicting is refused for that before a stale
+    # expected head, as the Go fake does.
+    fake_github.pulls[2].conflicting = True
+    resp = requests.put(update % 2, json={"expected_head_sha": "0" * 40}, timeout=10)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["message"] == "merge conflict between base and head"
+    fake_github.pulls[4] = PullRequest(number=4, head="gone", base="main", title="gone", body="", draft=False)
+    resp = requests.put(update % 4, json={}, timeout=10)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["message"] == "Reference does not exist"
 
     fake_github.commit_file("c", "C.md", "c\n", "c's file")
     old_head, main = fake_github.branch_sha("c"), fake_github.branch_sha("main")
