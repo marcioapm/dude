@@ -210,13 +210,13 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 		return err
 	}
 	if d == nil || !d.Live() || !slices.Contains(d.State.PullRequestIDs, prID) {
-		return escalationErr("conflict", "dude is not waiting on this pull request: it is busy with the task or has stopped")
+		return escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
 	}
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
 	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, head)
 	if e := d.State.Escalation; e != nil {
 		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
-			return escalationErr("conflict", "dude is waiting on a decision about something else")
+			return escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
 		}
 		in.Action = "wait"
 		if slices.Contains(e.Actions(), "retry") {
@@ -228,7 +228,7 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 		return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 	}
 	if d.Step != "awaitPullRequest" || d.State.Integration != nil {
-		return escalationErr("conflict", "dude is already working on the task; try again once it waits on the pull request")
+		return escalationErr("conflict", "%s", mDudeAlreadyWorkingOnTaskTry)
 	}
 	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 }

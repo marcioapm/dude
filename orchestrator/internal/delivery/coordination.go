@@ -124,9 +124,9 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
-		return Sent{}, RefusedMessage{Reason: "empty", Msg: "say something: text is required"}
+		return Sent{}, RefusedMessage{Reason: "empty", Msg: mSaySomethingTextRequired}
 	case len(in.Text) > SteerTextMax:
-		return Sent{}, RefusedMessage{Reason: "too_long", Msg: fmt.Sprintf("a message is at most %d KiB: say less, or pin a note",
+		return Sent{}, RefusedMessage{Reason: "too_long", Msg: fmt.Sprintf(mMessageAtMostKibSayLess,
 			SteerTextMax>>10)}
 	}
 	var status string
@@ -134,7 +134,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 		return Sent{}, err
 	}
 	if Ended(status) {
-		return Sent{}, RefusedMessage{Reason: "peer_ended", Msg: fmt.Sprintf("%s is %s: no Run will read this. Carry on with your assumption, or ask a person.", in.To.Key, status)}
+		return Sent{}, RefusedMessage{Reason: "peer_ended", Msg: fmt.Sprintf(mNoRunWillReadThisCarry, in.To.Key, status)}
 	}
 	// The Run's row serialises its sends, so two at once cannot both be
 	// the fifth.
@@ -149,9 +149,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 	}
 	if sent >= MessagesPerHour {
 		next := oldest.Add(time.Hour).UTC()
-		return Sent{}, RefusedMessage{Reason: "rate", RetryAt: &next, Msg: fmt.Sprintf("Refused: this Run has sent %d messages in "+
-			"the last hour, the most a Run may send. The next is allowed at %s UTC. Until then, `dude task list --peers`, "+
-			"`dude diff --task %s` and the epic notes may already answer it; if they don't, carry on and ask then.",
+		return Sent{}, RefusedMessage{Reason: "rate", RetryAt: &next, Msg: fmt.Sprintf(mRefusedThisRunHasSentMessages,
 			MessagesPerHour, next.Format("15:04"), in.To.Key)}
 	}
 	var thread struct{ From, To, FromRun string }
@@ -163,7 +161,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 			Scan(&thread.From, &thread.To, &thread.FromRun)
 		switch {
 		case db.IsNotFound(err):
-			return Sent{}, RefusedMessage{Reason: "reply", Msg: fmt.Sprintf("no message %s", in.ReplyTo)}
+			return Sent{}, RefusedMessage{Reason: "reply", Msg: fmt.Sprintf(mNoMessage, in.ReplyTo)}
 		case err != nil:
 			return Sent{}, err
 		}
@@ -173,8 +171,7 @@ func SendMessageTx(ctx context.Context, tx pgx.Tx, ref RunRef, in MessageInput) 
 			other = thread.To
 		}
 		if (thread.From != ref.TaskID && thread.To != ref.TaskID) || other != in.To.ID {
-			return Sent{}, RefusedMessage{Reason: "reply", Msg: fmt.Sprintf("%s is not a message between your task and %s: "+
-				"a reply goes to the other task of its thread", in.ReplyTo, in.To.Key)}
+			return Sent{}, RefusedMessage{Reason: "reply", Msg: fmt.Sprintf(mNotMessageBetweenYourTaskAnd, in.ReplyTo, in.To.Key)}
 		}
 	}
 	from, err := RunLabel(ctx, tx, ref.RunID)

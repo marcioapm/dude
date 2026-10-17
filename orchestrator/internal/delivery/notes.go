@@ -91,9 +91,9 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
-		return Pinned{}, NoteRefusal{Reason: "empty", Msg: "a note needs its text"}
+		return Pinned{}, NoteRefusal{Reason: "empty", Msg: mNoteNeedsItsText}
 	case len([]rune(text)) > NoteTextMax:
-		return Pinned{}, NoteRefusal{Reason: "too_long", Msg: fmt.Sprintf("a note is at most %d characters: a short working fact", NoteTextMax)}
+		return Pinned{}, NoteRefusal{Reason: "too_long", Msg: fmt.Sprintf(mNoteAtMostCharactersShortWorking, NoteTextMax)}
 	}
 	projectID, err := LockEpicTx(ctx, tx, in.EpicID)
 	if err != nil {
@@ -193,16 +193,16 @@ func noteRetiredLine(n int, by, text string) string {
 func notCurrent(ctx context.Context, tx pgx.Tx, epicID string, old *Note, n, current int) error {
 	switch {
 	case old == nil:
-		return NoteRefusal{Reason: "no_note", Msg: fmt.Sprintf("this epic has no note %d", n), Current: current}
+		return NoteRefusal{Reason: "no_note", Msg: fmt.Sprintf(mThisEpicHasNoNote, n), Current: current}
 	case old.Replaced != nil:
 		var next int
 		if err := tx.QueryRow(ctx, `SELECT n FROM epic_notes WHERE replaces_id = $1`, old.ID).Scan(&next); err != nil {
 			return err
 		}
-		return NoteRefusal{Reason: "replaced", Current: current, Msg: fmt.Sprintf("note %d was replaced by note %d at %s: replace note %d",
+		return NoteRefusal{Reason: "replaced", Current: current, Msg: fmt.Sprintf(mNoteWasReplacedByNoteAt,
 			n, next, old.Replaced.UTC().Format("15:04"), next)}
 	case old.Retired != nil:
-		return NoteRefusal{Reason: "retired", Current: current, Msg: fmt.Sprintf("note %d was retired at %s: pin a new note instead",
+		return NoteRefusal{Reason: "retired", Current: current, Msg: fmt.Sprintf(mNoteWasRetiredAtPinNew,
 			n, old.Retired.UTC().Format("15:04"))}
 	}
 	return nil

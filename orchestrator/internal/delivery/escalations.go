@@ -108,7 +108,7 @@ func lockTask(ctx context.Context, tx pgx.Tx, taskID string) (projectID, status 
 	err = tx.QueryRow(ctx, `SELECT project_id, status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).
 		Scan(&projectID, &status)
 	if db.IsNotFound(err) {
-		return "", "", escalationErr("not_found", "task %s not found", taskID)
+		return "", "", escalationErr("not_found", mTaskNotFound, taskID)
 	}
 	return projectID, status, err
 }
@@ -125,7 +125,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	if d == nil || d.TaskStatus != "awaiting_input" || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
-		return escalationErr("conflict", "delivery of task %s is not waiting for a decision", taskID)
+		return escalationErr("conflict", mDeliveryTaskNotWaitingForDecision, taskID)
 	}
 	st := d.State
 	e := st.Escalation
@@ -140,7 +140,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		}
 	}
 	if !slices.Contains(e.Actions(), in.Action) {
-		return escalationErr("bad_request", "%q is not a way to go on after %s; one of %s",
+		return escalationErr("bad_request", mNotWayGoOnAfterOne,
 			in.Action, e.Reason, strings.Join(e.Actions(), ", "))
 	}
 	if in.Authorize != nil {
@@ -153,7 +153,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		// Shipping past a criterion nobody saw work is on the record, with
 		// why.
 		if note == "" {
-			return escalationErr("bad_request", "%s needs a note: say why the task may ship with %s", in.Action,
+			return escalationErr("bad_request", mNeedsNoteSayWhyTaskMay, in.Action,
 				map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
 		}
 		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
@@ -537,7 +537,7 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 		return err
 	}
 	if int(tag.RowsAffected()) != len(runIDs) {
-		return escalationErr("not_kept", "what stopped is no longer kept to resume; try again or start over")
+		return escalationErr("not_kept", "%s", mWhatStoppedNoLongerKeptResume)
 	}
 	if note == "" {
 		return nil

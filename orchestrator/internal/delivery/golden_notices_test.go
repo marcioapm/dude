@@ -188,16 +188,26 @@ func TestGoldenMoveRefusals(t *testing.T) {
 	goldenLines(t, "move-refusals", lines)
 }
 
-// Every refusal format under agents/refusals/, in the golden's order, then
-// any the golden lacks.
+// Every refusal format under agents/refusals/tools and /delivery, in the
+// golden's order, then any the golden lacks.
 func TestGoldenRefusals(t *testing.T) {
+	var lines [][2]string
+	for _, prefix := range []string{"refusals/tools/", "refusals/delivery/"} {
+		lines = append(lines, refusalLines(prefix, "refusals")...)
+	}
+	goldenLines(t, "refusals", lines)
+}
+
+// refusalLines are the {{define}}s under prefix, ordered as golden lists
+// them, then any it lacks by name.
+func refusalLines(prefix, golden string) [][2]string {
 	var keys []string
 	for _, tm := range agentTemplates.Templates() {
-		if name := tm.Name(); strings.HasPrefix(name, "refusals/") && strings.Count(name, "/") == 3 {
+		if name := tm.Name(); strings.HasPrefix(name, prefix) && strings.Count(name, "/") == 3 {
 			keys = append(keys, name)
 		}
 	}
-	want, _ := os.ReadFile(filepath.Join("agents", "testdata", "refusals.golden.md"))
+	want, _ := os.ReadFile(filepath.Join("agents", "testdata", golden+".golden.md"))
 	order := map[string]int{}
 	for _, line := range strings.Split(string(want), "\n") {
 		if key, ok := strings.CutPrefix(line, "## "); ok {
@@ -222,5 +232,10 @@ func TestGoldenRefusals(t *testing.T) {
 	for _, key := range keys {
 		lines = append(lines, [2]string{key, render(mustTemplate(key), nil)})
 	}
-	goldenLines(t, "refusals", lines)
+	return lines
+}
+
+// Every refusal format under agents/refusals/domain/, in the golden's order.
+func TestGoldenDomainRefusals(t *testing.T) {
+	goldenLines(t, "refusals-domain", refusalLines("refusals/domain/", "refusals-domain"))
 }

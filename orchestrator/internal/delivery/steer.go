@@ -63,10 +63,10 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 		in.Text = strings.TrimSpace(strings.TrimSpace(in.Text) + "\n\n" + in.FeedbackWords)
 	}
 	if len(in.Text) > SteerTextMax {
-		return Steered{}, steerErr("bad_request", "a steer is at most %d KiB of text", SteerTextMax>>10)
+		return Steered{}, steerErr("bad_request", mSteerAtMostKibText, SteerTextMax>>10)
 	}
 	if strings.TrimSpace(in.Text) == "" && len(in.AttachmentIDs) == 0 && in.Supersedes == "" {
-		return Steered{}, steerErr("bad_request", "text or an image is required")
+		return Steered{}, steerErr("bad_request", "%s", mTextOrImageRequired)
 	}
 	if in.Scope == "" {
 		in.Scope = "run"
@@ -77,18 +77,18 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, kind FROM runs WHERE id = $1 AND session_id IS NULL
 		FOR UPDATE`, in.RunID).Scan(&projectID, &taskID, &status, &kind)
 	if db.IsNotFound(err) {
-		return Steered{}, steerErr("not_found", "run %s not found", in.RunID)
+		return Steered{}, steerErr("not_found", mRunNotFound, in.RunID)
 	}
 	if err != nil {
 		return Steered{}, err
 	}
 	if kind != "agent" {
-		return Steered{}, steerErr("not_an_agent", "run %s is a branch preview, not an agent's", in.RunID)
+		return Steered{}, steerErr("not_an_agent", mRunBranchPreviewNotAgent, in.RunID)
 	}
 	switch status {
 	case "pending", "scheduled", "starting", "running", "paused":
 	default:
-		return Steered{}, steerErr("conflict", "run %s is %s and can no longer be steered", in.RunID, status)
+		return Steered{}, steerErr("conflict", mRunAndCanNoLongerBe, in.RunID, status)
 	}
 	if in.Supersedes != "" && in.FeedbackWords == "" {
 		// run.steered of a steer carrying feedback has only the steerer's
@@ -170,7 +170,7 @@ func Steer(ctx context.Context, tx pgx.Tx, org string, in SteerInput) (Steered, 
 // only if there is something to repeat; and it cannot bring new images,
 // which would be attached and never sent.
 func checkRepeat(ctx context.Context, tx pgx.Tx, runID, superseded, text string, newImages bool) error {
-	required := steerErr("bad_request", "text or an image is required")
+	required := steerErr("bad_request", "%s", mTextOrImageRequired)
 	var words string
 	err := tx.QueryRow(ctx, `SELECT text FROM directives WHERE id = $1 AND run_id = $2`, superseded, runID).Scan(&words)
 	if err != nil && !db.IsNotFound(err) {
@@ -184,7 +184,7 @@ func checkRepeat(ctx context.Context, tx pgx.Tx, runID, superseded, text string,
 		return nil
 	}
 	if newImages {
-		return steerErr("invalid_attachment", "a message sent again carries the images it had: send new images in a new message")
+		return steerErr("invalid_attachment", "%s", mMessageSentAgainCarriesImagesHad)
 	}
 	if strings.TrimSpace(words) == "" {
 		carried, err := DirectiveAttachments(ctx, tx, superseded)
