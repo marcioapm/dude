@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -132,7 +131,7 @@ def _open_comment(ctx, page: Page) -> Page:
     return pv
 
 
-def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
+def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> dict:
     """The servers read showing the preview again, its web server ready: the web server as it says.
 
     Submitting the draft starts a delivery, and while its agents work the
@@ -140,16 +139,15 @@ def _back_to_the_preview(client: ApiClient, env, task: dict) -> dict:
     done the read is the preview's again; one that went to sleep meanwhile is
     woken as a visitor would.
     """
-    # Between two of the delivery's Runs the read is briefly the preview's again: wait for the delivery to rest
-    # first. The scripted fixer never answers the item, so the delivery ends waiting on a person (as in
-    # test_feedback.py), not at simplify: at rest is the task off "running" with no agent Run at work, twice.
-    def at_rest() -> bool:
-        t = client.get(f"/v1/tasks/{task['id']}").json()
-        return t["status"] not in ("received", "intake", "queued", "running") and not any(
-            r["status"] in ("pending", "scheduled", "starting", "running") for r in t.get("runs", []) if r.get("kind") != "preview")
+    # Between two of the delivery's Runs the read is briefly the preview's again, so wait for where it ends: the
+    # scripted fixer never answers the item, and after its one fix (maxAttemptsPerFinding 1) the review loop escalates
+    # it as stuck (workflow.go escalate), the only state here that starts no further Run until a person decides. The
+    # API shows an escalation only while nothing has decided it.
+    def stuck_on_the_item() -> bool:
+        e = client.get(f"/v1/tasks/{task['id']}").json().get("escalation") or {}
+        return e.get("reason") == "stuck" and (e.get("detail") or {}).get("feedbackIds") == [item_id]
 
-    wait_until(lambda: at_rest() and (time.sleep(1.0) is None) and at_rest(),
-               timeout=180, message="the delivery's agents were still at work after 180 s")
+    wait_until(stuck_on_the_item, timeout=180, message="the delivery never stopped for a person on the unanswered item within 180 s")
     read = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"] and s["run"]["kind"] == "preview" and s,
                       timeout=60, message="the servers read never came back to the preview after the delivery rested")
     if read["run"].get("asleep"):
@@ -176,6 +174,9 @@ def _evil_posted(page: Page) -> None:
 def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_colleague(
     browser_type: BrowserType, web_url: str, client: ApiClient, org: dict, forge_project: dict, env
 ):
+    # One fix per finding: the unanswered item is escalated after its first fix.
+    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
+                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task, web = _ready_preview(client, env, forge_project, "Comment on the checkout")
     assert web["commenting"] == {"available": True} and web["needsRestart"] is False, web
     browser = browser_type.launch(channel="chrome", headless=True, args=LAUNCH_ARGS)
@@ -240,7 +241,7 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
         ctx.close()
 
         # A colleague's Comment shows the submitted item pinned on the button, once the delivery's agents leave the preview to it.
-        web = _back_to_the_preview(client, env, task)
+        web = _back_to_the_preview(client, env, task, listed[0]["id"])
         _, colleague = provision_person(client, env, "Ana Ribeiro", f"ana-{task['id']}@example.com")
         ctx2, errors2 = _context(browser, web, web_url, env)
         page2 = ctx2.new_page()
