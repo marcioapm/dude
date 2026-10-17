@@ -9,12 +9,12 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Migrations 140 through 143 rebuild their indexes over the events already
+// Migrations 143 through 146 rebuild their indexes over the events already
 // there: each is valid, on its scope and time, holds the GitHub read
 // attempts and nothing else, and the hourly counts checkGitHubRead runs
 // count each scope's reads of the last hour.
 func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "140")
+	owner, apply := dbtest.Upgrade(t, "143")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`); err != nil {
 		t.Fatal(err)
