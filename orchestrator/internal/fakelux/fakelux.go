@@ -626,6 +626,10 @@ type Server struct {
 	PreviewDomain string
 	// Previews optionally advertises the relative-naming capability in whoami.
 	Previews *bool
+	// ServerInject is a lux from v0.1.32: whoami says serverInject, and
+	// servers take inject. Without it a create or patch naming inject is
+	// refused, as an older lux refuses a property it does not know.
+	ServerInject bool
 	// The port in preview URLs, when not the scheme's (a local demo).
 	PreviewPort int
 	// How often idle servers are looked for; zero is 100ms.
@@ -634,6 +638,8 @@ type Server struct {
 	DeletedServers []string
 	// What happened to tenant servers, in order (TenantCalls).
 	tenantCalls []string
+	// Their create and patch bodies, in order (TenantBodies).
+	tenantBodies []TenantBody
 	// The tenant's servers and its event feed (tenant.go).
 	feedState
 	// How lux acknowledges input. By default as lux does now: "accepted"

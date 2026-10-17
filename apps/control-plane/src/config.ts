@@ -93,7 +93,7 @@ export const KEYS: readonly Key[] = [
   key("vapid.subject", "DUDE_VAPID_SUBJECT", "string", "orchestrator", "mailto:dude@localhost"),
   key("factory.logins", "DUDE_FACTORY_LOGINS", "list", "orchestrator"),
   key("auth.provider", "DUDE_AUTH_PROVIDER", "string", "backend", "api_key"),
-  key("auth.public_url", "DUDE_AUTH_PUBLIC_URL", "string", "backend"),
+  key("auth.public_url", "DUDE_AUTH_PUBLIC_URL", "string", "both"),
   key("auth.super_admins", "DUDE_AUTH_SUPER_ADMINS", "list", "backend"),
   key("auth.cloudflare_access.team", "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM", "string", "backend"),
   key("auth.cloudflare_access.aud", "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD", "string", "backend"),
@@ -469,7 +469,9 @@ export class Config {
 
   private resolveAuth(): AuthConfig {
     const provider = this.string("DUDE_AUTH_PROVIDER");
-    const accessKeys = KEYS.filter((k) => k.name.startsWith("auth.") && k.env !== "DUDE_AUTH_PROVIDER" && this.from(k.env));
+    // auth.public_url is not Access's alone: it also turns on commenting on previews (the orchestrator's).
+    const accessKeys = KEYS.filter((k) => k.name.startsWith("auth.") && k.env !== "DUDE_AUTH_PROVIDER" &&
+      k.env !== "DUDE_AUTH_PUBLIC_URL" && this.from(k.env));
     if (provider === "api_key") {
       // Settings for Access without a provider would silently sign no one in with it.
       if (!this.from("DUDE_AUTH_PROVIDER") && accessKeys.length) {

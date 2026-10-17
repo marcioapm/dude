@@ -56,7 +56,7 @@
     {"name": "vapid.subject", "env": "DUDE_VAPID_SUBJECT", "kind": "string", "use": "orchestrator", "default": "mailto:dude@localhost", "secret": false},
     {"name": "factory.logins", "env": "DUDE_FACTORY_LOGINS", "kind": "list", "use": "orchestrator", "default": "", "secret": false},
     {"name": "auth.provider", "env": "DUDE_AUTH_PROVIDER", "kind": "string", "use": "backend", "default": "api_key", "secret": false},
-    {"name": "auth.public_url", "env": "DUDE_AUTH_PUBLIC_URL", "kind": "string", "use": "backend", "default": "", "secret": false},
+    {"name": "auth.public_url", "env": "DUDE_AUTH_PUBLIC_URL", "kind": "string", "use": "both", "default": "", "secret": false},
     {"name": "auth.super_admins", "env": "DUDE_AUTH_SUPER_ADMINS", "kind": "list", "use": "backend", "default": "", "secret": false},
     {"name": "auth.cloudflare_access.team", "env": "DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM", "kind": "string", "use": "backend", "default": "", "secret": false},
     {"name": "auth.cloudflare_access.aud", "env": "DUDE_AUTH_CLOUDFLARE_ACCESS_AUD", "kind": "string", "use": "backend", "default": "", "secret": false}

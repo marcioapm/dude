@@ -229,11 +229,14 @@ func PromptImages(images []SentAttachment) []PromptImage {
 // carries the task (Prompt: the implementer and investigator are given it
 // to do, reviewers and the tester check the work against it, the fixer and
 // simplifier keep to it). A branch preview has no prompt and gets none.
+// After them, the pictures of the people's preview items the Run was
+// given (runs.feedback_item_ids), in the room one message has left.
 func PromptAttachments(ctx context.Context, tx pgx.Tx, runID string) ([]SentAttachment, error) {
 	var taskID, goal string
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT t.id, t.goal, t.acceptance_criteria FROM runs r JOIN tasks t ON t.id = r.task_id
-		WHERE r.id = $1 AND r.kind = 'agent'`, runID).Scan(&taskID, &goal, &raw)
+	var itemIDs []string
+	err := tx.QueryRow(ctx, `SELECT t.id, t.goal, t.acceptance_criteria, r.feedback_item_ids FROM runs r JOIN tasks t ON t.id = r.task_id
+		WHERE r.id = $1 AND r.kind = 'agent'`, runID).Scan(&taskID, &goal, &raw, &itemIDs)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}
@@ -242,7 +245,28 @@ func PromptAttachments(ctx context.Context, tx pgx.Tx, runID string) ([]SentAtta
 	}
 	var criteria []string
 	_ = json.Unmarshal(raw, &criteria)
-	return TaskImages(ctx, tx, taskID, goal, criteria)
+	images, err := TaskImages(ctx, tx, taskID, goal, criteria)
+	if err != nil || len(itemIDs) == 0 {
+		return images, err
+	}
+	items, err := FeedbackItemsTx(ctx, tx, taskID, itemIDs)
+	if err != nil {
+		return nil, err
+	}
+	var used int64
+	for _, a := range images {
+		used += a.Bytes
+	}
+	pictures, err := feedbackPicturesTx(ctx, tx, taskID, items, false, MaxAttachmentsPerMessage-len(images), MaxMessageAttachmentBytes-used)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range pictures {
+		if !slices.ContainsFunc(images, func(a SentAttachment) bool { return a.ID == p.ID }) {
+			images = append(images, p)
+		}
+	}
+	return images, nil
 }
 
 // PromptAttachmentInfo is the metadata of the images the Run was given

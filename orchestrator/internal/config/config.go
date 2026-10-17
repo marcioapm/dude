@@ -136,7 +136,7 @@ type schema struct {
 	} `toml:"factory"`
 	Auth struct {
 		Provider         any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
-		PublicURL        any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"backend"`
+		PublicURL        any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"both"`
 		SuperAdmins      any `toml:"super_admins" env:"DUDE_AUTH_SUPER_ADMINS" kind:"list" use:"backend"`
 		CloudflareAccess struct {
 			Team any `toml:"team" env:"DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM" kind:"string" use:"backend"`
