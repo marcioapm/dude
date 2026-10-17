@@ -134,14 +134,16 @@ def test_the_fake_updates_a_branch_only_as_github_does(fake_github: FakeGitHub):
 
     head = fake_github.branch_sha("b")
     resp = requests.put(update % 2, json={"expected_head_sha": head}, timeout=10)
-    assert resp.status_code == 422 and "merge conflict" in resp.json()["message"], resp.text
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["message"] == "merge conflict between base and head"
     assert fake_github.branch_sha("b") == head
 
     fake_github.commit_file("c", "C.md", "c\n", "c's file")
     old_head, main = fake_github.branch_sha("c"), fake_github.branch_sha("main")
     resp = requests.put(update % 3, json={"expected_head_sha": old_head}, timeout=10)
     assert resp.status_code == 202, resp.text
-    assert fake_github.file_at("c", "FACTORY.md") == "A intent\n" and fake_github.file_at("c", "C.md") == "c\n"
+    assert fake_github.file_at("c", "FACTORY.md") == "A intent\n"
+    assert fake_github.file_at("c", "C.md") == "c\n"
     assert fake_github.branch_log("c")[0] == "Merge branch 'main' into c"
     assert fake_github._git_out("rev-list", "--parents", "-n1", "refs/heads/c").split()[1:] == [old_head, main]
 
