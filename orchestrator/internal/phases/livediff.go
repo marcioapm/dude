@@ -202,7 +202,7 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	res, err := s.Lux.Exec(ctx, r.LuxRunID, diffCommand("-", refs))
+	res, err := s.Lux.Exec(ctx, r.LuxRunID, diffCommand("-", refs, nil))
 	if err != nil {
 		return false, err
 	}
@@ -299,7 +299,7 @@ func beforeStop(refs map[string]string) *lux.BeforeStop {
 	if len(refs) == 0 {
 		return nil
 	}
-	return &lux.BeforeStop{Command: diffCommand("artifacts", refs), Timeout: FinalDiffTimeout}
+	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, nil), Timeout: FinalDiffTimeout}
 }
 
 // recordFinalDiff records the diff the beforeStop hook left, one patch per

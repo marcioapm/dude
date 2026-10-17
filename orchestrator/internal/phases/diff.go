@@ -239,6 +239,15 @@ func num(n int) *int { return &n }
 // a sha, or the branch lux checked out, whose first reflog entry is where
 // it started (lux checks a branch out with checkout -B, which records it).
 //
+// That third argument may go on, space-separated, with commits the Run was
+// given after it started (shas or refs): its base branch as lux fetched
+// it, a conductor's task branch as lux fast-forwarded it. Each one the
+// checkout has and HEAD contains is folded into what the diff is against —
+// a fast-forward to it, else git's clean merge of it (merge-tree, git 2.38)
+// — so what others committed and the Run merged is not shown as its own.
+// The header then names the last commit folded in. A merge that conflicts,
+// or a git without merge-tree, leaves that repository against its start.
+//
 // A patch is written to a temporary directory and published with lux-shim,
 // which keeps its own copy. A failed publish exits 3 after trying every
 // repository.
@@ -251,18 +260,39 @@ base_of() {
     git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null || git -C "$1" rev-parse -q --verify "origin/$2^{commit}"
   fi
 }
+fold() {
+  dir=$1 start=$2; shift 2
+  at=$start label=$start
+  for g in "$@"; do
+    g=$(git -C "$dir" rev-parse -q --verify "$g^{commit}" 2>/dev/null) || continue
+    git -C "$dir" merge-base --is-ancestor "$g" HEAD 2>/dev/null || continue
+    git -C "$dir" merge-base --is-ancestor "$g" "$at" 2>/dev/null && continue
+    if git -C "$dir" merge-base --is-ancestor "$at" "$g" 2>/dev/null; then
+      at=$g
+    elif tree=$(git -C "$dir" merge-tree --write-tree "$at" "$g" 2>/dev/null) &&
+      at=$(GIT_AUTHOR_NAME=dude GIT_AUTHOR_EMAIL=dude@localhost GIT_COMMITTER_NAME=dude GIT_COMMITTER_EMAIL=dude@localhost \
+        git -C "$dir" commit-tree "$tree" -p "$at" -p "$g" -m given < /dev/null 2>/dev/null); then
+      :
+    else
+      echo "$start $start"; return
+    fi
+    label=$g
+  done
+  echo "$label $at"
+}
 diffs() {
   while [ $# -ge 3 ]; do
-    name=$1 dir=$2 ref=$3; shift 3
+    name=$1 dir=$2 ref=${3%% *}; given=${3#"$ref"}; shift 3
     [ -d "$dir" ] || continue
     base=$(base_of "$dir" "$ref") || continue
-    echo "# dude-diff $name $base"
+    from=$(fold "$dir" "$base" $given)
+    echo "# dude-diff $name ${from%% *}"
     idx=$(mktemp) || exit 3
     real=$(git -C "$dir" rev-parse --git-path index)
     case $real in /*) ;; *) real=$dir/$real ;; esac
     if [ -f "$real" ]; then cp "$real" "$idx"; else rm -f "$idx"; fi
     GIT_INDEX_FILE=$idx git -C "$dir" add -A -N . 2>/dev/null
-    GIT_INDEX_FILE=$idx git -C "$dir" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames "$base" --
+    GIT_INDEX_FILE=$idx git -C "$dir" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames "${from#* }" --
     rm -f "$idx"
   done
 }
@@ -315,11 +345,12 @@ func finalDiffRepo(path string) (string, bool) {
 
 // diffCommand is the command that prints (dest "-") or saves (dest
 // "artifacts") the diff of each repository, given as name → the commit or
-// branch it started from.
-func diffCommand(dest string, bases map[string]string) []string {
+// branch it started from, and name → the commits it was given since (nil
+// for none: the diff against where it started).
+func diffCommand(dest string, bases map[string]string, given map[string][]string) []string {
 	cmd := []string{"sh", "-c", diffScript, "dude-diff", dest}
 	for _, name := range slices.Sorted(maps.Keys(bases)) {
-		cmd = append(cmd, name, RepoPath(name), bases[name])
+		cmd = append(cmd, name, RepoPath(name), strings.Join(append([]string{bases[name]}, given[name]...), " "))
 	}
 	return cmd
 }

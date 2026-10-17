@@ -289,7 +289,9 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	work, err := s.execChecked(ctx, r, diffCommand("-", r.BaseSHAs), "the diff")
+	// Against where each checkout started, never narrowed by what the Run
+	// was given: a narrower base would hide added lines from the scan.
+	work, err := s.execChecked(ctx, r, diffCommand("-", r.BaseSHAs, nil), "the diff")
 	if err != nil {
 		return nil, err
 	}
