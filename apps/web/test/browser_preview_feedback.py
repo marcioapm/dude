@@ -69,6 +69,11 @@ HEARD = """(() => {
   window.addEventListener('message', (e) => window.__heard.push(e.origin));
 })()"""
 
+# --ds-color-accent in each theme (tokens.css), as getComputedStyle writes it.
+ACCENT = {"dark": "rgb(39, 121, 188)", "light": "rgb(22, 109, 175)"}
+# --ds-color-overlay: the toolbar's fill.
+OVERLAY = {"dark": "rgb(55, 56, 58)", "light": "rgb(255, 255, 255)"}
+
 
 def ov(page, js, arg=None):
     """Evaluate `js` (a function of the overlay's root and arg) in the preview page."""
@@ -192,9 +197,10 @@ class CommentingOnAPreview(unittest.TestCase):
         self.assertEqual(ov(pv, "r => [...r.querySelectorAll('[data-testid=ov-pin]')].map(p => p.dataset.id)"), ["fbk_ana"])
         shoot(pv, "overlay-connected", themes=False)
 
-        # The page's own CSS never reaches the overlay: its buttons stay the overlay's colours.
+        # The page's own CSS never reaches the overlay: Comment is the design system's accent in the theme it draws.
         bg = ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor")
-        self.assertEqual(bg, "rgb(124, 92, 255)")
+        drawn = ov(pv, "r => r.querySelector('[data-overlay]').getAttribute('data-theme')")
+        self.assertEqual(bg, ACCENT[drawn])
 
         ov_click(pv, "ov-comment")
         wait_ov(pv, "ov-hint")
@@ -248,7 +254,8 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(draft.locator("[data-testid=fb-preview] img")).to_have_attribute("src", re.compile("^blob:"))
         shoot(page, "dude-feedback-tab")
 
-        # Show on preview marks it on the page that is open.
+        # Show on preview marks it on the page that is open (the tray's list, opened above, is put away first: it floats over the page's foot).
+        tray.get_by_role("button", name="Hide").click()
         draft.get_by_test_id("fb-show-on-preview").click()
         pv.wait_for_function("() => /Shown from dude/.test(window.__ovRoot.querySelector('[data-testid=ov-popover]')?.textContent ?? '')")
         shoot(pv, "overlay-show-on-preview", themes=False)
@@ -346,6 +353,43 @@ class CommentingOnAPreview(unittest.TestCase):
         self.assertEqual(ov_count(pv, "ov-comment"), 0)
         self.assertEqual(ov_count(pv, "ov-save"), 0)
         shoot(pv, "overlay-no-opener", themes=False)
+        self.assertEqual(self.errors, [])
+
+    def test_the_overlay_follows_the_os_then_dudes_theme_live(self):
+        ctx, page = self.context()
+        self.watch(page)
+        # A preview opened directly: no dude to ask, so the OS's scheme, switched live.
+        direct = ctx.new_page()
+        self.watch(direct)
+        direct.emulate_media(color_scheme="light")
+        direct.goto(f"{PREVIEW}/")
+        wait_ov(direct, "ov-no-opener")
+        theme = lambda p: ov(p, "r => r.querySelector('[data-overlay]').getAttribute('data-theme')")  # noqa: E731
+        bar = lambda p: ov(p, "r => getComputedStyle(r.querySelector('[data-testid=ov-toolbar]')).backgroundColor")  # noqa: E731
+        self.assertEqual((theme(direct), bar(direct)), ("light", OVERLAY["light"]))
+        direct.emulate_media(color_scheme="dark")
+        direct.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'dark'")
+        self.assertEqual(bar(direct), OVERLAY["dark"])
+        direct.close()
+
+        # Opened from dude: dude's resolved theme wins over the preview's OS, and follows dude when it changes.
+        page.emulate_media(color_scheme="dark")
+        comment = page.get_by_test_id("comment-on-server").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.emulate_media(color_scheme="light")
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'dark'", timeout=10_000)
+        self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor"), ACCENT["dark"])
+        page.emulate_media(color_scheme="light")
+        pv.wait_for_function("() => window.__ovRoot.querySelector('[data-overlay]').getAttribute('data-theme') === 'light'", timeout=10_000)
+        self.assertEqual(ov(pv, "r => getComputedStyle(r.querySelector('[data-testid=ov-comment]')).backgroundColor"), ACCENT["light"])
+        # The preview's own OS switching no longer moves it: dude decides now.
+        pv.emulate_media(color_scheme="dark")
+        pv.wait_for_timeout(300)
+        self.assertEqual(theme(pv), "light")
         self.assertEqual(self.errors, [])
 
     def test_restart_and_the_unavailable_reason(self):

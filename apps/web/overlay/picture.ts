@@ -12,7 +12,6 @@ import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
 
 const MAX_NODES = 2_000;
 const PAD = 8;
-const OUTLINE = "#7c5cff";
 
 export class PictureError extends Error {}
 
@@ -203,7 +202,7 @@ function load(src: string, win: Window): Promise<HTMLImageElement> {
  * most OVERLAY_LIMITS.pictureSide pixels on its long side. Throws a
  * PictureError saying why when it cannot be drawn.
  */
-export async function drawPicture(el: Element, win: Window): Promise<string> {
+export async function drawPicture(el: Element, win: Window, paint = { outline: "", background: "" }): Promise<string> {
   const r = el.getBoundingClientRect();
   const w = Math.ceil(r.width), h = Math.ceil(r.height);
   if (w < 1 || h < 1) throw new PictureError("it has no size");
@@ -220,10 +219,10 @@ export async function drawPicture(el: Element, win: Window): Promise<string> {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new PictureError("this browser can't draw it");
   ctx.scale(scale, scale);
-  ctx.fillStyle = "#ffffff";
+   ctx.fillStyle = paint.background || "white";
   ctx.fillRect(0, 0, w + 2 * PAD, h + 2 * PAD);
   ctx.drawImage(img, PAD, PAD, w, h);
-  ctx.strokeStyle = OUTLINE;
+  ctx.strokeStyle = paint.outline || "currentColor";
   ctx.lineWidth = 3;
   ctx.strokeRect(PAD - 3, PAD - 3, w + 6, h + 6);
   let url: string;

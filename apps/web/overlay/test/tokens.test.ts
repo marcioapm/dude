@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { flattenTheme } from "@dude/design-system/tokens";
-import { OVERLAY_THEME_TOKENS, TOKENS_MODULE, overlayTokensCss, overlayTokensModule } from "../build-tokens.ts";
+import { OVERLAY_THEME_TOKENS, TOKENS_MODULE, compactTokenNames, overlayTokensCss, overlayTokensModule } from "../build-tokens.ts";
 import { CSS } from "../css.ts";
 import { TOKENS_CSS } from "../tokens.gen.ts";
 
@@ -25,6 +25,16 @@ describe("the overlay's tokens", () => {
       const all = flattenTheme(mode);
       for (const k of OVERLAY_THEME_TOKENS) expect(block).toContain(`--ds-${k}:${all[k]};`.replace(/;$/, ""));
     }
+  });
+
+  test("build-time name compaction keeps declarations and references paired", () => {
+    const compact = compactTokenNames(`${TOKENS_CSS}\n${CSS}`);
+    const declared = new Set([...compact.matchAll(/(--d[a-z0-9]+):/g)].map((m) => m[1]));
+    const referenced = [...compact.matchAll(/var\((--d[a-z0-9]+)/g)].map((m) => m[1]);
+    expect(referenced.length).toBeGreaterThan(0);
+    expect(referenced.filter((n) => !declared.has(n))).toEqual([]);
+    expect(compact).not.toContain("--ds-");
+    expect(() => compactTokenNames("var(--ds-not-a-token)")).toThrow();
   });
 
   test("name every custom property the stylesheet reads", () => {

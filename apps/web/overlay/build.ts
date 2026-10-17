@@ -7,7 +7,7 @@
 
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
-import { TOKENS_MODULE, overlayTokensModule } from "./build-tokens.ts";
+import { TOKENS_MODULE, overlayTokensModule, compactTokenNames } from "./build-tokens.ts";
 
 const here = import.meta.dir;
 const out = join(here, "..", "public", "feedback");
@@ -27,5 +27,8 @@ if (!result.success) {
   for (const log of result.logs) console.error(log);
   process.exit(1);
 }
-const bytes = await Bun.file(join(out, "overlay.js")).bytes();
+// Both declarations and references share one mapping; the source and generated module retain the DS's names.
+const file = Bun.file(join(out, "overlay.js"));
+await Bun.write(file, compactTokenNames(await file.text()));
+const bytes = await file.bytes();
 console.log(`overlay.js: ${bytes.length} bytes, ${gzipSync(bytes).length} gzipped`);

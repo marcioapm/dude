@@ -82,6 +82,17 @@ export function overlayTokensModule(): string {
 
 export const TOKENS_MODULE = join(import.meta.dir, "tokens.gen.ts");
 
+/** Private to the closed shadow root: shorten custom-property names in the built IIFE, not in the authored CSS. */
+export function compactTokenNames(text: string): string {
+  const names = [...new Set([...overlayTokensCss().matchAll(/--ds-[a-z0-9-]+(?=:)/g)].map((m) => m[0]))].sort();
+  const short = new Map(names.map((name, i) => [name, `--d${i.toString(36)}`]));
+  return text.replace(/--ds-[a-z0-9-]+/g, (name) => {
+    const value = short.get(name);
+    if (!value) throw new Error(`overlay CSS reads an undeclared token: ${name}`);
+    return value;
+  });
+}
+
 if (import.meta.main) {
   const text = overlayTokensModule();
   await Bun.write(TOKENS_MODULE, text);
