@@ -2601,15 +2601,11 @@ func humanFeedback(sc workflow.StepContext) bool {
 // escalatedLine tells the conductor the delivery escalated to a person for
 // reason, with the actions the person has.
 func escalatedLine(reason string, actions []string) string {
-	line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
-		"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
-		"you decide_escalation.",
-		strings.ReplaceAll(reason, "_", " "), strings.Join(actions, ", "))
-	if reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked {
-		line += " The test's verdict per criterion and its evidence are on the task; " +
-			"accept or waive ships past a criterion nobody saw work, and needs the person's reason."
-	}
-	return line
+	return render(escalatedTmpl, struct {
+		Reason  string
+		Actions []string
+		Verdict bool
+	}{strings.ReplaceAll(reason, "_", " "), actions, reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked})
 }
 
 // integrationReviewBrief is what a reviewer of an integration merge (sha)

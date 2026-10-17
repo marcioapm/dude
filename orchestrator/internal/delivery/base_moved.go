@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -66,5 +65,8 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 // baseMovedLine tells a conductor base moved: task key merged pull request
 // number into it.
 func baseMovedLine(base, key string, number int) string {
-	return fmt.Sprintf("`%s` moved: %s merged (#%d). Call sync_base if your work depends on it.", base, key, number)
+	return render(baseMovedTmpl, struct {
+		Base, Task string
+		Number     int
+	}{base, key, number})
 }

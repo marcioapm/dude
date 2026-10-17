@@ -173,10 +173,10 @@ func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by st
 // unblockedLine tells a conductor its task taskKey can start, by merged;
 // auto, when it starts on its own.
 func unblockedLine(by, taskKey string, auto bool) string {
-	if auto {
-		return fmt.Sprintf("%s merged: %s can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.", by, taskKey)
-	}
-	return fmt.Sprintf("%s merged: %s can start now, nothing open in front of it. Tell the person; start nothing until they agree.", by, taskKey)
+	return render(unblockedTmpl, struct {
+		By, Task string
+		Auto     bool
+	}{by, taskKey, auto})
 }
 
 // EndAutoStartTx ends the task's start when unblocked without firing it,

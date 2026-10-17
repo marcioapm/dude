@@ -27,7 +27,7 @@ const (
 )
 
 // NotesLimitText is the refusal of a note past the limit, whoever pins it.
-var NotesLimitText = fmt.Sprintf("This epic has %d notes. Replace one (`dude note --replaces N`) instead.", NotesMax)
+var NotesLimitText = render(mustTemplate("notices/notes-limit"), NotesMax)
 
 // NoteRefusal is a note refused: Reason is limit, replaced, no_note,
 // too_long or empty; Current the epic's current notes then.
@@ -166,17 +166,26 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 
 // noteAddedLine tells the epic's live agents note n was pinned by by.
 func noteAddedLine(n int, by, text string) string {
-	return fmt.Sprintf("Epic note added: %d · %s · %s", n, by, text)
+	return render(noteAddedTmpl, struct {
+		N        int
+		By, Text string
+	}{n, by, text})
 }
 
 // noteReplacedLine tells them note was was replaced by note n.
 func noteReplacedLine(was, n int, by, text, wasText string) string {
-	return fmt.Sprintf("Epic note replaced: %d → %d · %s · %s\n(was: %s)", was, n, by, text, wasText)
+	return render(noteReplacedTmpl, struct {
+		Was, N            int
+		By, Text, WasText string
+	}{was, n, by, text, wasText})
 }
 
 // noteRetiredLine tells them note n was retired by by.
 func noteRetiredLine(n int, by, text string) string {
-	return fmt.Sprintf("Epic note retired: %d · %s · no longer in force: %s", n, by, text)
+	return render(noteRetiredTmpl, struct {
+		N        int
+		By, Text string
+	}{n, by, text})
 }
 
 // notCurrent refuses replacing a note that is not current: none by that

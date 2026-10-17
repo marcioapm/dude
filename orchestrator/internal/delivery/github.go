@@ -85,15 +85,11 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 // closeOutLine tells the conductor repo#number ended (state merged or
 // closed) and what to do about it.
 func closeOutLine(repo string, number int, state string) string {
-	name := fmt.Sprintf("%s#%d", repo, number)
-	var line string
-	switch state {
-	case forge.StateMerged:
-		line = fmt.Sprintf("Pull request %s was merged.", name)
-	case forge.StateClosed:
-		line = fmt.Sprintf("Pull request %s was closed without merging.", name)
-	}
-	return line + " Close out: say so in Chat if it helps the people on the task. Start nothing."
+	return render(prEndedTmpl, struct {
+		Repo   string
+		Number int
+		Merged bool
+	}{repo, number, state == forge.StateMerged})
 }
 
 // CloseOutTx records the reason to wake a conducted task's conductor for

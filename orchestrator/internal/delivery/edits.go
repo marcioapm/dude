@@ -595,24 +595,25 @@ func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, claim, 
 // publishedLine tells the conductor its publish id landed: commits
 // (repo@sha), lines in files; notMoved, the repositories it could not move.
 func publishedLine(id string, commits []string, lines, files int, notMoved []string) string {
-	if len(notMoved) > 0 {
-		return fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
-			id, strings.Join(commits, " "), strings.Join(notMoved, "; "))
-	}
-	return fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
-		id, strings.Join(commits, " "), lines, files)
+	return render(publishedTmpl, struct {
+		ID                string
+		Commits, NotMoved []string
+		Lines, Files      int
+	}{id, commits, notMoved, lines, files})
 }
 
 // publishRefusedLine tells the conductor its publish id was refused.
 func publishRefusedLine(id, why string) string {
-	return fmt.Sprintf("Your publish %s was refused, nothing moved: %s", id, clip(oneLine(why), 220))
+	return render(publishRefusedTmpl, struct{ ID, Why string }{id, why})
 }
 
 // publishStalledLine tells the conductor its publish id could not be
 // confirmed: said, each repository and the head it was sent to.
 func publishStalledLine(id string, said []string) string {
-	return fmt.Sprintf("Your publish %s could not be confirmed on the task branch (%s): check the branch before you publish again.",
-		id, strings.Join(said, ", "))
+	return render(publishStalledTmpl, struct {
+		ID   string
+		Said []string
+	}{id, said})
 }
 
 // PublishStalledTx settles a moving publish none of whose moves was

@@ -20,7 +20,7 @@ import (
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results
+//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -74,6 +74,31 @@ var (
 	taskImplementedTmpl        = mustTemplate("contracts/task-implemented")
 	taskUnderReviewTmpl        = mustTemplate("contracts/task-under-review")
 	workspaceTmpl              = mustTemplate("contracts/workspace")
+
+	baseMovedTmpl          = mustTemplate("wakes/base-moved")
+	decisionWaitingTmpl    = mustTemplate("wakes/decision-waiting")
+	escalatedTmpl          = mustTemplate("wakes/escalated")
+	escalationAnsweredTmpl = mustTemplate("wakes/escalation-answered")
+	escalationOnBannerTmpl = mustTemplate("wakes/escalation-on-banner")
+	prEndedTmpl            = mustTemplate("wakes/pr-ended")
+	publishedTmpl          = mustTemplate("wakes/published")
+	publishRefusedTmpl     = mustTemplate("wakes/publish-refused")
+	publishStalledTmpl     = mustTemplate("wakes/publish-stalled")
+	runAsksTmpl            = mustTemplate("wakes/run-asks")
+	runFailedTmpl          = mustTemplate("wakes/run-failed")
+	stalledTmpl            = mustTemplate("wakes/stalled")
+	steerFailedTmpl        = mustTemplate("wakes/steer-failed")
+	steerReadTmpl          = mustTemplate("wakes/steer-read")
+	unblockedTmpl          = mustTemplate("wakes/unblocked")
+	wakeNoteTmpl           = mustTemplate("wakes/note")
+
+	alreadyAnsweredTmpl = mustTemplate("notices/already-answered")
+	messageTmpl         = mustTemplate("notices/message")
+	messageHeldTmpl     = mustTemplate("notices/message-held")
+	noteAddedTmpl       = mustTemplate("notices/note-added")
+	noteReplacedTmpl    = mustTemplate("notices/note-replaced")
+	noteRetiredTmpl     = mustTemplate("notices/note-retired")
+	peerEndedTmpl       = mustTemplate("notices/peer-ended")
 )
 
 // mustTemplate is the named template, or a panic naming its file.

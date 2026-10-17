@@ -205,11 +205,7 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 // decisionWaitingNote is the reason to wake the conductor for a decision
 // at point, with line's facts.
 func decisionWaitingNote(point, line string) string {
-	note := fmt.Sprintf("Decision waiting: %s.", pointLabel[point])
-	if line != "" {
-		note += " " + line
-	}
-	return note
+	return render(decisionWaitingTmpl, struct{ Point, Line string }{pointLabel[point], line})
 }
 
 // toConductorTx parks the workflow on a decision for the conductor, and

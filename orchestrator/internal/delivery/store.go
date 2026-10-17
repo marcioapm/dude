@@ -726,7 +726,7 @@ type Directive struct {
 // runAsksLine tells the conductor a Run it started asked the person
 // question id.
 func runAsksLine(phase, runID, id string) string {
-	return fmt.Sprintf("Your %s Run %s asks the person a question (%s): read it in its chat.", phase, runID, id)
+	return render(runAsksTmpl, struct{ Phase, RunID, ID string }{phase, runID, id})
 }
 
 // QueueDirective records a directive for the Run, and returns its id and

@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -164,10 +163,10 @@ func SteerSettledTx(ctx context.Context, tx pgx.Tx, org, directiveID string, rea
 
 // steerReadLine tells the conductor its steer root was read.
 func steerReadLine(phase, runID, root string) string {
-	return fmt.Sprintf("Your %s Run %s read your steer %s.", phase, runID, root)
+	return render(steerReadTmpl, struct{ Phase, RunID, Root string }{phase, runID, root})
 }
 
 // steerFailedLine tells the conductor its steer root was not delivered.
 func steerFailedLine(root, phase, runID, why string) string {
-	return fmt.Sprintf("Your steer %s to your %s Run %s was not delivered: %s", root, phase, runID, clip(oneLine(why), 120))
+	return render(steerFailedTmpl, struct{ Root, Phase, RunID, Why string }{root, phase, runID, why})
 }

@@ -266,15 +266,13 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 // escalationAnsweredLine tells the conductor the owner's answer to its
 // question decided the escalation.
 func escalationAnsweredLine(questionID, action string) string {
-	return fmt.Sprintf("The owner's answer to your question %s decided the escalation: %s. The delivery goes on.",
-		questionID, action)
+	return render(escalationAnsweredTmpl, struct{ QuestionID, Action string }{questionID, action})
 }
 
 // escalationOnBannerLine tells the conductor the person decided the
 // escalation on the banner, closing its question about it.
 func escalationOnBannerLine(action, questionID string) string {
-	return fmt.Sprintf("The person decided the escalation on the banner: %s. Your question %s about it is closed. "+
-		"The delivery goes on.", action, questionID)
+	return render(escalationOnBannerTmpl, struct{ QuestionID, Action string }{questionID, action})
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
