@@ -405,6 +405,27 @@ describe("removing a tier", () => {
     expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id, timeLimitMinutes: 45 } });
   });
 
+  test("the organisation's judgement tier is a use: removing it needs a replacement, and the setting moves to it", async () => {
+    const added = await call(adminKey, "POST", "/v1/models/tiers", { name: "Judge", model: "gpt-6-sol-mini" });
+    expect(added.status).toBe(201);
+    const judge = await byName("Judge");
+    const thinker = await byName("Thinker");
+    const judgementTier = async () => (await owner`SELECT judgement_tier_id AS t FROM organizations WHERE id = ${ORG}`)[0].t;
+    await owner`UPDATE organizations SET judgement_tier_id = ${judge.id} WHERE id = ${ORG}`;
+    try {
+      expect((await byName("Judge")).usedBy).toEqual([{ kind: "judgements" }]);
+      const refused = await call(adminKey, "DELETE", `/v1/models/tiers/${judge.id}`, { replacement: null });
+      expect(refused.status).toBe(409);
+      expect((await body(refused)).error.code).toBe("in_use");
+      expect(await judgementTier()).toBe(judge.id);
+      expect((await call(adminKey, "DELETE", `/v1/models/tiers/${judge.id}`, { replacement: thinker.id })).status).toBe(200);
+      expect(await judgementTier()).toBe(thinker.id);
+      expect((await byName("Thinker")).usedBy).toContainEqual({ kind: "judgements" });
+    } finally {
+      await owner`UPDATE organizations SET judgement_tier_id = NULL WHERE id = ${ORG}`;
+    }
+  });
+
   test("a session that chose it falls back to the organisation's and is told so; another organisation's session is not", async () => {
     const added = await call(adminKey, "POST", "/v1/models/tiers", { name: "Spare", model: "claude-opus-5-5" });
     expect(added.status).toBe(201);

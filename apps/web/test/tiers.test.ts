@@ -26,6 +26,8 @@ describe("who uses a tier", () => {
     expect(tierUsedByWords([org("implementer"), org("fixer", true), proj("reviewer")])).toBe("2 agents · 1 project");
     expect(tierUsedByWords([proj("reviewer"), proj("implementer")])).toBe("1 project");
     expect(tierUsedByWords([])).toBe("Nobody");
+    expect(tierUsedByWords([org("reviewer"), { kind: "judgements" }])).toBe("1 agent · Judgements");
+    expect(tierUsedByWords([{ kind: "judgements" }])).toBe("Judgements");
   });
 
   test("each use by name, and where it is set", () => {
@@ -34,6 +36,8 @@ describe("who uses a tier", () => {
     expect(tierUseWhere(org("reviewer"), "Acme")).toBe("Acme’s setting");
     expect(tierUseWhere(proj("reviewer"), "Acme")).toBe("project override");
     expect(tierUseWhere(org("fixer", true), "Acme")).toBe("follows the implementer");
+    expect(tierUseName({ kind: "judgements" })).toBe("Judgements");
+    expect(tierUseWhere({ kind: "judgements" }, "Acme")).toBe("Acme’s judgement tier");
   });
 });
 
