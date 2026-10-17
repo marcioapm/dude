@@ -621,12 +621,9 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	results := make(chan bool, len(runs))
 	started := 0
 	for _, r := range runs {
-		// Its row was read while an earlier advance was still changing it;
-		// the next pass reads it fresh.
-		if busy[r.ID] {
-			continue
-		}
-		if !slots.claim(r.ID) {
+		// A Run busy before due() has a row read while an earlier advance
+		// was still changing it; the next pass reads it fresh.
+		if busy[r.ID] || !slots.claim(r.ID) {
 			continue
 		}
 		if !slots.take(ctx, wait.expired) {
