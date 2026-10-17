@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { JudgementCall, JudgementCallDetail, JudgementCallsResponse, JudgementSettings, JudgementTestResult } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
+import type { ApiClient } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { MODEL_TIERS } from "../src/fixtures/data.ts";
 import { JudgementsPage, useJudgementSettings } from "../src/screens/JudgementsSettings.tsx";
@@ -218,7 +219,7 @@ describe("the Judgements page", () => {
 });
 
 describe("Recent judgements' filter and paging", () => {
-  type Query = Parameters<FixtureClient["judgements"]>[0];
+  type Query = NonNullable<Parameters<ApiClient["judgements"]>[0]>;
   const ESCALATION: JudgementCall = { ...CALL, id: "mcl_e", asker: "delivery.escalation", question: "Does this question need a person?" };
   const OLDER: JudgementCall = { ...CALL, id: "mcl_old", question: "An older question?" };
   const page = (calls: JudgementCall[], next: string | null, first = true): JudgementCallsResponse => ({
