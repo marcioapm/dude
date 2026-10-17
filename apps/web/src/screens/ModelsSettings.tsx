@@ -99,22 +99,27 @@ function useProxyModels(client: ApiClient) {
 const agentFace = (role: string) =>
   <AgentAvatar key={`r-${role}`} role={(role === "fixer" ? "implementer" : role) as "implementer"} size="xs" />;
 
-const faceKey = (use: ModelTierUse) => (use.kind === "organization" ? `r-${use.role}` : `p-${use.project!.id}`);
+const faceKey = (use: ModelTierUse) =>
+  use.kind === "judgements" ? "judgements" : use.kind === "organization" ? `r-${use.role}` : `p-${use.project!.id}`;
 
-const faceOf = (use: ModelTierUse) =>
-  use.kind === "organization"
+const faceOf = (use: ModelTierUse) => {
+  if (use.kind === "judgements") return <TierMark key="judgements" icon="list-check" tone="neutral" size="sm" />;
+  return use.kind === "organization"
     ? agentFace(use.role)
     : <ProjectAvatar key={faceKey(use)} project={use.project!} size={16} />;
+};
 
-/** One face per role and per project, in the order they are named. */
+/** One face per role and per project, in the order they are named, and the judgements' mark after them. */
 function faces(uses: readonly ModelTierUse[]) {
   const seen = new Set<string>();
-  return uses.filter((u) => {
+  const roles = uses.filter((u) => {
+    if (u.kind === "judgements") return false;
     const key = faceKey(u);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   }).slice(0, 4).map(faceOf);
+  return uses.some((u) => u.kind === "judgements") ? [...roles, faceOf({ kind: "judgements" })] : roles;
 }
 
 /** How a tier reaches the agent, explained once. */
@@ -130,12 +135,14 @@ function HowItWorks({ example, proxy }: { example: ModelTier | null; proxy: stri
   );
 }
 
-export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
+export function ModelsPage({ client, orgName, tiers, problem, setTiers, onRemoved }: {
   client: ApiClient;
   orgName: string;
   tiers: ModelTiersResponse | null;
   problem: string | null;
   setTiers: (t: ModelTiersResponse) => void;
+  /** A tier was removed: settings that named it moved to its replacement. */
+  onRemoved?: (() => void) | undefined;
 }) {
   const proxy = useProxyModels(client);
   const [editing, setEditing] = useState<{ tier: ModelTierWithUse | null; test: boolean } | null>(null);
@@ -187,7 +194,10 @@ export function ModelsPage({ client, orgName, tiers, problem, setTiers }: {
       ) : null}
       {removing ? (
         <RemoveTierDialog client={client} orgName={orgName} tier={removing} others={tiers.tiers.filter((t) => t.id !== removing.id)}
-          onClose={() => setRemoving(null)} onRemoved={setTiers} />
+          onClose={() => setRemoving(null)} onRemoved={(t) => {
+            setTiers(t);
+            onRemoved?.();
+          }} />
       ) : null}
     </div>
   );
