@@ -296,10 +296,10 @@ func TestAnIntegrationRunThatPublishesNoMergeEscalatesWithoutAReview(t *testing.
 }
 
 // An integration Run that publishes to another repository of the task (one
-// with no pull request) but not to the conflicting one is no merge; what it
-// pushed is still where that repository's work stands, so the next Run
-// starts from it.
-func TestANoMergeIntegrationKeepsWhatItPublishedElsewhere(t *testing.T) {
+// with no pull request) but not to the conflicting one is no merge. What it
+// pushed stays on the candidate, never promoted: the task branch there does
+// not move, and the delivery stands where that branch does.
+func TestANoMergeIntegrationLeavesWhatItPublishedElsewhereOnTheCandidate(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
 	scripted := w.lux.Decide
@@ -327,22 +327,19 @@ func TestANoMergeIntegrationKeepsWhatItPublishedElsewhere(t *testing.T) {
 	if !strings.Contains(string(raw), `"cause": "no_merge"`) {
 		t.Fatalf("escalation %s", raw)
 	}
-	pushed := w.web.SHA(delivery.BranchFor(wi, 1))
+	pushed := w.web.SHA(delivery.CandidateBranch(wi, 1))
 	if pushed == "" {
-		t.Fatal("the integration Run pushed nothing to web")
+		t.Fatal("the integration Run pushed nothing to web's candidate")
+	}
+	if got := w.web.SHA(delivery.BranchFor(wi, 1)); got != "" {
+		t.Fatalf("web's task branch is at %s: an integration never promoted moved it", got)
 	}
 	var head string
-	var paths []string
-	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', ''),
-		ARRAY(SELECT jsonb_array_elements_text(COALESCE(state->'changedPaths', '[]'))) FROM workflow_runs
-		WHERE task_id = $1`, wi).Scan(&head, &paths); err != nil {
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'heads'->>'web', '') FROM workflow_runs
+		WHERE task_id = $1`, wi).Scan(&head); err != nil {
 		t.Fatal(err)
 	}
-	if head != pushed {
-		t.Fatalf("the delivery's web head %q, want the integration Run's push %s", head, pushed)
-	}
-	// Who reviews later sees the paths it changed there.
-	if !slices.Contains(paths, "web/NOTE.md") {
-		t.Fatalf("the delivery's changed paths %v, want web/NOTE.md among them", paths)
+	if head != "" {
+		t.Fatalf("the delivery's web head %q, want none: web's task branch holds nothing", head)
 	}
 }
