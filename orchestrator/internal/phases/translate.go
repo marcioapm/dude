@@ -140,6 +140,8 @@ type harnessState struct {
 	codexSpawns map[string][]codexSpawn
 	talkerState
 	stopState
+	// What the Run's init printed, and a setup script that failed in it.
+	init InitOutput
 }
 
 // talkerState is the part of harness_state a conductor or session agent
@@ -176,6 +178,7 @@ type harnessStateJSON struct {
 	Children       map[string]*childState  `json:"children,omitempty"`
 	CodexThread    string                  `json:"codexThread,omitempty"`
 	CodexSpawns    map[string][]codexSpawn `json:"codexSpawns,omitempty"`
+	Init           *InitOutput             `json:"init,omitempty"`
 	talkerState
 	stopState
 }
@@ -186,6 +189,9 @@ func (h harnessState) MarshalJSON() ([]byte, error) {
 		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState, stopState: h.stopState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
+	}
+	if h.init != (InitOutput{}) {
+		j.Init = &h.init
 	}
 	return json.Marshal(j)
 }
@@ -211,6 +217,9 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	if j.CodexTurn != nil {
 		h.codexTurn = *j.CodexTurn
+	}
+	if j.Init != nil {
+		h.init = *j.Init
 	}
 	return nil
 }
@@ -342,6 +351,7 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 		if f.Epoch > 0 {
 			t.epoch = f.Epoch
 		}
+		t.init.Record(f)
 		if f.Event != nil {
 			return t.agentEvent(ctx, tx, s, f)
 		}
@@ -616,6 +626,11 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	case broken != nil:
 		why = broken.Error + "; then its run ended: " + reason
 		event, more = why, map[string]any{"agentError": broken.AgentError}
+	case t.init.Failed != nil && t.init.Failed.Epoch == epoch:
+		// init-failed: lux's reason is only "exit code N".
+		setup := *t.init.Failed
+		why, event = setup.Reason(), setup.Reason()
+		more = map[string]any{"setup": map[string]any{"repository": setup.Repository, "exitCode": setup.ExitCode, "output": setup.Output}}
 	}
 	t.Broken = nil
 	keep := stop == nil || stop.Reason != luxTimeout
@@ -623,8 +638,12 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if err != nil {
 		return err
 	}
-	// The harness's own words can quote what the agent ran.
+	// The harness's own words can quote what the agent ran, and a setup
+	// script's output anything its repository printed.
 	why, event = red.String(why), red.String(event)
+	if setup, ok := more["setup"].(map[string]any); ok {
+		setup["output"] = red.String(setup["output"].(string))
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,

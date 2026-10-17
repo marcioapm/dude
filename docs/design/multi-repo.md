@@ -30,9 +30,8 @@ repositories is one task with one PR per repository changed.
   carry lux's `git.repositories[].push: false`: lux reports them `skipped`
   and never pushes them (agreed with lux; until it lands, dude ignores
   their push results and deletes any stray per-Run branch it finds).
-- **The Run's base is per repository.** `runs.base_ref` becomes
-  `runs.base_refs jsonb {repoName: sha}`; `runs.head_sha`/`changed_paths`
-  become `runs.heads jsonb {repoName: {sha, changedPaths}}`.
+- **Init scripts.** Each repository may have a setup script in repository settings (optional bash text, capped at 16 KiB). A Run composes the scripts in this list's order into lux `init.script`. In each checkout, it skips a `dude-setup-done` marker under that checkout's git directory, runs the script with `bash -e` and a timeout otherwise, and writes the marker only after success. A failure stops init and fails the Run with the script's exit code and output. Resumes retain the init and checkout, so completed repositories are skipped; a new Run uses the current settings. The setup environment clears dude's command-scope `GIT_CONFIG_*` variables so hook installers configure the repository's own hooks.
+
 
 ## Publishing
 

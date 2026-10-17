@@ -243,6 +243,8 @@ type specRepo struct {
 	ReadOnly bool
 	// Where it is checked out; "" is RepoPath(Name).
 	Path string
+	// Its setup script, run once per checkout before the agent (SetupInit).
+	Setup string
 }
 
 func (r specRepo) path() string {
@@ -269,6 +271,15 @@ func repoRefs(repos []specRepo) map[string]string {
 		refs[lux.SpecName(r.Name)] = r.Ref
 	}
 	return refs
+}
+
+// repoSetups are the repositories' setup scripts, in the spec's order.
+func repoSetups(repos []specRepo) []Setup {
+	out := make([]Setup, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, Setup{Name: lux.SpecName(r.Name), Path: r.path(), Script: r.Setup})
+	}
+	return out
 }
 
 // repositoriesBySpecName maps lux's reported names back to dude's repositories.
@@ -372,6 +383,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
+		spec.Init = SetupSpec(repoSetups(in.Repos))
 		for _, sec := range secrets.list {
 			if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == sec.Name }) {
 				spec.Secrets = append(spec.Secrets, sec)

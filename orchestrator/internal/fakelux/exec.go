@@ -282,3 +282,58 @@ func exitCode(err error, otherwise int) int {
 	}
 	return otherwise
 }
+
+// runInit runs the spec's init.script as lux's shim does on every start,
+// resumes included: /bin/sh -c in the Run's checkout, with the spec's
+// environment, between lux.init start and done records, its output as
+// stdout and stderr records. One that exits non-zero ends the placement
+// as lux ends it (an exited event, reason init-failed; the Run failed
+// "exit code N"), and false is returned. Callers hold s.mu.
+func (s *Server) runInit(run *Run, spec map[string]any) bool {
+	init, _ := spec["init"].(map[string]any)
+	script, _ := init["script"].(string)
+	if strings.TrimSpace(script) == "" {
+		return true
+	}
+	dir, err := s.checkout(run, spec)
+	if err != nil {
+		s.outputRecord(run, "stderr", "init script: "+err.Error()+"\n")
+		return s.initFailed(run, 1)
+	}
+	s.recordEvent(run, "lux.init", map[string]any{"phase": "start"})
+	env := os.Environ()
+	vars, _ := spec["env"].(map[string]any)
+	for k, v := range vars {
+		if str, ok := v.(string); ok {
+			env = append(env, k+"="+str)
+		}
+	}
+	cmd := exec.Command("/bin/sh", "-c", strings.ReplaceAll(script, workspaceRoot, dir))
+	cmd.Dir, cmd.Env = dir, env
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	code := exitCode(cmd.Run(), 1)
+	s.outputRecord(run, "stdout", stdout.String())
+	s.outputRecord(run, "stderr", stderr.String())
+	s.recordEvent(run, "lux.init", map[string]any{"phase": "done", "exitCode": code})
+	if code != 0 {
+		return s.initFailed(run, code)
+	}
+	return true
+}
+
+func (s *Server) initFailed(run *Run, code int) bool {
+	s.luxEvent(run, "exited", map[string]any{"exitCode": code, "reason": "init-failed",
+		"message": fmt.Sprintf("init script exited with %d", code)})
+	s.setStateWith(run, "failed", fmt.Sprintf("exit code %d", code))
+	return false
+}
+
+// outputRecord is plain output on a Run's record stream. Callers hold s.mu.
+func (s *Server) outputRecord(run *Run, ch, data string) {
+	if data == "" {
+		return
+	}
+	run.records = append(run.records, record{Seq: int64(len(run.records) + 1), Epoch: run.Epoch, Ch: ch, Data: data})
+	run.cond.Broadcast()
+}

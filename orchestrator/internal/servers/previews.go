@@ -268,8 +268,9 @@ func (p *Previews) imageOutcome(ctx context.Context, r previewRun, err error, wa
 // and Docker's images, containers and data across sleep.
 const EngineStore = "/home/agent/.local/share"
 
-// previewRef is one repository of a preview, at the ref it previews.
-type previewRef struct{ Name, URL, Ref string }
+// previewRef is one repository of a preview, at the ref it previews, and
+// its setup script.
+type previewRef struct{ Name, URL, Ref, Setup string }
 
 // refs are a preview's repositories: the task's, else its project's, each
 // at the task's branch where its work reached it, else its default branch.
@@ -290,7 +291,7 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 	}
 	if len(taskRepos) == 0 {
 		// A task naming none previews its project's code.
-		rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, 'read' FROM repositories
+		rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, 'read', COALESCE(setup_script, '') FROM repositories
 			WHERE project_id = $1 ORDER BY name`, r.ProjectID)
 		if err != nil {
 			return nil, err
@@ -314,7 +315,7 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 		case !db.IsNotFound(err):
 			return nil, err
 		}
-		repos = append(repos, previewRef{tr.Name, tr.URL, ref})
+		repos = append(repos, previewRef{tr.Name, tr.URL, ref, tr.SetupScript})
 	}
 	return repos, nil
 }
@@ -411,11 +412,15 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 			return lux.Spec{}, "", nil, nil, err
 		}
 		spec.Git = &lux.Git{}
+		var setups []phases.Setup
 		for _, rp := range repos {
 			lr := lux.Repository{Name: lux.SpecName(rp.Name), URL: rp.URL, Ref: rp.Ref, Path: phases.RepoPath(rp.Name), Push: new(bool)}
 			lr.Credential = names[lr.Name]
 			spec.Git.Repositories = append(spec.Git.Repositories, lr)
+			setups = append(setups, phases.Setup{Name: lr.Name, Path: lr.Path, Script: rp.Setup})
 		}
+		// Before its servers: lux starts them once init is done.
+		spec.Init = phases.SetupSpec(setups)
 		spec.Secrets = tokens
 	}
 	spec.Secrets = append(spec.Secrets, secrets...)
