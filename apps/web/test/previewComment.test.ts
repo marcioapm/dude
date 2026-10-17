@@ -424,3 +424,15 @@ test("what one window saved is not answered to the next: a new window starts wit
   await tick(5);
   expect(createDraft).toHaveBeenCalledTimes(2);
 });
+
+test("a window taken back after a reload starts with nothing remembered: its old nonces are saved again", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor() });
+  await tick(5);
+  popup.closed = true;
+  const reopened = { postMessage: mock(() => {}), closed: false, focus: () => {}, opener: window };
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, reopened);
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor() }, WEB, reopened);
+  await tick(5);
+  expect(createDraft).toHaveBeenCalledTimes(2);
+});

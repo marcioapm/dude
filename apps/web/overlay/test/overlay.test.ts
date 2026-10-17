@@ -455,6 +455,47 @@ test("after the give-up, a late saved for the old words leaves a box holding new
   expect((q("textarea") as HTMLTextAreaElement).value).toBe("Edited meanwhile");
 });
 
+test("a late saved that lands while the same save is sent again, after an edit, frees Save at once", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  const field = await writeOnPay("Slow link");
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { nonce: string };
+  await tick(100);
+  connect();
+  tid("ov-save")!.click();
+  expect((sent().at(-1) as { nonce: string }).nonce).toBe(first.nonce);
+  field.value = "Slow link, and more";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  fromDude({ type: "saved", v: 1, nonce: first.nonce, id: "fbk_1", drafts: 1, picture: "none" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  expect(tid("ov-save")!.textContent).toBe("Save draft");
+  await tick(100);
+  expect(count('[data-testid="ov-problem"]')).toBe(0);
+});
+
+test("after the give-up, turning the picture off is a change: a late saved leaves the box, Save sends a new save without one", async () => {
+  boot({ saveWaitMs: 60 });
+  connect();
+  await writeOnPay("With a picture");
+  await tick(20);
+  tid("ov-save")!.click();
+  const first = sent().at(-1) as { nonce: string; picture?: string };
+  expect(first.picture).toBeDefined();
+  await tick(100);
+  connect();
+  const attach = tid("ov-attach") as HTMLInputElement;
+  attach.checked = false;
+  attach.dispatchEvent(new win.Event("change", { bubbles: true }));
+  fromDude({ type: "saved", v: 1, nonce: first.nonce, id: "fbk_1", drafts: 1, picture: "attached" });
+  expect(count('[data-testid="ov-comment-box"]')).toBe(1);
+  tid("ov-save")!.click();
+  const again = sent().at(-1) as { type: string; nonce: string; picture?: string };
+  expect(again.type).toBe("draft");
+  expect(again.nonce).not.toBe(first.nonce);
+  expect(again.picture).toBeUndefined();
+});
+
 test("after the give-up, a late refused for that save still shows its reason", async () => {
   boot({ saveWaitMs: 60 });
   connect();

@@ -274,10 +274,8 @@ export class Overlay {
         if (m.nonce !== this.#saving && (this.#late === null || m.nonce !== this.#late)) return;
         if (m.nonce === this.#late && this.#lateSent !== this.#current()) {
           // The words or picture changed after the give-up: that save landed, this box is a new one.
-          this.#late = null;
-          this.#lateSent = null;
+          this.#saveDone();
           this.#drafts = Number(m.drafts) || this.#drafts;
-          this.#unanswered = false;
           this.#problem = null;
           break;
         }
