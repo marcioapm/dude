@@ -128,14 +128,13 @@ func (d *Pending) Actions() []string {
 }
 
 // pointLabel is how a decision point reads in a note.
-var pointLabel = map[string]string{
-	PointStart:       "start: nothing has run yet",
-	PointImplemented: "after implement",
-	PointReviewed:    "after a review round",
-	PointFixed:       "after a fix",
-	PointBeforePR:    "before the pull request",
-	PointPRFeedback:  "pull request feedback",
-}
+var pointLabel = func() map[string]string {
+	out := map[string]string{}
+	for _, p := range []string{PointStart, PointImplemented, PointReviewed, PointFixed, PointBeforePR, PointPRFeedback} {
+		out[p] = render(mustTemplate("wakes/facts/point-"+p), nil)
+	}
+	return out
+}()
 
 // next goes to step, as the policy decides, or under decider conductor
 // parks for the conductor's decision at point, saying line (bounded facts).

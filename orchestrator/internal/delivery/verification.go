@@ -379,14 +379,14 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 // testFailedLine is the conductor's fact on test runID failing criteria
 // with findings blocking ones of the tester's, in fix round round.
 func testFailedLine(runID string, criteria []int, findings, round int) string {
-	return fmt.Sprintf("test %s failed: criteria %v, %d blocking findings "+
-		"of the tester's; test fix round %d of %d.", runID, criteria, findings, round, MaxTestFixRounds)
+	return render(testFailedTmpl, struct {
+		RunID, Criteria      string
+		Findings, Round, Max int
+	}{runID, fmt.Sprint(criteria), findings, round, MaxTestFixRounds})
 }
 
 // testPassedLine is the conductor's fact on test runID passing.
-func testPassedLine(runID string) string {
-	return fmt.Sprintf("test %s: every criterion passed or was settled by a person.", runID)
-}
+func testPassedLine(runID string) string { return render(testPassedTmpl, runID) }
 
 // criteriaOf names the criteria in a gate's detail: number and text.
 func criteriaOf(verdicts []StoredVerdict, numbers []int) []map[string]any {

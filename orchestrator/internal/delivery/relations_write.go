@@ -334,25 +334,14 @@ func RelationLine(r *TaskRelationsOut) string {
 	if r == nil {
 		return ""
 	}
-	var parts []string
-	var open []string
+	var open, blocks []string
 	for _, b := range r.BlockedBy {
 		if !b.Merged {
 			open = append(open, fmt.Sprintf("%s (%s)", b.Key, b.Status))
 		}
 	}
-	if len(open) > 0 {
-		parts = append(parts, "blocked by "+strings.Join(open, ", "))
+	for _, b := range r.Blocks {
+		blocks = append(blocks, b.Key)
 	}
-	if len(r.Blocks) > 0 {
-		keys := make([]string, len(r.Blocks))
-		for i, b := range r.Blocks {
-			keys[i] = b.Key
-		}
-		parts = append(parts, "blocks "+strings.Join(keys, ", "))
-	}
-	if len(r.Related) > 0 {
-		parts = append(parts, "related "+strings.Join(r.Related, ", "))
-	}
-	return strings.Join(parts, " · ")
+	return render(relationLineTmpl, struct{ Open, Blocks, Related []string }{open, blocks, r.Related})
 }

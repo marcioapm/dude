@@ -918,14 +918,10 @@ func findingsLine(st *State, findings []FindingState) string {
 			parts = append(parts, fmt.Sprintf("%d %s", n, s))
 		}
 	}
-	line := fmt.Sprintf("Review round %d of %d done: %d open findings", st.Iteration, st.Policy.MaxReviewIterations, open)
-	if len(parts) > 0 {
-		line += " (" + strings.Join(parts, ", ") + ")"
-	}
-	if people > 0 {
-		line += fmt.Sprintf(", and %d people's feedback items to handle (feedback)", people)
-	}
-	return line + "."
+	return render(reviewRoundTmpl, struct {
+		Iteration, Max, Open, People int
+		Severities                   []string
+	}{st.Iteration, st.Policy.MaxReviewIterations, open, people, parts})
 }
 
 // fix: one fix Run for every unresolved finding. Findings overlap, a fixer
@@ -1559,7 +1555,7 @@ func feedbackLine(feedback []forge.ActionableFeedback) string {
 	for _, f := range feedback {
 		kind := f.Source
 		if len(f.Checks) > 0 {
-			kind = "failing check"
+			kind = failingCheck
 		}
 		kinds[kind]++
 	}
@@ -1567,7 +1563,10 @@ func feedbackLine(feedback []forge.ActionableFeedback) string {
 	for _, k := range slices.Sorted(maps.Keys(kinds)) {
 		parts = append(parts, fmt.Sprintf("%d %s", kinds[k], k))
 	}
-	return fmt.Sprintf("%d actionable items (%s): read them with pull_requests.", len(feedback), strings.Join(parts, ", "))
+	return render(prFeedbackFactTmpl, struct {
+		Count int
+		Kinds []string
+	}{len(feedback), parts})
 }
 
 // stillStuck says whether what a conflict or ci_stuck signal reported is
@@ -2171,7 +2170,7 @@ func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st
 
 // nothingToAdd follows the implementer's outcome when the work it continues
 // is reviewed as it is.
-const nothingToAdd = " Nothing to add: the work it continues is reviewed as it is."
+var nothingToAdd = render(mustTemplate("wakes/facts/nothing-to-add"), nil)
 
 // When people's feedback items are open, for feedbackOpenLine.
 const (
@@ -2185,17 +2184,10 @@ const (
 // feedbackOpenLine is the conductor's fact on n of people's feedback items
 // open, when.
 func feedbackOpenLine(when string, n int) string {
-	switch when {
-	case feedbackAfterFix:
-		return fmt.Sprintf("%d feedback items from people are still open after the fix: read them with feedback.", n)
-	case feedbackAfterIntegration:
-		return fmt.Sprintf("%d feedback items from people are open after the base integration: read them with feedback.", n)
-	case feedbackBeforePR:
-		return fmt.Sprintf("%d feedback items from people are open (feedback): they go to a fixer before any pull request.", n)
-	case feedbackReadyToRead:
-		return fmt.Sprintf("%d feedback items from people on the work ready to read: read them with feedback.", n)
-	}
-	return fmt.Sprintf("%d feedback items from people are open: read them with feedback.", n)
+	return render(feedbackOpenTmpl, struct {
+		When string
+		N    int
+	}{when, n})
 }
 
 // promotedRefreshRepos are the repositories a full promotion refreshes:

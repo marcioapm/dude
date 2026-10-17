@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -150,17 +149,10 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 
 // restartLine is what a restarted Run's agent is told of why.
 func restartLine(in Restart, note string) string {
-	who := "a person"
-	switch {
-	case in.ByDude:
-		who = "dude"
-	case in.Conductor != "":
-		who = "the conductor"
-	}
-	if note == "" {
-		return "Restarted by " + who + "."
-	}
-	return fmt.Sprintf("Restarted by %s: %s", who, note)
+	return render(restartLineTmpl, struct {
+		Note              string
+		ByDude, Conductor bool
+	}{note, in.ByDude, in.Conductor != ""})
 }
 
 // tierForRole is the id of the organization's tier named (by id or name),

@@ -255,7 +255,7 @@ func itemAnswerText(it QuestionItem, a ItemAnswer, words func(string) string) st
 
 func asTyped(s string) string { return s }
 
-func inTheirWords(s string) string { return fmt.Sprintf("in their own words: %q", s) }
+func inTheirWords(s string) string { return render(inTheirWordsTmpl, s) }
 
 // answersBlock is several items' answers for the agent and the record:
 // each question, numbered with its header, and its answer under it.
@@ -265,12 +265,12 @@ func answersBlock(items []QuestionItem, answers []ItemAnswer) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		q := strings.ReplaceAll(it.Question, "\n", "\n   ")
-		fmt.Fprintf(&b, "%d. %s — %s", i+1, it.Header, q)
-		if it.Multiple {
-			b.WriteString(" (several allowed)")
-		}
-		fmt.Fprintf(&b, "\n   → %s", strings.ReplaceAll(itemAnswerText(it, answers[i], inTheirWords), "\n", "\n     "))
+		b.WriteString(render(answerItemTmpl, struct {
+			I                        int
+			Header, Question, Answer string
+			Multiple                 bool
+		}{i, it.Header, strings.ReplaceAll(it.Question, "\n", "\n   "),
+			strings.ReplaceAll(itemAnswerText(it, answers[i], inTheirWords), "\n", "\n     "), it.Multiple}))
 	}
 	return b.String()
 }
@@ -280,23 +280,9 @@ func answersBlock(items []QuestionItem, answers []ItemAnswer) string {
 // question %q" in a session); for several, each question and its answer.
 // A note follows, signed.
 func AnswerDirective(prompt string, items []QuestionItem, a Answered, name string, session bool) string {
-	var text string
-	switch {
-	case len(items) == 1 && session:
-		text = fmt.Sprintf("%s answered your question %q:\n\n%s", name, prompt, a.Text)
-	case len(items) == 1:
-		text = fmt.Sprintf("Answer to your question %q:\n\n%s", prompt, a.Text)
-	case session:
-		text = fmt.Sprintf("%s answered your %d questions:\n\n%s", name, len(items), a.Text)
-	default:
-		text = fmt.Sprintf("Answers to your %d questions:\n\n%s", len(items), a.Text)
-	}
-	if a.Note != "" {
-		who := name
-		if who == "" {
-			who = "the person"
-		}
-		text += fmt.Sprintf("\n\nAlso from %s:\n%s", who, a.Note)
-	}
-	return text
+	return render(answerTmpl, struct {
+		Prompt, Name, Text, Note string
+		One, Session             bool
+		Count                    int
+	}{prompt, name, a.Text, a.Note, len(items) == 1, session, len(items)})
 }

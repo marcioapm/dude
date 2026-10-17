@@ -303,19 +303,16 @@ func (o Outcome) advance(heads map[string]string) map[string]string {
 // ended, its commit per repository and how many files it changed. Never
 // the files themselves.
 func (o Outcome) line(runID, phase string) string {
-	status := "finished"
-	if !o.Succeeded {
-		status = "failed"
-	}
 	var commits []string
 	for _, repo := range slices.Sorted(maps.Keys(o.Heads)) {
 		commits = append(commits, repo+"@"+short(o.Heads[repo]))
 	}
-	line := fmt.Sprintf("%s %s %s", phase, runID, status)
-	if len(commits) > 0 {
-		line += ", at " + strings.Join(commits, " ")
-	}
-	return fmt.Sprintf("%s, %d files changed.", line, len(o.ChangedPaths))
+	return render(outcomeTmpl, struct {
+		Phase, RunID string
+		Succeeded    bool
+		Commits      []string
+		Files        int
+	}{phase, runID, o.Succeeded, commits, len(o.ChangedPaths)})
 }
 
 // Unfinished is a phase Run that ended failed or aborted.

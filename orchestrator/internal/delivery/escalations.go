@@ -336,11 +336,7 @@ func waitsAtDecide(d *Delivery) bool {
 // carries: what the conductor proposed, what the owner said, and the
 // conductor's own word when it decided.
 func escalationNote(proposal, answer, conductorNote string) string {
-	parts := []string{"The conductor proposed: " + clip(oneLine(proposal), 1500), "The owner answered: " + clip(oneLine(answer), 1000)}
-	if n := strings.TrimSpace(conductorNote); n != "" {
-		parts = append(parts, "The conductor decided: "+clip(oneLine(n), 1000))
-	}
-	return strings.Join(parts, "\n")
+	return render(escalationNoteTmpl, struct{ Proposal, Answer, Decided string }{proposal, answer, strings.TrimSpace(conductorNote)})
 }
 
 // EscalationQuestion is what ask_person records for a conductor while its
@@ -399,15 +395,7 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 }
 
 // decidedBy says who took a decision, for a refusal.
-func decidedBy(h *HumanDecision) string {
-	switch {
-	case h.Conductor != "":
-		return "by the conductor " + h.Conductor + " (decide_escalation)"
-	case h.QuestionID != "":
-		return "by the owner's answer to question " + h.QuestionID
-	}
-	return "by a person on the banner"
-}
+func decidedBy(h *HumanDecision) string { return render(decidedByTmpl, h) }
 
 // ConductDecideEscalation is decide_escalation: the conductor decides the
 // escalation the delivery waits on, only on the task's owner's free answer
@@ -555,13 +543,12 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 func changedTask(title, goal string, rawCriteria []byte) string {
 	var criteria []string
 	_ = json.Unmarshal(rawCriteria, &criteria)
-	// A resume carries no images, so the changed text names them only.
-	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title,
-		strings.TrimSpace(ImagesAsText(goal)))
+	list := ""
 	if len(criteria) > 0 {
-		text += "\n\nAcceptance criteria:\n" + CriteriaList(CriteriaImagesAsText(criteria))
+		list = CriteriaList(CriteriaImagesAsText(criteria))
 	}
-	return text
+	// A resume carries no images, so the changed text names them only.
+	return render(taskChangedTmpl, struct{ Title, Goal, Criteria string }{title, strings.TrimSpace(ImagesAsText(goal)), list})
 }
 
 // ReleaseKeptTx lets a task's stopped Runs go — a retry or a start over
