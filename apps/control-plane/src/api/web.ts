@@ -91,14 +91,14 @@ async function send(request: Request, path: string, cacheControl: string, extra:
 
 // RFC 9110 13.1.2/13.1.3: If-None-Match (weak comparison) wins over If-Modified-Since.
 function notModified(request: Request, etag: string, modified: number): boolean {
-  const inm = request.headers.get("if-none-match");
-  if (inm !== null) {
+  const ifNoneMatch = request.headers.get("if-none-match");
+  if (ifNoneMatch !== null) {
     const weak = (t: string) => t.trim().replace(/^W\//, "");
-    return inm.split(",").some((t) => t.trim() === "*" || weak(t) === weak(etag));
+    return ifNoneMatch.split(",").some((t) => t.trim() === "*" || weak(t) === weak(etag));
   }
-  const ims = request.headers.get("if-modified-since");
-  if (ims === null) return false;
-  const since = Date.parse(ims);
+  const ifModifiedSince = request.headers.get("if-modified-since");
+  if (ifModifiedSince === null) return false;
+  const since = Date.parse(ifModifiedSince);
   return !Number.isNaN(since) && modified <= since;
 }
 

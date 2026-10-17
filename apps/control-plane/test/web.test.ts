@@ -103,6 +103,8 @@ describe("DUDE_WEB_DIR", () => {
 
   test("a revalidation with a validator is a 304 until the file changes", async () => {
     const path = join(parent, "web", "feedback", "overlay.js");
+    const overlayWith = (headers: Record<string, string>) =>
+      router.handle(new Request("http://dude.test/feedback/overlay.js", { headers }));
     const first = await get("/feedback/overlay.js");
     const etag = first.headers.get("etag");
     const modified = first.headers.get("last-modified");
@@ -110,7 +112,7 @@ describe("DUDE_WEB_DIR", () => {
     expect(modified).toBeTruthy();
     await first.text();
     for (const validator of [{ "if-none-match": etag! }, { "if-modified-since": modified! }]) {
-      const again = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: validator }));
+      const again = await overlayWith(validator);
       expect(again.status).toBe(304);
       expect(await again.text()).toBe("");
     }
@@ -123,10 +125,10 @@ describe("DUDE_WEB_DIR", () => {
     await writeFile(path, changed);
     await utimes(path, new Date(), new Date(Date.now() + 5_000));
     try {
-      const res = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: { "if-none-match": etag! } }));
+      const res = await overlayWith({ "if-none-match": etag! });
       expect(res.status).toBe(200);
       expect(await res.text()).toBe(changed);
-      const byDate = await router.handle(new Request("http://dude.test/feedback/overlay.js", { headers: { "if-modified-since": modified! } }));
+      const byDate = await overlayWith({ "if-modified-since": modified! });
       expect(byDate.status).toBe(200);
       expect(await byDate.text()).toBe(changed);
     } finally {
