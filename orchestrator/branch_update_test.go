@@ -1,11 +1,16 @@
 package orchestrator_test
 
-// A writer's publish when the task branch had its base merged in under it
-// (abs#5477): by dude's own update-branch in the sync that started the
-// fix, by a person's Update branch on GitHub, or by a later sync. The
-// automatic update is not asked for by a sync that has just signalled;
-// one that lands anyway is merged with the writer's commit on GitHub. A
-// person's own commit under the writer is never merged over.
+// A writer's publish, or a checked fix's promotion, when the task branch
+// had its base merged in under it (abs#5477): by dude's own update-branch
+// in the sync that started the fix, by a person's Update branch on GitHub,
+// or by a later sync. The automatic update is not asked for by a sync that
+// has just signalled; one that lands anyway is merged with the writer's
+// commit, or the candidate's head, on GitHub. A person's own commit under
+// either is never merged over.
+//
+// A pull request's fix publishes to its candidate branch, which nobody
+// merges the base into: the phase publish's merge-in is exercised by the
+// review loop's fix, which publishes to the task branch itself.
 
 import (
 	"bytes"
@@ -67,7 +72,7 @@ func TestABranchIsNotUpdatedUnderTheFixItsOwnSyncStarted(t *testing.T) {
 		w.sync()
 		return w.taskStatus(wi) == "awaiting_input" || w.taskStatus(wi) == "review" && w.branchUpdates(wi) == 1
 	})
-	w.fixPublishedFrom(wi, head)
+	w.fixPromotedFrom(wi, head)
 }
 
 // With whenBehind tell, falling behind with feedback is a fix and never a
@@ -94,61 +99,53 @@ func TestABranchBehindIsNotUpdatedWhenTheOrganizationAsksToBeTold(t *testing.T) 
 // person's Update branch or a later sync's does: the fix's publish merges
 // its commit in on GitHub. The branch's head is that merge, over GitHub's
 // and the fix's; the fix's change is its own, not the base's; the
-// delivery, the pull request and the next fix start from the merge.
+// delivery's next review and next writer start from the merge, and the
+// pull request opens on it.
 func TestAFixPublishesOverABaseMergeThatLandedUnderIt(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	start := w.gh.SHA(branch)
-	landed := w.underTheWriter(branch, func() string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	under, landed := landOnce(isFixMoveOf(w.gh.Repo, branch), func(*http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		return w.gh.MergeInto(branch, "main", nil)
 	})
-	fix := w.prFixSettled(wi)
+	w.onGitHub(under)
+	fix := w.reviewFixSettled(wi)
 	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
 		t.Fatalf("fix %s (%s), escalated %q\nruns:\n%s", fix.status, fix.error, r, w.describeRuns())
 	}
 	x := landed()
-	if x == "" || fix.base != start {
-		t.Fatalf("GitHub's merge %q, fix from %.8s, want from %.8s", x, fix.base, start)
+	if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != fix.base {
+		t.Fatalf("GitHub's merge %q has parents %v, want the fix's start %.8s first", x, got, fix.base)
 	}
-	m := w.gh.SHA(branch)
+	m := fix.head
 	if got := w.gh.Parents(m); !slices.Equal(got, []string{x, fix.commit}) {
-		t.Fatalf("the branch's head %.8s has parents %v, want GitHub's merge %.8s then the fix's %.8s", m, got, x, fix.commit)
+		t.Fatalf("the fix recorded head %.8s with parents %v, want GitHub's merge %.8s then the fix's %.8s", m, got, x, fix.commit)
 	}
-	if fix.head != m || !slices.Equal(fix.paths, []string{"FIXED.md"}) {
-		t.Errorf("the fix recorded head %.8s changing %v, want %.8s changing [FIXED.md]", fix.head, fix.paths, m)
+	if !slices.Equal(fix.paths, []string{"FIXED.md"}) {
+		t.Errorf("the fix recorded changing %v, want [FIXED.md]", fix.paths)
 	}
-	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, wi, m); n != 1 {
-		t.Error("the pull request's head is not the merge")
-	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'heads'->>'target' = $2`, wi, m); n != 1 {
-		t.Error("the delivery's head is not the merge")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, m); n != 1 {
+		t.Error("the delivery's next review did not start from the merge")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2
 		AND payload->'mergedBase'->>'commit' = $3 AND payload->'mergedBase'->>'into' = $4`, wi, m, fix.commit, x); n != 1 {
 		t.Errorf("%d commit events saying dude merged the fix in", n)
 	}
+	// The next writer's own commit is made on the merge, and the pull
+	// request opens on it.
+	var next string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(push_result->'results'->0->>'commit', '') FROM runs
+		WHERE task_id = $1 AND phase = 'simplify'`, wi).Scan(&next)
+	if got := w.gh.Parents(next); len(got) == 0 || got[0] != m {
+		t.Errorf("the simplifier's commit %.8s has parents %v, want the merge %.8s first", next, got, m)
+	}
+	if head := w.gh.SHA(w.gh.Pull(1).Head); head != next {
+		t.Errorf("the pull request opened at %.8s, want the simplifier's %.8s", head, next)
+	}
 	w.sync()
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed'`, wi); n != 0 {
 		t.Errorf("%d pushes recorded as someone else's", n)
-	}
-	w.gh.Comment(1, "alice", "Please also say goodbye.")
-	w.until("the next fix", func() bool { w.sync(); return w.fixes(wi) == 2 })
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND base_refs->>'target' = $2`, wi, m); n != 1 {
-		t.Error("the next fix did not start from the merge")
-	}
-	// The next fix's own commit is made on the merge, whether or not its
-	// publish then goes through.
-	var next string
-	w.until("the next fix pushed", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(push_result->'results'->0->>'commit', '') FROM runs
-			WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb AND status IN ('completed', 'failed')
-			ORDER BY created_at DESC LIMIT 1 OFFSET 0`, wi).Scan(&next)
-		return next != "" && next != fix.commit
-	})
-	if got := w.gh.Parents(next); len(got) == 0 || got[0] != m {
-		t.Errorf("the next fix's commit %.8s has parents %v, want the merge %.8s first", next, got, m)
 	}
 }
 
@@ -157,17 +154,17 @@ func TestAFixPublishesOverABaseMergeThatLandedUnderIt(t *testing.T) {
 // branch's head still.
 func TestAFixIsRefusedOverAPersonsCommitThatLandedUnderIt(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	landed := w.underTheWriter(branch, func() string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	landed := w.underTheFix(branch, func() string {
 		return w.gh.CommitFiles(branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 	}
-	if r := w.escalationReason(wi); r != "pr_fix_failed" {
-		t.Errorf("escalated %q, want pr_fix_failed", r)
+	if r := w.escalationReason(wi); r != "fix_failed" {
+		t.Errorf("escalated %q, want fix_failed", r)
 	}
 	if got := w.gh.SHA(branch); got != landed() {
 		t.Errorf("the task branch at %.8s, want the person's commit %.8s", got, landed())
@@ -178,23 +175,23 @@ func TestAFixIsRefusedOverAPersonsCommitThatLandedUnderIt(t *testing.T) {
 // refused naming the base merge, and the delivery escalates as before.
 func TestAFixConflictingWithABaseMergeUnderItIsRefused(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
 	// The base takes the task branch's work and rewrites the file the fixer
 	// writes; GitHub merges it in cleanly while the fix is at work, and no
 	// sync sees the pull request conflict.
-	landed := w.underTheWriter(branch, func() string {
+	landed := w.underTheFix(branch, func() string {
 		w.gh.MergeCommit("main", w.gh.SHA(branch))
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"FIXED.md": "the base's\n"})
 		return w.gh.MergeInto(branch, "main", nil)
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	if fix.status != "failed" || !strings.Contains(fix.error, "main was merged into the task branch meanwhile") ||
 		!strings.Contains(fix.error, "conflicts with that merge") {
 		t.Fatalf("fix %s (%s), want refused naming the base merge; GitHub's merge %q, branch log %v", fix.status, fix.error, landed(), w.gh.Log(branch))
 	}
-	if r := w.escalationReason(wi); r != "pr_fix_failed" {
-		t.Errorf("escalated %q, want pr_fix_failed", r)
+	if r := w.escalationReason(wi); r != "fix_failed" {
+		t.Errorf("escalated %q, want fix_failed", r)
 	}
 	if x := landed(); x == "" || w.gh.SHA(branch) != x {
 		t.Errorf("the task branch at %.8s, want GitHub's merge %.8s", w.gh.SHA(branch), x)
@@ -220,23 +217,22 @@ func TestAFixIsRefusedOverABaseMergeCarryingAPersonsEdit(t *testing.T) {
 	} {
 		t.Run(made.by, func(t *testing.T) {
 			w := newWorld(t)
-			wi := w.reviewing()
-			branch := w.gh.Pull(1).Head
-			start := w.gh.SHA(branch)
-			landed := w.underTheWriter(branch, func() string {
+			wi := w.task()
+			branch := delivery.BranchFor(wi, 1)
+			landed := w.underTheFix(branch, func() string {
 				w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 				return made.merge(w.gh, branch)
 			})
-			fix := w.prFixSettled(wi)
+			fix := w.reviewFixSettled(wi)
 			x := landed()
-			if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != start {
-				t.Fatalf("the evil merge %.8s has parents %v, want the task branch %.8s first", x, got, start)
+			if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != fix.base {
+				t.Fatalf("the evil merge %.8s has parents %v, want the fix's start %.8s first", x, got, fix.base)
 			}
 			if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 				t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 			}
-			if r := w.escalationReason(wi); r != "pr_fix_failed" {
-				t.Errorf("escalated %q, want pr_fix_failed", r)
+			if r := w.escalationReason(wi); r != "fix_failed" {
+				t.Errorf("escalated %q, want fix_failed", r)
 			}
 			if got := w.gh.SHA(branch); got != x {
 				t.Errorf("the task branch at %.8s, want the evil merge %.8s", got, x)
@@ -249,13 +245,13 @@ func TestAFixIsRefusedOverABaseMergeCarryingAPersonsEdit(t *testing.T) {
 // pushed is not GitHub's: the fix's publish does not merge over it.
 func TestAFixIsRefusedOverABaseMergeNotMadeByGitHub(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	landed := w.underTheWriter(branch, func() string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	landed := w.underTheFix(branch, func() string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		return w.gh.MergeLocally(branch, "main", nil)
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 	}
@@ -264,9 +260,9 @@ func TestAFixIsRefusedOverABaseMergeNotMadeByGitHub(t *testing.T) {
 	}
 }
 
-// A fix whose publish fast-forwards the task branch, as every phase of the
-// delivery before it did, never looks up whether its Run attempted a merge:
-// only a branch holding a merge of the fix's commit asks.
+// A delivery whose every publish fast-forwards, the pull request's fix to
+// its candidate included, never looks up whether a Run attempted a merge:
+// only a branch holding a merge of the writer's commit asks.
 func TestAFastForwardPublishLooksUpNoMergeAttempt(t *testing.T) {
 	w := newWorld(t)
 	var lookups atomic.Int64
@@ -276,8 +272,8 @@ func TestAFastForwardPublishLooksUpNoMergeAttempt(t *testing.T) {
 	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
 		t.Fatalf("fix %s (%s), escalated %q", fix.status, fix.error, r)
 	}
-	if got := w.gh.SHA(w.gh.Pull(1).Head); got != fix.commit || fix.head != fix.commit {
-		t.Fatalf("the branch at %.8s, the fix recorded %.8s, want both fast-forwarded to its commit %.8s", got, fix.head, fix.commit)
+	if fix.head != fix.commit {
+		t.Fatalf("the fix recorded %.8s, want its candidate fast-forwarded to its commit %.8s", fix.head, fix.commit)
 	}
 	if n := lookups.Load(); n != 0 {
 		t.Errorf("%d merge-attempt lookups over fast-forward publishes, want 0", n)
@@ -305,13 +301,7 @@ func TestARetriedFixDoesNotAdoptTheMergeAnAbortedFixAttempted(t *testing.T) {
 	}
 	wi := w.task()
 	branch := delivery.BranchFor(wi, 1)
-	isFixMove := func(r *http.Request) bool {
-		if !isMoveOf(branch)(r) {
-			return false
-		}
-		out, _ := exec.Command("git", "-C", w.gh.Repo, "log", "-1", "--format=%s", movedTo(r)).Output()
-		return strings.HasPrefix(string(out), "Address review findings")
-	}
+	isFixMove := isFixMoveOf(w.gh.Repo, branch)
 	under, x := landOnce(isFixMove, func(*http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		return w.gh.MergeInto(branch, "main", nil)
@@ -384,9 +374,9 @@ func TestARetriedFixDoesNotAdoptTheMergeAnAbortedFixAttempted(t *testing.T) {
 func TestAFixsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.RetryAhead = time.Minute
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	hook, landed := landOnce(isMoveOf(branch), func(*http.Request) string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	hook, landed := landOnce(isFixMoveOf(w.gh.Repo, branch), func(*http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		return w.gh.MergeInto(branch, "main", nil)
 	})
@@ -398,19 +388,16 @@ func TestAFixsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
 		return 0
 	})
 	w.gh.Set(func(s *fakegithub.Server) { s.LoseMergeResponses = 1 })
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
 		t.Fatalf("fix %s (%s), escalated %q", fix.status, fix.error, r)
 	}
-	x, m := landed(), w.gh.SHA(branch)
+	x, m := landed(), fix.head
 	if got := w.gh.Parents(m); x == "" || !slices.Equal(got, []string{x, fix.commit}) {
-		t.Fatalf("the branch's head %.8s has parents %v, want GitHub's merge %.8s then the fix's %.8s", m, got, x, fix.commit)
+		t.Fatalf("the fix recorded head %.8s with parents %v, want GitHub's merge %.8s then the fix's %.8s", m, got, x, fix.commit)
 	}
 	if n := merges.Load(); n != 1 {
 		t.Errorf("%d merge requests, want 1", n)
-	}
-	if fix.head != m {
-		t.Errorf("the fix recorded head %.8s, want its merge %.8s", fix.head, m)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.merge_attempted'
 		AND payload->>'commit' = $2`, wi, fix.commit); n != 1 {
@@ -428,15 +415,15 @@ func TestAFixsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
 // fast-forward's refusal stands.
 func TestAPersonsMergeOfAFixsCommitIsNotAdopted(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	hook, landed := landOnce(isMoveOf(branch), func(r *http.Request) string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	hook, landed := landOnce(isFixMoveOf(w.gh.Repo, branch), func(r *http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		w.gh.MergeInto(branch, "main", nil)
 		return w.gh.MergeCommit(branch, movedTo(r))
 	})
 	w.onGitHub(hook)
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	m := landed()
 	if got := w.gh.Parents(m); m == "" || len(got) != 2 || got[1] != fix.commit {
 		t.Fatalf("their merge %.8s has parents %v, want the fix's %.8s second", m, got, fix.commit)
@@ -444,8 +431,8 @@ func TestAPersonsMergeOfAFixsCommitIsNotAdopted(t *testing.T) {
 	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 	}
-	if r := w.escalationReason(wi); r != "pr_fix_failed" {
-		t.Errorf("escalated %q, want pr_fix_failed", r)
+	if r := w.escalationReason(wi); r != "fix_failed" {
+		t.Errorf("escalated %q, want fix_failed", r)
 	}
 	if got := w.gh.SHA(branch); got != m {
 		t.Errorf("the task branch at %.8s, want their merge %.8s", got, m)
@@ -463,9 +450,9 @@ func TestAPersonsMergeOfAFixsCommitIsNotAdopted(t *testing.T) {
 func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.RetryAhead = time.Minute
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	under, x := landOnce(isMoveOf(branch), func(*http.Request) string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	under, x := landOnce(isFixMoveOf(w.gh.Repo, branch), func(*http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		return w.gh.MergeInto(branch, "main", nil)
 	})
@@ -478,7 +465,7 @@ func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
 		}
 		return 0
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	m := landed()
 	if got := w.gh.Parents(m); m == "" || !slices.Equal(got, []string{x(), fix.commit}) {
 		t.Fatalf("the merge %.8s has parents %v, want %.8s then the fix's %.8s", m, got, x(), fix.commit)
@@ -490,8 +477,8 @@ func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
 	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 	}
-	if r := w.escalationReason(wi); r != "pr_fix_failed" {
-		t.Errorf("escalated %q, want pr_fix_failed", r)
+	if r := w.escalationReason(wi); r != "fix_failed" {
+		t.Errorf("escalated %q, want fix_failed", r)
 	}
 	if got := w.gh.SHA(branch); got != m {
 		t.Errorf("the task branch at %.8s, want the merge %.8s kept", got, m)
@@ -523,17 +510,16 @@ func TestAFixIsRefusedOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
 		}
 		return b
 	}
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	start := w.gh.SHA(branch)
-	landed := w.underTheWriter(branch, func() string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	landed := w.underTheFix(branch, func() string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"NOTES.md": lines("one, the base's", "10")})
 		return w.gh.MergeInto(branch, "main", nil)
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	x := landed()
-	if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != start {
-		t.Fatalf("GitHub's merge %q has parents %v, want the task branch %.8s first", x, got, start)
+	if got := w.gh.Parents(x); x == "" || len(got) != 2 || got[0] != fix.base {
+		t.Fatalf("GitHub's merge %q has parents %v, want the fix's start %.8s first", x, got, fix.base)
 	}
 	if out, _ := exec.Command("git", "-C", w.gh.Repo, "show", x+":NOTES.md").Output(); string(out) != lines("one, the base's", "ten, the task's") {
 		t.Fatalf("the merge's NOTES.md is %q, want both edits", out)
@@ -541,8 +527,8 @@ func TestAFixIsRefusedOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
 	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 	}
-	if r := w.escalationReason(wi); r != "pr_fix_failed" {
-		t.Errorf("escalated %q, want pr_fix_failed", r)
+	if r := w.escalationReason(wi); r != "fix_failed" {
+		t.Errorf("escalated %q, want fix_failed", r)
 	}
 	if got := w.gh.SHA(branch); got != x {
 		t.Errorf("the task branch at %.8s, want GitHub's merge %.8s", got, x)
@@ -562,21 +548,21 @@ func TestAFixIsRefusedWhenGitHubsCompareCannotProveTheBaseMerges(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
-			wi := w.reviewing()
-			branch := w.gh.Pull(1).Head
-			start := w.gh.SHA(branch)
-			landed := w.underTheWriter(branch, func() string {
+			wi := w.task()
+			branch := delivery.BranchFor(wi, 1)
+			landed := w.underTheFix(branch, func() string {
 				w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 				return w.gh.MergeInto(branch, "main", nil)
 			})
 			w.gh.Set(func(s *fakegithub.Server) {
 				s.CompareAnswer = func(base, head string, answer map[string]any) {
-					if x := landed(); base == start && x != "" && head == x {
+					// The fix's start...GitHub's merge: the judgement's compare.
+					if x := landed(); x != "" && head == x && base == s.Parents(x)[0] {
 						c.answer(answer)
 					}
 				}
 			})
-			fix := w.prFixSettled(wi)
+			fix := w.reviewFixSettled(wi)
 			if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
 				t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
 			}
@@ -592,9 +578,9 @@ func TestAFixIsRefusedWhenGitHubsCompareCannotProveTheBaseMerges(t *testing.T) {
 // merge, is what the fix records.
 func TestAFixAlreadyInABaseMergeUnderItRecordsThatMerge(t *testing.T) {
 	w := newWorld(t)
-	wi := w.reviewing()
-	branch := w.gh.Pull(1).Head
-	hook, landed := landOnce(isMoveOf(branch), func(r *http.Request) string {
+	wi := w.task()
+	branch := delivery.BranchFor(wi, 1)
+	hook, landed := landOnce(isFixMoveOf(w.gh.Repo, branch), func(r *http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
 		w.gh.MergeCommit("main", movedTo(r))
 		return w.gh.MergeInto(branch, "main", nil)
@@ -606,7 +592,7 @@ func TestAFixAlreadyInABaseMergeUnderItRecordsThatMerge(t *testing.T) {
 		}
 		return 0
 	})
-	fix := w.prFixSettled(wi)
+	fix := w.reviewFixSettled(wi)
 	x := landed()
 	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
 		t.Fatalf("fix %s (%s), escalated %q", fix.status, fix.error, r)
@@ -614,11 +600,11 @@ func TestAFixAlreadyInABaseMergeUnderItRecordsThatMerge(t *testing.T) {
 	if n := merges.Load(); n != 1 {
 		t.Errorf("%d merge requests, want 1 answered 204", n)
 	}
-	if x == "" || w.gh.SHA(branch) != x || fix.head != x {
-		t.Fatalf("the branch at %.8s, the fix recorded %.8s, want GitHub's merge %.8s", w.gh.SHA(branch), fix.head, x)
+	if x == "" || fix.head != x {
+		t.Fatalf("the fix recorded %.8s, want GitHub's merge %.8s", fix.head, x)
 	}
-	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, wi, x); n != 1 {
-		t.Error("the pull request's head is not the base merge")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, x); n != 1 {
+		t.Error("the delivery's next review did not start from the base merge")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2`, wi, x); n != 1 {
 		t.Errorf("%d commit events at the base merge", n)
@@ -1019,6 +1005,27 @@ func isMoveOf(branch string) func(r *http.Request) bool {
 	}
 }
 
+// isFixMoveOf: a fast-forward of branch to a review-loop fix's commit
+// (fakeagent's "Address review findings"), in the bare repository repo.
+func isFixMoveOf(repo, branch string) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		if !isMoveOf(branch)(r) {
+			return false
+		}
+		out, _ := exec.Command("git", "-C", repo, "log", "-1", "--format=%s", movedTo(r)).Output()
+		return strings.HasPrefix(string(out), "Address review findings")
+	}
+}
+
+// underTheFix is underTheWriter for the review loop's fix: land runs as
+// that fix's move of branch arrives, not the implementer's.
+func (w *world) underTheFix(branch string, land func() string) func() string {
+	w.t.Helper()
+	hook, landed := landOnce(isFixMoveOf(w.gh.Repo, branch), func(*http.Request) string { return land() })
+	w.onGitHub(hook)
+	return landed
+}
+
 // isMergesCall: POST /merges, a writer merging its commit in on GitHub.
 func isMergesCall(r *http.Request) bool {
 	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/merges")
@@ -1081,6 +1088,33 @@ func (w *world) prFixSettled(wi string) prFix {
 	return f
 }
 
+// reviewFixSettled delivers task wi and waits for the review loop's first
+// fix, which publishes to the task branch itself, to settle and the
+// delivery to go on: to an open pull request, or escalated.
+func (w *world) reviewFixSettled(wi string) prFix {
+	w.t.Helper()
+	w.deliver(wi)
+	var f prFix
+	read := func() {
+		f.paths = nil
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			return tx.QueryRow(context.Background(), `SELECT status::text, COALESCE(error, ''), COALESCE(base_refs->>'target', ''),
+					COALESCE(push_result->'results'->0->>'commit', ''), COALESCE(heads->'target'->>'sha', ''),
+					COALESCE(ARRAY(SELECT jsonb_array_elements_text(heads->'target'->'changedPaths')), '{}')
+				FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback = '[]'::jsonb ORDER BY created_at LIMIT 1`, wi).
+				Scan(&f.status, &f.error, &f.base, &f.commit, &f.head, &f.paths)
+		}); err != nil && err != pgx.ErrNoRows {
+			w.t.Fatal(err)
+		}
+	}
+	w.until("the review loop's fix settled", func() bool {
+		read()
+		s := w.taskStatus(wi)
+		return f.status == "failed" && s == "awaiting_input" || f.status == "completed" && s == "review" && len(w.gh.Pulls()) == 1
+	})
+	return f
+}
+
 // updateCalls counts the update-branch requests GitHub received.
 func (w *world) updateCalls() int {
 	n := 0
@@ -1095,19 +1129,19 @@ func (w *world) branchUpdates(wi string) int {
 		AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL`, wi)
 }
 
-// fixPublishedFrom asserts the task's one pull request fix started at base,
+// fixPromotedFrom asserts the task's one pull request fix started at base,
 // published, and that GitHub was asked to update the branch once, at the
-// head the fix published, never under it.
-func (w *world) fixPublishedFrom(wi, base string) {
+// head its promotion moved the pull request to, never under it.
+func (w *world) fixPromotedFrom(wi, base string) {
 	w.t.Helper()
 	if r := w.escalationReason(wi); r != "" {
 		w.t.Fatalf("escalated %s\nruns:\n%s", r, w.describeRuns())
 	}
-	var status, from, published string
+	var status, from, promoted string
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		return tx.QueryRow(context.Background(), `SELECT status::text, COALESCE(base_refs->>'target', ''),
-				COALESCE(push_result->'results'->0->>'commit', '')
-			FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&status, &from, &published)
+				COALESCE((SELECT payload->>'to' FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'), '')
+			FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&status, &from, &promoted)
 	}); err != nil {
 		w.t.Fatal(err)
 	}
@@ -1121,7 +1155,7 @@ func (w *world) fixPublishedFrom(wi, base string) {
 		w.t.Fatalf("%d branch updates, want 1", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
-		AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL AND payload->>'head' = $2`, wi, published); n != 1 {
-		w.t.Errorf("the branch was not updated at the head the fix published (%.8s)", published)
+		AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL AND payload->>'head' = $2`, wi, promoted); n != 1 || promoted == "" {
+		w.t.Errorf("the branch was not updated at the head the fix was promoted to (%.8s)", promoted)
 	}
 }
