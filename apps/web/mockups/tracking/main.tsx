@@ -18,10 +18,11 @@ import "../../src/app.css";
 import { ThemeProvider, useTheme, type ThemePreference } from "@dude/design-system";
 import { Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarToggle } from "@dude/design-system/components";
 import { Select, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
+import type { NavOverrides, NavRef } from "../../../../packages/design-system/src/util/navModel.ts";
 import { BoardPage, NO_FILTERS, type BoardFilters } from "./BoardPage.tsx";
 import { ArchiveEpicDialog, TaskDialogBug } from "./Dialogs.tsx";
 import { BriefPage, ProposalKindsPage } from "./Classification.tsx";
+import { EpicGlyphs, EpicVariantsPage, SIDEBAR_EXPANDED, SidebarEpicsPage } from "./EpicGlyph.tsx";
 import { FIND_QUERY, FindWorkPane, MeaningPage } from "./Finding.tsx";
 import { ActivityLines, TaskPage, type Overlay, type TaskView } from "./TaskPage.tsx";
 import { TasksList, type View } from "./TasksList.tsx";
@@ -49,6 +50,8 @@ export const SCREENS = {
   "find-work-tokens": "3 · Find work with tokens",
   "board-filters": "3 · Board filters",
   narrow: "4 · A bug at 390px",
+  "sidebar-epics": "5 · Sidebar: epic rows with the layers glyph",
+  "sidebar-epic-variants": "5 · Sidebar: epic row, (a) or (b)",
 } as const;
 export type Screen = keyof typeof SCREENS;
 
@@ -92,10 +95,13 @@ function Mock() {
   const theme = useTheme();
   const [screen, setScreen] = useState<Screen>(first in SCREENS ? first : "board-kinds");
   const [place, setPlace] = useState<Place>(() => placeOf(screen));
-  const [navOpen, setNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(params.get("drawer") === "open");
   const [query, setQuery] = useState("");
+  // The epic screens fold and open epics to show both states; elsewhere the tree opens by triage.
+  const sidebarScreen = screen === "sidebar-epics" || screen === "sidebar-epic-variants";
+  const [expanded, setExpanded] = useState<NavOverrides>(() => (sidebarScreen ? SIDEBAR_EXPANDED : new Map()));
   const finding = screen === "find-work-tokens";
-  const go = (s: Screen) => { setScreen(s); setPlace(placeOf(s)); setNavOpen(false); };
+  const go = (s: Screen) => { setScreen(s); setPlace(placeOf(s)); setNavOpen(false); if (s === "sidebar-epics" || s === "sidebar-epic-variants") setExpanded(SIDEBAR_EXPANDED); };
 
   let main: ReactNode = null;
   let selected: NavRef | null = { kind: "project", id: "p_cp" };
@@ -134,6 +140,12 @@ function Mock() {
   } else if (place.screen === "meaning") {
     selected = null;
     main = <MeaningPage />;
+  } else if (place.screen === "sidebar-epics") {
+    selected = { kind: "epic", id: "e_billing" };
+    main = <SidebarEpicsPage />;
+  } else if (place.screen === "sidebar-epic-variants") {
+    selected = { kind: "epic", id: "e_billing" };
+    main = <EpicVariantsPage />;
   } else {
     selected = null;
   }
@@ -152,15 +164,17 @@ function Mock() {
           options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
       </div>
       <div className="mocknote">
-        Reading as {YOU.name} ({ROLE}). Close is a person's decision with a resolution; Archive takes finished work out of everyday views.
+        Reading as {YOU.name} ({ROLE}). Close is a person's decision with a resolution; Archive takes finished work out of everyday views. Epic rows in the sidebar carry the layers glyph.
       </div>
       <div className={`shell ${finding ? pageStyles["finding"] : ""}`} style={{ flex: 1, minHeight: 0 }}>
         <Sidebar projects={[world()]} title="dude" you={YOU.id} selected={selected}
+          expanded={expanded} onExpandedChange={setExpanded}
           query={finding ? FIND_QUERY : query} onQueryChange={setQuery}
           sessions={finding ? <FindWorkPane /> : undefined}
           onSelect={(ref) => { if (ref.kind === "task") openTask(keyOf(ref.id)); else toBoard(); }}
           collapsible open={navOpen} onOpenChange={setNavOpen}
           footer={<><SidebarLink icon="building">Organisation settings</SidebarLink><SidebarProfile person={YOU} detail={ROLE === "owner" ? "ana@acme.dev" : "marcio@acme.dev"} onOpen={() => undefined} /></>} />
+        <EpicGlyphs root={document.body} scope="aside" />
         <main className="main flush">
           <SidebarToggle open={navOpen} onOpenChange={setNavOpen} size="sm" />
           {main}
