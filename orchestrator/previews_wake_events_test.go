@@ -44,6 +44,25 @@ func (w *world) migrate066() {
 	}
 }
 
+// resumingEvent returns lux's latest resuming state event for id.
+func (w *world) resumingEvent(id string) int64 {
+	w.t.Helper()
+	frames, err := w.previews.Lux.Events(context.Background(), id, 0)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var last int64
+	for _, f := range frames {
+		if f.EventType == "state" && w.lux.EventState(id, f.EventID) == "resuming" {
+			last = f.EventID
+		}
+	}
+	if last == 0 {
+		w.t.Fatalf("lux has no resuming event for %s", id)
+	}
+	return last
+}
+
 // stopsAfterResume is how many stops lux was asked for since the Run's
 // latest resume.
 func stopsAfterResume(calls []string) int {
@@ -167,8 +186,13 @@ func TestARunMidStartAcrossTheMigrationIsResumedOnceMoreThenCounted(t *testing.T
 	})
 	w.lux.RequestServer(web, "/")
 	w.untilPreview(runID, "the resumed start held", func() bool { return isClosed(held) })
+	// The wake records lux's answer, resuming, before the follower applies
+	// lux's own resuming event: the migration must find that event applied
+	// (lux_after_event past it), or the resume begins a start of its own.
+	resuming := w.resumingEvent(r.ID)
 	w.untilPreview(runID, "resuming applied", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'resuming' AND wake_wanted_at IS NULL`, runID) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'resuming' AND wake_wanted_at IS NULL
+			AND lux_after_event >= $2`, runID, resuming) == 1
 	})
 	w.migrate066()
 	close(release)

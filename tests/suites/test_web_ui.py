@@ -1547,10 +1547,17 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     # them his, and clicking one leaves that said rather than closing it.
     choices = page.get_by_test_id("choices-someone-else")
     expect(choices.get_by_role("button")).to_have_count(0)
+    # The asking Run is parked DUDE_PARK_AFTER (3 s) after it asks, and two signs of that move the card: the parked
+    # notice at the foot of the transcript, and the task header's owner line dropping "…is working" (a line shorter,
+    # the run view rising ~46 px). Radix closes on the pointerleave a move under a resting pointer sends, so hover
+    # once both are shown and Pause has become Resume, which marks the park as done.
+    expect(page.get_by_test_id("chat-notice").and_(page.locator("[data-kind=parked]"))).to_have_count(1, timeout=30_000)
+    expect(page.get_by_test_id("task-header")).not_to_contain_text("is working")
+    expect(page.get_by_role("button", name="Resume", exact=True)).to_be_visible()
     choices.get_by_text("yes").hover()
     expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
     # Watch the trigger across the press: it must never close, not merely be open again after.
-    choices.evaluate("""el => { window.__closed = false;
+    choices.evaluate("""el => { window.__closed = el.dataset.state === 'closed';
         new MutationObserver(() => { if (el.dataset.state === 'closed') window.__closed = true; })
           .observe(el, { attributes: true, attributeFilter: ['data-state'] }); }""")
     choices.get_by_text("yes").click()

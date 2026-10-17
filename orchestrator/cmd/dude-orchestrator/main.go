@@ -168,6 +168,9 @@ func run(log *slog.Logger) error {
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
 		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
+		// A pass stops waiting for a slow Run or publish after 2 s, so the
+		// next pass reaches every other one; the slow one keeps its slot.
+		SweepWait: 2 * time.Second,
 	}
 	defer syncer.Stop()
 	// Resumes whose timing an earlier process committed but never

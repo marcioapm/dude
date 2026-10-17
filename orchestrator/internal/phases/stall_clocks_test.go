@@ -41,7 +41,7 @@ func TestAPersonsResumeStartsItsTimeAwayAtTheAcceptance(t *testing.T) {
 	base := time.Now().Add(-time.Minute).UTC()
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	w.s.Lux = &stoppedEpochLux{streamLux: w.following(), base: base}
+	w.followingAs(func(st *streamLux) lux.Client { return &stoppedEpochLux{streamLux: st, base: base} })
 	w.exec(`UPDATE runs SET left_running_at = NULL WHERE id = $1`, w.run.ID)
 	w.whilePaused()
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'resuming'`); n != 1 {
@@ -60,7 +60,7 @@ func TestAResumeLuxAnswersRunningClearsItsTimeAway(t *testing.T) {
 	base := time.Now().Add(-time.Minute).UTC()
 	w.resumable()
 	w.lux.set(stoppedOnHost1(base), nil)
-	w.s.Lux = &runningAnswerLux{streamLux: w.following(), base: base}
+	w.followingAs(func(st *streamLux) lux.Client { return &runningAnswerLux{streamLux: st, base: base} })
 	w.exec(`UPDATE runs SET left_running_at = now() - interval '1 hour' WHERE id = $1`, w.run.ID)
 	w.whilePaused()
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`); n != 1 {

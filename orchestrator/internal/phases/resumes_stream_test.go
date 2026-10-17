@@ -58,9 +58,11 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 			w.lux.set(partial, nil)
 			finished := make(chan struct{}, 4)
 			w.s.followedUp = func() { finished <- struct{}{} }
-			st := w.following()
-			gated := &gatedLux{streamLux: st, entered: make(chan int, 4)}
-			w.s.Lux = gated
+			var gated *gatedLux
+			st := w.followingAs(func(st *streamLux) lux.Client {
+				gated = &gatedLux{streamLux: st, entered: make(chan int, 4)}
+				return gated
+			})
 
 			st.frames <- session(2)
 			st.frames <- cursorFrame(running(2), "c1")
