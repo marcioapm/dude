@@ -520,6 +520,38 @@ func TestTimingTakesAtMostHalfOfTheRunsRemainingDeadline(t *testing.T) {
 	})
 }
 
+// A rolling deadline lets bestEffort see a short budget without cancelling
+// real database I/O if the host is descheduled.
+type shortTimingDeadline struct{ context.Context }
+
+func (shortTimingDeadline) Deadline() (time.Time, bool) {
+	return time.Now().Add(180 * time.Millisecond), true
+}
+
+func TestBestEffortAppliesTheRunsDeadlineBudget(t *testing.T) {
+	w := newResumeWorld(t)
+	var lockMS, statementMS float64
+	called := false
+	var queryErr error
+	err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		w.s.bestEffort(shortTimingDeadline{w.ctx}, tx, w.run, "budget", func(ctx context.Context, tx pgx.Tx) error {
+			called = true
+			queryErr = tx.QueryRow(ctx, `SELECT
+				EXTRACT(EPOCH FROM current_setting('lock_timeout')::interval) * 1000,
+				EXTRACT(EPOCH FROM current_setting('statement_timeout')::interval) * 1000`).
+				Scan(&lockMS, &statementMS)
+			return queryErr
+		})
+		return queryErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || lockMS <= 0 || lockMS > 90 || statementMS != lockMS {
+		t.Fatalf("callback %v, lock %gms, statement %gms; want both in (0, 90]ms", called, lockMS, statementMS)
+	}
+}
+
 // A timing statement waiting on a lock inside the Run's deadline fails on
 // its own budget: the Run's update after it goes through on the same
 // transaction. The deadline is generous so that only the budget can end the
