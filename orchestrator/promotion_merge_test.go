@@ -130,6 +130,41 @@ func TestAPromotionConflictingWithABaseMergeIsRefused(t *testing.T) {
 	}
 }
 
+// A person pushes to the pull request's branch between promotion judging
+// a base merge on it and GitHub merging the candidate in: GitHub merges onto
+// the person's commit. That merge is not adopted, and a person is asked,
+// told what the merge's parents are.
+func TestAPromotionsMergeOntoAPersonsCommitIsNotAdopted(t *testing.T) {
+	w := newPRFixWorld(t)
+	again, theirs := landOnce(isMergesCall, func(*http.Request) string {
+		return w.gh.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
+	})
+	w.onGitHub(again)
+	var x string
+	w.onTest = func() {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
+		x = w.gh.MergeInto(w.branch, "main", nil)
+	}
+	w.comment("Please rename the greeting.")
+	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	m := w.gh.SHA(w.branch)
+	if got := w.gh.Parents(m); theirs() == "" || len(got) != 2 || got[0] != theirs() || w.gh.Parents(theirs())[0] != x {
+		t.Fatalf("the branch's head %.8s has parents %v, want GitHub's merge onto the person's %.8s on the base merge %.8s", m, got, theirs(), x)
+	}
+	var why string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'error', '') FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&why)
+	if !strings.Contains(why, "automatic recovery is refused") || !strings.Contains(why, theirs()) {
+		t.Errorf("the escalation says %q, want the unsafe merge onto %.8s", why, theirs())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 0 {
+		t.Errorf("%d moves recorded", n)
+	}
+}
+
 // The base merge lands between promotion's read of the pull request's
 // branch and its move: GitHub refuses the fast-forward (422), and the
 // candidate is merged in over the base merge.
