@@ -98,8 +98,10 @@ function pseudoSpan(el: Element, which: "::before" | "::after", win: Window, cou
 
 function imageData(img: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement, doc: Document): string {
   const c = doc.createElement("canvas");
-  c.width = (img as HTMLImageElement).naturalWidth || img.width || 1;
-  c.height = (img as HTMLImageElement).naturalHeight || img.height || 1;
+  // A video's width and height are its attributes (0 when unset): its frame's size is videoWidth/videoHeight.
+  const v = img as HTMLVideoElement;
+  c.width = v.videoWidth || (img as HTMLImageElement).naturalWidth || img.width || 1;
+  c.height = v.videoHeight || (img as HTMLImageElement).naturalHeight || img.height || 1;
   const ctx = c.getContext("2d");
   if (!ctx) throw new PictureError("this browser can't draw it");
   ctx.drawImage(img, 0, 0);

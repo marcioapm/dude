@@ -266,7 +266,7 @@ class CommentingOnAPreview(unittest.TestCase):
         b = page.locator(selector).bounding_box()
         return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
 
-    def test_the_picture_draws_a_pseudo_element_and_a_canvas(self):
+    def test_the_picture_draws_a_pseudo_element_a_canvas_and_a_video_frame(self):
         ctx, page = self.context()
         self.watch(page)
         comment = page.get_by_test_id("comment-on-server").first
@@ -275,6 +275,7 @@ class CommentingOnAPreview(unittest.TestCase):
             comment.click()
         pv = opened.value
         pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.wait_for_function("() => document.querySelector('.promo video').readyState >= 2", timeout=10_000)
         ov_click(pv, "ov-comment")
         wait_ov(pv, "ov-hint")
         # The promo's own padding, beside its children: the pointer is on the promo itself.
@@ -295,17 +296,19 @@ class CommentingOnAPreview(unittest.TestCase):
           const g = c.getContext('2d');
           g.drawImage(img, 0, 0);
           const d = g.getImageData(0, 0, c.width, c.height).data;
-          const want = { red: [230, 0, 0], blue: [0, 0, 230] };
-          const n = { red: 0, blue: 0, scale: c.width / %d };
+          const want = { red: [230, 0, 0], blue: [0, 0, 230], green: [0, 200, 0], yellow: [240, 240, 0] };
+          const n = { red: 0, blue: 0, green: 0, yellow: 0, scale: c.width / %d };
           for (let i = 0; i < d.length; i += 4)
             for (const [k, [R, G, B]] of Object.entries(want))
               if (Math.abs(d[i] - R) < 24 && Math.abs(d[i + 1] - G) < 24 && Math.abs(d[i + 2] - B) < 24) n[k]++;
           return n;
         }""" % (b["width"] + 16))
-        # Each is 64x32 CSS pixels on the page: at least half of that area must show.
+        # Each is 64x32 CSS pixels on the page (the video's halves 32x32): at least half of that area must show.
         area = 64 * 32 * counts["scale"] ** 2
         self.assertGreater(counts["red"], area / 2, f"the ::before badge is missing: {counts}")
         self.assertGreater(counts["blue"], area / 2, f"the canvas is missing: {counts}")
+        self.assertGreater(counts["green"], area / 4, f"the video's left half is missing: {counts}")
+        self.assertGreater(counts["yellow"], area / 4, f"the video's right half is missing: {counts}")
         self.assertEqual(set(self.overlay_requests), {f"{DUDE}/feedback/overlay.js", "https://status.widgets.test/"}, self.overlay_requests)
         self.assertEqual(self.errors, [])
 

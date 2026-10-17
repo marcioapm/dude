@@ -20,10 +20,10 @@
   ul.greetings { list-style: none; margin: 0; padding: 0; background: #fff; border-radius: 12px; }
   ul.greetings li { padding: 12px 18px; border-bottom: 1px solid #eef0f4; }
   aside.status iframe { width: 100%; height: 90px; border: 1px dashed #c9cdd8; border-radius: 8px; background: #fff; }
-  /* What the picture must draw from the page alone: a ::before badge and a canvas, in pure colours. */
+  /* What the picture must draw from the page alone: a ::before badge, a canvas and a video frame, in pure colours. */
   .promo { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 16px; background: #fff; border-radius: 12px; }
   .promo .badge::before { content: "NEW"; display: inline-block; width: 64px; height: 32px; background: rgb(230, 0, 0); color: rgb(230, 0, 0); }
-  .promo canvas { width: 64px; height: 32px; }
+  .promo canvas, .promo video { width: 64px; height: 32px; }
 </style>
 </head>
 <body>
@@ -41,14 +41,29 @@
     <div>
       <ul class="greetings"><li>Olá, Ana!</li><li>Hello, Sam!</li><li>Bonjour, Léa!</li></ul>
       <aside class="status"><iframe title="Status" src="https://status.widgets.test/"></iframe></aside>
-      <div class="promo" data-component="Promo"><span class="badge"></span><canvas width="64" height="32"></canvas></div>
+      <div class="promo" data-component="Promo"><span class="badge"></span><canvas width="64" height="32"></canvas><video muted playsinline></video></div>
     </div>
   </main>
   <script>
-    // The canvas is blue.
+    // The canvas is blue; the video plays a stream whose left half is green and right half yellow.
     const blue = document.querySelector(".promo canvas").getContext("2d");
     blue.fillStyle = "rgb(0, 0, 230)";
     blue.fillRect(0, 0, 64, 32);
+    const frames = document.createElement("canvas");
+    frames.width = 64;
+    frames.height = 32;
+    const f = frames.getContext("2d");
+    const paint = () => {
+      f.fillStyle = "rgb(0, 200, 0)";
+      f.fillRect(0, 0, 32, 32);
+      f.fillStyle = "rgb(240, 240, 0)";
+      f.fillRect(32, 0, 32, 32);
+    };
+    paint();
+    setInterval(paint, 100);
+    const video = document.querySelector(".promo video");
+    video.srcObject = frames.captureStream(10);
+    video.play();
   </script>
   <script>
     // A small SPA: in-app links move with pushState, as a router does.
