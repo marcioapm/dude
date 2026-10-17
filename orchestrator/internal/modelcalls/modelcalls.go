@@ -36,8 +36,9 @@ type Call struct {
 	Result any
 }
 
-// Record inserts c in tx's organisation and returns its id. The messages,
-// the answer and the error go through red first (nil redacts nothing).
+// Record inserts c in tx's organisation and returns its id. The request,
+// the answer, the result and the error go through red first (nil redacts
+// nothing).
 func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (string, error) {
 	request, err := json.Marshal(c.Sent.Body())
 	if err != nil {
@@ -63,6 +64,7 @@ func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (strin
 		if result, err = json.Marshal(c.Result); err != nil {
 			return "", err
 		}
+		result = red.JSON(result)
 	}
 	id := ids.New(ids.ModelCall)
 	_, err = tx.Exec(ctx, `

@@ -52,10 +52,10 @@ func TestACallIsRecordedRedactedWithoutItsHeaders(t *testing.T) {
 	}
 	var (
 		gotOrg, purpose, asker, about, tid, tname, model, st string
-		request, result                                       []byte
-		response                                              *string
-		errText                                               *string
-		httpStatus, latency, in, out                          int
+		request, result                                      []byte
+		response                                             *string
+		errText                                              *string
+		httpStatus, latency, in, out                         int
 	)
 	if err := owner.QueryRow(ctx, `SELECT organization_id, purpose, asker, about, tier_id, tier_name, model, request, response_text, result,
 		status, error, http_status, latency_ms, input_tokens, output_tokens FROM model_calls WHERE id = $1`, id).
