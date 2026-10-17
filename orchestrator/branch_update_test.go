@@ -263,6 +263,26 @@ func TestAFixIsRefusedOverABaseMergeNotMadeByGitHub(t *testing.T) {
 	}
 }
 
+// A fix whose publish fast-forwards the task branch, as every phase of the
+// delivery before it did, never looks up whether its Run attempted a merge:
+// only a branch holding a merge of the fix's commit asks.
+func TestAFastForwardPublishLooksUpNoMergeAttempt(t *testing.T) {
+	w := newWorld(t)
+	var lookups atomic.Int64
+	w.syncer.MergeAttemptLookup = func() { lookups.Add(1) }
+	wi := w.reviewing()
+	fix := w.prFixSettled(wi)
+	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
+		t.Fatalf("fix %s (%s), escalated %q", fix.status, fix.error, r)
+	}
+	if got := w.gh.SHA(w.gh.Pull(1).Head); got != fix.commit || fix.head != fix.commit {
+		t.Fatalf("the branch at %.8s, the fix recorded %.8s, want both fast-forwarded to its commit %.8s", got, fix.head, fix.commit)
+	}
+	if n := lookups.Load(); n != 0 {
+		t.Errorf("%d merge-attempt lookups over fast-forward publishes, want 0", n)
+	}
+}
+
 // The fix's merge over a base merge lands on GitHub and its answer is lost:
 // the retried finish finds the merge on the branch and adopts it as the
 // fix's, as the Run recorded attempting it, sending no second merge.

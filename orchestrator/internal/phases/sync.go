@@ -95,6 +95,9 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
+	// For tests: called as a publish looks up its Run's git.merge_attempted
+	// (mergeAttempted).
+	MergeAttemptLookup func()
 	// How long a turn lux's stop broke waits for lux's reason, and a
 	// move for lux to run the Run again (luxstop.go); zero takes heldWait
 	// and moveWait.
@@ -2099,6 +2102,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 // asking GitHub to merge commit into repo's task branch: only then is a
 // merge of commit found on the branch the Run's own.
 func (s *Syncer) mergeAttempted(ctx context.Context, r phaseRun, repo, commit string) (bool, error) {
+	if s.MergeAttemptLookup != nil {
+		s.MergeAttemptLookup()
+	}
 	var attempted bool
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2
