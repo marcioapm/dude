@@ -94,10 +94,8 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 	}
 	size := 0
 	for _, k := range []string{"output", "stdout", "stderr"} {
-		out, ok := payload[k].(map[string]any)
-		if !ok {
-			continue
-		}
+		out, _ := payload[k].(map[string]any)
+		delete(payload, k)
 		if out["withheld"] == true {
 			size += byteCount(out["bytes"])
 			continue
@@ -105,9 +103,6 @@ func withholdGitHubRead(names []string, payload map[string]any) {
 		head, _ := out["head"].(string)
 		tail, _ := out["tail"].(string)
 		size += len(head) + len(tail) + byteCount(out["omittedBytes"])
-	}
-	for _, k := range []string{"output", "stdout", "stderr"} {
-		delete(payload, k)
 	}
 	payload["output"] = map[string]any{"bytes": size, "withheld": true, "withheldBy": "name"}
 }
