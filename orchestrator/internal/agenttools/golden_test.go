@@ -100,11 +100,11 @@ func TestGoldenToolLists(t *testing.T) {
 		b.WriteString("\n")
 	}
 	golden(t, "tool-lists", b.String())
-	golden(t, "tool-server-instructions", serverInstructions(t))
+	golden(t, "tool-server-instructions", serverInstructionsGolden(t))
 }
 
 // serverInstructions is what the MCP server tells a client on initialize.
-func serverInstructions(t *testing.T) string {
+func serverInstructionsGolden(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()

@@ -14,9 +14,13 @@ A tool call of yours was open for 10 minutes, so dude stopped your turn. Tell th
 
 Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace and conversation are as you left them; processes you had running are not. Carry on with your task where you left off.
 
-## moved
+## move-kept
 
-You now run on Large (4 CPUs · 16 GiB · 40 GiB). Start again any server or watcher you had running. Carry on.
+You asked for XL; lux kept you on Large: lux said no
+
+## move-kept-reset
+
+You were to move back to XL; lux kept you on Large: lux said no.
 
 ## moved-pool
 

@@ -44,6 +44,9 @@ func TestGoldenGitHubAndMachineWords(t *testing.T) {
 		Files: append(make([]forge.FileRead, filesMax-1), forge.FileRead{Path: "bin"})}, []string{"bin"})
 	lines = append(lines,
 		[2]string{"search-more", fmt.Sprint(search["more"])},
+		[2]string{"whose-task", whoseTask},
+		[2]string{"whose-session", whoseSession},
+		[2]string{"budget-cut", budgetCut},
 		[2]string{"issue-pull-request", fmt.Sprint(issue["pullRequest"])},
 		[2]string{"issue-more-comments", fmt.Sprint(issue["moreComments"])},
 		[2]string{"pr-more-checks", fmt.Sprint(pr["moreChecks"])},

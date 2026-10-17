@@ -91,10 +91,7 @@ func (p *ResizePlan) keptInput(le *lux.Error, input string) string {
 	if reset {
 		why = refusal.ForPerson()
 	}
-	told := moveKept.Render(struct {
-		To, Kept, Why string
-		Reset         bool
-	}{p.moveTo, p.Recorded.Name, why, reset})
+	told := moveKeptTold(p.moveTo, p.Recorded.Name, why, reset)
 	return joinInput(told, input)
 }
 

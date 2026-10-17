@@ -50,6 +50,18 @@ GitHub refused reading acme/api#7 (HTTP 422)
 
 2 more match: narrow the query
 
+## whose-task
+
+your task's project
+
+## whose-session
+
+the projects linked to this session
+
+## budget-cut
+
+…cut: text and list tails omitted to fit the result budget
+
 ## issue-pull-request
 
 a pull request: github_pull_request reads its reviews, threads, checks and files

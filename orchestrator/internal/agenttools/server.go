@@ -248,13 +248,13 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	return c, nil
 }
 
-var serverInstructionsText = delivery.ToolText("common/server-instructions", nil)
+var serverInstructions = delivery.ToolText("common/server-instructions", nil)
 
 // serverFor builds the MCP server a Run sees: the tools its role may use,
 // each bound to it.
 func (s *Server) serverFor(c Caller) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "dude", Version: "1"}, &mcp.ServerOptions{
-		Instructions: serverInstructionsText,
+		Instructions: serverInstructions,
 	})
 	for _, t := range allTools() {
 		if !t.allowed(c.Role) {

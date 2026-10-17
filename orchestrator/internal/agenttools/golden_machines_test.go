@@ -37,7 +37,7 @@ func TestGoldenMachineToolWords(t *testing.T) {
 	say("limit-no-machine", refused(`{"size":"Large","reason":"oom"}`))
 	mustExec(t, f.owner, `DELETE FROM machine_moves WHERE run_id = 'run_mach'`)
 	mustExec(t, f.owner, `UPDATE runs SET machine = '{"sizeId":"ms_xl","name":"XL","cpus":8,"memoryMiB":32768,"diskGiB":80,"poolId":"pool_high","from":"task"}' WHERE id = 'run_mach'`)
-	say("list-largest", toolDescriptions(t, f, token)["list_machine_sizes"])
+	say("another-size", delivery.MustText("results/machines/another-size").Render(nil))
 	org := f.str(t, `SELECT name FROM organizations WHERE id = $1`, f.org)
 	path := filepath.Join("..", "delivery", "agents", "testdata", "results-machines.golden.md")
 	got := strings.ReplaceAll(b.String(), org+"'s", "ORG's")
