@@ -846,13 +846,16 @@ class FakeGitHub:
                     with gh._lock:
                         gh.updates.append(pr.number)
                     head, base = gh.branch_sha(pr.head) or "", gh.branch_sha(pr.base) or ""
-                    if body.get("expected_head_sha") and body["expected_head_sha"] != head:
-                        return self._send(422, {"message": "expected head sha didn't match current head ref"})
                     # A merge commit of the base into the head, as GitHub
                     # makes: the merged tree, refused when the flag says the
-                    # branches conflict or git cannot merge them.
+                    # branches conflict or git cannot merge them. The flag is
+                    # read first, as the Go fake does.
+                    if pr.conflicting:
+                        return self._send(422, {"message": "merge conflict between base and head"})
+                    if body.get("expected_head_sha") and body["expected_head_sha"] != head:
+                        return self._send(422, {"message": "expected head sha didn't match current head ref"})
                     merged = self._git("merge-tree", "--write-tree", head, base)
-                    if pr.conflicting or merged.returncode:
+                    if merged.returncode:
                         return self._send(422, {"message": "merge conflict between base and head"})
                     tree = merged.stdout.split("\n", 1)[0].strip()
                     sha = gh._git_out("commit-tree", tree, "-p", head, "-p", base,
