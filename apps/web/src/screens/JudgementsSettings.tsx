@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Duration,
   FlowSteps,
   SettingRow,
   SettingsDisclosure,
@@ -14,6 +15,7 @@ import {
   SettingsSection,
   TextButton,
   TierMark,
+  TokenCount,
 } from "@dude/design-system/components";
 import { formatTimestamp } from "@dude/design-system";
 import {
@@ -44,7 +46,7 @@ import {
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { DECISION, sure, testAnswerWords, testTokensWords, tokens, took, totalTokens } from "../judgements.ts";
+import { DECISION, sure, testAnswerWords, testTokensWords } from "../judgements.ts";
 import { tierEffortLabel, tierMark } from "../tiers.ts";
 import { tierOption } from "./ModelsSettings.tsx";
 
@@ -254,8 +256,10 @@ function RecentJudgements({ client }: { client: ApiClient }) {
                 <Td fit><DecisionBadge call={c} /></Td>
                 <Td fit align="right" mono muted={c.confidence === null}>{sure(c.confidence)}</Td>
                 <Td fit muted hideWhenNarrow>{c.asker}</Td>
-                <Td fit align="right" mono muted hideWhenNarrow>{took(c.latencyMs)}</Td>
-                <Td fit align="right" mono muted hideWhenNarrow>{totalTokens(c)}</Td>
+                <Td fit align="right" mono muted hideWhenNarrow><Duration ms={c.latencyMs} /></Td>
+                <Td fit align="right" mono muted hideWhenNarrow>
+                  {c.inputTokens + c.outputTokens ? <TokenCount tokens={c.inputTokens + c.outputTokens} /> : "—"}
+                </Td>
                 <Td fit align="right" muted hideWhenNarrow>{ago(c.createdAt)}</Td>
               </Tr>
             ))}
@@ -306,8 +310,10 @@ function JudgementDialog({ client, call, onClose }: { client: ApiClient; call: J
         <KeyValueList items={[
           { label: "Tier", value: <span className="tierOption"><TierMark icon={mark.icon} tone={mark.tone} size="sm" />{call.tierName}</span> },
           { label: "Model", value: call.model, mono: true },
-          { label: "Took", value: took(call.latencyMs), mono: true },
-          { label: "Tokens", value: tokens(call), mono: true },
+          { label: "Took", value: <Duration ms={call.latencyMs} />, mono: true },
+          { label: "Tokens", mono: true, value: call.inputTokens || call.outputTokens
+            ? <><TokenCount label="in" tokens={call.inputTokens} /> · <TokenCount label="out" tokens={call.outputTokens} /></>
+            : "—" },
         ]} />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {detail ? (

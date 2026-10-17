@@ -15,7 +15,7 @@ import { act, click, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { MODEL_TIERS } from "../src/fixtures/data.ts";
 import { JudgementsPage, useJudgementSettings } from "../src/screens/JudgementsSettings.tsx";
-import { testAnswerWords, tokens, totalTokens } from "../src/judgements.ts";
+import { testAnswerWords, testTokensWords } from "../src/judgements.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -153,14 +153,16 @@ describe("the Judgements page", () => {
       const r = [...container.querySelectorAll<HTMLElement>("[data-testid=judgement-row]")];
       return r.length ? r : null;
     }, "the rows");
-    expect(rows[0]!.textContent).toContain("Should the fixer act on this comment?ACME-28 · acme#5477No93%delivery.comment1.8s1,300");
+    expect(rows[0]!.textContent).toContain("Should the fixer act on this comment?ACME-28 · acme#5477No93%delivery.comment1.8s1.3ktok");
     expect(rows[1]!.textContent).toContain("Failed—delivery.comment1.8s—");
+    expect(rows[0]!.querySelector("[title='1,300 tokens']")).not.toBeNull();
     expect(container.textContent).toContain("Last 7 days · 2 calls");
     expect(container.textContent).not.toContain("$");
     await click(rows[0]!);
     const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
     expect(dialog.querySelector("[data-testid=judgement-answer]")?.textContent).toBe("No93% sureIt asks for nothing to change.");
-    expect(dialog.textContent).toContain("1,204 in · 96 out");
+    expect(dialog.textContent).toContain("in1.2k · out96");
+    expect(dialog.querySelector("[title='1,204 in tokens']")).not.toBeNull();
     await until(() => (dialog.textContent?.includes("What was sent") ? dialog : null), "the disclosures");
     expect(dialog.textContent).toContain("What the model answered, as it came");
     await click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Close")!);
@@ -181,11 +183,12 @@ describe("the Judgements page", () => {
 });
 
 describe("the words", () => {
-  test("tokens, totals and the test's answer", () => {
-    expect(tokens({ inputTokens: 1204, outputTokens: 96 })).toBe("1,204 in · 96 out");
-    expect(tokens({ inputTokens: 0, outputTokens: 0 })).toBe("—");
-    expect(totalTokens({ inputTokens: 0, outputTokens: 0 })).toBe("—");
-    expect(testAnswerWords({ ok: false, decision: null, confidence: null, reasoning: null, model: "m", latencyMs: 30_000, inputTokens: 0, outputTokens: 0,
-      error: "the model's answer is not a decision: no JSON object in it" })).toBe("gave no answer in 30.0s: the model's answer is not a decision: no JSON object in it.");
+  test("the test's answer reads its time as the design system formats a duration", () => {
+    const failed = { ok: false, decision: null, confidence: null, reasoning: null, model: "m", inputTokens: 0, outputTokens: 0,
+      error: "the model's answer is not a decision: no JSON object in it" };
+    expect(testAnswerWords({ ...failed, latencyMs: 30_000 })).toBe("gave no answer in 30s: the model's answer is not a decision: no JSON object in it.");
+    expect(testAnswerWords({ ...failed, latencyMs: 75_000 })).toBe("gave no answer in 1m 15s: the model's answer is not a decision: no JSON object in it.");
+    expect(testTokensWords({ inputTokens: 1204, outputTokens: 96 })).toBe("; 1.3k tokens");
+    expect(testTokensWords({ inputTokens: 0, outputTokens: 0 })).toBe("");
   });
 });
