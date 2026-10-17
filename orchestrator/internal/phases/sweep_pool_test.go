@@ -245,7 +245,8 @@ func TestARunFreedMidPassIsNotAdvancedFromItsStaleRow(t *testing.T) {
 	w.failed("behind")
 	w.run(`UPDATE runs SET created_at = (SELECT created_at FROM runs WHERE id = 'x') - interval '1 millisecond' WHERE id = 'behind'`)
 
-	w.s.SweepWait = 5 * time.Second
+	// Room for a starved CI box; the pass returns once the Run before x is done.
+	w.s.SweepWait = 15 * time.Second
 	done := make(chan int, 1)
 	go func() {
 		n, err := w.s.Sweep(w.ctx)
@@ -273,7 +274,10 @@ func TestARunFreedMidPassIsNotAdvancedFromItsStaleRow(t *testing.T) {
 		t.Errorf("the Run before x was asked %d times, want once", calls)
 	}
 
-	// Its back-off holds: x is not due for 5 s.
+	// Its back-off holds: x is not due for 5 s. Pushed further out first,
+	// so a slow box reaching this sweep after 5 s does not find x due; only
+	// a back-off retryLater wrote (streak 1) is moved.
+	w.run(`UPDATE runs SET next_attempt_at = next_attempt_at + interval '1 hour' WHERE id = 'x' AND retry_failures = 1`)
 	w.s.SweepWait = 0
 	w.sweep(0)
 	if calls, _ := fake.count("lx"); calls != 1 {

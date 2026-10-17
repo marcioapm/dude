@@ -209,8 +209,8 @@ type phaseRun struct {
 	// (luxstop.go), and how long it has been held; nil for none.
 	Broken    *brokenTurn
 	BrokenFor time.Duration
-	// retryLater's streak and when the retry it scheduled was due, as the
-	// sweep read them (migration 139); nil for none.
+	// retryLater's streak (0 for none) and when the retry it scheduled was
+	// due (nil for none), as the sweep read them (migration 139).
 	RetryFailures int
 	RetryDueAt    *time.Time
 }
@@ -604,6 +604,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	slots, _ := s.pools()
+	// Before due() reads the rows: a Run busy now may change under the read.
 	busy := slots.busyIDs()
 	runs, err := s.due(ctx)
 	if err != nil {
