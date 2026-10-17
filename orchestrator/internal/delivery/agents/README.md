@@ -44,6 +44,8 @@ bodies; these are known Go-side text and are not claimed to be migrated.
 
 ## Editing
 
+## Editing
+
 - A file's text is everything in it but its one trailing newline. Keep
   that newline; add no other blank line at the end, or the agent gets it.
 - Every directory but `roles/` holds Go
