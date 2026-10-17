@@ -235,7 +235,7 @@ def test_a_shared_session_signs_every_message_and_a_question_to_one_member_waits
     assert client.get("/v1/brainstorms").json()["questions"] == []
     held = client.post(f"/v1/brainstorms/{session}/chat", {"text": "also, cost estimates?"}).json()
     assert "questionId" not in held
-    # Wait for the asking turn to finish before counting Ana's answer.
+    # The asking turn's own reply lands after the question: count it first, or it is taken for Ana's answer.
     wait_until(lambda: any('"e2e user: ask Ana"' in s for s in _said(client, session)), timeout=60,
                message="the turn that asked Ana never ended")
     said = len(_said(client, session))
