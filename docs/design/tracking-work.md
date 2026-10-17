@@ -1,12 +1,13 @@
 # Tracking work: lifecycle, classification, finding things
 
-*Proposal. Clickable mockup: [`mockups/tracking/index.html`](mockups/tracking/index.html)
+*Decided: the build spec. Clickable mockup: [`mockups/tracking/index.html`](mockups/tracking/index.html)
 (`?screen=…&theme=dark|light&density=comfortable|compact&role=owner|member`), built from
-`apps/web/mockups/tracking/`. Nothing here is built.*
+`apps/web/mockups/tracking/`. Nothing here is built yet.*
 
-Throughout, **Decided** marks what Márcio fixed in the brief; **Proposed** is this document's
-choice, with the alternative it rejected. Where the brief's default turned out to need a change
-to be buildable, the change is called out as **Correction**.
+Throughout, **Decided** marks what Márcio fixed, in the brief or in *Decisions* (2026-10-17);
+each names the alternative it rejected. Where the brief's first wording turned out to need a
+change to be buildable, the change is called out as **Correction**. One question found while
+applying the decisions is under *Open*, with the answer this document builds to.
 
 ## The problem
 
@@ -39,9 +40,10 @@ what a *person decided* about a task. Concretely, on `origin/main`:
 
 Jira solves these for people with statuses, resolutions, issue types, priorities, labels,
 components, custom fields and JQL. dude needs a much smaller set, because most of what those
-fields carry, delivery already knows. This proposal adds three things that share one vocabulary:
+fields carry, delivery already knows. This document adds three things that share one vocabulary:
 
-1. **Lifecycle**: end work with a reason (**Close**), put ended work away (**Archive**).
+1. **Lifecycle**: end work with a reason (**Close**), put work away (**Archive**, closing it on
+   the way when it hasn't ended).
 2. **Classification**: a **kind** (bug, feature, chore, spike) that changes what the agents are
    told and what review checks; a **priority**; a **bug report** with what caused it.
 3. **Finding things**: a list beside the board with fixed views, filters on the fields above,
@@ -56,7 +58,7 @@ because every field must reach the same dozen surfaces (see *Field × surface*).
 
 ## Words
 
-*Proposed.* Each word is one a person already uses for the thing, and none is taken by
+*Decided.* Each word is one a person already uses for the thing, and none is taken by
 something else in dude.
 
 | Word | Means | Rejected, and why |
@@ -64,10 +66,11 @@ something else in dude.
 | **Close** | a person ends a task, saying why | "Resolve" (implies it was fixed), "Cancel" (wrong for a duplicate), "Abort" (already delivery's word for a stopped run) |
 | **Reopen** | undo Close | — |
 | **Won't do** / **Duplicate** / **Can't reproduce** / **Nothing to merge** | the four resolutions | "Obsolete" (folded into Won't do: the distinction isn't acted on), "Done" as a resolution (that is a status) |
-| **Archive** / **Unarchive** | take ended work out of every everyday view, and back | "Hide" (sounds per-person), "Delete" (it isn't) |
+| **Archive** / **Unarchive** | take work out of every everyday view, and back | "Hide" (sounds per-person), "Delete" (it isn't) |
+| **Close and archive** | Archive on a task that hasn't ended: one dialog, one confirmation, both | a refusal ("Close it first"): two dialogs for one intent |
 | **Bug**, **Feature**, **Chore**, **Spike** | the four kinds | "Task" as a kind (every one is a task), "Story" (product jargon), "Investigation" (spike is shorter and known) |
 | **P0**–**P3** | priority | words ("Urgent", "High") as the stored value: the numbers sort, compare and fit a card; the words are their tooltips |
-| **Introduced by** | the task that caused a bug | "Regressed by" (only right if it once worked), "Caused by" (too sure for a proposal) |
+| **Introduced by** | the task that caused a bug | "Regressed by" (only right if it once worked), "Caused by" (too sure for an agent's guess) |
 
 ## Epic 1 — Lifecycle
 
@@ -85,6 +88,10 @@ They compose: a task can be closed as Won't do and archived; a bug, done, with n
 merge. **Status stays the only thing delivery reads and writes.** Lifecycle writes its own
 columns, and one status transition each for Close and Reopen.
 
+**Ended**, for lifecycle, means `done`, or `aborted` with a resolution. A task that stopped
+(`failed`, or `aborted` by Stop) without one has not ended: Close is still offered on it, and
+Archive closes it on the way.
+
 #### Close, and resolutions
 
 *Decided:* resolutions, not new statuses; a person closes a never-started or stopped task; the
@@ -98,10 +105,10 @@ mapping is the brief's.
 | **Nothing to merge** | `done` | Mark done (`markDone`), unchanged route | keeps blocking ("done, nothing merged", as today) |
 
 - **Close is offered** for a task not started, and for one that stopped (`failed`, `aborted`
-  with no resolution). *Proposed:* not for a running one ("Stop its agents first, then close
-  it"). Stopping is already a decision with its own dialog; folding it into Close would make one
-  click end live work. Not for `review` either: a task in review has a pull request, and closing
-  that is GitHub's or Mark done's.
+  with no resolution). *Decided:* not for a running one ("Stop its agents first"). Stopping is
+  already a decision with its own dialog; folding it into Close would make one click end live
+  work. Not for `review` or `ready_to_merge` either ("It has a pull request open"): closing that
+  is GitHub's or Mark done's.
 - **Nothing to merge is not offered in Close** ("Only for work that ran: Mark done gives this,
   once there is a write-up or an answer"). `markDone` writes it: the route stays, and from now on
   stores `resolution = 'nothing_to_merge'` on the task, so today's "done, nothing merged" gets
@@ -110,12 +117,18 @@ mapping is the brief's.
 - **Can't reproduce is a bug's** (refused on other kinds, with that reason): there is nothing to
   reproduce in a feature.
 - **Reopen** clears the resolution and puts the task back to `received`, keeping its runs. A
-  duplicate's edge is removed on reopen, and what was handed over goes back.
-- **Why a Won't do still blocks.** The relations doc's rule is "only merged work releases what
-  waits on it". A task nobody will do hasn't produced what the waiting one needed; releasing
-  its dependants would start work on a missing foundation. The close dialog says so when
-  something waits ("CP-47 waits on CP-46 and will keep waiting… Remove the relation if it no
-  longer matters").
+  duplicate's edge is removed on reopen, and what was handed over goes back. On an archived task
+  Reopen is refused ("Unarchive it first, then reopen it"): the page's one button is Unarchive,
+  and Reopen follows it. The two stay separate steps.
+- **Why a Won't do still blocks.** *Decided* (Q1). The relations doc's rule is "only merged work
+  releases what waits on it". A task nobody will do hasn't produced what the waiting one needed;
+  releasing its dependants would start work on a missing foundation. When something waits on
+  the task, the close dialog says so for every resolution but Duplicate, which hands the
+  blocking over ("**CP-47 waits on this.** It will keep waiting: a task closed without merging
+  releases nothing."), with a **Remove the relation** checkbox. Checked, the close also deletes
+  those `blocks` edges in the same transaction (`removeRelations: true`; one
+  `task.relation_removed` each, as Remove relation writes), and the callout says the waiting
+  task can start without it.
 
 #### Duplicate: the `duplicates` relation, built
 
@@ -125,7 +138,7 @@ by Close (never by Add relation) and removed only by Reopen. It shows as **Dupli
 closed task and **Duplicated by** on the other, its own group in `RelationList`, with the `copy`
 glyph.
 
-**A duplicate blocker hands its blocking to the task it duplicates.** *Proposed,* with the
+**A duplicate blocker hands its blocking to the task it duplicates.** *Decided,* with the
 tradeoff:
 
 - `task_blocked_by` follows a `duplicates` edge: a `blocks` edge from a closed duplicate counts
@@ -148,18 +161,32 @@ tradeoff:
 
 *Decided:* `archived_at`/`archived_by` like memories; out of the board, tree, counts,
 `list_tasks` and Find work unless asked; reachable by link and from Archived; unarchive restores;
-an epic with unfinished tasks refused, offering to archive its finished ones; refused with
+an epic with unfinished tasks refused, offering to archive its ended ones; refused with
 running agents; owner or admin; Activity both ways.
 
-- **Only an ended task is archived** (`done`, `failed`, `aborted`). *Proposed:* this is stricter
-  than "refused while agents are running": a task in Backlog is archived by closing it first. An
-  archived task that could still start would be work nobody sees. Refusal reason on the menu
-  item: "Close it first: only ended tasks are archived".
+- **Archiving an unended task closes it first.** *Decided* (Q2). Archive… on a task that hasn't
+  ended (Backlog, or stopped without a resolution) opens the Close dialog as **Close and
+  archive** (screen *archive-open-task*): title "Close and archive CP-44", no resolution chosen,
+  the primary "Close and archive" disabled until one is. The Close rules hold unchanged: the
+  Duplicate picker and its handover, Can't reproduce for bugs only, Nothing to merge not offered,
+  the *waits on this* callout with Remove the relation. One confirmation closes the task with
+  that resolution and archives it in one transaction: `task.closed` then `task.archived`, one
+  ledger batch, and **one** Activity line ("**Ana** closed **CP-44** as Won't do and archived
+  it"). An archived task is therefore always ended, and nothing archived can start
+  (`tasks_archived_ended` in the migration holds it).
+- **On an ended task, Archive… is the plain confirmation** (screen *archive-task*, CP-46).
+- **A running task, or one with a pull request open, can't be archived**, exactly as it can't be
+  closed: the menu item is disabled with "Stop its agents first" (`running`, `awaiting_input`)
+  or "It has a pull request open" (`review`, `ready_to_merge`).
+- **Back out in two steps.** An archived, closed task shows Unarchive; once unarchived, Reopen.
+  *Rejected:* one "Unarchive and reopen": the two undo different decisions, and most unarchives
+  (an ended task wanted back in a count) don't want the reopen.
 - **Archiving an epic archives nothing by itself.** With unfinished tasks it is refused
   (screen *archive-epic-refused*), listing them; the dialog's one action is "Archive its N ended
   tasks", which archives those tasks (one `task.archived` each, and one Activity line on the
   epic) and leaves the epic. With every task ended, Archive archives the epic and its tasks
-  together, in one transaction.
+  together, in one transaction. The epic doesn't get close-all: each unended task needs its own
+  resolution, and N resolutions can't be picked honestly in one dialog.
 - **Archived tasks keep everything**, including relations: an archived blocker still blocks (the
   guard doesn't read the blocker's `archived_at`). An archived task can't be started or picked
   back up until it is unarchived (*Start paths*, path 7).
@@ -169,21 +196,32 @@ running agents; owner or admin; Activity both ways.
 
 | Screen | What it shows |
 |---|---|
-| `close-dialog` | Close CP-63: four resolutions as a `ChoiceList`, two disabled with why; Duplicate's `SearchPicker` and what the handover does |
+| `close-dialog` | Close CP-63 on Won't do: four resolutions as a `ChoiceList`, two disabled with why, and the *CP-47 waits on this* callout with its **Remove the relation** checkbox. `&why=duplicate`: the same dialog on Duplicate, its `SearchPicker` and what the handover does |
 | `closed-wontdo` | CP-46 closed as Won't do: the resolution beside the status, a `Callout` with Reopen and Archive |
 | `closed-duplicate` | CP-63 and CP-62 side by side: Duplicate of / Duplicated by, and CP-47's blocking handed to CP-62 |
-| `archive-task` | the Archive confirmation for CP-46 |
+| `archive-task` | the plain Archive confirmation for CP-46, which has ended |
+| `archive-open-task` | Archive… on CP-44, in Backlog: the Close dialog as **Close and archive CP-44**, no resolution chosen, its primary "Close and archive" disabled until one is; as a member, the primary disabled with whose decision it is |
 | `archive-epic-refused` | Webhook reliability refused, its 4 unended tasks listed, "Archive its 2 ended tasks" |
 | `archived-view` | the tasks list's Archived view, read by a member: every action in the row menu disabled with whose it is |
-| `activity-lifecycle` | every new Activity line, both ways (see *Events*) |
+| `activity-lifecycle` | every new Activity line, both ways, and the one line Close and archive writes (see *Events*) |
 
 - **Lifecycle actions live in the task's `…` menu** (the existing `RowMenu` in the header, the
-  tree row, the list row): Close…, Archive… / Unarchive. Each is shown to everyone, **disabled
-  with its reason** for a reader who may not ("Only Ana, the owner, or an admin can do this") or
-  when the task's state refuses it, per the README's rule that an option is never greyed out
-  without its reason (`RowMenu disabledReason`, `ChoiceList disabledReason`) and *A disabled
-  control the reader can still reach* (Task relations). On the page, the one action that matters
-  now is a button too: Reopen on a closed one, Unarchive on an archived one.
+  tree row, the list row): Close… (Reopen on a closed task), Archive… / Unarchive. Each is shown
+  to everyone, **disabled with its reason** for a reader who may not ("Only Ana, the owner, or an
+  admin can do this") or when the task's state refuses it, per the README's rule that an option
+  is never greyed out without its reason (`RowMenu disabledReason`, `ChoiceList disabledReason`)
+  and *A disabled control the reader can still reach* (Task relations). On the page, the one
+  action that matters now is a button too: Reopen on a closed one, Unarchive on an archived one.
+- **The menu's `disabledReason`s**, in the order checked:
+
+  | Item | Who may not | `running`, `awaiting_input` | `review`, `ready_to_merge` | ended | archived |
+  |---|---|---|---|---|---|
+  | Close… | "Only Ana, the owner, or an admin can do this" | "Stop its agents first" | "It has a pull request open" | "Already ended" (the item reads "Closed"; on a closed task it is Reopen) | — |
+  | Reopen | same | — | — | — | "Unarchive it first, then reopen it" |
+  | Archive… | same | "Stop its agents first" | "It has a pull request open" | enabled: plain confirmation | (Unarchive instead) |
+
+  Archive… on a task not started or stopped without a resolution is enabled and opens Close and
+  archive.
 - **Closed cards** in Done show their resolution in the card's marks line, where today's says
   "stopped".
 
@@ -197,37 +235,42 @@ running agents; owner or admin; Activity both ways.
 
 ### Start paths: one rule
 
-*Proposed:* `RefuseBlockedTx` becomes **`delivery.RefuseStartTx(ctx, tx, taskID) error`**, the
+*Decided:* `RefuseBlockedTx` becomes **`delivery.RefuseStartTx(ctx, tx, taskID) error`**, the
 one guard every start path already calls (through `GuardStartTx` or directly). In order, after
-locking the task row, two steps:
+locking the task row, three steps:
 
 1. **Archived** → `ArchivedError` ("CP-29 is archived: unarchive it to start it."). Not
-   overridable. Reached by picking an archived failed task back up (path 7); on the other paths
-   an archived task has ended, and the check costs nothing.
-2. **Blocked** → `BlockedError`, exactly as today, overridable by a person.
+   overridable. An archived task has always ended, so only the recovery paths (6, 7) can reach
+   it; the check costs nothing elsewhere.
+2. **Closed** → `ClosedError` ("CP-34 was closed as Can't reproduce: reopen it to start it.").
+   Not overridable. A closed task is `aborted`, and `stoppedTask` (`api/recover.go:141`) treats
+   every `aborted` task with a workflow as one to pick back up; without this step, Resume would
+   restart a task a person closed, past Reopen. See *Open*.
+3. **Blocked** → `BlockedError`, exactly as today, overridable by a person.
 
 `RefuseBlockedTx` stays as a wrapper while callers move; the API maps `ArchivedError` to 409
-`archived`, recorded as `task.start_refused {path, reason}`. The backend's own gate (path 8)
-calls a SQL function `task_start_refusal(task)` (returns `archived` | `blocked` | null) beside
-`task_blocked_by`, so both processes keep one rule.
+`archived` and `ClosedError` to 409 `closed`, recorded as `task.start_refused {path, reason}`.
+The backend's own gate (path 8) calls a SQL function `task_start_refusal(task)` (returns
+`archived` | `closed` | `blocked` | null) beside `task_blocked_by`, so both processes keep one
+rule.
 
 The table is the relations doc's, with the current lines (they have moved since) and two paths
 it didn't list:
 
 | # | path | where it starts work | lifecycle guard |
 |---|---|---|---|
-| 1 | **Deliver**, Create and deliver | `deliver` `orchestrator/internal/api/api.go:455` → `delivery.StartTx` `api.go:484` → `GuardStartTx` `delivery/start.go:109` | `RefuseStartTx` in `GuardStartTx`: Archived refused even with `override`. "Create and deliver" makes the task and says it was not started (`footerProblem`), as for blocked |
+| 1 | **Deliver**, Create and deliver | `deliver` `orchestrator/internal/api/api.go:455` → `delivery.StartTx` `api.go:484` → `GuardStartTx` `delivery/start.go:109` | `RefuseStartTx` in `GuardStartTx`: Archived and Closed refused even with `override`. "Create and deliver" makes the task and says it was not started (`footerProblem`), as for blocked |
 | 2 | **Talk it through** | `talk` `api/chat.go:67` → `talkThrough` `chat.go:300` → `StartTx` `chat.go:301` | same, through `StartTx` |
 | 3 | **A first message in an unstarted task's Chat** | `chat` `chat.go:30` → `decideFor` → `talkThrough` `chat.go:277` | same; the composer keeps the words |
-| 4 | **The conductor's first `start_phase implement` / `decide` at `PointStart`** | `ConductStartPhase` `delivery/conduct.go:193` → `refuseBlockedStart` `conduct.go:211`; `ConductDecide` `conduct.go:371` → `conduct.go:386` | `refuseBlockedStart` calls `RefuseStartTx`; an Archived refusal is a `Refusal` whatever `st.Overridden` says |
-| 5 | **The workflow's `implement` step** | `implementRun` `delivery/workflow.go:470` → `parkIfBlocked` `workflow.go:478` (`delivery/relations.go:144`) | unchanged: parks as for blocked, only before the first implementer of the attempt. Archived can't reach it (only ended tasks are archived) |
-| 6 | **Start over** | `recoverTask` `api/recover.go:206` → `GuardStartTx` `recover.go:252` → `startOver` `recover.go:353` | `RefuseStartTx`; Start over *anyway* does not pass Archived |
-| 7 | **Resume / Try again** | `recoverTask` → `pickUp` `api/recover.go:286` (`recover.go:322`) | **newly guarded for Archived only** (`RefuseStartTx` with blocked skipped). Reachable: an archived failed or stopped task picked back up would run work nobody sees, so it is refused ("CP-34 is archived: unarchive it to pick it back up"). Blocked stays unguarded here, as the relations doc decided |
+| 4 | **The conductor's first `start_phase implement` / `decide` at `PointStart`** | `ConductStartPhase` `delivery/conduct.go:193` → `refuseBlockedStart` `conduct.go:211`; `ConductDecide` `conduct.go:371` → `conduct.go:386` | `refuseBlockedStart` calls `RefuseStartTx`; an Archived or Closed refusal is a `Refusal` whatever `st.Overridden` says |
+| 5 | **The workflow's `implement` step** | `implementRun` `delivery/workflow.go:470` → `parkIfBlocked` `workflow.go:478` (`delivery/relations.go:144`) | unchanged: parks as for blocked, only before the first implementer of the attempt. Archived and Closed can't reach it: Close and Archive are refused while agents run |
+| 6 | **Start over** | `recoverTask` `api/recover.go:206` → `GuardStartTx` `recover.go:252` → `startOver` `recover.go:353` | `RefuseStartTx`; Start over *anyway* passes neither Archived nor Closed |
+| 7 | **Resume / Try again** | `recoverTask` → `pickUp` `api/recover.go:286` (`recover.go:322`) | **newly guarded for Archived and Closed only** (`RefuseStartTx` with blocked skipped). A closed task that once ran is `aborted` with a workflow, so `stoppedTask` offers it; it is refused ("CP-34 was closed: reopen it to pick it back up"), and the task page offers Reopen instead of Resume. Blocked stays unguarded here, as the relations doc decided |
 | 8 | **`POST /v1/tasks/:id/runs`** | `createRun` `apps/control-plane/src/api/routes/work.ts:365`, blockers at `work.ts:382` | `task_start_refusal(task)` before `task_blocked_by`, same 409s |
 | 9 | **Filing a proposal** | `fileProposal` `api/sessions.go:778` → `CreateTaskTx` `sessions.go:968` (`delivery/filing.go:57`) | starts nothing |
 | 10 | **`create_task`** | `createTask` `agenttools/tools.go:283` | starts nothing |
-| 11 | **Start when unblocked** | `AutoStarts.Sweep` `delivery/unblock.go:227` → `RefuseBlockedTx` `unblock.go:387` → `StartTx` `unblock.go:425` | `RefuseStartTx` at fire time; an archived task has ended and holds no request |
-| 12 | **A first feedback batch on a never-delivered task** *(not in the relations doc)* | `startForFeedbackTx` `delivery/feedback.go:528` → `StartTx` `feedback.go:533` | through `StartTx`; a never-delivered task isn't ended, so it can't be archived |
+| 11 | **Start when unblocked** | `AutoStarts.Sweep` `delivery/unblock.go:227` → `RefuseBlockedTx` `unblock.go:387` → `StartTx` `unblock.go:425` | `RefuseStartTx` at fire time. Close (and so Close and archive) ends the task's request in its transaction (`EndAutoStartTx` `unblock.go:180`, why `"closed"`, a new reason beside `"owner"`, `"started"`, …): a closed task holds none |
+| 12 | **A first feedback batch on a never-delivered task** *(not in the relations doc)* | `startForFeedbackTx` `delivery/feedback.go:528` → `StartTx` `feedback.go:533` | through `StartTx`: a never-delivered task closed, or closed and archived, refuses the batch's start |
 
 Confirming a plan (`awaiting_confirmation`) still has no route; any future one calls the guard.
 
@@ -237,30 +280,46 @@ Routes (control plane, forwarded to the orchestrator like `done`, so the guard a
 write stay in one process):
 
 ```
-POST /v1/tasks/:id/close      {resolution: wont_do|duplicate|cant_reproduce, duplicateOf?, note?}   owner | admin
-POST /v1/tasks/:id/reopen     {}                              owner | admin
-POST /v1/tasks/:id/archive    {}      POST /v1/tasks/:id/unarchive  {}            owner | admin
+POST /v1/tasks/:id/close      {resolution: wont_do|duplicate|cant_reproduce, duplicateOf?, note?, removeRelations?}   owner | admin
+POST /v1/tasks/:id/reopen     {}                              owner | admin   → 409 archived when archived
+POST /v1/tasks/:id/archive    {resolution?, duplicateOf?, note?, removeRelations?}                                  owner | admin
+POST /v1/tasks/:id/unarchive  {}                              owner | admin
 POST /v1/epics/:id/archive    {withEndedTasks?: true}   → 409 {code: "unfinished", tasks:[…]} without it
 POST /v1/epics/:id/unarchive
 ```
 
+**One archive route, the resolution optional.** *Decided.* On an ended task `archive` takes no
+body and archives. On a task that hasn't ended it requires `resolution` (with `duplicateOf` for
+a duplicate) and runs Close's own code (`closeTx`, the same validation, refusals and handover)
+then archives, in one transaction; without a resolution it is refused 409 `not_ended`
+("CP-44 hasn't ended: archiving it needs a resolution"). *Rejected:* the client calling
+`close` then `archive`. Two requests are two transactions: a failure or a dropped connection
+between them leaves a task closed but not archived, which the person never asked for, and two
+ledger batches whose Activity can't honestly be the single "closed … and archived it" line. The
+server already owns the close rules; one route keeps "closed and archived" one fact, refused or
+written whole. `close` stays its own route for Close.
+
 The shape is brainstorm sessions' (`POST /v1/brainstorms/:id/archive|unarchive`,
 `routes/sessions.ts:136`) and memories' (`/archive`), not a `PATCH {archived}`: each is a
 decision with its own refusal and its own ledger event. Refusals are 409 with a `code`
-(`running`, `not_ended`, `kind`, `loop`, `unfinished`) and a sentence.
+(`running`, `review`, `not_ended`, `kind`, `loop`, `unfinished`, `archived`) and a sentence;
+`running` and `review` carry the menu's words ("Stop its agents first", "It has a pull request
+open").
 
 Events (ledger; `packages/domain/src/events/types.ts` and the Go constants):
 
 | Event | Payload | Activity line |
 |---|---|---|
-| `task.closed` | `{resolution, duplicateOf?, note?, handedOver?: [keys]}` | **Ana** closed **CP-63** as a duplicate of **CP-62** — **CP-47**, which waited on CP-63, now waits on CP-62 |
+| `task.closed` | `{resolution, duplicateOf?, note?, handedOver?: [keys], removedRelations?: [keys], andArchived?: true}` | **Ana** closed **CP-63** as a duplicate of **CP-62** — **CP-47**, which waited on CP-63, now waits on CP-62 |
+| `task.closed` + `task.archived` (one batch) | `task.archived {viaClose: true}` | **Ana** closed **CP-44** as Won't do and archived it (one line for the batch; the note under it) |
 | `task.reopened` | `{was: resolution}` | **Ana** reopened **CP-59** (was Can't reproduce) |
-| `task.archived` / `task.unarchived` | `{viaEpic?: id}` | **Márcio** archived **CP-34** / **Ana** unarchived **CP-29** |
+| `task.archived` / `task.unarchived` | `{viaEpic?: id, viaClose?: true}` | **Márcio** archived **CP-34** / **Ana** unarchived **CP-29** |
 | `epic.archived` / `epic.unarchived` | as the task's, plus `{tasks: n}` | **Ana** archived the epic **Webhook reliability** and its 6 tasks |
-| `task.start_refused` | gains `reason: "archived"` | never a line (as today) |
+| `task.start_refused` | gains `reason: "archived" \| "closed"` | never a line (as today) |
 
 `task.status_changed` still records the status move Close and Reopen make, with reason
-"closed as won't do by Ana".
+"closed as won't do by Ana". Activity folds a `task.closed` with `andArchived` and the
+`task.archived {viaClose}` of the same batch into the one line; each alone keeps its own.
 
 ## Epic 2 — Classification
 
@@ -274,12 +333,12 @@ superseded. A document is what a spike produces; "code change" is every other ki
 
 | Kind | Brief (implementer) | Review gate | Proposal card | Ends |
 |---|---|---|---|---|
-| **Bug** | `kindInstructions["bug"]` after the role's lead (`builtinInstructions["implementer"]`, `delivery/prompts.go:539`): reproduce with the steps, commit a failing test named for the bug with its key in a comment ("Failing test for CP-62"), then fix in a second commit; can't reproduce → stop and say so. `PromptInput.task()` (`prompts.go:164`) appends the bug report after the goal. The investigator and the conductor get the bug report too (the conductor's briefing quotes the task: `ConductorPrompt`, `prompts.go:644`) | `reviewFocus["tests"]` (`prompts.go:198`) gains `bugGate`: find the commit adding the reproducing test before the fix; run it there (must fail) and at the head (must pass); missing, passing before, or unrelated to the steps → **blocking** finding "No failing test for CP-62", category `tests`. Only when `tests` is among the project's required reviewers (`requiredReviewers`); when it isn't, the gate is added to `correctness` instead, so a bug is never delivered without it | "Bug" tag, P-mark, the steps as its detail | as any change: merged |
+| **Bug** | `kindInstructions["bug"]` after the role's lead (`builtinInstructions["implementer"]`, `delivery/prompts.go:539`): reproduce with the steps, commit a failing test named for the bug with its key in a comment ("Failing test for CP-62"), then fix in a second commit; can't reproduce → stop and say so. `PromptInput.task()` (`prompts.go:164`) appends the bug report after the goal. The investigator and the conductor get the bug report too (the conductor's briefing quotes the task: `ConductorPrompt`, `prompts.go:644`) | `reviewFocus["tests"]` (`prompts.go:198`) gains `bugGate`: find the commit adding the reproducing test before the fix; run it there (must fail) and at the head (must pass); missing, passing before, or unrelated to the steps → **blocking** finding "No failing test for CP-62", category `tests`. *Decided* (Q4): when `tests` is not among the project's required reviewers (`requiredReviewers`), the same `bugGate` paragraph is added to `reviewFocus["correctness"]`, so a bug is never delivered without its failing test. No project setting turns it off | "Bug" tag, P-mark, the steps as its detail | as any change: merged |
 | **Feature** | unchanged | unchanged | "Feature" tag (no glyph on cards and rows: the default says nothing) | merged |
 | **Chore** | unchanged | unchanged | "Chore" tag | merged |
 | **Spike** | `kindInstructions["spike"]`: answer the question in a write-up published as an artifact (`answer.md`, the existing artifact publishing, `phases/artifacts.go`); commit no code to the task branch | review runs as configured; with no diff, there is nothing to review and no pull request opens: `openPullRequest` opens none and the task waits in review, "ready to read" (`awaitRead`, `delivery/workflow.go:1081`) | "Spike" tag | its owner's **Mark done** (`markDone`, `api.go:1153`), now writing `resolution = nothing_to_merge` |
 
-*Proposed:* a spike runs the same workflow, not a second one. The path a spike needs ("nothing
+*Decided:* a spike runs the same workflow, not a second one. The path a spike needs ("nothing
 changed → ready to read → Mark done") exists today and is how such work ends now; the kind only
 tells the agent to aim for it. *Rejected:* a separate document workflow
 (management.md's plan): more code for an outcome the current workflow already reaches.
@@ -313,7 +372,7 @@ tells the agent to aim for it. *Rejected:* a separate document workflow
   evidence as `introduced_by_note` (≤ 2,000). A pull request is named through its task: every
   pull request dude merged belongs to one.
 - **An agent proposes it** (`update_task {introducedBy: {task: "CP-30", evidence}}`, the
-  caller's own bug only; investigator or conductor). How it finds a candidate, *proposed*:
+  caller's own bug only; investigator or conductor). How it finds a candidate, *decided*:
   dude knows the order merges landed on the default branch (`pull_requests.merged_at` and the
   merge commit). The agent bisects **by merge order**: runs the reproduction at the merge before
   and after candidates, narrowing to one merge whose commit flips it from passing to failing.
@@ -323,7 +382,7 @@ tells the agent to aim for it. *Rejected:* a separate document workflow
   state="proposed"`): **Confirm** / **Clear** for the owner; for anyone else, whose call it is.
   Confirmed, the chip is solid and says who confirmed it. The owner can set it by hand
   (`PATCH … {introducedBy}`), which is `confirmed` at once.
-- *Proposed:* **no automatic proposal.** dude could guess from file overlap with recent merges,
+- *Decided:* **no automatic proposal.** dude could guess from file overlap with recent merges,
   but a guess that looks like a fact is worse than none; a candidate needs a reproduction run.
 
 ### Priority
@@ -331,7 +390,7 @@ tells the agent to aim for it. *Rejected:* a separate document workflow
 *Decided:* `P0`–`P3`, default `P2`; tasks sort by priority within their lane, then age; no
 position on tasks.
 
-- **Shown quietly**, *proposed*: **P0** with an up arrow and **P1** in strong ink, semibold,
+- **Shown quietly**, *decided*: **P0** with an up arrow and **P1** in strong ink, semibold,
   mono; **P2 not drawn** on cards, rows and results (it is the default, and a mark on 80% of
   cards is noise); **P3** in muted ink. The header, the rail and the dialog always show it, P2
   too. *Rejected:* a coloured flag: P0 would compete with needs-you, the one loud thing.
@@ -356,7 +415,7 @@ fixed set of values, decided then (see *Not here*).
 | `introduced-by-proposed` | CP-60, a P0 bug: "Likely CP-30 · merged 2 Oct", Confirm / Clear, and the evidence |
 | `board-kinds` | the board: kind glyphs and P0/P1/P3 after each card's key, cards in priority order |
 | `proposal-card-kinds` | a brainstorm's `ProposalCard` with a bug, a spike, a feature and a chore |
-| `brief-bug` | the implementer's brief and the tests reviewer's gate, feature beside bug, and a spike's |
+| `brief-bug` | the implementer's brief and the tests reviewer's gate, feature beside bug (with where the gate goes when `tests` isn't required: `correctness`), and a spike's |
 
 ## Epic 3 — Finding things
 
@@ -417,15 +476,15 @@ GET /v1/tasks
 *Decided:* a list per project, dense rows, filter bar, fixed views: Mine, Bugs, Needs you,
 Archived, Closed.
 
-- **Route** *(proposed)*: `#/project/:id/tasks?view=bugs` beside management.md's
+- **Route** *(decided)*: `#/project/:id/tasks?view=bugs` beside management.md's
   `#/project/:id` (the board). The board's header gains a `Segmented` **Board · List**, the same
   control in the same place on both, so one click switches with the project kept. The tree's
   project row opens whichever was last used. Filters are in the hash (`&kind=bug&priority=P0`),
   so a filtered list is a link.
-- **Views** *(decided list, proposed order)*: **Open** (the default: not ended, not archived),
+- **Views** *(decided, in this order)*: **Open** (the first view: not ended, not archived),
   **Mine**, **Bugs**, **Needs you**, **Closed**, **Archived**, as one
   `Segmented` with counts. They are fixed: everyone's Bugs is the same, and there is nothing to
-  name, save or share. *Proposed:* **Open** added as the default; without it the list's first
+  name, save or share. *Decided:* **Open** is added and opens first; without it the list's first
   screen would be one of the narrow views.
 - **Filter bar**: Search (key, title, goal), then chips: Kind, Priority, Owner, Epic,
   Repository (`TaskFilterBar`). A chip is a `RowMenu` of radio items; set, it says its value and
@@ -442,7 +501,7 @@ Archived, Closed.
 
 *Decided:* one input; `kind:bug p0 owner:ana #CP-41` tokens plus words; archived results marked.
 
-- **Tokens** *(proposed spelling)*: `kind:bug|feature|chore|spike`, `p0`…`p3`, `owner:<first
+- **Tokens** *(decided spelling)*: `kind:bug|feature|chore|spike`, `p0`…`p3`, `owner:<first
   name>` and `is:mine`, `#CP-41` (or a bare `CP-41`), `is:archived`, `is:closed`, `is:open`,
   `is:blocked`, `epic:"Billing v2"`. Everything else is words. Tokens are case-insensitive; an
   unknown `x:y` is a word.
@@ -482,7 +541,7 @@ Archived, Closed.
 | `find-work-tokens` | `kind:bug owner:ana billing`: what it understood, the epic Billing v2 with its layers glyph, its bugs (the duplicate CP-63 last, marked), then Ana's other bugs, the closed and archived ones last and marked |
 | `board-filters` | the board with Kind: Bug and Mine set |
 | `sidebar-epics` | the fixed sidebar (Billing v2 open, Webhook reliability folded with its needs-you count, Usage alerts folded), beside the tree as it is today and with the fix; also compact, and in the narrow drawer |
-| `sidebar-epic-variants` | (a) glyph only beside (b) glyph and roll-up word |
+| `sidebar-epic-variants` | what was considered: (a) glyph only, chosen, beside (b) glyph and roll-up word, rejected |
 
 ## Field × surface
 
@@ -493,9 +552,10 @@ Archived, Closed.
 | Task dialog, new | ✓ aside | ✓ aside | ✓ (bug) | ✓ aside | — | — |
 | Task dialog, edit | ✓ until delivery starts | ✓ | ✓ | ✓ | — | — |
 | Task page header | ✓ word | ✓ always | — | — | ✓ beside status | ✓ mark |
-| Task page notices | — | — | — | — | ✓ Callout + Reopen | ✓ Callout + Unarchive |
+| Task page notices | — | — | — | — | ✓ Callout + Reopen (archived: "Unarchive it first to reopen it") | ✓ Callout + Unarchive |
 | Task page Overview / rail | ✓ rail, what it changes | ✓ rail | ✓ block | ✓ chip, Confirm/Clear | ✓ rail | — |
-| Task `…` menu (header, tree, row) | — | — | — | — | ✓ Close… / Reopen | ✓ Archive… / Unarchive |
+| Task `…` menu (header, tree, row) | — | — | — | — | ✓ Close… / Reopen, each `disabledReason` as in *UX* | ✓ Archive… (unended: opens Close and archive) / Unarchive |
+| Close dialog | — | — | — | — | ✓ set; as Close and archive, set with the archive | ✓ set, as Close and archive |
 | Board card | ✓ glyph (not feature) | ✓ P0 P1 P3 | — | — | ✓ marks line | — *(not on the board)* |
 | Board header | ✓ chip | ✓ chip | — | — | — | ✓ "3 archived" |
 | Sidebar tree row | — *(28px row: key and status suffice; an epic row's one glyph is `layers`, see the NavTree fix)* | — | — | — | — | — *(not in the tree)* |
@@ -512,7 +572,7 @@ Archived, Closed.
 | `/v1/navigation` (`NavTask`) | ✓ | ✓ | — | — | ✓ | — *(archived not sent)* |
 | Brief / review | ✓ | — *(priority isn't a delivery input)* | ✓ | — | — | — |
 | Ledger | `task.kind_changed` | `task.priority_changed` | `task.updated` | `task.introduced_by_proposed` / `_confirmed` / `_cleared` | `task.closed` / `task.reopened` | `task.archived` / `task.unarchived` |
-| Activity line | “changed CP-61 from Feature to Bug” | “…and its priority from P2 to P1” | — *(the text's edit line)* | “proposed that CP-30 introduced CP-60” / “confirmed …” | ✓ | ✓ both ways |
+| Activity line | “changed CP-61 from Feature to Bug” | “…and its priority from P2 to P1” | — *(the text's edit line)* | “proposed that CP-30 introduced CP-60” / “confirmed …” | ✓; with an archive in the same batch, one line “closed CP-44 as Won't do and archived it” | ✓ both ways |
 
 The sidebar tells an epic from a task by glyph alone: an epic row and an epic result in Find
 work carry `layers` and a total; a task row and a task result carry a status mark and a mono key.
@@ -638,15 +698,9 @@ search and `/` are unchanged. Results use the tree's row grammar: an epic result
 - **Test.** `test/components.test.tsx` renders `NavTreeRow` for an epic row and for a task row
   and asserts on the DOM: the epic row holds exactly one `svg[data-icon="layers"]`, the task row
   none. The mockup's shooter makes the same check on every screen's tree.
-- **Choice: glyph only (a), or glyph and roll-up word (b)** (`sidebar-epic-variants`).
-  *Recommended: (a).* It is the rule as written, and it is the whole of what tells the levels
-  apart. (b) puts Planned / Active / Done on every epic row: in the tree almost every epic is
-  Active, so the word repeats without informing, and on a 28px row it competes with the needs-you
-  count, the one loud thing, and pushes the title to an ellipsis first in a narrow sidebar. The
-  board's lane header "roll-up" (README:1057) is the triage roll-up (the needs-you count), which
-  the tree's epic row already draws; the planned/active/done state is drawn only on the Epics
-  page, where it groups the list. (b) would also need `NavEpic` to carry `state`, which
-  `/v1/navigation` doesn't send today.
+- **Glyph only.** *Decided* (Q5): (a), the rule as written; the glyph alone tells the levels
+  apart (screen `sidebar-epic-variants`, kept as what was considered).
+  Rejected: (b), a roll-up word on every epic row, which repeats "Active" and crowds the needs-you count.
 
 ### `NavTask` *(changed)*
 
@@ -681,7 +735,7 @@ ALTER TABLE tasks
     setweight(to_tsvector('simple', title), 'A') || setweight(to_tsvector('english', title), 'A')
     || setweight(to_tsvector('english', coalesce(goal, '')), 'B')) STORED,
   ADD CONSTRAINT tasks_resolution_status CHECK (resolution IS NULL OR status IN ('done', 'aborted')),
-  ADD CONSTRAINT tasks_archived_ended    CHECK (archived_at IS NULL OR status IN ('done', 'failed', 'aborted')),
+  ADD CONSTRAINT tasks_archived_ended    CHECK (archived_at IS NULL OR status = 'done' OR resolution IS NOT NULL),
   ADD CONSTRAINT tasks_bug_fields CHECK (kind = 'bug' OR (bug_steps IS NULL AND introduced_by_task_id IS NULL)),
   ADD CONSTRAINT tasks_bug_lengths CHECK (length(bug_steps) <= 8192 AND length(bug_expected) <= 2000
                                           AND length(bug_actual) <= 2000 AND length(bug_environment) <= 120);
@@ -698,7 +752,7 @@ UPDATE tasks t SET resolution = 'nothing_to_merge'
 CREATE INDEX tasks_introduced_by_idx ON tasks (introduced_by_task_id) WHERE introduced_by_task_id IS NOT NULL;
 
 -- task_blocked_by follows a duplicate's blocking to its canonical task (one hop);
--- task_start_refusal(task) → 'archived' | 'blocked' | NULL, both processes' one rule;
+-- task_start_refusal(task) → 'archived' | 'closed' | 'blocked' | NULL, both processes' one rule;
 -- task_relation_would_cycle walks 'duplicates' as 'blocks'.
 -- (CREATE OR REPLACE of the first and third, as in 111.)
 ```
@@ -711,23 +765,29 @@ CREATE INDEX tasks_introduced_by_idx ON tasks (introduced_by_task_id) WHERE intr
   functions that use `duplicates` go in `133`.
 - Row-level security: unchanged (the columns sit on tables that have it). No new worker.
 
-## Open questions for Márcio
+## Decisions
 
-Numbered as in the first round. Q3 is dropped: its subject left this proposal (see *Not here*).
+Márcio's answers, 2026-10-17. Numbered as the questions were; Q3 left with Later (see *Not here*).
 
-- **Q1. Should a Won't do blocker keep blocking?** The rule says yes (only merged work releases),
-  and the close dialog warns. The other reading: a person closing it has decided the work isn't
-  needed, so neither is the wait. *Default: keeps blocking; the dialog offers to remove the
-  relation in the same step.*
-- **Q2. Archive only ended tasks, or anything not running?** The brief refuses only running ones;
-  this doc also refuses Backlog ("Close it first"), so nothing archived can start. *Default:
-  ended only.*
-- **Q4. The bug gate's home when `tests` isn't a required reviewer.** This doc moves it to
-  `correctness` so a bug can't ship without its failing test. Some projects turned `tests` off on
-  purpose. *Default: correctness carries it; a project can switch the gate off in Delivery
-  ("Bugs need a failing test", on by default).*
-- **Q5. The sidebar's epic row: (a) glyph only, or (b) glyph and roll-up word?** See
-  *`NavTree` epic rows (fix)*. *Default: (a).*
+- **Q1. Does a Won't do blocker keep blocking?** Yes. The close dialog says what waits on the
+  task and offers **Remove the relation** in the same step. (2026-10-17)
+- **Q2. Archive only ended tasks, or anything not running?** Anything not running and without a
+  pull request open; a task that hasn't ended is closed on the way, in one dialog and one
+  transaction (**Close and archive**). One route, `POST /v1/tasks/:id/archive` with an optional
+  resolution. Unarchive and Reopen stay two steps. Epics unchanged. (2026-10-17)
+- **Q4. Where does the bug gate go when `tests` isn't a required reviewer?** Into
+  `reviewFocus["correctness"]`. No project switch. (2026-10-17)
+- **Q5. The sidebar's epic row: glyph only, or glyph and roll-up word?** Glyph only (a).
+  (2026-10-17)
+
+## Open
+
+- **Resume on a closed task.** Close is offered on a stopped task that once ran; it stays
+  `aborted` with its workflow, which `stoppedTask` (`api/recover.go:141`) offers for Resume /
+  Try again. *This document builds:* `RefuseStartTx` refuses a closed task (`ClosedError`, 409
+  `closed`) on every path, recovery included, and the page offers Reopen, not Resume (*Start
+  paths*, step 2). The alternative, Resume implying Reopen, would let a click on the recovery
+  bar undo a person's Close without saying so.
 
 ## Not here
 
