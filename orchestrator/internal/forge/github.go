@@ -1903,16 +1903,28 @@ func reserveAgentRequest(target, authorization, resource string) error {
 	}
 	r := v.(rateReading)
 	now := time.Now()
+	if r.reserved(now) {
+		return r.refusal(now, "GitHub's rate limit is kept for delivery")
+	}
 	if !r.reset.After(now) {
 		return nil
-	}
-	if r.remaining <= r.limit/agentReadReserve {
-		return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
-			Message: "GitHub's rate limit is kept for delivery"}
 	}
 	r.remaining--
 	rateReadings.Store(key, r)
 	return nil
+}
+
+// reserved says the reading, still current at now, leaves no more than
+// delivery's reserve.
+func (r rateReading) reserved(now time.Time) bool {
+	return r.reset.After(now) && r.remaining <= r.limit/agentReadReserve
+}
+
+// refusal is an agent read's 429 for a reserved reading, carrying the wait
+// until its reset as GitHub's own limit would.
+func (r rateReading) refusal(now time.Time, message string) *Error {
+	return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
+		Message: message}
 }
 
 // rateKey names one token's limit on one resource at one GitHub (its
@@ -1964,11 +1976,9 @@ func (g *GitHub) readBudget(ctx context.Context, scope string, resources ...stri
 		if !ok {
 			continue
 		}
-		r := v.(rateReading)
-		if r.reset.After(now) && r.remaining <= r.limit/agentReadReserve {
-			return &Error{Status: http.StatusTooManyRequests, RetryAfter: min(r.reset.Sub(now), MaxRetryAfter), Refusal: RefusalRateReserve,
-				Message: fmt.Sprintf("GitHub's %s rate limit has %d of %d requests left until %s: they are kept for delivery",
-					resource, r.remaining, r.limit, r.reset.UTC().Format(time.RFC3339))}
+		if r := v.(rateReading); r.reserved(now) {
+			return r.refusal(now, fmt.Sprintf("GitHub's %s rate limit has %d of %d requests left until %s: they are kept for delivery",
+				resource, r.remaining, r.limit, r.reset.UTC().Format(time.RFC3339)))
 		}
 	}
 	return nil
