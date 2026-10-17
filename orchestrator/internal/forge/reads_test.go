@@ -138,7 +138,7 @@ func TestAgentReadRedirectBodiesNeverReachTheRefusal(t *testing.T) {
 		{"issue 308", "/repos/acme/old/issues/1", http.StatusPermanentRedirect, func(gh *GitHub) error {
 			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
 			return err
-		}, RefusalMoved},
+		}, RefusalMovedItem},
 		{"issue 302", "/repos/acme/old/issues/1", http.StatusFound, func(gh *GitHub) error {
 			_, err := gh.Issue(context.Background(), "acme/old", 1, 50)
 			return err
@@ -154,6 +154,11 @@ func TestAgentReadRedirectBodiesNeverReachTheRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/repos/acme/old" && tc.path != r.URL.Path {
+					// The repository is where it was: only the item moved.
+					_, _ = w.Write([]byte(`{"full_name":"acme/old"}`))
+					return
+				}
 				if r.URL.Path != tc.path {
 					t.Errorf("unexpected request %s", r.URL.Path)
 				}
@@ -166,6 +171,53 @@ func TestAgentReadRedirectBodiesNeverReachTheRefusal(t *testing.T) {
 			var e *Error
 			if !errors.As(err, &e) || e.Refusal != tc.refusal || e.Status != tc.status || strings.Contains(err.Error(), canary) {
 				t.Fatalf("err=%v (%#v), want refusal %q without the body", err, e, tc.refusal)
+			}
+		})
+	}
+}
+
+// A permanent redirect of an issue or pull request says the repository
+// moved only when the repository's own path redirects too; when the
+// repository answers where it was, the item moved (an issue transferred).
+func TestAMovedItemIsNotAMovedRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		renamed    bool
+		read       func(gh *GitHub) error
+		want, item string
+	}{
+		{"transferred issue", false, func(gh *GitHub) error { _, err := gh.Issue(context.Background(), "acme/old", 7, 50); return err },
+			RefusalMovedItem, "/repos/acme/old/issues/7"},
+		{"transferred pull request's path", false, func(gh *GitHub) error {
+			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300)
+			return err
+		}, RefusalMovedItem, "/repos/acme/old/pulls/7"},
+		{"renamed repository, issue", true, func(gh *GitHub) error { _, err := gh.Issue(context.Background(), "acme/old", 7, 50); return err },
+			RefusalMoved, "/repos/acme/old/issues/7"},
+		{"renamed repository, pull request", true, func(gh *GitHub) error {
+			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300)
+			return err
+		}, RefusalMoved, "/repos/acme/old/pulls/7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var paths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				if r.URL.Path == "/repos/acme/old" && !tc.renamed {
+					_, _ = w.Write([]byte(`{"full_name":"acme/old"}`))
+					return
+				}
+				w.Header().Set("Location", "/repositories/42")
+				w.WriteHeader(http.StatusMovedPermanently)
+			}))
+			defer srv.Close()
+			err := tc.read(NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}))
+			var e *Error
+			if !errors.As(err, &e) || e.Refusal != tc.want || e.Status != http.StatusMovedPermanently || Moved(err) != (tc.want == RefusalMoved) {
+				t.Fatalf("err=%v (%#v), want refusal %q", err, e, tc.want)
+			}
+			if want := []string{tc.item, "/repos/acme/old"}; !slices.Equal(paths, want) {
+				t.Errorf("requests %v, want %v", paths, want)
 			}
 		})
 	}

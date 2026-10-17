@@ -192,17 +192,33 @@ type Error struct {
 // Why dude refused an agent's read on its own account. Message then holds
 // dude's words only, never what GitHub sent.
 const (
-	RefusalMoved       = "moved"        // a permanent redirect of /repos/{slug}…
+	RefusalMoved       = "moved"        // a permanent redirect of /repos/{slug} itself
+	RefusalMovedItem   = "moved_item"   // one of an item under it, its repository where it was
 	RefusalRedirect    = "redirect"     // any other redirect
 	RefusalRateReserve = "rate_reserve" // the rest of the rate limit is delivery's
 	RefusalTooLarge    = "too_large"    // an answer past the agent read limit
 )
 
-// Moved says GitHub answered an agent's read of a repository with a
+// Moved says GitHub answered an agent's read of a repository itself with a
 // permanent redirect: renamed or transferred.
 func Moved(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Refusal == RefusalMoved
+}
+
+// itemMoved is err, for a permanent redirect of an item of slug's (an
+// issue, a pull request): RefusalMoved when the repository's own path
+// redirects too, as for a rename, else the item's RefusalMovedItem.
+func (g *GitHub) itemMoved(ctx context.Context, slug string, err error) error {
+	var e *Error
+	if !errors.As(err, &e) || e.Refusal != RefusalMovedItem {
+		return err
+	}
+	var repo struct{}
+	if repoErr := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); Moved(repoErr) {
+		return repoErr
+	}
+	return err
 }
 
 // MaxRetryAfter bounds a wait GitHub asks for, so a garbled header cannot
@@ -1687,8 +1703,9 @@ func (g *GitHub) SearchIssues(ctx context.Context, slug, words, kind, state stri
 
 // Issue reads an issue, or a pull request's conversation, with its first
 // maxComments comments.
-func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int) (IssueRead, error) {
+func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int) (_ IssueRead, err error) {
 	ctx = agentReadContext(ctx)
+	defer func() { err = g.itemMoved(ctx, slug, err) }()
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
 		return IssueRead{}, err
 	}
@@ -1715,8 +1732,9 @@ func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int
 // every review with its text, the threads nobody resolved, the checks on
 // its head and the files it changes (at most maxFiles), each file's diff
 // with it.
-func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int, requested ...string) (PullRequestRead, error) {
+func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int, requested ...string) (_ PullRequestRead, err error) {
 	ctx = agentReadContext(ctx)
+	defer func() { err = g.itemMoved(ctx, slug, err) }()
 	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
 		return PullRequestRead{}, err
 	}
@@ -1751,7 +1769,6 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		}
 		out.Reviews = append(out.Reviews, ReviewRead{Author: login(r.User), State: r.State, Body: r.Body, SubmittedAt: *r.SubmittedAt})
 	}
-	var err error
 	if out.Threads, out.ThreadsUnknown, err = g.openThreads(ctx, slug, number); err != nil {
 		return PullRequestRead{}, err
 	}

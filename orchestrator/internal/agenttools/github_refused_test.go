@@ -28,7 +28,8 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		message := `{"message":"` + canary + `","documentation_url":"https://docs.github.test/` + canary + `"}`
 		switch r.URL.Path {
-		case "/repos/acme/target/issues/1":
+		case "/repos/acme/target/issues/1", "/repos/acme/target":
+			// A renamed repository: its own path redirects too.
 			w.Header().Set("Location", "/repositories/42/"+canary)
 			w.WriteHeader(http.StatusMovedPermanently)
 			_, _ = w.Write([]byte(message))

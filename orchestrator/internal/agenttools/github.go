@@ -264,6 +264,8 @@ func githubRefusal(read githubRead, err error) error {
 	switch {
 	case forge.Moved(err):
 		msg = fmt.Sprintf("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
+	case e != nil && e.Refusal == forge.RefusalMovedItem:
+		msg = fmt.Sprintf("GitHub says %s has moved (renamed repository or transferred issue)", what)
 	case forge.RateLimited(err):
 		msg = fmt.Sprintf("GitHub is rate limiting dude (%v): read %s later", err, what)
 	case e != nil && e.NotFound():

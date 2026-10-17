@@ -439,11 +439,18 @@ func (g *GitHub) rateResource(target string) string {
 }
 
 // redirectRefusal is an agent read's refusal of a redirect, in dude's
-// words: a permanent one of a repository's path says it moved.
+// words. A permanent one of a repository's own path says it moved; of a
+// path under it, that the item moved, which itemMoved tells apart from a
+// renamed repository.
 func (g *GitHub) redirectRefusal(method, target string, status int) error {
 	path, _, _ := strings.Cut(strings.TrimPrefix(target, g.cred.APIBaseURL), "?")
-	if (status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect) && strings.HasPrefix(path, "/repos/") {
-		return &Error{Status: status, Refusal: RefusalMoved, Message: "GitHub says the repository has moved (renamed or transferred)"}
+	if status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect {
+		switch parts := strings.Split(strings.TrimPrefix(path, "/"), "/"); {
+		case len(parts) == 3 && parts[0] == "repos":
+			return &Error{Status: status, Refusal: RefusalMoved, Message: "GitHub says the repository has moved (renamed or transferred)"}
+		case len(parts) > 3 && parts[0] == "repos":
+			return &Error{Status: status, Refusal: RefusalMovedItem, Message: "GitHub says the item has moved (renamed repository or transferred issue)"}
+		}
 	}
 	return &Error{Status: status, Refusal: RefusalRedirect,
 		Message: fmt.Sprintf("GitHub answered %s %s with a redirect, which an agent's read does not follow", method, path)}
