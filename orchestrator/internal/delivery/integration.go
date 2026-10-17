@@ -156,9 +156,11 @@ const (
 	causeStillConflicting = "still_conflicting"
 	causePairAttempted    = "pair_attempted"
 	causeRunFailed        = "run_failed"
+	causeNoMerge          = "no_merge"
 
 	reasonStillConflicting = "still conflicting after integration"
 	reasonPairAttempted    = "this head/base pair was already attempted"
+	reasonNoMerge          = "the integration Run finished without publishing a merge"
 )
 
 func (i *Integration) pair() string { return i.Repo + ":" + i.Head + ":" + i.BaseHead }
@@ -186,7 +188,18 @@ func (st *State) attemptCause(i *Integration) (string, string) {
 // brief is the integration fixer's feedback item. Its "Base integration:"
 // lead is what marks the fix Run as an integration (phases.buildSpec).
 func (i *Integration) brief() string {
-	return fmt.Sprintf("Base integration: this branch conflicts with `%s` in %s. Call sync_base, then `git merge lux/%s`. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Never rebase or force. The recorded base head is %s.", i.Base, i.Repo, i.Base, i.BaseHead)
+	return fmt.Sprintf("Base integration: this branch conflicts with `%s` in %s. Call sync_base, then `git merge lux/%s`. "+
+		"While sync_base answers status asked, lux has not fetched the base yet and lux/%s may be missing or old: call it "+
+		"again in a moment. %s. Resolve every conflict keeping both sides' intent, run the affected tests, and commit "+
+		"with git's default merge message. Never rebase or force. The recorded base head is %s.",
+		i.Base, i.Repo, i.Base, i.Base, IntegrationMergeWhen(i.Base, i.BaseHead), i.BaseHead)
+}
+
+// IntegrationMergeWhen is when an integration fixer may merge lux/<base>,
+// and when it gives up, in the words the brief and sync_base's answer share.
+func IntegrationMergeWhen(base, recorded string) string {
+	return fmt.Sprintf("Merge once sync_base answers fetched or up-to-date, or `git merge-base --is-ancestor %s lux/%s` "+
+		"succeeds; if neither has happened after a few minutes, finish without merging", recorded, base)
 }
 
 // ResolveConflictsTx is a person's "Resolve conflicts" on a pull request:
@@ -237,7 +250,7 @@ func (e *Escalation) about(repo string, number int) bool {
 
 // integrationFailure escalates the integration as pull_request_conflict
 // (retry or wait). cause is the web's to word: causeStillConflicting,
-// causePairAttempted, or causeRunFailed with the Run's error.
+// causePairAttempted, causeNoMerge, or causeRunFailed with the Run's error.
 func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext, st *State, cause, problem string) (workflow.Result, error) {
 	i := st.Integration
 	detail := map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "cause": cause, "error": problem, "integration": true}

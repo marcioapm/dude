@@ -84,6 +84,8 @@ export function integrationCause(cause: unknown): string {
       return "it already tried this branch against this base";
     case "run_failed":
       return "the agent resolving it stopped before it finished";
+    case "no_merge":
+      return "the agent resolving it finished without merging the base in";
     default:
       return "";
   }

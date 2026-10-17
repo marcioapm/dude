@@ -250,7 +250,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
   resolve keeping both sides' intent, then an internal review that runs
   `git show --remerge-diff` on the merge, then the policy's test; the
-  conductor never runs tests. A pair already tried, or a pull request
+  conductor never runs tests. A pair already tried, an integration Run
+  that finishes without publishing to the conflicting repository (no
+  merge: nothing to review), or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
   `integration: true` (retry or wait). An integration Run spends none of
   the pull request's fix budget. With `whenBehind` `tell` nothing

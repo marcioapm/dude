@@ -13,6 +13,7 @@
 package fakelux
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -234,6 +235,9 @@ type Run struct {
 	workspace string
 	// Edit tool calls made, so each has an id of its own.
 	edits int
+	// The agent's last sync_base did not bring every base in (pending,
+	// failed or refused): its integrate step merges nothing.
+	baseUnfetched bool
 
 	busy  bool
 	woken bool
@@ -662,9 +666,13 @@ type Server struct {
 	// git.push follows, until ReleasePushes.
 	HoldPushes bool
 	heldPushes []func()
-	// HoldSyncs is a lux that accepts a running Run's sync and never
-	// reports it: no git.sync or sync.done follows.
+	// HoldSyncs is a lux that accepts a running Run's sync and does not
+	// report it: no git.sync or sync.done follows, until ReleaseSyncs.
 	HoldSyncs bool
+	heldSyncs []func()
+	// How long the scripted agent calls sync_base again while it answers
+	// pending; zero is fakeagent.SyncBaseRetryFor.
+	SyncBaseRetryFor time.Duration
 	// NoOperationCredentials is a runner from before credentials on push
 	// and sync: one carrying them is refused, 409
 	// git_credentials_unsupported.
@@ -1826,6 +1834,10 @@ func (s *Server) requestMachine(run *Run, args string) int {
 // failure is said in the agent's reply. Its HTTP status, 0 when it never
 // got one.
 func (s *Server) callTool(run *Run, tool, args string) int {
+	if tool == fakeagent.LocalIntegrate && run.baseUnfetched {
+		// As the brief says: no merge of a lux/<base> never fetched.
+		return http.StatusOK
+	}
 	if fakeagent.Local(tool) {
 		s.localCall(run, tool, args)
 		return http.StatusOK
@@ -1834,16 +1846,28 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	status, body, err := s.toolRequest(run, tool, args)
 	if tool == "sync_base" {
-		// The scripted agent can call before dude has recorded its Run as
-		// running, which sync_base refuses until it has: as an agent told
-		// to call again in a moment, it does.
-		deadline := time.Now().Add(5 * time.Second)
-		for status == 422 && strings.Contains(string(body), "container is not running") && time.Now().Before(deadline) {
+		// As an agent following sync_base's answers, it calls again while
+		// dude has not yet recorded its Run as running (refused), and while
+		// lux has not reported the fetch (pending): merging before would
+		// merge a lux/<base> that is missing or old.
+		deadline := time.Now().Add(cmp.Or(s.SyncBaseRetryFor, fakeagent.SyncBaseRetryFor))
+		for time.Now().Before(deadline) {
+			var wait time.Duration
+			switch {
+			case status == 422 && strings.Contains(string(body), "container is not running"):
+				wait = 20 * time.Millisecond
+			case status == 200 && fakeagent.SyncBasePending(body):
+				wait = fakeagent.SyncBaseRetryEvery
+			}
+			if wait == 0 {
+				break
+			}
 			s.mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(wait)
 			s.mu.Lock()
 			status, body, err = s.toolRequest(run, tool, args)
 		}
+		run.baseUnfetched = err != nil || status != 200 || !fakeagent.SyncBaseLanded(body)
 	}
 	s.saidOfTool(run, tool, status, err)
 	if err == nil && status != 0 && status < 300 {
