@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import type { DudeToOverlay, OverlayPin, OverlayToDude } from "@dude/domain/previewOverlayProtocol";
+import type { DudeToOverlay, OverlayPin, OverlayTheme, OverlayToDude } from "@dude/domain/previewOverlayProtocol";
 import { Overlay } from "../overlay.ts";
 import { PictureError } from "../picture.ts";
 
@@ -697,6 +697,7 @@ function osScheme(start: "light" | "dark" | "none") {
 }
 
 const drawn = () => q("[data-overlay]")!.getAttribute("data-theme");
+const themed = (theme?: OverlayTheme): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, ...(theme ? { theme } : {}) });
 
 test("before dude answers it follows the OS's colour scheme, live, and dark when the OS says neither", () => {
   const os = osScheme("light");
@@ -717,24 +718,24 @@ test("before dude answers it follows the OS's colour scheme, live, and dark when
 test("once dude's session names a theme it follows dude's, not the OS, and a new session switches it", () => {
   const os = osScheme("light");
   boot();
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "dark" });
+  fromDude(themed("dark"));
   expect(drawn()).toBe("dark");
   os.set("light");
   expect(drawn()).toBe("dark");
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" });
+  fromDude(themed("light"));
   expect(drawn()).toBe("light");
 });
 
 test("a legacy session resumes following the OS, and malformed sessions leave state unchanged", () => {
   const os = osScheme("light");
   boot();
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "dark" });
+  fromDude(themed("dark"));
   expect(drawn()).toBe("dark");
   const before = { theme: drawn(), connection: tid("ov-conn")!.textContent, pins: count('[data-testid="ov-pin"]') };
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: {}, drafts: 0, showPins: true, theme: 7 } as never);
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, extra: true } as never);
+  fromDude({ ...themed(), pins: {}, theme: 7 } as never);
+  fromDude({ ...themed(), extra: true } as never);
   expect({ theme: drawn(), connection: tid("ov-conn")!.textContent, pins: count('[data-testid="ov-pin"]') }).toEqual(before);
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true });
+  fromDude(themed());
   expect(drawn()).toBe("light");
   os.set("dark");
   expect(drawn()).toBe("dark");
@@ -744,7 +745,7 @@ test("a session with an invalid theme is rejected", () => {
   osScheme("light");
   boot();
   connect();
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "sepia" as "light" });
+  fromDude(themed("sepia" as "light"));
   expect(drawn()).toBe("light");
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
@@ -752,7 +753,7 @@ test("a session with an invalid theme is rejected", () => {
 test("a theme from another origin or another window is not heard", () => {
   osScheme("dark");
   boot();
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" }, "https://evil.example.test");
-  fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, theme: "light" }, DUDE, { postMessage() {} });
+  fromDude(themed("light"), "https://evil.example.test");
+  fromDude(themed("light"), DUDE, { postMessage() {} });
   expect(drawn()).toBe("dark");
 });
