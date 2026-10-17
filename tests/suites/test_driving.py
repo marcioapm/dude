@@ -21,7 +21,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, provision_person, sign_in, wait_until
+from helpers import ApiClient, finish_simplifier_review, provision_person, sign_in, wait_until
 
 SHOTS = Path(os.environ["DUDE_SHOTS"]) if os.environ.get("DUDE_SHOTS") else None
 
@@ -140,6 +140,7 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
 
 def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list,
+    owner_dsn: str,
 ):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
@@ -150,6 +151,8 @@ def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
     _waiting_on(client, task["id"], "after_implement")
     _say(client, task["id"], "Simplify, then the PR.", _tool("start_phase", {"phase": "simplify"}))
+    # The simplifier's diff is reviewed whoever decides; the conductor triages that round.
+    finish_simplifier_review(client, owner_dsn, task["id"])
     _waiting_on(client, task["id"], "before_pull_request")
 
     page.set_viewport_size({"width": 1440, "height": 900})

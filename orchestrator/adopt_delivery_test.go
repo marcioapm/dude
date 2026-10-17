@@ -394,8 +394,8 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
 
-	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify"}) {
-		t.Fatalf("phases %v, want review, fix, re-review, simplify (no implement)", got)
+	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify", "review"}) {
+		t.Fatalf("phases %v, want review, fix, re-review, simplify, its diff's review (no implement)", got)
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests, want the one taken over", len(w.gh.Pulls()))
@@ -424,8 +424,27 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if head == jervsHead || len(w.gh.Pulls()) != 1 {
 		t.Fatalf("fix head %s (was %s), %d pull requests", head, jervsHead, len(w.gh.Pulls()))
 	}
-	if out := w.gh.Log("feature/greet"); !strings.HasPrefix(out[0], "Address review findings") {
+	if out := w.gh.Log("feature/greet"); !strings.HasPrefix(out[0], "Simplify") || !strings.HasPrefix(out[1], "Address review findings") {
 		t.Fatalf("feature/greet after the PR fix: %v", out)
+	}
+	// Checked on a candidate under dude/, beside no branch of the person's,
+	// reviewed over its own range, simplified there, then promoted onto the
+	// adopted branch.
+	var fixBranch, fixHead, simplifyBranch, simplified string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
+		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&fixBranch, &fixHead)
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
+		WHERE task_id = $1 AND phase = 'simplify' ORDER BY created_at DESC LIMIT 1`, wi).Scan(&simplifyBranch, &simplified)
+	if fixBranch != delivery.CandidateBranch(wi, 1) || simplifyBranch != fixBranch || simplified != head || fixHead == head {
+		t.Fatalf("the fix published to %q at %s, the simplifier to %q at %s; feature/greet is at %s",
+			fixBranch, fixHead, simplifyBranch, simplified, head)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+		AND review_range->'base'->>'target' = $3`, wi, delivery.RangePullRequestFix, jervsHead); n == 0 {
+		t.Fatal("no review of the fix's range from jerv's head")
+	}
+	if w.gh.SHA("feature/greet-candidate") != "" {
+		t.Fatal("a candidate branch was made beside the person's")
 	}
 	if e := w.rerequests(wi); len(e) != 2 || e[1]["head"] != head || !slices.Equal(strs(e[1]["reviewersRequested"]), []string{"jerv"}) {
 		t.Fatalf("re-requests %v, want jerv asked for the fix's head", e)
@@ -651,8 +670,8 @@ func TestAnAdoptedBranchOpensItsPullRequestIntoItsBase(t *testing.T) {
 	if pr.Head != "stack/top" || pr.Base != "stack/base" || !pr.Draft {
 		t.Fatalf("pull request %s into %s draft=%v, want draft stack/top into stack/base", pr.Head, pr.Base, pr.Draft)
 	}
-	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify"}) {
-		t.Fatalf("phases %v, want no implement", got)
+	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify", "review"}) {
+		t.Fatalf("phases %v, want no implement, and the simplifier's diff reviewed", got)
 	}
 	log := w.gh.Log("stack/top")
 	if !slices.Contains(log, "The top") || !slices.Contains(log, "The base") || !strings.HasPrefix(log[0], "Simplify") {

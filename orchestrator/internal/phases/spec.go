@@ -151,6 +151,9 @@ type specInput struct {
 	// starts from.
 	Repos      []specRepo
 	PushBranch string
+	// A review limited to a range: why (delivery.RangeSimplify…), carried
+	// as the label dude.review_range; "" for the whole branch.
+	ReviewOf string
 	// The forge token lux clones and pushes with (gitTokenSecret), and, by
 	// spec name, a repository's own where it differs: a GitHub App's token
 	// is its installation's, one per repository owner.
@@ -340,6 +343,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 	if in.Effort != "" {
 		spec.Labels["dude.effort"] = in.Effort
+	}
+	if in.ReviewOf != "" {
+		spec.Labels["dude.review_range"] = in.ReviewOf
 	}
 	if in.ModelTier != "" {
 		spec.Labels["dude.model_tier"] = in.ModelTier

@@ -430,6 +430,12 @@ export const EventTypes = {
    */
   PullRequestReviewRerequested: "pull_request.review_rerequested",
   /**
+   * dude moved an open pull request's branch to a fix for its feedback,
+   * once the fix was reviewed and tested on the candidate branch. Payload:
+   * `{ repo, number, from, to, candidate }`.
+   */
+  PullRequestFixMoved: "pull_request.fix_moved",
+  /**
    * A session's agent or a task's conductor read GitHub through dude
    * (github_search, github_issue, github_pull_request), on its Run.
    * Payload: `{ tool, repo, number?, query?, kind?, state?, files?, bytes }`:

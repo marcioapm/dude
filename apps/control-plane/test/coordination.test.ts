@@ -216,6 +216,29 @@ test("a peer's branch is its newest Run with heads, while a reviewer with no bra
   }
 });
 
+test("peer branches exclude only the Run's exact generated candidate", async () => {
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, branch, heads, ended_at)
+    VALUES ('run_branch', ${ORG}, 'prj_c', 'wi_2', 2, 'completed', 'implement', 'placeholder',
+      '{"web":{"sha":"published"}}'::jsonb, now() + interval '1 minute'),
+      ('run_candidate', ${ORG}, 'prj_c', 'wi_2', 2, 'completed', 'fix', 'dude/wi_2/attempt-2-candidate',
+      '{"web":{"sha":"unchecked"}}'::jsonb, now() + interval '2 minutes')`;
+  await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+    VALUES ('pr_branch', ${ORG}, 'prj_c', 'wi_2', 'repo_c', 2, 'https://github.com/test/web/pull/2', 'task', 'main', 'published', 'Branch')`;
+  try {
+    for (const branch of ["feature/greeting-candidate", "dude/wi_2/attempt-2", "dude/wi_2/attempt-1-candidate",
+      "dude/wi_other/attempt-2-candidate", "dude/wi_2/custom-candidate"]) {
+      await owner`UPDATE runs SET branch = ${branch} WHERE id = 'run_branch'`;
+      const res = await call("GET", "/v1/epics/epc_c/peers");
+      expect(res.status).toBe(200);
+      const body = await res.json() as EpicPeers;
+      expect(body.tasks.find((t) => t.taskId === "wi_2")).toMatchObject({ branch, head: "published" });
+    }
+  } finally {
+    await owner`DELETE FROM pull_requests WHERE id = 'pr_branch'`;
+    await owner`DELETE FROM runs WHERE id IN ('run_branch', 'run_candidate')`;
+  }
+});
+
 test("another organisation's epic is not found, and nothing reads without a key", async () => {
   for (const path of ["/v1/epics/epc_o/notes", "/v1/epics/epc_o/threads", "/v1/epics/epc_o/peers", "/v1/epics/nope/notes"]) {
     expect((await call("GET", path)).status).toBe(404);
