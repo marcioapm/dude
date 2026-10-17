@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // The tool goldens pin what an agent reads of dude's tools: each tool's
@@ -134,4 +135,59 @@ func TestAMissingToolParameterNamesItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	describeParameters("ask_person", schema)
+}
+
+// goldenLines renders named texts as one golden, each under its name.
+func goldenLines(t *testing.T, name string, lines [][2]string) {
+	t.Helper()
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("## " + l[0] + "\n\n" + l[1] + "\n\n")
+	}
+	golden(t, name, b.String())
+}
+
+// What the tools tell an agent to do next, past a refusal.
+func TestGoldenToolResults(t *testing.T) {
+	pool := "highmem"
+	poolID := "pool_hm"
+	xl := delivery.Machine{Name: "XL", CPUs: 8, MemoryMiB: 32768, DiskGiB: 80, PoolID: &poolID, Pool: &pool}
+	large := delivery.Machine{Name: "Large", CPUs: 4, MemoryMiB: 16384, DiskGiB: 40}
+	none := delivery.MachineChoices{}
+	sync := lux.SyncResult{Status: "fetched", To: "aaa111", Behind: 3}
+	goldenLines(t, "results-tools", [][2]string{
+		{"ask-person", askNext(false)},
+		{"ask-person-escalation", askNext(true)},
+		{"session-ask", sessionAskNext("")},
+		{"session-ask-to", sessionAskNext("Bo Smith")},
+		{"request-repository", requestRepositoryNext("docs", false)},
+		{"request-repository-wait", requestRepositoryNext("docs", true)},
+		{"wait-for-reply", waitNext("GLD-8")},
+		{"wait-for-reply-came", replyCameNext},
+		{"steer", steerNext},
+		{"restart-run", restartNext},
+		{"publish", publishNext},
+		{"update-task-relations", relationsWrittenNext},
+		{"update-task", taskUpdatedNext},
+		{"propose", proposedNext},
+		{"relate", relationProposedNext},
+		{"feedback-resolve", feedbackResolvedNext},
+		{"settled-fixed-by", settledAs("resolved", "run_fix", 1, "")},
+		{"settled-fixed", settledAs("resolved", "", 1, "")},
+		{"settled-accepted", settledAs("accepted", "", 0, "person says fine")},
+		{"settled-superseded", settledAs("superseded", "", 0, "")},
+		{"settled-open-after", settledAs("open", "", 2, "")},
+		{"settled-open", settledAs("open", "", 0, "")},
+		{"moved-session", movedAnswer(true, "brainstorm", none, xl)},
+		{"moved-implementer", movedAnswer(false, "implementer", none, large)},
+		{"moved-conductor", movedAnswer(false, delivery.RoleConductor, none, large)},
+		{"moved-reviewer", movedAnswer(false, "reviewer", none, xl)},
+		{"moved-unlabelled", movedAnswer(false, "deployer", none, large)},
+		{"sync-asked-recorded", baseLine("api", "main", "abc123", lux.SyncResult{}, false).Next},
+		{"sync-asked", baseLine("api", "main", "", lux.SyncResult{}, false).Next},
+		{"sync-earlier", baseLine("api", "main", "", sync, true).Next},
+		{"sync-failed", baseLine("api", "main", "", lux.SyncResult{Status: "failed"}, false).Next},
+		{"sync-up-to-date", baseLine("api", "main", "", lux.SyncResult{Status: "up-to-date"}, false).Next},
+		{"sync-behind", baseLine("api", "main", "", sync, false).Next},
+	})
 }
