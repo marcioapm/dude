@@ -141,7 +141,7 @@ test("what Close could never accept is refused before the orchestrator is asked"
   expect(forwarded).toEqual([]);
 });
 
-type NavTask = { key: string; resolution?: string; duplicateOf?: string; blockedBy: Array<{ key: string }>; edges: { duplicatedBy?: string[] } };
+type NavTask = { key: string; resolution?: string; duplicateOf?: string; startable: boolean; blockedBy: Array<{ key: string }>; edges: { duplicatedBy?: string[] } };
 type NavTree = { projects: Array<{ id: string; archivedCount: number; tasks: NavTask[]; epics: Array<{ id: string; tasks: NavTask[] }> }> };
 
 test("archived tasks and epics are out of the navigation tree, counted for the board's hint; closed ones carry their resolution", async () => {
@@ -191,6 +191,17 @@ test("archived tasks and epics are out of the navigation tree, counted for the b
   const overview = (await (await call("GET", `/v1/projects/${PROJECT}/overview`)).json()) as { epics: Array<{ id: string }>; archivedEpics: Array<{ id: string }> };
   expect(overview.epics.map((e) => e.id)).not.toContain("epc_lc_a");
   expect(overview.archivedEpics.map((e) => e.id)).toEqual(["epc_lc_a"]);
+
+  // Held by the canonical task until it merges; then what its duplicate handed over can start.
+  expect(all.find((t) => t.key === key(handed))!.startable).toBe(false);
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${canonical}`;
+  await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+    head_branch, base_branch, head_sha, title, state)
+    VALUES ('pr_lc_c', ${ORG}, ${PROJECT}, ${canonical}, 'repo_lc', 1, 'u', 'h', 'main', 's', 't', 'merged')`;
+  const after = (await (await call("GET", "/v1/navigation")).json()) as NavTree;
+  const released = after.projects.find((p) => p.id === PROJECT)!.tasks.find((t) => t.key === key(handed))!;
+  expect(released.blockedBy).toEqual([]);
+  expect(released.startable).toBe(true);
 });
 
 test("path 8: a closed task's bare Run is refused as closed before its blockers, and allowed once reopened", async () => {

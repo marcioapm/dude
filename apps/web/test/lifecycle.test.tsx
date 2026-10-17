@@ -136,6 +136,15 @@ describe("the task page's lifecycle", () => {
     expect(itemText(reopen)).toContain("Unarchive it first, then reopen it");
   });
 
+  test("a task marked done (Nothing to merge) is not closed: no resolution mark, no Reopen", async () => {
+    const page = await taskPage(await clientWith({ status: "done", resolution: "nothing_to_merge" }));
+    expect(page.querySelector('[data-testid="resolution-mark"]')).toBeNull();
+    expect(page.querySelector('[data-testid="closed-notice"]')).toBeNull();
+    const items = (await menuItems(page)).map(itemText);
+    expect(items.some((t) => t.startsWith("Reopen"))).toBe(false);
+    expect(items.find((t) => t.startsWith("Closed"))).toContain("Already ended");
+  });
+
   test("a member sees the lifecycle disabled with whose decision it is", async () => {
     const client = await clientWith({ status: "received", owner: { id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: false } });
     const listed = await client.listPeople();

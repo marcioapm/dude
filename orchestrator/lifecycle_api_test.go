@@ -9,10 +9,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // ownedBy makes a person and gives them the task.
@@ -127,7 +132,7 @@ func TestCloseAsDuplicateHandsItsBlockingOver(t *testing.T) {
 	status, body = w.callAs(ana, "/internal/tasks/"+canonical+"/close", map[string]any{"resolution": "duplicate", "duplicateOf": w.keyOf(third)})
 	e, _ := body["error"].(map[string]any)
 	msg, _ := e["message"].(string)
-	if status != 409 || e["code"] != "conflict" || !strings.Contains(msg, w.keyOf(dup)+" duplicates") || !strings.Contains(msg, w.keyOf(third)) {
+	if want := w.keyOf(canonical) + " is what " + w.keyOf(dup) + " duplicates: reopen " + w.keyOf(dup) + " first."; status != 409 || e["code"] != "conflict" || msg != want {
 		t.Fatalf("close a canonical task as a duplicate: %d %v", status, body)
 	}
 	if got := w.str(`SELECT string_agg(id, ',') FROM task_blocked_by($1)`, waiting); got != canonical || w.resolutionOf(canonical) != "" {
@@ -187,18 +192,15 @@ func TestCloseRemovesItsRelationsWhenAsked(t *testing.T) {
 		t.Fatalf("close and remove: %d %v", status, body)
 	}
 	// Only this task's own blocks edges went: what blocks it, and its related link, stay.
-	var left []string
 	rows, err := w.owner.Query(context.Background(), `SELECT from_task_id || ' ' || kind || ' ' || to_task_id FROM task_relations
 		WHERE organization_id = $1 ORDER BY 1`, w.org)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		left = append(left, s)
+	left, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
 	}
-	rows.Close()
 	slices.Sort(left)
 	want := []string{x + " blocks " + task, min(task, c) + " related " + max(task, c)}
 	slices.Sort(want)
@@ -253,7 +255,7 @@ func TestCloseAndArchiveRefuseRunningAndReview(t *testing.T) {
 		VALUES ('pr_o_' || $1, $2, $3, $1, $4, 8000 + (SELECT number FROM tasks WHERE id = $1), 'u', 'h', 'main', 's', 't', 'open')`,
 		stoppedPR, w.org, w.project, w.repoID)
 	for _, c := range []struct{ task, code, words string }{{running, "running", "Stop its agents first"}, {review, "review", "It has a pull request open"},
-		{working, "running", "Stop its agents first"}, {stoppedPR, "review", "It has a pull request open"}} {
+		{working, "running", "Stop its agents first"}, {stoppedPR, "review", "It has a pull request open: close it on GitHub first."}} {
 		for _, route := range []string{"close", "archive"} {
 			status, body := w.callAs(ana, "/internal/tasks/"+c.task+"/"+route, map[string]any{"resolution": "wont_do"})
 			e, _ := body["error"].(map[string]any)
@@ -302,15 +304,15 @@ func TestArchiveAndCloseAndArchive(t *testing.T) {
 	if closedID == "" || archivedCause != closedID {
 		t.Fatalf("one batch: task.closed %q, task.archived caused by %q", closedID, archivedCause)
 	}
-	var order []string
-	rows, _ := w.owner.Query(context.Background(), `SELECT event_type FROM events WHERE task_id = $1
+	rows, err := w.owner.Query(context.Background(), `SELECT event_type FROM events WHERE task_id = $1
 		AND event_type IN ('task.closed', 'task.archived') ORDER BY cursor`, open)
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		order = append(order, s)
+	if err != nil {
+		t.Fatal(err)
 	}
-	rows.Close()
+	order, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !slices.Equal(order, []string{"task.closed", "task.archived"}) {
 		t.Fatalf("order %v", order)
 	}
@@ -461,6 +463,20 @@ func TestAClosedParkedDeliveryStartsNoImplementerOnTheUnblock(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND last_error IS NULL`, task); n != 1 {
 		t.Fatal("the claimed step on a closed task did not park")
 	}
+	// The same, for an overridden step, which reads no blockers.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'running', step = 'implementRun',
+		state = state || '{"overridden": true}'::jsonb WHERE task_id = $1`, task)
+	w.pump()
+	if n := w.phaseRuns(task, "implement"); n != 0 {
+		t.Fatalf("an overridden claimed step made %d implementers on a closed task", n)
+	}
+	// Close committing after the step's own check: its insert refuses, in
+	// the transaction that holds the delivery.
+	_, err := (&delivery.Store{DB: w.app}).CreatePhaseRun(context.Background(), w.org,
+		delivery.PhaseRun{TaskID: task, Phase: delivery.PhaseImplement, Key: "late-implement"})
+	if !errors.Is(err, delivery.ErrDeliveryEnded) || w.phaseRuns(task, "implement") != 0 {
+		t.Fatalf("an implementer created on a closed task: %v, %d Runs", err, w.phaseRuns(task, "implement"))
+	}
 }
 
 // An epic's archive is an admin's, or the owner's of every task it
@@ -544,13 +560,14 @@ func TestLifecycleRoutesDoNotReachAnotherOrganisation(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status, resolution)
 		VALUES ('wi_o_' || $1, $1, 'prj_o_' || $1, 1, 'Theirs', 'x', '[]'::jsonb, 'done', 'nothing_to_merge')`, other)
 	for _, path := range []string{"/internal/tasks/wi_o_" + other + "/close", "/internal/tasks/wi_o_" + other + "/archive",
-		"/internal/epics/epc_o_" + other + "/archive"} {
+		"/internal/tasks/wi_o_" + other + "/reopen", "/internal/tasks/wi_o_" + other + "/unarchive",
+		"/internal/epics/epc_o_" + other + "/archive", "/internal/epics/epc_o_" + other + "/unarchive"} {
 		if status, body := w.callAs(ana, path, map[string]any{"resolution": "wont_do"}); status != 404 {
 			t.Fatalf("%s: %d %v", path, status, body)
 		}
 	}
-	if n := w.count(`SELECT count(*) FROM tasks WHERE organization_id = $1 AND archived_at IS NOT NULL`, other); n != 0 {
-		t.Fatal("another organisation's task was archived")
+	if n := w.count(`SELECT count(*) FROM tasks WHERE organization_id = $1 AND (archived_at IS NOT NULL OR resolution IS DISTINCT FROM 'nothing_to_merge')`, other); n != 0 {
+		t.Fatal("another organisation's task was archived or reopened")
 	}
 	if n := w.count(`SELECT count(*) FROM epics WHERE organization_id = $1 AND archived_at IS NOT NULL`, other); n != 0 {
 		t.Fatal("another organisation's epic was archived")
