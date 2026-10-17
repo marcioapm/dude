@@ -880,7 +880,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ) : (
             <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
               onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined}
-              picture={pictures} preview={{ show: commenting.show, wayIn: <PreviewWayIn control={commenting} /> }} />
+              picture={pictures} preview={{ show: commenting.show, canShow: commenting.canShow, wayIn: <PreviewWayIn control={commenting} /> }} />
           )}
         </TabPanel>
 

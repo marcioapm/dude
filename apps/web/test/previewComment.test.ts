@@ -200,6 +200,35 @@ test("an upload refused saves the draft without its picture", async () => {
   expect(told()).toContainEqual(expect.objectContaining({ type: "saved", picture: "failed" }));
 });
 
+test("one save at a time: a second draft while one is in flight is refused, and saves again once it is done", async () => {
+  let finish!: () => void;
+  upload = mock(() => new Promise<string>((r) => { finish = () => r("att_1"); }));
+  c.dispose();
+  boot();
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor(), picture: PNG });
+  post({ type: "draft", v: 1, nonce: "n2", body: "y", anchor: anchor(), picture: PNG });
+  await tick();
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(told()).toEqual([{ type: "refused", v: 1, nonce: "n2", reason: "Still saving the last one" }]);
+  finish();
+  await tick(5);
+  expect(told().at(-1)).toMatchObject({ type: "saved", nonce: "n1" });
+  post({ type: "draft", v: 1, nonce: "n3", body: "z", anchor: anchor() });
+  await tick(5);
+  expect(told().at(-1)).toMatchObject({ type: "saved", nonce: "n3" });
+});
+
+test("at the drafts limit a draft is refused before its picture is uploaded", async () => {
+  items = Array.from({ length: 50 }, (_, i) => item(`d${i}`, { status: "draft" }));
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor(), picture: PNG });
+  await tick(5);
+  expect(upload).not.toHaveBeenCalled();
+  expect(createDraft).not.toHaveBeenCalled();
+  expect(told()).toEqual([{ type: "refused", v: 1, nonce: "n1", reason: "you have 50 drafts on this task: submit or remove some first" }]);
+});
+
 test("Show on preview sends highlight to the open page, or opens the item's page and marks it once it says hello", async () => {
   const it = item("fbk_s", { url: `${WEB}/cart` });
   items = [it];

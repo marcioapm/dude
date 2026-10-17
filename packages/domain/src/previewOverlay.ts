@@ -33,23 +33,40 @@ export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUni
   z.object({ type: z.literal("open"), v: v1, itemId: z.string().min(1).max(100) }).strict(),
 ]) as z.ZodType<OverlayToDude>;
 
+const MAX_ENTRIES = 2_000;
+
 /**
  * Whether `value` is larger than `cap`: its strings counted in UTF-16 code
- * units, every other value and key as 8. The walk stops as soon as it is
- * over, and at a depth past 32 (a page's message has no such nesting), so
- * a hostile message costs no more than the cap to measure.
+ * units, every other value and key as 8. Only plain objects, arrays and
+ * primitives are walked; anything else (a typed array, an ArrayBuffer, a
+ * Map, a Blob) is over, since no overlay message carries one. Keys are
+ * visited one at a time with `for…in` and the walk stops as soon as it is
+ * over, past MAX_ENTRIES values, or past a depth of 32, so measuring costs
+ * no more than the cap.
  */
 export function overSize(value: unknown, cap: number): boolean {
   let total = 0;
+  // Entries visited in all: an overlay message has a few dozen, so a page's many-keyed object is over long before the cap.
+  let entries = 0;
   const walk = (v: unknown, depth: number): boolean => {
-    if (depth > 32) return true;
+    if (depth > 32 || ++entries > MAX_ENTRIES) return true;
     if (typeof v === "string") total += v.length;
     else if (v !== null && typeof v === "object") {
+      const array = Array.isArray(v);
+      if (!array && Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null) return true;
       total += 8;
       if (total > cap) return true;
-      for (const [k, x] of Array.isArray(v) ? v.entries() : Object.entries(v)) {
-        total += typeof k === "string" ? k.length : 8;
-        if (total > cap || walk(x, depth + 1)) return true;
+      if (array) {
+        for (let i = 0; i < v.length; i++) {
+          total += 8;
+          if (total > cap || walk(v[i], depth + 1)) return true;
+        }
+      } else {
+        for (const k in v) {
+          if (!Object.hasOwn(v, k)) continue;
+          total += k.length;
+          if (total > cap || walk((v as Record<string, unknown>)[k], depth + 1)) return true;
+        }
       }
     } else total += 8;
     return total > cap;

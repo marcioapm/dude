@@ -14,7 +14,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { ServersState } from "../hooks/useServers.ts";
 import type { People } from "../people.tsx";
 import {
-  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins,
+  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins, showable,
   type CommentingOffer, type CommentingView,
 } from "../previewComment.ts";
 import type { TaskFeedbackController } from "./FeedbackSection.tsx";
@@ -26,6 +26,8 @@ export interface PreviewCommentingControl {
   readonly open: (server: { name: string; url: string }) => void;
   /** Show on preview: the item's page, marked. */
   readonly show: (item: FeedbackItem) => void;
+  /** Whether Show on preview can work for the item now. */
+  readonly canShow: (item: FeedbackItem) => boolean;
   readonly focus: () => void;
   readonly stop: () => void;
   readonly dismiss: () => void;
@@ -76,6 +78,7 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     offer, view,
     open: (s: { name: string; url: string }) => void commenting.open(s.url, s.name),
     show: (item: FeedbackItem) => void commenting.show(item),
+    canShow: (item: FeedbackItem) => item.anchor.kind === "preview" && showable(offer, item.anchor.url),
     focus: () => commenting.focus(),
     stop: () => commenting.stop(),
     dismiss: () => commenting.dismiss(),

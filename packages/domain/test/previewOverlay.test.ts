@@ -35,3 +35,25 @@ test("overSize counts a message's strings and stops once past the cap", () => {
   for (let i = 0; i < 40; i++) deep = [deep];
   expect(overSize(deep, 10_000)).toBe(true);
 });
+
+test("overSize refuses a typed array or buffer outright, and stops counting after a message's worth of entries", () => {
+  const typed = new Uint8Array(10_000_000);
+  let t = performance.now();
+  expect(overSize({ type: "draft", x: typed }, OVERLAY_LIMITS.message)).toBe(true);
+  expect(overSize({ type: "draft", x: typed.buffer }, OVERLAY_LIMITS.message)).toBe(true);
+  expect(overSize(new Map([["a", 1]]), OVERLAY_LIMITS.message)).toBe(true);
+  expect(performance.now() - t).toBeLessThan(5);
+  // 3,000 tiny entries are far under the cap in size, and still over: no overlay message has that many.
+  const many: Record<string, number> = {};
+  for (let i = 0; i < 3_000; i++) many[`k${i}`] = i;
+  expect(overSize(many, 1e9)).toBe(true);
+  expect(overSize(Array.from({ length: 3_000 }, () => 0), 1e9)).toBe(true);
+  // A million keys: the engine lists them (about 20 ms here), nothing more is walked.
+  const keys: Record<string, number> = {};
+  for (let i = 0; i < 1_000_000; i++) keys[`k${i}`] = i;
+  t = performance.now();
+  expect(overSize({ type: "draft", x: keys }, OVERLAY_LIMITS.message)).toBe(true);
+  expect(performance.now() - t).toBeLessThan(200);
+  // A plain message under the cap is not over.
+  expect(overSize(Object.assign(Object.create(null), { a: "x" }), 100)).toBe(false);
+});

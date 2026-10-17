@@ -13,7 +13,7 @@
  */
 
 import {
-  OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
+  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
   type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
@@ -71,6 +71,13 @@ export function commentingOffer(data: TaskServers | null): CommentingOffer {
 export function previewOrigins(data: TaskServers | null): ReadonlySet<string> {
   if (!data?.run || data.run.kind !== "preview") return new Set();
   return new Set(data.servers.filter((s) => s.commenting?.available).flatMap((s) => originOf(s.url) ?? []));
+}
+
+/** Whether Show on preview can work for a page: it is on one of the servers comments can be made on now. */
+export function showable(offer: CommentingOffer, url: string): boolean {
+  if (offer.kind !== "available") return false;
+  const origin = originOf(url);
+  return origin !== null && offer.servers.some((s) => originOf(s.url) === origin);
 }
 
 export type Checked =
@@ -202,6 +209,8 @@ export class PreviewCommenting {
   #server: string | null = null;
   #saved = 0;
   #pendingHighlight: string | null = null;
+  // One draft from the window at a time.
+  #saving = false;
   #timers: number[] = [];
   readonly #d: CommentingDeps;
 
@@ -384,7 +393,12 @@ export class PreviewCommenting {
         if (this.#d.read().items.some((i) => i.id === msg.itemId)) this.#d.onOpenItem(msg.itemId);
         return;
       case "draft":
-        void this.#save(msg);
+        if (this.#saving) {
+          this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: "Still saving the last one" });
+          return;
+        }
+        this.#saving = true;
+        void this.#save(msg).finally(() => { this.#saving = false; });
     }
   };
 
@@ -414,6 +428,12 @@ export class PreviewCommenting {
   }
 
   async #save(msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {
+    // The API's own limit, checked before any upload: a refused draft leaves no picture behind.
+    const drafts = this.#d.read().drafts;
+    if (drafts >= FEEDBACK_LIMITS.drafts) {
+      this.#post({ type: "refused", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: `you have ${drafts} drafts on this task: submit or remove some first` });
+      return;
+    }
     let attachmentId: string | undefined;
     let picture: "attached" | "none" | "failed" = "none";
     if (msg.picture) {

@@ -236,7 +236,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   /** A preview item's picture, read through the API (an <img> can't send the key). */
   picture?: ((attachmentId: string) => string | undefined) | undefined;
   /** Commenting on the branch preview: Show on preview, and the tab's way in. */
-  preview?: { show: (item: FeedbackItem) => void; wayIn: ReactNode } | undefined;
+  preview?: { show: (item: FeedbackItem) => void; canShow: (item: FeedbackItem) => boolean; wayIn: ReactNode } | undefined;
 }) {
   const [filter, setFilter] = useState<"needs" | "all">("needs");
   const d = fb.onDiff;
@@ -252,7 +252,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   const card = (i: FeedbackItem) => {
     const a = i.anchor;
     const jump = a.kind === "code" ? () => fb.showInDiff(a.runId, i.id)
-      : a.kind === "preview" && preview && !earlier ? () => preview.show(i) : undefined;
+      : a.kind === "preview" && preview && !earlier && preview.canShow(i) ? () => preview.show(i) : undefined;
     return (
       <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}
         className={fb.highlight === i.id ? "feedbackHighlight" : undefined}

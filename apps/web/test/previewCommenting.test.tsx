@@ -110,11 +110,7 @@ test("Overview's servers carry Comment on preview; the Feedback tab its way in",
 
 test("a preview card's Show on preview opens its page in the task's window", async () => {
   const client = new PreviewClient([web()]);
-  const now = new Date().toISOString();
-  const draft: FeedbackItem = { id: "fbk_p", taskId: TASK_ID, attempt: 1, batchId: null, author: { id: YOU, name: PEOPLE[0]!.name }, body: "Green",
-    anchor: { kind: "preview", url: `${WEB}/cart`, selector: "button.pay", viewport: { width: 1280, height: 720 } }, status: "draft", deliveredRunId: null,
-    resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [] };
-  client.feedbackItems.push(draft);
+  client.feedbackItems.push(previewDraft("fbk_p", `${WEB}/cart`));
   const open = mock((_url: string, _name?: string) => ({ postMessage() {}, closed: false, focus() {} }));
   (window as unknown as { open: unknown }).open = open;
   const c = await page(client, "feedback");
@@ -122,3 +118,28 @@ test("a preview card's Show on preview opens its page in the task's window", asy
   await act(async () => (show as HTMLElement).click());
   expect(open).toHaveBeenCalledWith(`${WEB}/cart`, `dude-preview-${TASK_ID}`);
 });
+
+test("Show on preview is offered only where it can work: not with commenting off, nor for a page on another server", async () => {
+  const cases: Array<[string, RunServer[], string]> = [
+    ["commenting off", [web({ commenting: { available: false, reason: "public_url" } })], `${WEB}/cart`],
+    ["an earlier preview's hostname", [web()], "https://web-old-1.preview.example.test/cart"],
+  ];
+  for (const [what, servers, url] of cases) {
+    const client = new PreviewClient(servers);
+    client.feedbackItems.push(previewDraft("fbk_p", url));
+    const c = await page(client, "feedback");
+    const card = await until(() => c.querySelector('[data-id="fbk_p"]'), `the card (${what})`);
+    expect([what, card.querySelectorAll('[data-testid="fb-show-on-preview"]').length]).toEqual([what, 0]);
+    // The anchor line is plain text, no link.
+    expect([what, card.querySelectorAll('button[aria-label^="Show it on the preview"]').length]).toEqual([what, 0]);
+    expect(card.textContent).toContain("Preview");
+    for (const u of mounted.splice(0)) await u();
+  }
+});
+
+function previewDraft(id: string, url: string): FeedbackItem {
+  const now = new Date().toISOString();
+  return { id, taskId: TASK_ID, attempt: 1, batchId: null, author: { id: YOU, name: PEOPLE[0]!.name }, body: "Green",
+    anchor: { kind: "preview", url, selector: "button.pay", viewport: { width: 1280, height: 720 } }, status: "draft", deliveredRunId: null,
+    resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [] };
+}
