@@ -83,6 +83,10 @@ func TestACallIsRecordedRedactedWithoutItsHeaders(t *testing.T) {
 	if string(result) != `{"decision": "yes"}` {
 		t.Errorf("result = %s", result)
 	}
+	var question string
+	if err := owner.QueryRow(ctx, `SELECT question FROM model_calls WHERE id = $1`, id).Scan(&question); err != nil || question != "Is [REDACTED:API_TOKEN] a token?" {
+		t.Errorf("question = %q (%v)", question, err)
+	}
 }
 
 // A failed call is status error with its message, and no answer or status
@@ -110,6 +114,48 @@ func TestAFailedCallIsRecordedAsAnError(t *testing.T) {
 	}
 	if st != "error" || errText == nil || *errText != "no answer from the LLM proxy in 1m0s" || response != nil || about != nil || httpStatus != nil || result != nil {
 		t.Errorf("row = %s %v %v %v %v %s", st, errText, response, about, httpStatus, result)
+	}
+}
+
+// A call stores its question's first line, short, and each message's
+// content to MaxContentBytes, marked where it was cut.
+func TestACallKeepsItsQuestionAndALongContentCut(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	long := strings.Repeat("é", MaxContentBytes) // 2 bytes each
+	question := "  " + strings.Repeat("q", MaxQuestionChars+20) + "\nsecond line"
+	sent := llm.Call{Model: "m", Messages: []llm.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: question}, {Role: "user", Content: long}}}
+	var id string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		id, err = Record(ctx, tx, nil, Call{Purpose: PurposeJudgement, Asker: "test", TierName: "x", Sent: sent})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	var request []byte
+	if err := owner.QueryRow(ctx, `SELECT question, request FROM model_calls WHERE id = $1`, id).Scan(&stored, &request); err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("q", MaxQuestionChars-1) + "…"; stored != want {
+		t.Errorf("question = %q", stored)
+	}
+	var body struct{ Messages []llm.Message }
+	if err := json.Unmarshal(request, &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Messages) != 3 || body.Messages[1].Content != question {
+		t.Fatalf("messages = %v", body.Messages[:2])
+	}
+	got := body.Messages[2].Content
+	want := strings.Repeat("é", MaxContentBytes/2) + "\n[… truncated: 65536 bytes not stored]"
+	if got != want {
+		t.Errorf("content: %d bytes, ends %q", len(got), got[len(got)-60:])
+	}
+	// What is sent is not cut.
+	if len(sent.Messages[2].Content) != 2*MaxContentBytes {
+		t.Errorf("sent cut to %d", len(sent.Messages[2].Content))
 	}
 }
 

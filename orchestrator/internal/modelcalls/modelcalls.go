@@ -6,6 +6,9 @@ package modelcalls
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -38,9 +41,21 @@ type Call struct {
 
 // Record inserts c in tx's organisation and returns its id. The request,
 // the answer, the result and the error go through red first (nil redacts
-// nothing).
+// nothing). Each message's content is stored to MaxContentBytes, and the
+// question is the first user message's first line, to MaxQuestionChars.
 func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (string, error) {
-	request, err := json.Marshal(c.Sent.Body())
+	body := c.Sent.Body()
+	stored := make([]llm.Message, len(c.Sent.Messages))
+	question := ""
+	for i, m := range c.Sent.Messages {
+		content := red.String(m.Content)
+		if question == "" && m.Role == "user" {
+			question = firstLine(content)
+		}
+		stored[i] = llm.Message{Role: m.Role, Content: truncateBytes(content)}
+	}
+	body["messages"] = stored
+	request, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}
@@ -68,14 +83,46 @@ func Record(ctx context.Context, tx pgx.Tx, red *redact.Redactor, c Call) (strin
 	}
 	id := ids.New(ids.ModelCall)
 	_, err = tx.Exec(ctx, `
-		INSERT INTO model_calls (id, organization_id, purpose, asker, about, task_id, tier_id, tier_name, model,
+		INSERT INTO model_calls (id, organization_id, purpose, asker, about, task_id, tier_id, tier_name, model, question,
 		  request, response_text, result, status, error, http_status, latency_ms, input_tokens, output_tokens)
-		VALUES ($1, current_organization_id(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-		id, c.Purpose, c.Asker, about, c.TaskID, c.TierID, c.TierName, c.Model,
+		VALUES ($1, current_organization_id(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		id, c.Purpose, c.Asker, about, c.TaskID, c.TierID, c.TierName, c.Model, question,
 		request, response, result, status, errText, c.Completion.Status, c.Completion.LatencyMs,
 		c.Completion.InputTokens, c.Completion.OutputTokens)
 	if err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+const (
+	// MaxContentBytes is the most of one message's content stored; what is
+	// sent is not cut.
+	MaxContentBytes = 64 << 10
+	// MaxQuestionChars bounds model_calls.question (its CHECK).
+	MaxQuestionChars = 500
+	// truncatedMark ends a stored content that was cut.
+	truncatedMark = "\n[… truncated: %d bytes not stored]"
+)
+
+// truncateBytes is s to MaxContentBytes, cut on a rune boundary and marked.
+func truncateBytes(s string) string {
+	if len(s) <= MaxContentBytes {
+		return s
+	}
+	cut := MaxContentBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf(truncatedMark, len(s)-cut)
+}
+
+// firstLine is s's first non-blank line, trimmed, to MaxQuestionChars characters.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > MaxQuestionChars {
+		line = string(r[:MaxQuestionChars-1]) + "…"
+	}
+	return line
 }

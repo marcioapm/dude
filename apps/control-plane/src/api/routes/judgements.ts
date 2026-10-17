@@ -64,11 +64,9 @@ async function putSettings(ctx: RequestContext): Promise<Response> {
   return json(await settings(ctx));
 }
 
-/** A call's columns as the API names them; the question is the first line of the user message sent. */
+/** A call's columns as the API names them; question is stored apart so a list never reads request. */
 const CALL_COLUMNS = `
-  c.id, c.created_at AS "createdAt", c.asker, c.about,
-  COALESCE(split_part((SELECT m->>'content' FROM jsonb_array_elements(c.request->'messages') m
-    WHERE m->>'role' = 'user' LIMIT 1), E'\\n', 1), '') AS question,
+  c.id, c.created_at AS "createdAt", c.asker, c.about, c.question,
   c.result->>'decision' AS decision, (c.result->>'confidence')::float8 AS confidence, c.result->>'reasoning' AS reasoning,
   c.status, c.error, c.tier_name AS "tierName", c.model, c.latency_ms AS "latencyMs",
   c.input_tokens AS "inputTokens", c.output_tokens AS "outputTokens"`;

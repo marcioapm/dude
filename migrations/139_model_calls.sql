@@ -35,6 +35,9 @@ CREATE TABLE model_calls (
   -- same after the tier is renamed, changed or removed.
   tier_name       text NOT NULL,
   model           text NOT NULL,
+  -- The first line of the question asked, short: the list reads it, never request.
+  question        text NOT NULL CHECK (length(question) <= 500),
+  -- Each message's content is kept to 64 KiB, marked where it was cut.
   request         jsonb NOT NULL,
   response_text   text,
   result          jsonb,

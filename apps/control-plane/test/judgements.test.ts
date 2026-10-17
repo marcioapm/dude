@@ -70,9 +70,9 @@ async function recordCall(org: string, id: string, over: Partial<Record<string, 
     ...over,
   };
   const request = { model: "gpt-6-sol-mini", messages: [{ role: "system", content: "You decide." }, { role: "user", content: c.question }], max_tokens: 1024 };
-  await owner`INSERT INTO model_calls (id, organization_id, purpose, asker, about, tier_name, model, request, response_text, result, status, error,
+  await owner`INSERT INTO model_calls (id, organization_id, purpose, asker, about, tier_name, model, question, request, response_text, result, status, error,
       http_status, latency_ms, input_tokens, output_tokens, created_at)
-    VALUES (${id}, ${org}, 'judgement', ${c.asker}, ${c.about}, 'Fast', 'gpt-6-sol-mini', ${request}::jsonb, ${c.response},
+    VALUES (${id}, ${org}, 'judgement', ${c.asker}, ${c.about}, 'Fast', 'gpt-6-sol-mini', ${c.question.split("\n")[0]}, ${request}::jsonb, ${c.response},
       ${c.result}::jsonb, ${c.status}, ${c.error}, 200, 1840, 1204, 96, now() - make_interval(mins => ${c.minutesAgo}))`;
 }
 
@@ -232,6 +232,17 @@ describe("recent judgements", () => {
     expect(detail.request.messages).toEqual([{ role: "system", content: "You decide." }, { role: "user", content: "Should the fixer act on this comment?\nMore lines." }]);
     expect(detail.responseText).toBe("{\"decision\":\"no\"}");
     expect((await call(memberKey, "GET", "/v1/judgements/mcl_nope")).status).toBe(404);
+  });
+
+  test("the list shows the question stored with the call, not one read from what was sent", async () => {
+    await recordCall(ORG, "mcl_q", { minutesAgo: 1, question: "Stored question?" });
+    await owner`UPDATE model_calls SET request = '{"messages": []}'::jsonb WHERE id = 'mcl_q'`;
+    try {
+      const res = await body(await call(memberKey, "GET", "/v1/judgements?limit=1"));
+      expect(res.calls.map((c: Json) => [c.id, c.question])).toEqual([["mcl_q", "Stored question?"]]);
+    } finally {
+      await owner`DELETE FROM model_calls WHERE id = 'mcl_q'`;
+    }
   });
 });
 

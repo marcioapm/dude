@@ -73,7 +73,8 @@ security like every tenant table:
 | `asker`, `about` | who asked, and a short label of what about |
 | `task_id` | the task it was about; SET NULL when the task goes |
 | `tier_id`, `tier_name`, `model` | the tier (SET NULL when removed), and its name and model then |
-| `request` | the body sent: messages and parameters. **Never the headers.** |
+| `question` | the first line of the question asked, to 500 characters: what the list shows, so it never reads `request` |
+| `request` | the body sent: messages and parameters, each message's content kept to 64 KiB (marked where cut; what is sent is not cut). **Never the headers.** |
 | `response_text` | the model's text as it came |
 | `result` | the parsed answer, when there is one |
 | `status`, `error`, `http_status` | `ok` or `error`, why, and the proxy's status |
