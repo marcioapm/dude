@@ -124,9 +124,8 @@ def test_the_fake_updates_a_branch_only_as_github_does(fake_github: FakeGitHub):
     for an update. GitHub refuses that one; a clean one gets the base's
     changes in a merge commit."""
     fake_github.mergeability_from_git = True
-    for number, branch in ((1, "a"), (2, "b"), (3, "c")):
-        fake_github.push_branch(branch)
-        fake_github.pulls[number] = PullRequest(number=number, head=branch, base="main", title=branch, body="", draft=False)
+    for branch in ("a", "b", "c"):
+        fake_github.open_pull(branch)
     fake_github.commit_file("a", "FACTORY.md", "A intent\n", "A's intent")
     fake_github.commit_file("b", "FACTORY.md", "B intent\n", "B's intent")
     fake_github.merge_into_base(1)
