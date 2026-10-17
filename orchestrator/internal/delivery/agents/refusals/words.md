@@ -4,6 +4,8 @@
 The owner answered: {{clip (oneLine .Answer) 1000}}{{with .Decided}}
 The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 
+{{- define "refusals/words/escalation-banner"}}a person decides it on the banner, or by answering your question about it (ask_person, the escalation's actions as choices){{end}}
+
 {{- define "refusals/words/decided-by"}}{{if .Conductor}}by the conductor {{.Conductor}} (decide_escalation){{else if .QuestionID}}by the owner's answer to question {{.QuestionID}}{{else}}by a person on the banner{{end}}{{end}}
 
 {{- define "refusals/words/blocked"}}{{.Task}} is blocked by {{.Blockers}}: it can start once {{if eq .N 1}}that's{{else}}they're{{end}} merged.{{end}}
