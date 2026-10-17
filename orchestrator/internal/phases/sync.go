@@ -369,6 +369,29 @@ const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.sessio
 		WHERE oc.value::timestamptz <= now() - make_interval(secs => $1::float8))
 	AND (r.stuck_interrupted_at IS NULL OR r.stuck_fingerprint IS DISTINCT FROM ` + brainstormCalls + `))`
 
+// silentTalker (SQL, over runs r; $1 the limit in seconds): a conductor or
+// session agent mid-turn with no tool call open (those are stuckBrainstorm's
+// and its own tools') that has shown no activity for the limit — a harness
+// retrying its model request, say for days after a 429, reports busy and
+// writes nothing. Not one already interrupted for this silence: the
+// fingerprint is the activity it was judged on, which the agent's next
+// sign of life replaces.
+const silentTalker = `(r.role IN ('conductor', 'brainstorm') AND r.phase IS NULL AND r.kind = 'agent'
+	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none'
+	AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL
+	AND r.open_tool_calls_at = '{}'
+	AND ` + talkerSilentSince + ` <= now() - make_interval(secs => $1::float8)
+	AND r.stuck_fingerprint IS DISTINCT FROM ` + silentFingerprint + `)`
+
+// talkerSilentSince (SQL, over runs r): the agent's last activity, else its
+// turn's start. Both are on the running clock: a resume clears them and the
+// next turn dates them, and a host move moves agent_active_at on by its wait
+// (backFromAway).
+const talkerSilentSince = `COALESCE(r.agent_active_at, r.agent_busy_at)`
+
+// silentFingerprint never equals an open-call fingerprint (brainstormCalls).
+const silentFingerprint = `('silent:' || extract(epoch FROM ` + talkerSilentSince + `)::text)`
+
 // changesCode (SQL, over runs r): a phase whose commits are published
 // (delivery.Publishes): implement, fix, simplify.
 const changesCode = `r.phase IN ('implement', 'fix', 'simplify')`
@@ -525,12 +548,13 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 // pending lets idle sweeps probe all pre-due selections in one round trip
 // instead of opening a transaction per step. A step whose probe found
 // nothing would have selected no rows. Probe failure runs every step.
-type pending struct{ brainstorms, unheard, unheardBrainstorms, stalls, failed, wakes bool }
+type pending struct{ brainstorms, silent, unheard, unheardBrainstorms, stalls, failed, wakes bool }
 
 // What each of those steps selects from (SQL), shared by its query and its
 // probe so the two cannot disagree.
 var (
 	stuckBrainstorms = `runs r WHERE ` + stuckBrainstorm
+	silentTalkers    = `runs r WHERE ` + silentTalker
 	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
 	failedForWake    = `runs r WHERE ` + delivery.FailedForConductor
 	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
@@ -550,6 +574,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			args      []any
 		}{
 			{stuckBrainstorms, &p.brainstorms, []any{brainstormCallLimit.Seconds()}},
+			{silentTalkers, &p.silent, []any{brainstormCallLimit.Seconds()}},
 			{delivery.Unheard, &p.unheard, nil},
 			{delivery.UnheardBrainstorm, &p.unheardBrainstorms, nil},
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
@@ -563,13 +588,13 @@ func (s *Syncer) pending(ctx context.Context) pending {
 	})
 	if err != nil {
 		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
-		return pending{true, true, true, true, true, true}
+		return pending{true, true, true, true, true, true, true}
 	}
 	return p
 }
 
-// beforeDue is Sweep's work on what is not a Run's own state: stuck
-// session agents, messages ended agents never heard, stall reports and
+// beforeDue is Sweep's work on what is not a Run's own state: stuck or
+// silent talkers, messages ended agents never heard, stall reports and
 // conductors' wakes. Each step runs if the probe found it work, or once an
 // earlier step ran: that one may have made work for it (a stall report is
 // a conductor's reason to wake).
@@ -578,6 +603,12 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 	if p.brainstorms {
 		ran = true
 		if err := s.interruptBrainstorms(ctx); err != nil {
+			return err
+		}
+	}
+	if p.silent || ran {
+		ran = true
+		if err := s.interruptSilentTalkers(ctx); err != nil {
 			return err
 		}
 	}
@@ -713,6 +744,62 @@ func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 			}
 			return delivery.SessionEvent(ctx, tx, ref, delivery.EvSessionTurnStopped, ledger.ActorSystem, "dude",
 				map[string]any{"runId": r.ID, "tool": tool, "openSecs": openSecs, "directiveId": id})
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const silentTurnNudge = "Your model request got no answer for 10 minutes (the model provider may be rate-limiting), " +
+	"so dude stopped your turn. Read any messages waiting for you and carry on."
+
+// interruptSilentTalkers stops the turn of each silentTalker, once per
+// silence: lux's interrupt is what makes the harness drop a model request
+// it is retrying, so what was queued for the agent is read.
+func (s *Syncer) interruptSilentTalkers(ctx context.Context) error {
+	var due []phaseRun
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, ''),
+			COALESCE(r.session_id, ''), r.role::text FROM `+silentTalkers, brainstormCallLimit.Seconds())
+		if err != nil {
+			return err
+		}
+		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (r phaseRun, err error) {
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.SessionID, &r.Role)
+		})
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, r := range due {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+				return err
+			}
+			var fingerprint string
+			var silentSecs float64
+			err := tx.QueryRow(ctx, `SELECT `+silentFingerprint+`, extract(epoch FROM now() - `+talkerSilentSince+`)
+				FROM runs r WHERE r.id = $2 AND `+silentTalker, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &silentSecs)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			id, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: silentTurnNudge, Interrupt: true, Scope: "turn"})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_interrupted_at = now(), stuck_fingerprint = $2 WHERE id = $1`,
+				r.ID, fingerprint); err != nil {
+				return err
+			}
+			payload := map[string]any{"runId": r.ID, "silentSecs": silentSecs, "directiveId": id}
+			if r.brainstorm() {
+				return delivery.SessionEvent(ctx, tx, r.ref(), delivery.EvSessionTurnStopped, ledger.ActorSystem, "dude", payload)
+			}
+			return s.event(ctx, tx, r, evTurnStopped, ledger.ActorSystem, payload)
 		}); err != nil {
 			return err
 		}
@@ -3200,6 +3287,9 @@ const (
 	evParked     = "run.parked"
 	evUnparked   = "run.unparked"
 	evIdleNudged = "run.idle_nudged"
+	// A conductor's turn stopped after its model went silent
+	// (interruptSilentTalkers); a session's is session.turn_stopped.
+	evTurnStopped = "run.turn_stopped"
 )
 
 // errForge: the forge's credentials could not be read. Passing, and asked
