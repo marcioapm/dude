@@ -30,7 +30,11 @@ func (w *receiptWorld) listing() []listedArtifact {
 	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
 	out, err := cmd.Output()
 	if err != nil {
-		w.t.Fatalf("GET /v1/artifacts: %v\n%s", err, out)
+		var stderr []byte
+		if exit, ok := err.(*exec.ExitError); ok {
+			stderr = exit.Stderr
+		}
+		w.t.Fatalf("GET /v1/artifacts: %v\nstdout: %s\nstderr: %s", err, out, stderr)
 	}
 	var body struct{ Artifacts []listedArtifact }
 	if err := json.Unmarshal(out, &body); err != nil {
