@@ -381,12 +381,15 @@ func TestChildReportSpec(t *testing.T) {
 }
 
 func TestChildRuntimeIsolation(t *testing.T) {
-	for _, action := range []string{"finish", "fail", "idle", "abort"} {
+	for _, action := range []string{"finish", "fail", "idle", "resume", "abort"} {
 		t.Run(action, func(t *testing.T) {
 			w := newResumeWorld(t)
 			w.exec(`UPDATE tasks SET status='running' WHERE id=$1`, w.run.TaskID)
 			w.exec(`INSERT INTO runs (id,organization_id,project_id,task_id,attempt,role,status) VALUES ('run_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
 			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state) VALUES('wf_child',$1,$2,'task.delivery','child','waiting','awaitPullRequest',jsonb_build_object('taskId',$2::text,'projectId',$3::text,'attempt',1,'heads',jsonb_build_object('repo','preserved'),'pendingRunIds',jsonb_build_array($4::text)))`, w.run.Org, w.run.TaskID, w.run.ProjectID, w.run.ID)
+			w.exec(`INSERT INTO repositories(id,organization_id,project_id,name,url) VALUES('repo_isolation',$1,$2,'repo','https://github.com/test/repo')`, w.run.Org, w.run.ProjectID)
+			w.exec(`INSERT INTO pull_requests(id,organization_id,project_id,task_id,repository_id,number,url,head_branch,base_branch,head_sha,title,checks,review) VALUES('pr_isolation',$1,$2,$3,'repo_isolation',1,'https://github.com/test/repo/pull/1','work','main','preserved','PR','passing','approved')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`UPDATE workflow_runs SET state=state || '{"headRunId":"run_parent","reviewRunIds":["run_parent"],"pullRequestIds":["pr_isolation"]}' WHERE id='wf_child'`)
 			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',phase='investigate',role='investigator',child_profile='investigator',child_capabilities='{}',status='running',control='none',lux_state='running',lux_stop_reason=NULL,turn_done_at=now() WHERE id=$1`, w.run.ID)
 			r := w.run
 			r.SourceKind = "task_conductor"
@@ -399,7 +402,7 @@ func TestChildRuntimeIsolation(t *testing.T) {
 			fake := w.onCallLux(nil)
 			snapshot := func() string {
 				var raw string
-				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object('t',to_jsonb(t),'w',to_jsonb(w))::text FROM tasks t JOIN workflow_runs w ON w.task_id=t.id WHERE t.id=$1`, r.TaskID).Scan(&raw); err != nil {
+				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object('t',to_jsonb(t),'w',to_jsonb(w),'pr',(SELECT to_jsonb(p) FROM pull_requests p WHERE id='pr_isolation'))::text FROM tasks t JOIN workflow_runs w ON w.task_id=t.id WHERE t.id=$1`, r.TaskID).Scan(&raw); err != nil {
 					t.Fatal(err)
 				}
 				return raw
@@ -422,6 +425,29 @@ func TestChildRuntimeIsolation(t *testing.T) {
 				if err := w.s.requestPause(w.ctx, r, "idle", "quiet"); err != nil {
 					t.Fatal(err)
 				}
+			case "resume":
+				w.exec(`UPDATE runs SET turn_done_at=NULL,agent_active_at=now() WHERE id=$1`, r.ID)
+				if err := w.owner.QueryRow(w.ctx, `SELECT agent_active_at FROM runs WHERE id=$1`, r.ID).Scan(&r.QuietSince); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.s.requestPause(w.ctx, r, "idle", "quiet"); err != nil {
+					t.Fatal(err)
+				}
+				w.exec(`UPDATE runs SET status='paused',control='resume',dude_pause='idle',lux_state='stopped',model='gpt-6-sol',harness='opencode' WHERE id=$1`, r.ID)
+				r.Status = "paused"
+				r.Control = "resume"
+				r.DudePause = "idle"
+				r.Resumable = true
+				r.LuxState = "stopped"
+				w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+				w.s.Lux = &childResumeLux{callLux: fake}
+				if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+					t.Fatal(err)
+				}
+				var status string
+				if err := w.owner.QueryRow(w.ctx, `SELECT status::text FROM runs WHERE id=$1`, r.ID).Scan(&status); err != nil || status != "running" {
+					t.Fatalf("child resume %s %v", status, err)
+				}
 			case "abort":
 				if err := (&delivery.Store{DB: w.s.DB}).AbortChild(w.ctx, r.Org, r.TaskID, r.ID); err != nil {
 					t.Fatal(err)
@@ -437,7 +463,7 @@ func TestChildRuntimeIsolation(t *testing.T) {
 			if snapshot() != before {
 				t.Fatal("child mutated task/workflow")
 			}
-			if action != "idle" {
+			if action != "idle" && action != "resume" {
 				signals := 0
 				if _, err := NotifyFinished(w.ctx, w.s.DB, func(_ context.Context, _, _, _, _, _ string) error { signals++; return nil }); err != nil {
 					t.Fatal(err)
@@ -454,4 +480,13 @@ func TestChildRuntimeIsolation(t *testing.T) {
 			}
 		})
 	}
+}
+
+type childResumeLux struct{ *callLux }
+
+func (f *childResumeLux) Get(context.Context, string) (lux.Run, error) {
+	return lux.Run{ID: "lrun_1", State: "stopped", Epoch: 1, Spec: lux.StoredSpec{Image: lux.Image{Ref: "test/image:latest"}}}, nil
+}
+func (f *childResumeLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 2}, nil
 }
