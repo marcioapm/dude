@@ -2,6 +2,7 @@ package agenttools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +89,7 @@ var tools = []tool{
 		"in note), review or test start too, on the pull request's branch, and it waits on them again after. Refused "+
 		"when you do not take the task's decisions, while a Run or publish is changing the branch, or past the policy's "+
 		"bounds: then ask the person.", conductors, startPhase),
+	define("start_agent", "Start one independent child agent for this task. The child reports its findings to you; publishing profiles may publish code. Refused for child agents.", conductors, startAgent),
 	define("steer", "Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: "+
 		"your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong "+
 		"way, or to add something the person just said; start another phase only once a Run has ended. interrupt "+
@@ -130,6 +132,40 @@ var tools = []tool{
 		"and files (then delegate: start_phase implement). Answers at once; you are woken when it is published or "+
 		"refused. Run a review before the pull request: the gate refuses an unreviewed commit of yours.",
 		conductors, publish),
+}
+
+type startAgentIn struct {
+	Profile string `json:"profile" jsonschema:"the child profile"`
+	Prompt  string `json:"prompt,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Tier    string `json:"tier,omitempty"`
+	Key     string `json:"key,omitempty"`
+}
+type startAgentOut struct{ RunID, Profile, Phase string }
+
+func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (startAgentOut, error) {
+	phase := delivery.PhaseForPromptRole(in.Profile)
+	if phase == "" || in.Profile == "conductor" || in.Profile == "brainstorm" {
+		return startAgentOut{}, refuse("an existing phase profile is required")
+	}
+	key := in.Key
+	if key == "" {
+		raw, _ := json.Marshal([]string{c.RunID, in.Profile, in.Prompt, in.Note, in.Tier})
+		sum := sha256.Sum256(raw)
+		key = "tool-" + fmt.Sprintf("%x", sum[:])
+	}
+	id, err := delivery.StartChildTx(ctx, tx, c.run(), phase, delivery.StartChildInput{
+		Parent: delivery.ChildParent{Kind: delivery.ChildParentTaskConductor, Run: c.run()}, Profile: in.Profile,
+		Prompt: in.Prompt, Note: in.Note, Tier: in.Tier, Key: key,
+		Capabilities: delivery.ChildCapabilities{PublishCode: delivery.Publishes[phase]},
+	})
+	if err != nil {
+		return startAgentOut{}, err
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	return startAgentOut{RunID: id, Profile: in.Profile, Phase: phase}, nil
 }
 
 // ---- list_tasks --------------------------------------------------------------
