@@ -126,9 +126,9 @@ auth = "none"                                            # DUDE_REGISTRY_AUTH
 # ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"   # DUDE_ECR_ROLE_ARN
 
 [images]
-# The dude layer every library image is finished with (the dude CLI,
-# OpenCode, its config), by digest. Unset, the image library is off: no
-# builds, and a Run whose image is a library image fails before lux.
+# The dude layer every library image is finished with. Normally the image
+# builder builds and publishes the current layer from the installed release's
+# share/dude/layer and bin/dude. Set this only as an explicit digest override.
 # layer = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/layer@sha256:…"   # DUDE_LAYER_IMAGE
 
 [builder]

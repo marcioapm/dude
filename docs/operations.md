@@ -51,6 +51,19 @@ not. The runtime image gives `agent` `agent:1:999` and `agent:1001:64535`.
 dude checks this for library images when they build, never for
 `DUDE_AGENT_IMAGE`.
 
+The release also holds the dude layer's build context under
+`share/dude/layer/`. At start, `dude-image-builder` adds the release's
+`bin/dude`, hashes the context, CLI bytes and `builder.platform`, builds and
+pushes the layer to `<parent of builder.repository>/layer:<hash>`, and
+records its digest in `image_layers`; the orchestrator and backend read the
+current row from there. A release whose inputs hash the same builds nothing
+new. `images.layer` (`DUDE_LAYER_IMAGE`) is an operator override by digest;
+with it set the builder builds no layer and every process uses it. Before the
+first layer is published (a fresh install whose builder has not started, or
+failed), the image library is off and says the builder has not published a
+dude layer yet. A builder that cannot build or push the layer exits non-zero
+with the reason.
+
 ### Private agent images
 
 lux logs its runners in to a registry per Run (lux's `docs/runspec.md`,

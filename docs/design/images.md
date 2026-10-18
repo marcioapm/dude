@@ -140,7 +140,9 @@ could not be mapped inside a Run. Where another name holds uid 1000 first
 (`node`), the lines are by uid. An image's own lines are kept.
 
 It pushes `<repository>:<version>-<layer digest, 12 hex>` and records the
-result in `image_finals`. The dude layer (`DUDE_LAYER_IMAGE`) is a `FROM
+result in `image_finals`.
+
+The release carries the layer build context at `share/dude/layer/`. It is assembled from `images/layer/` and the shared hook, git-config and OpenCode files in `images/runtime/`, so those files have one source of truth. The builder adds the release's `bin/dude` as `dude` before building it. The dude layer (`DUDE_LAYER_IMAGE`, or the current row in `image_layers`) is a `FROM
 scratch` image whose `/rootfs/` holds:
 
 - the dude CLI, OpenCode and ripgrep;
@@ -161,9 +163,16 @@ scratch` image whose `/rootfs/` holds:
 the node images), and podman takes `HOME` from the first passwd entry with
 that uid.
 
-aiverse builds it.
-
-**Limits.** Every build runs with:
+The dude layer is built and published by `dude-image-builder` from the installed release's
+`share/dude/layer/` and `bin/dude`. Its content tag hashes every context file,
+the CLI bytes and the builder platform. The layer is pushed to the `layer`
+repository beside the configured custom-image repository and its digest is
+recorded in `image_layers`. An identical release does not create another
+layer. `DUDE_LAYER_IMAGE`, when set, is an explicit operator override; when it
+is unset, the orchestrator and backend use the current `image_layers` row.
+Before the first layer is published, library builds and Runs are unavailable
+with a clear reason. A new layer digest finishes published versions again on
+first use, through `image_finals`.
 
 - `--memory` and `--memory-swap` set to `memory` (1536m);
 - CPU set by `--cpu-period 100000 --cpu-quota <cpus × 100000>`. podman
@@ -238,8 +247,7 @@ An organisation that never uses the library runs as it did.
 
 For a library image:
 
-- **Library off.** `DUDE_LAYER_IMAGE` is unset, so the library is off. The
-  Run fails before lux with "image library not configured".
+- **Library off.** Before `dude-image-builder` has published a layer, the library is off. The Run says that the builder has not published a dude layer yet.
 - **No published version.** If its first version is queued or building,
   the Run waits on that build; if an admin queues a newer version (which
   cancels the waiting one), it waits on the newer one. With none, or when
