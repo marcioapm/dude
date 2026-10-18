@@ -35,5 +35,5 @@ checks:
 ```
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
-- dude reads this block, not your prose. Your work goes on only when every check is `pass` and each one matches a command you ran in this Run that exited 0. A `fail` or `not-run`, a missing block, or a `pass` dude cannot match stops your work from publishing.
-- So a check that will not run is a problem to solve before you finish (see How you work). If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried. Never list a check as `pass` that you did not see pass.
+- This block reports your checks to people; dude does not yet parse it, match it to command exits or use it to gate publishing.
+- A failed check or one that will not run is a problem to solve before you finish (see How you work). If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried, then end your turn to wait for the answer. Reporting `fail` or `not-run` here does not pause the Run. Never list a check as `pass` that you did not see pass.
