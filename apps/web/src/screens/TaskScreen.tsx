@@ -1421,7 +1421,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           quote: `${p.from === "conductor" ? "Conductor" : "Deliver"} → ${p.to === "conductor" ? "Conductor" : "Deliver"}` });
         break;
       case "task.decided":
-        out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;
       case EventTypes.MachineReset: {
         // A person's Reset of a raised machine: on the task, with the Run it moved when one was live.

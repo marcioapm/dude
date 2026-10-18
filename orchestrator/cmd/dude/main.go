@@ -117,6 +117,14 @@ func run(args []string, out io.Writer) error {
 	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "print JSON")
 	switch cmd {
+	case "git diff-bases":
+		requestTimeout = 2 * time.Second
+		raw, err := request("GET", "/git/diff-bases", nil)
+		if err != nil {
+			return err
+		}
+		_, err = out.Write(raw)
+		return err
 	case "agent start":
 		prompt := fs.String("prompt", "", "child prompt")
 		note := fs.String("note", "", "conductor note")

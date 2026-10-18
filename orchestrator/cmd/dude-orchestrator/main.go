@@ -17,8 +17,8 @@
 //	LUX_URL, LUX_API_KEY         the lux control plane and a `run`-scoped key
 //	LUX_CONSOLE_URL              lux's console, for terminal links (default: LUX_URL)
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
-//	DUDE_LAYER_IMAGE             the dude layer the image library's images are finished with; unset,
-//	                             a Run whose image is a library image fails before lux
+//	DUDE_LAYER_IMAGE             an operator's override, by digest, of the dude layer library images are
+//	                             finished with; unset, the one dude-image-builder published (image_layers)
 //	DUDE_REGISTRY_AUTH           how lux logs in to pull agent and preview images: none (default), static, or ecr
 //	                             (DUDE_AGENT_IMAGE's ECR registry, a token from the AWS default
 //	                             credential chain, e.g. the instance role, minted fresh for each start)

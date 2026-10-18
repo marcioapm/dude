@@ -235,10 +235,16 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   refreshed. A candidate's verdict never reaches a pull request before that.
   A branch someone pushed to meanwhile is not moved: `pull_request_moved`
   asks a person (retry from their commit, or wait). Reviews are asked again
-  after the move. The round counts once against `MaxPRFixIterations` and
-  `FixRoundsPerPR`, in `prFix`. These steps are mechanics under the
+  after the move. The round counts once against `MaxPRFixIterations`, in
+  `prFix`, and once against `FixRoundsPerPR` of each open pull request
+  whose repository its fix published commits to, in `awaitPRFix`: a fix
+  that commits nothing spends none of the pull requests' budget, and
+  `prFix` refuses only a pull request whose budget is already spent. A
+  retry gives the budget back only for a round that was charged
+  (`pull_request_moved`, not `pr_fix_failed`). These steps are mechanics under the
   conductor too; it is told only at escalations. A conductor's publish is
-  refused while a candidate is checked.
+  refused while a candidate is checked. `ci_stuck` counts from when the
+  current head's checks went pending; finished checks close it as dude's `wait`.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.

@@ -1,4 +1,4 @@
--- Independent children retain their authorized parent and requested profile.
+-- 147_child_admission.sql — independent children retain their authorized parent and requested profile.
 -- NULL source_kind denotes existing workflow and interactive Runs.
 ALTER TABLE runs
   ADD COLUMN source_kind text CHECK (source_kind IN ('task_conductor', 'session')),

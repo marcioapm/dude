@@ -8,8 +8,11 @@
 
 export interface BrainstormTurnStopped {
   readonly runId: string;
-  readonly tool: string;
-  readonly openSecs: number;
+  /** The overdue open call's tool; absent when the model went silent with no call open. */
+  readonly tool?: string;
+  readonly openSecs?: number;
+  /** How long the agent had shown no activity, for a silent turn. */
+  readonly silentSecs?: number;
   readonly directiveId: string;
 }
 
@@ -140,7 +143,7 @@ export const EventTypes = {
   BrainstormBriefed: "session.briefed",
   /** dude told the session's agent something (who owns it now). Payload: `{ text, directiveId }`. */
   BrainstormTold: "session.told",
-  /** dude interrupted a turn with an overdue open call. Payload: `BrainstormTurnStopped`. */
+  /** dude interrupted a turn with an overdue open call, or silent for 10 minutes with none. Payload: `BrainstormTurnStopped`. */
   BrainstormTurnStopped: "session.turn_stopped",
   /**
    * The session was named: by its agent (name_session, `by: "agent"`) or a
@@ -242,6 +245,12 @@ export const EventTypes = {
    * after a failed turn.
    */
   RunParked: "run.parked",
+  /**
+   * dude interrupted a conductor's turn that was busy with no tool call
+   * open and no activity for 10 minutes (a harness retrying its model
+   * request). Payload: `{ runId, silentSecs, directiveId }`.
+   */
+  RunTurnStopped: "run.turn_stopped",
   /**
    * A person asked for a paused Run to be resumed. Payload: `{ reason,
    * requestedAt }`: `requestedAt` is when they asked, as the database

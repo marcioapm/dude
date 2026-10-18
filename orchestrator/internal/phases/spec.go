@@ -38,8 +38,9 @@ type AgentConfig struct {
 	LLMKey string
 	// Image used when a project names none.
 	DefaultImage string
-	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
-	// "" turns the library off: a Run whose image is a library image fails.
+	// The operator's override of the dude layer library images are
+	// finished with (DUDE_LAYER_IMAGE); "" for the one dude-image-builder
+	// made current (images.CurrentLayer).
 	Layer string
 	// The operator's floor (agent.egress): what every agent may reach,
 	// under its organisation's and project's lists. "*" turns egress
@@ -243,6 +244,11 @@ type specRepo struct {
 	ReadOnly bool
 	// Where it is checked out; "" is RepoPath(Name).
 	Path string
+	// Its setup script, run once per checkout before the agent (SetupInit).
+	Setup string
+	// Branches lux syncs into the checkout from others (syncedBranches):
+	// the final diff is against what of them the Run merged, too.
+	Synced []string
 }
 
 func (r specRepo) path() string {
@@ -269,6 +275,15 @@ func repoRefs(repos []specRepo) map[string]string {
 		refs[lux.SpecName(r.Name)] = r.Ref
 	}
 	return refs
+}
+
+// repoSetups are the repositories' setup scripts, in the spec's order.
+func repoSetups(repos []specRepo) []Setup {
+	out := make([]Setup, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, Setup{Name: lux.SpecName(r.Name), Path: r.path(), Script: r.Setup})
+	}
+	return out
 }
 
 // repositoriesBySpecName maps lux's reported names back to dude's repositories.
@@ -377,8 +392,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 				spec.Secrets = append(spec.Secrets, sec)
 			}
 		}
+		if len(in.Repos) > 0 {
+			SetupSpec(&spec, repoSetups(in.Repos))
+		}
 	}
-
 	if c.ToolsURL != "" && in.ToolsToken != "" {
 		// dude's own tools, as this Run. lux serves them inside the container
 		// — a socket for the dude CLI, loopback for the agent's MCP client —

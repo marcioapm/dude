@@ -66,9 +66,8 @@ export function usedByWords(uses: readonly ImageUse[], orgName: string): string 
 
 /**
  * A build's stages for BuildStages: waiting, building (and finishing),
- * for a version that can run containers checking it can, then pushed and
- * published. A failed check fails its own cell, and the build before it
- * is done; a passed check stays done when the push after it fails.
+ * checking the image's hook and optional container support, then publishing.
+ * A failed check fails its own cell; a passed check stays done if pushing fails.
  */
 export function buildStages(
   b: Pick<ImageBuild, "state" | "stage" | "kind" | "error"> & Partial<Pick<ImageBuild, "canRunContainers" | "containersCheck">>,
@@ -77,16 +76,19 @@ export function buildStages(
 ): BuildStage[] {
   const spec = `rootless · ${limits.cpus} CPU · ${trimGb(limits.memoryMiB)}`;
   const finish = b.kind === "finish";
-  const checks = Boolean(b.canRunContainers);
+  const checkDetail = b.canRunContainers
+    ? "podman or Docker, fuse-overlayfs, newuidmap/newgidmap, subuid"
+    : "dude's git hook";
   const last = finish ? "Dude layer added" : "Pushed and published";
   const lastDetail = finish ? "for the Runs waiting on it" : "dude/custom, then live";
-  const check = (state: BuildStage["state"], detail = "podman or Docker, fuse-overlayfs, newuidmap/newgidmap, subuid"): BuildStage[] =>
-    checks ? [{ id: "check", label: "Check containers", detail, state }] : [];
+  function check(state: BuildStage["state"], detail = checkDetail): BuildStage {
+    return { id: "check", label: "Check image", detail, state };
+  }
   if (b.state === "queued") {
     return [
       { id: "wait", label: "Waiting", detail: "in the queue", state: "current" },
       { id: "build", label: finish ? "Adding the dude layer" : "Building", detail: spec, state: "todo" },
-      ...check("todo"),
+      check("todo"),
       { id: "done", label: last, detail: lastDetail, state: "todo" },
     ];
   }
@@ -96,7 +98,7 @@ export function buildStages(
     return [
       { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
       { id: "build", label: b.stage === "pushing" && !late ? "Pushing" : b.stage === "finishing" ? "Adding the dude layer" : b.stage === "resolving" ? "Resolving its base" : checking || late ? "Built" : "Building", detail: spec, state: checking || late ? "done" : "current" },
-      ...check(checking ? "current" : late ? "done" : "todo", b.containersCheck?.detail),
+      check(checking ? "current" : late ? "done" : "todo", b.containersCheck?.detail),
       { id: "done", label: last, detail: lastDetail, state: late ? "current" : "todo" },
     ];
   }
@@ -104,7 +106,7 @@ export function buildStages(
     return [
       { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
       { id: "build", label: finish ? "Dude layer built" : "Built", detail: spec, state: "done" },
-      ...check("done", b.containersCheck?.detail),
+      check("done", b.containersCheck?.detail),
       { id: "done", label: finish ? "Dude layer added" : "Published", detail: finish ? "Runs start on it" : "every user gets it on their next Run", state: "done" },
     ];
   }
@@ -113,7 +115,7 @@ export function buildStages(
     return [
       { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
       { id: "build", label: finish ? "Dude layer built" : "Built", detail: spec, state: "done" },
-      { id: "check", label: "Check containers", detail: b.containersCheck.detail, state: "failed" },
+      check("failed", b.containersCheck.detail),
       { id: "done", label: finish ? "Dude layer not added" : "Not published", detail: `Not pushed · ${live}`, state: "todo" },
     ];
   }
@@ -121,14 +123,14 @@ export function buildStages(
     return [
       { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
       { id: "build", label: finish ? "Dude layer built" : "Built", detail: spec, state: "done" },
-      { id: "check", label: "Check containers", detail: b.containersCheck.detail, state: "done" },
+      check("done", b.containersCheck.detail),
       { id: "done", label: b.state === "cancelled" ? "Cancelled" : finish ? "Dude layer not added" : "Not published", detail: b.error ?? live, state: "failed" },
     ];
   }
   return [
     { id: "wait", label: "Waiting", detail: "in the queue", state: "done" },
     { id: "build", label: b.state === "cancelled" ? "Cancelled" : "Failed", detail: b.error ?? "", state: "failed" },
-    ...check("todo"),
+    check("todo"),
     { id: "done", label: "Not published", detail: live, state: "todo" },
   ];
 }

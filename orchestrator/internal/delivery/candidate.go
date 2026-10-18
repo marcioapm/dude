@@ -264,7 +264,7 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 			if id == "" || from != nil && *from == moved[repo] {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $2, head_seen_at = now(),
+			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $2, head_seen_at = now(), checks_pending_since = NULL,
 				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
 				WHERE id = $1`, id, moved[repo]); err != nil {
 				return err

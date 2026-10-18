@@ -7,6 +7,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -14,9 +15,68 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
+
+func TestFinalHookUsesRecordedSyncHistoryDespiteForgedRefs(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
+	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	runID, luxID, git, commit := w.idleImplementerCheckout()
+	w.commitFileIn(w.gh.Repo, "main", "imported.txt", "M1\n", "M1")
+	w.fetchBase(runID)
+	git("merge", "-q", "--no-edit", "lux/main")
+	commit("own.txt", "A\n", "A")
+	w.commitFileIn(w.gh.Repo, "main", "unmerged.txt", "M2\n", "M2")
+	w.fetchBase(runID)
+	git("update-ref", "refs/remotes/lux/main", "HEAD")
+	var checksum, base string
+	w.until("live attribution retains M1 after fetching M2", func() bool {
+		var raw []byte
+		if err := w.owner.QueryRow(context.Background(), `SELECT checksum, base, files FROM run_diffs WHERE run_id = $1 AND NOT final`, runID).Scan(&checksum, &base, &raw); err != nil {
+			return false
+		}
+		var files []phases.DiffFile
+		_ = json.Unmarshal(raw, &files)
+		return len(files) == 1 && files[0].Path == "own.txt"
+	})
+	w.lux.Timeout(luxID)
+	w.until("final hook matches the live diff", func() bool {
+		return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND final AND checksum = $2 AND base = $3
+			AND jsonb_array_length(files) = 1 AND files->0->>'path' = 'own.txt'`, runID, checksum, base) == 1
+	})
+}
+
+func TestPushScanSeesSecretInImportedBaseOmittedFromDisplay(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
+	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	runID, luxID, git, commit := w.idleImplementerCheckout()
+	w.commitFileIn(w.gh.Repo, "main", "imported-secret.txt", implToken+"\n", "Base configuration")
+	w.fetchBase(runID)
+	git("merge", "-q", "--no-edit", "lux/main")
+	commit("own.txt", "own\n", "Own work")
+	w.until("display omits imported secret", func() bool {
+		return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND NOT final AND jsonb_array_length(files) = 1 AND files->0->>'path' = 'own.txt'`, runID) == 1
+	})
+	w.endTurnUntilEnded(runID, luxID)
+	var reason string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, runID).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reason, "IMPL_TOKEN in imported-secret.txt") || w.luxRunFor(runID).Pushed {
+		t.Fatalf("imported secret was not refused: %q", reason)
+	}
+	w.until("final display also omits imported secret", func() bool {
+		return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND final AND jsonb_array_length(files) = 1 AND files->0->>'path' = 'own.txt'`, runID) == 1
+	})
+}
 
 func TestAWorkingAgentsUncommittedEditsAreItsLiveDiff(t *testing.T) {
 	w := newWorld(t)

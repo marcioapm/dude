@@ -141,6 +141,8 @@ type harnessState struct {
 	codexSpawns map[string][]codexSpawn
 	talkerState
 	stopState
+	// What the Run's init printed, and a setup script that failed in it.
+	init InitOutput
 }
 
 // talkerState is the part of harness_state a conductor or session agent
@@ -177,6 +179,7 @@ type harnessStateJSON struct {
 	Children       map[string]*childState  `json:"children,omitempty"`
 	CodexThread    string                  `json:"codexThread,omitempty"`
 	CodexSpawns    map[string][]codexSpawn `json:"codexSpawns,omitempty"`
+	Init           *InitOutput             `json:"init,omitempty"`
 	talkerState
 	stopState
 }
@@ -187,6 +190,9 @@ func (h harnessState) MarshalJSON() ([]byte, error) {
 		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState, stopState: h.stopState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
+	}
+	if h.init != (InitOutput{}) {
+		j.Init = &h.init
 	}
 	return json.Marshal(j)
 }
@@ -212,6 +218,9 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	if j.CodexTurn != nil {
 		h.codexTurn = *j.CodexTurn
+	}
+	if j.Init != nil {
+		h.init = *j.Init
 	}
 	return nil
 }
@@ -321,6 +330,7 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
+		stuck_fingerprint = CASE WHEN $11 AND stuck_fingerprint LIKE 'silent:%' THEN NULL ELSE stuck_fingerprint END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
 		harness_state = $14::jsonb,
 		children = (CASE WHEN $17 THEN '{}'::jsonb ELSE children - $16::text[] END)
@@ -343,6 +353,7 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 		if f.Epoch > 0 {
 			t.epoch = f.Epoch
 		}
+		t.init.Record(f)
 		if f.Event != nil {
 			return t.agentEvent(ctx, tx, s, f)
 		}
@@ -399,7 +410,7 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
+		if _, err := tx.Exec(ctx, `UPDATE runs r SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
 				ELSE files_changed_at END,
@@ -600,6 +611,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	why, event := "the agent's run ended before finishing its task: "+reason, reason
 	stop, broken := t.stopOf(state, reason, epoch), t.Broken
 	var more map[string]any
+	var setup *SetupFailure
 	switch {
 	case stop != nil:
 		why = luxStopWords(*stop, s.timeout())
@@ -617,6 +629,11 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	case broken != nil:
 		why = broken.Error + "; then its run ended: " + reason
 		event, more = why, map[string]any{"agentError": broken.AgentError}
+	case t.init.Failed != nil && t.init.Failed.Epoch == epoch:
+		// init-failed: lux's reason is only "exit code N".
+		setup = t.init.Failed
+		why = setup.Reason()
+		event = why
 	}
 	t.Broken = nil
 	keep := stop == nil || stop.Reason != luxTimeout
@@ -624,8 +641,12 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if err != nil {
 		return err
 	}
-	// The harness's own words can quote what the agent ran.
+	// The harness's own words can quote what the agent ran, and a setup
+	// script's output anything its repository printed.
 	why, event = red.String(why), red.String(event)
+	if setup != nil {
+		more = map[string]any{"setup": map[string]any{"repository": setup.Repository, "exitCode": setup.ExitCode, "output": red.String(setup.Output)}}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
 		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,

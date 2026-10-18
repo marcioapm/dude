@@ -153,7 +153,7 @@ type fixture struct {
 func setup(t *testing.T) *fixture {
 	t.Helper()
 	_, owner := dbtest.Open(t)
-	f := &fixture{t: t, owner: owner, org: dbtest.Org(t, owner), podman: &fakePodman{}}
+	f := &fixture{t: t, owner: owner, org: dbtest.Org(t, owner), podman: &fakePodman{found: hooked}}
 	f.b = &Builder{DB: dbtest.Builder(t, owner), Podman: f.podman, Repository: repo, Layer: layer,
 		Limits:  Limits{Platform: "linux/arm64", CPUs: 1.5, Memory: "1536m", Timeout: time.Minute},
 		MinFree: 8 << 30, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Flush: 10 * time.Millisecond}
@@ -654,8 +654,12 @@ func TestCheckLimitsRefusesAPodmanWithoutCPUAndMemoryControllers(t *testing.T) {
 	}
 }
 
+// hooked is what the check finds in a final with the dude layer's git hook
+// and nothing for containers.
+var hooked = Found{GitConfig: GitConfigPath, CommitHook: CommitHookPath}
+
 // able is what the check finds in an image that can run containers.
-var able = Found{Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
+var able = Found{GitConfig: GitConfigPath, CommitHook: CommitHookPath, Podman: "/usr/bin/podman", PodmanVersion: "podman version 5.4.2", FuseOverlayfs: "/usr/bin/fuse-overlayfs",
 	Newuidmap: Mapper{Path: "/usr/bin/newuidmap", FileCap: true}, Newgidmap: Mapper{Path: "/usr/bin/newgidmap", FileCap: true},
 	Subuid: []string{"agent:1:999", "agent:1001:64535"}, Subgid: []string{"agent:1:999", "agent:1001:64535"}}
 
@@ -679,7 +683,7 @@ func TestAVersionThatCanRunContainersIsCheckedOnItsFinalBeforeItIsPushed(t *test
 	}
 	log := f.log(build)
 	for _, want := range []string{
-		"Check containers: v1 is marked Can run containers, so dude checks it.\n",
+		"check  git hook  " + GitConfigPath + ", " + CommitHookPath + "\nCheck containers: v1 is marked Can run containers, so dude checks it.\n",
 		"check  engine  podman: /usr/bin/podman (5.4) · docker: not found\n",
 		"check  subuid  agent:1:999, agent:1001:64535\n",
 		"Check passed: it can run containers.\npushed " + repo + "@",
@@ -704,7 +708,7 @@ func TestAVersionThatCannotRunContainersFailsItsBuildAndThePreviousStaysPublishe
 	}
 	build := f.queue("img_n", "imv_n5", 5, "FROM node:22\nRUN true\n")
 	f.exec(`UPDATE image_versions SET can_run_containers = true WHERE id = 'imv_n5'`)
-	f.podman.found = Found{Subuid: able.Subuid, Subgid: able.Subgid}
+	f.podman.found = Found{GitConfig: GitConfigPath, CommitHook: CommitHookPath, Subuid: able.Subuid, Subgid: able.Subgid}
 	f.once()
 	const sentence = "Can't run containers: the image has no podman or rootless Docker, no fuse-overlayfs, and no newuidmap or newgidmap."
 	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_n5'`); got[0] != "failed" || got[1] != sentence {
@@ -733,13 +737,19 @@ func TestAVersionThatCannotRunContainersFailsItsBuildAndThePreviousStaysPublishe
 	}
 }
 
-func TestAVersionNotMarkedIsNotChecked(t *testing.T) {
+// A version not marked is checked for dude's git hook alone: nothing it
+// lacks for containers fails it, and only the hook verdict is kept.
+func TestAVersionNotMarkedIsNotCheckedForContainers(t *testing.T) {
 	f := setup(t)
 	f.image("img_b", "acme-base")
-	f.queue("img_b", "imv_b1", 1, "FROM debian\n")
+	build := f.queue("img_b", "imv_b1", 1, "FROM debian\n")
 	f.once()
-	if len(f.podman.checked) != 0 {
-		t.Errorf("checked %v", f.podman.checked)
+	if got := f.row(`SELECT v.state, b.containers_check->>'detail', b.containers_check->>'passed' FROM image_versions v JOIN image_builds b ON b.image_version_id = v.id
+		WHERE b.id = $1`, build); got[0] != "published" || got[1] != "dude's git hook is installed" || got[2] != "true" {
+		t.Errorf("version, check = %v", got)
+	}
+	if log := f.log(build); strings.Contains(log, "Check containers") {
+		t.Errorf("log:\n%s", log)
 	}
 }
 
@@ -754,7 +764,7 @@ func TestAFinishOfAVersionThatCanRunContainersIsCheckedToo(t *testing.T) {
 	f.once()
 	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
 	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_p1', 'finish', $2)`, f.org, next)
-	f.podman.found = Found{}
+	f.podman.found = hooked
 	f.once()
 	if got := f.row(`SELECT state, error FROM image_builds WHERE id = 'imb_fin'`); got[0] != "failed" || !strings.HasPrefix(fmt.Sprint(got[1]), "Can't run containers: ") {
 		t.Errorf("finish = %v", got)
@@ -850,5 +860,58 @@ func TestAFlaggedBuildMissingAnyOneThingIsNotPublished(t *testing.T) {
 				t.Errorf("published %s, pushed %v", published, pushed)
 			}
 		})
+	}
+}
+
+// Every final is checked for dude's git hook, flagged for containers or
+// not: one without it fails its build with the check's sentence, pushes no
+// final, and leaves the version before it published; a finish for a new
+// layer the same, with the version still published.
+func TestAFinalWithoutDudesGitHookIsNeverPushed(t *testing.T) {
+	f := setup(t)
+	f.image("img_b", "acme-base")
+	f.queue("img_b", "imv_b1", 1, "FROM debian\n")
+	f.once()
+	if got := strings.Join(f.podman.checked, " "); got != FinalTag(repo, "imv_b1", layer) {
+		t.Errorf("checked %q, want the final", got)
+	}
+	var pushed []string
+	f.podman.fail = func(op, tag, _ string) (string, error) {
+		if op == "push" {
+			pushed = append(pushed, tag)
+		}
+		return "", nil
+	}
+	f.podman.found = Found{GitConfig: GitConfigPath}
+	build := f.queue("img_b", "imv_b2", 2, "FROM debian\nRUN true\n")
+	f.once()
+	const sentence = "The image has no " + CommitHookPath + " after the dude layer, so its commits would carry no co-authors."
+	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_b2'`); got[0] != "failed" || got[1] != sentence {
+		t.Fatalf("v2 = %v", got)
+	}
+	if got := f.str(`SELECT published_version_id FROM images WHERE id = 'img_b'`); got != "imv_b1" {
+		t.Errorf("published = %s", got)
+	}
+	if slices.Contains(pushed, FinalTag(repo, "imv_b2", layer)) || f.str(`SELECT count(*) FROM image_finals WHERE image_version_id = 'imv_b2'`) != "0" {
+		t.Errorf("pushed %v", pushed)
+	}
+	if log := f.log(build); !strings.Contains(log, "check  git hook  git-config: "+GitConfigPath+" · prepare-commit-msg: missing\n"+sentence+"\nNot pushed. v1 stays published.\n") {
+		t.Errorf("log:\n%s", log)
+	}
+	// The verdict says it was the hook, so the page offers no container fix for it.
+	if got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail', containers_check->>'hook' FROM image_builds WHERE id = $1`, build); got[0] != "false" || got[1] != sentence || got[2] != "true" {
+		t.Errorf("check = %v", got)
+	}
+
+	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_b1', 'finish', $2)`, f.org, next)
+	f.podman.found = Found{}
+	f.once()
+	if got := f.row(`SELECT state, error FROM image_builds WHERE id = 'imb_fin'`); got[0] != "failed" ||
+		got[1] != "The image has no "+GitConfigPath+" or "+CommitHookPath+" after the dude layer, so its commits would carry no co-authors." {
+		t.Errorf("finish = %v", got)
+	}
+	if got := f.str(`SELECT count(*) FROM image_finals WHERE layer_ref = $1`, next); got != "0" {
+		t.Errorf("%s finals for the new layer", got)
 	}
 }

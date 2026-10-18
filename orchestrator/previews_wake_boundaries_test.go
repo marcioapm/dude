@@ -22,6 +22,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
 
@@ -299,7 +300,7 @@ func (w *world) crashedThenFailedResumes(n int) (runID, web string, r *fakelux.R
 	w.lux.FailStarts("dude.preview="+runID, n)
 	for i := 1; i <= n; i++ {
 		if _, err := w.previews.Lux.Resume(context.Background(), r.ID, lux.ResumeInput{
-			Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}}}); err != nil {
+			Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}, phases.SetupSecret(nil)}}); err != nil {
 			w.t.Fatal(err)
 		}
 		waitFor(w.t, "the resumed start failed", func() bool { return w.luxCalls(r.ID, "resume") == i && w.lux.State(r.ID) == "failed" })
