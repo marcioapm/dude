@@ -25,9 +25,7 @@ import (
 func TestInitRunsOnEveryPlacementFromTheSameSpec(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	t.Cleanup(fake.Close)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
+	client := c0(t, fake)
 	ctx := context.Background()
 	// The here-document's /workspace is data: only the commands' is the
 	// Run's directory.
@@ -44,13 +42,7 @@ func TestInitRunsOnEveryPlacementFromTheSameSpec(t *testing.T) {
 	if err != nil || string(first) != "kept /workspace $HOME `x`\n" {
 		t.Fatalf("first placement wrote %q: %v", first, err)
 	}
-	if err := client.Stop(ctx, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, client, run.ID, "stopped")
-	if _, err := client.Resume(ctx, run.ID, lux.ResumeInput{}); err != nil {
-		t.Fatal(err)
-	}
+	stopAndResume(t, client, run.ID)
 	waitState(t, client, run.ID, "running")
 	second, err := os.ReadFile(filepath.Join(dir, "f"))
 	if err != nil || string(second) != string(first) {
@@ -60,10 +52,7 @@ func TestInitRunsOnEveryPlacementFromTheSameSpec(t *testing.T) {
 	if string(placements) != "placed\nplaced\n" || fake.Workspace(run.ID) != dir {
 		t.Errorf("init ran %q in %s, first in %s", placements, fake.Workspace(run.ID), dir)
 	}
-	fake.mu.Lock()
-	inits := fake.runs[run.ID].inits
-	fake.mu.Unlock()
-	if inits != 2 {
+	if inits := fake.InitsOf(run.ID); inits != 2 {
 		t.Errorf("init ran %d times over two placements", inits)
 	}
 }
@@ -73,9 +62,7 @@ func TestWorkloadReadsInitMarkerOnEveryPlacement(t *testing.T) {
 		return Behaviour{Hang: true, Command: []string{"sh", "-eu", "-c", "cat /workspace/marker; rm /workspace/marker"}}
 	})
 	t.Cleanup(fake.Close)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
+	client := c0(t, fake)
 	ctx := context.Background()
 	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
 		Workload: lux.Workload{Adapter: "acp"},
@@ -86,13 +73,7 @@ func TestWorkloadReadsInitMarkerOnEveryPlacement(t *testing.T) {
 	cursor := ""
 	for epoch := 1; epoch <= 2; epoch++ {
 		if epoch == 2 {
-			if err := client.Stop(ctx, run.ID); err != nil {
-				t.Fatal(err)
-			}
-			waitState(t, client, run.ID, "stopped")
-			if _, err := client.Resume(ctx, run.ID, lux.ResumeInput{}); err != nil {
-				t.Fatal(err)
-			}
+			stopAndResume(t, client, run.ID)
 		}
 		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		observed := ""
@@ -273,9 +254,7 @@ echo second
 	})
 	fake.Workspaces = t.TempDir()
 	t.Cleanup(fake.Close)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
+	client := c0(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
@@ -322,9 +301,7 @@ func TestBehaviourCommandFailureFailsThePlacement(t *testing.T) {
 	})
 	fake.Workspaces = t.TempDir()
 	t.Cleanup(fake.Close)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
+	client := c0(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
@@ -598,9 +575,7 @@ func indexOf(t *testing.T, records []lux.Frame, from int, typ, requestID string)
 func TestAFailingInitFailsThePlacement(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	t.Cleanup(fake.Close)
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	client := lux.New(srv.URL, "k")
+	client := c0(t, fake)
 	run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
 		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}},
 		Init:     &lux.Init{Script: "exit 3"}}, "init-fails")
