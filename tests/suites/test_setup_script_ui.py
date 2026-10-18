@@ -63,8 +63,8 @@ def test_a_setup_script_is_set_marked_reopened_and_cleared(page: Page, web_url: 
 
     _type_script(page, SCRIPT)
     expect(dialog.get_by_test_id("setup-script-lines")).to_have_text("2 lines")
-    # Shell highlighting: the editor tokenises the script.
-    expect(dialog.locator(".cm-content span").first).to_be_visible()
+    shell_string = '"$(git rev-parse --git-path hooks)/pre-commit"'
+    expect(dialog.locator(".cm-content span").filter(has_text=shell_string)).to_have_count(1)
     dialog.get_by_test_id("setup-script-save").click()
     expect(toast(page, "api’s setup script saved")).to_be_visible()
     expect(page.get_by_role("dialog")).to_have_count(0)
@@ -91,8 +91,18 @@ def test_a_setup_script_is_set_marked_reopened_and_cleared(page: Page, web_url: 
     expect(settings.get_by_test_id("setup-script-mark")).to_have_count(0)
     assert _repository(client, project, "api")["setupScript"] is None
     assert console_errors == []
-
-
+def test_editor_scrolls_after_max_lines(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
+    project = _project_with_repositories(client)
+    sign_in(page, web_url, org["api_key"], at=f"#/project/{project['id']}/settings/repositories")
+    settings = page.get_by_test_id("project-settings")
+    settings.get_by_role("button", name="Actions for api").click()
+    page.get_by_role("menuitem", name="Setup script…").click()
+    dialog = page.get_by_role("dialog")
+    _type_script(page, "\n".join(f"echo {i}" for i in range(40)))
+    scroller = dialog.locator(".cm-scroller")
+    expect(scroller).to_have_count(1)
+    assert scroller.evaluate("el => el.scrollHeight > el.clientHeight")
+    assert console_errors == []
 @pytest.mark.ui
 def test_over_the_limit_save_is_disabled(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
     project = _project_with_repositories(client)
