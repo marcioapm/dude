@@ -423,7 +423,8 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// attempt's pull request must not wake the next one.
 		var decider string
 		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', ''),
-			COALESCE(w.state->'escalation'->>'reason', '') FROM workflow_runs w
+			COALESCE(CASE WHEN w.state->'escalation'->'decided' IS NULL
+				THEN w.state->'escalation'->>'reason' END, '') FROM workflow_runs w
 			JOIN pull_requests p ON p.id = $2
 			WHERE w.task_id = $1 AND w.status IN ('running', 'waiting')
 			  AND COALESCE(w.state->>'branch', p.head_branch) = p.head_branch
@@ -470,7 +471,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		signal = &forge.Signal{Kind: "ci_stuck"}
 	}
 	if signal != nil && workflowRunID != "" {
-		if err := s.signal(ctx, org, pr, status, signal, permitted, recorded, stuckFor, workflowRunID); err != nil {
+		if err := s.signal(ctx, org, pr, status, signal, permitted, recorded, stuckFor, pendingSince, workflowRunID); err != nil {
 			return err
 		}
 	}
@@ -609,7 +610,7 @@ func ownVerdicts(ctx context.Context, gh *forge.GitHub, fs []forge.Feedback) (ma
 // signal tells the workflow what a sync found. One signal per distinct
 // change, however many deliveries report it.
 func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forge.Status, signal *forge.Signal,
-	permitted []forge.Feedback, recorded []string, stuckFor int, workflowRunID string) error {
+	permitted []forge.Feedback, recorded []string, stuckFor int, pendingSince *time.Time, workflowRunID string) error {
 	signal.Repo, signal.Number = pr.RepoName, pr.Number
 	for i := range signal.Feedback {
 		signal.Feedback[i].Repo = pr.RepoName
@@ -640,7 +641,7 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	// Still stuck after a person chose to wait: asked again once as long
 	// has passed again, not at every sync, and not never.
 	if signal.Kind == "ci_stuck" {
-		key += fmt.Sprintf(":stuck:%d", stuckFor)
+		key += fmt.Sprintf(":stuck:%d:%d", pendingSince.Unix(), stuckFor)
 	}
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
 }

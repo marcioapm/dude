@@ -2169,7 +2169,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
 			// seen — was about the one before: its CI is yet to run on this.
-			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(),
+			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(), checks_pending_since = NULL,
 				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
 				WHERE task_id = $1 AND repository_id = $2 AND head_branch = $4 AND state IN ('open', 'draft')
 				  AND head_sha IS DISTINCT FROM $3`, r.TaskID, repo.ID, adv.Head, branch); err != nil {
