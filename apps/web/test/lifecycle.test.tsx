@@ -12,7 +12,8 @@ import { afterEach, beforeEach } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
+import { EPIC, PROJECT, PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
+import { ArchiveEpicConfirm, epicRef } from "../src/screens/actions.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { ApiError, type TaskDetail } from "../src/api/client.ts";
@@ -83,6 +84,30 @@ describe("the fixture client's lifecycle", () => {
     expect(await code(client.unarchiveTask(TASK_ID))).toBe("conflict");
     expect((await client.archivedTasks(TASK_ID)).tasks).toEqual([]);
   });
+});
+
+describe("the epic archive dialog callback", () => {
+  for (const archived of [false, true]) {
+    test(`reports the API archived=${archived} result after success, not the subset request`, async () => {
+      const client = new FixtureClient("a");
+      const epic = (await client.navigation()).projects.find((p) => p.id === PROJECT.id)!.epics!.find((e) => e.id === EPIC.id)!;
+      const response = Promise.withResolvers<{ archived: boolean; tasks: string[] }>();
+      const requests: boolean[] = [];
+      client.archiveEpic = (_id, withEndedTasks) => { requests.push(withEndedTasks ?? false); return response.promise; };
+      const callbacks: Array<boolean | "closed"> = [];
+      const { unmount } = await mount(<ToastProvider>
+        <ArchiveEpicConfirm client={client} epic={epicRef(PROJECT.id, epic)} tasks={epic.tasks}
+          onClose={() => callbacks.push("closed")} onArchived={(result) => callbacks.push(result)} />
+      </ToastProvider>);
+      mounted.push(unmount);
+      const confirm = await until(() => document.querySelector<HTMLElement>("[data-testid=archive-ended]"), "the subset archive action");
+      await act(async () => confirm.click());
+      expect(requests).toEqual([true]);
+      expect(callbacks).toEqual([]);
+      await act(async () => response.resolve({ archived, tasks: ["t_211"] }));
+      expect(callbacks).toEqual(["closed", archived]);
+    });
+  }
 });
 
 describe("the task page's lifecycle", () => {

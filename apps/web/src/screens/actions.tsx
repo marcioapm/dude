@@ -250,7 +250,7 @@ export function EpicDialog(props: {
  * and them; otherwise its one action archives the ended ones. The server
  * decides again and says why if the tree was behind.
  */
-export function ArchiveEpicConfirm(props: { client: ApiClient; epic: EpicRef; tasks: NavEpic["tasks"]; onClose: () => void; onArchived: () => void }) {
+export function ArchiveEpicConfirm(props: { client: ApiClient; epic: EpicRef; tasks: NavEpic["tasks"]; onClose: () => void; onArchived: (archived: boolean) => void }) {
   const { busy, problem, save } = useSave();
   const ref = (t: NavEpic["tasks"][number]) => ({ key: t.key ?? t.id, title: t.title, status: t.status });
   const unfinished = props.tasks.filter((t) => !lifecycleEnded(t.status, t.resolution)).map((t) => ({ ...ref(t), owner: t.people?.[0] ? firstName(t.people[0].name) : undefined }));
@@ -258,10 +258,11 @@ export function ArchiveEpicConfirm(props: { client: ApiClient; epic: EpicRef; ta
   return (
     <ArchiveEpicDialog open onOpenChange={(o) => !o && props.onClose()} epic={props.epic.title} unfinished={unfinished} ended={ended}
       problem={problem} busy={busy}
-      onConfirm={() => void save(() => props.client.archiveEpic(props.epic.id, unfinished.length > 0), () => {
+      onConfirm={() => void save(async () => {
+        const result = await props.client.archiveEpic(props.epic.id, unfinished.length > 0);
         props.onClose();
-        props.onArchived();
-      }, unfinished.length > 0 ? `${ended.length} ended task${ended.length === 1 ? "" : "s"} archived` : `${props.epic.title} archived`)} />
+        props.onArchived(result.archived);
+      }, undefined, unfinished.length > 0 ? `${ended.length} ended task${ended.length === 1 ? "" : "s"} archived` : `${props.epic.title} archived`)} />
   );
 }
 

@@ -826,9 +826,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       ) : null}
       {open?.kind === "archiveEpic" ? (
         <ArchiveEpicConfirm client={client} epic={open.epic} tasks={open.tasks} onClose={close}
-          onArchived={() => {
+          onArchived={(archived) => {
             saved();
-            if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }), true);
+            if (archived && selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }), true);
           }} />
       ) : null}
       <main className={flush ? "main flush" : "main"} id="main" tabIndex={-1}>
