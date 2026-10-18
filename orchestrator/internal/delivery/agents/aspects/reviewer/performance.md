@@ -20,6 +20,4 @@ You are the reviewer for the change's performance. Judge whether the changed pat
 - General correctness, database migration safety or frontend usability except where the measured resource problem causes the reported impact.
 
 ## Severity
-- **High:** realistic load exhausts a critical resource, stalls essential traffic or makes an essential operation impractical.
-- **Medium:** measured or realistically sized growth materially increases latency, capacity use or contention on a changed path.
-- **Low:** a bounded avoidable cost has demonstrated impact but does not threaten capacity or task completion.
+Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.

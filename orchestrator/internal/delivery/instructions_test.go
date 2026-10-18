@@ -64,6 +64,27 @@ func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 	}
 }
 
+func TestInstructionsAspectsUseSharedSeverity(t *testing.T) {
+	const definition = "Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request."
+	const reference = "Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`."
+	for _, aspect := range []string{"api", "correctness", "database", "frontend", "performance", "security", "tests"} {
+		for mode, text := range underEveryMode("reviewer", aspect, InstructionsInput{Tools: true}) {
+			t.Run(aspect+"/"+mode, func(t *testing.T) {
+				for _, want := range []string{definition, reference, "# Your aspect: " + aspect} {
+					if n := strings.Count(text, want); n != 1 {
+						t.Errorf("%q occurs %d times, want 1", want, n)
+					}
+				}
+				for _, local := range []string{"**High:**", "**Medium:**", "**Low:**"} {
+					if strings.Contains(text, local) {
+						t.Errorf("aspect redefines severity with %q", local)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestRoleSplitRejectsMissingAndDuplicateStances(t *testing.T) {
 	for _, text := range []string{"# Role\n\nNo stance.\n", "# Role\n\n## How you work as role\nA\n\n## How you work as other\nB\n"} {
 		_, err := parseAgentTemplates(fstest.MapFS{"agents/instructions/roles/role.md": {Data: []byte(text)}})

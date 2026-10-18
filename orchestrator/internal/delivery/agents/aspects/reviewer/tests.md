@@ -21,6 +21,4 @@ You are the reviewer for the change's tests. Other reviewers judge the code itse
 - Style of test code beyond readability that affects trust.
 
 ## Severity
-- **High:** a behaviour in the task, or a fixed defect, has no test that can fail; or a test was weakened so that a real failure now passes.
-- **Medium:** an important path or edge case is untested; or a test is nondeterministic.
-- **Low:** a test is fragile or over-coupled to implementation, but still meaningful.
+Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.

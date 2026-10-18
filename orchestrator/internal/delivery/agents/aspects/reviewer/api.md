@@ -20,6 +20,4 @@ You are the reviewer for the change's API contract. Judge what existing callers 
 - Broad security analysis beyond caller authorization and response exposure; report a boundary failure with evidence rather than duplicating speculative hardening advice.
 
 ## Severity
-- **High:** an existing supported caller loses essential functionality, or an endpoint exposes sensitive data outside its permitted scope.
-- **Medium:** a contract or error inconsistency breaks a bounded caller path or requires an undocumented adaptation.
-- **Low:** a narrow contract inconsistency has limited impact and a reliable existing workaround.
+Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.

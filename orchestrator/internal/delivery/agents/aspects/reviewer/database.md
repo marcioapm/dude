@@ -20,6 +20,4 @@ You are the reviewer for the change's database behaviour. Judge whether schema a
 - Broader security or API design except where the database operation itself breaks the stated guarantee.
 
 ## Severity
-- **High:** deployment risks data loss, unrecoverable migration failure or sustained blocking of essential traffic.
-- **Medium:** a missing access path, unenforced invariant or recovery gap causes meaningful failures under realistic data or concurrency.
-- **Low:** a bounded operational inefficiency or recoverable migration weakness has limited demonstrated impact.
+Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.

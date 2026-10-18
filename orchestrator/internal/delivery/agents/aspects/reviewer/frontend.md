@@ -20,6 +20,4 @@ You are the reviewer for the change's frontend behaviour. Judge whether people c
 - General backend correctness or broad performance tuning beyond the changed interface's states and rendering behaviour.
 
 ## Severity
-- **High:** users cannot complete an essential flow, including through required accessible interaction.
-- **Medium:** a realistic size, state or rendering storm materially impairs interaction but leaves a usable alternative.
-- **Low:** a bounded accessibility or layout defect reduces usability without blocking the task.
+Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
