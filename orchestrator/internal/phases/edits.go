@@ -118,8 +118,7 @@ func (s *Syncer) checkoutReadOnly(ctx context.Context, r phaseRun, cause error) 
 				"text": "This lux cannot keep the conductor's checkout current: it reads and does not edit, for this conversation."}}); err != nil {
 			return err
 		}
-		return tellConductor(ctx, tx, r, "checkout:read-only:"+r.ID,
-			"Your checkout cannot be kept current by this lux: do not edit; publish is refused. Delegate changes (start_phase).")
+		return tellConductor(ctx, tx, r, "checkout:read-only:"+r.ID, checkoutReadOnlyTold)
 	})
 }
 
@@ -265,3 +264,7 @@ func oneLineClip(s string, n int) string {
 	}
 	return s
 }
+
+// checkoutReadOnlyTold is what a conductor whose checkout this lux cannot
+// keep current is told.
+var checkoutReadOnlyTold = delivery.MustText("notices/told/checkout-read-only").Render(nil)

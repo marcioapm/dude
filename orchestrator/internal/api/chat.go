@@ -59,7 +59,7 @@ type chatMessage struct {
 
 // TalkItThrough is what a person who pressed Talk it through says to the
 // conductor first (delivery.TalkItThrough).
-const TalkItThrough = delivery.TalkItThrough
+var TalkItThrough = delivery.TalkItThrough
 
 // talk is Talk it through: a task not started gets its delivery, decided
 // by the conductor and waiting on its first decision, and its conductor,

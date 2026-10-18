@@ -542,6 +542,47 @@ body {
   gap: var(--ds-space-6);
 }
 
+/* -- Judgements ------------------------------------------------------ */
+
+/* A call's answer in its dialog: the decision and how sure, then why. */
+.judgementAnswer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+}
+.judgementAnswerHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.judgementSure {
+  color: var(--ds-color-text-secondary);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+}
+.judgementReasoning {
+  margin: 0;
+  color: var(--ds-color-text-primary);
+  line-height: var(--ds-leading-prose);
+}
+/* What was sent and what came back, as they were; app-local because the design system exports no plain-text well. */
+.judgementText {
+  margin: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.judgementQuote {
+  color: var(--ds-color-text-secondary);
+}
+
 /* -- The task page -------------------------------------------------- */
 
 .taskScreen {

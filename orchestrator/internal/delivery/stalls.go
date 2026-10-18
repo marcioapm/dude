@@ -116,95 +116,81 @@ type Process struct {
 // for a code-changing Run its files, tools, plan and last message. The
 // options line is the reader's.
 func (s Stall) Text(options string) string {
-	var b strings.Builder
 	who := s.Phase
 	if s.Category != "" {
 		who = s.Category + " " + who
 	}
-	detail := []string{}
-	if s.Round > 0 {
-		detail = append(detail, fmt.Sprintf("round %d", s.Round))
+	type call struct {
+		Tool, Input, Open string
+		Last              bool
 	}
-	if s.Tier != "" {
-		detail = append(detail, s.Tier)
+	type callLine struct{ Tool, Case string }
+	type child struct {
+		Tool, Title, Kind, ID, Ago, Last string
+		Waiting                          *WaitingOn
 	}
-	detail = append(detail, "running "+duration(s.RunningSecs))
-	fmt.Fprintf(&b, "Your %s Run %s (%s) has made no progress for %s.", who, s.RunID, strings.Join(detail, ", "), duration(s.WindowSecs))
-	if slices.Contains(s.Reasons, "silent") {
-		fmt.Fprintf(&b, " Its agent has done nothing for %s: no output, no tool call.", duration(s.SilentSecs))
+	type process struct {
+		Args, Elapsed string
+		CPU           float64
 	}
-	if len(s.Calls) > 0 {
-		fmt.Fprintf(&b, " It has %s open:", plural(len(s.Calls), "tool call"))
-		for i, c := range s.Calls {
-			sep := ","
-			if i == len(s.Calls)-1 {
-				sep = ";"
-			}
-			fmt.Fprintf(&b, " `%s` %q, for %s%s", c.Tool, c.Input, duration(c.OpenSecs), sep)
-		}
-		b.WriteString(" " + s.callsLine())
-	}
-	for _, c := range s.Children {
-		fmt.Fprintf(&b, " Its `%s` call %q has a child (%s · %s) whose last event was %s ago: %s", c.Tool, c.Title, c.Kind,
-			cutID(c.ChildID, 12), duration(c.LastEventSecs), c.LastEvent)
-		if w := c.WaitingOn; w != nil {
-			fmt.Fprintf(&b, " — waiting on a permission nothing can answer: %s for %s", w.Permission, strings.Join(w.Patterns, ", "))
-		}
-		b.WriteString(".")
-	}
-	if s.PSError != "" {
-		fmt.Fprintf(&b, " Processes: could not be read (%s).", s.PSError)
-	} else if len(s.Processes) > 0 {
-		ps := make([]string, len(s.Processes))
-		for i, p := range s.Processes {
-			ps[i] = fmt.Sprintf("%s (%.1f %% CPU, up %s)", p.Args, p.CPU, p.Elapsed)
-		}
-		fmt.Fprintf(&b, " Processes: %s.", strings.Join(ps, "; "))
-	}
-	if s.CPUSecs != nil {
-		fmt.Fprintf(&b, " CPU over %s: %.0f s; network: %s.", duration(s.UsageSecs), *s.CPUSecs, bytesWord(*s.NetBytes))
-	} else {
-		b.WriteString(" lux reported no CPU or network figures.")
-	}
-	if s.FilesChangedAt != nil || len(s.ToolsInWindow) > 0 {
-		if s.FilesChangedAt != nil {
-			fmt.Fprintf(&b, " Its files last changed at %s.", s.FilesChangedAt.UTC().Format("15:04 UTC"))
-		}
-		fmt.Fprintf(&b, " Its tool calls in the window: %s.", toolCounts(s.ToolsInWindow))
-		if len(s.Plan) > 0 {
-			fmt.Fprintf(&b, " Its plan: %s.", strings.Join(s.Plan, "; "))
-		}
-		if s.LastMessage != "" {
-			fmt.Fprintf(&b, " Its last message: %q.", s.LastMessage)
-		}
-	}
-	if options != "" {
-		b.WriteString(" " + options)
-	}
-	return b.String()
-}
-
-// callsLine says, for the open calls, whether a process is expected and
-// whether it is there.
-func (s Stall) callsLine() string {
-	var parts []string
-	for _, c := range s.Calls {
+	calls := make([]call, len(s.Calls))
+	var lines []callLine
+	for i, c := range s.Calls {
+		calls[i] = call{c.Tool, c.Input, duration(c.OpenSecs), i == len(s.Calls)-1}
+		// Whether a process is expected for it, and whether it is there.
+		l := callLine{Tool: c.Tool, Case: "none"}
 		switch {
 		case !c.Command:
-			parts = append(parts, fmt.Sprintf("`%s` runs inside the agent: no separate process is expected", c.Tool))
+			l.Case = "inside"
 		case s.PSError != "":
-			parts = append(parts, fmt.Sprintf("whether `%s`'s command still runs is unknown", c.Tool))
+			l.Case = "unknown"
 		case c.Alive:
-			parts = append(parts, fmt.Sprintf("`%s`'s command is running", c.Tool))
-		default:
-			parts = append(parts, fmt.Sprintf("no process runs `%s`'s command", c.Tool))
+			l.Case = "running"
 		}
+		lines = append(lines, l)
 	}
-	return strings.Join(slices.Compact(parts), "; ") + "."
+	children := make([]child, len(s.Children))
+	for i, c := range s.Children {
+		children[i] = child{c.Tool, c.Title, c.Kind, cutID(c.ChildID, 12), duration(c.LastEventSecs), c.LastEvent, c.WaitingOn}
+	}
+	processes := make([]process, len(s.Processes))
+	for i, p := range s.Processes {
+		processes[i] = process{p.Args, p.Elapsed, p.CPU}
+	}
+	data := struct {
+		Who, RunID, Tier, Running, Window, Silent string
+		Round                                     int
+		Calls                                     []call
+		CallLines                                 []callLine
+		Children                                  []child
+		PSError                                   string
+		Processes                                 []process
+		HasCPU                                    bool
+		CPU                                       float64
+		Usage, Net                                string
+		Activity                                  bool
+		FilesAt, Tools, LastMessage, Options      string
+		Plan                                      []string
+	}{Who: who, RunID: s.RunID, Tier: s.Tier, Running: duration(s.RunningSecs), Window: duration(s.WindowSecs), Round: s.Round,
+		Calls: calls, CallLines: slices.Compact(lines), Children: children, PSError: s.PSError, Processes: processes,
+		Activity: s.FilesChangedAt != nil || len(s.ToolsInWindow) > 0, Plan: s.Plan, LastMessage: s.LastMessage, Options: options}
+	if slices.Contains(s.Reasons, "silent") {
+		data.Silent = duration(s.SilentSecs)
+	}
+	if s.CPUSecs != nil {
+		data.HasCPU, data.CPU, data.Usage, data.Net = true, *s.CPUSecs, duration(s.UsageSecs), bytesWord(*s.NetBytes)
+	}
+	if s.FilesChangedAt != nil {
+		data.FilesAt = s.FilesChangedAt.UTC().Format("15:04 UTC")
+	}
+	if data.Activity {
+		data.Tools = toolCounts(s.ToolsInWindow)
+	}
+	return render(stalledTmpl, data)
 }
 
 // ConductorOptions is the conductor's options line; the owner's banner has buttons.
-const ConductorOptions = "Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier)."
+var ConductorOptions = render(mustTemplate("wakes/stalled-options"), nil)
 
 // cutID is an id's first n characters.
 func cutID(id string, n int) string {

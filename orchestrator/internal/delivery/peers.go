@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -55,7 +54,4 @@ func PeerByKey(ctx context.Context, tx pgx.Tx, taskID, key string) (Peer, bool, 
 
 // NotAPeer is the refusal for a task that is not one of the caller's
 // peers, whatever the tool.
-func NotAPeer(key string) string {
-	return fmt.Sprintf("%s is not one of your peers: only the other tasks on your epic are (list_tasks with peers: true shows "+
-		"them)", key)
-}
+func NotAPeer(key string) string { return render(notAPeerTmpl, key) }

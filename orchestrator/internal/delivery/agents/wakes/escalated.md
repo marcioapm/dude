@@ -1,0 +1,2 @@
+Escalated to a person: {{.Reason}}. Its actions: {{join .Actions ", "}}. Only the person decides: explain and propose, with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets you decide_escalation.
+{{- if .Verdict}} The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.{{end}}

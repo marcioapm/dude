@@ -667,8 +667,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	return wait.collect(results, started), nil
 }
 
-const stuckTurnNudge = "A tool call of yours was open for 10 minutes, so dude stopped your turn. " +
-	"Tell the people in the session briefly what you were doing and that it got stuck, then carry on or ask them."
+var stuckTurnNudge = delivery.MustText("notices/stuck-turn").Render(nil)
 
 func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 	type found struct{ ID, Org, SessionID string }
@@ -2799,12 +2798,8 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 		repo := byName[name][0]
 		in.AddRepositories = append(in.AddRepositories, repo)
 		carried = append(carried, q.ID)
-		note := "read only"
-		if q.Access == "write" {
-			note = "you may change it; commit there and it gets its own pull request"
-		}
 		// Written before lux clones it, so hedged: settleClone tells a failure.
-		told = append(told, fmt.Sprintf("%s is checked out at %s (%s) unless dude tells you its clone failed.", q.Name, repo.Path, note))
+		told = append(told, approvedRepoTold(q.Name, repo.Path, q.Access == "write"))
 	}
 	if len(failed) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -2818,7 +2813,7 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 	}
 	if len(carried) > 0 {
 		in.RequestID = carried[0]
-		in.Input = strings.TrimSpace("A person approved your request. " + strings.Join(told, " ") + " Carry on.\n\n" + in.Input)
+		in.Input = strings.TrimSpace(approvedTold(told) + "\n\n" + in.Input)
 	}
 	return nil
 }
@@ -3198,11 +3193,10 @@ func (s *Syncer) askControl(ctx context.Context, r phaseRun, call func(context.C
 
 // resumeNudge is what a resumed agent is told when nobody said anything
 // while it was paused.
-const resumeNudge = "You were paused and have been resumed. Continue the task where you left off."
+var resumeNudge = delivery.MustText("notices/resumed").Render(nil)
 
 // idleNudge is what an agent quiet mid-turn for the idle limit is told.
-const idleNudge = "You have not done anything for a while. Carry on with your task — or, if you need " +
-	"something only a person can give, ask for it with ask_person (every such decision in one call) and end your turn."
+var idleNudge = delivery.MustText("notices/idle").Render(nil)
 
 // Events of dude parking a Run and taking it back up.
 const (
@@ -3496,3 +3490,22 @@ func short(sha string) string {
 	}
 	return sha
 }
+
+// approvedRepoTold is what an agent is told of a repository a person
+// approved for it, checked out at path; write, when it may change it.
+func approvedRepoTold(name, path string, write bool) string {
+	return approvedRepo.Render(struct {
+		Name, Path string
+		Write      bool
+	}{name, path, write})
+}
+
+// approvedTold is what an agent is told when a person approved its
+// requests for repositories: each one's approvedRepoTold.
+func approvedTold(told []string) string { return approved.Render(told) }
+
+// What a Run is told of repositories a person approved for it.
+var (
+	approved     = delivery.MustText("notices/told/approved")
+	approvedRepo = delivery.MustText("notices/told/approved-repo")
+)

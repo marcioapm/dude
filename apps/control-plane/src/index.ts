@@ -42,6 +42,7 @@ import { registerMachineRoutes } from "./api/routes/machines.ts";
 import { registerAttachmentRoutes } from "./api/routes/attachments.ts";
 import { registerSessionRoutes } from "./api/routes/sessions.ts";
 import { registerModelRoutes } from "./api/routes/models.ts";
+import { registerJudgementRoutes } from "./api/routes/judgements.ts";
 import { registerImageRoutes } from "./api/routes/images.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
@@ -68,6 +69,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerMemoryRoutes(router);
   registerMachineRoutes(router);
   registerModelRoutes(router);
+  registerJudgementRoutes(router);
   registerImageRoutes(router);
   registerFindingRoutes(router);
   registerFeedbackRoutes(router);

@@ -7,10 +7,10 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { ModelTestInput, ModelTiersResponse, SettingsResponse } from "@dude/domain";
-import { act, click, mount, until } from "./dom.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
 import type { Member } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { MODEL_TIERS, PEOPLE, PROJECT, SETTINGS } from "../src/fixtures/data.ts";
@@ -39,6 +39,15 @@ class TestingClient extends FixtureClient {
 }
 
 const TIERS: ModelTiersResponse = { tiers: MODEL_TIERS, canEdit: true, upgrade: [] };
+
+/** The fixtures answer only a project's settings; the organisation's are the same, without the project. */
+class OrganizationClientBase extends FixtureClient {
+  override organizationSettings(): Promise<SettingsResponse> {
+    const { project: _, ...org } = SETTINGS;
+    const roles = Object.fromEntries(Object.entries(org.roles).map(([role, s]) => [role, { ...s, tier: { ...s.tier, organization: undefined } }]));
+    return Promise.resolve({ ...org, roles } as unknown as SettingsResponse);
+  }
+}
 
 /** Mounts a screen inside the providers the app gives it, unmounted after the test. */
 async function show(screen: ReactNode) {
@@ -193,14 +202,7 @@ describe("the Models page", () => {
 });
 
 describe("a role's tier", () => {
-  /** The fixtures answer only a project's settings; the organisation's are the same, without the project. */
-  class OrganizationClient extends FixtureClient {
-    override organizationSettings(): Promise<SettingsResponse> {
-      const { project: _, ...org } = SETTINGS;
-      const roles = Object.fromEntries(Object.entries(org.roles).map(([role, s]) => [role, { ...s, tier: { ...s.tier, organization: undefined } }]));
-      return Promise.resolve({ ...org, roles } as unknown as SettingsResponse);
-    }
-  }
+  class OrganizationClient extends OrganizationClientBase {}
   class FailingTiers extends OrganizationClient {
     override modelTiers(): Promise<ModelTiersResponse> {
       return Promise.reject(new Error("the backend answered 503"));
@@ -285,5 +287,50 @@ describe("a role's tier", () => {
     const { container } = await organizationRole(ADMIN, new FailingTiers("a"));
     const problem = await until(() => container.querySelector("[data-testid=role-tier-problem]"), "the tiers' problem");
     expect(problem.textContent).toBe("Example’s tiers could not be loaded: the backend answered 503");
+  });
+});
+
+describe("the judgement tier across the settings screen", () => {
+  /** Coder answers judgements; removing it moves them, on the server, to the replacement. */
+  class JudgingOnCoder extends OrganizationClientBase {
+    judgementTier: string | null = "mtr_coder";
+    settingsReads = 0;
+    tiers = MODEL_TIERS.map((t) => (t.id === "mtr_coder" ? { ...t, usedBy: [...t.usedBy, { kind: "judgements" as const }] } : t));
+    override modelTiers(): Promise<ModelTiersResponse> {
+      return Promise.resolve({ tiers: this.tiers, canEdit: true, upgrade: [] });
+    }
+    override judgementSettings() {
+      this.settingsReads++;
+      return Promise.resolve({ tierId: this.judgementTier, canEdit: true });
+    }
+    override removeModelTier(id: string, replacement: string | null): Promise<ModelTiersResponse> {
+      if (this.judgementTier === id) this.judgementTier = replacement;
+      this.tiers = this.tiers.filter((t) => t.id !== id);
+      return this.modelTiers();
+    }
+  }
+
+  function Screen({ client }: { client: FixtureClient }) {
+    const [at, setAt] = useState("models");
+    return <OrganizationSettingsScreen client={client} me={PEOPLE.find((p) => p.role === "admin")!} people={PEOPLE} onPeopleChanged={() => {}}
+      projects={[]} page={at} onPage={setAt} />;
+  }
+
+  test("removing the judgement tier with a replacement on Models, then opening Judgements, shows the replacement", async () => {
+    const client = new JudgingOnCoder("a");
+    const container = await show(<Screen client={client} />);
+    await until(() => container.querySelector("[data-testid=models-page] [data-tier=Coder]"), "the Models page");
+    await settle();
+    // Read once on the screen's first load, not again because the tiers arrived.
+    expect(client.settingsReads).toBe(1);
+    const dialog = await menuItem(container, "Coder", "Remove…");
+    expect(dialog.textContent).toContain("Judgements");
+    await click(dialog.querySelector("[data-testid=remove-model-tier]")!);
+    await until(() => (container.querySelector("[data-tier=Coder]") ? null : true), "Coder gone");
+    await click(container.querySelector("[data-settings-nav=judgements]")!);
+    const picker = await until(() => container.querySelector<HTMLElement>("[data-testid=judgement-tier]"), "the Judgements page");
+    await until(() => (picker.textContent?.startsWith("Thinker") ? picker : null), "the replacement picked");
+    expect(container.querySelectorAll("[data-testid=judgements-off]").length).toBe(0);
+    expect(client.settingsReads).toBe(2);
   });
 });

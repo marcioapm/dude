@@ -33,6 +33,9 @@ func (r Refusal) Error() string { return r.Msg }
 
 func refusef(format string, a ...any) error { return Refusal{Msg: fmt.Sprintf(format, a...)} }
 
+// refuseText is refusef with a message that has no verbs to fill.
+func refuseText(msg string) error { return Refusal{Msg: msg} }
+
 // IsRefusal says whether err is a Refusal.
 func IsRefusal(err error) bool { return errors.As(err, new(Refusal)) }
 
@@ -106,22 +109,17 @@ func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
 	}
 	switch {
 	case Ended(status):
-		return nil, refusef("this task is %s: you are read-only now and start nothing. Offer to record the change as a "+
-			"follow-up task (create_task), linked to this one, and create it once the person agrees", status)
+		return nil, refusef(rThisTaskYouAreReadOnly, status)
 	case d == nil || !d.Live():
-		return nil, refusef("this task has no delivery in progress to decide for")
+		return nil, refuseText(rThisTaskHasNoDeliveryIn)
 	case !d.State.conducted():
-		return nil, refusef("Deliver takes this task's decisions, not you: you are read-only. A person hands them to you " +
-			"by writing in Chat; until then, answer and advise")
+		return nil, refuseText(rDeliverTakesThisTaskDecisionsNot)
 	case d.Step == "conductorDecision" && d.State.Decision != nil && d.State.Decision.Taken != nil:
-		return nil, refusef("this decision was taken already (%s); you are woken at the next one", d.State.Decision.Taken.Action)
+		return nil, refusef(rThisDecisionWasTakenAlreadyYou, d.State.Decision.Taken.Action)
 	case d.Step == "decide" && d.State.Escalation != nil:
-		return nil, refusef("the delivery is stopped for a person at an escalation (%s), not waiting on your decision. "+
-			"The person decides it on the banner, or by answering your question about it (ask_person with the "+
-			"escalation's actions as choices); if the owner answers that question in their own words, decide it with "+
-			"decide_escalation", strings.ReplaceAll(d.State.Escalation.Reason, "_", " "))
+		return nil, refusef(rDeliveryStoppedForPersonAtEscalation, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "))
 	case d.Status != "waiting" || d.Step != "conductorDecision" || d.State.Decision == nil:
-		return nil, refusef("the delivery is not waiting on a decision now (it is at %s): you are woken when it is", d.Step)
+		return nil, refusef(rDeliveryNotWaitingOnDecisionNow, d.Step)
 	}
 	return d, nil
 }
@@ -140,7 +138,7 @@ func liveConductor(ctx context.Context, tx pgx.Tx, ref RunRef) error {
 		return err
 	}
 	if !live {
-		return refusef("you are no longer this task's conductor: another took over from you. Decide nothing")
+		return refuseText(rYouAreNoLongerThisTask)
 	}
 	return nil
 }
@@ -205,7 +203,7 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	}
 	p, st := d.State.Decision, &d.State
 	if !slices.Contains(p.Phases(), in.Phase) {
-		return "", refusef("%s cannot start at this decision (%s); it can start %s", in.Phase, pointLabel[p.Point], listOr(p.Phases()))
+		return "", refusef(rCannotStartAtThisDecisionCan, in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
 	if p.Point == PointStart {
 		if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
@@ -214,19 +212,19 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	}
 	if Publishes[in.Phase] {
 		if err := RefuseWhileMovingTx(ctx, tx, ref.TaskID); errors.Is(err, ErrPublishMoving) {
-			return "", refusef("your publish is moving the task branch now; start %s again in a moment", in.Phase)
+			return "", refusef(rYourPublishMovingTaskBranchNow, in.Phase)
 		} else if err != nil {
 			return "", err
 		}
 	}
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
-		return "", refusef("categories are for review, findings for fix")
+		return "", refuseText(rCategoriesAreForReviewFindingsFor)
 	}
 	switch in.Phase {
 	case PhaseReview:
 		for _, c := range in.Categories {
 			if !slices.Contains(reviewCategories(), c) {
-				return "", refusef("no reviewer %q: the categories are %s", c, listOr(reviewCategories()))
+				return "", refusef(rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
 			}
 		}
 		if err := reviewBound(st); err != nil {
@@ -262,7 +260,7 @@ const noteChars = 4000
 // review iterations are spent, as the policy's loop would escalate.
 func reviewBound(st *State) error {
 	if st.Iteration >= st.Policy.MaxReviewIterations {
-		return refusef("the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person)",
+		return refusef(rReviewLoopAtItsBoundRounds,
 			st.Iteration, st.Policy.MaxReviewIterations)
 	}
 	return nil
@@ -301,7 +299,7 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		if people > 0 {
 			return nil, nil
 		}
-		return nil, refusef("no open finding or feedback item to fix")
+		return nil, refuseText(rNoOpenFindingOrFeedbackItem)
 	}
 	limit := st.Policy.MaxAttemptsPerFinding + st.ExtraFixAttempts
 	// The policy's checkpoint: a blocking finding still open after its last
@@ -309,19 +307,18 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	// or the person decides. Another fix, of any finding, waits for that.
 	for _, f := range all {
 		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(st.Policy.BlockingSeverities, f.Severity) {
-			return nil, refusef("%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) "+
-				"or ask the person how to go on (ask_person) before another fix", f.ID, f.FixAttempts)
+			return nil, refusef(rStillOpenAfterFixAttemptsBound, f.ID, f.FixAttempts)
 		}
 	}
 	for _, id := range named {
 		f, ok := byID[id]
 		switch {
 		case !ok:
-			return nil, refusef("%s is not a finding of this task's delivery (findings lists them)", id)
+			return nil, refusef(rNotFindingThisTaskDeliveryFindings, id)
 		case f.Status != "open":
-			return nil, refusef("%s is %s, not open", id, f.Status)
+			return nil, refusef(rNotOpen, id, f.Status)
 		case f.FixAttempts >= limit:
-			return nil, refusef("%s has had %d fix attempts, the bound per finding: ask the person how to go on (ask_person)",
+			return nil, refusef(rHasHadFixAttemptsBoundPer,
 				id, f.FixAttempts)
 		}
 	}
@@ -337,7 +334,7 @@ func prFixBound(ctx context.Context, tx pgx.Tx, st *State) error {
 // prFixBoundFor is prFixBound for a fix of the pull requests in repos.
 func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) error {
 	if st.PRIteration >= st.Policy.MaxPRFixIterations {
-		return refusef("pull request fixes are at their bound: %d of %d this review round. Ask the person how to go on (ask_person)",
+		return refusef(rPullRequestFixesAreAtTheir,
 			st.PRIteration, st.Policy.MaxPRFixIterations)
 	}
 	var raw []byte
@@ -348,23 +345,33 @@ func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) er
 	total := forge.ReadSettings(raw).FixRoundsPerPR
 	for _, repo := range repos {
 		if total > 0 && st.PRFixes[repo] >= total {
-			return refusef("the pull request in %s has had %d fix rounds, the organization's bound: ask the person how to go on (ask_person)",
+			return refusef(rPullRequestInHasHadFix,
 				repo, st.PRFixes[repo])
 		}
 	}
 	return nil
 }
 
-// Before the pull request, the conductor asks this, with these answers;
-// only Open or Draft, at the head it was asked at, opens it.
-const (
-	GateQuestion = "Open the pull request?"
-	GateOpen     = "Open"
-	GateDraft    = "Draft"
+// Before the pull request, the conductor asks this, with these answers
+// (results/gate-choices, one a line, Open and Draft first); only Open or
+// Draft, at the head it was asked at, opens it.
+const GateQuestion = "Open the pull request?"
+
+var (
+	GateChoices = gateChoices(render(mustTemplate("results/gate-choices"), nil))
+	GateOpen    = GateChoices[0]
+	GateDraft   = GateChoices[1]
 )
 
-// GateChoices are the gate question's answers.
-var GateChoices = []string{GateOpen, GateDraft, "Show me the diff", "Another round"}
+// gateChoices are the gate's answers, one a line: Open, Draft, then the
+// rest. Fewer than two panics at init.
+func gateChoices(text string) []string {
+	choices := strings.Split(text, "\n")
+	if len(choices) < 2 {
+		panic("agents/results/gate-choices.md needs Open and Draft, one a line")
+	}
+	return choices
+}
 
 // What decide answers the conductor once the delivery goes on, or once it
 // has asked the person.
@@ -384,7 +391,7 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 	p, st := d.State.Decision, &d.State
 	note = strings.TrimSpace(note)
 	if !slices.Contains(p.Actions(), action) {
-		return nil, refusef("%q is not a decision at %s; one of %s, or start_phase", action, pointLabel[p.Point], listOr(p.Actions()))
+		return nil, refusef(rNotDecisionAtOneOrStart, action, pointLabel[p.Point], listOr(p.Actions()))
 	}
 	switch action {
 	case "ask_person":
@@ -412,8 +419,7 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 		if n, err := BlockingFeedbackTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return nil, err
 		} else if n > 0 {
-			return nil, refusef("%d feedback items from people are not handled yet (feedback): start a fix for them "+
-				"(start_phase fix) before the pull request", n)
+			return nil, refusef(rFeedbackItemsFromPeopleAreNot, n)
 		}
 		draft, err := GateAnswer(ctx, tx, st)
 		if err != nil {
@@ -440,11 +446,11 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 	if open, err := HasOpenQuestion(ctx, tx, ref.RunID); err != nil {
 		return nil, err
 	} else if open {
-		return nil, refusef("you already have a question waiting for an answer: end your turn and wait for it")
+		return nil, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
 	if d.State.Decision.Point != PointBeforePR {
 		if note == "" {
-			return nil, refusef("say what to ask the person in the note")
+			return nil, refuseText(rSayWhatAskPersonInNote)
 		}
 		id, err := AskTx(ctx, tx, ref, clip(note, noteChars), nil)
 		if err != nil {
@@ -555,7 +561,7 @@ func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err erro
 		WHERE task_id = $1 AND pr_gate_heads IS NOT NULL ORDER BY asked_at DESC, id DESC LIMIT 1`, st.TaskID).
 		Scan(&status, &answer, &raw)
 	if db.IsNotFound(err) {
-		return false, refusef("the person has not been asked: decide ask_person first, which asks them %q", GateQuestion)
+		return false, refusef(rPersonHasNotBeenAskedDecide, GateQuestion)
 	}
 	if err != nil {
 		return false, err
@@ -564,15 +570,15 @@ func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err erro
 	_ = json.Unmarshal(raw, &heads)
 	switch said := strings.ToLower(strings.TrimSpace(answer)); {
 	case status != "answered":
-		return false, refusef("the person has not answered %q yet: end your turn and wait", GateQuestion)
+		return false, refusef(rPersonHasNotAnsweredYetEnd, GateQuestion)
 	case !maps.Equal(heads, nonNilMap(st.Heads)):
-		return false, refusef("the person answered at an earlier head; the work has moved since. Ask again (decide ask_person)")
+		return false, refuseText(rPersonAnsweredAtEarlierHeadWork)
 	case said == strings.ToLower(GateOpen):
 		return false, nil
 	case said == strings.ToLower(GateDraft):
 		return true, nil
 	default:
-		return false, refusef("the person answered %q, not Open or Draft: do what they asked", clip(oneLine(answer), 80))
+		return false, refusef(rPersonAnsweredNotOpenOrDraft, clip(oneLine(answer), 80))
 	}
 }
 
@@ -584,19 +590,19 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return refusef("say why it is dismissed: the reason is shown with the finding")
+		return refuseText(rSayWhyDismissedReasonShownWith)
 	}
 	var title, status string
 	err := tx.QueryRow(ctx, `SELECT title, status::text FROM review_findings WHERE id = $1 AND task_id = $2 FOR UPDATE`,
 		findingID, ref.TaskID).Scan(&title, &status)
 	if db.IsNotFound(err) {
-		return refusef("%s is not a finding of this task (findings lists them)", findingID)
+		return refusef(rNotFindingThisTaskFindingsLists, findingID)
 	}
 	if err != nil {
 		return err
 	}
 	if status != "open" {
-		return refusef("%s is %s already", findingID, status)
+		return refusef(rAlready, findingID, status)
 	}
 	note := DismissedByConductor + clip(oneLine(reason), 1000)
 	if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted', resolution_note = $2, updated_at = now()
@@ -649,8 +655,7 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 		return err
 	}
 	if started {
-		return refusef("an implementer has started on this attempt: the task's text is what it was given. Record what " +
-			"changed as a decision with the person (ask_person), or as a follow-up task")
+		return refuseText(rImplementerHasStartedOnThisAttempt)
 	}
 	var goal string
 	var criteria []string
@@ -671,7 +676,7 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 		after["acceptanceCriteria"] = db.NonNil(criteria)
 	}
 	if len(after) == 0 {
-		return refusef("give a goal, acceptance criteria, or both")
+		return refuseText(rGiveGoalAcceptanceCriteriaOrBoth)
 	}
 	next, _ := json.Marshal(db.NonNil(criteria))
 	if _, err := tx.Exec(ctx, `UPDATE tasks SET goal = $2, acceptance_criteria = $3::jsonb, updated_at = now() WHERE id = $1`,
@@ -682,7 +687,7 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 	if err := SyncTaskImagesTx(ctx, tx, ref.TaskID, goal, criteria); err != nil {
 		var refused AttachmentError
 		if errors.As(err, &refused) {
-			return refusef("%s; nothing was saved", refused.Message)
+			return refusef(rNothingWasSaved, refused.Message)
 		}
 		return err
 	}
