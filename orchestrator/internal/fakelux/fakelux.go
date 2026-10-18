@@ -41,7 +41,7 @@ import (
 // spec it was submitted with.
 type Behaviour struct {
 	// Command executes in the workspace on every placement before the simulated
-	// agent runs; its output is streamed as an agent message, and errors fail the Run.
+	// agent runs; its output is buffered and emitted once on completion, and errors fail the Run.
 	Command []string
 	// The agent's reply, streamed as message chunks.
 	Reply string
@@ -227,7 +227,8 @@ type Run struct {
 	assigning int
 	// The start lux accepted last (submit, resume or migrate), counted up:
 	// a start under way goes on only while it is still the latest one.
-	starts int
+	starts  int
+	command *workloadCommand
 	// Its next placement goes to another host (a migrate).
 	moveNext  bool
 	artifacts []*artifact
@@ -565,7 +566,7 @@ type artifact struct {
 // deliverQueued hands queued input to an idle agent, which takes it as a
 // new turn. Callers hold s.mu.
 func (s *Server) deliverQueued(run *Run) {
-	if len(run.queued) == 0 || run.State != "running" {
+	if len(run.queued) == 0 || run.State != "running" || run.command != nil {
 		return
 	}
 	for i := range run.queued {
@@ -748,14 +749,16 @@ type Server struct {
 	failStarts map[string]int
 	failAs     map[string]string
 	// Test hooks for stream delivery, placement starts, and event pages.
-	beforeEvent    func(runID string, eventID int64, typ string)
-	beforeStart    func(runID string)
-	beforeAssign   func(runID string)
-	afterPlacement func(runID string, epoch int)
-	eventPages     func(runID string, after int64, ids []int64) int
+	beforeEvent         func(runID string, eventID int64, typ string)
+	beforeStart         func(runID string)
+	beforeAssign        func(runID string)
+	afterPlacement      func(runID string, epoch int)
+	beforeCommandResult func(epoch int)
+	eventPages          func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
+	commands  sync.WaitGroup
 	// What exec and GET say of a Run's processes and usage (execPlay).
 	execPlay
 	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
@@ -791,7 +794,17 @@ func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
 // Close is the fake lux shutting down: work held on InputGate is dropped,
 // so no goroutine outlives the test that served it.
 func (s *Server) Close() {
-	s.closeOnce.Do(func() { close(s.closed) })
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		close(s.closed)
+		for _, run := range s.runs {
+			if run.command != nil {
+				run.command.cancel()
+			}
+		}
+		s.mu.Unlock()
+		s.commands.Wait()
+	})
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -1618,7 +1631,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	}
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
-	if !s.behaviourCommand(run, spec) {
+	if !s.behaviourCommand(run, spec, epoch, start) {
 		return
 	}
 	if generic(spec) {
@@ -2113,6 +2126,9 @@ func (s *Server) setStage(run *Run, stage string, since *time.Time, reason strin
 
 // setStateWith records a state with lux's reason for it. Callers hold s.mu.
 func (s *Server) setStateWith(run *Run, state, reason string) {
+	if (state == "stopping" || lux.Terminal(state)) && run.command != nil {
+		run.command.cancel()
+	}
 	run.State, run.StateReason = state, reason
 	if state == "running" {
 		p := run.currentPlacement()

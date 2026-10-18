@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -270,22 +271,72 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 
-func (s *Server) behaviourCommand(run *Run, spec map[string]any) bool {
+type workloadCommand struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// behaviourCommand returns with s.mu held, but releases it while waiting for
+// the process. Both the result and the simulated agent belong to this start.
+func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start int) bool {
 	args := run.behavior.Command
 	if len(args) == 0 {
 		return true
 	}
-	dir, err := s.checkout(run, spec)
-	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, args[0], s.inWorkspace(run, args[1:])...)
-		cmd.Dir = dir
-		var out []byte
-		out, err = cmd.CombinedOutput()
-		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-			"content": map[string]any{"type": "text", "text": string(out)}})
+	select {
+	case <-s.closed:
+		return false
+	default:
 	}
+	dir, err := s.checkout(run, spec)
+	if err != nil {
+		s.setStateWith(run, "failed", "workload-failed")
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := &workloadCommand{cancel: cancel, done: make(chan struct{})}
+	run.command = command
+	s.commands.Add(1)
+	defer s.commands.Done()
+	defer close(command.done)
+	cmd := exec.CommandContext(ctx, args[0], s.inWorkspace(run, args[1:])...)
+	cmd.Dir = dir
+	// Kill the shell and its children together; bound pipe draining even if
+	// a descendant escapes the process group while retaining stdout/stderr.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	beforeResult := s.beforeCommandResult
+	s.mu.Unlock()
+	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// WaitDelay only replaces a successful exit: inherited pipes do
+		// not turn a successful workload into a failure.
+		err = nil
+	}
+	// A shell can exit before its children. Do not leave those behind even
+	// when the command itself completed successfully.
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	if beforeResult != nil {
+		beforeResult(epoch)
+	}
+	s.mu.Lock()
+	if run.command == command {
+		run.command = nil
+	}
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	if !run.starting(epoch, start) || run.State != "running" || ctx.Err() == context.Canceled {
+		return false
+	}
+	s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+		"content": map[string]any{"type": "text", "text": string(out)}})
 	if err != nil {
 		s.setStateWith(run, "failed", "workload-failed")
 		return false

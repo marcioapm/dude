@@ -4,9 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -113,6 +119,197 @@ func TestWorkloadReadsInitMarkerOnEveryPlacement(t *testing.T) {
 			t.Fatalf("placement %d run = %+v: %v", epoch, got, err)
 		}
 	}
+}
+
+func TestBehaviourCommandCancellation(t *testing.T) {
+	for _, action := range []string{"stop", "terminate", "cancel", "legacy-cancel", "close"} {
+		t.Run(action, func(t *testing.T) {
+			fake := New("", "k", func(map[string]any) Behaviour {
+				return Behaviour{Hang: true, Command: []string{"sh", "-eu", "-c",
+					"sleep 60 & child=$!; echo buffered-before-exit; echo $$ $child > /workspace/ready.tmp; mv /workspace/ready.tmp /workspace/ready; wait $child"}}
+			})
+			fake.CancelledState = action == "legacy-cancel"
+			t.Cleanup(fake.Close)
+			releaseResult := make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseResult) }) }
+			t.Cleanup(release)
+			fake.beforeCommandResult = func(epoch int) {
+				if action == "stop" && epoch == 1 {
+					<-releaseResult
+				}
+			}
+			finished := make(chan int, 2)
+			fake.AfterPlacement(func(_ string, epoch int) { finished <- epoch })
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(srv.Close)
+			client := lux.New(srv.URL, "k")
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
+				Workload: lux.Workload{Adapter: "acp"}}, "command-cancel")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pids := waitCommandReady(t, fake, run.ID)
+			if err := client.Input(ctx, run.ID, lux.InputRequest{RequestID: "queued", Text: "wait for command"}); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			turns := fake.runs[run.ID].turnsEnded
+			records := len(fake.runs[run.ID].records)
+			fake.mu.Unlock()
+			if turns != 0 || records != 0 {
+				t.Fatal("input started the agent before command completion")
+			}
+			fake.mu.Lock()
+			command := fake.runs[run.ID].command
+			fake.mu.Unlock()
+			if command == nil {
+				t.Fatal("ready command is not registered")
+			}
+			requestCtx, requestCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer requestCancel()
+			done := make(chan error, 1)
+			go func() {
+				if action == "close" {
+					fake.Close()
+					done <- nil
+					return
+				}
+				endpoint := action
+				if endpoint == "legacy-cancel" {
+					endpoint = "cancel"
+				}
+				req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, srv.URL+"/v1/runs/"+run.ID+"/"+endpoint, nil)
+				if err == nil {
+					req.Header.Set("Authorization", "Bearer k")
+					var resp *http.Response
+					resp, err = http.DefaultClient.Do(req)
+					if err == nil {
+						resp.Body.Close()
+						if resp.StatusCode != http.StatusAccepted {
+							err = errors.New(resp.Status)
+						}
+					}
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-requestCtx.Done():
+				t.Fatal("lifecycle request waited for the workload command")
+			}
+			if action == "stop" {
+				waitState(t, client, run.ID, "stopped")
+				// Replace the placement before waiting for its completion callback.
+				if err := os.Remove(filepath.Join(fake.Workspace(run.ID), "ready")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := client.Resume(ctx, run.ID, lux.ResumeInput{}); err != nil {
+					t.Fatal(err)
+				}
+				second := waitCommandReady(t, fake, run.ID)
+				if second[0] == pids[0] {
+					t.Fatal("resume did not start a new command")
+				}
+				release()
+			}
+			select {
+			case <-command.done:
+			case <-ctx.Done():
+				t.Fatal("command was not reaped")
+			}
+			select {
+			case epoch := <-finished:
+				if epoch != 1 {
+					t.Fatalf("completed epoch %d, want 1", epoch)
+				}
+			case <-ctx.Done():
+				t.Fatal("old placement did not finish")
+			}
+			for _, pid := range pids {
+				waitCommandGone(t, pid)
+			}
+			got, err := client.Get(ctx, run.ID)
+			want := "terminated"
+			switch action {
+			case "stop", "close":
+				want = "running"
+			case "legacy-cancel":
+				want = "cancelled"
+			}
+			if err != nil || got.State != want || got.StateReason == "workload-failed" {
+				t.Fatalf("after old command completion: %+v, %v; want %s", got, err, want)
+			}
+			if records := fake.Records(run.ID); len(records) != 0 {
+				t.Fatalf("cancelled command published buffered output or continued the agent: %+v", records)
+			}
+			if action == "stop" {
+				fake.Close()
+				for _, pid := range waitReadyPIDs(t, fake.Workspace(run.ID)) {
+					waitCommandGone(t, pid)
+				}
+			}
+		})
+	}
+}
+
+func waitCommandReady(t *testing.T, fake *Server, id string) []int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if dir := fake.Workspace(id); dir != "" {
+			if _, err := os.Stat(filepath.Join(dir, "ready")); err == nil {
+				return waitReadyPIDs(t, dir)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("command did not write its readiness marker")
+	return nil
+}
+
+func waitReadyPIDs(t *testing.T, dir string) []int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "ready"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		t.Fatalf("invalid readiness marker %q", data)
+	}
+	var pids []int
+	for _, field := range fields {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid <= 0 {
+			t.Fatalf("invalid PID %q: %v", field, err)
+		}
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+func waitCommandGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return
+		}
+		// An orphaned child can remain a zombie until the host's init reaps
+		// it; it no longer executes or holds the command's output pipes.
+		out, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		if strings.HasPrefix(strings.TrimSpace(string(out)), "Z") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("command process %d still alive", pid)
 }
 
 // An init that exits non-zero fails the placement before the workload
