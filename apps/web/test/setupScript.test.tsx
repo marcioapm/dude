@@ -142,6 +142,19 @@ test("Save sends the script as written, and the row's mark follows", async () =>
   expect(mark.getAttribute("aria-label")).toBe("Edit sdk-js’s setup script, 1 line");
 });
 
+test("CRLF saved scripts are clean on open and NUL scripts cannot save", async () => {
+  const client = new ScriptClient(true, "echo one\r\necho two\r\n");
+  const page = await open(client);
+  await fromMenu(page, "web-console");
+  expect(saveButton().disabled).toBe(true);
+  expect((await editor()).textContent).toContain("echo one");
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
+  await settle();
+  await fromMenu(page, "sdk-js");
+  await setText("a\0b");
+  expect(document.querySelector("[data-testid=setup-script-invalid]")?.textContent).toContain("NUL");
+  expect(saveButton().disabled).toBe(true);
+});
 test("a script cleared to blank saves as none, and the mark goes", async () => {
   const client = new ScriptClient(true);
   const page = await open(client);
