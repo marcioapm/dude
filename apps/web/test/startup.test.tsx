@@ -216,7 +216,7 @@ describe("the projection", () => {
     const ended = project(events, "failed").turns.find((t) => t.kind === "ended")!;
     expect(ended.kind === "ended" && ended.start?.failed).toEqual({ reason: error, source: "dude", setup: { repository: "api", exitCode: 1, output } });
     expect(ended).toMatchObject({ setup: { repository: "api", exitCode: 1, output } });
-    // Without stages (an older lux), the ended line still carries it.
+    // With no start still active, the ended line carries the setup failure.
     const bare = project([created(), ev("run.failed", { status: "failed", error, setup: { repository: "api", exitCode: 124, output: "" } }, 50_000)], "failed")
       .turns.find((t) => t.kind === "ended")!;
     expect(bare).toMatchObject({ text: `Failed: ${error}`, setup: { repository: "api", exitCode: 124, output: "" } });
