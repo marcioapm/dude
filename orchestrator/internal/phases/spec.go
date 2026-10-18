@@ -150,8 +150,6 @@ type specInput struct {
 	// The Run's instruction file (delivery.Instructions), written into
 	// /workspace by its init script on every placement; "" writes none.
 	Instructions string
-	// Its init script, from Instructions (runSpec).
-	init string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
@@ -329,7 +327,6 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		},
 		Timeout: cmp.Or(c.Timeout, DefaultTimeout),
 	}
-	addInit(&spec, in.init)
 	// The conductor parks while idle, and its running time adds up across
 	// the whole task: the hard limit is for phase Runs only.
 	if in.Phase == "" {

@@ -63,9 +63,6 @@ func writeFile(path, body, end string) string {
 // if script succeeded. That init runs in a subshell with the shell's
 // defaults, so script's set -eu cannot change it.
 func addInit(spec *lux.Spec, script string) {
-	if script == "" {
-		return
-	}
 	if spec.Init != nil && strings.TrimSpace(spec.Init.Script) != "" {
 		script = strings.TrimSuffix(script, "\n") + " && (\nset +eu\n" + spec.Init.Script + "\n)\n"
 	}
@@ -75,15 +72,16 @@ func addInit(spec *lux.Spec, script string) {
 // runSpec is buildSpec for a Run with an instruction file: refused when
 // the file cannot be written by an init, or the init is over MaxInitScript.
 func runSpec(c AgentConfig, in specInput) (lux.Spec, error) {
-	if in.Instructions != "" {
-		script, err := instructionsInit(in.Instructions)
-		if err != nil {
-			return lux.Spec{}, err
-		}
-		in.init = script
-	}
 	spec := buildSpec(c, in)
-	if spec.Init != nil && len(spec.Init.Script) > MaxInitScript {
+	if in.Instructions == "" {
+		return spec, nil
+	}
+	script, err := instructionsInit(in.Instructions)
+	if err != nil {
+		return lux.Spec{}, err
+	}
+	addInit(&spec, script)
+	if len(spec.Init.Script) > MaxInitScript {
 		return lux.Spec{}, fmt.Errorf("the Run's init script is %d bytes, over the %d-byte limit", len(spec.Init.Script), MaxInitScript)
 	}
 	return spec, nil
