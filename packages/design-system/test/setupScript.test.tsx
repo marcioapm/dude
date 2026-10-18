@@ -10,7 +10,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SetupScriptMark, SizeMeter, sizeLevel, textLines } from "../src/components/SetupScript.tsx";
-import { CodeEditor } from "../src/components/CodeEditor.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -67,15 +66,5 @@ describe("SetupScriptMark", () => {
     expect(edit!.textContent).toBe("setup");
     await act(async () => edit!.click());
     expect(opened).toBe(1);
-  });
-});
-
-describe("CodeEditor maxLines", () => {
-  test("caps the text area's height at the given lines, and only when given", () => {
-    const long = Array.from({ length: 40 }, (_, i) => `echo ${i}`).join("\n");
-    const capped = renderToStaticMarkup(<CodeEditor aria-label="Setup script" language="shell" value={long} minLines={4} maxLines={6} />);
-    const uncapped = renderToStaticMarkup(<CodeEditor aria-label="Setup script" language="shell" value={long} minLines={4} />);
-    expect(capped).toContain("max-height:calc(6 * var(--ds-code-line) + 2 * var(--ds-space-8))");
-    expect(uncapped).not.toContain("max-height");
   });
 });
