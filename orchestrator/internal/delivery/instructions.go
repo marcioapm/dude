@@ -180,8 +180,3 @@ func BuiltinPrompt(role string) string {
 	}
 	return render(parts[1], InstructionsInput{Tools: true, CLI: true}.data(role))
 }
-
-// fill puts the task and the Run into a saved prompt where it names them.
-func (v PromptVars) fill(prompt string) string {
-	return PromptInput{Title: v.Title, Goal: v.Goal, AcceptanceCriteria: v.Criteria, Branch: v.Branch, BaseRef: v.BaseRef}.fill(prompt)
-}

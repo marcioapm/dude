@@ -91,15 +91,15 @@ type PromptInput struct {
 var promptVariable = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
 
 // fill puts the task and the Run into a saved prompt where it names them.
-// The task still follows in full, as every phase frames it: a prompt that
+// The task still follows in full in the first message: a prompt that
 // names one part of it must not cost the agent the rest.
-func (in PromptInput) fill(prompt string) string {
+func (v PromptVars) fill(prompt string) string {
 	values := map[string]string{
-		"task.title":    in.Title,
-		"task.goal":     in.Goal,
-		"task.criteria": CriteriaList(in.AcceptanceCriteria),
-		"run.branch":    in.Branch,
-		"run.base_ref":  in.BaseRef,
+		"task.title":    v.Title,
+		"task.goal":     v.Goal,
+		"task.criteria": CriteriaList(v.Criteria),
+		"run.branch":    v.Branch,
+		"run.base_ref":  v.BaseRef,
 	}
 	return promptVariable.ReplaceAllStringFunc(prompt, func(m string) string {
 		if v, ok := values[promptVariable.FindStringSubmatch(m)[1]]; ok {
