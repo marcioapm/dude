@@ -130,21 +130,21 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 	if replaced {
 		org = nil
 	}
+	stance := render(parts[1], d)
 	if org == nil && !replaced {
-		sections = append(sections, render(parts[1], d))
+		sections = append(sections, stance)
 	}
 	if fixed := render(parts[2], d); fixed != "" {
 		sections = append(sections, fixed)
 	}
 	if role == "reviewer" {
-		if text := reviewerAspect(aspect); text != "" {
-			sections = append(sections, text)
-		}
+		sections = append(sections, reviewFocus[reviewCategory(aspect)])
 	}
+	stanceTitle, _, _ := strings.Cut(stance, "\n")
 	saved := struct {
 		Org, Project, OrgName, ProjectName, Stance string
 		OrgReplaces, ProjectReplaces, OrgDropped   bool
-	}{OrgName: in.OrgName, ProjectName: in.ProjectName, Stance: stanceTitle(parts[1], d),
+	}{OrgName: in.OrgName, ProjectName: in.ProjectName, Stance: strings.TrimPrefix(stanceTitle, "## "),
 		OrgReplaces: org != nil, ProjectReplaces: replaced, OrgDropped: replaced && in.OrgPrompt != nil}
 	if org != nil {
 		saved.Org = strings.TrimSpace(in.Vars.fill(*org))
@@ -161,19 +161,12 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 	return strings.Join(sections, "\n\n") + "\n"
 }
 
-// reviewerAspect is the reviewer's aspect for category, correctness for a
-// category without one.
-func reviewerAspect(category string) string {
+// reviewCategory is category when it has an aspect, else correctness.
+func reviewCategory(category string) string {
 	if reviewFocus[category] == "" {
-		category = "correctness"
+		return "correctness"
 	}
-	return reviewFocus[category]
-}
-
-// stanceTitle is the stance section's heading, without its "## ".
-func stanceTitle(stance *template.Template, d instructionData) string {
-	first, _, _ := strings.Cut(render(stance, d), "\n")
-	return strings.TrimPrefix(first, "## ")
+	return category
 }
 
 // BuiltinPrompt is the part of a role's instructions a saved prompt stands

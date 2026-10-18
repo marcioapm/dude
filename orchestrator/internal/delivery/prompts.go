@@ -325,11 +325,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 
 	case PhaseReview:
-		category := in.Category
-		if reviewFocus[category] == "" {
-			category = "correctness"
-		}
-		add(render(reviewLeadTmpl, category))
+		add(render(reviewLeadTmpl, reviewCategory(in.Category)))
 		add(render(taskUnderReviewTmpl, in.task()), reviewScope(in.ReviewBase, in.ReviewOf, len(in.Repositories)))
 		for _, f := range in.PRFeedback {
 			if f.Source == "integration" {
