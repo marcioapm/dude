@@ -255,6 +255,7 @@ type Spec struct {
 	Labels   map[string]string `json:"labels,omitempty"`
 	Image    Image             `json:"image"`
 	Workload Workload          `json:"workload"`
+	Init     *Init             `json:"init,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
 	Secrets  []Secret          `json:"secrets,omitempty"`
 	Git      *Git              `json:"git,omitempty"`
@@ -266,14 +267,6 @@ type Spec struct {
 	Resources *Resources `json:"resources,omitempty"`
 	// Where it may run; nil is the tenant's default pool.
 	Placement *PlacementSpec `json:"placement,omitempty"`
-	// Run with /bin/sh -c before the workload on every placement; a non-zero
-	// exit fails the placement (lux reason init-failed).
-	Init *Init `json:"init,omitempty"`
-}
-
-// Init is lux's spec.Init.
-type Init struct {
-	Script string `json:"script"`
 }
 
 // Resources is a Run's size. Memory and disk are bytes, which lux takes as
@@ -353,6 +346,15 @@ func (r Run) NestedContainers(sent Spec) bool {
 		return sb.NestedContainers
 	}
 	return sent.Sandbox != nil && sent.Sandbox.NestedContainers
+}
+
+// Init is a script lux runs with /bin/sh -c in the container, as the
+// workload's user with its environment, after the repositories are synced
+// and before the workload, on every start of the Run, resumes included. A
+// non-zero exit ends the placement (exit reason init-failed). lux puts no
+// time limit on it.
+type Init struct {
+	Script string `json:"script"`
 }
 
 type Image struct {

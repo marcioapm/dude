@@ -571,7 +571,8 @@ func indexOf(t *testing.T, records []lux.Frame, from int, typ, requestID string)
 }
 
 // An init that exits non-zero fails the placement before the workload
-// starts, with lux's reason.
+// starts, as lux does: an exited event with reason init-failed, and the
+// Run failed with the exit code.
 func TestAFailingInitFailsThePlacement(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
 	t.Cleanup(fake.Close)
@@ -583,11 +584,22 @@ func TestAFailingInitFailsThePlacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, client, run.ID, "failed")
-	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if got, _ := client.Get(context.Background(), run.ID); got.StateReason == "init-failed" {
-			return
-		}
+	if got, _ := client.Get(context.Background(), run.ID); got.StateReason != "exit code 3" {
+		t.Errorf("failed with reason %q", got.StateReason)
 	}
-	got, _ := client.Get(context.Background(), run.ID)
-	t.Errorf("failed with reason %q", got.StateReason)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	var exited struct{ Reason string }
+	err = client.Output(ctx, run.ID, "", 0, func(f lux.Frame) error {
+		if f.Kind == "lux" && f.EventType == "exited" {
+			if err := json.Unmarshal(f.EventData, &exited); err != nil {
+				return err
+			}
+			return errStreamDone
+		}
+		return nil
+	})
+	if !errors.Is(err, errStreamDone) || exited.Reason != "init-failed" {
+		t.Errorf("exited with reason %q: %v", exited.Reason, err)
+	}
 }

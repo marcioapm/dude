@@ -1,9 +1,7 @@
 package fakelux
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -20,37 +18,6 @@ func (s *Server) workspaceDir(run *Run) (string, error) {
 	}
 	run.root = dir
 	return dir, nil
-}
-
-// runInit runs the spec's init.script with /bin/sh -c before the workload,
-// on every placement, as lux's shim does (internal/shim/shim.go runInit),
-// reported as lux.init start and done. False: it exited non-zero, and the
-// placement failed with reason init-failed. Callers hold s.mu.
-func (s *Server) runInit(run *Run) bool {
-	var spec struct {
-		Init *struct {
-			Script string `json:"script"`
-		} `json:"init"`
-	}
-	_ = json.Unmarshal(run.Spec, &spec)
-	if spec.Init == nil || strings.TrimSpace(spec.Init.Script) == "" {
-		return true
-	}
-	s.recordEvent(run, "lux.init", map[string]any{"phase": "start"})
-	dir, err := s.workspaceDir(run)
-	code := 1
-	if err == nil {
-		cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(spec.Init.Script, dir))
-		cmd.Dir = dir
-		code = exitCode(cmd.Run(), 1)
-	}
-	run.inits++
-	s.recordEvent(run, "lux.init", map[string]any{"phase": "done", "exitCode": code})
-	if code != 0 {
-		s.setStateWith(run, "failed", "init-failed")
-		return false
-	}
-	return true
 }
 
 // inWorkspaceScript reads /workspace in a script's commands as the Run's

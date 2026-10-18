@@ -584,6 +584,8 @@ type record struct {
 	Seq   int64
 	Epoch int
 	Event map[string]any
+	// A plain output record (Event nil): its channel, stdout or stderr.
+	Ch, Data string
 }
 
 type event struct {
@@ -1626,7 +1628,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		run.pendingSync = nil
 	}
 	// Init runs on every placement, before the servers and the workload.
-	if !s.runInit(run) {
+	if !s.runInit(run, spec) {
 		return
 	}
 	// Every start of the Run starts its spec's servers.
@@ -3225,7 +3227,11 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			cursor := fmt.Sprintf("%d.%d", rec.Epoch, rec.Seq)
-			if !send("record", map[string]any{"cursor": cursor, "epoch": rec.Epoch, "seq": rec.Seq, "ch": "event", "event": rec.Event}) {
+			frame := map[string]any{"cursor": cursor, "epoch": rec.Epoch, "seq": rec.Seq, "ch": "event", "event": rec.Event}
+			if rec.Event == nil {
+				frame = map[string]any{"cursor": cursor, "epoch": rec.Epoch, "seq": rec.Seq, "ch": rec.Ch, "data": rec.Data}
+			}
+			if !send("record", frame) {
 				return
 			}
 		}

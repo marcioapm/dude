@@ -42,7 +42,7 @@
     {"name": "builder.database_url", "env": "DUDE_BUILDER_DATABASE_URL", "kind": "string", "use": "builder", "default": "", "secret": true},
     {"name": "builder.repository", "env": "DUDE_BUILDER_REPOSITORY", "kind": "string", "use": "builder", "default": "", "secret": false},
     {"name": "builder.authfile", "env": "DUDE_BUILDER_AUTHFILE", "kind": "string", "use": "builder", "default": "", "secret": false},
-    {"name": "builder.platform", "env": "DUDE_BUILDER_PLATFORM", "kind": "string", "use": "builder", "default": "linux/arm64", "secret": false},
+    {"name": "builder.platform", "env": "DUDE_BUILDER_PLATFORM", "kind": "string", "use": "builder", "default": "native", "secret": false},
     {"name": "builder.cpus", "env": "DUDE_BUILDER_CPUS", "kind": "float", "use": "all", "default": "1.5", "secret": false},
     {"name": "builder.memory", "env": "DUDE_BUILDER_MEMORY", "kind": "string", "use": "all", "default": "1536m", "secret": false},
     {"name": "builder.timeout", "env": "DUDE_BUILDER_TIMEOUT", "kind": "duration", "use": "builder", "default": "60m", "secret": false},

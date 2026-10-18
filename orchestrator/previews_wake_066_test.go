@@ -12,6 +12,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // lastEventID is the id of the Run's latest lifecycle event in lux.
@@ -44,7 +45,7 @@ func (w *world) endedBeforeTheMigration(end string, fails int) (runID, web strin
 		w.lux.FailStarts("dude.preview="+runID, fails)
 	}
 	if _, err := w.previews.Lux.Resume(context.Background(), r.ID, lux.ResumeInput{
-		Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}}}); err != nil {
+		Secrets: []lux.Secret{{Name: "GIT_TOKEN", Value: "fixture"}, phases.SetupSecret(nil)}}); err != nil {
 		w.t.Fatal(err)
 	}
 	waitFor(w.t, "the resumed start ended", func() bool { return w.luxCalls(r.ID, "resume") == 1 && w.lux.State(r.ID) == end })

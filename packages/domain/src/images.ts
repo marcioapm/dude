@@ -120,7 +120,7 @@ export interface ImageBuild {
   /** Its version can run containers, so the build checks it can (the "Check containers" stage). */
   canRunContainers: boolean;
   /** What that check found: passed, and one line of what it found; null before it ran. */
-  containersCheck: { passed: boolean; detail: string } | null;
+  containersCheck: { passed: boolean; detail: string; hook?: boolean } | null;
   checkSeconds: number | null;
   /** Jobs the builder takes before this one, of any organization; null unless queued. */
   ahead: number | null;

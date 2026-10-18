@@ -60,13 +60,27 @@ test("who uses an image, in a few words", () => {
 describe("a build's stages", () => {
   const limits = { cpus: 1.5, memoryMiB: 1536 };
   test("waiting, building, failed: the failure's sentence in the stage, and what stays live", () => {
-    expect(buildStages({ state: "queued", stage: null, kind: "build", error: null }, limits, 4).map((s) => s.state)).toEqual(["current", "todo", "todo"]);
+    expect(buildStages({ state: "queued", stage: null, kind: "build", error: null }, limits, 4).map((s) => s.state)).toEqual(["current", "todo", "todo", "todo"]);
     const running = buildStages({ state: "running", stage: "building", kind: "build", error: null }, limits, 4);
-    expect(running.map((s) => s.state)).toEqual(["done", "current", "todo"]);
+    expect(running.map((s) => s.state)).toEqual(["done", "current", "todo", "todo"]);
     expect(running[1]!.detail).toBe("rootless · 1.5 CPU · 1.5 GB");
     const failed = buildStages({ state: "failed", stage: null, kind: "build", error: "ran out of memory (1.5 GB) at step 3" }, limits, 4);
-    expect(failed.map((s) => [s.state, s.detail])).toEqual([["done", "in the queue"], ["failed", "ran out of memory (1.5 GB) at step 3"], ["todo", "v4 is still live"]]);
+    expect(failed.map((s) => [s.state, s.detail])).toEqual([["done", "in the queue"], ["failed", "ran out of memory (1.5 GB) at step 3"], ["todo", "dude's git hook"], ["todo", "v4 is still live"]]);
   });
+  for (const canRunContainers of [false, true]) {
+    test(`mandatory check states, containers=${canRunContainers}`, () => {
+      for (const [state, stage, passed, expected] of [
+        ["running", "checking", undefined, "current"],
+        ["succeeded", null, true, "done"],
+        ["failed", null, false, "failed"],
+      ] as const) {
+        const detail = canRunContainers ? "hook and container tools" : "dude's git hook";
+        const stages = buildStages(job({ state, stage, canRunContainers, containersCheck: passed === undefined ? null : { passed, detail } }), limits, 2);
+        expect(stages.find((s) => s.id === "check")).toMatchObject({ label: "Check image", state: expected });
+        if (passed !== undefined) expect(stages[2]!.detail).toBe(detail);
+      }
+    });
+  }
   test("a finish says it adds the dude layer", () => {
     expect(buildStages({ state: "running", stage: "finishing", kind: "finish", error: null }, limits, 1)[1]!.label).toBe("Adding the dude layer");
   });
@@ -122,20 +136,21 @@ describe("the build page's log after a read", () => {
 describe("a build of a version that can run containers", () => {
   const limits = { cpus: 2, memoryMiB: 4096 };
   const base = { kind: "build" as const, error: null, canRunContainers: true };
-  test("has a Check containers cell between Built and Published", () => {
-    const stages = buildStages({ ...base, state: "queued", stage: null }, limits, 2);
-    expect(stages.map((s) => s.label)).toEqual(["Waiting", "Building", "Check containers", "Pushed and published"]);
-    expect(buildStages({ ...base, canRunContainers: false, state: "queued", stage: null }, limits, 2).map((s) => s.id)).toEqual(["wait", "build", "done"]);
+  test("has a Check image cell for every image, with optional container detail", () => {
+    const stages = buildStages({ ...base, canRunContainers: false, state: "queued", stage: null }, limits, 2);
+    expect(stages.map((s) => s.label)).toEqual(["Waiting", "Building", "Check image", "Pushed and published"]);
+    expect(stages[2]!.detail).toBe("dude's git hook");
+    expect(buildStages({ ...base, state: "queued", stage: null }, limits, 2)[2]!.detail).toContain("podman or Docker");
   });
   test("checking is the current cell, after Built", () => {
     expect(buildStages({ ...base, state: "running", stage: "checking" }, limits, 2).map((s) => [s.label, s.state])).toEqual([
-      ["Waiting", "done"], ["Built", "done"], ["Check containers", "current"], ["Pushed and published", "todo"]]);
+      ["Waiting", "done"], ["Built", "done"], ["Check image", "current"], ["Pushed and published", "todo"]]);
   });
   test("passed: what it found, and published", () => {
     const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
     const stages = buildStages({ ...base, state: "succeeded", stage: null, containersCheck: { passed: true, detail } }, limits, 3);
     expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
-      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check containers", "done", detail],
+      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check image", "done", detail],
       ["Published", "done", "every user gets it on their next Run"]]);
   });
   test("failed: the check's cell fails, the next says nothing was pushed", () => {
@@ -143,20 +158,20 @@ describe("a build of a version that can run containers", () => {
       containersCheck: { passed: false, detail: "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap" } }, limits, 4);
     expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
       ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"],
-      ["Check containers", "failed", "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap"],
+      ["Check image", "failed", "Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap"],
       ["Not published", "todo", "Not pushed · v4 is still live"]]);
   });
   test("pushing after a passed check: the check is done, the push current", () => {
     const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
     expect(buildStages({ ...base, state: "running", stage: "pushing", containersCheck: { passed: true, detail } }, limits, 2).map((s) => [s.label, s.state])).toEqual([
-      ["Waiting", "done"], ["Built", "done"], ["Check containers", "done"], ["Pushed and published", "current"]]);
+      ["Waiting", "done"], ["Built", "done"], ["Check image", "done"], ["Pushed and published", "current"]]);
   });
   test("a push failing after a passed check: the check stays done, publication fails", () => {
     const detail = "podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent";
     const stages = buildStages({ ...base, state: "failed", stage: null, error: "pushing to the registry failed: 502 Bad Gateway",
       containersCheck: { passed: true, detail } }, limits, 2);
     expect(stages.map((s) => [s.label, s.state, s.detail])).toEqual([
-      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check containers", "done", detail],
+      ["Waiting", "done", "in the queue"], ["Built", "done", "rootless · 2 CPU · 4 GB"], ["Check image", "done", detail],
       ["Not published", "failed", "pushing to the registry failed: 502 Bad Gateway"]]);
   });
 });

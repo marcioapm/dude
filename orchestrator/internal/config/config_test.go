@@ -11,6 +11,22 @@ import (
 	"time"
 )
 
+func TestBuilderPlatformDefaultsToNativeAndPreservesExplicitSettings(t *testing.T) {
+	for _, platform := range []string{"", "linux/" + runtime.GOARCH, "linux/riscv64"} {
+		c, err := load(t, Builder, map[string]string{"DUDE_BUILDER_PLATFORM": platform})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := platform
+		if want == "" {
+			want = "linux/" + runtime.GOARCH
+		}
+		if got := c.String("DUDE_BUILDER_PLATFORM"); got != want {
+			t.Errorf("platform %q = %q, want %q", platform, got, want)
+		}
+	}
+}
+
 // env is a getenv over a map, so no test depends on the real environment.
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 

@@ -161,6 +161,8 @@ func PersonName(ctx context.Context, tx pgx.Tx, personID string) (string, error)
 // pushed.
 type SessionRepo struct {
 	ID, ProjectID, Key, Name, URL, DefaultBranch string
+	// Run once in each fresh checkout before the agent starts; "" for none.
+	SetupScript string
 }
 
 // SpecName is the repository's name in the lux spec: <key>-<name>, unique
@@ -184,7 +186,7 @@ func SessionRepoPath(key, name string) string { return "/workspace/repos/" + key
 // SessionRepositories are the repositories linked to a session, in project
 // key and name order.
 func SessionRepositories(ctx context.Context, tx pgx.Tx, sessionID string) ([]SessionRepo, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, p.key_prefix, r.name, r.url, r.default_branch
+	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, p.key_prefix, r.name, r.url, r.default_branch, COALESCE(r.setup_script, '')
 		FROM session_repositories sr JOIN repositories r ON r.id = sr.repository_id JOIN projects p ON p.id = r.project_id
 		JOIN session_projects sp ON sp.session_id = sr.session_id AND sp.project_id = r.project_id
 		WHERE sr.session_id = $1 ORDER BY p.key_prefix, r.name`, sessionID)

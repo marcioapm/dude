@@ -17,6 +17,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -106,15 +107,16 @@ type schema struct {
 		ECRRoleARN any `toml:"ecr_role_arn" env:"DUDE_ECR_ROLE_ARN" kind:"string" use:"orchestrator"`
 	} `toml:"registry"`
 	Images struct {
-		// The dude layer every library image is finished with, by digest;
-		// unset, the image library builds nothing and Runs cannot use it.
+		// An operator's override, by digest, of the dude layer every library
+		// image is finished with; unset, the one dude-image-builder built
+		// from the release and recorded in image_layers.
 		Layer any `toml:"layer" env:"DUDE_LAYER_IMAGE" kind:"string" use:"all"`
 	} `toml:"images"`
 	Builder struct {
 		DatabaseURL  any `toml:"database_url" env:"DUDE_BUILDER_DATABASE_URL" kind:"string" use:"builder" secret:"true"`
 		Repository   any `toml:"repository" env:"DUDE_BUILDER_REPOSITORY" kind:"string" use:"builder"`
 		Authfile     any `toml:"authfile" env:"DUDE_BUILDER_AUTHFILE" kind:"string" use:"builder"`
-		Platform     any `toml:"platform" env:"DUDE_BUILDER_PLATFORM" kind:"string" use:"builder" default:"linux/arm64"`
+		Platform     any `toml:"platform" env:"DUDE_BUILDER_PLATFORM" kind:"string" use:"builder" default:"native"`
 		CPUs         any `toml:"cpus" env:"DUDE_BUILDER_CPUS" kind:"float" use:"all" default:"1.5"`
 		Memory       any `toml:"memory" env:"DUDE_BUILDER_MEMORY" kind:"string" use:"all" default:"1536m"`
 		Timeout      any `toml:"timeout" env:"DUDE_BUILDER_TIMEOUT" kind:"duration" use:"builder" default:"60m"`
@@ -614,6 +616,9 @@ func (c *Config) value(env, kind string) any {
 	}
 	if k.Default == "" {
 		return nil
+	}
+	if k.Env == "DUDE_BUILDER_PLATFORM" && k.Default == "native" {
+		return "linux/" + runtime.GOARCH
 	}
 	v, err := fromEnv(k, k.Default)
 	if err != nil {

@@ -142,9 +142,12 @@ func TestEveryAgentRunsInstructionsAreItsInitNotASecret(t *testing.T) {
 				if spec.Init == nil {
 					t.Fatalf("%s/%s/%s: no init", harness, model, name)
 				}
-				// What this script writes, TestTheInstructionsInitWritesTheFileExactly runs.
-				if want, _ := instructionsInit(workspaceDir, in.Instructions); spec.Init.Script != want {
-					t.Errorf("%s/%s/%s: init is not the instructions' write:\n%s", harness, model, name, spec.Init.Script)
+				// What this script writes, TestTheInstructionsInitWritesTheFileExactly
+				// runs; the repositories' setup runs after it.
+				write, _ := instructionsInit(workspaceDir, in.Instructions)
+				want := strings.TrimSuffix(write, "\n") + " && (\nset +eu\n" + SetupInit(SetupManifestPath, workspaceDir, SetupTimeout) + "\n)\n"
+				if spec.Init.Script != want {
+					t.Errorf("%s/%s/%s: init is not the instructions' write, then the setup:\n%s", harness, model, name, spec.Init.Script)
 				}
 				if spec.Workload.Workdir != workspaceDir && !(model == "fake/scripted" && len(in.Repos) == 1) {
 					t.Errorf("%s/%s/%s: starts in %s, not beside its instruction file", harness, model, name, spec.Workload.Workdir)
@@ -173,16 +176,24 @@ func TestAnAgentStartsBesideItsInstructionFile(t *testing.T) {
 }
 
 // An init script over MaxInitScript is refused before lux is asked, saying
-// how large it is.
+// how large it is. The limit is on the whole init, the repositories' setup
+// it runs after the instruction file included.
 func TestAnInitOverTheLimitIsRefused(t *testing.T) {
 	c, in := goldenInput("claude-opus-5-5")
-	in.Instructions = strings.Repeat("x", MaxInitScript) + "\n"
-	if _, err := runSpec(c, in); err == nil || !strings.Contains(err.Error(), "over the 262144-byte limit") {
-		t.Fatalf("an oversized init: %v", err)
+	in.Instructions = "x\n"
+	small, err := runSpec(c, in)
+	if err != nil {
+		t.Fatal(err)
 	}
-	in.Instructions = strings.Repeat("x", MaxInitScript-1024) + "\n"
-	if _, err := runSpec(c, in); err != nil {
-		t.Fatalf("an init under the limit: %v", err)
+	// Everything but the text: the delimiter's length does not depend on it.
+	fits := MaxInitScript - (len(small.Init.Script) - len(in.Instructions))
+	in.Instructions = strings.Repeat("x", fits-1) + "\n"
+	if spec, err := runSpec(c, in); err != nil || len(spec.Init.Script) != MaxInitScript {
+		t.Fatalf("an init of exactly the limit: %v", err)
+	}
+	in.Instructions = strings.Repeat("x", fits) + "\n"
+	if _, err := runSpec(c, in); err == nil || !strings.Contains(err.Error(), "over the 262144-byte limit") {
+		t.Fatalf("an init one byte over: %v", err)
 	}
 }
 
