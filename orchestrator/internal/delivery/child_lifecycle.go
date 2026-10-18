@@ -222,6 +222,18 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		if !c.Actionable {
 			return refusef("the parent is no longer live for this attempt")
 		}
+		if Publishes[c.Phase] {
+			d, err := LoadDelivery(ctx, tx, taskID)
+			if err != nil {
+				return err
+			}
+			if d == nil || !d.Live() || d.State.Attempt != c.Attempt {
+				return refusef("the parent is no longer live for this attempt")
+			}
+			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, d); err != nil {
+				return err
+			}
+		}
 		encoded, _ := json.Marshal([]string{childID, key})
 		id, err = createPhaseRunTx(ctx, tx, org, PhaseRun{TaskID: taskID, Phase: c.Phase,
 			BaseRefs: c.BaseRefs, ParentRunID: c.ParentID, Attempt: c.Attempt, ConductorRunID: c.ParentID,

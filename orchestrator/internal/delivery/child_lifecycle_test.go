@@ -184,6 +184,76 @@ func TestChildSettlement(t *testing.T) {
 	}
 }
 
+func TestChildWriterAdmissionReservesOnlyOneWriter(t *testing.T) {
+	w := newChildWorld(t)
+	in := w.in
+	in.Profile = "implementer"
+	in.Capabilities.PublishCode = true
+	in.Key = "writer-one"
+	if _, err := w.s.StartChild(w.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	in.Key = "writer-two"
+	if _, err := w.s.StartChild(w.ctx, in); !IsRefusal(err) {
+		t.Fatalf("second writer: %v", err)
+	}
+	in.Key = "read-only"
+	in.Profile = "investigator"
+	in.Capabilities.PublishCode = false
+	if _, err := w.s.StartChild(w.ctx, in); err != nil {
+		t.Fatalf("read-only child beside writer: %v", err)
+	}
+}
+
+func TestChildWriterAdmissionSeesWorkflowWriterAndPublishes(t *testing.T) {
+	for _, livePublish := range []string{"requested", "asked", "pushed", "moving"} {
+		t.Run(livePublish, func(t *testing.T) {
+			w := newChildWorld(t)
+			w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, base_refs)
+				VALUES ('workflow_writer', $1, 'prj_life', 'wi_life', 3, 'pending', 'implement', 'implementer', '{}')`, w.org)
+			in := w.in
+			in.Profile = "implementer"
+			in.Capabilities.PublishCode = true
+			in.Key = "blocked-by-workflow-writer"
+			if _, err := w.s.StartChild(w.ctx, in); !IsRefusal(err) {
+				t.Fatalf("workflow writer: %v", err)
+			}
+			w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = 'workflow_writer'`)
+			w.exec(`INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message, workflow_run_id, attempt, branch, status)
+				VALUES ('pub_life', $1, 'wi_life', 'run_parent', 'req_life', '', 'wf_life', 3, 'work', $2)`, w.org, livePublish)
+			if _, err := w.s.StartChild(w.ctx, in); !IsRefusal(err) {
+				t.Fatalf("live publish %s: %v", livePublish, err)
+			}
+		})
+	}
+}
+
+func TestRestartWriterAdmissionAbortsOldInReplacementTransaction(t *testing.T) {
+	w := newChildWorld(t)
+	in := w.in
+	in.Profile = "implementer"
+	in.Capabilities.PublishCode = true
+	in.Key = "writer"
+	old, err := w.s.StartChild(w.ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := w.s.RestartChild(w.ctx, w.org, "wi_life", old, "replace")
+	if err != nil || next == old {
+		t.Fatalf("restart %s: %v", next, err)
+	}
+	var oldControl, oldReason, replaced string
+	if err := w.owner.QueryRow(w.ctx, `SELECT control::text, child_stop_reason, replaced_by FROM runs WHERE id = $1`, old).Scan(&oldControl, &oldReason, &replaced); err != nil {
+		t.Fatal(err)
+	}
+	if oldControl != "abort" || oldReason != "restarted" || replaced != next {
+		t.Fatalf("old reservation fence %s/%s/%s", oldControl, oldReason, replaced)
+	}
+	if _, err := w.s.RestartChild(w.ctx, w.org, "wi_life", old, "other"); !IsRefusal(err) {
+		t.Fatalf("branched replacement: %v", err)
+	}
+}
+
 func TestChildStaleResults(t *testing.T) {
 	for _, change := range []string{
 		`UPDATE tasks SET status = 'done' WHERE id = 'wi_life'`,

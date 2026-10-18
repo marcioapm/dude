@@ -60,12 +60,13 @@ func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, err
 			return err
 		}
 		var live bool
+		var parentAttempt int
 		// Parent Run precedes task, matching Chat and conductor ending.
 		err := tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.phase IS NULL
 			AND r.source_kind IS NULL AND r.replaced_by IS NULL AND r.control <> 'abort'
-			AND NOT COALESCE(`+Ending+`, false)
+			AND NOT COALESCE(`+Ending+`, false), r.attempt
 			FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND r.project_id = $3
-			AND r.organization_id = $4 FOR UPDATE`, ref.RunID, ref.TaskID, ref.ProjectID, ref.Org).Scan(&live)
+			AND r.organization_id = $4 FOR UPDATE`, ref.RunID, ref.TaskID, ref.ProjectID, ref.Org).Scan(&live, &parentAttempt)
 		if db.IsNotFound(err) {
 			return refusef("the parent is not this task's authorized conductor")
 		}
@@ -94,6 +95,14 @@ func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, err
 		}
 		if d == nil || !d.Live() {
 			return refusef("this task has no live delivery")
+		}
+		if d.State.Attempt != parentAttempt {
+			return refusef("the parent conductor is from an old delivery attempt")
+		}
+		if Publishes[phase] {
+			if err := refuseWriterAdmissionTx(ctx, tx, ref.TaskID, "", d); err != nil {
+				return err
+			}
 		}
 		tier := ""
 		if in.Tier != "" {

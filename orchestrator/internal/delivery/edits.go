@@ -77,6 +77,30 @@ func stepHolds(ctx context.Context, tx pgx.Tx, wfID, lock string) (bool, error) 
 const liveWriter = `EXISTS (SELECT 1 FROM runs w WHERE w.task_id = $1 AND w.phase IN ` + writerPhases + `
 	AND w.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))`
 
+// refuseWriterAdmissionTx reserves the task's single publishing slot. The
+// caller holds Chat, so this check serializes with conductor publishes and
+// other writer admissions.
+func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunID string, d *Delivery) error {
+	var writer, publishing bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs w
+		WHERE w.task_id = $1 AND w.id <> $2 AND w.phase IN `+writerPhases+`
+		AND w.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')),
+		EXISTS (SELECT 1 FROM conductor_publishes WHERE task_id = $1 AND status IN `+publishLive+`)`,
+		taskID, excludeRunID).Scan(&writer, &publishing); err != nil {
+		return err
+	}
+	if writer {
+		return refusef("%s", refusedWriter)
+	}
+	if publishing {
+		return refusef("a publish of this task is under way; wait for it to finish")
+	}
+	if d != nil && d.State.Candidate != nil {
+		return refusef("%s", refusedCandidate)
+	}
+	return nil
+}
+
 // ConductPublish is publish: the task's live conductor asks for what it
 // committed in its checkout to be pushed and taken to the task branch.
 // Refused, writing nothing, unless it is the live conductor, it takes the

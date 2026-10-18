@@ -104,6 +104,7 @@ func TestStartChildAdmission(t *testing.T) {
 		}
 		exec(`UPDATE runs SET status = 'running', replaced_by = NULL, control = 'none', lux_state = NULL WHERE id = 'run_parent'`)
 		exec(`UPDATE tasks SET status = 'running' WHERE id = 'wi_child'`)
+		exec(`UPDATE workflow_runs SET state = jsonb_set(state, '{attempt}', '3') WHERE id = 'wf_child'`)
 	}
 	// Take a fresh snapshot after the fixture's deliberate status changes.
 	before = snapshot()
@@ -212,6 +213,9 @@ func TestStartChildAdmission(t *testing.T) {
 		}
 		if gotPhase != phase || gotRole != RoleForPhase[phase] || tier != "tier_child" || capabilities != request.Capabilities {
 			t.Fatalf("%s resolved to %s/%s/%s/%+v", profile, gotPhase, gotRole, tier, capabilities)
+		}
+		if Publishes[phase] {
+			exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE task_id = 'wi_child' AND phase IN ('implement', 'fix', 'simplify')`)
 		}
 	}
 	bad = in
