@@ -789,7 +789,9 @@ test("GitHub read migrations recover interrupted concurrent builds and replay co
       expect(await validity()).toEqual([{ valid: true }]);
       await sql`DELETE FROM schema_migrations WHERE version = ${version}`;
       expect((await migrate(url, { log: () => {} })).applied).toEqual([file.name]);
-      expect(await validity()).toEqual([{ valid: true }]);
+      const replayName = version === "147" ? "events_session_github_reads_idx" : "events_task_github_reads_idx";
+      const replayIndex = async () => [...await sql`SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass(${replayName})`];
+      expect(await replayIndex()).toEqual([{ valid: true }]);
     } finally {
       await holder`ROLLBACK`;
       builder.release();
@@ -910,7 +912,7 @@ test("a database main left at 114 takes 115 to 117, keeps its relations, and tas
       ('org_u', 'wi_off', 'wi_a', 'blocks', 'per_u'), ('org_u', 'wi_a', 'wi_off', 'related', 'per_u')`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["115_agent_coordination.sql", "116_peer_ended.sql", "117_events_agent_message_idx.sql", "118_accounts.sql", "119_github_owner_oauth.sql", "120_agent_machine_moves.sql", "121_pull_request_rerequests.sql", "122_push_per_organization.sql", "123_acceptance_verdicts.sql", "124_task_sources.sql", "125_task_source_mode.sql", "126_fake_done_model.sql", "127_feedback.sql", "128_project_secret_recipients.sql", "129_run_project_secrets.sql", "130_run_secret_values.sql", "131_fake_secret_models.sql", "132_run_synced_bases.sql", "133_feedback_pictures_kept.sql", "134_review_range.sql", "135_events_session_github_reads_idx.sql", "136_events_task_github_reads_idx.sql", "137_events_fix_merge_attempted_idx.sql", "138_events_git_merge_attempted_idx.sql", "139_run_retry_backoff.sql", "140_tasks_id_org_idx.sql", "141_model_tiers_id_org_idx.sql", "142_model_calls.sql", "143_checks_pending_since.sql", "144_image_layers.sql", "145_repository_setup_script.sql", "146_run_sync_history.sql", "147_events_session_github_reads_idx.sql", "148_events_session_github_reads_idx.sql", "149_events_task_github_reads_idx.sql", "150_events_task_github_reads_idx.sql", "151_recover_github_read_indexes.sql"]);
-    expect((await recorded(url)).map((m) => m.name).slice(-31)).toEqual([
+    expect((await recorded(url)).map((m) => m.name).slice(-32)).toEqual([
       "120_agent_machine_moves.sql", "121_pull_request_rerequests.sql", "122_push_per_organization.sql", "123_acceptance_verdicts.sql", "124_task_sources.sql", "125_task_source_mode.sql", "126_fake_done_model.sql", "127_feedback.sql", "128_project_secret_recipients.sql", "129_run_project_secrets.sql", "130_run_secret_values.sql", "131_fake_secret_models.sql", "132_run_synced_bases.sql", "133_feedback_pictures_kept.sql", "134_review_range.sql", "135_events_session_github_reads_idx.sql", "136_events_task_github_reads_idx.sql", "137_events_fix_merge_attempted_idx.sql", "138_events_git_merge_attempted_idx.sql", "139_run_retry_backoff.sql", "140_tasks_id_org_idx.sql", "141_model_tiers_id_org_idx.sql", "142_model_calls.sql", "143_checks_pending_since.sql", "144_image_layers.sql", "145_repository_setup_script.sql", "146_run_sync_history.sql", "147_events_session_github_reads_idx.sql", "148_events_session_github_reads_idx.sql", "149_events_task_github_reads_idx.sql", "150_events_task_github_reads_idx.sql", "151_recover_github_read_indexes.sql"]);
     expect([...await sql`SELECT from_task_id, to_task_id, kind::text FROM task_relations ORDER BY kind`]).toEqual([
       { from_task_id: "wi_off", to_task_id: "wi_a", kind: "blocks" },
