@@ -299,7 +299,7 @@ func exitCode(err error, otherwise int) int {
 func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	init, _ := spec["init"].(map[string]any)
 	script, _ := init["script"].(string)
-	if strings.TrimSpace(script) == "" || s.nothingToInit(run, script) {
+	if strings.TrimSpace(script) == "" {
 		return true
 	}
 	dir, err := s.checkout(run, spec)
