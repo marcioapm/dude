@@ -84,7 +84,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		return PRActionCheck{}, err
 	}
 	if !prActionAllowed(caller.role, caller.phase, in.Action) {
-		return PRActionCheck{}, refusef("%s is not yours to do: a task's conductor acts on its pull requests", in.Action)
+		return PRActionCheck{}, refusef(rNotYoursDoTaskConductorActs, in.Action)
 	}
 	c := PRActionCheck{ref: ref, action: in.Action}
 	if caller.role == RoleConductor {
@@ -94,11 +94,11 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, err
 		}
 		if !live {
-			return c, refusef("you are no longer this task's conductor: another took over from you. Do nothing on GitHub")
+			return c, refuseText(rYouAreNoLongerThisTask4)
 		}
 	} else {
 		if caller.ended() {
-			return c, refusef("your Run is %s: it acts on nothing", caller.status)
+			return c, refusef(rYourRunActsOnNothing, caller.status)
 		}
 		for _, id := range caller.batch {
 			if n := forge.LineCommentID(id); n != 0 {
@@ -106,7 +106,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			}
 		}
 		if len(c.batch) == 0 {
-			return c, refusef("you resolve only the review threads in your feedback, and it has none")
+			return c, refuseText(rYouResolveOnlyReviewThreadsIn)
 		}
 	}
 	repo, number, err := parsePR(in.PR)
@@ -121,17 +121,17 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
 		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks)
 	if db.IsNotFound(err) {
-		return c, refusef("%s is not a pull request of your task: you act only on your task's (pull_requests lists them)", in.PR)
+		return c, refusef(rNotPullRequestYourTaskYou, in.PR)
 	}
 	if err != nil {
 		return c, err
 	}
 	if state != forge.StateOpen && state != forge.StateDraft {
-		return c, refusef("%s#%d is %s: there is nothing to do on it", repo, number, state)
+		return c, refusef(rThereNothingDoOn, repo, number, state)
 	}
 	c.repo, c.number, c.slug = repo, number, forge.SlugFromURL(url)
 	if gh == nil || c.slug == "" {
-		return c, refusef("%s#%d is not on a GitHub dude is connected to", repo, number)
+		return c, refusef(rNotOnGithubDudeConnected, repo, number)
 	}
 	if nodeID != nil {
 		c.nodeID = *nodeID
@@ -149,21 +149,21 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		}
 		switch {
 		case len(c.logins) == 0:
-			return c, refusef("name whom to ask: logins")
+			return c, refuseText(rNameWhomAskLogins)
 		case len(c.logins) > maxReviewLogins:
-			return c, refusef("ask at most %d people at once", maxReviewLogins)
+			return c, refusef(rAskAtMostPeopleAtOnce, maxReviewLogins)
 		}
 	case ActionResolveThread:
 		c.thread = strings.TrimSpace(in.Thread)
 		if c.thread == "" {
-			return c, refusef("name the thread: its id (PRRT_…), or a line comment in it (line-comment-…)")
+			return c, refuseText(rNameThreadItsIdPrrtOr)
 		}
 	case ActionMarkReady:
 		if state != forge.StateDraft {
-			return c, refusef("%s#%d is not a draft", repo, number)
+			return c, refusef(rNotDraft, repo, number)
 		}
 		if c.nodeID == "" {
-			return c, refusef("dude has no GraphQL id for %s#%d yet; try again after its next sync", repo, number)
+			return c, refusef(rDudeHasNoGraphqlIdFor, repo, number)
 		}
 	case ActionRerunChecks:
 		failed := 0
@@ -173,7 +173,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			}
 		}
 		if failed == 0 {
-			return c, refusef("no failed check on %s#%d's head that GitHub can run again", repo, number)
+			return c, refusef(rNoFailedCheckOnHeadThat, repo, number)
 		}
 		// Once per head, whoever asked: CI that fails again on the same
 		// commit is a fix's to answer, not another run's. A claim GitHub
@@ -188,7 +188,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, err
 		}
 		if again {
-			return c, refusef("the failed checks on %s#%d were run again on this head already: a fix answers them now", repo, number)
+			return c, refusef(rFailedChecksOnWereRunAgain, repo, number)
 		}
 		// The claim commits before GitHub is called; Chat's lock serializes this check.
 		claim, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
@@ -200,7 +200,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		}
 		c.claim = claim
 	default:
-		return c, refusef("no pull request action %q", in.Action)
+		return c, refusef(rNoPullRequestAction, in.Action)
 	}
 	return c, nil
 }
@@ -238,7 +238,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			done.Asked = append(done.Asked, l)
 		}
 		if len(done.Asked) == 0 {
-			return done, refusef("%s may not review %s: not collaborators on it", strings.Join(done.Refused, ", "), c.slug)
+			return done, refusef(rMayNotReviewNotCollaboratorsOn, strings.Join(done.Refused, ", "), c.slug)
 		}
 		if err := gh.RequestReviewers(ctx, c.slug, c.number, done.Asked); err != nil {
 			return done, ghRefusal(err)
@@ -255,10 +255,10 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			return done, ghRefusal(err)
 		}
 		if t == nil || !strings.EqualFold(t.Repo, c.slug) || t.Number != c.number {
-			return done, refusef("%s is not a review thread of %s#%d", c.thread, c.repo, c.number)
+			return done, refusef(rNotReviewThread, c.thread, c.repo, c.number)
 		}
 		if c.batch != nil && !slices.ContainsFunc(t.CommentIDs, func(id int64) bool { return slices.Contains(c.batch, id) }) {
-			return done, refusef("%s is not a thread in your feedback: you resolve only those", c.thread)
+			return done, refusef(rNotThreadInYourFeedbackYou, c.thread)
 		}
 		if !t.Resolved {
 			if err := gh.ResolveReviewThread(ctx, c.slug, t.ID); err != nil {
@@ -282,7 +282,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 					"repo": c.repo, "number": c.number, "head": c.head, "released": c.claim}}}
 		}
 		if err != nil {
-			return done, refusef("GitHub's re-run of the failed checks on %s#%d may or may not have happened (%v); this head is not run again automatically", c.repo, c.number, err)
+			return done, refusef(rGithubReRunFailedChecksOn, c.repo, c.number, err)
 		}
 		done.Rerun = n
 	}
@@ -292,7 +292,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 func ghRefusal(err error) error {
 	var e *forge.Error
 	if errors.As(err, &e) && (forge.Refused(err) || forge.Transient(err)) {
-		return refusef("GitHub did not do it: %v", err)
+		return refusef(rGithubDidNotDo, err)
 	}
 	return err
 }

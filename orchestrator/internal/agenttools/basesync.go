@@ -33,15 +33,6 @@ const syncBaseEvery = 250 * time.Millisecond
 // call's report.
 const landedEarlierWait = 5 * time.Second
 
-const syncBaseDescription = "Fetch the base your task branch merges into (main, or the base it continues) into your " +
-	"checkout as lux/<base>, with credentials your checkout does not have: `git fetch origin` cannot. Nothing in your " +
-	"checkout moves. It answers, per repository, the ref to merge, how many commits the base is ahead of you, and how " +
-	"to see whether it conflicts (`git merge-tree --write-tree HEAD lux/<base>`). Then merge, never rebase, and never " +
-	"force anything: `git merge lux/<base>`, resolve every conflict keeping both sides' intent, and commit with " +
-	"git's default merge message. Implementer, fixer and simplifier: run the affected tests before finishing your Run. " +
-	"Conductor: never build, install or run tests; resolve only small changes, publish, and delegate review and test " +
-	"before shipping. Delegate larger resolutions to a fix Run."
-
 // SyncBaseFunc asks lux for a sync of a running Run with that Run's push
 // credentials (phases.Syncer.SyncBase).
 type SyncBaseFunc func(ctx context.Context, org, runID, luxRunID, requestID string, refs []lux.SyncRef) error
@@ -92,7 +83,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 		return ask, err
 	}
 	if luxRun == "" || luxState != "running" {
-		return ask, refuse("your container is not running as lux sees it; call sync_base again in a moment")
+		return ask, refuseText(rYourContainerNotRunningAsLux)
 	}
 	ask.LuxRunID = luxRun
 	d, err := delivery.ReadDelivery(ctx, tx, c.TaskID)
@@ -128,7 +119,7 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 		}
 	}
 	if len(ask.Refs) == 0 {
-		return ask, refuse("this Run holds no repository it may change: there is no base to bring in")
+		return ask, refuseText(rThisRunHoldsNoRepositoryMay)
 	}
 	return ask, nil
 }
@@ -140,15 +131,14 @@ func checkSyncBase(ctx context.Context, tx pgx.Tx, c Caller, _ syncBaseIn) (base
 func fetchBase(ctx context.Context, c Caller, ask baseAsk) (syncBaseOut, error) {
 	out := syncBaseOut{RequestID: baseRequestPrefix(c.RunID) + fmt.Sprint(time.Now().UnixNano())}
 	if c.env.syncBase == nil || c.env.lux == nil {
-		return out, refuse("this dude cannot ask lux for a sync: sync_base is not available here")
+		return out, refuseText(rThisDudeCannotAskLuxFor)
 	}
 	err := c.env.syncBase(ctx, c.Org, c.RunID, ask.LuxRunID, out.RequestID, ask.Refs)
 	if lux.SyncModesRefused(err) {
-		return out, refuse("this lux has no sync modes, so it cannot fetch your base without moving your checkout: " +
-			"sync_base needs a lux with mode fetch. Ask a person to bring the base in, or carry on without it")
+		return out, refuseText(rThisLuxHasNoSyncModes)
 	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		return out, refuse("lux would not fetch your base: %s", le.Message)
+		return out, refuse(rLuxWouldNotFetchYourBase, le.Message)
 	}
 	if err != nil {
 		return out, err
@@ -243,28 +233,25 @@ func baseLine(repo, base, recorded string, res lux.SyncResult, earlier bool) Bas
 	if !earlier {
 		b.Behind, b.Ahead = &res.Behind, &res.Ahead
 	}
-	merge := fmt.Sprintf("`git merge-tree --write-tree HEAD lux/%s` shows whether it conflicts; then `git merge lux/%s`, "+
-		"resolve, run the affected tests, commit", base, base)
+	var c, mergeWhen string
 	switch {
 	case res.Status == "" && recorded != "":
-		b.Status = "asked"
-		b.Next = fmt.Sprintf("lux has not reported the fetch yet, so lux/%s may be missing or older than the base you "+
-			"integrate: call sync_base again in a moment. %s.", base, delivery.IntegrationMergeWhen(base, recorded)) +
-			" Then " + merge + "."
+		b.Status, c, mergeWhen = "asked", "asked-recorded", delivery.IntegrationMergeWhen(base, recorded)
 	case res.Status == "":
-		b.Status = "asked"
-		b.Next = fmt.Sprintf("lux has not reported the fetch yet: in a moment, `git rev-list --count HEAD..lux/%s` says "+
-			"how far behind you are (an error: not fetched yet); then %s.", base, merge)
+		b.Status, c = "asked", "asked"
 	case earlier:
-		b.Next = fmt.Sprintf("lux has not reported this call's fetch; its last fetch, for an earlier call, landed %s on "+
-			"lux/%s: `git rev-list --count HEAD..lux/%s` says how far behind you are; then %s.", res.To, base, base, merge)
+		c = "earlier"
 	case res.Status == "failed":
-		b.Next = "lux could not fetch it; call sync_base again, or carry on without it."
+		c = "failed"
 	case res.Behind == 0:
-		b.Next = fmt.Sprintf("You already have everything on %s: nothing to merge.", base)
+		c = "up-to-date"
 	default:
-		b.Next = fmt.Sprintf("%s is %d commits ahead of you: %s.", base, res.Behind, merge)
+		c = "behind"
 	}
+	b.Next = syncBaseResult.Render(struct {
+		Case, Base, To, MergeWhen string
+		Behind                    int
+	}{c, base, res.To, mergeWhen, res.Behind})
 	return b
 }
 
@@ -273,5 +260,5 @@ func settleSyncBase(_ context.Context, _ pgx.Tx, _ Caller, _ baseAsk, out syncBa
 }
 
 var baseSyncTools = []tool{
-	around(define("sync_base", syncBaseDescription, baseSyncers, checkSyncBase), fetchBase, settleSyncBase),
+	around(define("sync_base", baseSyncers, checkSyncBase), fetchBase, settleSyncBase),
 }

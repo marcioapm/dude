@@ -8,8 +8,6 @@ package delivery
 // pool list, and the image's platforms from the Run's placements.
 
 import (
-	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 
@@ -77,49 +75,22 @@ func (r MoveRefusal) ForPerson() string {
 }
 
 func (r MoveRefusal) words() (said, advice string) {
-	size := r.Size.Name
-	in := "its pool"
-	if r.Size.Pool != nil && *r.Size.Pool != "" {
-		in = *r.Size.Pool
+	pool := ""
+	if r.Size.Pool != nil {
+		pool = *r.Size.Pool
 	}
-	switch {
-	case r.Status == http.StatusBadRequest && r.OtherPool:
-		return "this lux cannot move a Run between pools yet.", " Ask for a size in your own pool."
-	case r.Status == http.StatusBadRequest:
-		return "this lux cannot change a stopped Run's CPUs or memory.", " Use fewer workers or less data."
+	arch := ""
+	if len(r.PoolPlatforms) > 0 {
+		arch = r.PoolPlatforms[0][strings.LastIndex(r.PoolPlatforms[0], "/")+1:]
 	}
-	switch r.Code {
-	case lux.CodeUnknownPool:
-		return size + "'s pool has no host it fits", "; ask for another size"
-	case lux.CodePlatformMismatch:
-		if len(r.PoolPlatforms) > 0 && len(r.ImagePlatforms) > 0 {
-			return fmt.Sprintf("%s is in %s, whose machines are %s; this agent's image is %s only.", size, in,
-					strings.Join(r.PoolPlatforms, ", "), strings.Join(r.ImagePlatforms, ", ")),
-				fmt.Sprintf(" Ask for another size, or ask a person to add %s image.", anArch(r.PoolPlatforms[0]))
-		}
-		return fmt.Sprintf("%s is in %s, whose machines cannot run this agent's image.", size, in),
-			" Ask for another size, or ask a person to add an image for them."
-	case lux.CodePoolUnfit:
-		if r.NoNested || strings.Contains(r.luxMessage, "nested containers") {
-			return fmt.Sprintf("%s is in %s, which can't run nested containers, and this agent's image needs them.", size, in),
-				" Ask for another size."
-		}
-		return fmt.Sprintf("%s (%s CPUs · %s GiB) is larger than any machine in %s.", size, number(r.Size.CPUs),
-			number(float64(r.Size.MemoryMiB)/1024), in), " Ask for another size."
-	case lux.CodeInvalidSpec:
-		return fmt.Sprintf("lux cannot give this agent %s as the size is set up.", size),
-			fmt.Sprintf(" Ask for another size, or ask a person to check %s in Machines.", size)
-	case "not_resumable":
-		return fmt.Sprintf("lux was already resuming this Run, so it could not move it to %s.", size), " Ask again once you are running."
-	}
-	return fmt.Sprintf("lux would not move this agent to %s.", size), " Ask for another size."
-}
-
-// anArch is "an arm64 image"'s article and arch, from "linux/arm64".
-func anArch(platform string) string {
-	arch := platform[strings.LastIndex(platform, "/")+1:]
-	if arch != "" && strings.ContainsRune("aeiou", rune(arch[0])) {
-		return "an " + arch
-	}
-	return "a " + arch
+	data := struct {
+		Status                        int
+		Code, Size, Pool, CPUs        string
+		Memory, Arch                  string
+		PoolPlatforms, ImagePlatforms []string
+		OtherPool, Nested, Vowel      bool
+	}{r.Status, r.Code, r.Size.Name, pool, number(r.Size.CPUs), number(float64(r.Size.MemoryMiB) / 1024), arch,
+		r.PoolPlatforms, r.ImagePlatforms, r.OtherPool, r.NoNested || strings.Contains(r.luxMessage, "nested containers"),
+		arch != "" && strings.ContainsRune("aeiou", rune(arch[0]))}
+	return render(moveRefusedSaidTmpl, data), render(moveRefusedAdviceTmpl, data)
 }

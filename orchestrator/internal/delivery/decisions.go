@@ -128,14 +128,13 @@ func (d *Pending) Actions() []string {
 }
 
 // pointLabel is how a decision point reads in a note.
-var pointLabel = map[string]string{
-	PointStart:       "start: nothing has run yet",
-	PointImplemented: "after implement",
-	PointReviewed:    "after a review round",
-	PointFixed:       "after a fix",
-	PointBeforePR:    "before the pull request",
-	PointPRFeedback:  "pull request feedback",
-}
+var pointLabel = func() map[string]string {
+	out := map[string]string{}
+	for _, p := range []string{PointStart, PointImplemented, PointReviewed, PointFixed, PointBeforePR, PointPRFeedback} {
+		out[p] = render(mustTemplate("wakes/facts/point-"+p), nil)
+	}
+	return out
+}()
 
 // next goes to step, as the policy decides, or under decider conductor
 // parks for the conductor's decision at point, saying line (bounded facts).
@@ -202,6 +201,12 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	return out, true, err
 }
 
+// decisionWaitingNote is the reason to wake the conductor for a decision
+// at point, with line's facts.
+func decisionWaitingNote(point, line string) string {
+	return render(decisionWaitingTmpl, struct{ Point, Line string }{pointLabel[point], line})
+}
+
 // toConductorTx parks the workflow on a decision for the conductor, and
 // records the reason to wake it, in the transition's transaction. Keyed on
 // the decision's number, so a step replayed after a crash records it once.
@@ -214,10 +219,7 @@ func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *
 	if point == PointBeforePR {
 		st.GateRequired = true
 	}
-	note := fmt.Sprintf("Decision waiting: %s.", pointLabel[point])
-	if line != "" {
-		note += " " + line
-	}
+	note := decisionWaitingNote(point, line)
 	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
 		fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
 	if err == nil && added {

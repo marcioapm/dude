@@ -641,7 +641,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 			return workflow.Result{}, err
 		}
 		st.HeadRunID, st.PendingRunIDs = runID, nil
-		return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement")+" Nothing to add: the work it continues is reviewed as it is.")
+		return w.next(ctx, sc, st, PointImplemented, "review", out.line(runID, "implement")+nothingToAdd)
 	}
 	if len(out.ChangedPaths) == 0 && (writable || !out.Published) {
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
@@ -726,7 +726,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 				p.ReviewRange = reviewRange
 				d.apply(p)
 				if st.Integration != nil {
-					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: fmt.Sprintf("Review integration at %s: run `git show --remerge-diff %s` in addition to reviewing the branch changes and overlapping automatically merged code. A clean textual merge does not prove semantic correctness.", st.Integration.MergeSHA, st.Integration.MergeSHA)}}
+					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: integrationReviewBrief(st.Integration.MergeSHA)}}
 				}
 			})
 		if err != nil {
@@ -918,14 +918,10 @@ func findingsLine(st *State, findings []FindingState) string {
 			parts = append(parts, fmt.Sprintf("%d %s", n, s))
 		}
 	}
-	line := fmt.Sprintf("Review round %d of %d done: %d open findings", st.Iteration, st.Policy.MaxReviewIterations, open)
-	if len(parts) > 0 {
-		line += " (" + strings.Join(parts, ", ") + ")"
-	}
-	if people > 0 {
-		line += fmt.Sprintf(", and %d people's feedback items to handle (feedback)", people)
-	}
-	return line + "."
+	return render(reviewRoundTmpl, struct {
+		Iteration, Max, Open, People int
+		Severities                   []string
+	}{st.Iteration, st.Policy.MaxReviewIterations, open, people, parts})
 }
 
 // fix: one fix Run for every unresolved finding. Findings overlap, a fixer
@@ -1307,7 +1303,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 			}
 			if len(st.PRFeedback) > 0 || len(open) > 0 {
 				st.ActingOnPR = false
-				line := fmt.Sprintf("%d feedback items from people are open after the base integration: read them with feedback.", len(open))
+				line := feedbackOpenLine(feedbackAfterIntegration, len(open))
 				if len(st.PRFeedback) > 0 {
 					line = feedbackLine(st.PRFeedback)
 				}
@@ -1348,7 +1344,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 		if len(open) > 0 {
 			return w.next(ctx, sc, st, PointReviewed, "fix",
-				fmt.Sprintf("%d feedback items from people are open (feedback): they go to a fixer before any pull request.", len(open)))
+				feedbackOpenLine(feedbackBeforePR, len(open)))
 		}
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
@@ -1537,8 +1533,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			}
 			if len(open) > 0 {
 				st.PRFeedback = nil
-				return w.next(ctx, sc, st, PointPRFeedback, "prFix",
-					fmt.Sprintf("%d feedback items from people are open: read them with feedback.", len(open)))
+				return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackOpenLine(feedbackOpen, len(open)))
 			}
 		}
 		if readiness {
@@ -1560,7 +1555,7 @@ func feedbackLine(feedback []forge.ActionableFeedback) string {
 	for _, f := range feedback {
 		kind := f.Source
 		if len(f.Checks) > 0 {
-			kind = "failing check"
+			kind = failingCheck
 		}
 		kinds[kind]++
 	}
@@ -1568,7 +1563,10 @@ func feedbackLine(feedback []forge.ActionableFeedback) string {
 	for _, k := range slices.Sorted(maps.Keys(kinds)) {
 		parts = append(parts, fmt.Sprintf("%d %s", kinds[k], k))
 	}
-	return fmt.Sprintf("%d actionable items (%s): read them with pull_requests.", len(feedback), strings.Join(parts, ", "))
+	return render(prFeedbackFactTmpl, struct {
+		Count int
+		Kinds []string
+	}{len(feedback), parts})
 }
 
 // stillStuck says whether what a conflict or ci_stuck signal reported is
@@ -2170,21 +2168,43 @@ func (w *steps) prFixLanded(ctx context.Context, sc workflow.StepContext, st *St
 	}
 	// People's feedback the fix left unanswered is open again, and no
 	// signal will come for it: another fix, within MaxPRFixIterations.
-	if fix, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are still open after the fix: read them with feedback."); err != nil || started {
+	if fix, started, err := w.fixOpenFeedback(ctx, sc, st, feedbackAfterFix); err != nil || started {
 		return fix, err
 	}
 	return res, nil
 }
 
 // fixOpenFeedback starts a pull request fix when people's feedback items
-// are open (started), with line (formatted with their count) as its reason.
-func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st *State, line string) (res workflow.Result, started bool, err error) {
+// are open (started), with when's feedbackOpenLine as its reason.
+func (w *steps) fixOpenFeedback(ctx context.Context, sc workflow.StepContext, st *State, when string) (res workflow.Result, started bool, err error) {
 	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
 	if err != nil || len(open) == 0 {
 		return workflow.Result{}, false, err
 	}
-	res, err = w.next(ctx, sc, st, PointPRFeedback, "prFix", fmt.Sprintf(line, len(open)))
+	res, err = w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackOpenLine(when, len(open)))
 	return res, true, err
+}
+
+// nothingToAdd follows the implementer's outcome when the work it continues
+// is reviewed as it is.
+var nothingToAdd = render(mustTemplate("wakes/facts/nothing-to-add"), nil)
+
+// When people's feedback items are open, for feedbackOpenLine.
+const (
+	feedbackOpen             = "open"
+	feedbackAfterFix         = "after-fix"
+	feedbackAfterIntegration = "after-integration"
+	feedbackBeforePR         = "before-pr"
+	feedbackReadyToRead      = "ready-to-read"
+)
+
+// feedbackOpenLine is the conductor's fact on n of people's feedback items
+// open, when.
+func feedbackOpenLine(when string, n int) string {
+	return render(feedbackOpenTmpl, struct {
+		When string
+		N    int
+	}{when, n})
 }
 
 // promotedRefreshRepos are the repositories a full promotion refreshes:
@@ -2356,14 +2376,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := fmt.Sprintf("Escalated to a person: %s. Its actions: %s. Only the person decides: explain and propose, "+
-			"with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets "+
-			"you decide_escalation.",
-			strings.ReplaceAll(reason, "_", " "), strings.Join(st.Escalation.Actions(), ", "))
-		if reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked {
-			line += " The test's verdict per criterion and its evidence are on the task; " +
-				"accept or waive ships past a criterion nobody saw work, and needs the person's reason."
-		}
+		line := escalatedLine(reason, st.Escalation.Actions())
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
 				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
@@ -2450,7 +2463,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			return workflow.Result{Next: "prFix", State: st}, nil
 		}
 		if handOpen && len(st.PullRequestIDs) > 0 {
-			if res, started, err := w.fixOpenFeedback(ctx, sc, st, "%d feedback items from people are open: read them with feedback."); err != nil || started {
+			if res, started, err := w.fixOpenFeedback(ctx, sc, st, feedbackOpen); err != nil || started {
 				return res, err
 			}
 		}
@@ -2614,11 +2627,24 @@ func (w *steps) awaitRead(ctx context.Context, sc workflow.StepContext) (workflo
 	}
 	st.Retries++
 	st.Iteration, st.PendingRunIDs = 0, nil
-	return w.next(ctx, sc, st, PointReviewed, "fix",
-		fmt.Sprintf("%d feedback items from people on the work ready to read: read them with feedback.", len(open)))
+	return w.next(ctx, sc, st, PointReviewed, "fix", feedbackOpenLine(feedbackReadyToRead, len(open)))
 }
 
 // humanFeedback says whether the signals carry a person's feedback.
 func humanFeedback(sc workflow.StepContext) bool {
 	return slices.ContainsFunc(sc.Signals, func(s workflow.Signal) bool { return s.Name == SignalHumanFeedback })
 }
+
+// escalatedLine tells the conductor the delivery escalated to a person for
+// reason, with the actions the person has.
+func escalatedLine(reason string, actions []string) string {
+	return render(escalatedTmpl, struct {
+		Reason  string
+		Actions []string
+		Verdict bool
+	}{strings.ReplaceAll(reason, "_", " "), actions, reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked})
+}
+
+// integrationReviewBrief is what a reviewer of an integration merge (sha)
+// is given as feedback.
+func integrationReviewBrief(sha string) string { return render(integrationReviewTmpl, sha) }

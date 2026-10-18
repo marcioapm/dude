@@ -32,7 +32,7 @@ const (
 // ---- findings ------------------------------------------------------------------
 
 type findingsIn struct {
-	IDs []string `json:"ids,omitempty" jsonschema:"findings to read in full (fnd_…), with their text; empty lists the task's findings without it"`
+	IDs []string `json:"ids,omitempty"`
 }
 
 type findingOut struct {
@@ -66,7 +66,7 @@ type findingsOut struct {
 func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, error) {
 	ids := uniquePaths(in.IDs)
 	if len(ids) > findingTextMax {
-		return nil, refuse("at most %d findings by id at once", findingTextMax)
+		return nil, refuse(rAtMostFindingsByIdAt, findingTextMax)
 	}
 	out := findingsOut{Findings: []findingOut{}}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM review_findings WHERE task_id = $1`, c.TaskID).Scan(&out.Total); err != nil {
@@ -117,21 +117,14 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 }
 
 func settledAs(status, by string, attempts int, note string) string {
-	switch status {
-	case "resolved":
-		if by != "" {
-			return "fixed by " + by
-		}
-		return "fixed"
-	case "accepted":
-		return delivery.AcceptedBy(note)
-	case "superseded":
-		return "superseded: the code it described is gone"
+	accepted := ""
+	if status == "accepted" {
+		accepted = delivery.AcceptedBy(note)
 	}
-	if attempts > 0 {
-		return fmt.Sprintf("open after %d fix attempts", attempts)
-	}
-	return "open"
+	return findingsSettled.Render(struct {
+		Status, By, Accepted string
+		Attempts             int
+	}{status, by, accepted, attempts})
 }
 
 // ---- pull_requests ----------------------------------------------------------
@@ -274,10 +267,10 @@ func conducted[T any](out T, err error) (T, error) {
 }
 
 type startPhaseIn struct {
-	Phase      string   `json:"phase" jsonschema:"implement, review, fix, simplify or test"`
-	Categories []string `json:"categories,omitempty" jsonschema:"review: the reviewers to run (correctness, tests, security, database, api, frontend, performance); none runs those the change warrants"`
-	Findings   []string `json:"findings,omitempty" jsonschema:"fix: the open findings to fix (fnd_…); none fixes every open one"`
-	Note       string   `json:"note,omitempty" jsonschema:"what you ask of the Run, added to its prompt"`
+	Phase      string   `json:"phase"`
+	Categories []string `json:"categories,omitempty"`
+	Findings   []string `json:"findings,omitempty"`
+	Note       string   `json:"note,omitempty"`
 }
 
 func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[string]any, error) {
@@ -287,8 +280,8 @@ func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[
 }
 
 type decideIn struct {
-	Action string `json:"action" jsonschema:"next, ask_person, wait or open_pull_request"`
-	Note   string `json:"note,omitempty" jsonschema:"why; for ask_person, the question"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
 }
 
 func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]any, error) {
@@ -296,8 +289,8 @@ func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]a
 }
 
 type dismissIn struct {
-	ID     string `json:"id" jsonschema:"the finding (fnd_…)"`
-	Reason string `json:"reason" jsonschema:"why it is left as it is, shown with the finding"`
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map[string]any, error) {
@@ -306,8 +299,8 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 }
 
 type decideEscalationIn struct {
-	Action string `json:"action" jsonschema:"one of the escalation's actions: retry, accept, resume, done, wait or stop"`
-	Note   string `json:"note,omitempty" jsonschema:"what you decided and why, kept with the task for every agent from here on"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
 }
 
 func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalationIn) (map[string]any, error) {
@@ -319,10 +312,10 @@ func decideEscalation(ctx context.Context, tx pgx.Tx, c Caller, in decideEscalat
 }
 
 type steerIn struct {
-	Run         string   `json:"run" jsonschema:"the phase Run to steer (run_…), one of this task's current attempt, still running"`
-	Text        string   `json:"text,omitempty" jsonschema:"what to tell it: read at its next step, in the turn it is in"`
-	Interrupt   bool     `json:"interrupt,omitempty" jsonschema:"stop its current turn so it hears this now; only when the work it is doing is wasted"`
-	FeedbackIDs []string `json:"feedbackIds,omitempty" jsonschema:"people's open feedback items (fbi_…) to pass to an implementer or fixer: dude adds their own words, never a summary"`
+	Run         string   `json:"run"`
+	Text        string   `json:"text,omitempty"`
+	Interrupt   bool     `json:"interrupt,omitempty"`
+	FeedbackIDs []string `json:"feedbackIds,omitempty"`
 }
 
 func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any, error) {
@@ -333,8 +326,7 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	out := map[string]any{"directiveId": st.ID, "run": in.Run,
-		"next": "Queued for the Run. You are woken when it has read it, or if it never will."}
+	out := map[string]any{"directiveId": st.ID, "run": in.Run, "next": steerNext}
 	if lands != "" {
 		out["lands"] = lands
 	}
@@ -342,9 +334,9 @@ func steer(ctx context.Context, tx pgx.Tx, c Caller, in steerIn) (map[string]any
 }
 
 type restartRunIn struct {
-	Run  string `json:"run" jsonschema:"the phase Run to restart (run_…): one of this task's that the delivery waits on, still live"`
-	Note string `json:"note" jsonschema:"why, and what to do differently: told to the new Run"`
-	Tier string `json:"tier,omitempty" jsonschema:"a model tier of the organization's (its id or name) to run the new Run on; none keeps the role's"`
+	Run  string `json:"run"`
+	Note string `json:"note"`
+	Tier string `json:"tier,omitempty"`
 }
 
 // restartRun is restart_run: a fresh Run in the stuck one's slot. Under the
@@ -359,7 +351,7 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 		return nil, err
 	}
 	if !live {
-		return nil, refuse("you are no longer this task's conductor: another took over from you. Restart nothing")
+		return nil, refuseText(rYouAreNoLongerThisTask)
 	}
 	id, err := delivery.RestartRunTx(ctx, tx, c.Org, c.TaskID, delivery.Restart{RunID: strings.TrimSpace(in.Run), Note: in.Note,
 		Tier: strings.TrimSpace(in.Tier), Actor: delivery.Writer{ActorType: ledger.ActorAgent, ActorID: c.RunID}, Conductor: c.RunID})
@@ -369,14 +361,13 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	return map[string]any{"restarted": in.Run, "run": id,
-		"next": "The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision."}, nil
+	return map[string]any{"restarted": in.Run, "run": id, "next": restartNext}, nil
 }
 
 type replyIn struct {
-	PR        string `json:"pr" jsonschema:"the pull request: its number, or repo#number, one of your task's"`
-	Text      string `json:"text" jsonschema:"what to post, in Markdown, as you would say it in Chat"`
-	InReplyTo string `json:"in_reply_to,omitempty" jsonschema:"the comment you answer (issue-comment-…, line-comment-… or review-…): a line comment is answered in its thread; anything else is quoted"`
+	PR        string `json:"pr"`
+	Text      string `json:"text"`
+	InReplyTo string `json:"in_reply_to,omitempty"`
 }
 
 // forgeFor resolves the caller's organization's GitHub client before the
@@ -426,7 +417,7 @@ func recordReply(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.ReplyPost,
 }
 
 type publishIn struct {
-	Message string `json:"message,omitempty" jsonschema:"what the commits do, in a line, for Chat; your commit messages stay as they are"`
+	Message string `json:"message,omitempty"`
 }
 
 func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string]any, error) {
@@ -437,21 +428,20 @@ func publish(ctx context.Context, tx pgx.Tx, c Caller, in publishIn) (map[string
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	return map[string]any{"publishId": id, "status": "publishing",
-		"next": "lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused."}, nil
+	return map[string]any{"publishId": id, "status": "publishing", "next": publishNext}, nil
 }
 
 type updateTaskIn struct {
-	Goal               *string      `json:"goal,omitempty" jsonschema:"the task's goal, whole, as agreed"`
-	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty" jsonschema:"the task's acceptance criteria, the whole list, as agreed"`
-	AddRelations       []relationIn `json:"addRelations,omitempty" jsonschema:"relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related"`
-	RemoveRelations    []relationIn `json:"removeRelations,omitempty" jsonschema:"relations to remove: only ones this task's agents added"`
+	Goal               *string      `json:"goal,omitempty"`
+	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty"`
+	AddRelations       []relationIn `json:"addRelations,omitempty"`
+	RemoveRelations    []relationIn `json:"removeRelations,omitempty"`
 }
 
 type relationIn struct {
-	Kind string `json:"kind" jsonschema:"blocked_by, blocks or related, read from this task"`
-	Task string `json:"task" jsonschema:"the other task's key (CP-41)"`
-	Why  string `json:"why,omitempty" jsonschema:"why, shown quoted in the task's history"`
+	Kind string `json:"kind"`
+	Task string `json:"task"`
+	Why  string `json:"why,omitempty"`
 }
 
 // edgesOf resolves update_task's relations to edges of the caller's task.
@@ -460,14 +450,14 @@ func edgesOf(ctx context.Context, tx pgx.Tx, c Caller, in []relationIn) ([]deliv
 	for _, r := range in {
 		kind := strings.TrimSpace(r.Kind)
 		if kind != delivery.SideBlockedBy && kind != delivery.SideBlocks && kind != delivery.SideRelated {
-			return nil, refuse("a relation's kind is blocked_by, blocks or related, not %q", r.Kind)
+			return nil, refuse(rRelationKindBlockedByBlocksOr, r.Kind)
 		}
 		other, ok, err := delivery.TaskByOrgKey(ctx, tx, r.Task)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, refuse("no task %s in this organisation", r.Task)
+			return nil, refuse(rNoTaskInThisOrganisation, r.Task)
 		}
 		here, err := hereOf(ctx, tx, c)
 		if err != nil {
@@ -498,7 +488,7 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 			return conducted[map[string]any](nil, err)
 		}
 		if in.Goal == nil && in.AcceptanceCriteria == nil {
-			return map[string]any{"updated": true, "next": "The relations are written. A task blocked by another starts only once that one is merged."}, nil
+			return map[string]any{"updated": true, "next": relationsWrittenNext}, nil
 		}
 	}
 	spec := delivery.TaskSpec{Goal: in.Goal}
@@ -507,12 +497,12 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 	}
 	switch {
 	case in.Goal != nil && utf16Len(strings.TrimFunc(*in.Goal, isJSSpace)) < GoalMin:
-		return nil, refuse("a goal of at least %d characters", GoalMin)
+		return nil, refuse(rGoalAtLeastCharacters, GoalMin)
 	case in.Goal != nil && utf16Len(*in.Goal) > GoalMax || len(spec.Criteria) > 50:
-		return nil, refuse("too long: a goal of at most %d characters, at most 50 criteria", GoalMax)
+		return nil, refuse(rTooLongGoalAtMostCharacters, GoalMax)
 	case criteriaLength(spec.Criteria) > CriteriaMax:
-		return nil, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
+		return nil, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	}
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
-	return conducted(map[string]any{"updated": true, "next": "The implementer's prompt will have it."}, err)
+	return conducted(map[string]any{"updated": true, "next": taskUpdatedNext}, err)
 }

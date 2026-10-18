@@ -49,25 +49,44 @@ const (
 	diffPathsMax       = 20
 )
 
-// cutMark ends a text dude shortened.
-const cutMark = "…cut"
+var (
+	cutMark          = githubText("cut", nil)
+	whoseTask        = githubText("whose-task", nil)
+	whoseSession     = githubText("whose-session", nil)
+	issuePullRequest = githubText("issue-pull-request", nil)
+	noDiff           = githubText("no-diff", nil)
+	budgetCut        = githubText("budget-cut", cutMark)
+)
+
+// githubText renders delivery/agents/results/github.md's text name.
+func githubText(name string, data any) string { return githubTexts[name].Render(data) }
+
+// githubTexts are github.md's texts, resolved at init.
+var githubTexts = func() map[string]delivery.Text {
+	out := map[string]delivery.Text{}
+	for _, name := range []string{"refused", "whose-task", "whose-session", "cut", "search-more", "issue-pull-request",
+		"comments-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut"} {
+		out[name] = delivery.MustText("results/github/" + name)
+	}
+	return out
+}()
 
 type githubSearchIn struct {
-	Repo  string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Query string `json:"query,omitempty" jsonschema:"words to find in titles and bodies, and GitHub qualifiers (label:bug, author:ana); the repository is repo's, never one named here"`
-	Kind  string `json:"kind" jsonschema:"issue or pr"`
-	State string `json:"state,omitempty" jsonschema:"open, closed or all (default all)"`
+	Repo  string `json:"repo"`
+	Query string `json:"query,omitempty"`
+	Kind  string `json:"kind"`
+	State string `json:"state,omitempty"`
 }
 
 type githubIssueIn struct {
-	Repo   string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Number int    `json:"number" jsonschema:"the issue's number (a pull request's reads its conversation)"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
 }
 
 type githubPullRequestIn struct {
-	Repo   string   `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	Number int      `json:"number" jsonschema:"the pull request's number"`
-	Files  []string `json:"files,omitempty" jsonschema:"paths of changed files whose diff to read (at most 20); none reads no diff"`
+	Repo   string   `json:"repo"`
+	Number int      `json:"number"`
+	Files  []string `json:"files,omitempty"`
 }
 
 type githubCheckLogIn struct {
@@ -137,7 +156,7 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, err
 	}
 	if gh == nil {
-		return read, refuse("this organisation has no GitHub connection: nothing on GitHub can be read")
+		return read, refuseText(rThisOrganisationHasNoGithubConnection)
 	}
 	want := strings.Trim(strings.TrimSpace(read.Slug), "/")
 	slugs, err := readableRepos(ctx, tx, c)
@@ -146,14 +165,14 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 	}
 	i := slices.IndexFunc(slugs, func(s string) bool { return strings.EqualFold(s, want) })
 	if i < 0 {
-		whose := "your task's project"
+		whose := whoseTask
 		if c.Role == delivery.RoleBrainstorm {
-			whose = "the projects linked to this session"
+			whose = whoseSession
 		}
 		if len(slugs) == 0 {
-			return read, refuse("%s is not a repository you may read: %s have none on GitHub", want, whose)
+			return read, refuse(rNotRepositoryYouMayReadHave, want, whose)
 		}
-		return read, refuse("%s is not a repository you may read: only %s, %s", want, whose, strings.Join(slugs, ", "))
+		return read, refuse(rNotRepositoryYouMayReadOnly, want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
 	// The session's (or, for a conductor with none, the task's) Runs share
@@ -170,7 +189,7 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, err
 	}
 	if reads >= githubReadsPerHour {
-		return read, refuse("at most %d GitHub reads an hour; this session has made them: wait, or work with what you read", githubReadsPerHour)
+		return read, refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
 	}
 	return read, nil
 }
@@ -179,16 +198,16 @@ func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (
 	kind, state := strings.TrimSpace(in.Kind), strings.TrimSpace(in.State)
 	switch {
 	case kind != "issue" && kind != "pr":
-		return githubRead{}, refuse("kind is issue or pr")
+		return githubRead{}, refuseText(rKindIssueOrPr)
 	case state != "" && state != "open" && state != "closed" && state != "all":
-		return githubRead{}, refuse("state is open, closed or all")
+		return githubRead{}, refuseText(rStateOpenClosedOrAll)
 	case len(in.Query) > 256:
-		return githubRead{}, refuse("query: at most 256 characters")
+		return githubRead{}, refuseText(rQueryAtMost256Characters)
 	}
 	for _, term := range strings.Fields(strings.ToLower(in.Query)) {
 		for _, q := range []string{"repo:", "org:", "user:", "owner:"} {
 			if strings.HasPrefix(strings.TrimPrefix(term, "-"), q) {
-				return githubRead{}, refuse("name the repository in repo, not with %s in the query", q)
+				return githubRead{}, refuse(rNameRepositoryInRepoNotWith, q)
 			}
 		}
 	}
@@ -198,21 +217,21 @@ func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (
 
 func readGitHubIssue(ctx context.Context, tx pgx.Tx, c Caller, in githubIssueIn) (githubRead, error) {
 	if in.Number <= 0 {
-		return githubRead{}, refuse("number is the issue's, from 1")
+		return githubRead{}, refuseText(rNumberIssueFrom1)
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_issue", Slug: in.Repo, Number: in.Number})
 }
 
 func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPullRequestIn) (githubRead, error) {
 	if in.Number <= 0 {
-		return githubRead{}, refuse("number is the pull request's, from 1")
+		return githubRead{}, refuseText(rNumberPullRequestFrom1)
 	}
 	files := uniquePaths(in.Files)
 	for i, f := range files {
 		files[i] = strings.TrimSpace(delivery.Unquoted(f))
 	}
 	if len(files) > diffPathsMax {
-		return githubRead{}, refuse("files: at most %d paths at once", diffPathsMax)
+		return githubRead{}, refuse(rFilesAtMostPathsAtOnce, diffPathsMax)
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_pull_request", Slug: in.Repo, Number: in.Number, Files: files})
 }
@@ -286,37 +305,16 @@ func githubRefusal(read githubRead, err error) error {
 	if e != nil {
 		status = e.Status
 	}
-	later := "later"
-	if wait := forge.RetryAfter(err); wait > 0 {
+	wait := ""
+	if d := forge.RetryAfter(err); d > 0 {
 		// Never "in 0s": a wait under a minute reads as one.
-		later = "in " + max(wait, time.Minute).Round(time.Minute).String()
+		wait = max(d, time.Minute).Round(time.Minute).String()
 	}
 	kind := refusalKind(err)
-	var msg string
-	switch kind {
-	case forge.RefusalMoved:
-		msg = fmt.Sprintf("repository %s has moved on GitHub; update the project's repository URL", read.Slug)
-	case forge.RefusalMovedItem:
-		msg = fmt.Sprintf("GitHub says %s has moved (renamed repository or transferred issue)", what)
-	case forge.RefusalRedirect:
-		msg = fmt.Sprintf("GitHub answered reading %s with a redirect (HTTP %d), which dude does not follow", what, status)
-	case forge.RefusalTooLarge:
-		msg = fmt.Sprintf("GitHub's answer reading %s is past the 4 MiB an agent's read may take", what)
-	case forge.RefusalRateReserve:
-		msg = fmt.Sprintf("the rest of GitHub's rate limit is kept for delivery: read %s %s, or work with what you read", what, later)
-	case "rate_limited":
-		msg = fmt.Sprintf("GitHub is rate limiting dude (HTTP %d): read %s %s", status, what, later)
-	case "not_found":
-		msg = fmt.Sprintf("GitHub has no %s, or dude cannot see it", what)
-	case "unavailable":
-		if status == 0 {
-			msg = fmt.Sprintf("GitHub did not answer reading %s: try again later", what)
-		} else {
-			msg = fmt.Sprintf("GitHub did not answer reading %s (HTTP %d): try again later", what, status)
-		}
-	default:
-		msg = fmt.Sprintf("GitHub refused reading %s (HTTP %d)", what, status)
-	}
+	msg := githubText("refused", struct {
+		Kind, Slug, What, Wait string
+		Status                 int
+	}{kind, read.Slug, what, wait, status})
 	payload := readPayload(read)
 	payload["refused"] = kind
 	if e != nil {
@@ -405,7 +403,10 @@ func (w wrapper) text(s string, limit int) string {
 	s = strings.ToValidUTF8(s, "\uFFFD")
 	cut := ""
 	if len(s) > limit {
-		cut = fmt.Sprintf(" %s: %d of %d bytes", cutMark, len(cutBytes(s, limit)), len(s))
+		cut = githubText("text-cut", struct {
+			Cut         string
+			Kept, Total int
+		}{cutMark, len(cutBytes(s, limit)), len(s)})
 		s = cutBytes(s, limit)
 	}
 	return delivery.ExternalText(w.id, s) + cut
@@ -467,7 +468,7 @@ func (w wrapper) search(lines []forge.IssueLine, total int) map[string]any {
 	}
 	out := map[string]any{"items": items, "total": total, "external": w.note()}
 	if total > len(items) {
-		out["more"] = fmt.Sprintf("%d more match: narrow the query", total-len(items))
+		out["more"] = githubText("search-more", total-len(items))
 	}
 	return out
 }
@@ -481,7 +482,7 @@ func (w wrapper) issue(i forge.IssueRead) map[string]any {
 	out := map[string]any{"issue": w.line(i.IssueLine), "body": w.text(i.Body, textCap), "comments": w.comments(i.Comments),
 		"external": w.note()}
 	if i.PullRequest {
-		out["pullRequest"] = "a pull request: github_pull_request reads its reviews, threads, checks and files"
+		out["pullRequest"] = issuePullRequest
 	}
 	if more := commentsCut(len(i.Comments), i.CommentCount); more != "" {
 		out["moreComments"] = more
@@ -494,7 +495,10 @@ func commentsCut(shown, total int) string {
 	if total <= shown {
 		return ""
 	}
-	return fmt.Sprintf("%s: the first %d of %d comments", cutMark, shown, total)
+	return githubText("comments-cut", struct {
+		Cut          string
+		Shown, Total int
+	}{cutMark, shown, total})
 }
 
 type ghReviewOut struct {
@@ -554,7 +558,7 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		if slices.Contains(paths, f.Path) {
 			out.Diff = w.text(f.Patch, diffCap)
 			if f.Patch == "" {
-				out.Diff = "GitHub shows no diff for it (binary, or too large)"
+				out.Diff = noDiff
 			}
 		}
 		files = append(files, out)
@@ -563,16 +567,22 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 		"head": w.text(p.Head, 300), "base": w.text(p.Base, 300), "reviews": reviews, "unresolvedThreads": threads,
 		"checks": checks, "files": files, "external": w.note()}
 	if p.ChecksCut {
-		pr["moreChecks"] = cutMark + ": check runs incomplete"
+		pr["moreChecks"] = githubText("checks-cut", cutMark)
 	}
 	if p.ReviewsCut || len(p.Reviews) > reviewsMax {
-		pr["moreReviews"] = fmt.Sprintf("%s: at most %d reviews; review history incomplete", cutMark, reviewsMax)
+		pr["moreReviews"] = githubText("reviews-cut", struct {
+			Cut string
+			Max int
+		}{cutMark, reviewsMax})
 	}
 	if p.ThreadsUnknown {
-		pr["threadsUnknown"] = cutMark + ": GitHub would not list all review threads"
+		pr["threadsUnknown"] = githubText("threads-unknown", cutMark)
 	}
 	if len(p.Files) >= filesMax {
-		pr["moreFiles"] = fmt.Sprintf("%s: the first %d changed files", cutMark, filesMax)
+		pr["moreFiles"] = githubText("files-cut", struct {
+			Cut string
+			Max int
+		}{cutMark, filesMax})
 	}
 	if len(missing) > 0 {
 		if len(p.Files) >= filesMax {
@@ -643,7 +653,7 @@ func (w wrapper) fit(v map[string]any) (json.RawMessage, error) {
 		}
 	}
 	budget(m)
-	m["cut"] = cutMark + ": text and list tails omitted to fit the result budget"
+	m["cut"] = budgetCut
 	return marshalResult(m)
 }
 
@@ -695,20 +705,11 @@ func (w wrapper) recut(s string, n int) string {
 }
 
 var githubReadTools = []tool{
-	around(define("github_search", "Search one of your projects' GitHub repositories for issues or pull requests (kind), "+
-		"by words and GitHub qualifiers, open, closed or all: up to 30, most recently updated first, each with its number, "+
-		"title, author, state, labels, last update and URL. Read only; dude reads it, and what people wrote comes "+
-		"marked as external text.", githubReaders, searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_search", githubReaders, searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_issue", "Read an issue of one of your projects' GitHub repositories: its title, body, author, "+
-		"state and labels, and its comments in order (the first 50). Read only; what people wrote comes marked as "+
-		"external text.", githubReaders, readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_issue", githubReaders, readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_pull_request", "Read a pull request of one of your projects' GitHub repositories: its title, "+
-		"body, author, state, draft, head and base; its reviews; the review threads nobody resolved; its checks; the "+
-		"files it changes with their line counts; and, for the paths you name in files, their diff. Read only: reading "+
-		"a pull request lets you do nothing on it. What people wrote comes marked as external text.",
-		githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_pull_request", githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 	around(define("github_check_log", "Read a failed check's log, or what its check run reported when it is not a GitHub Actions job or GitHub cannot provide its log. Use the check id from github_pull_request before deciding whether to rerun or fix it. Read only; the result is marked as external text.",
 		githubReaders, readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),

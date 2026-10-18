@@ -3,9 +3,9 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
+	"text/template"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -90,8 +90,11 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 	if body == "" {
 		return "", nil
 	}
-	return "## The conversation so far\n\n" + replayLead + "\n\n" + body, nil
+	return replayHeading(body), nil
 }
+
+// replayHeading is the rendered replay under its heading and lead.
+func replayHeading(body string) string { return render(replayTmpl, body) }
 
 // fromCompaction is where the replay starts: the newest compaction summary
 // the agent's harness kept (agent.context.compacted), with the Run whose
@@ -131,7 +134,7 @@ func replayTokens(s string) int {
 	return (utf8.RuneCountInString(s) + charsPerToken - 1) / charsPerToken
 }
 
-const outputDropped = "[output dropped]"
+var outputDropped = replayLine("output-dropped", nil)
 
 // fitReplay renders the entries within budget tokens, shedding while over:
 // tool outputs, oldest first, keeping the call; then tool calls whole,
@@ -196,7 +199,7 @@ func fitReplay(start replayStart, entries []replayEntry, budget int) string {
 }
 
 // tookOver marks where another Run's agent took the conversation on.
-const tookOver = "[A new agent took over here.]"
+var tookOver = replayLine("took-over", nil)
 
 // takeOvers is, per entry, whether a take-over line goes before it: its
 // Run differs from the last Run seen, counting from the summary's.
@@ -212,7 +215,38 @@ func takeOvers(start replayStart, entries []replayEntry) []bool {
 	return at
 }
 
-func omittedLine(n int) string { return fmt.Sprintf("[%d earlier messages omitted]", n) }
+func omittedLine(n int) string { return replayLine("omitted", n) }
+
+// replayLine renders briefings/replay-lines.md's line name with data.
+func replayLine(name string, data any) string {
+	t, ok := replayLineTmpls[name]
+	if !ok {
+		panic("no replay line " + name)
+	}
+	return render(t, data)
+}
+
+// replayLineTmpls are the lines replayLine renders, resolved at init.
+var replayLineTmpls = func() map[string]*template.Template {
+	out := map[string]*template.Template{}
+	for _, name := range []string{"summary", "omitted", "took-over", "pr-reply", "you", "said", "answered", "image-ref",
+		"github", "someone", "withdrawn", "settled-elsewhere", "dude", "earlier-proposal", "filed", "proposed", "decided",
+		"finding", "task-changed", "renamed", "session-replaced", "asked", "tool", "no-output-recorded", "output-dropped",
+		"no-output", "tail-cut", "capped", "stderr", "error", "exit"} {
+		out[name] = mustTemplate("briefings/replay-lines/" + name)
+	}
+	return out
+}()
+
+// The replay's fixed lines.
+var (
+	replayNoOutputRecorded = replayLine("no-output-recorded", nil)
+	replayNoOutput         = replayLine("no-output", nil)
+	replayWithdrawn        = replayLine("withdrawn", nil)
+	replaySettledElsewhere = replayLine("settled-elsewhere", nil)
+	replaySessionReplaced  = replayLine("session-replaced", nil)
+	replaySomeone          = replayLine("someone", nil)
+)
 
 // joinReplay renders the summary under its heading, then the entries,
 // after a line saying how many earlier ones were omitted; a take-over line
@@ -236,15 +270,8 @@ func joinReplay(start replayStart, entries []replayEntry, omitted int) string {
 	if start.summary == "" {
 		return body
 	}
-	out := "## Earlier, as the agent summarised it\n\n" + strings.TrimSpace(start.summary)
-	if body != "" {
-		out += "\n\n## Since then\n\n" + body
-	}
-	return out
+	return replayLine("summary", struct{ Summary, Body string }{strings.TrimSpace(start.summary), body})
 }
-
-const replayLead = "What was said here before you, oldest first, from dude's record (\"You\" is this conversation's agent, " +
-	"before you). Tool calls show their input and output, cut where long; thoughts are not kept. Images are named, not attached."
 
 func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, error) {
 	// A session renamed before its first Run has events and nothing to
@@ -343,7 +370,10 @@ func replayEntries(events []replayEvent) []replayEntry {
 				gh, _ := p["github"].(map[string]any)
 				repo, _ := gh["repo"].(string)
 				n, _ := gh["number"].(float64)
-				add(ev, fmt.Sprintf("You (on pull request %s#%d): %s", repo, int(n), replayText(str("text"))))
+				add(ev, replayLine("pr-reply", struct {
+					Repo, Text string
+					Number     int
+				}{repo, replayText(str("text")), int(n)}))
 				continue
 			}
 			add(ev, said(personOf(ev), str("text"), p["attachments"]))
@@ -356,68 +386,59 @@ func replayEntries(events []replayEvent) []replayEntry {
 			add(ev, said(personOf(ev), str("text"), p["attachments"]))
 		case evAgentMessage:
 			if t := str("text"); strings.TrimSpace(t) != "" {
-				add(ev, "You: "+t)
+				add(ev, replayLine("you", t))
 			}
 		case EvQuestionAsked:
 			add(ev, askedLine(p))
 		case evQuestionAnswered:
-			line := said(personOf(ev)+" answered", str("answer"), p["attachments"])
-			if note := str("note"); note != "" {
-				line += "\n" + personOf(ev) + ", also: " + replayText(note)
+			note := str("note")
+			if note != "" {
+				note = replayText(note)
 			}
-			add(ev, line)
+			add(ev, replayLine("answered", struct {
+				Who, Text, Note string
+				Images          []string
+			}{personOf(ev), replayText(str("answer")), note, imageNames(p["attachments"])}))
 		case EvQuestionClosed:
 			if str("by") == "withdrawn" {
-				add(ev, "dude: your question was withdrawn; nobody answered it.")
+				add(ev, replayWithdrawn)
 			} else {
-				add(ev, "dude: your question was settled elsewhere, unanswered.")
+				add(ev, replaySettledElsewhere)
 			}
 		case evSessionTold, EvConductorWoken:
-			add(ev, "dude: "+str("text"))
+			add(ev, replayLine("dude", str("text")))
 		case EvSessionProposed:
 			add(ev, proposedLine(p, filed[str("proposalId")]))
 		case EvSessionFiled:
 			if id, items := filings(p); !proposed[id] && len(items) > 0 {
-				add(ev, "Your earlier proposal: "+strings.Join(items, ", ")+".")
+				add(ev, replayLine("earlier-proposal", items))
 			}
 		case EvDecisionTaken:
-			line := fmt.Sprintf("You decided, at %s: %s", pointWords(str("point")), str("action"))
-			if ph := str("phase"); ph != "" {
-				line += " (" + ph + ")"
-			}
-			if note := str("note"); note != "" {
-				line += ": " + oneLine(note)
-			}
-			add(ev, line+".")
+			add(ev, replayLine("decided", struct{ Point, Action, Phase, Note string }{pointWords(str("point")), str("action"),
+				str("phase"), str("note")}))
 		case EvFindingResolved:
 			if str("by") == "conductor" {
 				// In the words the briefing's findings use (AcceptedBy).
-				add(ev, fmt.Sprintf("Finding %s: %s.", str("findingId"), AcceptedBy(str("note"))))
+				add(ev, replayLine("finding", struct{ ID, Settled string }{str("findingId"), AcceptedBy(str("note"))}))
 			}
 		case EvTaskUpdated:
 			if str("by") == "conductor" {
-				var what []string
-				if _, ok := p["goal"]; ok {
-					what = append(what, "goal")
-				}
-				if _, ok := p["acceptanceCriteria"]; ok {
-					what = append(what, "acceptance criteria")
-				}
-				add(ev, "You changed the task's "+strings.Join(what, " and ")+".")
+				_, goal := p["goal"]
+				_, criteria := p["acceptanceCriteria"]
+				add(ev, replayLine("task-changed", struct{ Goal, Criteria bool }{goal, criteria}))
 			}
 		case EvSessionRenamed:
-			who := personOf(ev)
-			if str("by") == ByAgent {
-				who = "You"
-			}
-			add(ev, fmt.Sprintf("%s named the session %q.", who, str("title")))
+			add(ev, replayLine("renamed", struct {
+				Who, Title string
+				You        bool
+			}{personOf(ev), str("title"), str("by") == ByAgent}))
 		case evSessionReplaced:
-			add(ev, "[Here the agent's session restarted without its conversation.]")
+			add(ev, replaySessionReplaced)
 		case evToolCalled:
 			key := ev.RunID + "/" + str("callId")
 			calls[key] = len(out)
 			out = append(out, replayEntry{run: ev.RunID, tool: true, call: toolCall(str("tool"), p["input"]),
-				output: "[no output recorded]"})
+				output: replayNoOutputRecorded})
 		case evToolCompleted:
 			key := ev.RunID + "/" + str("callId")
 			i, ok := calls[key]
@@ -437,65 +458,61 @@ func replayEntries(events []replayEvent) []replayEntry {
 func personOf(ev replayEvent) string {
 	if gh, ok := ev.Payload["github"].(map[string]any); ok {
 		if login, _ := gh["login"].(string); login != "" {
-			return login + " (GitHub)"
+			return replayLine("github", login)
 		}
 	}
 	if ev.Who != "" {
 		return ev.Who
 	}
 	if login, ok := strings.CutPrefix(ev.ActorID, "github:"); ok {
-		return login + " (GitHub)"
+		return replayLine("github", login)
 	}
-	return "Someone"
+	return replaySomeone
 }
 
 // said is "Name: words", the images it carried named after the words.
 func said(who, text string, attachments any) string {
-	line := who + ": " + replayText(text)
+	return replayLine("said", struct {
+		Who, Text string
+		Images    []string
+	}{who, replayText(text), imageNames(attachments)})
+}
+
+// imageNames are the names of the images a message carried, "" for one
+// without.
+func imageNames(attachments any) []string {
+	var out []string
 	for _, a := range asList(attachments) {
 		m, _ := a.(map[string]any)
-		if name, _ := m["name"].(string); name != "" {
-			line += " [image: " + name + "]"
-		} else {
-			line += " [image]"
-		}
+		name, _ := m["name"].(string)
+		out = append(out, name)
 	}
-	return line
+	return out
 }
 
 // replayText is a message's words with each image it shows named.
 func replayText(s string) string {
-	return ReplaceImageRefs(s, func(r ImageRef) string { return "[image: " + r.name() + "]" })
+	return ReplaceImageRefs(s, func(r ImageRef) string { return replayLine("image-ref", r.name()) })
 }
 
 func askedLine(p map[string]any) string {
 	var items []QuestionItem
 	raw, _ := json.Marshal(p["items"])
 	_ = json.Unmarshal(raw, &items)
-	who := "You asked"
-	if to, _ := p["toName"].(string); to != "" {
-		who += " " + to
+	type item struct {
+		Header, Question string
+		Labels           []string
 	}
-	if len(items) == 0 {
-		prompt, _ := p["prompt"].(string)
-		return who + ": " + prompt
-	}
-	item := func(it QuestionItem) string {
-		s := it.Question
-		if labels := it.Labels(); len(labels) > 0 {
-			s += " (choices: " + strings.Join(labels, "; ") + ")"
-		}
-		return s
-	}
-	if len(items) == 1 {
-		return who + ": " + item(items[0])
-	}
-	var b strings.Builder
-	b.WriteString(who + ":")
+	asked := make([]item, len(items))
 	for i, it := range items {
-		fmt.Fprintf(&b, "\n%d. %s — %s", i+1, it.Header, item(it))
+		asked[i] = item{it.Header, it.Question, it.Labels()}
 	}
-	return b.String()
+	to, _ := p["toName"].(string)
+	prompt, _ := p["prompt"].(string)
+	return replayLine("asked", struct {
+		To, Prompt string
+		Items      []item
+	}{to, prompt, asked})
 }
 
 // filings are a session.filed's proposal and, per item filed, who filed
@@ -503,15 +520,15 @@ func askedLine(p map[string]any) string {
 func filings(p map[string]any) (string, []string) {
 	id, _ := p["proposalId"].(string)
 	by, _ := p["by"].(string)
-	if by == "" {
-		by = "someone"
-	}
 	var out []string
 	for _, f := range asList(p["filed"]) {
 		m, _ := f.(map[string]any)
 		n, _ := m["item"].(float64)
 		key, _ := m["key"].(string)
-		out = append(out, fmt.Sprintf("item %d filed by %s as %s", int(n)+1, by, key))
+		out = append(out, replayLine("filed", struct {
+			N       int
+			By, Key string
+		}{int(n) + 1, by, key}))
 	}
 	return id, out
 }
@@ -520,29 +537,10 @@ func proposedLine(p map[string]any, filed []string) string {
 	var items []ProposalItem
 	raw, _ := json.Marshal(p["items"])
 	_ = json.Unmarshal(raw, &items)
-	parts := make([]string, len(items))
-	for i, it := range items {
-		switch it.Kind {
-		case "epic", "task":
-			parts[i] = fmt.Sprintf("%d. %s %q in %s", i+1, it.Kind, it.Title, it.Project)
-		case "edit":
-			parts[i] = fmt.Sprintf("%d. an edit to %s", i+1, it.Task)
-		case "comment":
-			parts[i] = fmt.Sprintf("%d. a comment on %s", i+1, it.Task)
-		case "note":
-			parts[i] = fmt.Sprintf("%d. a note on %q in %s", i+1, it.Epic, it.Project)
-			if it.Replaces != 0 {
-				parts[i] = fmt.Sprintf("%d. a note replacing note %d on %q in %s", i+1, it.Replaces, it.Epic, it.Project)
-			}
-		default:
-			parts[i] = fmt.Sprintf("%d. %s", i+1, it.Kind)
-		}
-	}
-	outcome := "none filed"
-	if len(filed) > 0 {
-		outcome = strings.Join(filed, ", ")
-	}
-	return "You proposed: " + strings.Join(parts, "; ") + " — " + outcome + "."
+	return replayLine("proposed", struct {
+		Items []ProposalItem
+		Filed []string
+	}{items, filed})
 }
 
 func pointWords(point string) string {
@@ -554,9 +552,7 @@ func pointWords(point string) string {
 
 // toolCall is a call as one line: tool(input), its input capped.
 func toolCall(tool string, input any) string {
-	if tool == "" {
-		tool = "tool"
-	}
+	tool = replayLine("tool", tool)
 	in := ""
 	if input != nil {
 		raw, _ := json.Marshal(input)
@@ -581,22 +577,22 @@ func toolOutput(p map[string]any) string {
 		s := capReplay(head)
 		if tail, _ := m["tail"].(string); tail != "" {
 			n, _ := m["omittedBytes"].(float64)
-			s += fmt.Sprintf("\n[… %d bytes cut …]\n", int(n)) + capReplay(tail)
+			s += replayLine("tail-cut", int(n)) + capReplay(tail)
 		}
 		if k == "stderr" {
-			s = "stderr: " + s
+			s = replayLine("stderr", s)
 		}
 		parts = append(parts, s)
 	}
 	out := strings.Join(parts, "\n")
 	if status, _ := p["status"].(string); status == "error" {
-		out = "error: " + out
+		out = replayLine("error", out)
 	}
 	if code, ok := p["exitCode"].(float64); ok && code != 0 {
-		out += fmt.Sprintf(" (exit %d)", int(code))
+		out += replayLine("exit", int(code))
 	}
 	if strings.TrimSpace(out) == "" {
-		return "[no output]"
+		return replayNoOutput
 	}
 	return out
 }
@@ -611,7 +607,7 @@ func capReplay(s string) string {
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut] + fmt.Sprintf("[… %d bytes cut]", len(s)-cut)
+	return s[:cut] + replayLine("capped", len(s)-cut)
 }
 
 func asList(v any) []any { l, _ := v.([]any); return l }

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -27,8 +26,8 @@ var machineRoles = delivery.PromptRoles
 const machineMovesPerRun = 3
 
 type requestMachineIn struct {
-	Size   string `json:"size" jsonschema:"one of the sizes listed in this tool's description, by name (Large)"`
-	Reason string `json:"reason" jsonschema:"what ran out: the command, its exit or error, the workers or threads it used"`
+	Size   string `json:"size"`
+	Reason string `json:"reason"`
 }
 
 type requestMachineOut struct {
@@ -76,9 +75,9 @@ func machineOffer(request bool) func(ctx context.Context, tx pgx.Tx, c Caller) (
 			return choices.Offer(), nil
 		}
 		if len(choices.Targets) == 0 {
-			return "The larger machine sizes this Run may move to: none. " + choices.Nothing(), nil
+			return machinesListNone.Render(choices.Nothing()), nil
 		}
-		return "The larger machine sizes this Run may move to, with their pools: " + choices.List() + ".", nil
+		return machinesList.Render(choices.List()), nil
 	}
 }
 
@@ -94,7 +93,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	var out requestMachineOut
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" || len([]rune(reason)) > 2000 {
-		return out, refuse("say what ran out: the command, its error or exit code (at most 2000 characters)")
+		return out, refuseText(rSayWhatRanOutCommandIts)
 	}
 	var current *delivery.Machine
 	var live, status, control, phase string
@@ -115,18 +114,17 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if pending > 0 {
-		return out, refuse("you are being moved to %s now; ask again once you are there, if it is still too small", cmp.Or(pendingTo, "another size"))
+		return out, refuse(rYouAreBeingMovedNowAsk, cmp.Or(pendingTo, machinesAnotherSize))
 	}
 	if used >= machineMovesPerRun {
-		on := "your machine"
+		on := machinesYourMachine
 		if current != nil {
 			on = current.Name
 		}
-		return out, refuse("This Run has moved %d times, the limit for one Run; a Reset does not give a move back. "+
-			"Carry on on %s, or say in your work what did not fit.", machineMovesPerRun, on)
+		return out, refuse(rThisRunHasMovedTimesLimit, machineMovesPerRun, on)
 	}
 	if current == nil || live == "" || status != "running" || control != "none" {
-		return out, refusal{msg: "this Run is not live and available for a machine move", code: "not_live"}
+		return out, refusal{msg: machinesNotLive, code: "not_live"}
 	}
 	choices, sizes, pools, _, err := machineChoices(ctx, tx, c)
 	if err != nil {
@@ -138,9 +136,9 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	found, ok := sizes.Named(in.Size)
 	if !ok {
 		if len(choices.Targets) == 0 {
-			return out, refuse("no size named %s. %s", in.Size, choices.Nothing())
+			return out, refuse(rNoSizeNamed, in.Size, choices.Nothing())
 		}
-		return out, refuse("no size named %s; you may move to: %s", in.Size, choices.List())
+		return out, refuse(rNoSizeNamedYouMayMove, in.Size, choices.List())
 	}
 	target := choices.Named(found)
 	names := delivery.PoolNamesOf(pools)
@@ -152,14 +150,14 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return refusal{msg: msg, code: code, event: &refusedEvent{delivery.EvMachineRequested, payload}}
 	}
 	if !delivery.Larger(target, *current) {
-		msg := fmt.Sprintf("you run on %s (%s); ask for one larger: %s", current.Name, current.Spec(), choices.Names())
+		msg := machinesNotLarger.Render(struct{ Name, Spec, Names string }{current.Name, current.Spec(), choices.Names()})
 		if len(choices.Targets) == 0 {
 			msg = choices.Nothing()
 		}
 		return out, refusedAs(msg, "not_larger", "not_larger")
 	}
 	if c.env.lux == nil || c.env.validateMachine == nil {
-		return out, refuse("machine validation is unavailable")
+		return out, refuseText(rMachineValidationUnavailable)
 	}
 	before, err := c.env.lux.Get(ctx, live)
 	if err != nil {
@@ -167,7 +165,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	}
 	if err := c.env.validateMachine(ctx, live, current, &target, before); err != nil {
 		if errors.Is(err, delivery.ErrPoolsUnread) {
-			return out, refuse("lux's pools could not be read; ask again shortly")
+			return out, refuseText(rLuxPoolsCouldNotBeRead)
 		}
 		if le, ok := lux.AsError(err); ok {
 			// Unread before, the pools are read once more so the sentence can name them.
@@ -196,7 +194,7 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	err = delivery.StartMove(ctx, tx, delivery.MachineMove{ID: id, Org: c.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.RunID,
 		Role: role, Kind: "raise", ToSizeID: target.SizeID, From: delivery.MoveFrom{Machine: *current, PreviousRaise: previous}, Reason: reason}, true)
 	if errors.Is(err, delivery.ErrMoveUnavailable) {
-		return out, refuse("this Run is no longer available for a machine move")
+		return out, refuseText(rThisRunNoLongerAvailableFor)
 	}
 	if err != nil {
 		return out, err
@@ -226,23 +224,22 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 // movedAnswer is the design's answer to an accepted request; role is the
 // caller's settings role.
 func movedAnswer(session bool, role string, choices delivery.MachineChoices, target delivery.Machine) string {
-	where := ""
-	if pool := choices.OtherPool(target); pool != "" {
-		where = " in the " + pool + " pool"
+	label := strings.ToLower(delivery.RoleLabel[role])
+	if label == "" {
+		label = role
 	}
-	later := "Later " + strings.ToLower(delivery.RoleLabel[role]) + " Runs in this task run on " + target.Name + " too."
-	switch {
-	case session:
-		later = "This session's agent runs on " + target.Name + " from now on."
-	case role == "implementer":
-		later = "Later implementer and fixer Runs in this task run on " + target.Name + " too."
-	case role == delivery.RoleConductor:
-		later = "Later conductors in this task run on " + target.Name + " too."
-	case delivery.RoleLabel[role] == "":
-		later = "Later " + role + " Runs in this task run on " + target.Name + " too."
-	}
-	return fmt.Sprintf("Moved: you run on %s (%s)%s from your next step. Your conversation and your checkout are kept, "+
-		"committed or not, with everything else on /workspace and your home. Running processes and /tmp are not: start "+
-		"your servers and watchers again. %s End your turn now; you are resumed on %s.",
-		target.Name, target.Spec(), where, later, target.Name)
+	return machineMoved.Render(struct {
+		Name, Spec, Pool, Role, Label string
+		Session                       bool
+	}{target.Name, target.Spec(), choices.OtherPool(target), role, label, session})
 }
+
+// The machine tools' own words: delivery/agents/results/machines.md.
+var (
+	machinesList        = delivery.MustText("results/machines/list")
+	machinesListNone    = delivery.MustText("results/machines/list-none")
+	machinesNotLarger   = delivery.MustText("results/machines/not-larger")
+	machinesNotLive     = delivery.MustText("results/machines/not-live").Render(nil)
+	machinesYourMachine = delivery.MustText("results/machines/your-machine").Render(nil)
+	machinesAnotherSize = delivery.MustText("results/machines/another-size").Render(nil)
+)
