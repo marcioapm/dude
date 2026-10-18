@@ -18,7 +18,7 @@ export const RESOLUTION_LABEL: Record<TaskResolution, string> = {
   wont_do: "Won't do", duplicate: "Duplicate", cant_reproduce: "Can't reproduce", nothing_to_merge: "Nothing to merge",
 };
 
-/** Why a start is refused, first that holds (task_start_refusal, migration 144). */
+/** Why a start is refused, first that holds (task_start_refusal, migration 145). */
 export type StartRefusal = "archived" | "closed" | "blocked";
 
 /** A person closed it: a resolution other than delivery's Nothing to merge. */
