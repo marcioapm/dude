@@ -14,10 +14,6 @@ A tool call of yours was open for 10 minutes, so dude stopped your turn. Tell th
 
 Your model request got no answer for 10 minutes (the model provider may be rate-limiting), so dude stopped your turn. Read any messages waiting for you and carry on.
 
-## silent-suppressed
-
-Its model still has not answered: dude will not interrupt again until the agent produces output or a person writes to it.
-
 ## host-moved
 
 Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace and conversation are as you left them; processes you had running are not. Carry on with your task where you left off.

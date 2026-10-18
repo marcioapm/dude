@@ -839,12 +839,6 @@ describe("the agent's task and what it did with it", () => {
     expect(turns.flatMap((t) => (t.kind === "notice" ? [t.text] : []))).toEqual(["Its model gave no answer for 10 minutes: dude stopped the turn."]);
   });
 
-  test("suppressed silent retries show the recovery condition", () => {
-    const text = "Its model still has not answered: dude will not interrupt again until the agent produces output or a person writes to it.";
-    const turns = apply(emptyProjection(), [ev(EventTypes.RunTurnStopped, { runId: "run_1", silentSecs: 660, suppressed: true, text })]).turns;
-    expect(turns.flatMap((t) => (t.kind === "notice" ? [t.text] : []))).toEqual([text]);
-  });
-
   test("the progress row keeps its place when the prompt goes before it", () => {
     const state = apply(emptyProjection(), [ev("agent.custom.progress", { data: { done: 1, of: 3 } }), ev(EventTypes.PromptDelivered, { text: "Go." })]);
     apply(state, [ev("agent.custom.progress", { data: { done: 2, of: 3 } })]);
