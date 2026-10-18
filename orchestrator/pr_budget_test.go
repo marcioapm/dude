@@ -179,3 +179,39 @@ func TestALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t *testing.T) {
 		t.Fatalf("legacy landing charged again: %s, want 5", f)
 	}
 }
+
+// The earlier landing-charged version retained a previous round's charge
+// marker when starting the next one. That is not a legacy start charge:
+// refunding it on retry would forgive the previous successful fix.
+func TestAnUpgradeDuringAFailedPRFixKeepsThePriorCharge(t *testing.T) {
+	w := newBudgetWorld(t, "2")
+	setPolicy(w.world, w.wi, `{"maxPrFixIterations":9}`)
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("first fix", func() bool { w.sync(); return w.fixes(w.wi) == 1 && w.taskStatus(w.wi) == "review" })
+	var previous string
+	if err := w.owner.QueryRow(context.Background(), `SELECT (state->'prFixCharged')::text FROM workflow_runs WHERE task_id=$1`, w.wi).Scan(&previous); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.spent(); n != 1 {
+		t.Fatalf("first fix spent %d, want 1", n)
+	}
+	w.crash.Store(true)
+	w.gh.Comment(1, "alice", "And the farewell.")
+	w.until("failed fix", func() bool { w.sync(); return w.escalationReason(w.wi) == "pr_fix_failed" })
+	// Reproduce the intermediate release's persisted state at deploy:
+	// round 2 failed without a charge, retaining round 1's marker.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state=jsonb_set(state, '{prFixCharged}', $2::jsonb) WHERE task_id=$1`, w.wi, previous)
+	w.crash.Store(false)
+	if code, body := w.decide(w.person("owner"), w.wi, "retry", ""); code != 200 {
+		t.Fatalf("retry: %d %v", code, body)
+	}
+	w.until("retried fix", func() bool { w.sync(); return w.fixes(w.wi) == 3 && w.taskStatus(w.wi) == "review" })
+	if n := w.spent(); n != 2 {
+		t.Fatalf("two successful rounds spent %d, want 2; prior successful charge was forgiven", n)
+	}
+	w.gh.Comment(1, "alice", "And a test.")
+	w.until("budget exhausted", func() bool { w.sync(); return w.escalationReason(w.wi) == "pr_loop_exhausted" })
+	if n := w.fixes(w.wi); n != 3 {
+		t.Fatalf("%d fixers, want the three already run", n)
+	}
+}

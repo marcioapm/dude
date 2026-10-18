@@ -1772,9 +1772,15 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 
 // currentPRFixCharge recognises rounds that spent their budget at start.
 func (st *State) currentPRFixCharge() *PRFixCharge {
-	if st.PRFixCharged == nil || st.PRFixCharged.Round != st.PRFixKey {
-		// A round without a start marker spent its budget when it started.
+	switch {
+	case st.PRFixCharged == nil:
+		// A nil marker is the old format: that round spent its budget when it started.
 		st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Repos: feedbackRepos(st.PRFeedback)}
+	case st.PRFixCharged.Round != st.PRFixKey:
+		// A marker from an earlier round is not evidence that this round spent
+		// anything. It is the intermediate format's next round: charge it when
+		// commits land, without losing the earlier charge on retry.
+		st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Pending: true}
 	}
 	return st.PRFixCharged
 }
