@@ -170,8 +170,8 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if got := v.spec.Env["OPENCODE_ENABLE_EXA"]; got != "1" {
 		t.Errorf("OPENCODE_ENABLE_EXA = %q, want 1", got)
 	}
-	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
-		t.Errorf("the brainstorm that may reach any host is not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	if !strings.Contains(specInstructions(t, v.spec), webNote) {
+		t.Errorf("the brainstorm that may reach any host is not told it can read the web:\n%s", specInstructions(t, v.spec))
 	}
 	var raw []byte
 	s.until("the brainstorm's network to be recorded", func() bool {
@@ -196,8 +196,8 @@ func TestABrainstormOfAnOrganisationThatLetsItReachesAnyHost(t *testing.T) {
 	if got, want := rules(*v.spec.Network), []string{"llm.example", "mcp.exa.ai", "pypi.org"}; v.spec.Network.Unrestricted || !slices.Equal(got, want) {
 		t.Errorf("the next brainstorm's network = %+v, want %v", v.spec.Network, want)
 	}
-	if strings.Contains(v.spec.Workload.Prompt, webNote) {
-		t.Errorf("the brainstorm started after the setting was turned off is told it can read the web:\n%s", v.spec.Workload.Prompt)
+	if strings.Contains(specInstructions(t, v.spec), webNote) {
+		t.Errorf("the brainstorm started after the setting was turned off is told it can read the web:\n%s", specInstructions(t, v.spec))
 	}
 }
 
@@ -230,8 +230,8 @@ func TestABrainstormMadeUnrestrictedByAStarIsToldItCanReadTheWeb(t *testing.T) {
 			if harness != "codex" || v.spec.Network == nil || !v.spec.Network.Unrestricted {
 				t.Fatalf("submitted on %s with network %+v, want codex unrestricted", harness, v.spec.Network)
 			}
-			if !strings.Contains(v.spec.Workload.Prompt, webNote) {
-				t.Errorf("not told it can read the web:\n%s", v.spec.Workload.Prompt)
+			if !strings.Contains(specInstructions(t, v.spec), webNote) {
+				t.Errorf("not told it can read the web:\n%s", specInstructions(t, v.spec))
 			}
 			if !codexSearchesLive(t, v.spec.Secrets) {
 				t.Error("Codex not pinned to search live")

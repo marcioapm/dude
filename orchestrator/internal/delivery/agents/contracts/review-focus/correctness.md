@@ -1,1 +1,0 @@
-Does the change do what the task and its acceptance criteria say? Look at empty, edge and error cases, concurrency and ordering, state transitions, and assumptions the code makes but does not check. Look hardest where the change meets what it did not change: its callers and the data already stored.
