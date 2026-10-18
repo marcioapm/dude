@@ -162,6 +162,89 @@ func TestTreeOfIsRevParsesTree(t *testing.T) {
 	}
 }
 
+// The peel paths, each against git: a tag on a tag, a tag on a tree, a
+// blob, a missing object, and a chain of tags longer than the ten hops
+// fakegit follows. Where fakegit answers it must be git's answer; past
+// the hop limit it must leave the name to git (ErrUnknown), never answer.
+func TestPeelFollowsTagsAsGitDoesAndLeavesLongChainsToGit(t *testing.T) {
+	bare, _ := history(t)
+	tag := func(name, target string) {
+		must(t, bare, []string{"GIT_COMMITTER_DATE=@1700000000 +0000"},
+			"-c", "user.name=t", "-c", "user.email=t@x", "tag", "-a", "-m", name, name, target)
+	}
+	tag("onv1", "v1")            // tag -> tag -> commit
+	tag("ontree", "main^{tree}") // tag -> tree
+	tag("onblob", "main:a.txt")  // tag -> blob
+	prev := "main"
+	for i := range 12 { // tag(12) -> ... -> tag(1) -> commit: past ten hops
+		name := fmt.Sprintf("chain%d", i+1)
+		tag(name, prev)
+		prev = name
+	}
+	r := open(t, bare)
+	cases := []struct {
+		name   string
+		commit bool // git peels it to a commit
+		tree   bool // git peels it to a tree
+		long   bool // past fakegit's hop limit for both: must be ErrUnknown
+	}{
+		{"onv1", true, true, false},
+		{"ontree", false, true, false},
+		{"onblob", false, false, false},
+		{"chain9", true, false, false}, // nine tags reach the commit; its tree is an eleventh hop
+		{"chain12", true, true, true},
+		{must(t, bare, nil, "rev-parse", "main:a.txt"), false, false, false},
+		{strings.Repeat("e", 40), false, false, false},
+	}
+	for _, tc := range cases {
+		wantC, errC := run(t, bare, nil, "", "rev-parse", "--verify", "-q", tc.name+"^{commit}")
+		if (errC == nil) != tc.commit {
+			t.Fatalf("%q^{commit}: fixture expects %v, git says %q (%v)", tc.name, tc.commit, wantC, errC)
+		}
+		c, err := r.Commit(tc.name)
+		switch {
+		case tc.long:
+			if err != ErrUnknown {
+				t.Errorf("%q: past the hop limit, Commit = %v, %v; want ErrUnknown", tc.name, c, err)
+			}
+		case err == ErrUnknown || err == ErrNotFound:
+			if tc.commit {
+				t.Errorf("%q: git peels it to %s, fakegit left it (%v)", tc.name, wantC, err)
+			}
+		case err != nil:
+			t.Errorf("%q: %v", tc.name, err)
+		case !tc.commit:
+			t.Errorf("%q: Commit = %s, git has no commit there", tc.name, c.Hash)
+		case c.Hash.String() != wantC:
+			t.Errorf("%q: Commit = %s, git says %s", tc.name, c.Hash, wantC)
+		}
+		// tc.tree is whether fakegit should answer the tree. git always can
+		// for a commit-ish; fakegit stops at ten objects, so a tree one hop
+		// past that is left to git.
+		wantT, errT := run(t, bare, nil, "", "rev-parse", "--verify", "-q", tc.name+"^{tree}")
+		if gitTree := errT == nil; gitTree != (tc.tree || tc.commit) {
+			t.Fatalf("%q^{tree}: fixture expects git to find one = %v, git says %q (%v)", tc.name, tc.tree || tc.commit, wantT, errT)
+		}
+		h, err := r.TreeOf(tc.name)
+		switch {
+		case tc.long || (tc.commit && !tc.tree):
+			if err != ErrUnknown {
+				t.Errorf("%q: past the hop limit, TreeOf = %s, %v; want ErrUnknown", tc.name, h, err)
+			}
+		case err == ErrUnknown || err == ErrNotFound:
+			if tc.tree {
+				t.Errorf("%q^{tree}: git says %s, fakegit left it (%v)", tc.name, wantT, err)
+			}
+		case err != nil:
+			t.Errorf("%q^{tree}: %v", tc.name, err)
+		case !tc.tree:
+			t.Errorf("%q: TreeOf = %s, git has no tree there", tc.name, h)
+		case h.String() != wantT:
+			t.Errorf("%q^{tree}: %s, git says %s", tc.name, h, wantT)
+		}
+	}
+}
+
 // commits are the names of the history's commits (and the annotated tag).
 var commits = []string{"main", "side", "other", "v1", "light", "both", "refs/tags/both", "dude/wi_1/attempt-1", "alias"}
 
