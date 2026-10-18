@@ -609,6 +609,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	why, event := "the agent's run ended before finishing its task: "+reason, reason
 	stop, broken := t.stopOf(state, reason, epoch), t.Broken
 	var more map[string]any
+	var setup *SetupFailure
 	switch {
 	case stop != nil:
 		why = luxStopWords(*stop, s.timeout())
@@ -628,9 +629,9 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		event, more = why, map[string]any{"agentError": broken.AgentError}
 	case t.init.Failed != nil && t.init.Failed.Epoch == epoch:
 		// init-failed: lux's reason is only "exit code N".
-		setup := *t.init.Failed
-		why, event = setup.Reason(), setup.Reason()
-		more = map[string]any{"setup": map[string]any{"repository": setup.Repository, "exitCode": setup.ExitCode, "output": setup.Output}}
+		setup = t.init.Failed
+		why = setup.Reason()
+		event = why
 	}
 	t.Broken = nil
 	keep := stop == nil || stop.Reason != luxTimeout
@@ -641,8 +642,8 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	// The harness's own words can quote what the agent ran, and a setup
 	// script's output anything its repository printed.
 	why, event = red.String(why), red.String(event)
-	if setup, ok := more["setup"].(map[string]any); ok {
-		setup["output"] = red.String(setup["output"].(string))
+	if setup != nil {
+		more = map[string]any{"setup": map[string]any{"repository": setup.Repository, "exitCode": setup.ExitCode, "output": red.String(setup.Output)}}
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
