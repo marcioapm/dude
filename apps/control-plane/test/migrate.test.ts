@@ -762,7 +762,8 @@ test("143 adds a nullable, size-checked setup script to existing repositories", 
     const atLimit = "x".repeat(16_384);
     await sql`UPDATE repositories SET setup_script = ${atLimit} WHERE id = 'repo_143'`;
     expect((await sql`SELECT octet_length(setup_script) AS bytes FROM repositories WHERE id = 'repo_143'`)[0]?.bytes).toBe(16_384);
-    await expect(sql`UPDATE repositories SET setup_script = ${atLimit + "x"} WHERE id = 'repo_143'`).rejects.toThrow();
+    await expect((async () => sql`UPDATE repositories SET setup_script = ${atLimit + "x"} WHERE id = 'repo_143'`)())
+      .rejects.toThrow(/repositories_setup_script_size/);
   } finally {
     await sql.end();
   }
