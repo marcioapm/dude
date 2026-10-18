@@ -14,7 +14,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ImagePicker, type ImageChoiceView } from "../src/components/ImagePicker.tsx";
 import { BuildQueueStrip, BuildStages, ImageHistory, type ImageHistoryVersion } from "../src/components/Images.tsx";
 import { CodeEditor } from "../src/components/CodeEditor.tsx";
-import CodeEditorCore from "../src/components/CodeEditorCore.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -246,7 +245,8 @@ describe("CodeEditor", () => {
     expect(html).toContain('aria-busy="true"');
   });
 
-  test("does not mark the loaded editor as busy", () => {
+  test("does not mark the loaded editor as busy", async () => {
+    const { default: CodeEditorCore } = await import("../src/components/CodeEditorCore.tsx");
     const html = renderToStaticMarkup(<CodeEditorCore aria-label="Containerfile" value="FROM a\n" />);
     expect(html).not.toContain("aria-busy");
   });
