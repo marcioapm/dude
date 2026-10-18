@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ProjectAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection, TextButton } from "@dude/design-system/components";
+import { ProjectAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection, SetupScriptMark, TextButton, textLines } from "@dude/design-system/components";
 import {
   Button,
   Callout,
@@ -33,6 +33,7 @@ import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
+import { SetupScriptDialog } from "./SetupScriptDialog.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
 import { useMachineSizes } from "./MachinesSettings.tsx";
@@ -163,7 +164,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
           ) : page === "repositories" ? (
             <>
               <SettingsHeader title="Repositories" description="What agents check out. The first is where tasks start; the others can be requested." />
-              <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
+              <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} orgName={orgName} />
             </>
           ) : page === "servers" ? (
             <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} sizes={sizes} onCount={setServerCount}
@@ -259,9 +260,10 @@ function GeneralTab({ client, project, canEdit, onSaved, images, orgName, onMana
   );
 }
 
-function RepositoriesTab({ client, project, canEdit, onSaved }: TabProps) {
+function RepositoriesTab({ client, project, canEdit, onSaved, orgName }: TabProps & { orgName: string }) {
   const [editing, setEditing] = useState<Repository | "new" | null>(null);
   const [removing, setRemoving] = useState<Repository | null>(null);
+  const [scripting, setScripting] = useState<Repository | null>(null);
   const { busy, problem, save } = useSave();
   const addButton = useRef<HTMLButtonElement>(null);
   // A table uses the width it has; a form keeps to one readable column.
@@ -277,7 +279,7 @@ function RepositoriesTab({ client, project, canEdit, onSaved }: TabProps) {
         <Table density="compact">
           <THead>
             <Tr>
-              <Th width="18%">Name</Th>
+              <Th width="22%">Name</Th>
               <Th>URL</Th>
               <Th width="12%">Branch</Th>
               <Th width="12%">Trust</Th>
@@ -288,14 +290,21 @@ function RepositoriesTab({ client, project, canEdit, onSaved }: TabProps) {
           </THead>
           <TBody>
             {project.repositories.map((r) => (
-              <Tr key={r.id}>
-                <Td mono>{r.name}</Td>
+              <Tr key={r.id} data-testid={`repository-row-${r.name}`}>
+                <Td mono>
+                  {r.name}
+                  {r.setupScript ? (
+                    <SetupScriptMark repository={r.name} lines={textLines(r.setupScript)} action={canEdit ? "edit" : "view"}
+                      onClick={() => setScripting(r)} />
+                  ) : null}
+                </Td>
                 <Td mono muted title={r.url}>{r.url}</Td>
                 <Td mono>{r.defaultBranch}</Td>
                 <Td>{r.trust === "untrusted_external" ? "External" : "Internal"}</Td>
                 <Td align="right">
                   {canEdit ? <RowMenu label={`Actions for ${r.name}`} items={[
                     { id: "edit", label: "Edit", icon: "edit", onSelect: () => setEditing(r) },
+                    { id: "setup-script", label: "Setup script…", icon: "terminal", onSelect: () => setScripting(r) },
                     { kind: "separator" },
                     { id: "remove", label: "Remove", tone: "danger", onSelect: () => setRemoving(r) },
                   ]} /> : null}
@@ -319,6 +328,10 @@ function RepositoriesTab({ client, project, canEdit, onSaved }: TabProps) {
           onClose={() => setEditing(null)}
           onSaved={onSaved}
         />
+      ) : null}
+      {scripting ? (
+        <SetupScriptDialog client={client} repository={scripting} canEdit={canEdit} orgName={orgName}
+          onClose={() => setScripting(null)} onSaved={onSaved} />
       ) : null}
       <Dialog
         open={removing !== null}
