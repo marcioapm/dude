@@ -215,14 +215,10 @@ func newPRFixWorldIn(t *testing.T, web bool, testers ...string) *prFixWorld {
 	// A reviewer the fake lux plays as the scripted one, whose spec carries
 	// dude's own prompt.
 	w.onModel("reviewer", "llm-reviewer")
-	if web {
-		w.wi = w.testingAcross("fake/scripted")
-	} else {
-		w.wi = w.testing("fake/scripted")
-	}
-	w.until("a pull request", func() bool {
-		return len(w.gh.Pulls()) == 1 && (!web || len(w.web.Pulls()) == 1) && w.taskStatus(w.wi) == "review"
-	})
+	w.onModel("qa_browser", "fake/scripted")
+	w.wi = w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets", "it says goodbye"]' WHERE id = $1`, w.wi)
+	w.prOpen(w.wi, prAt{test: true, web: web})
 	w.branch = w.gh.Pull(1).Head
 	w.before = w.gh.SHA(w.branch)
 	w.webBefore = w.web.SHA(w.branch)

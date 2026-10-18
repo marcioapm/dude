@@ -274,7 +274,7 @@ export interface PromptHistory {
   projectId: string | null;
   /** Newest first. */
   versions: PromptVersion[];
-  /** dude's built-in prompt: what a history with no versions runs. */
+  /** dude's built-in stance for the role ("How you work as …"): the only section a saved prompt replaces. */
   builtin: string;
 }
 

@@ -274,9 +274,9 @@ Run's list, recorded in `runs.network` with the rest.
 **Brainstorm sessions** (Organisation settings → Network, owners and
 admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
 on, a brainstorm Run of the organisation is submitted unrestricted,
-whatever its list or the operator's says, so it can read the web. It is
-also told, after its instructions and whatever the organisation's prompt
-says: "You can read the web: search for and fetch public pages when the
+whatever its list or the operator's says, so it can read the web. Its
+instruction file (`/workspace/AGENTS.md`, which no saved prompt can cut
+short) also says: "You can read the web: search for and fetch public pages when the
 conversation needs facts from outside the linked repositories. Say where
 each fact came from, with its URL." Off, it is told nothing about the web.
 A brainstorm made unrestricted by `*` in the operator's or the
@@ -1137,3 +1137,15 @@ callback requires the same logged-in person who started the connection.
 answers 200 `{"status":"ok"}` when it can reach the database, 503
 otherwise. The orchestrator logs to stderr (`log/slog` text); a loop that
 fails logs `loop failed` and keeps running.
+
+## Agent instructions
+
+Every agent Run starts in `/workspace` with an instruction file,
+`/workspace/AGENTS.md`, and `/workspace/CLAUDE.md` containing `@AGENTS.md`,
+written by the Run's `init.script` before the agent starts, on every
+placement. The file is assembled once, at submit, from dude's charter and
+role text and the saved prompt versions the Run records; lux keeps the spec,
+so a move, host loss or resume writes the same file, and only a new Run sees
+a changed saved prompt. It is not a secret and is not redacted. The first
+message carries only the task and this Run's data. Sources and the
+saved-prompt rules: `orchestrator/internal/delivery/agents/README.md`.

@@ -436,8 +436,8 @@ func TestAFreshAgentAfterAChangeTakesTheSettingAsItIsNow(t *testing.T) {
 		t.Fatalf("the fresh agent runs on %s · %s, want gpt-6-sol · codex", model, harness)
 	}
 	v := s.luxRun(onCodex)
-	if !strings.Contains(v.spec.Workload.Prompt, webNote) {
-		t.Errorf("the fresh agent with the setting on is not told it can read the web:\n%s", v.spec.Workload.Prompt)
+	if !strings.Contains(specInstructions(t, v.spec), webNote) {
+		t.Errorf("the fresh agent with the setting on is not told it can read the web:\n%s", specInstructions(t, v.spec))
 	}
 	if !codexSearchesLive(t, v.spec.Secrets) {
 		t.Error("the fresh agent with the setting on is not pinned to search live")
@@ -452,8 +452,8 @@ func TestAFreshAgentAfterAChangeTakesTheSettingAsItIsNow(t *testing.T) {
 		t.Fatalf("the next fresh agent runs on %s · %s, want claude-opus-5 · codex", model, harness)
 	}
 	v = s.luxRun(onOpus)
-	if strings.Contains(v.spec.Workload.Prompt, webNote) {
-		t.Errorf("the fresh agent with the setting off is told it can read the web:\n%s", v.spec.Workload.Prompt)
+	if strings.Contains(specInstructions(t, v.spec), webNote) {
+		t.Errorf("the fresh agent with the setting off is told it can read the web:\n%s", specInstructions(t, v.spec))
 	}
 	if codexSearchesLive(t, v.spec.Secrets) {
 		t.Error("the fresh agent with the setting off is pinned to search live")

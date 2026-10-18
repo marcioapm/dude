@@ -66,14 +66,17 @@ func TestATalkerResumedWithoutItsSessionIsBriefedAgain(t *testing.T) {
 }
 
 // A blank harness session has no prompt but what it is sent: the briefing
-// again carries everything the first prompt had around the briefing — how
-// the agent works, its tools — and says the conversation is lost in dude's
-// own words, not as a member's or person's message.
+// again, with its checkouts, saying the conversation is lost in dude's own
+// words, not as a member's or person's message. How it works and its tools
+// are the instruction file this placement's init wrote again, unchanged.
 func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 	for kind, start := range talkers(t) {
 		t.Run(kind, func(t *testing.T) {
 			tk, run := start(t)
+			// Given tools after its submit: its instruction file, pinned
+			// then, says none, and is written unchanged.
 			tk.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
+			before := tk.instructionsOf(run)
 			tk.lux.LoseSession(tk.luxRunOf(run))
 			tk.stopOnItsOwn(run, "stopped")
 			tk.parked(run)
@@ -86,24 +89,25 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 				run).Scan(&text); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(text, "## How you work") {
-				t.Errorf("no role instructions:\n%s", text)
+			if strings.Contains(text, "# How you work") {
+				t.Errorf("the briefing again repeats the instruction file:\n%s", text)
+			}
+			if after := tk.instructionsOf(run); after != before || !strings.Contains(after, "# Your role: ") {
+				t.Errorf("the resumed Run's instruction file changed or is empty:\n%s", after)
 			}
 			lost := strings.Index(text, "restarted without its earlier conversation")
 			switch kind {
 			case "brainstorm":
-				if !strings.Contains(text, "You think out loud with the members of this session") ||
-					!strings.Contains(text, "The dude tools read the linked projects") || !strings.Contains(text, "name_session") {
-					t.Errorf("not the brainstorm's instructions and tools:\n%s", text)
+				if f := tk.instructionsOf(run); !strings.Contains(f, "# Your role: brainstorm partner") {
+					t.Errorf("not the brainstorm's instructions:\n%s", f)
 				}
 				heading := strings.Index(text, "## Your earlier conversation is lost")
 				if strings.Contains(text, "## The first message") || heading < 0 || lost < heading {
 					t.Errorf("dude's note not under a heading of its own:\n%s", text)
 				}
 			case "conductor":
-				if !strings.Contains(text, "The people on the task talk to you in its Chat") ||
-					!strings.Contains(text, "The dude tools read what dude knows about this task") {
-					t.Errorf("not the conductor's instructions and tools:\n%s", text)
+				if f := tk.instructionsOf(run); !strings.Contains(f, "# Your role: conductor") {
+					t.Errorf("not the conductor's instructions:\n%s", f)
 				}
 				if !strings.Contains(text, "Conductor, dude is briefing you again") || !strings.Contains(text, "## dude's message") ||
 					strings.Contains(text, "wrote in the Chat") {
@@ -122,8 +126,7 @@ func TestATalkerBriefedAgainIsToldHowItWorks(t *testing.T) {
 
 // A brainstorm briefed again is told of the web by the network it was
 // submitted with, which its resumes keep, not by the setting as changed
-// since: started able to reach any host, it is still told it can read the
-// web; started on the list, it is not.
+// since: its instruction file is the one pinned at submit.
 func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
 	for _, anywhere := range []bool{true, false} {
 		t.Run(map[bool]string{true: "anywhere then off", false: "list then on"}[anywhere], func(t *testing.T) {
@@ -160,8 +163,12 @@ func TestABrainstormBriefedAgainIsToldTheNetworkItRunsWith(t *testing.T) {
 				run).Scan(&text); err != nil {
 				t.Fatal(err)
 			}
-			if told := strings.Contains(text, webNote); told != anywhere {
-				t.Errorf("told it can read the web %v, want %v:\n%s", told, anywhere, text)
+			// What it is told is its instruction file, pinned at submit.
+			if told := strings.Contains(tk.instructionsOf(run), webNote); told != anywhere {
+				t.Errorf("told it can read the web %v, want %v", told, anywhere)
+			}
+			if strings.Contains(text, webNote) {
+				t.Errorf("the briefing again repeats the instruction file:\n%s", text)
 			}
 		})
 	}
