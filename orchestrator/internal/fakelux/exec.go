@@ -251,7 +251,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	args, env, collect := s.publishing(args)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir, cmd.Env = dir, env
-	var stdout, stderr strings.Builder
+	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 127)
 	s.mu.Lock()
@@ -310,7 +310,7 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	}
 	cmd := exec.Command("/bin/sh", "-c", strings.ReplaceAll(script, workspaceRoot, dir))
 	cmd.Dir, cmd.Env = dir, env
-	var stdout, stderr strings.Builder
+	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 1)
 	s.outputRecord(run, "stdout", stdout.String())
@@ -321,6 +321,28 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	}
 	return true
 }
+
+// initOutputMax is how much of each of init's channels the fake keeps:
+// the end, where a failure says what failed.
+const initOutputMax = 64 << 10
+
+// tailWriter keeps the last initOutputMax bytes written to it.
+type tailWriter struct{ b []byte }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= initOutputMax {
+		w.b = append(w.b[:0], p[len(p)-initOutputMax:]...)
+		return n, nil
+	}
+	if over := len(w.b) + len(p) - initOutputMax; over > 0 {
+		w.b = w.b[:copy(w.b, w.b[over:])]
+	}
+	w.b = append(w.b, p...)
+	return n, nil
+}
+
+func (w *tailWriter) String() string { return strings.ToValidUTF8(string(w.b), "") }
 
 func (s *Server) initFailed(run *Run, code int) bool {
 	s.luxEvent(run, "exited", map[string]any{"exitCode": code, "reason": "init-failed",

@@ -128,10 +128,19 @@ func (o *InitOutput) Record(f lux.Frame) {
 	if !o.Running || (f.Channel != "stdout" && f.Channel != "stderr") {
 		return
 	}
-	o.Tail += f.Data
-	if over := len(o.Tail) - initOutputMax; over > 0 {
-		o.Tail = strings.ToValidUTF8(o.Tail[over:], "")
+	o.Tail = keepTail(o.Tail, f.Data, initOutputMax)
+}
+
+// keepTail is the last max bytes of tail+data, cut on a rune boundary,
+// without copying more of either than it keeps.
+func keepTail(tail, data string, max int) string {
+	if len(data) >= max {
+		return strings.ToValidUTF8(data[len(data)-max:], "")
 	}
+	if over := len(tail) + len(data) - max; over > 0 {
+		tail = strings.ToValidUTF8(tail[over:], "")
+	}
+	return tail + data
 }
 
 // setupFailed reads which repository's setup script failed from the line
