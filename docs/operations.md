@@ -51,6 +51,24 @@ not. The runtime image gives `agent` `agent:1:999` and `agent:1001:64535`.
 dude checks this for library images when they build, never for
 `DUDE_AGENT_IMAGE`.
 
+The release also holds the dude layer's build context under
+`share/dude/layer/`. At start, `dude-image-builder` adds the release's
+`bin/dude`, hashes the context, CLI bytes and `builder.platform`, builds and
+pushes the layer to `<parent of builder.repository>/layer:<hash>`, and
+records its digest in `image_layers`; the orchestrator and backend read the
+current row from there. Only identical CLI bytes, context files and platform reuse
+an existing layer. The CLI embeds the release version, so every normal release
+changes the tag and lazily re-finishes published versions on first use. A rollback
+makes its recorded layer current again without rebuilding it. `builder.platform`
+defaults to `linux/runtime.GOARCH`; an explicit setting is preserved, but publishing
+requires the release-native CLI architecture.
+`images.layer` (`DUDE_LAYER_IMAGE`) is an operator override by digest;
+with it set the builder builds no layer and every process uses it. Before the
+first layer is published (a fresh install whose builder has not started, or
+failed), the image library is off and says the builder has not published a
+dude layer yet. A builder that cannot build or push the layer exits non-zero
+with the reason.
+
 ### Private agent images
 
 lux logs its runners in to a registry per Run (lux's `docs/runspec.md`,
@@ -833,6 +851,8 @@ A runtime image must provide `ps` (the `procps` package on Debian). dude
 reads a stalled Run's processes with `ps -eo pid,ppid,etime,pcpu,args` in
 its container. An image without it still works, but its stall reports
 cannot list processes and report that they could not be read.
+
+A repository may define an optional setup script in its repository settings. It is bash text capped at 16 KiB. Every agent Run, and every preview of repositories, is submitted with the same fixed lux `init.script` and a file secret, `dude-setup` at `/home/agent/.dude/setup`, that lists each of its repositories with a script (name, checkout path and script, each base64, one repository a line). lux runs init after repository sync and before the workload, on every start. Each script runs in its own checkout and gets a marker under that checkout's git directory (`dude-setup-done`) only after it succeeds. Scripts run in repository order; a failure stops init and fails the Run with the script's exit code and recent output. lux keeps no secret value, so every resume supplies the list again from the current settings, including any repository the resume adds (an approved repository request, a repository linked to a session): its script runs on that resume, before the workload. A checkout with a marker never runs its script again, whatever the setting says now; one without (its repository got a script while the Run was parked) runs it on the next resume. Runs submitted before this init existed carry no init: a resume declares the secret, and nothing reads it. lux redacts secret values from Run output, matching the list's whole value, so a script printing its own text is not masked. Setup runs `bash -e` behind a 15-minute timeout and clears `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n` so hook installers configure the repository's own hooks rather than dude's command-scope hook path. The setup API is the repository settings API: `PATCH /v1/repositories/:id` with `{setupScript: string|null}` and a repository response containing `setupScript`; blank text is stored as `null`, values over 16 KiB or containing NUL are a 400. It has the same organisation-admin authorization and `repository.updated` audit event as other repository settings. The web UI is intentionally not implemented yet; its design starts with a mockup.
 
 It should carry dude's commit hook (`images/runtime/git-hooks/dude-hook`,
 linked under every client hook's name in `/usr/local/share/dude/git-hooks`,

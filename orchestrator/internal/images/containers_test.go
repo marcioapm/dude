@@ -3,6 +3,7 @@ package images
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -44,6 +45,68 @@ func TestTheCheckSaysWhatIsMissingInOneSentence(t *testing.T) {
 		}
 		if got := c.f.Sentence(); c.f.Passed() || got != c.want {
 			t.Errorf("%s: sentence = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The check finds dude's git-config and its prepare-commit-msg hook as the
+// layer lays them out (images/runtime's files, linked by link-git-hooks.sh),
+// and says which is missing when one is: a hook that is not executable, a
+// dangling link, or none at all.
+func TestTheCheckFindsTheLayersGitHook(t *testing.T) {
+	layout := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		hooks := filepath.Join(root, "usr/local/share/dude/git-hooks")
+		if err := os.MkdirAll(hooks, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for src, dst := range map[string]string{"git-config": "usr/local/share/dude/git-config", "git-hooks/dude-hook": "usr/local/share/dude/git-hooks/dude-hook"} {
+			b, err := os.ReadFile(filepath.Join("../../../images/runtime", src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, dst), b, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("/bin/sh", "../../../images/runtime/link-git-hooks.sh", hooks).CombinedOutput(); err != nil {
+			t.Fatalf("link-git-hooks.sh: %v\n%s", err, out)
+		}
+		return root
+	}
+	root := layout(t)
+	f := ContainersCheck(root)
+	if f.GitConfig != GitConfigPath || f.CommitHook != CommitHookPath || f.HookSentence() != "" {
+		t.Errorf("the layer's layout: %+v, %q", f, f.HookSentence())
+	}
+	if got := f.HookLine(); got != "check  git hook  "+GitConfigPath+", "+CommitHookPath {
+		t.Errorf("line = %q", got)
+	}
+	for _, c := range []struct {
+		name   string
+		breaks func(root string) error
+		want   string
+	}{
+		{"no git-config", func(root string) error { return os.Remove(filepath.Join(root, GitConfigPath)) },
+			"The image has no " + GitConfigPath + " after the dude layer, so its commits would carry no co-authors."},
+		{"a hook that is not executable", func(root string) error {
+			return os.Chmod(filepath.Join(root, "usr/local/share/dude/git-hooks/dude-hook"), 0o644)
+		},
+			"The image has no " + CommitHookPath + " after the dude layer, so its commits would carry no co-authors."},
+		{"a dangling hook link", func(root string) error {
+			return os.Remove(filepath.Join(root, "usr/local/share/dude/git-hooks/dude-hook"))
+		},
+			"The image has no " + CommitHookPath + " after the dude layer, so its commits would carry no co-authors."},
+		{"neither", func(root string) error { return os.RemoveAll(filepath.Join(root, "usr/local/share/dude")) },
+			"The image has no " + GitConfigPath + " or " + CommitHookPath + " after the dude layer, so its commits would carry no co-authors."},
+	} {
+		root := layout(t)
+		if err := c.breaks(root); err != nil {
+			t.Fatal(err)
+		}
+		if got := ContainersCheck(root).HookSentence(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }

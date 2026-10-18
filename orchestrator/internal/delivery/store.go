@@ -694,13 +694,15 @@ type Repository struct {
 	// "write": may change, and gets a pull request when it does. "read":
 	// cloned for context, never pushed.
 	Access string
+	// Run once in each fresh checkout before the agent starts; "" for none.
+	SetupScript string
 }
 
 // TaskRepositories are the repositories a task works on; none is
 // work that changes no code.
 func TaskRepositories(ctx context.Context, tx pgx.Tx, taskID string) ([]Repository, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT r.id, r.name, r.url, r.default_branch, wr.access::text
+		SELECT r.id, r.name, r.url, r.default_branch, wr.access::text, COALESCE(r.setup_script, '')
 		FROM task_repositories wr JOIN repositories r ON r.id = wr.repository_id
 		WHERE wr.task_id = $1 ORDER BY r.name`, taskID)
 	if err != nil {

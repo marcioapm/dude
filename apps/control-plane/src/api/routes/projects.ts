@@ -41,6 +41,7 @@ const repositoryInput = z.object({
   url: repositoryFields.url,
   defaultBranch: z.string().min(1).default("main"),
   trust: z.enum(["trusted_internal", "untrusted_external"]).default("trusted_internal"),
+  setupScript: repositoryFields.setupScript.default(null),
 });
 
 const createProjectInput = z.object({
@@ -170,10 +171,10 @@ async function insertProject(ctx: RequestContext, input: z.input<typeof createPr
       const other = await sameCheckout(scope, projectId, repo.name, null);
       if (other) throw conflict(sameCheckoutMessage(repo.name, other));
       const repoRows = (await scope.sql`
-        INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust)
+        INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust, setup_script)
         VALUES (${newId("repository")}, ${organizationId}, ${projectId}, ${repo.name}, ${repo.url},
-                ${repo.defaultBranch}, ${repo.trust})
-        RETURNING id, name, url, default_branch AS "defaultBranch", trust`) as Array<
+                ${repo.defaultBranch}, ${repo.trust}, ${repo.setupScript})
+        RETURNING id, name, url, default_branch AS "defaultBranch", trust, setup_script AS "setupScript"`) as Array<
         Record<string, unknown>
       >;
       if (repoRows[0]) repositories.push(repoRows[0]);
@@ -208,7 +209,7 @@ async function getProject(ctx: RequestContext): Promise<Response> {
     if (!rows[0]) return null;
 
     const repositories = await scope.sql`
-      SELECT id, name, url, default_branch AS "defaultBranch", trust
+      SELECT id, name, url, default_branch AS "defaultBranch", trust, setup_script AS "setupScript"
       FROM repositories WHERE project_id = ${projectId} ORDER BY name`;
     return { ...rows[0], repositories };
   });

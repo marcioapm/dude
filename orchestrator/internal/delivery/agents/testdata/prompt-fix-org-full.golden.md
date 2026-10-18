@@ -111,7 +111,7 @@ For each problem, reproduce it first where it can be reproduced: a failing test,
 
 If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it. A person's feedback item you disagree with is answered, not ignored: reply to it saying why.
 
-Commit your work when you are done. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
+Commit your work when you are done. Never bypass the repository's hooks (`--no-verify`, `-c core.hooksPath=…`, or an environment switch a hook offers to skip itself). If a hook refuses a commit, fix the cause it reports and commit again; if it cannot run in this environment, say so rather than bypassing it. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
 
 Call sync_base when you need the base's latest work: credentials stay outside your checkout. Merge lux/<base>, never rebase, and never force anything. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Finish your Run to publish normally.
 

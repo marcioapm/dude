@@ -11,8 +11,8 @@
 import { z } from "zod";
 import { SQL } from "bun";
 import {
-  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, epicState, epicStateSchema, newId, taskCriteriaInput,
-  taskGoalInput, taskGoalShortBy, type EpicState,
+  EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, epicState, epicStateSchema, newId, setupScriptInput,
+  taskCriteriaInput, taskGoalInput, taskGoalShortBy, type EpicState,
 } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
@@ -26,7 +26,7 @@ import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./peop
 import { syncTaskAttachments } from "./attachments.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
-  created_at AS "createdAt"`;
+  setup_script AS "setupScript", created_at AS "createdAt"`;
 // An epic's state is stored only when a person sets it; otherwise it is what
 // its tasks say (epicState, @dude/domain).
 const EPIC_SELECT = `id, project_id AS "projectId", title, description, position, state AS "storedState",
@@ -65,6 +65,8 @@ export const repositoryFields = {
     .transform(canonicalRepositoryUrl),
   defaultBranch: z.string().min(1).max(200),
   trust: z.enum(["trusted_internal", "untrusted_external"]),
+  // Read when a Run is submitted: a change reaches Runs started after it.
+  setupScript: setupScriptInput,
 };
 /**
  * An https `url` at GitHub's host `www.github.com` written at `github.com`,
@@ -81,6 +83,7 @@ const addRepositoryInput = z.object({
   ...repositoryFields,
   defaultBranch: repositoryFields.defaultBranch.default("main"),
   trust: repositoryFields.trust.default("trusted_internal"),
+  setupScript: repositoryFields.setupScript.default(null),
 });
 const updateRepositoryInput = z.object(repositoryFields).partial();
 
@@ -129,11 +132,13 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
     const other = await sameCheckout(scope, projectId, input.name, null);
     if (other) return { sameCheckout: other };
     const rows = (await scope.sql`
-      INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust)
+      INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch, trust, setup_script)
       VALUES (${newId("repository")}, ${ctx.principal.organizationId}, ${projectId}, ${input.name}, ${input.url},
-              ${input.defaultBranch}, ${input.trust})
+              ${input.defaultBranch}, ${input.trust}, ${input.setupScript})
       RETURNING ${scope.sql.unsafe(REPOSITORY_SELECT)}`) as Array<Record<string, unknown>>;
-    await record(scope, ctx, EventTypes.RepositoryAdded, projectId, { repositoryId: rows[0]!.id, name: input.name });
+    await record(scope, ctx, EventTypes.RepositoryAdded, projectId, {
+      repositoryId: rows[0]!.id, name: input.name, ...(input.setupScript !== null ? { setupScript: input.setupScript } : {}),
+    });
     return { repository: rows[0]! };
   }).catch((err: unknown) => checkoutRefused(ctx, err, projectId, input.name, null));
   if ("missing" in result) throw notFound(`project ${projectId} not found`);
@@ -187,7 +192,8 @@ async function updateRepository(ctx: RequestContext): Promise<Response> {
         name = COALESCE(${input.name ?? null}, name),
         url = COALESCE(${input.url ?? null}, url),
         default_branch = COALESCE(${input.defaultBranch ?? null}, default_branch),
-        trust = COALESCE(${input.trust ?? null}::trust_class, trust)
+        trust = COALESCE(${input.trust ?? null}::trust_class, trust),
+        setup_script = CASE WHEN ${input.setupScript !== undefined} THEN ${input.setupScript ?? null} ELSE setup_script END
       WHERE id = ${id}
       RETURNING ${scope.sql.unsafe(REPOSITORY_SELECT)}`) as Array<Record<string, unknown>>;
     await record(scope, ctx, EventTypes.RepositoryUpdated, current[0].projectId, { repositoryId: id, ...input });

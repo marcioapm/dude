@@ -51,10 +51,23 @@ import type { RequestContext, Router } from "../router.ts";
 
 type Json = Record<string, unknown>;
 
-/** The builder as configured, and whether it is alive: builds run only with a dude layer to finish them with. */
+/**
+ * The dude layer library images are finished with now, as the orchestrator
+ * reads it (images.CurrentLayer): the operator's override, else the one
+ * dude-image-builder selected last; null before it has published one.
+ */
+async function currentLayer(scope: OrgScope): Promise<string | null> {
+  const override = config().string("DUDE_LAYER_IMAGE");
+  if (override) return override;
+  const [layer] = (await scope.sql`
+    SELECT ref FROM image_layers ORDER BY current_at DESC, tag DESC LIMIT 1`) as Array<{ ref: string }>;
+  return layer?.ref ?? null;
+}
+
+/** The builder's limits, the current layer, and whether it is alive: builds run only with a layer to finish them with. */
 export async function builderInfo(scope: OrgScope): Promise<ImageBuilderInfo> {
   const c = config();
-  const layer = c.string("DUDE_LAYER_IMAGE") ?? null;
+  const layer = await currentLayer(scope);
   const memory = c.string("DUDE_BUILDER_MEMORY") ?? "1536m";
   const [beat] = (await scope.sql`
     SELECT seen_at AS "seenAt", seen_at < now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS}) AS stale FROM image_builder`) as Array<{ seenAt: string; stale: boolean }>;
@@ -63,9 +76,6 @@ export async function builderInfo(scope: OrgScope): Promise<ImageBuilderInfo> {
     lastSeenAt: beat?.seenAt ?? null, offline: layer !== null && (beat?.stale ?? true),
   };
 }
-
-/** Whether builds can run at all, without a database read. */
-const buildsConfigured = () => Boolean(config().string("DUDE_LAYER_IMAGE"));
 
 /**
  * The builder's memory setting in MiB: whole bytes or a whole number of
@@ -478,10 +488,10 @@ async function buildImage(ctx: RequestContext): Promise<Response> {
   // No body, or an empty object: build the draft as saved.
   const raw = (await ctx.request.clone().text()).trim();
   const input = raw && raw !== "{}" ? ((await parseBody(ctx.request, imageDraftSchema)) as ImageDraftInput) : null;
-  if (!buildsConfigured()) {
-    throw new HttpError(503, "image builds are not configured on this dude: DUDE_LAYER_IMAGE is unset", "builder_unavailable");
-  }
   const queued = await withOrg(ctx.principal.organizationId, async (scope) => {
+    if (!(await currentLayer(scope))) {
+      throw new HttpError(503, "dude-image-builder has not published a dude layer yet", "builder_unavailable");
+    }
     const image = await lockImage(scope, id);
     if (input) await saveDraft(scope, ctx, image, input);
     const [draft] = (await scope.sql`
