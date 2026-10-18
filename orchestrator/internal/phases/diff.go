@@ -276,6 +276,7 @@ fold() {
       at=$g
     elif tree=$(git -C "$dir" merge-tree --write-tree "$at" "$g" 2>/dev/null) &&
       at=$(GIT_AUTHOR_NAME=dude GIT_AUTHOR_EMAIL=dude@localhost GIT_COMMITTER_NAME=dude GIT_COMMITTER_EMAIL=dude@localhost \
+        GIT_AUTHOR_DATE='2000-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2000-01-01T00:00:00 +0000' \
         git -C "$dir" commit-tree "$tree" -p "$at" -p "$g" -m given < /dev/null 2>/dev/null); then
       :
     else

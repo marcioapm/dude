@@ -122,6 +122,35 @@ func TestABaseBranchCommitTheRunMergedIsNotItsChange(t *testing.T) {
 	}
 }
 
+func TestIdenticalDiffFoldsReuseTheSameCommit(t *testing.T) {
+	g := newGivenRepo(t, "task")
+	g.commit(g.dir, "own.txt", "the run's work\n", "own")
+	m := g.someoneCommits("main", "base.txt", "imported work\n")
+	g.git("merge", "-q", "--no-edit", "lux/main")
+	var previous, patch string
+	for _, date := range []string{"2026-01-01T00:00:00 +0000", "2026-01-02T00:00:00 +0000"} {
+		out := g.diff("task "+m, "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date,
+			"GIT_AUTHOR_NAME=external", "GIT_COMMITTER_NAME=external")
+		var folds []string
+		for _, line := range strings.Split(g.git("fsck", "--no-reflogs", "--unreachable"), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 3 && fields[1] == "commit" && g.git("show", "-s", "--format=%s", fields[2]) == "given" {
+				folds = append(folds, fields[2])
+			}
+		}
+		if len(folds) != 1 {
+			t.Fatalf("synthetic fold commits = %v, want exactly one", folds)
+		}
+		if previous != "" && (previous != folds[0] || patch != out) {
+			t.Fatalf("identical fold changed commit or patch: %s -> %s", previous, folds[0])
+		}
+		previous, patch = folds[0], out
+	}
+	if got := diffPaths(patch); !slices.Equal(got, []string{"own.txt"}) || parseRunDiff(patch).Base != m {
+		t.Fatalf("fold changed diff: %s", patch)
+	}
+}
+
 // A conductor's checkout, on the task branch by name, is fast-forwarded
 // from S to someone's T, then commits C and leaves edits uncommitted:
 // given T, its diff is C and the edits. Then it merges the base branch's
