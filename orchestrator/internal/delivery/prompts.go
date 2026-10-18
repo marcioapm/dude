@@ -13,6 +13,7 @@ import (
 // ledger already knows, rather than a model summarising work another model
 // already did.
 type PromptInput struct {
+	Child              bool
 	Title              string
 	Goal               string
 	AcceptanceCriteria []string
@@ -379,6 +380,11 @@ func Prompt(phase string, in PromptInput) string {
 
 	default:
 		add(in.task())
+	}
+	if in.Child && in.OrgPrompt != nil {
+		if prompt := strings.TrimSpace(*in.OrgPrompt); prompt != "" {
+			add(prompt)
+		}
 	}
 
 	if n := strings.TrimSpace(in.ConductorNote); n != "" {
