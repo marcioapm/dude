@@ -72,6 +72,7 @@ rNameRepositoryInRepoNotWith           refusals/tools/github/name-repository-in-
 rNumberIssueFrom1                      refusals/tools/github/number-issue-from-1
 rNumberPullRequestFrom1                refusals/tools/github/number-pull-request-from-1
 rFilesAtMostPathsAtOnce                refusals/tools/github/files-at-most-paths-at-once
+rCheckIdCheckRunFrom1                   refusals/tools/github/check-id-check-run-from-1
 rSayWhatRanOutCommandIts               refusals/tools/machines/say-what-ran-out-command-its
 rYouAreBeingMovedNowAsk                refusals/tools/machines/you-are-being-moved-now-ask
 rThisRunHasMovedTimesLimit             refusals/tools/machines/this-run-has-moved-times-limit

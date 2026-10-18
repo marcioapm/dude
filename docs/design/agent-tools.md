@@ -135,6 +135,11 @@ on a peer's reply is waiting on a person, with a peer at the other end:
 
 ## Identity and authority
 
+Brainstorm and conductor may use `github_check_log` with a check id from
+`github_pull_request` to read a failed Actions check's log before choosing a
+rerun or a fix; its bounded tail, or the check-run output for other checks, is
+marked as external text.
+
 - Each phase Run gets its own **bearer token**, minted at submit, stored
   hashed on the Run, sent to lux as a secret (`headers: [{name:
   Authorization, secret: DUDE_MCP_TOKEN}]`), revoked when the Run ends.

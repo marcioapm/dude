@@ -3804,6 +3804,36 @@ func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
 	}
 }
 
+// Actions checks with no useful check output give the fixer their log tail.
+func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
+	w.gh.SetJobLog(77, "2026-10-16T19:47:01.123Z =================================== FAILURES ===\n"+
+		"2026-10-16T19:47:02.123Z E       AssertionError: 3 != 2\n"+
+		"2026-10-16T19:47:03.123Z ##[error]Process completed with exit code 1.\n"+
+		"2026-10-16T19:47:04.123Z Post job cleanup.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	w.until("the failure log to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				if !strings.Contains(spec.Workload.Prompt, "AssertionError: 3 != 2") || strings.Contains(spec.Workload.Prompt, "Post job cleanup.") {
+					t.Fatalf("fixer feedback: %s", spec.Workload.Prompt)
+				}
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // An approved pull request with a thread left unresolved is not ready.
 func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
 	w := newWorld(t)
