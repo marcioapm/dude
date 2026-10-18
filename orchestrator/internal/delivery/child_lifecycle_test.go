@@ -244,7 +244,7 @@ func TestChildWriterBlocksWorkflowAndConductorPublication(t *testing.T) {
 		t.Fatalf("workflow writer: %v", err)
 	}
 	w.exec(`UPDATE workflow_runs SET state = state || '{"decider":"conductor"}'::jsonb WHERE id = 'wf_life'`)
-	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
 		if _, err := ConductPublish(w.ctx, tx, w.in.Parent.Run, "publish"); !IsRefusal(err) {
 			return fmt.Errorf("conduct publish: %v", err)
 		}
@@ -562,6 +562,45 @@ func TestChildAtomicEnqueue(t *testing.T) {
 	}
 	if w.snapshot() != before {
 		t.Fatal("notification mutated workflow/PR/task")
+	}
+}
+
+func TestChildEnqueueClaimsDisjointBatches(t *testing.T) {
+	w := newChildWorld(t)
+	for i := 0; i < 2; i++ {
+		id := w.child(fmt.Sprintf("claim-%d", i))
+		if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim := func() ([]string, error) {
+		var ids []string
+		err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
+			token := fmt.Sprintf("claim-%d", len(ids))
+			rows, err := tx.Query(w.ctx, `UPDATE child_result_outbox SET claimed_by=$1,claimed_until=now()+interval '1 minute'
+				WHERE (parent_run_id,child_run_id,generation) IN (
+					SELECT parent_run_id,child_run_id,generation FROM child_result_outbox
+					WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
+					ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+				) RETURNING child_run_id`, token)
+			if err != nil {
+				return err
+			}
+			ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
+			return err
+		})
+		return ids, err
+	}
+	first, err := claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0] == second[0] {
+		t.Fatalf("overlapping claims: %v %v", first, second)
 	}
 }
 

@@ -298,12 +298,17 @@ func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
 	type pending struct {
 		Org, Parent, Child string
 		Generation         int
+		Token              string
 	}
 	var todo []pending
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT organization_id, parent_run_id, child_run_id, generation FROM child_result_outbox
-			WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
-			ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED`)
+		token := ids.New(ids.Directive)
+		rows, err := tx.Query(ctx, `UPDATE child_result_outbox SET claimed_by = $1, claimed_until = now() + interval '1 minute'
+			WHERE (parent_run_id, child_run_id, generation) IN (
+				SELECT parent_run_id, child_run_id, generation FROM child_result_outbox
+				WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
+				ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED
+			) RETURNING organization_id, parent_run_id, child_run_id, generation, claimed_by`, token)
 		if err != nil {
 			return err
 		}
@@ -319,11 +324,9 @@ func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
 			if err != nil {
 				return err
 			}
-			token := ids.New(ids.Directive)
-			tag, err := tx.Exec(ctx, `UPDATE child_result_outbox SET claimed_by = $4, claimed_until = now() + interval '1 minute'
-				WHERE parent_run_id = $1 AND child_run_id = $2 AND generation = $3 AND consumed_at IS NULL AND stale_at IS NULL
-				AND (claimed_until IS NULL OR claimed_until < now())`, p.Parent, p.Child, p.Generation, token)
-			if err != nil || tag.RowsAffected() == 0 {
+			var claimed string
+			if err := tx.QueryRow(ctx, `SELECT claimed_by FROM child_result_outbox
+				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$4`, p.Parent, p.Child, p.Generation, p.Token).Scan(&claimed); err != nil {
 				return err
 			}
 			if !c.Actionable || c.ParentID != p.Parent {
@@ -348,7 +351,7 @@ func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
 				return err
 			}
 			_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL
-				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, directive, token)
+				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, directive, p.Token)
 			if err == nil {
 				n++
 			}
