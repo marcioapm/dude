@@ -44,12 +44,10 @@ type Blocker struct {
 	Status string `json:"status"`
 }
 
-// stateWord names a blocker's state the way every refusal does.
-var stateWord = map[string]string{
-	"review": "in review", "running": "in progress", "awaiting_input": "needs a person", "ready_to_merge": "ready to merge",
-	"failed": "failed", "aborted": "aborted", "received": "not started", "queued": "not started", "intake": "being shaped",
-	"awaiting_confirmation": "plan to confirm", "done": "done, nothing merged",
-}
+// stateWord names a blocker's state the way every refusal does, keyed by
+// the task status a blocker can have (refusals/words/blocker-state/<status>).
+var stateWord = agentTexts("refusals/words/blocker-state/", "review", "running", "awaiting_input", "ready_to_merge",
+	"failed", "aborted", "received", "queued", "intake", "awaiting_confirmation", "done")
 
 // Words is "CP-41 (in review)".
 func (b Blocker) Words() string {
