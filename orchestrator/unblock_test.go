@@ -47,12 +47,11 @@ func (w *world) events(task, typ string) int {
 	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, typ)
 }
 
-// mergeFor delivers blocker to its pull request and merges it, as GitHub
-// would; the reconciler notices.
+// mergeFor puts blocker in review on its pull request (inReview) and
+// merges it, as GitHub would; the reconciler notices.
 func (w *world) mergeFor(blocker string) {
 	w.t.Helper()
-	w.deliver(blocker)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.inReview(blocker)
 	w.gh.Merge(1)
 	w.until("the blocker to be merged", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)

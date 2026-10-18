@@ -267,33 +267,34 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 			t.Fatalf("lines %d full %q binary %v, want z.txt's 400 and mine.go's 1", acc.Lines, acc.Full, acc.Binary)
 		}
 	})
-	t.Run("a fetched base GitHub's main does not answer for counts in full", func(t *testing.T) {
+	t.Run("a push GitHub refuses to compare with main counts in full", func(t *testing.T) {
 		a := conflictMerged(t)
 		a.intercept = func(r *http.Request) int {
-			if strings.HasSuffix(r.URL.Path, "/compare/main..."+a.base) {
+			if strings.HasSuffix(r.URL.Path, "/compare/main..."+a.head()) {
 				return http.StatusNotFound
 			}
 			return 0
 		}
 		acc := a.published()
-		if !strings.Contains(acc.Full, "could not compare main") || acc.Lines != 303 {
+		if !strings.Contains(acc.Full, "could not compare the push with main") || acc.Lines != 303 {
 			t.Fatalf("lines %d full %q, want 303 counted in full", acc.Lines, acc.Full)
 		}
 	})
-	t.Run("a push GitHub refuses to compare with the base counts in full", func(t *testing.T) {
+	t.Run("a compare that names no merge base counts in full", func(t *testing.T) {
 		a := conflictMerged(t)
-		a.intercept = func(r *http.Request) int {
-			if strings.Contains(r.URL.Path, "/compare/"+a.base+"...") {
-				return http.StatusNotFound
+		a.answer = func(base, head string, answer map[string]any) {
+			if base == "main" {
+				delete(answer, "merge_base_commit")
 			}
-			return 0
 		}
 		acc := a.published()
-		if !strings.Contains(acc.Full, "could not compare the push") || acc.Lines != 303 {
+		if !strings.Contains(acc.Full, "named no merge base") || acc.Lines != 303 {
 			t.Fatalf("lines %d full %q, want 303 counted in full", acc.Lines, acc.Full)
 		}
 	})
-	t.Run("a fetched base the push does not contain counts in full", func(t *testing.T) {
+	t.Run("a main newer than the push leaves out the main it merged", func(t *testing.T) {
+		// lux's last fetch is a main the push does not contain; the main the
+		// push merged is still the base's.
 		a := newAccountingRun(t)
 		a.commit(map[string]string{"mine.go": "package mine\n"}, "task work")
 		a.advanceBase(map[string]string{"base.go": lines(300, "base")})
@@ -302,9 +303,9 @@ func TestAPublishIsCountedFromGitHubAlone(t *testing.T) {
 		a.advanceBase(map[string]string{"later.go": "later\n"})
 		a.syncBase()
 		acc := a.published()
-		samePaths(t, acc, "base.go", "mine.go")
-		if !strings.Contains(acc.Full, "does not contain") || acc.Lines != 301 {
-			t.Fatalf("lines %d full %q, want 301 counted in full", acc.Lines, acc.Full)
+		samePaths(t, acc, "mine.go")
+		if acc.Full != "" || acc.Lines != 1 {
+			t.Fatalf("lines %d full %q, want mine.go's 1", acc.Lines, acc.Full)
 		}
 	})
 	t.Run("the task's change on top of the base GitHub cut short counts in full", func(t *testing.T) {
@@ -388,6 +389,69 @@ func TestABinaryChangeIsBinaryWhateverItsStatus(t *testing.T) {
 		acc := counted([]forge.ComparedFile{{Filename: "huge.sql", Status: "modified", Additions: 20000, SHA: "4b825dc642cb6eb9a060e54bf8d69288fbee4904"}})
 		if !acc.Binary {
 			t.Fatalf("lines %d: not past the limit", acc.Lines)
+		}
+	})
+}
+
+// A main the push merged is the base's however it came in: through the
+// task branch, merged there by GitHub's Update branch.
+func TestAPublishLeavesOutTheMainItsTaskBranchMerged(t *testing.T) {
+	// S, the task's head; main gains M; GitHub merges main into the task
+	// branch (U); the checkout takes U from the task branch, not main, and
+	// commits on top.
+	updated := func(t *testing.T, base map[string]string, resolved map[string]string) *accountingRun {
+		a := newAccountingRun(t)
+		a.seed(map[string]string{"shared.txt": lines(10, "s")})
+		a.commit(map[string]string{"task.go": lines(4, "task"), "shared.txt": lines(10, "s") + "task\n"}, "S")
+		git(t, a.work, "push", "-q", a.origin, "HEAD:refs/heads/task")
+		a.start = a.head()
+		a.advanceBase(base)
+		other := filepath.Join(t.TempDir(), "other")
+		git(t, t.TempDir(), "clone", "-q", "-b", "task", a.origin, other)
+		if gitErr(&accountingRun{t: t, work: other}, "merge", "-q", "--no-edit", "origin/main") != nil {
+			for path, content := range resolved {
+				write(t, filepath.Join(other, path), content)
+			}
+			git(t, other, "add", "-A")
+			git(t, other, "commit", "-q", "--no-edit")
+		}
+		git(t, other, "push", "-q", "origin", "task")
+		git(t, a.work, "fetch", "-q", "origin", "task")
+		git(t, a.work, "merge", "-q", "--ff-only", "FETCH_HEAD")
+		return a
+	}
+	t.Run("the base's file is left out", func(t *testing.T) {
+		a := updated(t, map[string]string{".github/workflows/backup.yml": lines(8, "ci")}, nil)
+		a.commit(map[string]string{"y.go": lines(3, "y"), "z.go": lines(2, "z")}, "C")
+		acc := a.published()
+		samePaths(t, acc, "y.go", "z.go")
+		if acc.Lines != 5 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want y.go's 3 and z.go's 2", acc.Lines, acc.Full)
+		}
+	})
+	t.Run("a file both changed counts the task's part on top of main", func(t *testing.T) {
+		onMain := lines(5, "main") + lines(10, "s")
+		a := updated(t, map[string]string{"shared.txt": onMain}, map[string]string{"shared.txt": onMain + "task\n"})
+		a.commit(map[string]string{"shared.txt": onMain + "task\nmore\n", "y.go": "y\n"}, "C")
+		acc := a.published()
+		samePaths(t, acc, "shared.txt", "y.go")
+		// shared.txt: the conductor's "more" and S's "task" on top of main's
+		// 5 lines, which are main's; y.go's 1.
+		if acc.Lines != 3 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want shared.txt's 2 and y.go's 1", acc.Lines, acc.Full)
+		}
+	})
+	t.Run("a main the push did not merge changes nothing", func(t *testing.T) {
+		a := newAccountingRun(t)
+		a.commit(map[string]string{"task.go": "task\n"}, "S")
+		a.start = a.head()
+		a.advanceBase(map[string]string{"base.go": lines(30, "base")})
+		a.syncBase()
+		a.commit(map[string]string{"y.go": lines(3, "y"), "README.md": "# target\nmore\n"}, "C")
+		acc := a.published()
+		samePaths(t, acc, "README.md", "y.go")
+		if acc.Lines != 4 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want start...head's 4", acc.Lines, acc.Full)
 		}
 	})
 }

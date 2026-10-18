@@ -128,16 +128,13 @@ RUN git config --system user.name "dude" \
 # (see the script). git skips a missing include: an image without
 # git-config runs the repository's own hooks, and commits carry no
 # co-authors. The system setting is the fallback for a git started without
-# the Run's environment; the hook passes over it to .git/hooks. Not linked,
-# so a repository's own of these do not run: reference-transaction and
-# post-index-change, which git calls on every ref and index write.
+# the Run's environment; the hook passes over it to .git/hooks. The names
+# it is linked under are link-git-hooks.sh's, shared with the dude layer
+# (images/layer).
 COPY --chmod=0644 git-config /usr/local/share/dude/git-config
 COPY --chmod=0755 git-hooks/dude-hook /usr/local/share/dude/git-hooks/dude-hook
-RUN cd /usr/local/share/dude/git-hooks \
-    && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \
-         commit-msg post-commit pre-rebase post-checkout post-merge pre-push post-rewrite pre-auto-gc \
-         sendemail-validate; do \
-         ln -s dude-hook "$h"; done \
+RUN --mount=type=bind,source=link-git-hooks.sh,target=/tmp/link-git-hooks.sh \
+    sh /tmp/link-git-hooks.sh /usr/local/share/dude/git-hooks \
     && git config --system core.hooksPath /usr/local/share/dude/git-hooks
 
 USER agent

@@ -56,3 +56,24 @@ func TestOnlyACompletedSyncNamingACommitIsKept(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncHistoryRetainsDistinctDeliveredCommits(t *testing.T) {
+	w := newResumeWorld(t)
+	first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, sha := range []string{first, second, first} {
+		raw, _ := json.Marshal(map[string]string{"repo": "target", "ref": "main", "status": "fetched", "to": sha})
+		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+			return recordSyncedBase(w.ctx, tx, w.run.ID, raw)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var history map[string]map[string][]string
+	var latest map[string]map[string]string
+	if err := w.owner.QueryRow(w.ctx, `SELECT sync_history, synced_bases FROM runs WHERE id = $1`, w.run.ID).Scan(&history, &latest); err != nil {
+		t.Fatal(err)
+	}
+	if got := history["target"]["main"]; len(got) != 2 || got[0] != first || got[1] != second || latest["target"]["main"] != first {
+		t.Fatalf("history %+v, latest %+v", history, latest)
+	}
+}

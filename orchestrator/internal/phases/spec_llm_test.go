@@ -44,7 +44,7 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 		t.Errorf("DUDE_LLM_URL = %q", spec.Env["DUDE_LLM_URL"])
 	}
 	for _, s := range spec.Secrets {
-		if s.As == "file" {
+		if s.As == "file" && s.Name != setupSecretName {
 			t.Errorf("secret %s is a file: the image holds OpenCode's config", s.Name)
 		}
 	}

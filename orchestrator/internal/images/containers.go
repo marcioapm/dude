@@ -19,8 +19,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The container check: a version marked "Can run containers" is checked,
-// once its dude layer is on, for what lux's nested containers need of an
+// The final-image check. Every final is checked, once its dude layer is
+// on, for dude's git-config and commit hook. A version marked "Can run
+// containers" is also checked for what lux's nested containers need of an
 // image (lux docs/runspec.md, "Nested containers"): an engine (podman, or
 // rootless Docker: dockerd-rootless with dockerd, RootlessKit and
 // slirp4netns), fuse-overlayfs, newuidmap and newgidmap able to gain
@@ -35,6 +36,9 @@ const CheckCommand = "containers-check"
 
 // Found is what the check found in an image.
 type Found struct {
+	// dude's git-config and its prepare-commit-msg hook (GitConfigPath,
+	// CommitHookPath), "" for each the image lacks: every final needs both.
+	GitConfig, CommitHook string `json:",omitempty"`
 	// Paths, "" for none; versions as the engine prints them.
 	Podman, PodmanVersion string `json:",omitempty"`
 	// Docker is the rootless launcher (dockerd-rootless[.sh]); it runs
@@ -104,6 +108,45 @@ func (f Found) engine() bool { return f.Podman != "" || f.docker() }
 // partialDocker is a rootless Docker launcher without the rest of it, in
 // an image with no podman: what is missing is Docker's parts.
 func (f Found) partialDocker() bool { return f.Podman == "" && f.Docker != "" && !f.docker() }
+
+// The dude layer's git-config, which every Run includes (phases.
+// DudeGitConfig), and the hook that adds the co-authors. The check takes
+// each when it is a regular file (the hook through its symlink to
+// dude-hook), and the hook only when it is executable too.
+const (
+	GitConfigPath  = "/usr/local/share/dude/git-config"
+	CommitHookPath = "/usr/local/share/dude/git-hooks/prepare-commit-msg"
+)
+
+// HookSentence is why a final without dude's git-config or commit hook
+// fails, in one sentence; "" when it has both.
+func (f Found) HookSentence() string {
+	var missing []string
+	if f.GitConfig == "" {
+		missing = append(missing, GitConfigPath)
+	}
+	if f.CommitHook == "" {
+		missing = append(missing, CommitHookPath)
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "The image has no " + orList(missing) + " after the dude layer, so its commits would carry no co-authors."
+}
+
+// HookLine is the hook check's line in the build's log.
+func (f Found) HookLine() string {
+	if f.GitConfig != "" && f.CommitHook != "" {
+		return "check  git hook  " + f.GitConfig + ", " + f.CommitHook
+	}
+	or := func(p string) string {
+		if p == "" {
+			return "missing"
+		}
+		return p
+	}
+	return "check  git hook  git-config: " + or(f.GitConfig) + " · prepare-commit-msg: " + or(f.CommitHook)
+}
 
 // Passed is whether the image can run containers.
 func (f Found) Passed() bool {
@@ -304,6 +347,12 @@ func ContainersCheck(root string) Found {
 			}
 		}
 		return ""
+	}
+	if st, err := os.Stat(filepath.Join(root, GitConfigPath)); err == nil && st.Mode().IsRegular() {
+		f.GitConfig = GitConfigPath
+	}
+	if st, err := os.Stat(filepath.Join(root, CommitHookPath)); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
+		f.CommitHook = CommitHookPath
 	}
 	f.Podman = look("podman")
 	if f.Podman != "" && root == "/" {

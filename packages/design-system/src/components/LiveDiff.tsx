@@ -343,7 +343,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   const tools = (
     <>
         {files.length > 0 ? (
-          <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
+          <span className={styles["since"]} title={base ? `The agent's checkout against ${base}: the commit it started from, or the latest one of others' it brought in. Uncommitted work included.` : undefined}>
             {base ? (
               <>
                 Since <span className={styles["mono"]}>{short}</span> ·{" "}
