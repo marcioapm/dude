@@ -269,11 +269,7 @@ func messageTarget(ctx context.Context, tx pgx.Tx, task, replyTo, asker string) 
 // that it decides nothing, how to answer, then the words. from is the
 // sender's RunLabel ("ABS-1's implementer").
 func MessageDirective(from, id, replyTo, text string) string {
-	kind := "Message"
-	if replyTo != "" {
-		kind = "Reply to " + replyTo
-	}
-	return render(messageTmpl, struct{ Kind, ID, From, FromKey, Text string }{kind, id, from, strings.SplitN(from, "'", 2)[0], text})
+	return render(messageTmpl, struct{ ReplyTo, ID, From, FromKey, Text string }{replyTo, id, from, strings.SplitN(from, "'", 2)[0], text})
 }
 
 // closeWaitsTx closes the open waits on message (by "reply" or "self"),

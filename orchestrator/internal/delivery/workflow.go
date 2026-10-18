@@ -84,9 +84,11 @@ type State struct {
 	PRIteration int `json:"prIteration,omitempty"`
 	// Fixes each pull request has had, by repository (a task has one pull
 	// request per repository): bounded by the organization's fix rounds per
-	// pull request. A fix counts against every pull request whose feedback
-	// it addressed, and no other.
+	// pull request. A round counts once its fix lands with commits, against
+	// every open pull request whose repository it changed, and no other.
 	PRFixes map[string]int `json:"prFixesByRepo,omitempty"`
+	// The last round charged to PRFixes, and the repositories charged.
+	PRFixCharged *PRFixCharge `json:"prFixCharged,omitempty"`
 	// Names each PR fix's Run. Only grows, so a round starting over never
 	// finds an earlier fix.
 	PRFixKey int `json:"prFixKey,omitempty"`
@@ -405,6 +407,15 @@ type Candidate struct {
 	// The heads at which a person accepted a review round whose reviewers
 	// failed: promotion takes them as reviewed (unreviewedHeads).
 	Accepted map[string]string `json:"accepted,omitempty"`
+}
+
+// PRFixCharge is a round (its PRFixKey) charged to the pull requests in
+// Repos: once, when its fix landed with commits; a retry of that round
+// gives it back.
+type PRFixCharge struct {
+	Round   int      `json:"round"`
+	Repos   []string `json:"repos"`
+	Pending bool     `json:"pending,omitempty"`
 }
 
 // PromotedRefresh is the after-promotion refresh still to do: the
@@ -1728,33 +1739,29 @@ func (st *State) candidateBranch() string {
 	return CandidateBranch(st.TaskID, max(st.Attempt, 1))
 }
 
-// chargePRFix counts a fix against this round's budget and each pull
-// request's it addresses; the escalation, and true, when either is spent.
+// chargePRFix counts a fix against this round's budget, and refuses it
+// when the round's is spent or a pull request it addresses has had its
+// organization's fix rounds already; the escalation, and true, then. The
+// pull requests' budget is spent only by a fix that lands with commits
+// (chargeLandedPRFix).
 func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (workflow.Result, bool, error) {
 	st.PRIteration++
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
-	var spent []string // pull requests past the organization's budget
+	st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Pending: true}
 	repos := feedbackRepos(st.PRFeedback)
 	if len(repos) == 0 {
-		// A fix the conductor started while the pull requests waited, on
-		// no feedback: it counts against each still open.
-		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-		if err != nil {
+		// A fix the conductor started while the pull requests waited, or
+		// one for people's feedback in dude: refused if any still open is
+		// at its budget.
+		var err error
+		if repos, err = w.openPRRepos(ctx, sc, st); err != nil {
 			return workflow.Result{}, false, err
 		}
-		for _, p := range states {
-			if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
-				repos = append(repos, p.Repo)
-			}
-		}
 	}
+	var spent []string // pull requests at the organization's budget
 	for _, repo := range repos {
-		if st.PRFixes == nil {
-			st.PRFixes = map[string]int{}
-		}
-		st.PRFixes[repo]++
-		if total > 0 && st.PRFixes[repo] > total {
+		if total > 0 && st.PRFixes[repo] >= total {
 			spent = append(spent, repo)
 		}
 	}
@@ -1764,6 +1771,60 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 		return res, true, err
 	}
 	return workflow.Result{}, false, nil
+}
+
+// currentPRFixCharge recognises rounds that spent their budget at start.
+func (st *State) currentPRFixCharge() *PRFixCharge {
+	switch {
+	case st.PRFixCharged == nil:
+		// A nil marker is the old format: that round spent its budget when it started.
+		st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Repos: feedbackRepos(st.PRFeedback)}
+	case st.PRFixCharged.Round != st.PRFixKey:
+		// A marker from an earlier round is not evidence that this round spent
+		// anything. It is the intermediate format's next round: charge it when
+		// commits land, without losing the earlier charge on retry.
+		st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Pending: true}
+	}
+	return st.PRFixCharged
+}
+
+// chargeLandedPRFix spends the round's fix once against each open PR it changed.
+func (w *steps) chargeLandedPRFix(ctx context.Context, sc workflow.StepContext, st *State, changed map[string]string) error {
+	if !st.currentPRFixCharge().Pending {
+		return nil
+	}
+	open, err := w.openPRRepos(ctx, sc, st)
+	if err != nil {
+		return err
+	}
+	charge := &PRFixCharge{Round: st.PRFixKey, Repos: []string{}}
+	for _, repo := range open {
+		if _, ok := changed[repo]; !ok {
+			continue
+		}
+		if st.PRFixes == nil {
+			st.PRFixes = map[string]int{}
+		}
+		st.PRFixes[repo]++
+		charge.Repos = append(charge.Repos, repo)
+	}
+	st.PRFixCharged = charge
+	return nil
+}
+
+// openPRRepos names the repositories of the task's pull requests still open.
+func (w *steps) openPRRepos(ctx context.Context, sc workflow.StepContext, st *State) ([]string, error) {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return nil, err
+	}
+	var repos []string
+	for _, p := range states {
+		if p.State != forge.StateMerged && p.State != forge.StateClosed && !slices.Contains(repos, p.Repo) {
+			repos = append(repos, p.Repo)
+		}
+	}
+	return repos, nil
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.
@@ -1868,6 +1929,13 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
 	st.ActingOnPR = false
+	if len(out.Heads) > 0 {
+		// The round's fix has commits: it spends the pull requests' budget,
+		// even if a person's push later refuses its promotion.
+		if err := w.chargeLandedPRFix(ctx, sc, st, out.Heads); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	if len(out.Heads) == 0 || st.Candidate == nil {
 		// Nothing changed (or a fix from before candidates, already on the
 		// pull request): nothing to check, nothing to move.
@@ -1876,8 +1944,8 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// On the candidate branch: reviewed over the fix alone, then tested on
 	// every criterion, before the pull request shows it. The review loop
 	// and the test's fix rounds are this round's, bounded as before the
-	// pull request; the round counted once, against PRIteration and
-	// PRFixes, in prFix.
+	// pull request; the round counted once against PRIteration, in prFix,
+	// and against PRFixes, above.
 	st.Candidate.Base = map[string]string{}
 	for repo := range out.Heads {
 		if base := cmp.Or(st.Candidate.From[repo], out.Bases[repo]); base != "" {
@@ -2547,12 +2615,17 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 			break
 		}
 		// The same fix again, not the next: what the stopped one counted
-		// is given back. A budget spent is a new one.
+		// is given back — the round, and the pull requests' budget only if
+		// its fix landed (a pull_request_moved; a failed fix spent none).
+		// A budget spent is a new one.
 		st.PRIteration--
-		for _, repo := range feedbackRepos(st.PRFeedback) {
-			if st.PRFixes[repo] > 0 {
-				st.PRFixes[repo]--
+		if c := st.currentPRFixCharge(); !c.Pending {
+			for _, repo := range c.Repos {
+				if st.PRFixes[repo] > 0 {
+					st.PRFixes[repo]--
+				}
 			}
+			st.PRFixCharged = nil
 		}
 		if e != nil && e.Reason == "pr_loop_exhausted" {
 			st.PRIteration = 0

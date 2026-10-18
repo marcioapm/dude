@@ -162,15 +162,21 @@ func (a FeedbackAnchor) PageLine() string {
 	if u, err := url.Parse(a.URL); err == nil && u.EscapedPath() != "" {
 		route = u.EscapedPath()
 	}
-	line := "Route " + route
+	type box struct{ Width, Height, X, Y int }
+	data := struct {
+		Route           string
+		Window, Element *box
+	}{Route: route}
 	if v := a.Viewport; v != nil {
-		line += fmt.Sprintf(" in a %d×%d window", v.Width, v.Height)
+		data.Window = &box{Width: v.Width, Height: v.Height}
 	}
 	if r := a.Rect; r != nil {
-		line += fmt.Sprintf(" · the element is %d×%d at %d, %d", px(r.Width), px(r.Height), px(r.X), px(r.Y))
+		data.Element = &box{px(r.Width), px(r.Height), px(r.X), px(r.Y)}
 	}
-	return line
+	return render(pageLineTmpl, data)
 }
+
+var pageLineTmpl = mustTemplate("contracts/feedback-page-line")
 
 func px(v float64) int { return int(math.Round(v)) }
 

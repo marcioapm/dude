@@ -451,7 +451,8 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", by, taskKey, howLabel[how], first)})
 }
 
-var howLabel = map[string]string{HowDeliver: "Deliver", HowTalk: "Talk it through"}
+// howLabel names each way to start (HowDeliver, HowTalk) as its button does.
+var howLabel = agentTexts("notices/start-how/", HowDeliver, HowTalk)
 
 // lastUnblock is the blocker whose merge released the task last, and its
 // pull request's number: "" and nil when none is recorded.

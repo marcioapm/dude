@@ -102,10 +102,12 @@ func (s *Syncer) syncAsked(ctx context.Context, r phaseRun, id string, refs []lu
 // checkout current: it stays read-only, Chat says so, and so does the
 // conductor's next input.
 func (s *Syncer) checkoutReadOnly(ctx context.Context, r phaseRun, cause error) error {
-	why := "this lux cannot keep your checkout current"
+	var said *string
 	if le, ok := lux.AsError(cause); ok && le.Message != "" {
-		why += " (" + oneLineClip(le.Message, 120) + ")"
+		message := oneLineClip(le.Message, 120)
+		said = &message
 	}
+	why := readOnlyCause.Render(said)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET checkout_read_only = $2, checkout_sync_id = NULL, checkout_sync_repos = '{}'
 			WHERE id = $1 AND checkout_read_only IS NULL`, r.ID, why)
@@ -268,3 +270,7 @@ func oneLineClip(s string, n int) string {
 // checkoutReadOnlyTold is what a conductor whose checkout this lux cannot
 // keep current is told.
 var checkoutReadOnlyTold = delivery.MustText("notices/told/checkout-read-only").Render(nil)
+
+// readOnlyCause is what checkout_read_only records, which publish's
+// refusals name: lux's message, when it gave one, in parentheses.
+var readOnlyCause = delivery.MustText("refusals/words/read-only-cause")
