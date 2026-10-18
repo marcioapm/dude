@@ -1,5 +1,7 @@
 """Independent conductor children through the deployed tool and phase paths."""
 
+import json
+
 from helpers import ApiClient, query, wait_until
 from fake_github import FakeGitHub
 from suites.test_conductor_edits import _point, _say, _tool, _said
@@ -31,6 +33,20 @@ def _started(client, owner_dsn, task, parent):
             delivery = query(owner_dsn, "SELECT status,step,state FROM workflow_runs WHERE task_id=%s", (task["id"],))
             raise AssertionError((text, parent_state, delivery))
     return rows and rows[0]
+
+
+def _tool_answers(client, run_id, profile):
+    calls = {}
+    answers = []
+    for event in client.events(runId=run_id, limit=1000):
+        payload = event["payload"]
+        if event["eventType"] == "agent.tool.called" and payload.get("tool") == "start_agent":
+            calls[payload["callId"]] = payload.get("input", payload.get("arguments", {}))
+        elif event["eventType"] == "agent.tool.completed" and payload.get("tool") == "start_agent":
+            arguments = calls.get(payload.get("callId"), {})
+            if arguments.get("profile") == profile:
+                answers.append(payload)
+    return answers
 
 
 def test_child_report_returns_once_without_moving_delivery(client: ApiClient, owner_dsn, forge_project):
@@ -76,10 +92,20 @@ def test_child_writer_excludes_another_but_allows_reports_and_selective_abort(cl
          _tool("start_agent", {"profile": "implementer", "key": "first"}),
          _tool("start_agent", {"profile": "implementer", "key": "second"}),
          _tool("start_agent", {"profile": "investigator", "key": "report"}))
-    rows = wait_until(lambda: (rows := _children(owner_dsn, task)) and len(rows) == 2 and rows, timeout=90)
-    assert len([row for row in rows if row["phase"] == "implement"]) == 1
-    writer = next(row for row in rows if row["phase"] == "implement")
-    sibling = next(row for row in rows if row["phase"] == "investigate")
+    answers = wait_until(lambda: _tool_answers(client, parent, "investigator") if len(_tool_answers(client, parent, "implementer")) == 2 else None,
+                         timeout=90)
+    implementer_answers = _tool_answers(client, parent, "implementer")
+    assert len(implementer_answers) == 2
+    assert "one writer" in " ".join(_said(client, parent)).lower(), implementer_answers
+    investigator = answers[0]
+    output = investigator.get("output", {})
+    if isinstance(output, str):
+        output = json.loads(output)
+    investigator_id = output["runId"]
+    wait_until(lambda: query(owner_dsn, "SELECT id FROM child_results WHERE child_run_id=%s", (investigator_id,)), timeout=120)
+    wait_until(lambda: query(owner_dsn, "SELECT d.id FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id WHERE o.child_run_id=%s AND d.delivered_at IS NOT NULL", (investigator_id,)), timeout=90)
+    writer = next(row for row in _children(owner_dsn, task) if row["phase"] == "implement")
+    sibling = next(row for row in _children(owner_dsn, task) if row["id"] == investigator_id)
     response = client.post(f"/v1/runs/{writer['id']}/abort", {})
     assert response.status_code == 200, response.text
     wait_until(lambda: client.get_run(writer["id"])["status"] == "aborted", timeout=60)
