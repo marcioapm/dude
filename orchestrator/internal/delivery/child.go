@@ -32,7 +32,7 @@ type StartChildInput struct {
 func childPhase(profile string) (string, error) {
 	phase := PhaseForPromptRole(profile)
 	if phase == "" {
-		return "", refusef("an existing phase profile is required")
+		return "", refuseText(rChildProfileRequired)
 	}
 	return phase, nil
 }
@@ -64,13 +64,13 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 		return "", err
 	}
 	if in.Parent.Kind != ChildParentTaskConductor || in.Key == "" {
-		return "", refusef("a task conductor parent and idempotency key are required")
+		return "", refuseText(rChildParentKeyRequired)
 	}
 	if in.Capabilities.PublishCode != Publishes[phase] {
-		return "", refusef("capabilities must match the named profile")
+		return "", refuseText(rChildCapabilitiesMismatch)
 	}
 	if len([]rune(in.Note)) > 4000 {
-		return "", refusef("note exceeds 4000 characters")
+		return "", refuseText(rChildNoteTooLong)
 	}
 	ref := in.Parent.Run
 	var id string
@@ -86,20 +86,20 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 			FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND r.project_id = $3
 			AND r.organization_id = $4 FOR UPDATE`, ref.RunID, ref.TaskID, ref.ProjectID, ref.Org).Scan(&live, &parentAttempt)
 	if db.IsNotFound(err) {
-		return "", refusef("the parent is not this task's authorized conductor")
+		return "", refuseText(rChildParentUnauthorized)
 	}
 	if err != nil {
 		return "", err
 	}
 	if !live {
-		return "", refusef("the parent conductor is ended, replaced, or itself a child")
+		return "", refuseText(rChildParentEnded)
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, ref.TaskID).Scan(&status); err != nil {
 		return "", err
 	}
 	if Ended(status) {
-		return "", refusef("this task has ended")
+		return "", refuseText(rChildTaskEnded)
 	}
 	keyBytes, _ := json.Marshal([]string{string(in.Parent.Kind), ref.RunID, in.Key})
 	key := "child:" + string(keyBytes)
@@ -112,14 +112,14 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 		return "", err
 	}
 	if d == nil || !d.Live() {
-		return "", refusef("this task has no live delivery")
+		return "", refuseText(rChildNoLiveDelivery)
 	}
 	attempt, err := EffectiveChildAttemptTx(ctx, tx, ref.TaskID, d)
 	if err != nil {
 		return "", err
 	}
 	if attempt != parentAttempt {
-		return "", refusef("the parent conductor is from an old delivery attempt")
+		return "", refuseText(rChildParentOldAttempt)
 	}
 	if Publishes[phase] {
 		if err := refuseWriterAdmissionTx(ctx, tx, ref.TaskID, "", d); err != nil {

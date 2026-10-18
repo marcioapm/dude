@@ -58,7 +58,7 @@ var tools = []tool{
 }
 
 type startAgentIn struct {
-	Profile string `json:"profile" jsonschema:"the child profile"`
+	Profile string `json:"profile"`
 	Prompt  string `json:"prompt,omitempty"`
 	Note    string `json:"note,omitempty"`
 	Tier    string `json:"tier,omitempty"`
@@ -74,7 +74,7 @@ type startAgentOut struct {
 func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (startAgentOut, error) {
 	phase := delivery.PhaseForPromptRole(in.Profile)
 	if phase == "" || in.Profile == "conductor" || in.Profile == "brainstorm" {
-		return startAgentOut{}, refuse("an existing phase profile is required")
+		return startAgentOut{}, refuseText(rChildProfileRequired)
 	}
 	key := in.Key
 	if key == "" {

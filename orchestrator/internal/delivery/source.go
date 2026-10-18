@@ -222,7 +222,7 @@ func unreachableOr(err error) error {
 // source's head branch, measured against its base. Attempt must be positive.
 func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy Policy, attempt int) (State, error) {
 	if attempt < 1 {
-		return State{}, refusef("a positive delivery attempt is required")
+		return State{}, refuseText(rChildPositiveAttemptRequired)
 	}
 	st := State{TaskID: taskID, ProjectID: projectID, Policy: policy, Attempt: attempt, Branch: BranchFor(taskID, attempt)}
 	src, err := TaskSource(ctx, tx, taskID)

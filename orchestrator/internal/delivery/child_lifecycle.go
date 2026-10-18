@@ -32,7 +32,7 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	err := tx.QueryRow(ctx, `SELECT task_id, parent_run_id FROM runs
 		WHERE id = $1 AND source_kind = 'task_conductor'`, childID).Scan(&c.TaskID, &c.ParentID)
 	if db.IsNotFound(err) {
-		return nil, refusef("not an independent task child")
+		return nil, refuseText(rNotIndependentTaskChild)
 	}
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 		Scan(&c.Profile, &c.Phase, &c.Status, &c.Attempt, &c.Generation, &c.StopReason, &c.ReplacedBy,
 			&c.Prompt, &c.Note, &c.Tier, &c.Branch, &c.Capabilities, &c.BaseRefs)
 	if db.IsNotFound(err) {
-		return nil, refusef("child ownership changed")
+		return nil, refuseText(rChildOwnershipChanged)
 	}
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func (s *Store) SettleChild(ctx context.Context, org, childID string, outcome Ch
 // settlement, so another notifier cannot replace findings after the snapshot.
 func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcome ChildOutcome, collect func(pgx.Tx) error) (bool, error) {
 	if outcome.Status != "completed" && outcome.Status != "failed" && outcome.Status != "aborted" {
-		return false, refusef("a terminal child outcome is required")
+		return false, refuseText(rChildTerminalOutcomeRequired)
 	}
 	created := false
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -180,7 +180,7 @@ func AbortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID string) error 
 		return err
 	}
 	if c.TaskID != taskID {
-		return refusef("child does not belong to this task")
+		return refuseText(rChildWrongTask)
 	}
 	_, err = tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
 			child_stop_reason = 'aborted', control_reason = 'child aborted', keep = false
@@ -196,7 +196,7 @@ func (s *Store) RestartChild(ctx context.Context, org, taskID, childID, key stri
 
 func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key string) (string, error) {
 	if key == "" {
-		return "", refusef("a restart idempotency key is required")
+		return "", refuseText(rChildRestartKeyRequired)
 	}
 	var id string
 	err := func() error {
@@ -205,7 +205,7 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 			return err
 		}
 		if c.TaskID != taskID {
-			return refusef("child does not belong to this task")
+			return refuseText(rChildWrongTask)
 		}
 		// Replaced children can replay their own restart request, but not after
 		// the parent has ended or the task has moved to another attempt.
@@ -215,16 +215,16 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 				return err
 			}
 			if previousKey != key {
-				return refusef("this child already has a replacement")
+				return refuseText(rChildAlreadyReplaced)
 			}
 			if !c.ParentLive {
-				return refusef("the parent is no longer live for this attempt")
+				return refuseText(rChildParentNotLive)
 			}
 			id = c.ReplacedBy
 			return nil
 		}
 		if !c.Actionable {
-			return refusef("the parent is no longer live for this attempt")
+			return refuseText(rChildParentNotLive)
 		}
 		if Publishes[c.Phase] {
 			d, err := LoadDelivery(ctx, tx, taskID)
@@ -236,7 +236,7 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 				return err
 			}
 			if d == nil || !d.Live() || attempt != c.Attempt {
-				return refusef("the parent is no longer live for this attempt")
+				return refuseText(rChildParentNotLive)
 			}
 			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, d); err != nil {
 				return err
@@ -273,7 +273,7 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 		if err := tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.replaced_by IS NULL AND r.control <> 'abort'
 			AND NOT COALESCE(`+Ending+`, false) FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND r.source_kind IS NULL FOR UPDATE`, parentID, taskID).Scan(&live); err != nil {
 			if db.IsNotFound(err) {
-				return refusef("not this task's parent")
+				return refuseText(rChildWrongParent)
 			}
 			return err
 		}
@@ -282,7 +282,7 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 			return err
 		}
 		if live && !Ended(status) {
-			return refusef("the parent has not ended")
+			return refuseText(rChildParentStillLive)
 		}
 		_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason = 'parent-ended', control = 'abort',
 			control_requested_at = now(), control_reason = 'child parent ended', keep = false

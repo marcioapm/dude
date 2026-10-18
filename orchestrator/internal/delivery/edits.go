@@ -97,7 +97,7 @@ func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunI
 		return refusef("%s", refusedWriter)
 	}
 	if publishing {
-		return refusef("a publish of this task is under way; wait for it to finish")
+		return refuseText(rChildTaskPublishing)
 	}
 	if d != nil && d.State.Candidate != nil {
 		return refusef("%s", refusedCandidate)

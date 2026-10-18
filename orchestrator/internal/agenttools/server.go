@@ -566,7 +566,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 			return err
 		}
 		if child && !childToolAllowed(t.name) {
-			return refuse("independent report children cannot mutate workflow or start Runs")
+			return refuseText(rChildToolsReadOnly)
 		}
 		return nil
 	}); err != nil {

@@ -4,6 +4,8 @@
 package agenttools
 
 const (
+	rChildProfileRequired                  = "an existing phase profile is required"
+	rChildToolsReadOnly                    = "independent report children cannot mutate workflow or start Runs"
 	rYourContainerNotRunningAsLux          = "your container is not running as lux sees it; call sync_base again in a moment"
 	rThisRunHoldsNoRepositoryMay           = "this Run holds no repository it may change: there is no base to bring in"
 	rThisDudeCannotAskLuxFor               = "this dude cannot ask lux for a sync: sync_base is not available here"
