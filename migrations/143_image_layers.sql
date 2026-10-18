@@ -11,4 +11,7 @@ CREATE TABLE image_layers (
   current_at timestamptz NOT NULL DEFAULT now()
 );
 GRANT SELECT ON image_layers TO dude_app;
+-- 002_app_role grants these verbs on every table, so make this global
+-- infrastructure table read-only for the application role explicitly.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON image_layers FROM dude_app;
 GRANT SELECT, INSERT, UPDATE ON image_layers TO dude_builder;

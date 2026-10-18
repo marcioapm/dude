@@ -738,14 +738,14 @@ func TestAVersionThatCannotRunContainersFailsItsBuildAndThePreviousStaysPublishe
 }
 
 // A version not marked is checked for dude's git hook alone: nothing it
-// lacks for containers fails it, and no container verdict is kept.
+// lacks for containers fails it, and only the hook verdict is kept.
 func TestAVersionNotMarkedIsNotCheckedForContainers(t *testing.T) {
 	f := setup(t)
 	f.image("img_b", "acme-base")
 	build := f.queue("img_b", "imv_b1", 1, "FROM debian\n")
 	f.once()
-	if got := f.row(`SELECT v.state, b.containers_check FROM image_versions v JOIN image_builds b ON b.image_version_id = v.id
-		WHERE b.id = $1`, build); got[0] != "published" || got[1] != nil {
+	if got := f.row(`SELECT v.state, b.containers_check->>'detail', b.containers_check->>'passed' FROM image_versions v JOIN image_builds b ON b.image_version_id = v.id
+		WHERE b.id = $1`, build); got[0] != "published" || got[1] != "dude's git hook is installed" || got[2] != "true" {
 		t.Errorf("version, check = %v", got)
 	}
 	if log := f.log(build); strings.Contains(log, "Check containers") {

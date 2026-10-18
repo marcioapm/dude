@@ -83,14 +83,8 @@ type job struct {
 // throughout. A layer it cannot publish is Run's error: nothing is finished
 // with a layer that does not exist.
 func (b *Builder) Run(ctx context.Context) error {
-	if b.Layer == "" {
-		if err := b.PublishLayer(ctx); err != nil {
-			return err
-		}
-	}
-	if err := b.Recover(ctx); err != nil {
-		return err
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if err := b.Heartbeat(ctx); err != nil {
 		return err
 	}
@@ -112,6 +106,15 @@ func (b *Builder) Run(ctx context.Context) error {
 			}
 		}
 	}()
+	if err := b.Recover(ctx); err != nil {
+		return err
+	}
+	if b.Layer == "" {
+		if err := b.PublishLayer(ctx); err != nil {
+			b.Log.Error("publishing the dude layer", "error", err)
+			return err
+		}
+	}
 	poll := b.Poll
 	if poll == 0 {
 		poll = 3 * time.Second
@@ -642,10 +645,16 @@ func (b *Builder) check(ctx context.Context, j job, tag string, p *progress, tim
 	}
 	p.printf("%s\n", found.HookLine())
 	if sentence := found.HookSentence(); sentence != "" {
+		result, _ := json.Marshal(map[string]any{"passed": false, "detail": sentence})
+		if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
+			return err
+		}
 		return b.notPushed(j, p, sentence)
 	}
 	if !j.CanRunContainers {
-		return nil
+		result, _ := json.Marshal(map[string]any{"passed": true, "detail": "dude's git hook is installed"})
+		_, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result)
+		return err
 	}
 	p.printf("Check containers: v%d is marked Can run containers, so dude checks it.\n", j.Number)
 	for _, l := range found.LogLines() {

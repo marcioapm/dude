@@ -1,13 +1,19 @@
 package images
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // release is an installed release's layer context and CLI, as dist.sh lays
@@ -173,6 +179,138 @@ func TestALayerForAnotherPlatformIsRefused(t *testing.T) {
 	if len(f.podman.builds) != 0 {
 		t.Errorf("built %v", f.podman.builds)
 	}
+}
+
+func TestLayerPrivilegesAllowOnlyTheBuilderToPublish(t *testing.T) {
+	f := setup(t)
+	b := layerBuilder(t, f, "cli v1")
+	ctx := context.Background()
+	if err := b.PublishLayer(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := current(t, f, ""); got != b.Layer {
+		t.Fatalf("app read = %q, want %q", got, b.Layer)
+	}
+	for _, statement := range []string{
+		`INSERT INTO image_layers (tag, ref, platform, version) SELECT 'evil', ref, platform, version FROM image_layers`,
+		`UPDATE image_layers SET current_at = now()`,
+		`DELETE FROM image_layers`,
+		`TRUNCATE image_layers`,
+	} {
+		t.Run(statement[:strings.IndexByte(statement, ' ')], func(t *testing.T) {
+			tx, err := f.owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE dude_app`); err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, statement)
+			var denied *pgconn.PgError
+			if !errors.As(err, &denied) || denied.Code != "42501" {
+				t.Fatalf("app write = %v, want insufficient_privilege", err)
+			}
+		})
+	}
+	if err := b.PublishLayer(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var ref string
+	if err := b.DB.Pool.QueryRow(ctx, `SELECT ref FROM image_layers`).Scan(&ref); err != nil || ref != b.Layer {
+		t.Fatalf("builder read = %q, %v", ref, err)
+	}
+}
+
+func TestRunKeepsHeartbeatAndRecoversBeforeLayerPublication(t *testing.T) {
+	f := setup(t)
+	b := layerBuilder(t, f, "cli v1")
+	b.Beat, b.Poll = 10*time.Millisecond, 10*time.Millisecond
+	f.image("img_run", "run")
+	job := f.queue("img_run", "imv_run", 1, "FROM debian\n")
+	f.exec(`UPDATE image_builds SET state = 'running' WHERE id = $1`, job)
+	f.podman.block, f.podman.blocked = make(chan struct{}), make(chan struct{})
+	blocked := f.podman.blocked
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	select {
+	case <-blocked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("layer build did not start")
+	}
+	waitLayer(t, f, `SELECT state = 'queued' AND restarts = 1 FROM image_builds WHERE id = 'imb_imv_run'`)
+	f.exec(`UPDATE image_builder SET seen_at = now() - interval '1 hour'`)
+	waitLayer(t, f, `SELECT seen_at > now() - interval '1 minute' FROM image_builder`)
+	if got := f.str(`SELECT state FROM image_builds WHERE id = 'imb_imv_run'`); got != "queued" {
+		t.Fatalf("claimed during layer build: %s", got)
+	}
+	f.podman.fail = func(op, tag, _ string) (string, error) {
+		if op == "build" && strings.Contains(tag, "imv_run") {
+			var count int
+			if err := b.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM image_layers`).Scan(&count); err != nil || count != 1 {
+				return "", fmt.Errorf("job started before current layer: count=%d, error=%v", count, err)
+			}
+		}
+		return "", nil
+	}
+	close(f.podman.block)
+	waitLayer(t, f, `SELECT state = 'succeeded' FROM image_builds WHERE id = 'imb_imv_run'`)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if b.Layer == "" || current(t, f, "") != b.Layer {
+		t.Fatal("Run did not publish its layer")
+	}
+}
+
+func TestRunPublicationFailureReturnsCauseAndStopsHeartbeat(t *testing.T) {
+	f := setup(t)
+	b := layerBuilder(t, f, "cli v1")
+	b.Beat = 10 * time.Millisecond
+	f.image("img_run", "run")
+	f.queue("img_run", "imv_run", 1, "FROM debian\n")
+	cause := errors.New("registry unavailable")
+	var logs bytes.Buffer
+	b.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	f.podman.fail = func(op, _, _ string) (string, error) {
+		if op == "push" {
+			return "", cause
+		}
+		return "", nil
+	}
+	if err := b.Run(context.Background()); !errors.Is(err, cause) {
+		t.Fatalf("Run = %v", err)
+	}
+	if !strings.Contains(logs.String(), "registry unavailable") {
+		t.Fatalf("startup failure not logged: %s", logs.String())
+	}
+	if got := f.str(`SELECT state FROM image_builds WHERE id = 'imb_imv_run'`); got != "queued" {
+		t.Fatalf("job = %s", got)
+	}
+	if got := f.str(`SELECT count(*) FROM image_layers`); got != "0" {
+		t.Fatalf("layers = %s", got)
+	}
+	time.Sleep(30 * time.Millisecond)
+	before := f.str(`SELECT seen_at FROM image_builder`)
+	time.Sleep(60 * time.Millisecond)
+	if after := f.str(`SELECT seen_at FROM image_builder`); after != before {
+		t.Fatalf("heartbeat continues after failure: %s -> %s", before, after)
+	}
+}
+
+func waitLayer(t *testing.T, f *fixture, query string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.str(query) == "true" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out: %s", query)
 }
 
 // current is CurrentLayer in the orchestrator's role, in an organization's
