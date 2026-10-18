@@ -232,13 +232,25 @@ def test_a_build_page_shows_the_container_check_passing_and_failing(
          f"{sentence}\nNot pushed. v1 stays published.\n")
     sign_in(page, web_url, org["api_key"], at=f"#/org/settings/images/builds/{failed['buildId']}")
     stages = page.get_by_test_id("build-stages")
-    expect(stages).to_contain_text("Check containers")
+    expect(stages).to_contain_text("Check image")
     expect(stages).to_contain_text("Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap")
     expect(stages).to_contain_text("Not pushed · v1 is still live")
     expect(page.get_by_test_id("build-error")).to_have_text(sentence)
     expect(page.get_by_test_id("build-fix")).to_contain_text("FROM image:agents-podman")
     expect(page.get_by_test_id("build-log")).to_contain_text("Not pushed. v1 stays published.")
     _shoot(page, "04-build-failed")
+
+    # A missing dude hook is not a container-engine failure: installing
+    # podman (or turning the flag off) cannot fix it.
+    hook_sentence = "The image has no /usr/local/share/dude/git-hooks/prepare-commit-msg after the dude layer, so its commits would carry no co-authors."
+    execute(owner_dsn, "UPDATE image_versions SET error = %s WHERE id = %s", (hook_sentence, failed["versionId"]))
+    execute(owner_dsn, """UPDATE image_builds SET error = %s,
+        containers_check = jsonb_build_object('passed', false, 'detail', %s::text, 'hook', true) WHERE id = %s""",
+            (hook_sentence, hook_sentence, failed["buildId"]))
+    page.reload()
+    expect(page.get_by_test_id("build-error")).to_have_text(hook_sentence)
+    expect(page.get_by_test_id("build-stages")).to_contain_text(hook_sentence)
+    expect(page.get_by_test_id("build-fix")).to_have_count(0)
 
     # agents-podman's own v1, checked and passed.
     passed = query(owner_dsn, "SELECT id FROM image_builds WHERE image_version_id = %s", (able["image"]["published"]["versionId"],))[0]["id"]
@@ -249,7 +261,7 @@ def test_a_build_page_shows_the_container_check_passing_and_failing(
          "Check passed: it can run containers.\n")
     page.goto(f"{web_url}#/org/settings/images/builds/{passed}")
     expect(page.get_by_test_id("build-stages")).to_contain_text("podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent")
-    expect(page.get_by_text("checking containers")).to_be_visible()
+    expect(page.get_by_text("checking image")).to_be_visible()
     _shoot(page, "04b-build-passed")
     assert console_errors == []
 

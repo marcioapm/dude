@@ -134,6 +134,7 @@ func checkPreviewSecrets(t *testing.T, what string, raw json.RawMessage, login s
 	}
 	want := []map[string]any{
 		{"name": "GIT_TOKEN", "value": "ghp_test"},
+		{"name": "dude-setup", "value": "# dude setup scripts: a repository a line, its name, checkout and script, each base64\n", "as": "file", "path": "/home/agent/.dude/setup"},
 		{"name": "DUDE_REGISTRY_AUTH", "value": login},
 	}
 	if !reflect.DeepEqual(got, want) {

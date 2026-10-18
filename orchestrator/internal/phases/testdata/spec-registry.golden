@@ -60,6 +60,9 @@
       "timeout": "10s"
     }
   },
+  "init": {
+    "script": "manifest='/home/agent/.dude/setup'\n[ -f \"$manifest\" ] || exit 0\ncd '/workspace' || exit\ndude_setup() (\n\tcd \"$2\" || exit\n\tdone=$(git rev-parse --git-path dude-setup-done) \u0026\u0026 script=$(git rev-parse --git-path dude-setup.sh) || exit\n\t[ -e \"$done\" ] \u0026\u0026 exit 0\n\tprintf '%s%s\\n' 'dude: running the setup script of ' \"$1\" \u003e\u00262\n\tprintf '%s' \"$3\" | base64 -d \u003e \"$script\" || exit\n\tfor v in $(env | sed -n 's/=.*//p'); do\n\t\tcase \"$v\" in\n\t\t*[!A-Za-z0-9_]*) ;;\n\t\tGIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset \"$v\" ;;\n\t\tesac\n\tdone\n\tunset GIT_CONFIG_PARAMETERS\n\texport GIT_CONFIG_COUNT=0\n\ttimeout -k 10s 900s bash -e \"$script\" \u003c /dev/null 3\u003c\u0026-\n\tcode=$?\n\trm -f \"$script\"\n\t[ \"$code\" -eq 0 ] || exit \"$code\"\n\t: \u003e \"$done\"\n)\nwhile IFS=' ' read -r name path script \u003c\u00263; do\n\tcase $name in '' | '#'*) continue ;; esac\n\tname=$(printf '%s' \"$name\" | base64 -d \u0026\u0026 echo .) \u0026\u0026 path=$(printf '%s' \"$path\" | base64 -d \u0026\u0026 echo .) ||\n\t\t{ echo \"dude: the setup manifest is unreadable\" \u003e\u00262; exit 1; }\n\tname=${name%.} path=${path%.}\n\tif [ ! -d \"$path\" ]; then\n\t\tprintf 'dude: %s has no checkout at %s; its setup script is skipped\\n' \"$name\" \"$path\" \u003e\u00262\n\t\tcontinue\n\tfi\n\tdude_setup \"$name\" \"$path\" \"$script\" || { code=$?; printf '%s%s %s\\n' 'dude-setup-failed: ' \"$code\" \"$name\" \u003e\u00262; exit \"$code\"; }\ndone 3\u003c \"$manifest\"\n"
+  },
   "env": {
     "CLICOLOR_FORCE": "1",
     "DUDE_LLM_URL": "https://llm.example/v1",
@@ -83,6 +86,12 @@
     {
       "name": "GIT_TOKEN",
       "value": "ghp_golden"
+    },
+    {
+      "name": "dude-setup",
+      "value": "# dude setup scripts: a repository a line, its name, checkout and script, each base64\n",
+      "as": "file",
+      "path": "/home/agent/.dude/setup"
     },
     {
       "name": "DUDE_TOOLS_AUTH",

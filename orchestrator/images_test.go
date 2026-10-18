@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,30 @@ func (w *world) runImage(wi, phase string) images.RunImage {
 	var got images.RunImage
 	_ = json.Unmarshal(raw, &got)
 	return got
+}
+
+// With no override, the layer dude-image-builder last made current is the
+// one: a Run on a library image gets its final for that layer, and once a
+// newer layer is current, the next Run waits on a finish for it.
+func TestWithNoOverrideRunsUseTheLayerTheBuilderPublished(t *testing.T) {
+	w := newWorld(t)
+	version := w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE organizations SET default_image_id = 'img_base' WHERE id = $1`, w.org)
+	mustExec(t, w.owner, `INSERT INTO image_layers (tag, ref, platform, version) VALUES ('0123456789abcdef', $1, 'linux/arm64', 'v1')`, imageLayer)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.runImage(wi, "implement"); got.Ref != finalRef || got.Layer != imageLayer || got.VersionID != version {
+		t.Errorf("runs.image = %+v", got)
+	}
+
+	mustExec(t, w.owner, `INSERT INTO image_layers (tag, ref, platform, version, current_at)
+		VALUES ('fedcba9876543210', $1, 'linux/arm64', 'v2', now() + interval '1 second')`, nextLayer)
+	other := w.task()
+	w.deliver(other)
+	w.until("a finish for the new layer", func() bool {
+		return slices.Equal(w.finishJobs(), []string{"queued " + nextLayer})
+	})
 }
 
 // The organization's default base, published and finished with the
