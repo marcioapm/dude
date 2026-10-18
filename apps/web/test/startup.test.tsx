@@ -498,6 +498,15 @@ describe("a task's Run page", () => {
     expect(log.textContent).not.toContain("· the end");
   });
 
+  test("a setup failure after run.started renders output on the ended line", async () => {
+    const output = "dude: running the setup script of api\nnpm ERR! parked failure\n";
+    const ledger = [created(), stage("waiting", 0), ev("run.started", {}, 4_000),
+      ev("run.failed", { status: "failed", error: "setup failed", setup: { repository: "api", exitCode: 1, output } }, 5_000)];
+    const page = await runPage("failed", ledger);
+    const ended = await until(() => page.querySelector("[data-testid=chat-ended]"), "the ended line");
+    expect(ended.textContent).toContain("setup failed");
+    expect(page.querySelector("[data-testid=setup-output]")?.textContent).toContain("npm ERR! parked failure");
+  });
   test("failed before lux named a stage: the Run's header has no stage words to add, and no stale wait badge", async () => {
     const ledger = [created(), ev("run.failed", { status: "failed", error: "No model yet." }, 1_000)];
     expect(project(ledger, "failed").startFailed).toMatchObject({ stage: null, failed: { source: "dude" } });
