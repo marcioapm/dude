@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -116,6 +117,8 @@ func (s *Server) beforeStop(run *Run) {
 	var spec struct {
 		Workload struct {
 			BeforeStop *lux.BeforeStop `json:"beforeStop"`
+			Services   []lux.Service   `json:"services"`
+			MCPServers []lux.Service   `json:"mcpServers"`
 		} `json:"workload"`
 	}
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -140,6 +143,41 @@ func (s *Server) beforeStop(run *Run) {
 		env = append(env, "LUX_ARTIFACTS="+out)
 	}
 	cmd.Env = env
+	// Stand in for the image's dude CLI, reading through the authenticated service.
+	for _, svc := range append(spec.Workload.Services, spec.Workload.MCPServers...) {
+		if svc.Name != "dude" || svc.URL == "" {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(svc.URL, "/")+"/git/diff-bases", nil)
+		if err != nil {
+			continue
+		}
+		for _, h := range svc.Headers {
+			req.Header.Set(h.Name, run.secretValues[h.Secret])
+		}
+		s.mu.Unlock()
+		res, err := http.DefaultClient.Do(req)
+		s.mu.Lock()
+		if err != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(res.Body)
+		res.Body.Close()
+		if readErr != nil || res.StatusCode != http.StatusOK {
+			continue
+		}
+		bin, err := os.MkdirTemp(run.workspace, ".dude-cli-")
+		if err != nil {
+			continue
+		}
+		defer os.RemoveAll(bin)
+		_ = os.WriteFile(filepath.Join(bin, "dude"), []byte("#!/bin/sh\nprintf '%s' \"$FAKELUX_DIFF_BASES\"\n"), 0o755)
+		for i, arg := range cmd.Args {
+			cmd.Args[i] = strings.ReplaceAll(arg, "/usr/local/bin/dude", filepath.Join(bin, "dude"))
+		}
+		cmd.Env = append(cmd.Env, "FAKELUX_DIFF_BASES="+string(data))
+		break
+	}
 	code := exitCode(cmd.Run(), -1)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
 	collect(run)

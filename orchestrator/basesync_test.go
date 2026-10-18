@@ -934,8 +934,9 @@ func (w *world) fetchBase(runID string) string {
 	return want
 }
 
-// failCompareOnce makes GitHub answer the first compare from base 502, as
-// a GitHub briefly down does; it answers whether that compare was asked.
+// failCompareOnce makes GitHub answer the first compare from base (a
+// commit or a branch) 502, as a GitHub briefly down does; it answers
+// whether that compare was asked.
 func (w *world) failCompareOnce(base string) func() bool {
 	var failed atomic.Bool
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -951,9 +952,9 @@ func (w *world) failCompareOnce(base string) func() bool {
 
 // The base moves on GitHub while an implementer works, on the file it
 // changes; it fetched the base and never merged it. Then GitHub fails the
-// compare of the push with that base once. The publish is retried, the
-// fetched base is not in the push so every change counts, and the
-// implementer completes with its own file.
+// accounting's compare of the push with main once. The publish is retried,
+// the push holds no newer main than its start so every change counts, and
+// the implementer completes with its own file.
 func TestAPhasePublishSurvivesAMovedBaseAndAGitHubOutage(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldPushes = true
@@ -963,7 +964,8 @@ func TestAPhasePublishSurvivesAMovedBaseAndAGitHubOutage(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
 	})
 	w.commitFileIn(w.gh.Repo, "main", "FACTORY.md", "someone else's\n", "Someone else's merge")
-	failed := w.failCompareOnce(w.fetchBase(w.phaseRunOf(wi, "implement")))
+	w.fetchBase(w.phaseRunOf(wi, "implement"))
+	failed := w.failCompareOnce("main")
 	w.lux.HoldPushes = false
 	w.lux.ReleasePushes()
 	w.until("the implementer completed", func() bool {
@@ -987,7 +989,8 @@ func TestAPhasePublishSurvivesAMovedBaseAndAGitHubOutage(t *testing.T) {
 func TestAConductorPublishWaitsOutAGitHubOutage(t *testing.T) {
 	e, _ := newCommitted(t)
 	e.commitFileIn(e.gh.Repo, "main", "README.md", "# base\n", "Base moved")
-	failed := e.failCompareOnce(e.fetchBase(e.cond))
+	e.fetchBase(e.cond)
+	failed := e.failCompareOnce("main")
 	if status, why := e.published(e.publish()); status != delivery.PublishPublished {
 		t.Fatalf("publish %s: %s", status, why)
 	}

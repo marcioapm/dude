@@ -237,8 +237,9 @@ func TestFeedbackACompareFailureWhileSettlingAResolutionBacksOff(t *testing.T) {
 }
 
 // Two items resolved by one fixer with the same commit are weighed with
-// one compare of it: the compares naming it are publish's own compare of
-// the head and one base...commit, not one per item.
+// one compare of it: the compares naming it are publish's own two (start...head
+// and its base branch...head, for the merge base) and one base...commit, not
+// one per item.
 func TestFeedbackTwoResolutionsWithOneCommitCompareItOnce(t *testing.T) {
 	w := newWorld(t)
 	ana := w.person("Ana")
@@ -276,14 +277,18 @@ func TestFeedbackTwoResolutionsWithOneCommitCompareItOnce(t *testing.T) {
 		AND resolved_verified_at IS NOT NULL`); n != 2 {
 		t.Errorf("%d of 2 resolutions verified", n)
 	}
-	n := 0
+	n, resolutions := 0, 0
 	for _, p := range compares {
 		if strings.Contains(p, commit) {
 			n++
 		}
+		// The agent named the commit abbreviated; publish names the full head.
+		if strings.HasSuffix(p, "..."+commit) {
+			resolutions++
+		}
 	}
-	if n != 2 {
-		t.Errorf("%d compares name %s, want 2: %v", n, commit, compares)
+	if n != 3 || resolutions != 1 {
+		t.Errorf("%d compares name %s (want 3), %d of them the resolutions' (want 1): %v", n, commit, resolutions, compares)
 	}
 }
 

@@ -10,6 +10,10 @@ You have not done anything for a while. Carry on with your task — or, if you n
 
 A tool call of yours was open for 10 minutes, so dude stopped your turn. Tell the people in the session briefly what you were doing and that it got stuck, then carry on or ask them.
 
+## silent-turn
+
+Your model request got no answer for 10 minutes (the model provider may be rate-limiting), so dude stopped your turn. Read any messages waiting for you and carry on.
+
 ## host-moved
 
 Your host was replaced: lux moved you to another one, and your turn was cut off. Your workspace and conversation are as you left them; processes you had running are not. Carry on with your task where you left off.
