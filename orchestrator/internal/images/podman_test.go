@@ -601,3 +601,55 @@ func TestPodmanLocalFinishWithoutAShellSaysWhatItNeeds(t *testing.T) {
 		t.Errorf("Failure = %q\n%s", got, out)
 	}
 }
+
+// The release's own layer (scripts/layer-context.sh, with a dude CLI built
+// here), built as the builder builds it and finished onto debian, passes
+// the hook check, and a commit in it runs dude's hook. Downloads OpenCode
+// and ripgrep, as the layer's Dockerfile does.
+func TestPodmanTheReleasesLayerCarriesDudesGitHook(t *testing.T) {
+	c := localPodman(t)
+	c.Self = staticSelf(t)
+	c.Limits.Platform = "linux/" + map[string]string{"aarch64": "arm64", "x86_64": "amd64"}[strings.TrimSpace(uname(t))]
+	dir := t.TempDir()
+	if out, err := exec.Command("../../../scripts/layer-context.sh", dir).CombinedOutput(); err != nil {
+		t.Fatalf("layer-context.sh: %v\n%s", err, out)
+	}
+	cli := filepath.Join(t.TempDir(), "dude")
+	build := exec.Command("go", "build", "-o", cli, "../../cmd/dude")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building dude: %v\n%s", err, out)
+	}
+	b := &Builder{Podman: c, Repository: "localhost/dude-test/custom", Limits: c.Limits, LayerContext: dir, DudeBinary: cli}
+	tag, err := LayerTag(dir, cli, c.Limits.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := LayerRepository(b.Repository) + ":" + tag
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "--ignore", image).Run() })
+	work, err := b.layerDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(work)
+	var log bytes.Buffer
+	if err := c.Build(context.Background(), work, image, nil, &log); err != nil {
+		t.Fatalf("building the layer: %v\n%s", err, log.String())
+	}
+	user := fmt.Sprintf("localhost/dude-test-user:%d", time.Now().UnixNano())
+	localBuild(t, "FROM docker.io/library/debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git\n", user)
+	final := user + "-final"
+	localBuild(t, FinishContainerfile(user, image), final)
+	found, err := c.CheckContainers(context.Background(), final, &log)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if s := found.HookSentence(); s != "" {
+		t.Fatalf("hook check: %s", s)
+	}
+	got := runIn(t, final, "sh", "-c", "git config --system core.hooksPath; cd /tmp && git init -q r && cd r && "+
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0="+GitConfigPath+" git commit -q --allow-empty -m x 2>&1")
+	if !strings.HasPrefix(got, "/usr/local/share/dude/git-hooks\ndude: committing without co-authors: dude's tools did not answer") {
+		t.Errorf("in the final:\n%s", got)
+	}
+}
