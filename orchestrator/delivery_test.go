@@ -1781,10 +1781,7 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 // if a check turns red.
 func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -3263,10 +3260,7 @@ func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
 func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:failure")
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3286,10 +3280,7 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 // the fix's head has not been through CI: not ready until it has.
 func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3332,9 +3323,7 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	w := newWorld(t)
 	w.prs.CIGrace = time.Hour
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3373,10 +3362,7 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 // on it, the task is ready, though the factory never pushed it.
 func TestACommitAPersonAddsCanBeReady(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	if w.gh.CommitOnTop(w.gh.Pull(1).Head, "Merge branch 'main' into the task") == "" {
 		t.Fatal("could not commit on top")
 	}
@@ -3600,9 +3586,13 @@ func (w *world) sync() {
 // phase.finished signals, and the fake GitHub's BranchLog and request log
 // of the publishes.
 func (w *world) reviewing() string {
+	return w.inReview(w.task())
+}
+
+// inReview writes reviewing's state for the task wi, made by the caller.
+func (w *world) inReview(wi string) string {
 	w.t.Helper()
 	ctx := context.Background()
-	wi := w.task()
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
 		return delivery.NameOnlyRepository(ctx, tx, wi)
 	}); err != nil {

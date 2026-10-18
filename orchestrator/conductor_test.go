@@ -33,12 +33,11 @@ func conductorWorld(t *testing.T, model ...string) *world {
 	return w
 }
 
-// delivered is a task delivered to its pull request, and its branch then.
+// delivered is a task in review on its pull request (inReview), and its
+// branch then.
 func (w *world) delivered() (task string, log []string) {
 	w.t.Helper()
-	task = w.task()
-	w.deliver(task)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	task = w.inReview(w.task())
 	return task, w.gh.Log(delivery.BranchFor(task, 1))
 }
 
