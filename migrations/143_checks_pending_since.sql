@@ -1,4 +1,4 @@
--- 140_checks_pending_since.sql — when a pull request's checks went pending
+-- 143_checks_pending_since.sql — when a pull request's checks went pending
 -- on its current head: what ci_stuck counts its patience from. head_seen_at
 -- is when the head was first seen, which may be long before a check
 -- started (a later check, a re-run). NULL while the checks are not pending.

@@ -293,7 +293,7 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.QuestionID != "":
 		line = escalationAnsweredLine(in.QuestionID, in.Action)
 	case len(closed) > 0:
-		line = escalationOnBannerLine(in.Action, closed[0].ID)
+		line = escalationOnBannerLine(in.Action, closed[0].ID, in.ActorType == ledger.ActorSystem)
 	default:
 		return nil
 	}
@@ -309,8 +309,11 @@ func escalationAnsweredLine(questionID, action string) string {
 
 // escalationOnBannerLine tells the conductor the person decided the
 // escalation on the banner, closing its question about it.
-func escalationOnBannerLine(action, questionID string) string {
-	return render(escalationOnBannerTmpl, struct{ QuestionID, Action string }{questionID, action})
+func escalationOnBannerLine(action, questionID string, system bool) string {
+	return render(escalationOnBannerTmpl, struct {
+		QuestionID, Action string
+		System             bool
+	}{questionID, action, system})
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer

@@ -243,7 +243,8 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   retry gives the budget back only for a round that was charged
   (`pull_request_moved`, not `pr_fix_failed`). These steps are mechanics under the
   conductor too; it is told only at escalations. A conductor's publish is
-  refused while a candidate is checked.
+  refused while a candidate is checked. `ci_stuck` counts from when the
+  current head's checks went pending; finished checks close it as dude's `wait`.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.
