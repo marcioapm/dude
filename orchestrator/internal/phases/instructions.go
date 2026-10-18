@@ -19,19 +19,16 @@ const claudeImport = "@AGENTS.md\n"
 const MaxInitScript = 256 << 10
 
 // instructionsInit is the POSIX sh script that writes the Run's
-// instruction file, and CLAUDE.md importing it, into /workspace. lux runs
-// it before the workload on every placement, from the spec it keeps, so
-// every placement of the Run writes the same bytes.
+// instruction file, and CLAUDE.md importing it, into dir (a Run's is
+// /workspace). lux runs it before the workload on every placement, from
+// the spec it keeps, so every placement of the Run writes the same bytes.
 //
 // The text goes in a quoted here-document, so the shell expands nothing in
 // it; the delimiter is derived from the text, and a text with that line in
 // it is refused. A here-document ends its body with a newline, so the text
 // must too. Each file is written beside its place and renamed into it, and
 // each command runs only if the one before succeeded.
-func instructionsInit(text string) (string, error) { return instructionsInitIn(workspaceDir, text) }
-
-// instructionsInitIn is instructionsInit writing into dir.
-func instructionsInitIn(dir, text string) (string, error) {
+func instructionsInit(dir, text string) (string, error) {
 	if !strings.HasSuffix(text, "\n") {
 		return "", errors.New("the instruction file does not end with a newline")
 	}
@@ -76,7 +73,7 @@ func runSpec(c AgentConfig, in specInput) (lux.Spec, error) {
 	if in.Instructions == "" {
 		return spec, nil
 	}
-	script, err := instructionsInit(in.Instructions)
+	script, err := instructionsInit(workspaceDir, in.Instructions)
 	if err != nil {
 		return lux.Spec{}, err
 	}

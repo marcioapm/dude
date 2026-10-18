@@ -51,7 +51,7 @@ func TestTheInstructionsInitWritesTheFileExactly(t *testing.T) {
 	}
 	for name, text := range texts {
 		dir := t.TempDir()
-		script, err := instructionsInitIn(dir, text)
+		script, err := instructionsInit(dir, text)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -82,7 +82,7 @@ func TestTheInstructionsInitWritesTheFileExactly(t *testing.T) {
 // beside it; a text without a final newline is refused rather than
 // written with one added.
 func TestTheInstructionsInitWritesIntoTheWorkspace(t *testing.T) {
-	script, err := instructionsInit("x\n")
+	script, err := instructionsInit(workspaceDir, "x\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTheInstructionsInitWritesIntoTheWorkspace(t *testing.T) {
 			t.Errorf("the init does not %q:\n%s", want, script)
 		}
 	}
-	if _, err := instructionsInit("no newline"); err == nil {
+	if _, err := instructionsInit(workspaceDir, "no newline"); err == nil {
 		t.Error("a text without a final newline is written")
 	}
 }
@@ -101,7 +101,7 @@ func TestTheInstructionsInitWritesIntoTheWorkspace(t *testing.T) {
 // here-document would end there and the rest run as commands.
 func TestATextHoldingItsOwnDelimiterIsRefused(t *testing.T) {
 	text := "a\n"
-	s, _ := instructionsInit(text)
+	s, _ := instructionsInit(workspaceDir, text)
 	_, end, _ := strings.Cut(strings.SplitN(s, "\n", 3)[1], "<<'")
 	end, _, _ = strings.Cut(end, "'")
 	if err := refuseDelimiter(text+end+"\n", end); err == nil {
@@ -143,7 +143,7 @@ func TestEveryAgentRunsInstructionsAreItsInitNotASecret(t *testing.T) {
 					t.Fatalf("%s/%s/%s: no init", harness, model, name)
 				}
 				// What this script writes, TestTheInstructionsInitWritesTheFileExactly runs.
-				if want, _ := instructionsInit(in.Instructions); spec.Init.Script != want {
+				if want, _ := instructionsInit(workspaceDir, in.Instructions); spec.Init.Script != want {
 					t.Errorf("%s/%s/%s: init is not the instructions' write:\n%s", harness, model, name, spec.Init.Script)
 				}
 				if spec.Workload.Workdir != workspaceDir && !(model == "fake/scripted" && len(in.Repos) == 1) {
@@ -190,7 +190,7 @@ func TestAnInitOverTheLimitIsRefused(t *testing.T) {
 // runs after it, only if it succeeded, and with the shell's own defaults.
 func TestTheInstructionsInitRunsBeforeAnExistingInit(t *testing.T) {
 	dir := t.TempDir()
-	script, err := instructionsInitIn(dir, "rules\n")
+	script, err := instructionsInit(dir, "rules\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestTheInstructionsInitRunsBeforeAnExistingInit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(blocked, "AGENTS.md.tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script, _ = instructionsInitIn(blocked, "rules\n")
+	script, _ = instructionsInit(blocked, "rules\n")
 	spec = lux.Spec{Init: &lux.Init{Script: "touch ran"}}
 	addInit(&spec, script)
 	cmd := exec.Command("/bin/sh", "-c", spec.Init.Script)
