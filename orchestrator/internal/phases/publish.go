@@ -775,7 +775,7 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 			h, m := heads[name], p.Moves[name]
 			// As a phase's publish: the pull request on the branch has a new
 			// head, whose checks are yet to run.
-			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(),
+			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(), checks_pending_since = NULL,
 				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
 				WHERE task_id = $1 AND repository_id = $2 AND head_branch = $4 AND state IN ('open', 'draft')
 				  AND head_sha IS DISTINCT FROM $3`, p.TaskID, m.RepoID, h.SHA, p.Branch); err != nil {
