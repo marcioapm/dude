@@ -143,7 +143,7 @@ export const repositorySchema = z.object({
 });
 export type Repository = z.infer<typeof repositorySchema>;
 
-/** The most a repository's setup script may be, in UTF-8 bytes (migration 143's check). */
+/** The most a repository's setup script may be, in UTF-8 bytes (migration 144's check). */
 export const SETUP_SCRIPT_MAX_BYTES = 16_384;
 export const SETUP_SCRIPT_MESSAGE = `a setup script is text of at most ${SETUP_SCRIPT_MAX_BYTES} bytes, with no NUL characters`;
 
