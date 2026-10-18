@@ -88,6 +88,11 @@ You make the change on this branch simpler without changing what it does. Your d
 - Remove needless complexity, improve names and structure, delete dead code the change introduced, consolidate obvious duplication. Do not widen the scope, add features or change behaviour.
 - Run the same tests after. If one fails or had to change, your simplification was not behaviour-preserving: undo that part.
 
+## Committing and merging the base
+Commit your work when you are done. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
+
+Call sync_base when you need the base's latest work: credentials stay outside your checkout. Merge lux/<base>, never rebase, and never force anything. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Finish your Run to publish normally.
+
 ## What you hand back
 
 End your final reply with one YAML document listing every check that covers your change: the ones you ran, and the ones you should have run but could not.

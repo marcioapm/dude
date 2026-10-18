@@ -2,12 +2,40 @@ package orchestrator_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+// instructionsOf is the instruction file a Run's spec writes.
+func (w *world) instructionsOf(runID string) string {
+	w.t.Helper()
+	return specInstructions(w.t, w.specOfRun(runID))
+}
+
+// specInstructions is the instruction file spec's init script writes, run
+// with /bin/sh in a directory standing in for /workspace; "" with no init.
+func specInstructions(t *testing.T, spec lux.Spec) string {
+	t.Helper()
+	if spec.Init == nil {
+		return ""
+	}
+	dir := t.TempDir()
+	script := strings.ReplaceAll(spec.Init.Script, "/workspace/AGENTS.md", dir+"/AGENTS.md")
+	script = strings.ReplaceAll(script, "/workspace/CLAUDE.md", dir+"/CLAUDE.md")
+	if out, err := exec.Command("/bin/sh", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("the init script failed: %v: %s", err, out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
 // A Run's instruction file is written into its /workspace before its agent
 // starts, from the saved prompts recorded on the Run. lux keeps the spec, so

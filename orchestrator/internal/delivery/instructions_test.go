@@ -11,11 +11,12 @@ func TestGoldenInstructions(t *testing.T) {
 	for _, role := range PromptRoles {
 		for _, layer := range goldenInstructions {
 			in := goldenTask()
-			in.Tools, in.CLI = true, true
+			in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+			in.Repositories, in.Anywhere = readOnlyRepos(), role == RoleBrainstorm
 			in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = layer.org, layer.project, layer.projectMod
 			golden(t, fmt.Sprintf("instructions-%s-%s", role, layer.name), Instructions(role, "correctness", in.InstructionsInput()))
 		}
-		golden(t, "stance-"+role, BuiltinStance(role))
+
 	}
 }
 
@@ -44,7 +45,7 @@ func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 				}
 			}
 		}
-		if strings.Contains(custom, BuiltinStance(role)) || strings.Contains(replaced, BuiltinStance(role)) {
+		if strings.Contains(custom, BuiltinPrompt(role)) || strings.Contains(replaced, BuiltinPrompt(role)) {
 			t.Errorf("%s: replace did not replace the stance", role)
 		}
 		if !strings.Contains(custom, "Organisation's stance: A task.") || strings.Contains(replaced, "Organisation's stance") || !strings.Contains(replaced, "Project's stance: A task.") {
@@ -57,7 +58,7 @@ func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 		}
 		in.OrgPrompt = nil
 		added = Instructions(role, "correctness", in)
-		if strings.Count(added, BuiltinStance(role)) != 1 {
+		if strings.Count(added, BuiltinPrompt(role)) != 1 {
 			t.Errorf("%s: project add removed the built-in stance", role)
 		}
 	}

@@ -13,6 +13,8 @@ type InstructionsInput struct {
 	Tools, CLI bool
 	// A brainstorm that may reach any host.
 	Anywhere bool
+	// A conductor with a checkout, which merges the base itself.
+	Checkouts bool
 	// The severities that send a change back (a reviewer's and a tester's).
 	BlockingSeverities []string
 	// The organisation's saved prompt for the role (nil: none), and the
@@ -39,7 +41,7 @@ type PromptVars struct {
 func (in PromptInput) InstructionsInput() InstructionsInput {
 	in = in.withImages()
 	return InstructionsInput{
-		Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, BlockingSeverities: in.BlockingSeverities,
+		Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context: in.Context,
 		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
@@ -77,6 +79,8 @@ type instructionData struct {
 	Role string
 	// Which of the tools dude.md names this Run has.
 	Ask, Event, CreateTask, Repository, RunDiff, SyncBase bool
+	// How a role that reads GitHub reads what was written outside dude.
+	ExternalTextNote string
 }
 
 func (in InstructionsInput) data(role string) instructionData {
@@ -87,7 +91,8 @@ func (in InstructionsInput) data(role string) instructionData {
 		}
 	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
-		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"]}
+		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
+		ExternalTextNote: ExternalTextNote}
 }
 
 var (
@@ -178,9 +183,11 @@ func stanceTitle(stance *template.Template, d instructionData) string {
 	return strings.TrimPrefix(first, "## ")
 }
 
-// BuiltinStance is the part of a role's instructions a saved prompt in
-// replace mode stands in for: what the settings page shows as dude's.
-func BuiltinStance(role string) string {
+// BuiltinPrompt is the part of a role's instructions a saved prompt stands
+// in for: its "How you work as …" section as dude ships it, what the
+// settings page shows as dude's and where a first edit starts from. The
+// rest of the instruction file is dude's whatever is saved.
+func BuiltinPrompt(role string) string {
 	parts, ok := roleParts[role]
 	if !ok {
 		return ""

@@ -11,16 +11,16 @@ import (
 )
 
 // What dude tells agents lives in Markdown under agents/ (its README says
-// how to edit it). roles/ holds each role's replaceable instructions as
-// plain text; every other directory holds text/template files, each
-// named by its path without ".md" ("contracts/commit"). A file's one
+// how to edit it): text/template files, each named by its path without
+// ".md" ("contracts/commit"); instructions/roles/<role>.md is split in
+// three (parseRole). A file's one
 // trailing newline is not part of its text. Every file is read and parsed
 // when the package initialises, and every name Go renders is resolved then
 // (mustTemplate, agentTexts' keys) as is every {{template}} a file
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/instructions agents/aspects agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
+//go:embed agents/instructions agents/aspects agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -50,22 +50,19 @@ var (
 	adoptedPrTmpl              = mustTemplate("contracts/adopted-pr")
 	baseTmpl                   = mustTemplate("contracts/base")
 	brainstormCheckoutsTmpl    = mustTemplate("contracts/brainstorm-checkouts")
-	brainstormNotesTmpl        = mustTemplate("contracts/brainstorm-notes")
 	conductorCheckoutTmpl      = mustTemplate("contracts/conductor-checkout")
 	continueTmpl               = mustTemplate("contracts/continue")
 	earlierFindingsTmpl        = mustTemplate("contracts/earlier-findings")
 	feedbackTmpl               = mustTemplate("contracts/feedback")
 	fromConductorTmpl          = mustTemplate("contracts/from-conductor")
-	howYouWorkTmpl             = mustTemplate("contracts/how-you-work")
 	machineTmpl                = mustTemplate("contracts/machine")
 	machineNothingTmpl         = mustTemplate("contracts/machine-nothing")
 	machineOfferTmpl           = mustTemplate("contracts/machine-offer")
 	prFeedbackTmpl             = mustTemplate("contracts/pr-feedback")
 	prFeedbackBotsTmpl         = mustTemplate("contracts/pr-feedback-bots")
 	prPhaseStartedTmpl         = mustTemplate("results/pr-phase-started")
-	projectNotesTmpl           = mustTemplate("contracts/project-notes")
 	restartedTmpl              = mustTemplate("contracts/restarted")
-	reviewTmpl                 = mustTemplate("contracts/review")
+	reviewScopeTmpl            = mustTemplate("contracts/review-scope")
 	reviewFindingsTmpl         = mustTemplate("contracts/review-findings")
 	reviewLeadTmpl             = mustTemplate("contracts/review-lead")
 	severityTmpl               = mustTemplate("contracts/severity")
@@ -164,7 +161,7 @@ func fileText(fsys fs.FS, name string) (string, error) {
 func parseAgentTemplates(fsys fs.FS) (*template.Template, error) {
 	root := template.New("").Option("missingkey=error").Funcs(agentFuncs)
 	err := fs.WalkDir(fsys, "agents", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(p) != ".md" || strings.HasPrefix(p, "agents/roles/") {
+		if err != nil || d.IsDir() || path.Ext(p) != ".md" {
 			return err
 		}
 		text, err := fileText(fsys, p)
@@ -299,24 +296,6 @@ func agentTextsIn(set *template.Template, prefix string, want ...string) map[str
 		}
 	}
 	return out
-}
-
-// loadRoles reads roles/<role>.md: a role's instructions, one paragraph
-// per blank-line-separated block (instructions keeps the fixer's apart).
-func loadRoles(fsys fs.FS) (map[string][]string, error) {
-	files, err := fs.Glob(fsys, "agents/roles/*.md")
-	if err != nil {
-		return nil, err
-	}
-	roles := map[string][]string{}
-	for _, f := range files {
-		text, err := fileText(fsys, f)
-		if err != nil {
-			return nil, err
-		}
-		roles[strings.TrimSuffix(path.Base(f), ".md")] = strings.Split(text, "\n\n")
-	}
-	return roles, nil
 }
 
 // stanceHeading opens the part of a role file a saved prompt may replace.

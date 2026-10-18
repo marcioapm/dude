@@ -1,9 +1,9 @@
 {{if not .Repos -}}
-No repository is checked out for this work: it changes no code. Its result is what you publish (see below) and what you reply.
+No repository is checked out for this work: it changes no code. Its result is what you publish and what you reply.
 {{- else -}}
 ## Repositories
 
-This work spans these checkouts:
+{{if eq (len .Repos) 1}}This work's checkout:{{else}}This work spans these checkouts:{{end}}
 {{range .Repos}}
 - `{{.Name}}` at `{{.Path}}` — {{if .ReadOnly}}read only: for reference, do not change it — changes there are never kept{{else if $.Test}}the change under test{{else}}you may change it{{end}}{{end}}
 

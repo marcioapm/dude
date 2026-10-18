@@ -9,24 +9,21 @@ import (
 )
 
 // Every role a phase runs as, and every role a person can edit, has its
-// instructions file, read whole.
+// instructions file, with a stance a saved prompt can stand in for; there
+// is no file for a role nobody can edit.
 func TestEveryRoleHasItsInstructionsFile(t *testing.T) {
-	roles, err := loadRoles(agentFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
 	want := append([]string{}, PromptRoles...)
 	for _, role := range PromptRoleForPhase {
 		want = append(want, role)
 	}
 	for _, role := range want {
-		if len(roles[role]) == 0 || strings.TrimSpace(roles[role][0]) == "" {
-			t.Errorf("agents/roles/%s.md is missing or empty", role)
+		if strings.TrimSpace(BuiltinPrompt(role)) == "" || Instructions(role, "", InstructionsInput{}) == "" {
+			t.Errorf("agents/instructions/roles/%s.md is missing or has no stance", role)
 		}
 	}
-	for role := range roles {
+	for role := range roleParts {
 		if !slices.Contains(PromptRoles, role) {
-			t.Errorf("agents/roles/%s.md is no role a person can edit", role)
+			t.Errorf("agents/instructions/roles/%s.md is no role a person can edit", role)
 		}
 	}
 }
@@ -42,7 +39,7 @@ func TestEveryAgentTemplateParses(t *testing.T) {
 	if _, err := parseAgentTemplates(empty); err == nil {
 		t.Error("an empty template loads")
 	}
-	if _, err := loadRoles(fstest.MapFS{"agents/roles/fixer.md": {Data: []byte("  \n")}}); err == nil {
+	if _, err := parseAgentTemplates(fstest.MapFS{"agents/instructions/roles/fixer.md": {Data: []byte("  \n")}}); err == nil {
 		t.Error("an empty role file loads")
 	}
 }

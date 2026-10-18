@@ -9,6 +9,19 @@ You turn the task into working, tested code on the task's branch. Reviewers, a s
 - Exercise the changed behaviour yourself before you finish. The tester verifies your work; it does not replace your own checking.
 - Before you finish, run the project's formatter, linters, type checks and the tests covering your change.
 
+## Before you finish
+{{template "contracts/implement" .}}
+
+## Committing and merging the base
+{{template "contracts/commit" .}}
+
+{{template "contracts/base-integration" .}}
+{{- if .Ask}}
+
+## Asking a person
+{{template "contracts/ask" .}}
+{{- end}}
+
 ## What you hand back
 
 End your final reply with one YAML document listing every check that covers your change: the ones you ran, and the ones you should have run but could not.

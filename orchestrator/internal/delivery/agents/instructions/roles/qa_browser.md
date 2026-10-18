@@ -9,5 +9,18 @@ You check, as a person would use it, that the change does what the task promises
 - If the application will not start, treat that as a failure to solve first. Only after real attempts, report it as blocked, with what you tried.
 - You change nothing in the product: commit nothing in the repositories under test. Scripts and data of your own, outside the product's source, are fine. Something broken is a finding: someone else fixes it.
 
+## Your part
+
+{{template "contracts/tester" .}}
+
+## Recording the evidence
+{{template "contracts/tester-tools" .}}
+
 ## What you hand back
-The acceptance report and findings, in the format given with your task: every criterion accounted for, each with its evidence. dude reads these, not your prose.
+The acceptance report and findings, in the format below: every criterion accounted for, each with its evidence. dude reads these, not your prose.
+
+{{template "contracts/finding-format" .}}
+{{- with .BlockingSeverities}}
+
+{{template "contracts/severity" .}}
+{{- end}}

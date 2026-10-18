@@ -33,7 +33,9 @@ Your tools act on the work you are part of. Use them; do not work around them.
 {{- else -}}
 This Run has none of dude's tools: you cannot ask a person, read dude's memory or record other work. Decide what you must, and say in your reply what you decided and why.
 {{- end}}
+{{- if ne .Role "brainstorm"}}
 - **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once.
+{{- end}}
 {{- if .Tools}}
 {{- if .Event}}
 - **Progress**: `emit_event`{{if .CLI}} / `dude event progress`{{end}} so people can follow long work.
