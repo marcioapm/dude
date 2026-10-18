@@ -47,8 +47,8 @@ type Previews struct {
 	// run containers (agent.nested_containers).
 	DefaultImage           string
 	DefaultImageContainers bool
-	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
-	// "" turns the library off.
+	// The operator's override of the dude layer (DUDE_LAYER_IMAGE); "" for
+	// the one dude-image-builder made current.
 	Layer string
 	// The login for the registry agent images come from (DUDE_REGISTRY_AUTH);
 	// nil for none. A preview of the agent image pulls it the same way.

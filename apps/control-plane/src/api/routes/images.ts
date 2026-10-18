@@ -51,6 +51,11 @@ import type { RequestContext, Router } from "../router.ts";
 
 type Json = Record<string, unknown>;
 
+/**
+ * The dude layer library images are finished with now, as the orchestrator
+ * reads it (images.CurrentLayer): the operator's override, else the one
+ * dude-image-builder selected last; null before it has published one.
+ */
 async function currentLayer(scope: OrgScope): Promise<string | null> {
   const override = config().string("DUDE_LAYER_IMAGE");
   if (override) return override;
@@ -59,7 +64,7 @@ async function currentLayer(scope: OrgScope): Promise<string | null> {
   return layer?.ref ?? null;
 }
 
-/** The builder's current layer and whether it is alive. */
+/** The builder's limits, the current layer, and whether it is alive: builds run only with a layer to finish them with. */
 export async function builderInfo(scope: OrgScope): Promise<ImageBuilderInfo> {
   const c = config();
   const layer = await currentLayer(scope);

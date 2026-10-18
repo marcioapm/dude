@@ -106,8 +106,9 @@ type schema struct {
 		ECRRoleARN any `toml:"ecr_role_arn" env:"DUDE_ECR_ROLE_ARN" kind:"string" use:"orchestrator"`
 	} `toml:"registry"`
 	Images struct {
-		// The dude layer every library image is finished with, by digest;
-		// unset, the image library builds nothing and Runs cannot use it.
+		// An operator's override, by digest, of the dude layer every library
+		// image is finished with; unset, the one dude-image-builder built
+		// from the release and recorded in image_layers.
 		Layer any `toml:"layer" env:"DUDE_LAYER_IMAGE" kind:"string" use:"all"`
 	} `toml:"images"`
 	Builder struct {

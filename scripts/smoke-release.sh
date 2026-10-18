@@ -112,9 +112,9 @@ for cmd in dude-orchestrator dude-backend; do
   echo "ok  bin/$cmd validate: good file accepted, bad refused"
 done
 # dude-image-builder validates its own keys: the good file above lacks them.
+# No images.layer: the builder builds its own, and the setting is an override.
 builder_good="$prefix/builder.toml"
-printf '[images]\nlayer = "r.invalid/dude/layer@sha256:%s"\n[builder]\ndatabase_url = "postgres://dude_builder:x@127.0.0.1:1/dude"\nrepository = "r.invalid/dude/custom"\n' \
-  "$(printf '0%.0s' $(seq 1 64))" > "$builder_good"
+printf '[builder]\ndatabase_url = "postgres://dude_builder:x@127.0.0.1:1/dude"\nrepository = "r.invalid/dude/custom"\n' > "$builder_good"
 chmod 0600 "$builder_good"
 got="$(env -i PATH="$PATH" DUDE_CONFIG="$builder_good" "$prefix/bin/dude-image-builder" validate)" || fail "bin/dude-image-builder validate on a good file exited $?"
 [[ "$got" == "ok: $builder_good" ]] || fail "bin/dude-image-builder validate printed '$got'"

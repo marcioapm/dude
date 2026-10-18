@@ -202,25 +202,27 @@ describe("build and publish", () => {
     configure(null);
     const first = "registry.example/dude/layer@sha256:" + "2".repeat(64);
     const second = "registry.example/dude/layer@sha256:" + "3".repeat(64);
+    // The one the builder selected last is current, whichever was built first.
     await owner`INSERT INTO image_layers (tag, ref, platform, version, current_at) VALUES
-      ('v1', ${first}, 'linux/amd64', '1'), ('v2', ${second}, 'linux/amd64', '2')`;
+      ('v2', ${second}, 'linux/amd64', '2', now() - interval '1 hour'), ('v1', ${first}, 'linux/amd64', '1', now())`;
     try {
       const listed = await body(await call(memberKey, "GET", "/v1/images"));
-      expect(listed.builder).toMatchObject({ available: true, layer: second });
+      expect(listed.builder).toMatchObject({ available: true, layer: first });
 
       const created = await body(await call(adminKey, "POST", "/v1/images", { name: "layer-check", containerfile: BASE }));
       const queued = await body(await call(adminKey, "POST", `/v1/images/${created.image.id}/build`));
       expect(queued.buildId).toBeString();
-      expect(queued.image.builder).toMatchObject({ available: true, layer: second });
+      expect(queued.image.builder).toMatchObject({ available: true, layer: first });
       expect((await call(adminKey, "POST", `/v1/images/builds/${queued.buildId}/cancel`)).status).toBe(200);
 
       configure(LAYER);
       expect((await body(await call(memberKey, "GET", "/v1/images"))).builder.layer).toBe(LAYER);
     } finally {
-      configure(null);
+      configure(LAYER);
       await owner`DELETE FROM image_layers`;
     }
   });
+
   test("Build & publish numbers the draft v1 and queues it; the published version is untouched", async () => {
     const res = await call(adminKey, "POST", `/v1/images/${ids.base}/build`);
     expect(res.status).toBe(201);

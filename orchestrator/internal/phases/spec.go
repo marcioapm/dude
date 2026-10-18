@@ -38,8 +38,9 @@ type AgentConfig struct {
 	LLMKey string
 	// Image used when a project names none.
 	DefaultImage string
-	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
-	// "" turns the library off: a Run whose image is a library image fails.
+	// The operator's override of the dude layer library images are
+	// finished with (DUDE_LAYER_IMAGE); "" for the one dude-image-builder
+	// made current (images.CurrentLayer).
 	Layer string
 	// The operator's floor (agent.egress): what every agent may reach,
 	// under its organisation's and project's lists. "*" turns egress

@@ -119,13 +119,7 @@ func Known(ctx context.Context, tx pgx.Tx) (func(string) bool, error) {
 	return func(id string) bool { return set[id] }, nil
 }
 
-func EffectiveLayer(ctx context.Context, tx pgx.Tx, override string) (string, error) {
-	if override != "" {
-		return override, nil
-	}
-	return CurrentLayer(ctx, tx)
-}
-
+// Outcome is what a Run whose image is a library image does now: start
 // on Ref, wait for WaitBuild (its dude layer being added, or its first
 // version building), or fail with Fail, before lux and at no model cost.
 type Outcome struct {
@@ -136,22 +130,21 @@ type Outcome struct {
 }
 
 // ErrNotConfigured is a library image with no dude layer to finish it.
-const ErrNotConfigured = "image library not configured: dude-image-builder has not published a dude layer yet"
+const ErrNotConfigured = "image library not configured: " + NoLayer
 
-// Resolve is what imageID gives a Run now, under layer (DUDE_LAYER_IMAGE),
-// in the Run's organization's transaction. waitingOn is the job the Run
+// Resolve is what imageID gives a Run now, under the current layer
+// (CurrentLayer, override the operator's DUDE_LAYER_IMAGE), in the Run's
+// organization's transaction. waitingOn is the job the Run
 // already waited on (runs.image_build_id), "" for none: its failure is the
 // Run's. A build cancelled under it (a newer version queued instead) is
 // not: the image is looked at again. A finish that is missing is queued,
 // or joined if one is: two Runs needing the same one share it, and the
 // builder takes it before any build.
-func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (Outcome, error) {
-	var err error
-	effectiveLayer, err := EffectiveLayer(ctx, tx, layer)
+func Resolve(ctx context.Context, tx pgx.Tx, imageID, override, waitingOn string) (Outcome, error) {
+	layer, err := CurrentLayer(ctx, tx, override)
 	if err != nil {
 		return Outcome{}, err
 	}
-	layer = effectiveLayer
 	if waitingOn != "" {
 		var state, kind string
 		var why *string
@@ -281,12 +274,12 @@ func (r Refused) Error() string { return r.Reason }
 // failure is the Run's: waitingOn); one that cannot be had is Refused.
 // Both are the caller's to act on after committing: returned from the
 // transaction they would roll back the finish job it queued (Settle).
-func Choose(ctx context.Context, tx pgx.Tx, site Site, layer, runID, waitingOn string) (string, *RunImage, error) {
+func Choose(ctx context.Context, tx pgx.Tx, site Site, override, runID, waitingOn string) (string, *RunImage, error) {
 	id, ref := site.Pick()
 	if id == "" {
 		return ref, nil, nil
 	}
-	out, err := Resolve(ctx, tx, id, layer, waitingOn)
+	out, err := Resolve(ctx, tx, id, override, waitingOn)
 	switch {
 	case err != nil:
 		return "", nil, err

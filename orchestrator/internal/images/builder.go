@@ -28,11 +28,11 @@ type Builder struct {
 	Podman Podman
 	// Where versions are pushed: <registry>/<repo>, no tag.
 	Repository string
-	// Layer is the explicit DUDE_LAYER_IMAGE override, if configured.
+	// The dude layer jobs finish with, a digest ref: the operator's
+	// override (DUDE_LAYER_IMAGE), else what PublishLayer made current.
 	Layer string
-	// LayerRepository is where the builder publishes its owned layer.
-	LayerRepository string
-	// LayerContext and DudeBinary are the installed release's context and CLI.
+	// The installed release's share/dude/layer/ and bin/dude, which
+	// PublishLayer builds the layer from.
 	LayerContext, DudeBinary string
 	Limits                   Limits
 	MinFree                  int64
@@ -78,10 +78,13 @@ type job struct {
 	Published int
 }
 
-// Run takes jobs until ctx ends, writing its heartbeat throughout.
+// Run publishes the release's dude layer unless the operator's override
+// names one, then takes jobs until ctx ends, writing its heartbeat
+// throughout. A layer it cannot publish is Run's error: nothing is finished
+// with a layer that does not exist.
 func (b *Builder) Run(ctx context.Context) error {
 	if b.Layer == "" {
-		if err := b.ensureLayer(ctx); err != nil {
+		if err := b.PublishLayer(ctx); err != nil {
 			return err
 		}
 	}
@@ -606,13 +609,11 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 		return "", wrapTimeout(ctx, err)
 	}
 	timings["build"] += time.Since(start).Seconds()
-	if err := b.checkContainers(ctx, j, tag, p, timings); err != nil {
+	if err := b.check(ctx, j, tag, p, timings); err != nil {
 		return "", err
 	}
-	if j.CanRunContainers {
-		// The check is done: the page shows the push as the next stage.
-		p.setStage("pushing")
-	}
+	// The check is done: the page shows the push as the next stage.
+	p.setStage("pushing")
 	start = time.Now()
 	digest, err := b.Podman.Push(ctx, tag, p)
 	timings["push"] += time.Since(start).Seconds()
@@ -624,40 +625,46 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 	return final, nil
 }
 
-// checkContainers checks a version marked "Can run containers" on its
-// final image, before it is pushed: the image Runs get, with the dude
-// layer's agent user and subordinate ids on it, since the user image
-// alone has no agent to check them for. A version that cannot fails the
-// job with the check's sentence, and nothing of it is pushed or published.
-func (b *Builder) checkContainers(ctx context.Context, j job, tag string, p *progress, timings map[string]float64) error {
+// check runs the static check (CheckCommand) in a final image before it is
+// pushed: the image Runs get, after the dude layer. Every final must have
+// dude's git-config and commit hook, or its commits would silently carry no
+// co-authors (git skips a missing include). A version marked "Can run
+// containers" must also be able to, with the layer's agent user and
+// subordinate ids, which the user image alone lacks. A final that fails
+// either fails the job with one sentence, and nothing of it is pushed.
+func (b *Builder) check(ctx context.Context, j job, tag string, p *progress, timings map[string]float64) error {
 	p.setStage("checking")
-	p.printf("Checking the finished image for dude's git hook and config.\n")
 	start := time.Now()
 	found, err := b.Podman.CheckContainers(ctx, tag, p)
 	timings["check"] = time.Since(start).Seconds()
 	if err != nil {
 		return wrapTimeout(ctx, err)
 	}
-	for _, l := range found.LogLines() {
-		p.printf("%s\n", l)
-	}
-	result, _ := json.Marshal(map[string]any{"passed": found.Passed() && found.HooksPassed(), "detail": found.Detail()})
-	if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
-		return err
-	}
-	if !found.HooksPassed() {
-		sentence := "Can't build the image: " + found.HooksSentence() + "."
-		p.printf("%s\n", sentence)
-		return reason(sentence)
+	p.printf("%s\n", found.HookLine())
+	if sentence := found.HookSentence(); sentence != "" {
+		return b.notPushed(j, p, sentence)
 	}
 	if !j.CanRunContainers {
 		return nil
+	}
+	p.printf("Check containers: v%d is marked Can run containers, so dude checks it.\n", j.Number)
+	for _, l := range found.LogLines() {
+		p.printf("%s\n", l)
+	}
+	result, _ := json.Marshal(map[string]any{"passed": found.Passed(), "detail": found.Detail()})
+	if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
+		return err
 	}
 	if found.Passed() {
 		p.printf("Check passed: it can run containers.\n")
 		return nil
 	}
-	sentence := found.Sentence()
+	return b.notPushed(j, p, found.Sentence())
+}
+
+// notPushed ends a final that failed its check: the sentence in the log
+// and as the job's failure.
+func (b *Builder) notPushed(j job, p *progress, sentence string) error {
 	p.printf("%s\n", sentence)
 	if j.Kind == "build" && j.Published > 0 {
 		p.printf("Not pushed. v%d stays published.\n", j.Published)
