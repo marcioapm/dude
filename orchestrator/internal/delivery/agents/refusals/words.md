@@ -4,6 +4,8 @@
 The owner answered: {{clip (oneLine .Answer) 1000}}{{with .Decided}}
 The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 
+{{- define "refusals/words/escalation-banner"}}a person decides it on the banner, or by answering your question about it (ask_person, the escalation's actions as choices){{end}}
+
 {{- define "refusals/words/decided-by"}}{{if .Conductor}}by the conductor {{.Conductor}} (decide_escalation){{else if .QuestionID}}by the owner's answer to question {{.QuestionID}}{{else}}by a person on the banner{{end}}{{end}}
 
 {{- define "refusals/words/blocked"}}{{.Task}} is blocked by {{.Blockers}}: it can start once {{if eq .N 1}}that's{{else}}they're{{end}} merged.{{end}}
@@ -11,6 +13,28 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 {{- define "refusals/words/blocked-agent"}}{{.}} You can't start it anyway; a person can. Tell the person, and end your turn: you are woken when it can start.{{end}}
 
 {{- define "refusals/words/blocker"}}{{.Key}} ({{.State}}){{end}}
+
+{{- define "refusals/words/blocker-state/review"}}in review{{end}}
+
+{{- define "refusals/words/blocker-state/running"}}in progress{{end}}
+
+{{- define "refusals/words/blocker-state/awaiting_input"}}needs a person{{end}}
+
+{{- define "refusals/words/blocker-state/ready_to_merge"}}ready to merge{{end}}
+
+{{- define "refusals/words/blocker-state/failed"}}failed{{end}}
+
+{{- define "refusals/words/blocker-state/aborted"}}aborted{{end}}
+
+{{- define "refusals/words/blocker-state/received"}}not started{{end}}
+
+{{- define "refusals/words/blocker-state/queued"}}not started{{end}}
+
+{{- define "refusals/words/blocker-state/intake"}}being shaped{{end}}
+
+{{- define "refusals/words/blocker-state/awaiting_confirmation"}}plan to confirm{{end}}
+
+{{- define "refusals/words/blocker-state/done"}}done, nothing merged{{end}}
 
 {{- define "refusals/words/not-a-peer"}}{{.}} is not one of your peers: only the other tasks on your epic are (list_tasks with peers: true shows them){{end}}
 
@@ -43,3 +67,5 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 {{- define "refusals/words/not-moved-refused"}}{{.Repo}} was refused: {{clip (oneLine .Why) 160}}{{end}}
 
 {{- define "refusals/words/not-moved-stalled"}}{{.Repo}} could not be confirmed at {{.Head}}{{end}}
+
+{{- define "refusals/words/read-only-cause"}}this lux cannot keep your checkout current{{with .}} ({{.}}){{end}}{{end}}
