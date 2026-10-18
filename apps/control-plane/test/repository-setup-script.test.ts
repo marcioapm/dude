@@ -1,5 +1,5 @@
 /**
- * A repository's setup script (migration 144): bash a Run executes once in
+ * A repository's setup script (migration 145): bash a Run executes once in
  * each fresh checkout before the agent starts. It is set when a repository
  * is added, made with its project, or changed; read back with the
  * repository and its project; blank is none; over 16 KiB or holding a NUL

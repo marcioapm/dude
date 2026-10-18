@@ -20,7 +20,7 @@ import (
 // The dude layer is built by the builder itself from the installed
 // release: share/dude/layer/ (scripts/layer-context.sh) with the release's
 // bin/dude added as `dude`. It is tagged by content (LayerTag), pushed to
-// LayerRepository, and recorded in image_layers (migration 143), whose most
+// LayerRepository, and recorded in image_layers (migration 144), whose most
 // recently selected row is the current layer for every process.
 
 // LayerTag is the layer's tag: the first 16 hex of a sha256 over every
