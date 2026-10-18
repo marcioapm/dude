@@ -13,6 +13,8 @@ import (
 func TestASilentTalkersBusyRetriesBackOff(t *testing.T) {
 	w := newResumeWorld(t)
 	w.silentConductor("11 minutes", "stuck_fingerprint = 'tool-call'")
+	w.follow(running(1), busy(1))
+	w.ageSilent("11 minutes")
 	w.interruptSilent()
 	for i, step := range []struct {
 		elapsed string
@@ -47,24 +49,62 @@ func TestASilentTalkersBusyRetriesBackOff(t *testing.T) {
 
 func TestASilentTalkersBackoffIsCappedAtTwoHours(t *testing.T) {
 	w := newResumeWorld(t)
-	w.silentConductor("3 hours", "stuck_fingerprint = 'silent:1000', stuck_interrupted_at = now() - interval '119 minutes'")
+	w.silentConductor("11 minutes", "")
+	w.follow(running(1), busy(1))
+	w.ageSilent("11 minutes")
 	w.interruptSilent()
-	if n := w.count(silentInterrupts); n != 0 {
-		t.Fatalf("before cap: interrupts = %d, want 0", n)
+	for _, since := range []string{"21 minutes", "41 minutes", "81 minutes"} {
+		w.ageSilent(since)
+		w.interruptSilent()
 	}
-	w.exec(`UPDATE runs SET stuck_interrupted_at = now() - interval '121 minutes' WHERE id = $1`, w.run.ID)
+	w.ageSilent("119 minutes")
+	if n := w.count(silentInterrupts); n != 4 {
+		t.Fatalf("before cap: interrupts = %d, want 4", n)
+	}
+	w.ageSilent("121 minutes")
 	w.interruptSilent()
-	if n := w.count(silentInterrupts); n != 1 {
-		t.Fatalf("past cap: interrupts = %d, want 1", n)
+	if n := w.count(silentInterrupts); n != 5 {
+		t.Fatalf("past cap: interrupts = %d, want 5", n)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'silent:1001'`); n != 1 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'silent:5'`); n != 1 {
 		t.Fatal("capped backoff did not advance the streak")
+	}
+}
+
+func TestAMalformedSilentStreaksDoNotAbortTheSweep(t *testing.T) {
+	w := newResumeWorld(t)
+	for _, fingerprint := range []string{"silent:", "silent:abc", "silent:99999999999999999999", "silent:3"} {
+		w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ($2, $1, 'Silent')`, w.run.Org, "session_"+fingerprint)
+		w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status,
+			lux_run_id, lux_state, control, session_id, agent_busy_at, agent_active_at, stuck_fingerprint)
+			SELECT $2, organization_id, project_id, NULL, attempt, NULL, 'brainstorm', 'agent', 'running',
+				'lux_' || $2, 'running', 'none', $3, now() - interval '1 hour', now() - interval '11 minutes', $4
+			FROM runs WHERE id = $1`, w.run.ID, "run_"+fingerprint, "session_"+fingerprint, fingerprint)
+	}
+	w.silentConductor("11 minutes", "stuck_fingerprint = 'tool-call'")
+	w.interruptSilent()
+	var interrupts int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE r.organization_id = $1 AND d.interrupt AND d.scope = 'turn'`, w.run.Org).Scan(&interrupts); err != nil {
+		t.Fatal(err)
+	}
+	if interrupts != 5 {
+		t.Fatalf("interrupts = %d, want 5", interrupts)
+	}
+	var streaks int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM runs WHERE organization_id = $1 AND stuck_fingerprint = 'silent:1'`, w.run.Org).Scan(&streaks); err != nil {
+		t.Fatal(err)
+	}
+	if streaks != 5 {
+		t.Fatalf("first-interrupt streaks = %d, want 5", streaks)
 	}
 }
 
 func TestAPersonsSteerBypassesSilentBackoff(t *testing.T) {
 	w := newResumeWorld(t)
 	w.silentConductor("11 minutes", "")
+	w.follow(running(1), busy(1))
+	w.ageSilent("11 minutes")
 	w.interruptSilent()
 	for _, actor := range []string{ledger.ActorSystem, ledger.ActorHuman} {
 		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
@@ -116,9 +156,15 @@ func (w *resumeWorld) silentConductor(silentFor string, change string) {
 
 func (w *resumeWorld) interruptSilent() {
 	w.t.Helper()
-	if err := w.s.interruptSilentTalkers(w.ctx); err != nil {
+	if err := w.s.beforeDue(w.ctx); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+func (w *resumeWorld) ageSilent(since string) {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET agent_active_at = now() - $2::interval,
+		stuck_interrupted_at = now() - $2::interval WHERE id = $1`, w.run.ID, since)
 }
 
 const (
@@ -133,6 +179,8 @@ const (
 func TestASilentConductorIsInterruptedOncePerSilence(t *testing.T) {
 	w := newResumeWorld(t)
 	w.silentConductor("11 minutes", "")
+	w.follow(running(1), busy(1))
+	w.ageSilent("11 minutes")
 	w.interruptSilent()
 	if n := w.count(silentInterrupts); n != 1 {
 		t.Fatalf("interrupts = %d, want 1", n)
@@ -229,6 +277,8 @@ func TestAResumedConductorIsNotJudgedOnItsParkedTime(t *testing.T) {
 func TestAHostMoveDoesNotInterruptTheSameSilenceTwice(t *testing.T) {
 	w := newResumeWorld(t)
 	w.silentConductor("41 minutes", "")
+	w.follow(running(1), busy(1))
+	w.ageSilent("41 minutes")
 	w.interruptSilent()
 	w.exec(`UPDATE runs SET lux_state = 'resuming', left_running_at = now() - interval '30 minutes' WHERE id = $1`, w.run.ID)
 	w.follow(running(2))
