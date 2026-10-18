@@ -303,10 +303,9 @@ func newResumeWorld(t *testing.T) *resumeWorld {
 		}
 	}
 	fake := &placementLux{}
-	stream := newStreamLux(fake)
 	run := phaseRun{ID: "run_" + org, Org: org, ProjectID: "prj_" + org, TaskID: "wi_" + org, Phase: "implement",
 		Status: statusPaused, Control: "none", DudePause: "person", LuxRunID: "lrun_1", LuxState: "stopped"}
-	s := &Syncer{DB: app, Lux: stream, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Syncer{DB: app, Lux: fake, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	return &resumeWorld{t: t, ctx: ctx, s: s, lux: fake, owner: owner, run: run}
 }
 

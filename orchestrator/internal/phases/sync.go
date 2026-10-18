@@ -380,14 +380,12 @@ const silentTalker = `(r.role IN ('conductor', 'brainstorm') AND r.phase IS NULL
 	AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL
 	AND r.open_tool_calls_at = '{}'
 	AND ` + talkerSilentSince + ` <= now() - make_interval(secs => $1::float8)
-	AND (COALESCE(r.stuck_fingerprint NOT LIKE 'silent:%', true)
-		OR ` + silentStreak + ` = 0
+	AND (` + silentStreak + ` = 0
 		OR ` + personRearmedSilence + `
-		OR r.stuck_interrupted_at IS NULL
 		OR r.stuck_interrupted_at <= now() - make_interval(secs => LEAST($1::float8 * power(2, LEAST(` + silentStreak + `, 4)), 7200))))`
 
 const silentStreak = `(CASE WHEN r.stuck_interrupted_at IS NOT NULL
-	AND r.stuck_fingerprint ~ '^silent:[1-9][0-9]{0,8}$'
+	AND r.stuck_fingerprint ~ '^silent:[0-9]{1,9}$'
 	THEN split_part(r.stuck_fingerprint, ':', 2)::bigint ELSE 0 END)`
 
 // Only person-authored directives bypass backoff; dude's own nudge does not.
