@@ -226,7 +226,21 @@ func TestASetupScriptRunsBeforeTheWorkloadAndOnARepositoryAResumeAdds(t *testing
 	}
 }
 
-// A script that fails fails the Run init-failed, naming its repository,
+func TestAnEmptySetupManifestDoesNotCloneForInit(t *testing.T) {
+	l := newSetupLux(t, "api")
+	run := l.submit(map[string]string{}, "api")
+	if got := l.started(run); !slices.Equal(got, []string{"workload"}) {
+		t.Fatalf("starts %v", got)
+	}
+	entries, err := os.ReadDir(l.fake.Workspaces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("empty setup manifest cloned %d workspace(s)", len(entries))
+	}
+}
+
 // and the workload never starts.
 func TestAFailingSetupScriptFailsTheRunBeforeItsWorkload(t *testing.T) {
 	l := newSetupLux(t, "api", "web")

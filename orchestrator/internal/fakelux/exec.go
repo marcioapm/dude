@@ -302,6 +302,9 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	if strings.TrimSpace(script) == "" {
 		return true
 	}
+	if s.nothingToInit(run, script) {
+		return true
+	}
 	dir, err := s.checkout(run, spec)
 	if err == nil {
 		script, err = s.placeFileSecrets(run, script)
@@ -341,7 +344,7 @@ func (s *Server) nothingToInit(run *Run, script string) bool {
 	_ = json.Unmarshal(run.Spec, &spec)
 	read := false
 	for _, sec := range spec.Secrets {
-		if sec.As != "file" || !strings.Contains(script, sec.Path) {
+		if sec.Name != "dude-setup" || sec.As != "file" || !strings.Contains(script, sec.Path) {
 			continue
 		}
 		read = true
