@@ -37,7 +37,7 @@ func conductorWorld(t *testing.T, model ...string) *world {
 // branch then.
 func (w *world) delivered() (task string, log []string) {
 	w.t.Helper()
-	task = w.inReview(w.task())
+	task = w.reviewing()
 	return task, w.gh.Log(delivery.BranchFor(task, 1))
 }
 
