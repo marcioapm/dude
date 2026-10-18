@@ -112,7 +112,7 @@ var roleParts = func() map[string][3]*template.Template {
 // A saved prompt never removes a section dude ships: in replace mode it
 // stands in for the role's stance ("How you work as <role>") alone, and in
 // add mode it follows it. An organisation's prompt replaces; a project's
-// replaces the organisation's too in replace mode, as it always has.
+// replaces the organisation's too in replace mode.
 func Instructions(role, aspect string, in InstructionsInput) string {
 	parts, ok := roleParts[role]
 	if !ok {

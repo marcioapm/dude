@@ -235,7 +235,7 @@ func render(t *template.Template, data any) string {
 	return b.String()
 }
 
-// agentTexts renders each template under prefix ("contracts/review-focus/")
+// agentTexts renders each template under prefix ("aspects/reviewer/")
 // once, keyed by the rest of its name. Each of want must be among them.
 func agentTexts(prefix string, want ...string) map[string]string {
 	return agentTextsIn(agentTemplates, prefix, want...)

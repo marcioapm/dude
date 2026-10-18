@@ -157,7 +157,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // "look for problems" finds the same generic ones every time, and one told to
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
-// Each is agents/contracts/review-focus/<category>.md.
+// Each is agents/aspects/reviewer/<category>.md.
 var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 
 // What a review limited to a range (ReviewRange) checks, by its Of.
