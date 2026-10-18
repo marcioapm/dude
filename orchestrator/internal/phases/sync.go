@@ -1451,15 +1451,16 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	if stored == nil {
 		// Pinned to the Run: lux keeps the submitted spec, and its init,
 		// for every placement; a resume sends none.
-		in.Instructions = delivery.Instructions(settingsRole, r.Category, promptIn.InstructionsInput())
+		instructionsIn := promptIn
+		if r.conductor() {
+			instructionsIn = conductorIn
+		}
+		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructionsIn.InstructionsInput())
 	}
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.
 		in.Prompt = conductorPrompt
-		if stored == nil {
-			in.Instructions = delivery.Instructions(settingsRole, "", conductorIn.InstructionsInput())
-		}
 		if promptIn.Machine != "" {
 			in.Prompt += "\n\n" + promptIn.Machine
 		}
