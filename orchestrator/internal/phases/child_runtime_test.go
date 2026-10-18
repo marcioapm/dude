@@ -3,12 +3,12 @@ package phases
 import (
 	"context"
 	"errors"
-	"strings"
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"strings"
 	"testing"
 	"time"
 )
