@@ -770,7 +770,7 @@ test("145 adds a nullable, size-checked setup script to existing repositories", 
 }, 120_000);
 
 test("GitHub read migrations recover interrupted concurrent builds and replay completed builds", async () => {
-  for (const [version, name] of [["147", "events_session_github_reads_idx"], ["149", "events_task_github_reads_idx"]] as const) {
+  for (const [version, name] of [["148", "events_session_github_reads_idx"], ["150", "events_task_github_reads_idx"]] as const) {
     const { url, sql } = await migratedBefore(version);
     const builder = await sql.reserve();
     const holder = await sql.reserve();
@@ -789,7 +789,7 @@ test("GitHub read migrations recover interrupted concurrent builds and replay co
       expect(await validity()).toEqual([{ valid: true }]);
       await sql`DELETE FROM schema_migrations WHERE version = ${version}`;
       expect((await migrate(url, { log: () => {} })).applied).toEqual([file.name]);
-      const replayName = version === "147" ? "events_session_github_reads_idx" : "events_task_github_reads_idx";
+      const replayName = version === "148" ? "events_session_github_reads_idx" : "events_task_github_reads_idx";
       const replayIndex = async () => [...await sql`SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass(${replayName})`];
       expect(await replayIndex()).toEqual([{ valid: true }]);
     } finally {
