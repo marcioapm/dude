@@ -3,12 +3,12 @@ package phases
 import (
 	"context"
 	"errors"
+	"strings"
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
-	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +25,24 @@ func TestChildRuntimeWriterFence(t *testing.T) {
 	}
 	if _, _, err := w.s.publish(w.ctx, w.run); err == nil {
 		t.Fatal("writer child reached publication")
+	}
+}
+
+func TestChildReplacementWriterWaitsForLivePredecessor(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status)
+		VALUES('run_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,phase)
+		VALUES('run_predecessor',$1,$2,$3,1,'implementer','running','implement')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',child_replaces='run_predecessor',
+		child_profile='implementer',child_capabilities='{"publishCode":true}',phase='implement',role='implementer',status='running' WHERE id=$1`, w.run.ID)
+	r := w.run
+	r.SourceKind = "task_conductor"
+	r.Phase = "implement"
+	r.Role = "implementer"
+	r.Status = "running"
+	if err := w.s.childExecutionAllowed(w.ctx, r); err == nil || !strings.Contains(err.Error(), "predecessor is not terminal") {
+		t.Fatal("replacement writer ran while predecessor was live")
 	}
 }
 

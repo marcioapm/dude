@@ -40,6 +40,10 @@ def test_child_report_returns_once_without_moving_delivery(client: ApiClient, ow
     child = wait_until(lambda: _started(client, owner_dsn, task, parent), timeout=60)
     wait_until(lambda: query(owner_dsn, "SELECT * FROM child_results WHERE child_run_id=%s", (child["id"],)), timeout=120)
     wait_until(lambda: query(owner_dsn, "SELECT * FROM child_result_outbox WHERE child_run_id=%s AND consumed_at IS NOT NULL", (child["id"],)), timeout=90)
+    wait_until(lambda: query(owner_dsn, "SELECT d.id, d.text, d.delivered_at FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id WHERE o.child_run_id=%s AND d.delivered_at IS NOT NULL", (child["id"],)), timeout=90)
+    directive = query(owner_dsn, "SELECT d.id, d.text, d.delivered_at FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id WHERE o.child_run_id=%s", (child["id"],))
+    assert len(directive) == 1 and directive[0]["delivered_at"] is not None
+    assert "childId" in directive[0]["text"] and "investigator" in directive[0]["text"]
     after = client.get(f"/v1/tasks/{task['id']}").json()
     assert after["status"] == before["status"]
     assert _point(client, task["id"]) == "after_implement"
@@ -47,6 +51,7 @@ def test_child_report_returns_once_without_moving_delivery(client: ApiClient, ow
     assert len(results) == 1
     assert query(owner_dsn, "SELECT id FROM artifacts WHERE run_id=%s", (child["id"],))
     assert len(query(owner_dsn, "SELECT * FROM child_result_outbox WHERE child_run_id=%s", (child["id"],))) == 1
+    assert len(query(owner_dsn, "SELECT d.id FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id WHERE o.child_run_id=%s", (child["id"],))) == 1
 
 
 def test_child_writer_moves_branch_and_returns_commit(client: ApiClient, owner_dsn, forge_project, fake_github: FakeGitHub):
