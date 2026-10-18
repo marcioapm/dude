@@ -329,6 +329,7 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
+		stuck_fingerprint = CASE WHEN $11 AND stuck_fingerprint LIKE 'silent:%' THEN NULL ELSE stuck_fingerprint END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
 		harness_state = $14::jsonb,
 		children = (CASE WHEN $17 THEN '{}'::jsonb ELSE children - $16::text[] END)
@@ -409,10 +410,6 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE runs r SET lux_state = $2,
-			stuck_fingerprint = CASE WHEN $2 = 'running' AND left_running_at IS NOT NULL
-				AND stuck_fingerprint = `+silentFingerprint+`
-				THEN 'silent:' || extract(epoch FROM COALESCE(`+backFromAway("agent_active_at")+`, agent_busy_at))::text
-				ELSE stuck_fingerprint END,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			files_changed_at = CASE WHEN $2 = 'running' THEN COALESCE(`+backFromAway("files_changed_at")+`, now())
 				ELSE files_changed_at END,

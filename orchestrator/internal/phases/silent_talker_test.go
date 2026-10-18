@@ -4,8 +4,101 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestASilentTalkersBusyRetriesBackOff(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("11 minutes", "stuck_fingerprint = 'tool-call'")
+	w.interruptSilent()
+	for i, step := range []struct {
+		elapsed string
+		want    int
+		streak  string
+	}{
+		{"11 minutes", 1, "silent:1"},
+		{"19 minutes", 1, "silent:1"},
+		{"21 minutes", 2, "silent:2"},
+		{"39 minutes", 2, "silent:2"},
+		{"41 minutes", 3, "silent:3"},
+		{"79 minutes", 3, "silent:3"},
+		{"81 minutes", 4, "silent:4"},
+	} {
+		w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
+		w.exec(`UPDATE runs SET agent_active_at = now() - interval '11 minutes',
+			stuck_interrupted_at = now() - $2::interval WHERE id = $1`, w.run.ID, step.elapsed)
+		w.interruptSilent()
+		if n := w.count(silentInterrupts); n != step.want {
+			t.Fatalf("step %d (%s): interrupts = %d, want %d", i, step.elapsed, n, step.want)
+		}
+		var fingerprint string
+		if err := w.owner.QueryRow(w.ctx, `SELECT stuck_fingerprint FROM runs WHERE id = $1`, w.run.ID).Scan(&fingerprint); err != nil || fingerprint != step.streak {
+			t.Fatalf("step %d: fingerprint = %q, want %q: %v", i, fingerprint, step.streak, err)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.turn_stopped'
+		AND (payload->>'streak')::int BETWEEN 1 AND 4`); n != 4 {
+		t.Fatalf("streak notices = %d, want 4", n)
+	}
+}
+
+func TestASilentTalkersBackoffIsCappedAtTwoHours(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("3 hours", "stuck_fingerprint = 'silent:1000', stuck_interrupted_at = now() - interval '119 minutes'")
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 0 {
+		t.Fatalf("before cap: interrupts = %d, want 0", n)
+	}
+	w.exec(`UPDATE runs SET stuck_interrupted_at = now() - interval '121 minutes' WHERE id = $1`, w.run.ID)
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 1 {
+		t.Fatalf("past cap: interrupts = %d, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'silent:1001'`); n != 1 {
+		t.Fatal("capped backoff did not advance the streak")
+	}
+}
+
+func TestAPersonsSteerBypassesSilentBackoff(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("11 minutes", "")
+	w.interruptSilent()
+	for _, actor := range []string{ledger.ActorSystem, ledger.ActorHuman} {
+		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+			_, err := delivery.Steer(w.ctx, tx, w.run.Org, delivery.SteerInput{
+				RunID: w.run.ID, Text: "Try another approach.", Actor: delivery.Writer{ActorType: actor, ActorID: "per_test"},
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
+		w.exec(`UPDATE runs SET agent_active_at = now() - interval '9 minutes' WHERE id = $1`, w.run.ID)
+		w.interruptSilent()
+		if n := w.count(silentInterrupts); n != 1 {
+			t.Fatalf("recent activity: interrupts = %d, want 1", n)
+		}
+		w.exec(`UPDATE runs SET agent_active_at = now() - interval '11 minutes' WHERE id = $1`, w.run.ID)
+		w.interruptSilent()
+		want := 1
+		if actor == ledger.ActorHuman {
+			want = 2
+		}
+		if n := w.count(silentInterrupts); n != want {
+			t.Fatalf("%s directive: interrupts = %d, want %d", actor, n, want)
+		}
+	}
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 2 {
+		t.Fatalf("one human steer bypasses once: interrupts = %d, want 2", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'silent:2'`); n != 1 {
+		t.Fatal("human steer reset rather than advanced the streak")
+	}
+}
 
 // silentConductor makes w's Run a conductor mid-turn, its last activity
 // silentFor ago, with change applied after.
@@ -36,8 +129,7 @@ const (
 
 // A conductor busy with no tool open and no activity for the limit —
 // OpenCode retrying a rate-limited model request — has its turn stopped,
-// once per silence; the agent's next activity starts a new silence that
-// may be stopped again.
+// with backoff; the agent's next activity ends the streak.
 func TestASilentConductorIsInterruptedOncePerSilence(t *testing.T) {
 	w := newResumeWorld(t)
 	w.silentConductor("11 minutes", "")
@@ -59,6 +151,9 @@ func TestASilentConductorIsInterruptedOncePerSilence(t *testing.T) {
 	// The agent speaks (its activity, as the stream records it), then goes
 	// silent again for the limit.
 	w.follow(spoke(1))
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint IS NULL`); n != 1 {
+		t.Fatal("model output did not end the silent streak")
+	}
 	w.interruptSilent()
 	if n := w.count(silentInterrupts); n != 1 {
 		t.Fatalf("right after new activity: interrupts = %d, want 1", n)
@@ -70,6 +165,9 @@ func TestASilentConductorIsInterruptedOncePerSilence(t *testing.T) {
 	}
 	if n := w.count(silentNotices); n != 2 {
 		t.Fatalf("a second silence: run.turn_stopped events = %d, want 2", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.turn_stopped' AND payload->>'streak' = '1'`); n != 2 {
+		t.Fatalf("fresh streak notices = %d, want 2", n)
 	}
 }
 
@@ -134,6 +232,9 @@ func TestAHostMoveDoesNotInterruptTheSameSilenceTwice(t *testing.T) {
 	w.interruptSilent()
 	w.exec(`UPDATE runs SET lux_state = 'resuming', left_running_at = now() - interval '30 minutes' WHERE id = $1`, w.run.ID)
 	w.follow(running(2))
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND stuck_fingerprint = 'silent:1'`); n != 1 {
+		t.Fatal("host move changed the silent streak")
+	}
 	w.interruptSilent()
 	if n := w.count(silentInterrupts); n != 1 {
 		t.Fatalf("host move interrupted the same silence again: %d", n)
