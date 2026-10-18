@@ -754,7 +754,7 @@ test("142 rebuilds a key an interrupted 140 left invalid, and 140 and 141 run ag
 test("144 adds a nullable, size-checked setup script to existing repositories", async () => {
   const { url, sql } = await migratedBefore("144");
   try {
-    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_144', 'org 144', 'org-143')`;
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_144', 'org 144', 'org-144')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_144', 'org_144', 'P', 'p-144', 'P')`;
     await sql`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_144', 'org_144', 'prj_144', 'api', 'https://github.com/acme/api.git')`;
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["144_repository_setup_script.sql"]);
