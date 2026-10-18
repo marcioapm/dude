@@ -601,6 +601,12 @@ func TestChildEnqueueClaimsDisjointBatches(t *testing.T) {
 	if third, err := claim("worker-c"); err != nil || len(third) != 0 {
 		t.Fatalf("third worker claimed %v (%v), want none", third, err)
 	}
+	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
+		_, err := tx.Exec(w.ctx, `UPDATE child_result_outbox SET consumed_at=now() WHERE child_run_id=$1`, first[0])
+		return err
+	}); err == nil {
+		t.Fatal("sweeper updated consumed_at despite column grant")
+	}
 }
 
 func claimChildForTest(t *testing.T, w *childWorld, id, token string) childClaim {
