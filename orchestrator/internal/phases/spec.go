@@ -277,25 +277,11 @@ func repoRefs(repos []specRepo) map[string]string {
 	return refs
 }
 
-// repoSetups are the repositories setup scripts, in the specs order.
+// repoSetups are the repositories' setup scripts, in the spec's order.
 func repoSetups(repos []specRepo) []Setup {
 	out := make([]Setup, 0, len(repos))
 	for _, r := range repos {
 		out = append(out, Setup{Name: lux.SpecName(r.Name), Path: r.path(), Script: r.Setup})
-	}
-	return out
-}
-
-// repoSynced is, by spec name, where in the checkout lux leaves each
-// branch it syncs into it: refs/remotes/lux/<branch>, set to the commit its
-// git.sync reports (runs.synced_bases), so the hook, fixed at submit, folds
-// in what a live read is given from the database.
-func repoSynced(repos []specRepo) map[string][]string {
-	out := map[string][]string{}
-	for _, r := range repos {
-		for _, branch := range r.Synced {
-			out[lux.SpecName(r.Name)] = append(out[lux.SpecName(r.Name)], "refs/remotes/lux/"+branch)
-		}
 	}
 	return out
 }
