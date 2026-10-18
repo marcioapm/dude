@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -272,58 +273,44 @@ func TestInstructionsContractMatrix(t *testing.T) {
 		{name: "project_replace", projectMode: "replace", org: true, project: true},
 	}
 	for _, role := range roles {
-		t.Run(role.role, func(t *testing.T) {
-			for _, mode := range modes {
-				t.Run(mode.name, func(t *testing.T) {
-					for _, tools := range []struct {
-						name    string
-						enabled bool
-					}{{"tools_false", false}, {"tools_true", true}} {
-						t.Run(tools.name, func(t *testing.T) {
-							org := "Organisation stance for " + role.role + ": verify {{task.title}}."
-							project := "Project stance for " + role.role + ": deliver {{task.title}}."
-							in := InstructionsInput{Tools: tools.enabled, CLI: tools.enabled, Checkouts: true,
-								BlockingSeverities: []string{"blocking", "high"}, Vars: PromptVars{Title: "CSV export"}}
-							if mode.org {
-								in.OrgPrompt = &org
-							}
-							if mode.project {
-								in.ProjectPrompt, in.ProjectPromptMode = project, mode.projectMode
-							}
-							got := Instructions(role.role, "correctness", in)
-							count := func(marker string, want int) {
-								t.Helper()
-								if n := strings.Count(got, marker); n != want {
-									t.Errorf("marker %q occurs %d times, want %d", marker, n, want)
-								}
-							}
-							presence := func(marker string, present bool) {
-								t.Helper()
-								want := 0
-								if present {
-									want = 1
-								}
-								count(marker, want)
-							}
-							for _, marker := range []string{"# How you work\n", "Label what you did not check as not checked.",
-								"# How dude works\n", "dude does the mechanics: it starts Runs, moves branches", role.purpose} {
-								count(marker, 1)
-							}
-							for _, marker := range role.fixed {
-								count(marker, 1)
-							}
-							presence(role.stance, mode.builtin)
-							presence("Organisation stance for "+role.role+": verify CSV export.", mode.org && mode.projectMode != "replace")
-							presence("Project stance for "+role.role+": deliver CSV export.", mode.project)
-							presence("Your tools act on the work you are part of. Use them; do not work around them.", tools.enabled)
-							presence("This Run has none of dude's tools:", !tools.enabled)
-							presence("# Your aspect: correctness", role.role == "reviewer")
-							presence("A plausible implementation is not evidence that the required behaviour actually holds.", role.role == "reviewer")
-						})
+		org := "Organisation stance for " + role.role + ": verify {{task.title}}."
+		project := "Project stance for " + role.role + ": deliver {{task.title}}."
+		for _, mode := range modes {
+			for _, tools := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/tools_%t", role.role, mode.name, tools), func(t *testing.T) {
+					in := InstructionsInput{Tools: tools, CLI: tools, Checkouts: true,
+						BlockingSeverities: []string{"blocking", "high"}, Vars: PromptVars{Title: "CSV export"}}
+					if mode.org {
+						in.OrgPrompt = &org
 					}
+					if mode.project {
+						in.ProjectPrompt, in.ProjectPromptMode = project, mode.projectMode
+					}
+					got := Instructions(role.role, "correctness", in)
+					presence := func(marker string, present bool) {
+						t.Helper()
+						want := 0
+						if present {
+							want = 1
+						}
+						if n := strings.Count(got, marker); n != want {
+							t.Errorf("marker %q occurs %d times, want %d", marker, n, want)
+						}
+					}
+					for _, marker := range append([]string{"# How you work\n", "Label what you did not check as not checked.",
+						"# How dude works\n", "dude does the mechanics: it starts Runs, moves branches", role.purpose}, role.fixed...) {
+						presence(marker, true)
+					}
+					presence(role.stance, mode.builtin)
+					presence("Organisation stance for "+role.role+": verify CSV export.", mode.org && mode.projectMode != "replace")
+					presence("Project stance for "+role.role+": deliver CSV export.", mode.project)
+					presence("Your tools act on the work you are part of. Use them; do not work around them.", tools)
+					presence("This Run has none of dude's tools:", !tools)
+					presence("# Your aspect: correctness", role.role == "reviewer")
+					presence("A plausible implementation is not evidence that the required behaviour actually holds.", role.role == "reviewer")
 				})
 			}
-		})
+		}
 	}
 }
 
