@@ -329,6 +329,7 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 			FROM unnest($10::text[]) c), '{}'),
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
 		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
+		stuck_fingerprint = CASE WHEN $11 AND stuck_fingerprint LIKE 'silent:%' THEN NULL ELSE stuck_fingerprint END,
 		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13),
 		harness_state = $14::jsonb,
 		children = (CASE WHEN $17 THEN '{}'::jsonb ELSE children - $16::text[] END)

@@ -4,8 +4,71 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+func TestASilentTalkersBusyRetriesAreSuppressedUntilOutput(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("11 minutes", "")
+	w.interruptSilent()
+	for i := 0; i < 3; i++ {
+		w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
+		w.exec(`UPDATE runs SET agent_active_at = now() - interval '11 minutes' WHERE id = $1`, w.run.ID)
+		w.interruptSilent()
+	}
+	if n := w.count(silentInterrupts); n != 1 {
+		t.Fatalf("busy retries: interrupts = %d, want 1", n)
+	}
+	const suppressed = `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.turn_stopped' AND payload->>'suppressed' = 'true'`
+	if n := w.count(suppressed); n != 1 {
+		t.Fatalf("suppression notices = %d, want 1", n)
+	}
+	w.follow(spoke(1))
+	w.exec(`UPDATE runs SET agent_active_at = now() - interval '11 minutes' WHERE id = $1`, w.run.ID)
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 2 {
+		t.Fatalf("output re-arms silence: interrupts = %d, want 2", n)
+	}
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 2 {
+		t.Fatalf("unchanged silence: interrupts = %d, want 2", n)
+	}
+}
+
+func TestAPersonsSteerRearmsOneSilentInterrupt(t *testing.T) {
+	w := newResumeWorld(t)
+	w.silentConductor("11 minutes", "")
+	w.interruptSilent()
+	w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
+	w.exec(`UPDATE runs SET agent_active_at = now() - interval '12 minutes' WHERE id = $1`, w.run.ID)
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 1 {
+		t.Fatalf("before person writes: interrupts = %d, want 1", n)
+	}
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		_, err := delivery.Steer(w.ctx, tx, w.run.Org, delivery.SteerInput{
+			RunID: w.run.ID, Text: "Try another approach.", Actor: delivery.Writer{ActorType: ledger.ActorHuman, ActorID: "per_test"},
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.interruptSilent()
+	if n := w.count(silentInterrupts); n != 2 {
+		t.Fatalf("person re-arms silence: interrupts = %d, want 2", n)
+	}
+	for i := 0; i < 3; i++ {
+		w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
+		w.exec(`UPDATE runs SET agent_active_at = now() - interval '13 minutes' WHERE id = $1`, w.run.ID)
+		w.interruptSilent()
+	}
+	if n := w.count(silentInterrupts); n != 2 {
+		t.Fatalf("one steer re-arms only once: interrupts = %d, want 2", n)
+	}
+}
 
 // silentConductor makes w's Run a conductor mid-turn, its last activity
 // silentFor ago, with change applied after.

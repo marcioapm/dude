@@ -261,6 +261,16 @@ describe("a brainstorm session's page", () => {
     expect(notice!.textContent).not.toContain("was open");
   });
 
+  test("suppressed silent retries show the recovery condition", async () => {
+    const text = "Its model still has not answered: dude will not interrupt again until the agent produces output or a person writes to it.";
+    const client = new SessionClient(detail("read"), [
+      ev("session.turn_stopped", { runId: RUN, silentSecs: 660, suppressed: true, text }),
+    ]);
+    const page = await sessionPage(client);
+    await settle();
+    expect(page.querySelector('[data-kind="stopped"]')?.textContent).toContain(text);
+  });
+
   test("its conversation: each member's message signed, dude's briefing without the first message, the agent's answer", async () => {
     const client = new SessionClient(detail("owner"), [
       ev("chat.message", { text: "Can the meter take a run event?" }, { type: "human", id: YOU }),

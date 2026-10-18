@@ -373,15 +373,20 @@ const stuckBrainstorm = `(r.role = 'brainstorm' AND r.phase IS NULL AND r.sessio
 // session agent mid-turn with no tool call open (those are stuckBrainstorm's
 // and its own tools') that has shown no activity for the limit — a harness
 // retrying its model request, say for days after a 429, reports busy and
-// writes nothing. Not one already interrupted for this silence: the
-// fingerprint is the activity it was judged on, which the agent's next
-// sign of life replaces.
+// writes nothing. The fingerprint deduplicates a silence; suppression then
+// waits for substantive activity or a person's directive, not a busy frame.
 const silentTalker = `(r.role IN ('conductor', 'brainstorm') AND r.phase IS NULL AND r.kind = 'agent'
 	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none'
 	AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL
 	AND r.open_tool_calls_at = '{}'
 	AND ` + talkerSilentSince + ` <= now() - make_interval(secs => $1::float8)
-	AND r.stuck_fingerprint IS DISTINCT FROM ` + silentFingerprint + `)`
+	AND ((r.stuck_fingerprint IS DISTINCT FROM 'silent:suppressed'
+		AND r.stuck_fingerprint IS DISTINCT FROM ` + silentFingerprint + `) OR ` + personRearmedSilence + `))`
+
+// Only person-authored directives re-arm a silent turn; dude's own nudge does not.
+const personRearmedSilence = `EXISTS (SELECT 1 FROM events e JOIN directives d ON d.id = e.payload->>'directiveId'
+	WHERE e.run_id = r.id AND d.run_id = r.id AND e.actor_type = 'human'
+	AND d.created_at > r.stuck_interrupted_at)`
 
 // talkerSilentSince (SQL, over runs r): the agent's last activity, else its
 // turn's start. Both are on the running clock: a resume clears them and the
@@ -752,6 +757,7 @@ func (s *Syncer) interruptBrainstorms(ctx context.Context) error {
 }
 
 var silentTurnNudge = delivery.MustText("notices/silent-turn").Render(nil)
+var silentTurnSuppressed = delivery.MustText("notices/silent-suppressed").Render(nil)
 
 // interruptSilentTalkers stops the turn of each silentTalker, once per
 // silence: lux's interrupt is what makes the harness drop a model request
@@ -778,23 +784,33 @@ func (s *Syncer) interruptSilentTalkers(ctx context.Context) error {
 			}
 			var fingerprint string
 			var silentSecs float64
-			err := tx.QueryRow(ctx, `SELECT `+silentFingerprint+`, extract(epoch FROM now() - `+talkerSilentSince+`)
-				FROM runs r WHERE r.id = $2 AND `+silentTalker, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &silentSecs)
+			var suppress bool
+			err := tx.QueryRow(ctx, `SELECT `+silentFingerprint+`, extract(epoch FROM now() - `+talkerSilentSince+`),
+				COALESCE(r.stuck_fingerprint LIKE 'silent:%', false) AND NOT `+personRearmedSilence+`
+				FROM runs r WHERE r.id = $2 AND `+silentTalker, brainstormCallLimit.Seconds(), r.ID).Scan(&fingerprint, &silentSecs, &suppress)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			if err != nil {
 				return err
 			}
-			id, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: silentTurnNudge, Interrupt: true, Scope: "turn"})
-			if err != nil {
-				return err
+			payload := map[string]any{"runId": r.ID, "silentSecs": silentSecs}
+			if suppress {
+				if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_fingerprint = 'silent:suppressed' WHERE id = $1`, r.ID); err != nil {
+					return err
+				}
+				payload["suppressed"], payload["text"] = true, silentTurnSuppressed
+			} else {
+				id, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: silentTurnNudge, Interrupt: true, Scope: "turn"})
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_interrupted_at = now(), stuck_fingerprint = $2 WHERE id = $1`,
+					r.ID, fingerprint); err != nil {
+					return err
+				}
+				payload["directiveId"] = id
 			}
-			if _, err := tx.Exec(ctx, `UPDATE runs SET stuck_interrupted_at = now(), stuck_fingerprint = $2 WHERE id = $1`,
-				r.ID, fingerprint); err != nil {
-				return err
-			}
-			payload := map[string]any{"runId": r.ID, "silentSecs": silentSecs, "directiveId": id}
 			if r.brainstorm() {
 				return delivery.SessionEvent(ctx, tx, r.ref(), delivery.EvSessionTurnStopped, ledger.ActorSystem, "dude", payload)
 			}

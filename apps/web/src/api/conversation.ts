@@ -473,7 +473,7 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   },
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
-  [EventTypes.RunTurnStopped]: { notice: "nudged", text: () => "Its model gave no answer for 10 minutes: dude stopped the turn." },
+  [EventTypes.RunTurnStopped]: { notice: "nudged", text: (p) => p.suppressed === true && typeof p.text === "string" ? p.text : "Its model gave no answer for 10 minutes: dude stopped the turn." },
   [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
   // The summary it kept stays in the event, for the ledger; it can run to pages.
   [EventTypes.ContextCompacted]: { notice: "notice", text: () => "The agent compacted its context." },
