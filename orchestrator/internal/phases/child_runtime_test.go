@@ -21,6 +21,9 @@ func TestChildRuntimeWriterFence(t *testing.T) {
 	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,kind,source_kind)
 		VALUES('run_parent',$1,$2,$3,1,'conductor','running','agent',NULL)`, w.run.Org, w.run.ProjectID, w.run.TaskID)
 	w.exec(`UPDATE tasks SET status='running' WHERE id=$1`, w.run.TaskID)
+	w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state)
+		VALUES('wf_child_fence',$1,$2,'task.delivery','child-fence','waiting','awaitPullRequest',
+		('{"attempt":1,"taskId":"' || $2 || '","projectId":"' || $3 || '"}')::jsonb)`, w.run.Org, w.run.TaskID, w.run.ProjectID)
 	w.exec(`UPDATE runs SET source_kind = 'task_conductor', parent_run_id = 'run_parent',
 		child_profile = 'implementer', child_capabilities = '{"publishCode":true}', phase='implement',
 		role='implementer', status='running', control='none', child_stop_reason='parent-ended' WHERE id = $1`, w.run.ID)
