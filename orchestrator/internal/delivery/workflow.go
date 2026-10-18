@@ -1746,7 +1746,6 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
 	st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Pending: true}
-	var spent []string // pull requests at the organization's budget
 	repos := feedbackRepos(st.PRFeedback)
 	if len(repos) == 0 {
 		// A fix the conductor started while the pull requests waited, or
@@ -1757,6 +1756,7 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 			return workflow.Result{}, false, err
 		}
 	}
+	var spent []string // pull requests at the organization's budget
 	for _, repo := range repos {
 		if total > 0 && st.PRFixes[repo] >= total {
 			spent = append(spent, repo)

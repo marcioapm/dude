@@ -129,7 +129,7 @@ func TestChecksFinishedRechecksTheEscalationAndCurrentChecks(t *testing.T) {
 			if _, err := owner.Exec(ctx, `UPDATE pull_requests SET checks = $1::check_state WHERE id = 'pr_e'`, tc.checks); err != nil {
 				t.Fatal(err)
 			}
-			if err := app.InOrg(ctx, org, func(tx pgx.Tx) error { return ChecksFinishedTx(ctx, tx, org, "wi_e", "target", 1, "passing") }); err != nil {
+			if err := app.InOrg(ctx, org, func(tx pgx.Tx) error { return ChecksFinishedTx(ctx, tx, org, "wi_e", "target", 1) }); err != nil {
 				t.Fatal(err)
 			}
 			var decided bool

@@ -482,7 +482,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// ChecksFinishedTx checks again under it.
 	if workflowStep == "decide" && escalationReason == "ci_stuck" && (status.Checks == forge.ChecksPassing || status.Checks == forge.ChecksFailing) && isOpen(status.State) {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			return delivery.ChecksFinishedTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number, status.Checks)
+			return delivery.ChecksFinishedTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number)
 		}); err != nil {
 			return err
 		}

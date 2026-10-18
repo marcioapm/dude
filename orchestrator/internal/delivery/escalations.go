@@ -215,10 +215,10 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 }
 
 // ChecksFinishedTx decides an open ci_stuck escalation about the pull
-// request (repo, number) as a person's wait would, now that a sync read its
-// checks as no longer pending (checks): recorded as the system's decision,
-// with a note saying so. Anything else waiting at decide is left alone.
-func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int, checks string) error {
+// request (repo, number) as a person's wait would, once its recorded checks
+// are passing or failing: recorded as the system's decision, with a note
+// saying so. Anything else waiting at decide is left alone.
+func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int) error {
 	// Locked before it is read: the escalation open now may be another.
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil || !waitsAtDecide(d) || d.TaskStatus != "awaiting_input" || !stuckOn(d.State.Escalation, repo, number) {
@@ -229,13 +229,12 @@ func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, 
 		JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND r.name = $2 AND pr.number = $3
 		AND pr.state IN ('open', 'draft')`, taskID, repo, number).Scan(&current)
-	if err == pgx.ErrNoRows {
+	switch {
+	case db.IsNotFound(err):
 		return nil
-	}
-	if err != nil {
+	case err != nil:
 		return err
-	}
-	if current != "passing" && current != "failing" {
+	case current != "passing" && current != "failing":
 		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: "wait",
@@ -307,8 +306,8 @@ func escalationAnsweredLine(questionID, action string) string {
 	return render(escalationAnsweredTmpl, struct{ QuestionID, Action string }{questionID, action})
 }
 
-// escalationOnBannerLine tells the conductor the person decided the
-// escalation on the banner, closing its question about it.
+// escalationOnBannerLine tells the conductor the person (or dude, when
+// system) decided the escalation on the banner, closing its question about it.
 func escalationOnBannerLine(action, questionID string, system bool) string {
 	return render(escalationOnBannerTmpl, struct {
 		QuestionID, Action string
