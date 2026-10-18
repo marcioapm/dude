@@ -252,12 +252,16 @@ func TestAFailingSetupScriptFailsTheRunBeforeItsWorkload(t *testing.T) {
 
 // Inside a script the Run's command-scope git settings are gone, so a
 // hook it installs is the repository's own; a later commit in the Run's
-// environment runs dude's hook, which runs it.
+// environment runs dude's hook, which runs it. A resume keeps the
+// checkout, so the link the script made is still there and the script
+// does not run again: the next commit runs the same hook.
 func TestAHookASetupScriptInstallsRunsOnALaterCommit(t *testing.T) {
 	l := newSetupLux(t, "api")
-	run := l.submit(map[string]string{"api": `env | grep '^GIT_CONFIG' | sort > "$(git rev-parse --git-path setup-env)"
+	scripts := map[string]string{"api": `env | grep '^GIT_CONFIG' | sort > "$(git rev-parse --git-path setup-env)"
 ln -sf ../../pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
-`}, "api")
+echo ran >> "$(git rev-parse --git-path setup-runs)"
+`}
+	run := l.submit(scripts, "api")
 	if got := l.started(run); !slices.Equal(got, []string{"init", "workload"}) {
 		t.Fatalf("starts %v\n%s", got, l.initOutput(run))
 	}
@@ -266,18 +270,47 @@ ln -sf ../../pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
 		t.Errorf("inside the script:\n%s", b)
 	}
 	// The agent's commit, in the Run's environment.
-	cmd := exec.Command("git", "commit", "-q", "--allow-empty", "-m", "work")
-	cmd.Dir = api
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir())
-	for k, v := range l.env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	home := t.TempDir()
+	commit := func(msg string) {
+		t.Helper()
+		cmd := exec.Command("git", "commit", "-q", "--allow-empty", "-m", msg)
+		cmd.Dir = api
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+home)
+		for k, v := range l.env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		} else if !strings.Contains(string(out), "dude: committing without co-authors") {
+			t.Errorf("%s: dude's hook did not run first:\n%s", msg, out)
+		}
 	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	} else if !strings.Contains(string(out), "dude: committing without co-authors") {
-		t.Errorf("dude's hook did not run first:\n%s", out)
-	}
+	commit("work")
 	if b, _ := os.ReadFile(filepath.Join(api, ".git", "hook-log")); string(b) != "repository-hook\n" {
 		t.Errorf("the repository's hook ran %q", b)
+	}
+
+	ctx := context.Background()
+	if err := l.c.Stop(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	for r, _ := l.c.Get(ctx, run); r.State != "stopped"; r, _ = l.c.Get(ctx, run) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := l.c.Resume(ctx, run, lux.ResumeInput{Secrets: []lux.Secret{SetupSecret(l.setups(scripts, "api"))}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(l.started(run)) < 4 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := l.started(run); !slices.Equal(got, []string{"init", "workload", "init", "workload"}) {
+		t.Fatalf("starts after the resume %v", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(api, ".git", "setup-runs")); string(b) != "ran\n" {
+		t.Errorf("the script ran %q, want once: a resume keeps the checkout", b)
+	}
+	commit("after the resume")
+	if b, _ := os.ReadFile(filepath.Join(api, ".git", "hook-log")); string(b) != "repository-hook\nrepository-hook\n" {
+		t.Errorf("after the resume the repository's hook ran %q, want once more", b)
 	}
 }
