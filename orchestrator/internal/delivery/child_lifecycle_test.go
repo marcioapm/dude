@@ -667,6 +667,10 @@ func TestChildTenantLockMakesClaimSkip(t *testing.T) {
 		t.Fatal(err)
 	}
 	claim := claimChildForTest(t, w, id, "worker-a")
+	// Make the lease eligible for takeover before A enters its tenant
+	// transaction. The row lock, rather than an unexpired lease, must keep
+	// worker B's SKIP LOCKED claim out while A is delivering.
+	w.exec(`UPDATE child_result_outbox SET claimed_until=now()-interval '1 second' WHERE child_run_id=$1`, id)
 	tx, err := w.s.DB.Pool.Begin(w.ctx)
 	if err != nil {
 		t.Fatal(err)
