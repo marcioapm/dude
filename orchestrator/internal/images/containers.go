@@ -136,7 +136,7 @@ func (f Found) HookSentence() string {
 
 // HookLine is the hook check's line in the build's log.
 func (f Found) HookLine() string {
-	if f.HookSentence() == "" {
+	if f.GitConfig != "" && f.CommitHook != "" {
 		return "check  git hook  " + f.GitConfig + ", " + f.CommitHook
 	}
 	or := func(p string) string {
