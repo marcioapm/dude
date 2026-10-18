@@ -138,8 +138,25 @@ export const repositorySchema = z.object({
   defaultBranch: z.string().min(1).default("main"),
   /** Trust class — plan §47. Governs network/credential posture. */
   trust: z.enum(["trusted_internal", "untrusted_external"]).default("trusted_internal"),
+  /** Bash run once in each fresh checkout before the agent starts; null: none. */
+  setupScript: z.string().nullable().optional(),
 });
 export type Repository = z.infer<typeof repositorySchema>;
+
+/** The most a repository's setup script may be, in UTF-8 bytes (migration 145's check). */
+export const SETUP_SCRIPT_MAX_BYTES = 16_384;
+export const SETUP_SCRIPT_MESSAGE = `a setup script is text of at most ${SETUP_SCRIPT_MAX_BYTES} bytes, with no NUL characters`;
+
+/**
+ * A setup script as the API takes it: blank (or only whitespace) is none,
+ * stored as null; otherwise kept as written.
+ */
+export const setupScriptInput = z
+  .string()
+  .nullable()
+  .transform((s) => (s === null || s.trim() === "" ? null : s))
+  .refine((s) => s === null || (new TextEncoder().encode(s).length <= SETUP_SCRIPT_MAX_BYTES && !s.includes("\0")),
+    SETUP_SCRIPT_MESSAGE);
 
 export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low", "note"]);
 

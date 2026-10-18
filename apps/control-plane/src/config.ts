@@ -79,7 +79,7 @@ export const KEYS: readonly Key[] = [
   key("builder.database_url", "DUDE_BUILDER_DATABASE_URL", "string", "builder", "", true),
   key("builder.repository", "DUDE_BUILDER_REPOSITORY", "string", "builder"),
   key("builder.authfile", "DUDE_BUILDER_AUTHFILE", "string", "builder"),
-  key("builder.platform", "DUDE_BUILDER_PLATFORM", "string", "builder", "linux/arm64"),
+  key("builder.platform", "DUDE_BUILDER_PLATFORM", "string", "builder", "native"),
   key("builder.cpus", "DUDE_BUILDER_CPUS", "float", "all", "1.5"),
   key("builder.memory", "DUDE_BUILDER_MEMORY", "string", "all", "1536m"),
   key("builder.timeout", "DUDE_BUILDER_TIMEOUT", "duration", "builder", "60m"),

@@ -33,6 +33,7 @@ repositories is one task with one PR per repository changed.
 - **The Run's base is per repository.** `runs.base_ref` becomes
   `runs.base_refs jsonb {repoName: sha}`; `runs.head_sha`/`changed_paths`
   become `runs.heads jsonb {repoName: {sha, changedPaths}}`.
+- **Setup scripts.** Each repository may have a setup script in repository settings (optional bash text, capped at 16 KiB). Every Run carries one fixed lux `init.script` and a file secret, `dude-setup` at `/home/agent/.dude/setup`, listing each of its repositories that has a script, in this list's order. Init runs each listed script in its checkout unless a `dude-setup-done` marker is under that checkout's git directory, with `bash -e` and a timeout, and writes the marker only after success. A failure stops init and fails the Run with the script's exit code and output. lux keeps no secret value, so every resume gives the list again from the current settings, with any repository the resume adds: an added checkout runs its script before the agent starts again, a checkout that ran one never runs it again. The setup environment clears dude's command-scope `GIT_CONFIG_*` variables so hook installers configure the repository's own hooks.
 
 ## Publishing
 

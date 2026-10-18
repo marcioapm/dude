@@ -10,6 +10,9 @@
 #     bin/dude-migrate         the migration runner, bun --compile, with
 #                              migrations/*.sql embedded (build-migrate.sh)
 #     share/dude/web/          the built web app (DUDE_WEB_DIR)
+#     share/dude/layer/        the dude layer's build context but bin/dude
+#                              (scripts/layer-context.sh), which
+#                              dude-image-builder builds and publishes
 #     share/dude/third-party/  licences of code bundled into the binaries
 #     FEATURES                 what this release supports, one per line:
 #                              a deployment tool reads it before relying on
@@ -74,6 +77,7 @@ for arch in arm64 amd64; do
     --target="bun-linux-$bun_arch" "${BUN_DEFINES[@]}"
 
   cp -R "$ROOT/apps/web/dist" "$work/share/dude/web"
+  "$ROOT/scripts/layer-context.sh" "$work/share/dude/layer"
   cp "$ROOT/LICENSE" "$work/share/dude/LICENSE"
   # dude-backend bundles jose (MIT), and dude-orchestrator links go-toml
   # (MIT); both licences ask for their notice in copies.

@@ -44,6 +44,18 @@ repository = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/custom"
 	}
 }
 
+// No layer is set in the normal case: the builder builds its own, and
+// DUDE_LAYER_IMAGE is only an override.
+func TestValidateNeedsNoLayer(t *testing.T) {
+	code, out, errs := check(t, `[builder]
+database_url = "postgres://dude_builder:x@127.0.0.1/dude"
+repository = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/custom"
+`, nil)
+	if code != 0 || !strings.HasPrefix(out, "ok: ") {
+		t.Fatalf("exit %d: %s%s", code, out, errs)
+	}
+}
+
 func TestValidateRefusesWhatStartupWould(t *testing.T) {
 	for name, c := range map[string]struct{ text, want string }{
 		"nothing":           {"", "builder.database_url (DUDE_BUILDER_DATABASE_URL) is required"},

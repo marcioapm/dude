@@ -9,6 +9,8 @@
 #   - FEATURES lists validate, image-builder and git-credentials, and dude-orchestrator,
 #     dude-backend and dude-image-builder validate accept a good file and
 #     refuse a bad one;
+#   - share/dude/layer holds the dude layer's build context, as
+#     scripts/layer-context.sh writes it from this checkout;
 #   - the tarball holds no .sql files;
 #   - bin/dude-migrate, run from a directory with no SQL in it, applies
 #     every migration in this repository's migrations/, reports them all
@@ -77,6 +79,21 @@ echo "ok  FEATURES lists image-builder"
 grep -qx git-credentials "$prefix/FEATURES" || fail "FEATURES does not list git-credentials: $(cat "$prefix/FEATURES")"
 echo "ok  FEATURES lists git-credentials"
 
+# The dude layer's build context, which dude-image-builder builds with
+# bin/dude: the same files as this checkout's, the hook and setup executable.
+layer="$prefix/share/dude/layer"
+want_layer="$(mktemp -d "$prefix/layer-want.XXXXXX")"
+"$ROOT/scripts/layer-context.sh" "$want_layer"
+got_files="$(cd "$layer" 2>/dev/null && find . -type f | LC_ALL=C sort)" || fail "the tarball has no share/dude/layer"
+want_files="$(cd "$want_layer" && find . -type f | LC_ALL=C sort)"
+[[ "$got_files" == "$want_files" ]] || fail "share/dude/layer holds $(echo $got_files), want $(echo $want_files)"
+diff -r "$want_layer" "$layer" >&2 || fail "share/dude/layer differs from scripts/layer-context.sh's"
+for f in setup.sh git-hooks/dude-hook link-git-hooks.sh; do
+  [[ -x "$layer/$f" ]] || fail "share/dude/layer/$f is not executable"
+done
+grep -q 'hooksPath = /usr/local/share/dude/git-hooks' "$layer/git-config" || fail "share/dude/layer/git-config sets no core.hooksPath"
+echo "ok  share/dude/layer holds the layer's build context ($(echo "$got_files" | wc -l | tr -d ' ') files)"
+
 # validate, on a good and a bad file, with none of this machine's settings.
 # Port 1 on loopback: were validate to connect, it would fail loudly.
 good="$prefix/good.toml"
@@ -95,9 +112,9 @@ for cmd in dude-orchestrator dude-backend; do
   echo "ok  bin/$cmd validate: good file accepted, bad refused"
 done
 # dude-image-builder validates its own keys: the good file above lacks them.
+# No images.layer: the builder builds its own, and the setting is an override.
 builder_good="$prefix/builder.toml"
-printf '[images]\nlayer = "r.invalid/dude/layer@sha256:%s"\n[builder]\ndatabase_url = "postgres://dude_builder:x@127.0.0.1:1/dude"\nrepository = "r.invalid/dude/custom"\n' \
-  "$(printf '0%.0s' $(seq 1 64))" > "$builder_good"
+printf '[builder]\ndatabase_url = "postgres://dude_builder:x@127.0.0.1:1/dude"\nrepository = "r.invalid/dude/custom"\n' > "$builder_good"
 chmod 0600 "$builder_good"
 got="$(env -i PATH="$PATH" DUDE_CONFIG="$builder_good" "$prefix/bin/dude-image-builder" validate)" || fail "bin/dude-image-builder validate on a good file exited $?"
 [[ "$got" == "ok: $builder_good" ]] || fail "bin/dude-image-builder validate printed '$got'"

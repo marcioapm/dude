@@ -167,7 +167,7 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
         waiting={waiting.map((b) => `${b.imageName} v${b.version ?? ""}`)}
         onOpen={running ? () => onSub(`builds/${running.id}`) : undefined}
         limits={builderLimits(data.builder)}
-        unavailable={data.builder.available ? undefined : "Builds are off: this dude has no dude layer configured (DUDE_LAYER_IMAGE), so images can be edited but not built or run."}
+        unavailable={data.builder.available ? undefined : "Builds are off: dude-image-builder has not published a dude layer yet, so images can be edited but not built or run."}
       />
       {data.images.length === 0 ? (
         <Callout tone="neutral">No images yet. An image is a Containerfile dude builds and adds its own tools to; projects, previews and agent roles then pick it.</Callout>
@@ -477,7 +477,7 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
             <>
               <span className="layerLabel">DUDE LAYER</span>
               <span className="layerNote"> · added last, from the running release · read-only</span>
-              {`\nCOPY --from=${builder.layer ? `dude-layer@${shortDigest(builder.layer)}` : "dude-layer (not configured)"} /rootfs/ /   # dude CLI, OpenCode, its config\nRUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]\nUSER agent`}
+              {`\nCOPY --from=${builder.layer ? `dude-layer@${shortDigest(builder.layer)}` : "dude-layer (not published yet)"} /rootfs/ /   # dude CLI, OpenCode, its config\nRUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]\nUSER agent`}
             </>
           }
           footer={
@@ -539,7 +539,7 @@ function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenB
             <p className="imageSaveHint">
               {builder.available
                 ? `v${next} joins the queue${ahead ? ` (${ahead} ahead)` : ""}. If it fails, ${image.published ? `v${image.published.number} stays published` : "nothing changes"} and the draft keeps its build log.`
-                : "Builds are off on this dude (no DUDE_LAYER_IMAGE): drafts save, nothing builds."}
+                : "Builds are off: dude-image-builder has not published a dude layer yet. Drafts save, nothing builds."}
               {" "}Build arguments and the Containerfile are not secret: the history shows them.
             </p>
           </>
@@ -723,13 +723,13 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
       <dl className="buildFacts">
         <div><dt className="ds-tnum">{elapsed !== null ? formatDuration(elapsed) : build.state === "queued" ? queuePlace(build.ahead) : "—"}</dt><dd>{elapsed !== null ? (live ? "elapsed" : "took") : "in the line"}</dd></div>
         {build.buildSeconds ? <div><dt className="ds-tnum">{formatDuration(build.buildSeconds * 1000)}</dt><dd>building</dd></div> : null}
-        {build.checkSeconds ? <div><dt className="ds-tnum">{formatDuration(build.checkSeconds * 1000)}</dt><dd>checking containers</dd></div> : null}
+        {build.checkSeconds ? <div><dt className="ds-tnum">{formatDuration(build.checkSeconds * 1000)}</dt><dd>checking image</dd></div> : null}
         {build.pushSeconds ? <div><dt className="ds-tnum">{formatDuration(build.pushSeconds * 1000)}</dt><dd>pushing</dd></div> : null}
         <div><dt className="ds-tnum">{build.published ? `v${build.published.number}` : "none"}</dt><dd>{build.state === "succeeded" && build.kind === "build" ? "published now" : "published"}</dd></div>
       </dl>
       {live ? <BuilderOffline builder={build.builder} /> : null}
       {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
-      {build.state === "failed" && build.containersCheck && !build.containersCheck.passed ? (
+      {build.state === "failed" && build.canRunContainers && build.containersCheck && !build.containersCheck.passed && !build.containersCheck.hook ? (
         <p className="buildFix" data-testid="build-fix">
           Install them in the Containerfile, or build <code>FROM image:{ableBase ?? "<an image that can>"}</code>, which can run containers. Or untick Can run containers.
         </p>
