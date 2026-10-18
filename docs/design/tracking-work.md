@@ -712,7 +712,7 @@ search and `/` are unchanged. Results use the tree's row grammar: an epic result
 
 ## Migration sketch
 
-Written before 132–143 were taken. Epic 1 shipped its part as `144` and `145` (see *Epic 1 as
+Written before 132–145 were taken. Epic 1 shipped its part as `146` and `147` (see *Epic 1 as
 built*); Epic 2 and 3's columns take the next free numbers.
 
 ```sql
@@ -797,10 +797,10 @@ None for Epic 1.
 
 Where the build differs from, or settles, what the sections above say:
 
-- **Migrations** are `144_task_lifecycle.sql` (types, columns, constraints, the
-  `nothing_to_merge` backfill) and `145_task_lifecycle_rules.sql` (`task_blocked_by`,
+- **Migrations** are `146_task_lifecycle.sql` (types, columns, constraints, the
+  `nothing_to_merge` backfill) and `147_task_lifecycle_rules.sql` (`task_blocked_by`,
   `task_closed`, `task_start_refusal`, `task_relation_would_cycle`), not one `132`: other
-  migrations took 132–143, and `ADD VALUE 'duplicates'` can't be used in the transaction that
+  migrations took 132–145, and `ADD VALUE 'duplicates'` can't be used in the transaction that
   adds it. Epic 1 adds only its own columns; kind, priority, a bug's report and `search` are
   Epic 2 and 3's.
 - **Closed** means `resolution IS NOT NULL AND resolution <> 'nothing_to_merge'` (SQL

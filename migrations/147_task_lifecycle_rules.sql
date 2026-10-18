@@ -1,6 +1,6 @@
--- 145_task_lifecycle_rules.sql — the start rules that read lifecycle
+-- 147_task_lifecycle_rules.sql — the start rules that read lifecycle
 -- (docs/design/tracking-work.md, "Duplicate" and "Start paths: one rule").
--- Separate from 144 because they name the `duplicates` relation kind 144
+-- Separate from 146 because they name the `duplicates` relation kind 146
 -- adds, which can't be used in the transaction that adds it.
 --
 -- A task closed as a duplicate hands its blocking to the task it

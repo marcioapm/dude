@@ -55,7 +55,7 @@ const TASK_SELECT = `
       'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
-  -- Lifecycle (migration 144): why a person ended it, and whether it is put away.
+  -- Lifecycle (migration 146): why a person ended it, and whether it is put away.
   resolution, archived_at AS "archivedAt",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.archived_by) AS "archivedBy",
@@ -430,7 +430,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     // Path 8: a bare Run is a start, refused as the orchestrator's
     // RefuseStartTx refuses one: archived, then closed (neither ever
     // overridden), then blocked. The order is task_start_refusal's
-    // (migration 145), the blockers task_blocked_by's; the row is locked as
+    // (migration 147), the blockers task_blocked_by's; the row is locked as
     // RefuseStartTx locks it.
     await scope.sql`SELECT 1 FROM tasks WHERE id = ${taskId} FOR NO KEY UPDATE`;
     const [refusal] = (await scope.sql`
