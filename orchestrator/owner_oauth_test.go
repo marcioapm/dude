@@ -32,9 +32,11 @@ func (w *world) connectThroughCallback(person, token string, githubID int) {
 	cmd := exec.Command("bun", "run", "orchestrator/testdata/connect-github.ts", w.org, person, token, strconv.Itoa(githubID))
 	cmd.Dir = filepath.Join(filepath.Dir(file), "..")
 	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil || string(out) != "/?github=connected#/me/settings" {
-		w.t.Errorf("Connect GitHub callback: %v %s", err, out)
+		w.t.Errorf("Connect GitHub callback: %v\nstdout: %s\nstderr: %s", err, out, stderr.Bytes())
 	}
 }
 
