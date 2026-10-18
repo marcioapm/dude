@@ -82,6 +82,42 @@ describe("LiveDiff", () => {
     expect(html).not.toContain("Unified");
   });
 
+  test("follows the newest change only while the diff is on screen", async () => {
+    // happy-dom lays nothing out: give every box the same place, and count the follows.
+    const place = HTMLElement.prototype.getBoundingClientRect;
+    const scroll = HTMLElement.prototype.scrollTo;
+    let at = { top: 100, bottom: 400 };
+    const follows: ScrollToOptions[] = [];
+    HTMLElement.prototype.getBoundingClientRect = () => ({ ...at, left: 0, right: 800, width: 800, height: at.bottom - at.top, x: 0, y: at.top, toJSON() {} }) as DOMRect;
+    HTMLElement.prototype.scrollTo = function (o?: ScrollToOptions | number) { if (typeof o === "object") follows.push(o); } as typeof HTMLElement.prototype.scrollTo;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    let n = 0;
+    const next = () => [file("src/a.ts", "M", [["-", "old"], ...Array.from({ length: ++n }, (_, i): ["+", string] => ["+", `line ${i}`])])];
+    try {
+      await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
+      await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
+      expect(follows).toHaveLength(1);
+      expect(follows[0]!.behavior).toBe("smooth");
+      // Below the fold, and above it: a new change flashes, but nothing scrolls.
+      for (const off of [{ top: window.innerHeight + 10, bottom: window.innerHeight + 300 }, { top: -300, bottom: -1 }]) {
+        at = off;
+        await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
+        expect(host.querySelectorAll("[data-fresh]").length).toBeGreaterThan(0);
+        expect(follows).toHaveLength(1);
+      }
+      at = { top: 100, bottom: 400 };
+      await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
+      expect(follows).toHaveLength(2);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      HTMLElement.prototype.getBoundingClientRect = place;
+      HTMLElement.prototype.scrollTo = scroll;
+    }
+  });
+
   test("with nothing changed it says so", () => {
     expect(renderToStaticMarkup(<LiveDiff base="b" files={[]} emptyMessage="Nothing yet." />)).toContain("Nothing yet.");
   });
