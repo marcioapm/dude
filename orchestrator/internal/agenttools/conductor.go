@@ -257,7 +257,11 @@ func excerpt(s string, n int) string {
 func conducted[T any](out T, err error) (T, error) {
 	var r delivery.Refusal
 	if errors.As(err, &r) {
-		return out, refusal{msg: r.Msg, blocked: r.Blocked}
+		refused := refusal{msg: r.Msg, blocked: r.Blocked}
+		if r.Event != nil {
+			refused.event = &refusedEvent{r.Event.Type, r.Event.Payload}
+		}
+		return out, refused
 	}
 	return out, err
 }

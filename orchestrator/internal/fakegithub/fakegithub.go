@@ -157,6 +157,15 @@ type Server struct {
 	RateRemaining map[string]int
 	// merge-tree's and diff's answers, by the commits they were asked of.
 	memo memo
+	// Check runs by id, as GitHub reports them (joblogs.go); one not named
+	// reports a failed test in its output.
+	CheckRuns map[int64]CheckRun
+	// Actions job logs by id, the download host they redirect to, and a
+	// status the logs endpoint answers instead (403: no permission).
+	JobLogs      map[int64]string
+	LogHost      string
+	LogStatus    int
+	downloadAuth []string
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -852,14 +861,9 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})
-	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"output": map[string]string{"title": "1 test failed",
-			"summary": "TestGreeting: expected hello, got hi", "text": ""}})
-	})
-	mux.HandleFunc("GET "+prefix+"/check-runs/{id}/annotations", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, []any{map[string]any{"path": "greet.go", "start_line": 12, "annotation_level": "failure",
-			"message": "expected hello"}})
-	})
+	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
+	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)
+	mux.HandleFunc("GET "+prefix+"/check-runs/{id}/annotations", s.checkRunAnnotations)
 	mux.HandleFunc("GET "+prefix+"/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()

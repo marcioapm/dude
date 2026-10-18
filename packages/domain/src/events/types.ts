@@ -448,8 +448,8 @@ export const EventTypes = {
   PullRequestFixMoved: "pull_request.fix_moved",
   /**
    * A session's agent or a task's conductor read GitHub through dude
-   * (github_search, github_issue, github_pull_request), on its Run.
-   * Payload: `{ tool, repo, number?, query?, kind?, state?, files?, bytes }`:
+   * (github_search, github_issue, github_pull_request, github_check_log), on its Run.
+   * Payload: `{ tool, repo, number?, checkId?, query?, kind?, state?, files?, bytes }`:
    * what was asked and the result's size in bytes, never what GitHub said.
    * A read refused once checked has `{ refused, status }` in place of
    * `bytes`: dude's kind (moved, moved_item, redirect, rate_reserve, rate_limited,

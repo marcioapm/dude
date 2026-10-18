@@ -438,6 +438,10 @@ you already asked for %s; a person has not decided yet
 
 no task %q or epic %q in this project (list_tasks shows them)
 
+## refusals/tools/github/check-id-check-run-from-1
+
+checkId is the check run's id, from 1
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
@@ -933,4 +937,8 @@ no model tier %q: the tiers are the organization's (in Models)
 ## refusals/delivery/restart/tier-names-no-model-yet-cannot
 
 the tier %q names no model yet: a %s cannot run on it
+
+## refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
+
+GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished
 
