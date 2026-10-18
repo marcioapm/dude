@@ -24,25 +24,21 @@ import (
 // as a phase's work is taken. One writer at a time, small, and never
 // untested at the pull request.
 
-// Refusals a publish can meet, in the words the conductor is told.
-const (
-	refusedWriter = "an implementer is working on this task; wait for it, or steer it"
-	refusedPolicy = "Deliver decides this task: steer its agents, or ask the person to hand it to you."
-	// A fix for the open pull request is on its candidate branch, being
-	// reviewed and tested.
-	refusedCandidate = "a fix for the pull request is being reviewed and tested; publish once it has reached the pull request"
-	RefusedBehind    = "your checkout is behind the task branch; `git merge lux/%s` first"
-	RefusedNothing   = "nothing to publish: you have no commits on top of the task branch's head"
-	// RefusedTooBig takes the lines, files, and the limits.
-	RefusedTooBig = "this is %d lines in %d files, past the conductor's limit of %d lines / %d files: " +
-		"delegate this (start_phase implement)"
-	// RefusedBinary takes the repository: a change GitHub shows no lines
-	// for is past any line limit.
-	RefusedBinary = "%s has a change GitHub shows no lines for (a binary file, a rename or mode change with no edits, " +
-		"or a diff too large to show), past the conductor's limit: delegate this (start_phase implement)"
-	// UntestedHead is the pull request gate refusing a head that is a
-	// conductor's commit no review or test Run has run on.
-	UntestedHead = "the last commit is the conductor's; run a review first"
+// Refusals a publish can meet, in the words the conductor is told
+// (agents/refusals/words.md). RefusedBehind takes the branch,
+// RefusedTooBig the lines, files and the limits, RefusedBinary the
+// repository: a change GitHub shows no lines for is past any line limit.
+// UntestedHead is the pull request gate refusing a head that is a
+// conductor's commit no review or test Run has run on.
+var (
+	refusedWriter    = render(mustTemplate("refusals/words/writer"), nil)
+	refusedPolicy    = render(mustTemplate("refusals/words/policy"), nil)
+	refusedCandidate = render(mustTemplate("refusals/words/candidate"), nil)
+	RefusedBehind    = render(mustTemplate("refusals/words/behind"), nil)
+	RefusedNothing   = render(mustTemplate("refusals/words/nothing"), nil)
+	RefusedTooBig    = render(mustTemplate("refusals/words/too-big"), nil)
+	RefusedBinary    = render(mustTemplate("refusals/words/binary"), nil)
+	UntestedHead     = render(mustTemplate("wakes/facts/untested-head"), nil)
 )
 
 // Publish statuses (conductor_publishes.status).
@@ -129,7 +125,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 		return "", err
 	}
 	if !live {
-		return "", refusef("you are no longer this task's conductor: another took over from you. Publish nothing")
+		return "", refuseText(rYouAreNoLongerThisTask3)
 	}
 	d, err := ReadDelivery(ctx, tx, ref.TaskID)
 	if err != nil {
@@ -143,15 +139,15 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	switch {
 	case Ended(status):
-		return "", refusef("this task is %s: you are read-only now and publish nothing. Offer a follow-up task (create_task)", status)
+		return "", refusef(rThisTaskYouAreReadOnly3, status)
 	case d == nil || !d.Live():
-		return "", refusef("this task has no delivery in progress: there is no task branch to publish to")
+		return "", refuseText(rThisTaskHasNoDeliveryIn2)
 	case !d.State.conducted():
 		return "", refusef("%s", refusedPolicy)
 	case readOnly != "":
-		return "", refusef("your checkout is read-only for this conversation: %s", readOnly)
+		return "", refusef(rYourCheckoutReadOnlyForThis, readOnly)
 	case pushBranch == "":
-		return "", refusef("your checkout has no repository you may change: nothing can be published")
+		return "", refuseText(rYourCheckoutHasNoRepositoryYou)
 	}
 	var writer, inFlight bool
 	if err := tx.QueryRow(ctx, `SELECT `+liveWriter+`,
@@ -163,7 +159,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 		return "", refusef("%s", refusedWriter)
 	}
 	if inFlight {
-		return "", refusef("a publish of yours is under way: you are woken when it is done")
+		return "", refuseText(rPublishYoursUnderWayYouAre)
 	}
 	if d.State.Candidate != nil {
 		return "", refusef("%s", refusedCandidate)
@@ -328,15 +324,15 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 	}
 	switch {
 	case !live:
-		return d, "you are no longer this task's conductor", nil
+		return d, publishRefusedWhy("not-conductor", ""), nil
 	case readOnly != "":
-		return d, "your checkout is read-only for this conversation: " + readOnly, nil
+		return d, publishRefusedWhy("read-only", readOnly), nil
 	case d == nil || !d.Live():
-		return d, "this task has no delivery in progress", nil
+		return d, publishRefusedWhy("no-delivery", ""), nil
 	case Ended(d.TaskStatus):
-		return d, "this task is " + d.TaskStatus, nil
+		return d, publishRefusedWhy("ended", d.TaskStatus), nil
 	case d.WorkflowID != p.WorkflowID || d.State.Attempt != p.Attempt:
-		return d, "the task was started over since you published", nil
+		return d, publishRefusedWhy("started-over", ""), nil
 	case !d.State.conducted():
 		return d, refusedPolicy, nil
 	case writer:
@@ -575,13 +571,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 		WHERE id = $1`, p.WorkflowID, rawHeads, rawPaths); err != nil {
 		return err
 	}
-	var notMoved []string
-	for _, repo := range slices.Sorted(maps.Keys(refused)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s was refused: %s", repo, clip(oneLine(refused[repo]), 160)))
-	}
-	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
-		notMoved = append(notMoved, fmt.Sprintf("%s could not be confirmed at %s", repo, short(stalled[repo])))
-	}
+	notMoved := notMovedParts(refused, stalled)
 	raw, _ := json.Marshal(heads)
 	tag, err := tx.Exec(ctx, `UPDATE conductor_publishes SET status = 'published', heads = $2::jsonb, settled_at = now(),
 			error = NULLIF($3, ''), next_attempt_at = NULL
@@ -596,12 +586,7 @@ func PublishedTx(ctx context.Context, tx pgx.Tx, ref RunRef, p PublishOf, heads 
 	for _, repo := range slices.Sorted(maps.Keys(heads)) {
 		commits = append(commits, repo+"@"+short(heads[repo].SHA))
 	}
-	line := fmt.Sprintf("Your publish %s is on the task branch: %s, %d lines in %d files. Run a review before the pull request.",
-		p.ID, strings.Join(commits, " "), lines, len(paths))
-	if len(notMoved) > 0 {
-		line = fmt.Sprintf("Your publish %s is on the task branch in part: published %s; %s. Run a review before the pull request.",
-			p.ID, strings.Join(commits, " "), strings.Join(notMoved, "; "))
-	}
+	line := publishedLine(p.ID, commits, lines, len(paths), notMoved)
 	if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "published", "published:"+p.ID, line); err != nil {
 		return err
 	}
@@ -625,9 +610,32 @@ func PublishRefusedTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID, claim, 
 		}
 		return nil
 	}
-	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID,
-		fmt.Sprintf("Your publish %s was refused, nothing moved: %s", pubID, clip(oneLine(why), 220)))
+	_, err = RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_refused", "publish_refused:"+pubID, publishRefusedLine(pubID, why))
 	return err
+}
+
+// publishedLine tells the conductor its publish id landed: commits
+// (repo@sha), lines in files; notMoved, the repositories it could not move.
+func publishedLine(id string, commits []string, lines, files int, notMoved []string) string {
+	return render(publishedTmpl, struct {
+		ID                string
+		Commits, NotMoved []string
+		Lines, Files      int
+	}{id, commits, notMoved, lines, files})
+}
+
+// publishRefusedLine tells the conductor its publish id was refused.
+func publishRefusedLine(id, why string) string {
+	return render(publishRefusedTmpl, struct{ ID, Why string }{id, why})
+}
+
+// publishStalledLine tells the conductor its publish id could not be
+// confirmed: said, each repository and the head it was sent to.
+func publishStalledLine(id string, said []string) string {
+	return render(publishStalledTmpl, struct {
+		ID   string
+		Said []string
+	}{id, said})
 }
 
 // PublishStalledTx settles a moving publish none of whose moves was
@@ -666,9 +674,7 @@ func stalledNoticeTx(ctx context.Context, tx pgx.Tx, ref RunRef, pubID string, s
 			return err
 		}
 	}
-	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_stalled", "publish_stalled:"+pubID,
-		fmt.Sprintf("Your publish %s could not be confirmed on the task branch (%s): check the branch before you publish again.",
-			pubID, strings.Join(said, ", ")))
+	_, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, "publish_stalled", "publish_stalled:"+pubID, publishStalledLine(pubID, said))
 	return err
 }
 
@@ -743,76 +749,74 @@ func (w *steps) reviewUntested(ctx context.Context, sc workflow.StepContext, st 
 // current: "" for up-to-date or fast-forward. An operation in progress
 // is told whatever the status, with only the commands git accepts in it.
 func CheckoutLine(s lux.SyncResult) string {
-	repo, ref, ahead, behind := s.Repo, s.Ref, s.Ahead, s.Behind
 	if s.Operation != "" {
-		return operationLine(repo, ref, s.Operation, behind)
+		return operationLine(s.Repo, s.Ref, s.Operation, s.Behind)
 	}
-	merge := fmt.Sprintf("`git merge lux/%s`", ref)
+	data := struct {
+		Case, Repo, Ref, Status, Error string
+		Ahead, Behind                  int
+		Why                            []string
+	}{Case: "other", Repo: s.Repo, Ref: s.Ref, Status: s.Status, Error: s.Error, Ahead: s.Ahead, Behind: s.Behind}
 	switch s.Status {
 	case "", "up-to-date", "fast-forward":
 		return ""
 	case "kept":
-		if !s.Dirty && !s.Diverged && ahead == 0 {
+		data.Case = "kept"
+		if !s.Dirty && !s.Diverged && s.Ahead == 0 {
 			// Nothing of its own in the way: HEAD is not on the task branch,
 			// and lux never switches it.
-			return fmt.Sprintf("%s: your checkout is %d behind and not on the task branch; `git switch -C %s lux/%s` to take it.",
-				repo, behind, ref, ref)
+			data.Case = "off-branch"
+			break
 		}
-		var why []string
 		if s.Dirty {
-			why = append(why, "has local changes")
+			data.Why = append(data.Why, checkoutDirty)
 		}
-		if s.Diverged || ahead > 0 {
-			why = append(why, fmt.Sprintf("%d commits of its own", ahead))
+		if s.Diverged || s.Ahead > 0 {
+			data.Why = append(data.Why, render(checkoutOwnTmpl, s.Ahead))
 		}
-		if len(why) == 0 {
-			why = append(why, "was kept as it is")
+		if len(data.Why) == 0 {
+			data.Why = append(data.Why, checkoutKeptAsIs)
 		}
-		return fmt.Sprintf("%s: your checkout is %d behind and %s; %s to take them in.", repo, behind, strings.Join(why, " and "), merge)
-	case "ahead":
-		return fmt.Sprintf("%s: your checkout is %d ahead of the task branch and not behind: publish, or keep working.", repo, ahead)
-	case "failed":
-		return fmt.Sprintf("%s: your checkout could not be brought current (%s); it is as you left it.", repo, clip(oneLine(s.Error), 120))
+	case "ahead", "failed":
+		data.Case = s.Status
 	}
-	return fmt.Sprintf("%s: your checkout is %d behind and %d ahead (%s); %s to take the task branch in.", repo, behind, ahead, s.Status, merge)
+	return render(checkoutTmpl, data)
 }
 
 // operationLine tells a checkout stopped mid-operation how to finish or
 // abort it. Switching branches or merging is refused by git until then,
 // so neither is advised before it.
 func operationLine(repo, ref, op string, behind int) string {
-	var finish string
-	switch op {
-	case lux.OperationRebase, lux.OperationAm, lux.OperationMerge, lux.OperationCherryPick, lux.OperationRevert:
-		finish = fmt.Sprintf("resolve and `git %s --continue`, or `git %s --abort`", op, op)
-	case lux.OperationSequencer:
-		finish = "resolve and `git cherry-pick --continue` (or `git revert --continue`), or `git cherry-pick --abort` (or `git revert --abort`)"
-	default:
-		finish = "finish or abort it"
-	}
-	then := ""
-	if behind > 0 {
-		then = fmt.Sprintf("; then `git merge lux/%s`", ref)
-	}
-	return fmt.Sprintf("%s: %s is in progress in your checkout (%d behind the task branch): %s%s.",
-		repo, operationName(op), behind, finish, then)
+	return render(operationTmpl, struct {
+		Repo, Ref, Op string
+		Behind        int
+	}{repo, ref, op, behind})
 }
 
 // operationName is a git operation lux reported, as the conductor reads it.
-func operationName(op string) string {
-	switch op {
-	case lux.OperationSequencer:
-		return "a cherry-pick or revert of several commits"
-	case lux.OperationAm:
-		return "a `git am`"
-	case "":
-		return "a git operation"
-	}
-	return "a " + op
-}
+func operationName(op string) string { return render(operationNameTmpl, op) }
 
 // MidOperationRefusal is why a publish is refused when lux would not push
 // repo, an operation (lux.Operation*) being in progress in its checkout.
 func MidOperationRefusal(repo, op string) string {
-	return fmt.Sprintf("%s: %s is in progress in your checkout: finish or abort it, then publish.", repo, operationName(op))
+	return render(midOperationTmpl, struct{ Repo, Op string }{repo, op})
+}
+
+// publishRefusedWhy is why a publish is refused as it lands: case, with
+// what it names (the read-only reason, the task's status).
+func publishRefusedWhy(c, what string) string {
+	return render(publishLandingTmpl, struct{ Case, What string }{c, what})
+}
+
+// notMovedParts are the repositories a publish did not move: refused (with
+// why), then stalled (with the head it was sent to).
+func notMovedParts(refused, stalled map[string]string) []string {
+	var notMoved []string
+	for _, repo := range slices.Sorted(maps.Keys(refused)) {
+		notMoved = append(notMoved, render(notMovedRefusedTmpl, struct{ Repo, Why string }{repo, refused[repo]}))
+	}
+	for _, repo := range slices.Sorted(maps.Keys(stalled)) {
+		notMoved = append(notMoved, render(notMovedStalledTmpl, struct{ Repo, Head string }{repo, short(stalled[repo])}))
+	}
+	return notMoved
 }

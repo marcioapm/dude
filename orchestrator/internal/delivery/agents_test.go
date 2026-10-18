@@ -98,3 +98,13 @@ func TestAMissingTemplateNamesItsFile(t *testing.T) {
 	}()
 	mustTemplate("contracts/gone")
 }
+
+// A {{define}} Go renders that its file lacks panics, naming the file.
+func TestAMissingDefineNamesItsFile(t *testing.T) {
+	defer func() {
+		if r := fmt.Sprint(recover()); r != `agents/briefings/replay-lines.md defines no "briefings/replay-lines/gone"` {
+			t.Errorf("mustTemplate of a missing define: %v", r)
+		}
+	}()
+	mustTemplate("briefings/replay-lines/gone")
+}

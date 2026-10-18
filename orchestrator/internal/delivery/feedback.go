@@ -162,15 +162,21 @@ func (a FeedbackAnchor) PageLine() string {
 	if u, err := url.Parse(a.URL); err == nil && u.EscapedPath() != "" {
 		route = u.EscapedPath()
 	}
-	line := "Route " + route
+	type box struct{ Width, Height, X, Y int }
+	data := struct {
+		Route           string
+		Window, Element *box
+	}{Route: route}
 	if v := a.Viewport; v != nil {
-		line += fmt.Sprintf(" in a %d×%d window", v.Width, v.Height)
+		data.Window = &box{Width: v.Width, Height: v.Height}
 	}
 	if r := a.Rect; r != nil {
-		line += fmt.Sprintf(" · the element is %d×%d at %d, %d", px(r.Width), px(r.Height), px(r.X), px(r.Y))
+		data.Element = &box{px(r.Width), px(r.Height), px(r.X), px(r.Y)}
 	}
-	return line
+	return render(pageLineTmpl, data)
 }
+
+var pageLineTmpl = mustTemplate("contracts/feedback-page-line")
 
 func px(v float64) int { return int(math.Round(v)) }
 
@@ -331,7 +337,7 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 		return Submitted{}, errNotAPerson
 	}
 	if strings.TrimSpace(in.Key) == "" || len(in.DraftIDs) == 0 {
-		return Submitted{}, feedbackErr("bad_request", "draftIds and a submissionKey are required")
+		return Submitted{}, feedbackErr("bad_request", "%s", mDraftidsAndSubmissionkeyAreRequired)
 	}
 	if err := LockChat(ctx, tx, in.TaskID); err != nil {
 		return Submitted{}, err
@@ -342,7 +348,7 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 	}
 	projectID, status, err := lockTask(ctx, tx, in.TaskID)
 	if err != nil {
-		return Submitted{}, feedbackErr("not_found", "task %s not found", in.TaskID)
+		return Submitted{}, feedbackErr("not_found", mTaskNotFound, in.TaskID)
 	}
 	if out, found, err := repeatedSubmit(ctx, tx, in); found || err != nil {
 		return out, err
@@ -366,7 +372,7 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 	}
 	if len(mine) != len(in.DraftIDs) {
 		// Which ones is not said: another person's draft is not told to exist.
-		return Submitted{}, feedbackErr("bad_request", "%d of the %d drafts are not your drafts on this task's current attempt: nothing was submitted",
+		return Submitted{}, feedbackErr("bad_request", mDraftsAreNotYourDraftsOn,
 			len(in.DraftIDs)-len(mine), len(in.DraftIDs))
 	}
 	batchID := ids.New(ids.FeedbackBatch)
@@ -413,7 +419,7 @@ func repeatedSubmit(ctx context.Context, tx pgx.Tx, in Submission) (Submitted, b
 		return out, true, err
 	}
 	if !slices.Equal(slices.Sorted(slices.Values(out.ItemIDs)), slices.Sorted(slices.Values(in.DraftIDs))) {
-		return Submitted{}, true, feedbackErr("conflict", "submission key %q was used for another batch: use a new key for new drafts", in.Key)
+		return Submitted{}, true, feedbackErr("conflict", mSubmissionKeyWasUsedForAnother, in.Key)
 	}
 	out.Repeated = true
 	return out, true, nil
@@ -424,9 +430,9 @@ func repeatedSubmit(ctx context.Context, tx pgx.Tx, in Submission) (Submitted, b
 func refuseEnded(status string) error {
 	switch status {
 	case "done":
-		return feedbackErr("conflict", "this task is done: feedback on it goes in a follow-up task. Your drafts are kept.")
+		return feedbackErr("conflict", "%s", mThisTaskDoneFeedbackOnGoes)
 	case "failed", "aborted":
-		return feedbackErr("conflict", "this task is %s: Recover it first, then submit. Your drafts are kept.", status)
+		return feedbackErr("conflict", mThisTaskRecoverFirstThenSubmit, status)
 	}
 	return nil
 }
@@ -488,7 +494,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 			return reviveForFeedbackTx(ctx, tx, ref, d)
 		}
 		out.Waiting = "the delivery has ended"
-		return feedbackErr("conflict", "this task's delivery has ended: start it over to give it feedback. Your drafts are kept.")
+		return feedbackErr("conflict", "%s", mThisTaskDeliveryHasEndedStart)
 	}
 	// Every live delivery is signalled: only the waits on the pull
 	// requests or the reader take it, each reading the items again, so one
@@ -841,7 +847,7 @@ func lockItem(ctx context.Context, tx pgx.Tx, itemID string) (lockedItem, error)
 	var it lockedItem
 	err := tx.QueryRow(ctx, `SELECT task_id FROM feedback_items WHERE id = $1 AND status <> 'draft'`, itemID).Scan(&it.TaskID)
 	if db.IsNotFound(err) {
-		return it, feedbackErr("not_found", "feedback %s not found", itemID)
+		return it, feedbackErr("not_found", mFeedbackNotFound, itemID)
 	}
 	if err != nil {
 		return it, err
@@ -861,7 +867,7 @@ func lockItem(ctx context.Context, tx pgx.Tx, itemID string) (lockedItem, error)
 		return it, err
 	}
 	if it.Attempt != it.Current {
-		return it, feedbackErr("conflict", "feedback %s is on attempt %d, which is read-only", itemID, it.Attempt)
+		return it, feedbackErr("conflict", mFeedbackOnAttemptWhichReadOnly, itemID, it.Attempt)
 	}
 	return it, nil
 }
@@ -911,7 +917,7 @@ func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string
 	}
 	body := strings.TrimSpace(in.Body)
 	if kind == "reply" && body == "" {
-		return feedbackErr("bad_request", "a reply needs words")
+		return feedbackErr("bad_request", "%s", mReplyNeedsWords)
 	}
 	it, err := lockItem(ctx, tx, in.ItemID)
 	if err != nil {
@@ -923,7 +929,7 @@ func personSettleTx(ctx context.Context, tx pgx.Tx, in PersonAction, kind string
 		if it.Pending {
 			// A reply would stop a resolution not yet verified from holding
 			// the gate, and its Run failing would no longer reopen it.
-			return feedbackErr("conflict", "feedback %s is resolved by a commit not yet published: reopen it to ask for more, or resolve it to confirm", in.ItemID)
+			return feedbackErr("conflict", mFeedbackResolvedByCommitNotYet, in.ItemID)
 		}
 		ev = EvFeedbackReplied
 		if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'replied', updated_at = now() WHERE id = $1`, in.ItemID); err != nil {
@@ -963,7 +969,7 @@ func PersonReopenTx(ctx context.Context, tx pgx.Tx, rt Starter, in PersonAction)
 		return Submitted{}, err
 	}
 	if it.Status != "resolved" && it.Status != "replied" {
-		return Submitted{}, feedbackErr("conflict", "feedback %s is %s: only a resolved or replied item is reopened", in.ItemID, it.Status)
+		return Submitted{}, feedbackErr("conflict", mFeedbackOnlyResolvedOrRepliedItem, in.ItemID, it.Status)
 	}
 	if err := refuseEnded(it.TaskStatus); err != nil {
 		return Submitted{}, err
@@ -998,14 +1004,14 @@ func PersonReopenTx(ctx context.Context, tx pgx.Tx, rt Starter, in PersonAction)
 func AgentReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, itemID, body string) error {
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return feedbackErr("bad_request", "say why: a reply needs words")
+		return feedbackErr("bad_request", "%s", mSayWhyReplyNeedsWords)
 	}
 	it, err := agentItem(ctx, tx, ref, itemID)
 	if err != nil {
 		return err
 	}
 	if it.Status != "open" && it.Status != "delivered" {
-		return feedbackErr("conflict", "feedback %s is %s: there is nothing to reply to until a person reopens it", itemID, it.Status)
+		return feedbackErr("conflict", mFeedbackThereNothingReplyUntilPerson, itemID, it.Status)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE feedback_items SET status = 'replied', updated_at = now() WHERE id = $1`, itemID); err != nil {
 		return err
@@ -1026,7 +1032,7 @@ func agentItem(ctx context.Context, tx pgx.Tx, ref RunRef, itemID string) (locke
 	var taskID string
 	err := tx.QueryRow(ctx, `SELECT task_id FROM feedback_items WHERE id = $1 AND status <> 'draft'`, itemID).Scan(&taskID)
 	if db.IsNotFound(err) || err == nil && taskID != ref.TaskID {
-		return lockedItem{}, feedbackErr("not_found", "feedback %s is not your task's", itemID)
+		return lockedItem{}, feedbackErr("not_found", mFeedbackNotYourTask, itemID)
 	}
 	if err != nil {
 		return lockedItem{}, err
@@ -1048,21 +1054,21 @@ type Resolution struct {
 func AgentResolveTx(ctx context.Context, tx pgx.Tx, ref RunRef, in Resolution) (string, error) {
 	commit := strings.ToLower(strings.TrimSpace(in.Commit))
 	if !shaPattern.MatchString(commit) {
-		return "", feedbackErr("bad_request", "commit %q is not a commit SHA: resolve with the commit that fixed it (`--commit HEAD`)", in.Commit)
+		return "", feedbackErr("bad_request", mCommitNotCommitShaResolveWith, in.Commit)
 	}
 	it, err := agentItem(ctx, tx, ref, in.ItemID)
 	if err != nil {
 		return "", err
 	}
 	if it.Status != "open" && it.Status != "delivered" {
-		return "", feedbackErr("conflict", "feedback %s is %s already", in.ItemID, it.Status)
+		return "", feedbackErr("conflict", mFeedbackAlready, in.ItemID, it.Status)
 	}
 	var phase string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1`, ref.RunID).Scan(&phase); err != nil {
 		return "", err
 	}
 	if !Publishes[phase] {
-		return "", feedbackErr("forbidden", "only the implementer or fixer whose commit fixed it resolves feedback; reply instead, or start a fix")
+		return "", feedbackErr("forbidden", "%s", mOnlyImplementerOrFixerWhoseCommit)
 	}
 	repo, err := resolutionRepo(ctx, tx, ref.TaskID, in.ItemID, in.Repo)
 	if err != nil {
@@ -1102,18 +1108,18 @@ func resolutionRepo(ctx context.Context, tx pgx.Tx, taskID, itemID, named string
 	switch {
 	case kind == "code" && anchored != "":
 		if named != "" && named != anchored {
-			return "", feedbackErr("bad_request", "feedback %s is on %s: resolve it with a commit there, not in %s", itemID, anchored, named)
+			return "", feedbackErr("bad_request", mFeedbackOnResolveWithCommitThere, itemID, anchored, named)
 		}
 		return anchored, nil
 	case named != "":
 		if !slices.Contains(repos, named) {
-			return "", feedbackErr("bad_request", "%s is not a repository this task changes (%s)", named, strings.Join(repos, ", "))
+			return "", feedbackErr("bad_request", mNotRepositoryThisTaskChanges, named, strings.Join(repos, ", "))
 		}
 		return named, nil
 	case len(repos) == 1:
 		return repos[0], nil
 	}
-	return "", feedbackErr("bad_request", "this task changes %s: name the repository your commit is in (--repo)", strings.Join(repos, ", "))
+	return "", feedbackErr("bad_request", mThisTaskChangesNameRepositoryYour, strings.Join(repos, ", "))
 }
 
 // PendingResolution is an agent's resolution waiting on its Run's publish.
@@ -1241,7 +1247,7 @@ func AgentFeedbackTx(ctx context.Context, tx pgx.Tx, taskID string, itemIDs []st
 	var err error
 	if len(itemIDs) > 0 {
 		if len(itemIDs) > 20 {
-			return out, feedbackErr("bad_request", "at most 20 ids at a time")
+			return out, feedbackErr("bad_request", "%s", mAtMost20IdsAtTime)
 		}
 		rows, err = tx.Query(ctx, `SELECT `+itemColumns+` FROM feedback_items f
 			WHERE f.task_id = $1 AND f.id = ANY($2) AND f.status <> 'draft' AND f.attempt = task_attempt($1)

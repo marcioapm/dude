@@ -151,17 +151,17 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || token == "" {
-			http.Error(w, "a Run's token is required", http.StatusUnauthorized)
+			http.Error(w, httpTokenRequired, http.StatusUnauthorized)
 			return
 		}
 		caller, err := s.lookup(r.Context(), token)
 		switch {
 		case errors.Is(err, errUnknown):
-			http.Error(w, "unknown or ended Run", http.StatusUnauthorized)
+			http.Error(w, httpUnknownRun, http.StatusUnauthorized)
 			return
 		case err != nil:
 			s.Log.Error("agent tools: token lookup failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, httpInternalError, http.StatusInternalServerError)
 			return
 		}
 		caller.CallID = r.Header.Get("X-Dude-Tool-Call-ID")
@@ -186,6 +186,13 @@ func (s *Server) Handler() http.Handler {
 		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
 }
+
+// What the HTTP layer answers a request it cannot serve (refusals/http).
+var (
+	httpTokenRequired = delivery.MustText("refusals/http/token-required").Render(nil)
+	httpUnknownRun    = delivery.MustText("refusals/http/unknown-run").Render(nil)
+	httpInternalError = delivery.MustText("refusals/http/internal-error").Render(nil)
+)
 
 // listJSON is what the CLI shows for `dude tools`: the tools this Run has.
 func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
@@ -278,12 +285,13 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	return c, nil
 }
 
+var serverInstructions = delivery.ToolText("common/server-instructions", nil)
+
 // serverFor builds the MCP server a Run sees: the tools its role may use,
 // each bound to it.
 func (s *Server) serverFor(c Caller) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "dude", Version: "1"}, &mcp.ServerOptions{
-		Instructions: "Tools for the work you are doing in dude, the software factory that started you: " +
-			"see and add to the project's work. What you create is marked as yours and waits for a person.",
+		Instructions: serverInstructions,
 	})
 	for _, t := range allTools() {
 		if !t.allowed(c.Role) || c.Child && !childToolAllowed(t.name) {
@@ -427,25 +435,77 @@ func allTools() []tool {
 }
 
 // define makes a tool from a typed function: its input schema from In,
-// its arguments decoded strictly into In.
-func define[In, Out any](name, description string, roles []string,
+// its arguments decoded strictly into In. Its description and its
+// parameters' are delivery/agents/tools/<name>.md's (a session agent's,
+// tools/session/<name>.md).
+func define[In, Out any](name string, roles []string,
 	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
 		panic(fmt.Sprintf("tool %s: %v", name, err))
 	}
-	return tool{name: name, description: description, roles: roles, schema: schema,
+	key := toolKey(name, roles)
+	describeParameters(key, schema)
+	return tool{name: name, description: delivery.ToolText(key, toolTextData), roles: roles, schema: schema,
 		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
 			var in In
 			if len(args) > 0 && string(args) != "null" {
 				dec := json.NewDecoder(bytes.NewReader(args))
 				dec.DisallowUnknownFields()
 				if err := dec.Decode(&in); err != nil {
-					return nil, refuse("arguments: %v", err)
+					return nil, refuse(rArguments, err)
 				}
 			}
 			return do(ctx, tx, c, in)
 		}}
+}
+
+// toolTextData is what a tool's description may name: create_task's GoalMin.
+var toolTextData = struct{ GoalMin int }{GoalMin}
+
+// toolKey is the name of a tool's text: a session agent's tools share their
+// names with the task agents', so theirs are under session/.
+func toolKey(name string, roles []string) string {
+	if slices.Equal(roles, brainstorms) {
+		return "session/" + name
+	}
+	return name
+}
+
+// describeParameters gives schema's properties their descriptions from the
+// tool's text, each by its path ("questions.header" for a field of the
+// items of questions). A description naming no property panics: the
+// parameter was renamed and its text left behind.
+func describeParameters(key string, schema *jsonschema.Schema) {
+	used := map[string]bool{}
+	var walk func(prefix string, s *jsonschema.Schema)
+	walk = func(prefix string, s *jsonschema.Schema) {
+		if s == nil {
+			return
+		}
+		walk(prefix, s.Items)
+		for name, p := range s.Properties {
+			path := prefix + name
+			if text, ok := delivery.ToolParameter(key, path); ok {
+				p.Description = text
+				used[path] = true
+			}
+			walk(path+".", p)
+		}
+	}
+	walk("", schema)
+	var unused []string
+	for _, path := range delivery.ToolParameters(key) {
+		if !used[path] {
+			unused = append(unused, path)
+		}
+	}
+	if len(unused) > 0 {
+		// Sorted: ToolParameters comes from a map, and the panic must name the same paths every run.
+		slices.Sort(unused)
+		panic(fmt.Sprintf("agents/tools/%s.md describes %s, which the tool has no parameter called",
+			key, strings.Join(unused, ", ")))
+	}
 }
 
 // limit caps how many calls a Run may make to the tool in its lifetime.
@@ -667,9 +727,9 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	limit := t.perRun
 	switch {
 	case recent >= callsPerMinute:
-		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)
+		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
 	case limit > 0 && sameTool >= limit:
-		return refuse("%s is limited to %d calls in a run; this run has used them", tool, limit)
+		return refuse(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
 }
@@ -706,3 +766,6 @@ func structured(out []byte) json.RawMessage {
 	}
 	return out
 }
+
+// refuseText is refuse with a message that has no verbs to fill.
+func refuseText(msg string) error { return refusal{msg: msg} }

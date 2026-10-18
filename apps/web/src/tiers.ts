@@ -31,13 +31,14 @@ export function tierMark(tier: Pick<ModelTier, "name">): { icon: IconName; tone:
   return { icon: "sparkle", tone: "neutral" };
 }
 
-/** Who uses a tier, in words: "4 agents", "2 agents · 1 project", "Nobody". */
+/** Who uses a tier, in words: "4 agents", "2 agents · 1 project · Judgements", "Nobody". */
 export function tierUsedByWords(uses: readonly ModelTierUse[]): string {
-  const agents = new Set(uses.filter((u) => u.kind === "organization").map((u) => u.role)).size;
-  const projects = new Set(uses.filter((u) => u.kind === "project").map((u) => u.project?.id)).size;
+  const agents = new Set(uses.flatMap((u) => (u.kind === "organization" ? [u.role] : []))).size;
+  const projects = new Set(uses.flatMap((u) => (u.kind === "project" ? [u.project?.id] : []))).size;
   const parts = [
     agents ? `${agents} ${agents === 1 ? "agent" : "agents"}` : null,
     projects ? `${projects} ${projects === 1 ? "project" : "projects"}` : null,
+    uses.some((u) => u.kind === "judgements") ? "Judgements" : null,
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : "Nobody";
 }
@@ -47,13 +48,15 @@ function roleOn(role: string, project: { name: string } | null): string {
   return project ? `${project.name} · ${roleLabel(role)}` : roleLabel(role);
 }
 
-/** One use, as the remove dialog and the edit callout name it: "Implementer", "abs · Reviewer". */
+/** One use, as the remove dialog and the edit callout name it: "Implementer", "abs · Reviewer", "Judgements". */
 export function tierUseName(use: ModelTierUse): string {
+  if (use.kind === "judgements") return "Judgements";
   return roleOn(use.role, use.kind === "project" ? use.project! : null);
 }
 
 /** Where a use is set, as the remove dialog says it. */
 export function tierUseWhere(use: ModelTierUse, orgName: string): string {
+  if (use.kind === "judgements") return `${orgName}’s judgement tier`;
   if (use.inherited) return "follows the implementer";
   return use.kind === "project" ? "project override" : `${orgName}’s setting`;
 }

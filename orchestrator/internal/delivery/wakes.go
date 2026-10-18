@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -29,22 +28,14 @@ func heldKey(key string) bool { return strings.HasPrefix(key, heldWakePrefix) }
 
 // WakeNote is the note for reasons' lines, in the order they came.
 func WakeNote(lines []string) string {
-	var b strings.Builder
-	b.WriteString("dude woke you; ")
-	if len(lines) == 1 {
-		b.WriteString("one thing:")
-	} else {
-		fmt.Fprintf(&b, "%d things:", len(lines))
+	shown, more := lines, 0
+	if len(lines) > wakeLines {
+		shown, more = lines[:wakeLines], len(lines)-wakeLines
 	}
-	for i, l := range lines {
-		if i == wakeLines {
-			fmt.Fprintf(&b, "\n- … and %d more", len(lines)-wakeLines)
-			break
-		}
-		b.WriteString("\n- " + l)
-	}
-	b.WriteString("\n\nRead what you need with your tools; take the decision waiting, or tell the person what you propose.")
-	return b.String()
+	return render(wakeNoteTmpl, struct {
+		Count, More int
+		Lines       []string
+	}{len(lines), more, shown})
 }
 
 // WakeConductorTx delivers the task's pending reasons to its conductor as
@@ -345,9 +336,13 @@ func RecordFailedTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string) e
 	if category != "" {
 		phase += " · " + category
 	}
-	_, err := RecordWakeTx(ctx, tx, org, taskID, "decision", "failed:"+runID,
-		fmt.Sprintf("Your %s Run %s failed: %s", phase, runID, clip(oneLine(errText), 120)))
+	_, err := RecordWakeTx(ctx, tx, org, taskID, "decision", "failed:"+runID, runFailedLine(phase, runID, errText))
 	return err
+}
+
+// runFailedLine is the reason a Run the conductor started failed, in words.
+func runFailedLine(phase, runID, errText string) string {
+	return render(runFailedTmpl, struct{ Phase, RunID, Error string }{phase, runID, errText})
 }
 
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task

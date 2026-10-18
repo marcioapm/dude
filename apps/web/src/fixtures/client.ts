@@ -657,6 +657,20 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ models: ["claude-opus-5-5", "claude-fable-5-1", "gpt-5.6-sol"], source: "llm.example/v1", problem: null });
   }
 
+  // -- judgements: Off, and nothing asked yet --------------------------------
+
+  #judgementTier: string | null = null;
+  override judgementSettings(): ReturnType<ApiClient["judgementSettings"]> {
+    return Promise.resolve({ tierId: this.#judgementTier, canEdit: true });
+  }
+  override setJudgementTier(tierId: string | null): ReturnType<ApiClient["setJudgementTier"]> {
+    this.#judgementTier = tierId;
+    return this.judgementSettings();
+  }
+  override judgements(): ReturnType<ApiClient["judgements"]> {
+    return Promise.resolve({ calls: [], summary: { calls: 0, since: new Date(Date.now() - 7 * 86_400_000).toISOString() }, askers: [], next: null });
+  }
+
   // -- servers --------------------------------------------------------------
 
   override projectServers(): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {

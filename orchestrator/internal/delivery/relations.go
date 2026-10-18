@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -45,12 +44,10 @@ type Blocker struct {
 	Status string `json:"status"`
 }
 
-// stateWord names a blocker's state the way every refusal does.
-var stateWord = map[string]string{
-	"review": "in review", "running": "in progress", "awaiting_input": "needs a person", "ready_to_merge": "ready to merge",
-	"failed": "failed", "aborted": "aborted", "received": "not started", "queued": "not started", "intake": "being shaped",
-	"awaiting_confirmation": "plan to confirm", "done": "done, nothing merged",
-}
+// stateWord names a blocker's state the way every refusal does, keyed by
+// the task status a blocker can have (refusals/words/blocker-state/<status>).
+var stateWord = agentTexts("refusals/words/blocker-state/", "review", "running", "awaiting_input", "ready_to_merge",
+	"failed", "aborted", "received", "queued", "intake", "awaiting_confirmation", "done")
 
 // Words is "CP-41 (in review)".
 func (b Blocker) Words() string {
@@ -58,7 +55,7 @@ func (b Blocker) Words() string {
 	if w == "" {
 		w = strings.ReplaceAll(b.Status, "_", " ")
 	}
-	return fmt.Sprintf("%s (%s)", b.Key, w)
+	return render(blockerTmpl, struct{ Key, State string }{b.Key, w})
 }
 
 // KeyList is "CP-41 and CP-43", "CP-40, CP-41 and CP-43".
@@ -102,18 +99,15 @@ func blockerWords(bs []Blocker) []string {
 }
 
 func (e BlockedError) Error() string {
-	once := "they're"
-	if len(e.Blockers) == 1 {
-		once = "that's"
-	}
-	return fmt.Sprintf("%s is blocked by %s: it can start once %s merged.", e.TaskKey, KeyList(blockerWords(e.Blockers)), once)
+	return render(blockedTmpl, struct {
+		Task, Blockers string
+		N              int
+	}{e.TaskKey, KeyList(blockerWords(e.Blockers)), len(e.Blockers)})
 }
 
 // AgentRefusal is what a conductor is told when a start of its task is
 // refused as blocked.
-func (e BlockedError) AgentRefusal() string {
-	return e.Error() + " You can't start it anyway; a person can. Tell the person, and end your turn: you are woken when it can start."
-}
+func (e BlockedError) AgentRefusal() string { return render(blockedAgentTmpl, e.Error()) }
 
 // BlockersPayload is the blockers as events carry them: [{key, status}].
 func BlockersPayload(bs []Blocker) []map[string]any {

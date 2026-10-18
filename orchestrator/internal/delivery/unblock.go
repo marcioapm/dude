@@ -166,12 +166,17 @@ func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by st
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
 		return err
 	}
-	line := fmt.Sprintf("%s merged: %s can start now, nothing open in front of it. Tell the person; start nothing until they agree.", by, taskKey)
-	if auto {
-		line = fmt.Sprintf("%s merged: %s can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.", by, taskKey)
-	}
-	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, line)
+	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, unblockedLine(by, taskKey, auto))
 	return err
+}
+
+// unblockedLine tells a conductor its task taskKey can start, by merged;
+// auto, when it starts on its own.
+func unblockedLine(by, taskKey string, auto bool) string {
+	return render(unblockedTmpl, struct {
+		By, Task string
+		Auto     bool
+	}{by, taskKey, auto})
 }
 
 // EndAutoStartTx ends the task's start when unblocked without firing it,
@@ -418,9 +423,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	}
 	in := StartInput{Org: org, TaskID: taskID, How: how, Writer: Writer{ActorType: ledger.ActorSystem, ActorID: "dude", Person: setBy}}
 	if how == HowTalk {
-		in.Message = fmt.Sprintf("%s set this task to be talked through once nothing was in front of it, and %s merged. "+
-			"Read the task and the merged code, then ask %s what you need to know, or propose a plan. Nothing is built until they agree.",
-			first, by, first)
+		in.Message = talkWhenUnblocked(first, by)
 	}
 	if _, err := StartTx(ctx, tx, a.Starter, in); err != nil {
 		return err
@@ -429,7 +432,8 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", by, taskKey, howLabel[how], first)})
 }
 
-var howLabel = map[string]string{HowDeliver: "Deliver", HowTalk: "Talk it through"}
+// howLabel names each way to start (HowDeliver, HowTalk) as its button does.
+var howLabel = agentTexts("notices/start-how/", HowDeliver, HowTalk)
 
 // lastUnblock is the blocker whose merge released the task last, and its
 // pull request's number: "" and nil when none is recorded.
@@ -487,4 +491,10 @@ func firstName(name string) string {
 		return f[0]
 	}
 	return "its owner"
+}
+
+// talkWhenUnblocked is what the conductor started by an unblocked task's
+// Talk it through is told first: first set it, by merged.
+func talkWhenUnblocked(first, by string) string {
+	return render(talkWhenUnblockedTmpl, struct{ First, By string }{first, by})
 }

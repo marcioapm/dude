@@ -27,7 +27,7 @@ const (
 )
 
 // NotesLimitText is the refusal of a note past the limit, whoever pins it.
-var NotesLimitText = fmt.Sprintf("This epic has %d notes. Replace one (`dude note --replaces N`) instead.", NotesMax)
+var NotesLimitText = render(mustTemplate("notices/notes-limit"), NotesMax)
 
 // NoteRefusal is a note refused: Reason is limit, replaced, no_note,
 // too_long or empty; Current the epic's current notes then.
@@ -91,9 +91,9 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
-		return Pinned{}, NoteRefusal{Reason: "empty", Msg: "a note needs its text"}
+		return Pinned{}, NoteRefusal{Reason: "empty", Msg: mNoteNeedsItsText}
 	case len([]rune(text)) > NoteTextMax:
-		return Pinned{}, NoteRefusal{Reason: "too_long", Msg: fmt.Sprintf("a note is at most %d characters: a short working fact", NoteTextMax)}
+		return Pinned{}, NoteRefusal{Reason: "too_long", Msg: fmt.Sprintf(mNoteAtMostCharactersShortWorking, NoteTextMax)}
 	}
 	projectID, err := LockEpicTx(ctx, tx, in.EpicID)
 	if err != nil {
@@ -153,9 +153,9 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	if err := noteEvent(ctx, tx, org, projectID, in, EvNotePinned, payload); err != nil {
 		return Pinned{}, err
 	}
-	change, line := "added", fmt.Sprintf("Epic note added: %d · %s · %s", out.N, by, text)
+	change, line := "added", noteAddedLine(out.N, by, text)
 	if was != nil {
-		change, line = "replaced", fmt.Sprintf("Epic note replaced: %d → %d · %s · %s\n(was: %s)", was.N, out.N, by, text, was.Text)
+		change, line = "replaced", noteReplacedLine(was.N, out.N, by, text, was.Text)
 	}
 	if out.Told, err = announceNoteTx(ctx, tx, org, in.EpicID, out.ID, in.Run.RunID, change, line); err != nil {
 		return Pinned{}, err
@@ -164,21 +164,45 @@ func PinNoteTx(ctx context.Context, tx pgx.Tx, org string, in PinInput) (Pinned,
 	return out, err
 }
 
+// noteAddedLine tells the epic's live agents note n was pinned by by.
+func noteAddedLine(n int, by, text string) string {
+	return render(noteAddedTmpl, struct {
+		N        int
+		By, Text string
+	}{n, by, text})
+}
+
+// noteReplacedLine tells them note was was replaced by note n.
+func noteReplacedLine(was, n int, by, text, wasText string) string {
+	return render(noteReplacedTmpl, struct {
+		Was, N            int
+		By, Text, WasText string
+	}{was, n, by, text, wasText})
+}
+
+// noteRetiredLine tells them note n was retired by by.
+func noteRetiredLine(n int, by, text string) string {
+	return render(noteRetiredTmpl, struct {
+		N        int
+		By, Text string
+	}{n, by, text})
+}
+
 // notCurrent refuses replacing a note that is not current: none by that
 // number, or one already replaced or retired, naming what took its place.
 func notCurrent(ctx context.Context, tx pgx.Tx, epicID string, old *Note, n, current int) error {
 	switch {
 	case old == nil:
-		return NoteRefusal{Reason: "no_note", Msg: fmt.Sprintf("this epic has no note %d", n), Current: current}
+		return NoteRefusal{Reason: "no_note", Msg: fmt.Sprintf(mThisEpicHasNoNote, n), Current: current}
 	case old.Replaced != nil:
 		var next int
 		if err := tx.QueryRow(ctx, `SELECT n FROM epic_notes WHERE replaces_id = $1`, old.ID).Scan(&next); err != nil {
 			return err
 		}
-		return NoteRefusal{Reason: "replaced", Current: current, Msg: fmt.Sprintf("note %d was replaced by note %d at %s: replace note %d",
+		return NoteRefusal{Reason: "replaced", Current: current, Msg: fmt.Sprintf(mNoteWasReplacedByNoteAt,
 			n, next, old.Replaced.UTC().Format("15:04"), next)}
 	case old.Retired != nil:
-		return NoteRefusal{Reason: "retired", Current: current, Msg: fmt.Sprintf("note %d was retired at %s: pin a new note instead",
+		return NoteRefusal{Reason: "retired", Current: current, Msg: fmt.Sprintf(mNoteWasRetiredAtPinNew,
 			n, old.Retired.UTC().Format("15:04"))}
 	}
 	return nil
@@ -214,8 +238,7 @@ func RetireNoteTx(ctx context.Context, tx pgx.Tx, org, epicID string, n int, per
 	if _, err := ledger.Append(ctx, tx, ev); err != nil {
 		return Note{}, err
 	}
-	if _, err := announceNoteTx(ctx, tx, org, epicID, old.ID, "", "retired",
-		fmt.Sprintf("Epic note retired: %d · %s · no longer in force: %s", old.N, name, old.Text)); err != nil {
+	if _, err := announceNoteTx(ctx, tx, org, epicID, old.ID, "", "retired", noteRetiredLine(old.N, name, old.Text)); err != nil {
 		return Note{}, err
 	}
 	retired, err := noteByN(ctx, tx, epicID, n)
