@@ -99,14 +99,13 @@ dude_setup() (
 	[ -e "$done" ] && exit 0
 	printf '%s%s\n' '` + setupRunningPrefix + `' "$1" >&2
 	printf '%s' "$3" | base64 -d > "$script" || exit
-  for v in $(env | sed -n 's/=.*//p'); do
-    case "$v" in
-      GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;;
-    esac
-  done
-  unset GIT_CONFIG_PARAMETERS
-  export GIT_CONFIG_COUNT=0
-
+	for v in $(env | sed -n 's/=.*//p'); do
+		case "$v" in
+		GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;;
+		esac
+	done
+	unset GIT_CONFIG_PARAMETERS
+	export GIT_CONFIG_COUNT=0
 	timeout -k 10s ` + strconv.Itoa(int(timeout.Seconds())) + `s bash -e "$script" < /dev/null 3<&-
 	code=$?
 	rm -f "$script"
@@ -191,7 +190,7 @@ func (o *InitOutput) Record(f lux.Frame) {
 // without copying more of either than it keeps.
 func keepTail(tail, data string, max int) string {
 	if len(data) >= max {
-		return strings.ToValidUTF8(data[len(data)-max:], "")
+		return strings.Clone(strings.ToValidUTF8(data[len(data)-max:], ""))
 	}
 	if over := len(tail) + len(data) - max; over > 0 {
 		tail = strings.ToValidUTF8(tail[over:], "")
