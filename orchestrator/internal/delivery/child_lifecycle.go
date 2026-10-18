@@ -294,25 +294,33 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 
 // EnqueueChildResults claims bounded work and commits the parent's durable input
 // and receipt together. A crash rolls both back; lux transport happens later.
-func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
-	type pending struct {
-		Org, Parent, Child string
-		Generation         int
-		Token              string
+// childClaim is one outbox row a worker holds the lease on.
+type childClaim struct {
+	Org, Parent, Child string
+	Generation         int
+	Token              string
+}
+
+// claimChildResultsTx leases up to limit unconsumed outbox rows to token in
+// one statement. Rows another worker holds are skipped, not waited on, and a
+// lease that expired (a worker that crashed) is taken over.
+func claimChildResultsTx(ctx context.Context, tx pgx.Tx, token string, limit int) ([]childClaim, error) {
+	rows, err := tx.Query(ctx, `UPDATE child_result_outbox SET claimed_by = $1, claimed_until = now() + interval '1 minute'
+		WHERE (parent_run_id, child_run_id, generation) IN (
+			SELECT parent_run_id, child_run_id, generation FROM child_result_outbox
+			WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
+			ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED
+		) RETURNING organization_id, parent_run_id, child_run_id, generation, claimed_by`, token, limit)
+	if err != nil {
+		return nil, err
 	}
-	var todo []pending
-	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		token := ids.New(ids.Directive)
-		rows, err := tx.Query(ctx, `UPDATE child_result_outbox SET claimed_by = $1, claimed_until = now() + interval '1 minute'
-			WHERE (parent_run_id, child_run_id, generation) IN (
-				SELECT parent_run_id, child_run_id, generation FROM child_result_outbox
-				WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
-				ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED
-			) RETURNING organization_id, parent_run_id, child_run_id, generation, claimed_by`, token)
-		if err != nil {
-			return err
-		}
-		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[pending])
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[childClaim])
+}
+
+func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
+	var todo []childClaim
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) (err error) {
+		todo, err = claimChildResultsTx(ctx, tx, ids.New(ids.Directive), 50)
 		return err
 	}); err != nil {
 		return 0, err

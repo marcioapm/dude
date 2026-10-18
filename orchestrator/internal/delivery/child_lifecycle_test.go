@@ -573,34 +573,33 @@ func TestChildEnqueueClaimsDisjointBatches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	claim := func() ([]string, error) {
-		var ids []string
+	// The production claim, run by two workers in turn: the first holds its
+	// lease, so the second must get the other row, never the same one.
+	claim := func(token string) ([]string, error) {
+		var got []string
 		err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
-			token := fmt.Sprintf("claim-%d", len(ids))
-			rows, err := tx.Query(w.ctx, `UPDATE child_result_outbox SET claimed_by=$1,claimed_until=now()+interval '1 minute'
-				WHERE (parent_run_id,child_run_id,generation) IN (
-					SELECT parent_run_id,child_run_id,generation FROM child_result_outbox
-					WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
-					ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
-				) RETURNING child_run_id`, token)
-			if err != nil {
-				return err
+			claims, err := claimChildResultsTx(w.ctx, tx, token, 1)
+			for _, c := range claims {
+				got = append(got, c.Child)
 			}
-			ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
 			return err
 		})
-		return ids, err
+		return got, err
 	}
-	first, err := claim()
+	first, err := claim("worker-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := claim()
+	second, err := claim("worker-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first) != 1 || len(second) != 1 || first[0] == second[0] {
 		t.Fatalf("overlapping claims: %v %v", first, second)
+	}
+	// Both rows are leased now: a third worker gets nothing.
+	if third, err := claim("worker-c"); err != nil || len(third) != 0 {
+		t.Fatalf("third worker claimed %v (%v), want none", third, err)
 	}
 }
 
