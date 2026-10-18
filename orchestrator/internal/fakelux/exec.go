@@ -71,7 +71,7 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 	if run.workspace != "" {
 		return run.workspace, nil
 	}
-	dir, err := os.MkdirTemp(s.Workspaces, "fakelux-"+run.ID+"-")
+	dir, err := s.workspaceDir(run)
 	if err != nil {
 		return "", err
 	}

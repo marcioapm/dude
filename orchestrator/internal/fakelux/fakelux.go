@@ -233,8 +233,11 @@ type Run struct {
 	published map[string]string
 
 	// Its checkout, a real git clone made when first needed: the
-	// container's /workspace.
-	workspace string
+	// container's /workspace. root is that directory before anything is
+	// cloned into it: init writes there without paying for a clone.
+	workspace, root string
+	// Init scripts run, one per placement that ran its spec's init.
+	Inits int
 	// Edit tool calls made, so each has an id of its own.
 	edits int
 	// The agent's last sync_base did not bring every base in (pending,
@@ -1605,6 +1608,10 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		// Restored checkouts move before init, as a resume's sync does.
 		s.applySync(run, run.pendingSync, "")
 		run.pendingSync = nil
+	}
+	// Init runs on every placement, before the servers and the workload.
+	if !s.runInit(run) {
+		return
 	}
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)

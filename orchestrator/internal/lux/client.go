@@ -266,6 +266,14 @@ type Spec struct {
 	Resources *Resources `json:"resources,omitempty"`
 	// Where it may run; nil is the tenant's default pool.
 	Placement *PlacementSpec `json:"placement,omitempty"`
+	// Run with /bin/sh -c before the workload on every placement; a non-zero
+	// exit fails the placement (lux reason init-failed).
+	Init *Init `json:"init,omitempty"`
+}
+
+// Init is lux's spec.Init.
+type Init struct {
+	Script string `json:"script"`
 }
 
 // Resources is a Run's size. Memory and disk are bytes, which lux takes as
