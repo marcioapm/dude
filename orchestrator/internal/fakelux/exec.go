@@ -251,7 +251,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	args, env, collect := s.publishing(args)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir, cmd.Env = dir, env
-	var stdout, stderr tailWriter
+	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 127)
 	s.mu.Lock()
