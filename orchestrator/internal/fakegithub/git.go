@@ -195,19 +195,22 @@ func (s *Server) mergeTree(a, b string) (string, error) {
 	return out, err
 }
 
-// diff is `git diff <args> base...head`, once per pair of commits.
+// diff is `git diff <args> base...head`, once per pair of commits. A
+// failure is git's own on the names as given, its message naming them.
 func (s *Server) diff(r *fakegit.Repo, base, head string, args ...string) (string, error) {
+	named := append(append([]string{"diff"}, args...), base+"..."+head)
 	hb, hh := s.commitOf(r, base), s.commitOf(r, head)
 	if hb == "" || hh == "" {
-		return s.git(append(append([]string{"diff"}, args...), base+"..."+head)...)
+		return s.git(named...)
 	}
 	key := "diff\x00" + strings.Join(args, "\x00") + "\x00" + hb + "\x00" + hh
 	if v, ok := s.memo.get(key); ok {
 		return v.out, nil
 	}
 	out, err := s.git(append(append([]string{"diff"}, args...), hb+"..."+hh)...)
-	if err == nil {
-		s.memo.put(key, memoed{out: out})
+	if err != nil {
+		return s.git(named...)
 	}
-	return out, err
+	s.memo.put(key, memoed{out: out})
+	return out, nil
 }
