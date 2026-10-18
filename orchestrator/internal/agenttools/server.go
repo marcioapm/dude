@@ -148,22 +148,29 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || token == "" {
-			http.Error(w, "a Run's token is required", http.StatusUnauthorized)
+			http.Error(w, httpTokenRequired, http.StatusUnauthorized)
 			return
 		}
 		caller, err := s.lookup(r.Context(), token)
 		switch {
 		case errors.Is(err, errUnknown):
-			http.Error(w, "unknown or ended Run", http.StatusUnauthorized)
+			http.Error(w, httpUnknownRun, http.StatusUnauthorized)
 			return
 		case err != nil:
 			s.Log.Error("agent tools: token lookup failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, httpInternalError, http.StatusInternalServerError)
 			return
 		}
 		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
 }
+
+// What the HTTP layer answers a request it cannot serve (refusals/http).
+var (
+	httpTokenRequired = delivery.MustText("refusals/http/token-required").Render(nil)
+	httpUnknownRun    = delivery.MustText("refusals/http/unknown-run").Render(nil)
+	httpInternalError = delivery.MustText("refusals/http/internal-error").Render(nil)
+)
 
 // listJSON is what the CLI shows for `dude tools`: the tools this Run has.
 func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {

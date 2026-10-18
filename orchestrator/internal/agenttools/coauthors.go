@@ -100,7 +100,7 @@ func (s *Server) coauthors(w http.ResponseWriter, r *http.Request) {
 		return err
 	}); err != nil {
 		s.Log.Error("agent tools: reading a task's co-authors failed", "run", c.RunID, "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, httpInternalError, http.StatusInternalServerError)
 		return
 	}
 	// The bot commits with a GitHub App: never its own co-author. Not known

@@ -3,7 +3,6 @@ package delivery
 import (
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -172,12 +171,21 @@ func imageText(images []PromptImage) func(ImageRef) string {
 	return func(r ImageRef) string {
 		for i, img := range images {
 			if img.ID == r.ID {
-				return "[Image " + strconv.Itoa(i+1) + ": " + img.Name + "]"
+				return render(imageGivenTmpl, struct {
+					N    int
+					Name string
+				}{i + 1, img.Name})
 			}
 		}
-		return "[Image unavailable: " + r.name() + "]"
+		return render(imageUnavailableTmpl, r.name())
 	}
 }
+
+var (
+	imageGivenTmpl       = mustTemplate("contracts/images/given")
+	imageUnavailableTmpl = mustTemplate("contracts/images/unavailable")
+	imageNamedTmpl       = mustTemplate("contracts/images/named")
+)
 
 // name is what a reader is told the image is: its alt, else its id.
 func (r ImageRef) name() string {
@@ -205,7 +213,7 @@ func (in PromptInput) withImages() PromptInput {
 	return in
 }
 
-func nameText(r ImageRef) string { return "[Image: " + r.name() + "]" }
+func nameText(r ImageRef) string { return render(imageNamedTmpl, r.name()) }
 
 // ImagesAsText writes a task text's references for a reader given no
 // images with it (a pull request, a note to a resumed agent): by name.

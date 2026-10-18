@@ -1675,17 +1675,13 @@ func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep st
 		map[string]any{"from": from, "to": to, "keep": keep, "fromName": fromName, "toName": toName}); err != nil {
 		return err
 	}
-	stays := fromName + " stays in it and can chat."
-	switch keep {
-	case delivery.SessionRead:
-		stays = fromName + " stays in it and can read."
-	case "leave":
-		stays = fromName + " left it."
-	}
-	err = delivery.TellBrainstorm(ctx, tx, org, sessionID, toName+" owns this session now. "+stays+
-		" Edits you propose are filed by whoever owns the task, as before.")
-	return err
+	return delivery.TellBrainstorm(ctx, tx, org, sessionID, sessionOwnerTold.Render(struct {
+		To, From   string
+		Read, Left bool
+	}{toName, fromName, keep == delivery.SessionRead, keep == "leave"}))
 }
+
+var sessionOwnerTold = delivery.MustText("notices/told/session-owner")
 
 // acceptSession is an invitee joining: they see the whole conversation from
 // now on. A handover's invitation makes them the owner.
