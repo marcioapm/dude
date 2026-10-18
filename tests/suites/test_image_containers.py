@@ -232,7 +232,7 @@ def test_a_build_page_shows_the_container_check_passing_and_failing(
          f"{sentence}\nNot pushed. v1 stays published.\n")
     sign_in(page, web_url, org["api_key"], at=f"#/org/settings/images/builds/{failed['buildId']}")
     stages = page.get_by_test_id("build-stages")
-    expect(stages).to_contain_text("Check containers")
+    expect(stages).to_contain_text("Check image")
     expect(stages).to_contain_text("Missing: podman or Docker, fuse-overlayfs, newuidmap, newgidmap")
     expect(stages).to_contain_text("Not pushed · v1 is still live")
     expect(page.get_by_test_id("build-error")).to_have_text(sentence)
@@ -249,7 +249,7 @@ def test_a_build_page_shows_the_container_check_passing_and_failing(
          "Check passed: it can run containers.\n")
     page.goto(f"{web_url}#/org/settings/images/builds/{passed}")
     expect(page.get_by_test_id("build-stages")).to_contain_text("podman 5.4, fuse-overlayfs, newuidmap/newgidmap with capabilities, subuid for agent")
-    expect(page.get_by_text("checking containers")).to_be_visible()
+    expect(page.get_by_text("checking image")).to_be_visible()
     _shoot(page, "04b-build-passed")
     assert console_errors == []
 

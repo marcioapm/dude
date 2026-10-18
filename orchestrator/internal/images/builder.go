@@ -645,7 +645,7 @@ func (b *Builder) check(ctx context.Context, j job, tag string, p *progress, tim
 	}
 	p.printf("%s\n", found.HookLine())
 	if sentence := found.HookSentence(); sentence != "" {
-		result, _ := json.Marshal(map[string]any{"passed": false, "detail": sentence})
+		result, _ := json.Marshal(map[string]any{"passed": false, "detail": sentence, "hook": true})
 		if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET containers_check = $2 WHERE id = $1`, j.ID, result); err != nil {
 			return err
 		}

@@ -729,7 +729,7 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
       </dl>
       {live ? <BuilderOffline builder={build.builder} /> : null}
       {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
-      {build.state === "failed" && build.canRunContainers && build.containersCheck && !build.containersCheck.passed ? (
+      {build.state === "failed" && build.canRunContainers && build.containersCheck && !build.containersCheck.passed && !build.containersCheck.hook ? (
         <p className="buildFix" data-testid="build-fix">
           Install them in the Containerfile, or build <code>FROM image:{ableBase ?? "<an image that can>"}</code>, which can run containers. Or untick Can run containers.
         </p>

@@ -21,7 +21,7 @@
 //	DUDE_BUILDER_REPOSITORY      where versions are pushed: <registry>/<repo> (required)
 //	DUDE_LAYER_IMAGE             an operator's override of the dude layer, by digest: no layer is built
 //	DUDE_BUILDER_AUTHFILE        podman's auth file for the repository
-//	DUDE_BUILDER_PLATFORM        linux/arm64
+//	DUDE_BUILDER_PLATFORM        linux/<this builder's architecture>; must match the release's bin/dude
 //	DUDE_BUILDER_CPUS            1.5, each build's CPUs
 //	DUDE_BUILDER_MEMORY          1536m, each build's memory and swap
 //	DUDE_BUILDER_TIMEOUT         60m, each build's wall-clock limit

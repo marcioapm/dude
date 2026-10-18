@@ -898,6 +898,10 @@ func TestAFinalWithoutDudesGitHookIsNeverPushed(t *testing.T) {
 	if log := f.log(build); !strings.Contains(log, "check  git hook  git-config: "+GitConfigPath+" · prepare-commit-msg: missing\n"+sentence+"\nNot pushed. v1 stays published.\n") {
 		t.Errorf("log:\n%s", log)
 	}
+	// The verdict says it was the hook, so the page offers no container fix for it.
+	if got := f.row(`SELECT containers_check->>'passed', containers_check->>'detail', containers_check->>'hook' FROM image_builds WHERE id = $1`, build); got[0] != "false" || got[1] != sentence || got[2] != "true" {
+		t.Errorf("check = %v", got)
+	}
 
 	next := "registry.test/dude/layer@sha256:9999999999999999999999999999999999999999999999999999999999999999"
 	f.exec(`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref) VALUES ('imb_fin', $1, 'imv_b1', 'finish', $2)`, f.org, next)
