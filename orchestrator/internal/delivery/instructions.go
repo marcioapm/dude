@@ -48,18 +48,6 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 	}
 }
 
-// toolRoles is the role each settings role's Run calls dude's tools as: a
-// fixer is the implementer's Run, told something else.
-var toolRoles = map[string]string{"fixer": "implementer"}
-
-// ToolRole is the role a Run of settings role calls dude's tools as.
-func ToolRole(role string) string {
-	if r, ok := toolRoles[role]; ok {
-		return r
-	}
-	return role
-}
-
 // InstructionTools are the tools the instruction file names, by the role a
 // Run calls them as; agenttools' tests hold each list to the tools that
 // role is given.
@@ -84,9 +72,14 @@ type instructionData struct {
 }
 
 func (in InstructionsInput) data(role string) instructionData {
+	// A fixer is the implementer's Run, told something else.
+	toolRole := role
+	if role == "fixer" {
+		toolRole = "implementer"
+	}
 	has := map[string]bool{}
 	if in.Tools {
-		for _, t := range InstructionTools[ToolRole(role)] {
+		for _, t := range InstructionTools[toolRole] {
 			has[t] = true
 		}
 	}
