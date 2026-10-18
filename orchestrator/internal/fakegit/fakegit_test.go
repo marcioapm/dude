@@ -66,7 +66,8 @@ func history(t *testing.T) (string, []string) {
 		t.Fatal(err)
 	}
 	commit("exec and link", nil)
-	must(t, work, nil, "tag", "-a", "-m", "v1", "v1")
+	must(t, work, []string{"GIT_COMMITTER_DATE=" + fmt.Sprintf("@%d +0000", at/2)},
+		"-c", "user.name=t", "-c", "user.email=t@x", "tag", "-a", "-m", "v1", "v1")
 	must(t, work, nil, "tag", "light")
 	must(t, work, nil, "checkout", "-q", "-b", "side")
 	commit("side 1", map[string]string{"dir/sub/b.txt": "side\n"})
