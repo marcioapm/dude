@@ -15,6 +15,8 @@ import (
 	"container/heap"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -42,9 +44,23 @@ type Repo struct {
 }
 
 // Open opens the repository whose git directory is dir (a bare
-// repository, or a checkout's .git); ok false when its format is one git
-// must read (an extension such as reftable or sha256, or format version 1).
+// repository, or a checkout's .git); ok false when dir is not one (a
+// checkout's top, a .git file, a linked worktree's, one with alternates) or
+// its format is one git must read (an extension such as reftable or
+// sha256, or format version 1).
 func Open(dir string) (*Repo, bool) {
+	for _, p := range []string{"HEAD", "config", "objects", "refs"} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			return nil, false
+		}
+	}
+	// A linked worktree's git directory keeps its refs elsewhere; an
+	// alternate's objects are another repository's.
+	for _, p := range []string{"commondir", "objects/info/alternates"} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err == nil {
+			return nil, false
+		}
+	}
 	st := filesystem.NewStorageWithOptions(osfs.New(dir), cache.NewObjectLRUDefault(), filesystem.Options{})
 	cfg, err := st.Config()
 	if err != nil {
