@@ -153,29 +153,15 @@ func (r *Repo) Commit(name string) (*object.Commit, error) {
 }
 
 func (r *Repo) peelCommit(h plumbing.Hash) (*object.Commit, error) {
-	for range 10 {
-		o, err := r.st.EncodedObject(plumbing.AnyObject, h)
-		if err != nil {
-			return nil, ErrUnknown
-		}
-		switch o.Type() {
-		case plumbing.CommitObject:
-			c, err := object.DecodeCommit(r.st, o)
-			if err != nil {
-				return nil, ErrUnknown
-			}
-			return c, nil
-		case plumbing.TagObject:
-			t, err := object.DecodeTag(r.st, o)
-			if err != nil {
-				return nil, ErrUnknown
-			}
-			h = t.Target
-		default:
-			return nil, ErrUnknown
-		}
+	o, err := r.peel(h, plumbing.CommitObject)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrUnknown
+	c, err := object.DecodeCommit(r.st, o)
+	if err != nil {
+		return nil, ErrUnknown
+	}
+	return c, nil
 }
 
 // tree is the tree name names: a tree, or a commit's (a tag peeled).
@@ -184,30 +170,40 @@ func (r *Repo) tree(name string) (*object.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
+	o, err := r.peel(h, plumbing.TreeObject)
+	if err != nil {
+		return nil, err
+	}
+	t, err := object.DecodeTree(r.st, o)
+	if err != nil {
+		return nil, ErrUnknown
+	}
+	return t, nil
+}
+
+// peel follows tags from h, and a commit to its tree when want is a tree,
+// to an object of type want; ErrUnknown for any other object on the way.
+func (r *Repo) peel(h plumbing.Hash, want plumbing.ObjectType) (plumbing.EncodedObject, error) {
 	for range 10 {
 		o, err := r.st.EncodedObject(plumbing.AnyObject, h)
 		if err != nil {
 			return nil, ErrUnknown
 		}
-		switch o.Type() {
-		case plumbing.TreeObject:
-			t, err := object.DecodeTree(r.st, o)
-			if err != nil {
-				return nil, ErrUnknown
-			}
-			return t, nil
-		case plumbing.CommitObject:
+		switch t := o.Type(); {
+		case t == want:
+			return o, nil
+		case t == plumbing.CommitObject && want == plumbing.TreeObject:
 			c, err := object.DecodeCommit(r.st, o)
 			if err != nil {
 				return nil, ErrUnknown
 			}
 			h = c.TreeHash
-		case plumbing.TagObject:
-			t, err := object.DecodeTag(r.st, o)
+		case t == plumbing.TagObject:
+			tag, err := object.DecodeTag(r.st, o)
 			if err != nil {
 				return nil, ErrUnknown
 			}
-			h = t.Target
+			h = tag.Target
 		default:
 			return nil, ErrUnknown
 		}
@@ -386,6 +382,10 @@ func (r *Repo) WriteBlob(content string) (plumbing.Hash, error) {
 	if err := w.Close(); err != nil {
 		return plumbing.ZeroHash, ErrUnknown
 	}
+	return r.store(o)
+}
+
+func (r *Repo) store(o plumbing.EncodedObject) (plumbing.Hash, error) {
 	h, err := r.st.SetEncodedObject(o)
 	if err != nil {
 		return plumbing.ZeroHash, ErrUnknown
@@ -500,11 +500,7 @@ func (r *Repo) writeDir(d *dir) (plumbing.Hash, error) {
 	if err := (&object.Tree{Entries: entries}).Encode(o); err != nil {
 		return plumbing.ZeroHash, ErrUnknown
 	}
-	h, err := r.st.SetEncodedObject(o)
-	if err != nil {
-		return plumbing.ZeroHash, ErrUnknown
-	}
-	return h, nil
+	return r.store(o)
 }
 
 // sortName is git's tree order key: a directory sorts as if its name ended
@@ -561,9 +557,5 @@ func (r *Repo) CommitTree(tree string, parents []string, name, email, message st
 	if err := c.Encode(o); err != nil {
 		return plumbing.ZeroHash, ErrUnknown
 	}
-	h, err := r.st.SetEncodedObject(o)
-	if err != nil {
-		return plumbing.ZeroHash, ErrUnknown
-	}
-	return h, nil
+	return r.store(o)
 }
