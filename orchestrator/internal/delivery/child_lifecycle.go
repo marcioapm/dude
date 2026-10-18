@@ -237,7 +237,7 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		encoded, _ := json.Marshal([]string{childID, key})
 		id, err = createPhaseRunTx(ctx, tx, org, PhaseRun{TaskID: taskID, Phase: c.Phase,
 			BaseRefs: c.BaseRefs, ParentRunID: c.ParentID, Attempt: c.Attempt, ConductorRunID: c.ParentID,
-			ConductorNote: c.Note, Tier: c.Tier, Branch: c.Branch, Key: "child-restart:" + string(encoded)})
+			ConductorNote: c.Note, Tier: c.Tier, Branch: c.Branch, Key: "child-restart:" + string(encoded), Child: true})
 		if err != nil {
 			return err
 		}

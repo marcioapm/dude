@@ -114,7 +114,7 @@ func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, err
 		id, err = createPhaseRunTx(ctx, tx, ref.Org, PhaseRun{
 			TaskID: ref.TaskID, Phase: phase, BaseRefs: d.State.Heads, Attempt: d.State.Attempt,
 			ParentRunID: ref.RunID, ConductorRunID: ref.RunID, ConductorNote: in.Note,
-			Key: key, Tier: tier, Branch: d.State.Branch,
+			Key: key, Tier: tier, Branch: d.State.Branch, Child: true,
 		})
 		if err != nil {
 			return err

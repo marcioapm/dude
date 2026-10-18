@@ -2,11 +2,14 @@ package delivery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 type childWorld struct {
@@ -225,6 +228,32 @@ func TestChildWriterAdmissionSeesWorkflowWriterAndPublishes(t *testing.T) {
 				t.Fatalf("live publish %s: %v", livePublish, err)
 			}
 		})
+	}
+}
+
+func TestChildWriterBlocksWorkflowAndConductorPublication(t *testing.T) {
+	w := newChildWorld(t)
+	in := w.in
+	in.Profile = "implementer"
+	in.Capabilities.PublishCode = true
+	in.Key = "writer"
+	if _, err := w.s.StartChild(w.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.s.CreatePhaseRun(w.ctx, w.org, PhaseRun{TaskID: "wi_life", Phase: PhaseImplement, Attempt: 3, Key: "workflow-writer"}); !errors.As(err, new(workflow.Wait)) {
+		t.Fatalf("workflow writer: %v", err)
+	}
+	w.exec(`UPDATE workflow_runs SET state = state || '{"decider":"conductor"}'::jsonb WHERE id = 'wf_life'`)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if _, err := ConductPublish(w.ctx, tx, w.in.Parent.Run, "publish"); !IsRefusal(err) {
+			return fmt.Errorf("conduct publish: %v", err)
+		}
+		if _, err := ConductStartPhase(w.ctx, tx, w.in.Parent.Run, StartPhase{Phase: PhaseReview}); !IsRefusal(err) {
+			return fmt.Errorf("start phase: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
