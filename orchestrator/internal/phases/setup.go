@@ -85,7 +85,8 @@ func DeclaresSetup(stored lux.StoredSpec) bool {
 // No manifest is no setup.
 //
 // The command-scope git settings every Run carries (workloadGitConfig)
-// are cleared for a script, so a hook installer writes the repository's
+// are cleared for a script (a word from a multi-line value that is no
+// name is passed over: dash would refuse to unset it and stop init), so a hook installer writes the repository's
 // own config and hooks directory, which dude's hook then runs. A decoded
 // name or path keeps a trailing newline: each substitution ends with "."
 // and loses it after.
@@ -101,6 +102,7 @@ dude_setup() (
 	printf '%s' "$3" | base64 -d > "$script" || exit
 	for v in $(env | sed -n 's/=.*//p'); do
 		case "$v" in
+		*[!A-Za-z0-9_]*) ;;
 		GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_*) unset "$v" ;;
 		esac
 	done

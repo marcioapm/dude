@@ -332,6 +332,29 @@ func TestASetupScriptHasNoInput(t *testing.T) {
 	}
 }
 
+// Every indexed git config var is gone inside a script, one past the
+// count included, and an env value whose lines look like them neither
+// survives nor stops the script.
+func TestASetupScriptClearsEveryIndexedGitConfigPastAMultiLineValue(t *testing.T) {
+	for _, val := range []string{
+		"pem\nGIT_CONFIG_KEY_0.x=y",
+		"headers\nGIT_CONFIG_VALUE_3: a=b",
+		"line\nGIT_CONFIG_KEY_0=core.hooksPath",
+	} {
+		w := newSetupWorkspace(t)
+		w.env = append(w.env, "MULTI="+val, "GIT_CONFIG_KEY_9=core.hooksPath", "GIT_CONFIG_VALUE_9=/elsewhere")
+		w.checkout("api")
+		out := filepath.Join(t.TempDir(), "names")
+		_, errOut, code := w.init(w.setup("api", "compgen -e | grep '^GIT_CONFIG_' | sort > '"+out+"' || :\n"))
+		if code != 0 {
+			t.Fatalf("%q: exit %d\n%s", val, code, errOut)
+		}
+		if b, _ := os.ReadFile(out); string(b) != "GIT_CONFIG_COUNT\nGIT_CONFIG_GLOBAL\nGIT_CONFIG_NOSYSTEM\n" {
+			t.Errorf("%q: exported inside the script %q", val, b)
+		}
+	}
+}
+
 // Inside the script the Run's command-scope git settings are gone
 // (GIT_CONFIG_COUNT=0, no KEY/VALUE), so git config writes the
 // repository's own config, under the command-scope setting the Run's git

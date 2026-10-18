@@ -226,6 +226,8 @@ func TestASetupScriptRunsBeforeTheWorkloadAndOnARepositoryAResumeAdds(t *testing
 	}
 }
 
+// A manifest naming no script needs no checkout: the fake clones nothing
+// for init.
 func TestAnEmptySetupManifestDoesNotCloneForInit(t *testing.T) {
 	l := newSetupLux(t, "api")
 	run := l.submit(map[string]string{}, "api")
@@ -241,6 +243,7 @@ func TestAnEmptySetupManifestDoesNotCloneForInit(t *testing.T) {
 	}
 }
 
+// A script that fails fails the Run init-failed, naming its repository,
 // and the workload never starts.
 func TestAFailingSetupScriptFailsTheRunBeforeItsWorkload(t *testing.T) {
 	l := newSetupLux(t, "api", "web")
