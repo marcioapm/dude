@@ -26,20 +26,8 @@ type setupWorkspace struct {
 
 func newSetupWorkspace(t *testing.T) *setupWorkspace {
 	t.Helper()
-	w := &setupWorkspace{t: t, root: t.TempDir(), hooks: t.TempDir()}
-	hook, err := filepath.Abs("../../../images/runtime/git-hooks/dude-hook")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"pre-commit", "prepare-commit-msg", "commit-msg"} {
-		if err := os.Symlink(hook, filepath.Join(w.hooks, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	include := filepath.Join(t.TempDir(), "git-config")
-	if err := os.WriteFile(include, []byte("[core]\n\thooksPath = "+w.hooks+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	hooks, include := dudeHooks(t)
+	w := &setupWorkspace{t: t, root: t.TempDir(), hooks: hooks}
 	home := t.TempDir()
 	runEnv := map[string]string{}
 	workloadGitConfig(runEnv, true)
@@ -51,6 +39,28 @@ func newSetupWorkspace(t *testing.T) *setupWorkspace {
 		w.env = append(w.env, k+"="+v)
 	}
 	return w
+}
+
+// dudeHooks is a copy of dude's hook directory, linking the runtime
+// image's dude-hook under the client hooks the tests commit through, and
+// a git-config naming it as core.hooksPath, as the image's does.
+func dudeHooks(t *testing.T) (hooks, include string) {
+	t.Helper()
+	hooks = t.TempDir()
+	hook, err := filepath.Abs("../../../images/runtime/git-hooks/dude-hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pre-commit", "prepare-commit-msg", "commit-msg"} {
+		if err := os.Symlink(hook, filepath.Join(hooks, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	include = filepath.Join(t.TempDir(), "git-config")
+	if err := os.WriteFile(include, []byte("[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return hooks, include
 }
 
 // checkout makes repos/<name>, a repository with one commit.

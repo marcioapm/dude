@@ -23,13 +23,12 @@ type setupLux struct {
 	fake  *fakelux.Server
 	c     *lux.HTTPClient
 	repos map[string]string // URL → repository
-	hooks string            // dude's hook directory
 	env   map[string]string // what a Run's spec carries of git
 }
 
 func newSetupLux(t *testing.T, names ...string) *setupLux {
 	t.Helper()
-	l := &setupLux{t: t, repos: map[string]string{}, hooks: t.TempDir()}
+	l := &setupLux{t: t, repos: map[string]string{}}
 	for _, name := range names {
 		dir := filepath.Join(t.TempDir(), name)
 		gitIn(t, "", "init", "-q", "-b", "main", dir)
@@ -47,19 +46,7 @@ func newSetupLux(t *testing.T, names ...string) *setupLux {
 		gitIn(t, dir, "commit", "-q", "-m", "base")
 		l.repos["https://github.com/acme/"+name+".git"] = dir
 	}
-	hook, err := filepath.Abs("../../../images/runtime/git-hooks/dude-hook")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"pre-commit", "prepare-commit-msg", "commit-msg"} {
-		if err := os.Symlink(hook, filepath.Join(l.hooks, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	include := filepath.Join(t.TempDir(), "git-config")
-	if err := os.WriteFile(include, []byte("[core]\n\thooksPath = "+l.hooks+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	_, include := dudeHooks(t)
 	// The Run's command-scope settings (workloadGitConfig), its include
 	// naming this copy of dude's git-config, and a second entry.
 	l.env = map[string]string{}
