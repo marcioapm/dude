@@ -107,9 +107,13 @@ describe("LiveDiff", () => {
         expect(host.querySelectorAll("[data-fresh]").length).toBeGreaterThan(0);
         expect(follows).toHaveLength(1);
       }
-      at = { top: 100, bottom: 400 };
-      await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
-      expect(follows).toHaveLength(2);
+      // Back on screen, and partly on screen across either edge: it follows each time.
+      const h = window.innerHeight;
+      for (const [i, on] of [{ top: 100, bottom: 400 }, { top: -100, bottom: 300 }, { top: h - 100, bottom: h + 500 }].entries()) {
+        at = on;
+        await act(async () => root.render(<LiveDiff base="0fff44b9a1c2" live files={next()} />));
+        expect(follows).toHaveLength(2 + i);
+      }
     } finally {
       await act(async () => root.unmount());
       host.remove();

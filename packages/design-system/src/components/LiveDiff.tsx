@@ -267,7 +267,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     // Chromium drop a fragment navigation the page starts meanwhile.
     const where = box?.getBoundingClientRect();
     if (box && last && where && where.bottom > 0 && where.top < window.innerHeight) {
-      const top = last.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      const top = last.getBoundingClientRect().top - where.top + box.scrollTop;
       box.scrollTo({ top: Math.max(0, top - box.clientHeight / 3), behavior: "smooth" });
     }
   }, [follow, fresh]);
