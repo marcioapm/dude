@@ -875,6 +875,10 @@ test("a database main left at 114 takes 115 to 117, keeps its relations, and tas
     const [index] = await sql`SELECT i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'events_agent_message_idx'`;
     expect(index).toEqual({ valid: true });
+    const [childIndex] = await sql`SELECT i.indisvalid AS valid, a.attname AS column FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+      WHERE c.relname = 'child_results_child_idx'`;
+    expect(childIndex).toEqual({ valid: true, column: "child_run_id" });
     // 116 rebuilds the tier model check whole: it keeps 113's subagent models beside fake/peer.
     const tier = (id: string, model: string) =>
       sql`INSERT INTO model_tiers (id, organization_id, name, model) VALUES (${id}, 'org_u', ${id}, ${model})`;
