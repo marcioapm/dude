@@ -258,8 +258,8 @@ type callerKey struct{}
 
 var errUnknown = errors.New("unknown token")
 
-// lookup finds the live Run a token names. A Run that has ended — finished,
-// failed, aborted — has no tools.
+// lookup finds the Run a token names, and whether it is a started child. The
+// handler refuses an ended Run's tools, except the final hooks' diff bases.
 func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	var c Caller
 	var role *string
@@ -275,19 +275,10 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
-	if err == nil {
-		err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child)
-		})
-		if err != nil {
-			return c, err
-		}
-	}
-	switch c.Status {
-	case "completed", "failed", "aborted":
-		return c, errUnknown
-	}
-	return c, nil
+	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child)
+	})
+	return c, err
 }
 
 var serverInstructions = delivery.ToolText("common/server-instructions", nil)
