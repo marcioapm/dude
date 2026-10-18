@@ -712,9 +712,9 @@ func TestChildTransportRecovery(t *testing.T) {
 				if err == nil || w.count("directives") != 0 {
 					t.Fatalf("rollback %d %v directives %d", n, err, w.count("directives"))
 				}
-				var untouched bool
-				if err := w.owner.QueryRow(w.ctx, `SELECT consumed_at IS NULL AND claimed_by IS NULL FROM child_result_outbox`).Scan(&untouched); err != nil || !untouched {
-					t.Fatalf("partial receipt %v %v", untouched, err)
+				var leased bool
+				if err := w.owner.QueryRow(w.ctx, `SELECT consumed_at IS NULL AND claimed_by IS NOT NULL AND claimed_until > now() FROM child_result_outbox`).Scan(&leased); err != nil || !leased {
+					t.Fatalf("partial receipt lease %v %v", leased, err)
 				}
 				return
 			}
