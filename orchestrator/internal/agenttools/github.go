@@ -90,8 +90,8 @@ type githubPullRequestIn struct {
 }
 
 type githubCheckLogIn struct {
-	Repo    string `json:"repo" jsonschema:"the repository, owner/name, one of your projects'"`
-	CheckID int64  `json:"checkId" jsonschema:"the check id from github_pull_request"`
+	Repo    string `json:"repo"`
+	CheckID int64  `json:"checkId"`
 }
 
 // githubRead is a read checked in the call's transaction: what to ask
@@ -238,7 +238,7 @@ func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPu
 
 func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheckLogIn) (githubRead, error) {
 	if in.CheckID <= 0 {
-		return githubRead{}, refuse("checkId is the check run's id, from 1")
+		return githubRead{}, refuseText("checkId is the check run's id, from 1")
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID})
 }
@@ -711,7 +711,6 @@ var githubReadTools = []tool{
 		readOnGitHub, recordGitHubRead),
 	around(define("github_pull_request", githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_check_log", "Read a failed check's log, or what its check run reported when it is not a GitHub Actions job or GitHub cannot provide its log. Use the check id from github_pull_request before deciding whether to rerun or fix it. Read only; the result is marked as external text.",
-		githubReaders, readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_check_log", githubReaders, readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 }

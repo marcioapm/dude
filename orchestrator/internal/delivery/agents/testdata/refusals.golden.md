@@ -934,3 +934,7 @@ no model tier %q: the tiers are the organization's (in Models)
 
 the tier %q names no model yet: a %s cannot run on it
 
+## refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
+
+GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished
+

@@ -90,6 +90,7 @@ const (
 	rNotReviewThread                        = "%s is not a review thread of %s#%d"
 	rNotThreadInYourFeedbackYou             = "%s is not a thread in your feedback: you resolve only those"
 	rGithubReRunFailedChecksOn              = "GitHub's re-run of the failed checks on %s#%d may or may not have happened (%v); this head is not run again automatically"
+	rGithubRefusedToRunFailedChecksOn       = "GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished"
 	rGithubDidNotDo                         = "GitHub did not do it: %v"
 	rDeliveryMovedOnAsYouAsked              = "the delivery moved on as you asked; you are woken at its next decision"
 	rCannotStartWhileDeliveryWaitsOn        = "%s cannot start while the delivery waits on its pull requests; it can start %s"

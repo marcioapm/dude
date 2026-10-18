@@ -276,8 +276,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			// GitHub answered no and ran nothing (a workflow still running,
 			// a job too old): the head's rerun is not spent. The release is
 			// recorded by the caller as the refusal's event.
-			return done, Refusal{Msg: fmt.Sprintf("GitHub refused to run the failed checks on %s#%d again (%v): nothing was "+
-				"re-run; ask again once CI on this head has finished", c.repo, c.number, err),
+			return done, Refusal{Msg: fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err),
 				Event: &RefusalEvent{Type: EvPullRequestAction, Payload: map[string]any{"action": ActionRerunChecks,
 					"repo": c.repo, "number": c.number, "head": c.head, "released": c.claim}}}
 		}
