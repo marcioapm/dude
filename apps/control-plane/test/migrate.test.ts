@@ -768,6 +768,7 @@ test("143 adds a nullable, size-checked setup script to existing repositories", 
     await sql.end();
   }
 }, 120_000);
+
 test("108 leaves a valid index on the directives that resend another, and only those, outside a transaction", async () => {
   const file = (await listMigrationFiles()).find((f) => f.version === "108");
   expect(file && outsideTransaction(await file.contents())).toBe(true);
@@ -783,7 +784,6 @@ test("108 leaves a valid index on the directives that resend another, and only t
     await sql.end();
   }
 }, 120_000);
-
 
 test("110 stores a repository at https://www.github.com/ at https://github.com/, and leaves every other URL as it was", async () => {
   const { url, sql } = await migratedBefore("110");
