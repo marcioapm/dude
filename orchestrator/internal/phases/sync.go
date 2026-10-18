@@ -1248,6 +1248,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var sizes delivery.Sizes
 	var raised delivery.Raises
 	var recorded *delivery.Machine
+	var conductorIn delivery.PromptInput
 	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
 	var projectSecrets []lux.Secret
 	var tier delivery.Tier
@@ -1286,9 +1287,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		// A resume sends no prompt: lux keeps the submitted one.
 		if r.conductor() && stored == nil {
-			if conductorPrompt, err = s.talkerPrompt(ctx, tx, r, briefing, delivery.PromptImages(taskImages)); err != nil {
+			if conductorIn, err = s.talkerInput(ctx, tx, r, delivery.PromptImages(taskImages)); err != nil {
 				return err
 			}
+			conductorPrompt = delivery.ConductorPrompt(briefing, conductorIn)
 		}
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
@@ -1446,10 +1448,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI)
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
+	if stored == nil {
+		// Pinned to the Run: lux keeps the submitted spec, and its init,
+		// for every placement; a resume sends none.
+		in.Instructions = delivery.Instructions(settingsRole, r.Category, promptIn.InstructionsInput())
+	}
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.
 		in.Prompt = conductorPrompt
+		if stored == nil {
+			in.Instructions = delivery.Instructions(settingsRole, "", conductorIn.InstructionsInput())
+		}
 		if promptIn.Machine != "" {
 			in.Prompt += "\n\n" + promptIn.Machine
 		}
@@ -1491,7 +1501,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			return lux.Spec{}, runSizes{}, nil, nil, err
 		}
 	}
-	spec := buildSpec(s.Agent, in)
+	spec, err := runSpec(s.Agent, in)
+	if err != nil {
+		return lux.Spec{}, runSizes{}, nil, nil, err
+	}
 	given := withProjectSecrets(&spec, projectSecrets)
 	return spec, runSizes{Now: in.Machine, Recorded: recorded}, taskImages, given, nil
 }
@@ -1525,6 +1538,19 @@ func checkoutOf(r phaseRun, repo delivery.Repository, tb delivery.TaskBranch) (r
 // (sessionKept). images are those given with it, which the briefing's
 // image references are numbered against; the rest read as unavailable.
 func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefing string, images []delivery.PromptImage) (string, error) {
+	in, err := s.talkerInput(ctx, tx, r, images)
+	if err != nil {
+		return "", err
+	}
+	if r.brainstorm() {
+		return delivery.BrainstormPrompt(briefing, in), nil
+	}
+	return delivery.ConductorPrompt(briefing, in), nil
+}
+
+// talkerInput is what a conductor's or session agent's prompt and
+// instruction file are made from.
+func (s *Syncer) talkerInput(ctx context.Context, tx pgx.Tx, r phaseRun, images []delivery.PromptImage) (delivery.PromptInput, error) {
 	role := delivery.RoleConductor
 	if r.brainstorm() {
 		role = delivery.RoleBrainstorm
@@ -1534,16 +1560,16 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	if r.brainstorm() {
 		var orgModels json.RawMessage
 		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
-			return "", fmt.Errorf("load the session's organization: %w", err)
+			return in, fmt.Errorf("load the session's organization: %w", err)
 		}
 		var err error
 		if in.Anywhere, err = s.brainstormAnywhere(ctx, tx, r.ID); err != nil {
-			return "", err
+			return in, err
 		}
 		models = []json.RawMessage{orgModels}
 		repos, err := delivery.SessionRepositories(ctx, tx, r.SessionID)
 		if err != nil {
-			return "", err
+			return in, err
 		}
 		for _, repo := range repos {
 			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Key + "/" + repo.Name,
@@ -1554,17 +1580,17 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 		if err := tx.QueryRow(ctx, `SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID).Scan(&in.Title, &in.Goal, &criteria, &projectModels, &orgModels); err != nil {
-			return "", fmt.Errorf("load task: %w", err)
+			return in, fmt.Errorf("load task: %w", err)
 		}
 		_ = json.Unmarshal(criteria, &in.AcceptanceCriteria)
 		models = []json.RawMessage{projectModels, orgModels}
 		repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
 		if err != nil {
-			return "", fmt.Errorf("load repositories: %w", err)
+			return in, fmt.Errorf("load repositories: %w", err)
 		}
 		tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
 		if err != nil {
-			return "", err
+			return in, err
 		}
 		for i, repo := range repos {
 			ref, readOnly := checkoutOf(r, repo, tb)
@@ -1584,13 +1610,10 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	}
 	prompts, err := delivery.LoadPrompts(ctx, tx, r.ID, project, role)
 	if err != nil {
-		return "", err
+		return in, err
 	}
 	in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = prompts.Org, prompts.Project, prompts.ProjectMode
-	if r.brainstorm() {
-		return delivery.BrainstormPrompt(briefing, in), nil
-	}
-	return delivery.ConductorPrompt(briefing, in), nil
+	return in, nil
 }
 
 // toolsToken is the token for this start of the Run: the same however

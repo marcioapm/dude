@@ -52,7 +52,7 @@ func TestInitRunsOnEveryPlacementFromTheSameSpec(t *testing.T) {
 		t.Errorf("init ran %q in %s, first in %s", placements, fake.Workspace(run.ID), dir)
 	}
 	fake.mu.Lock()
-	inits := fake.runs[run.ID].Inits
+	inits := fake.runs[run.ID].inits
 	fake.mu.Unlock()
 	if inits != 2 {
 		t.Errorf("init ran %d times over two placements", inits)

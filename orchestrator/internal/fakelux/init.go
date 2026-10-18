@@ -44,7 +44,7 @@ func (s *Server) runInit(run *Run) bool {
 		cmd.Dir = dir
 		code = exitCode(cmd.Run(), 1)
 	}
-	run.Inits++
+	run.inits++
 	s.recordEvent(run, "lux.init", map[string]any{"phase": "done", "exitCode": code})
 	if code != 0 {
 		s.setStateWith(run, "failed", "init-failed")
@@ -86,4 +86,14 @@ func (s *Server) Workspace(id string) string {
 		return run.root
 	}
 	return ""
+}
+
+// InitsOf is how many placements of a Run have run its init.
+func (s *Server) InitsOf(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return run.inits
+	}
+	return 0
 }

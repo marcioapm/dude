@@ -141,5 +141,8 @@
         "cidr": "10.9.8.7/32"
       }
     ]
+  },
+  "init": {
+    "script": "set -eu\ncat \u003e /workspace/AGENTS.md.tmp \u003c\u003c'DUDE_AGENTS_ed822fcfea80eda1' \u0026\u0026\n# How you work\n\nCheck, then claim: `$HOME` stays as written.\nDUDE_AGENTS_ed822fcfea80eda1\nmv -f /workspace/AGENTS.md.tmp /workspace/AGENTS.md \u0026\u0026\ncat \u003e /workspace/CLAUDE.md.tmp \u003c\u003c'DUDE_AGENTS_ed822fcfea80eda1' \u0026\u0026\n@AGENTS.md\nDUDE_AGENTS_ed822fcfea80eda1\nmv -f /workspace/CLAUDE.md.tmp /workspace/CLAUDE.md\n"
   }
 }

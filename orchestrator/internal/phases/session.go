@@ -96,9 +96,12 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		}
 		// A resume sends no prompt: lux keeps the submitted one.
 		if stored == nil {
-			if prompt, err = s.talkerPrompt(ctx, tx, r, briefing, nil); err != nil {
+			talker, err := s.talkerInput(ctx, tx, r, nil)
+			if err != nil {
 				return err
 			}
+			prompt = delivery.BrainstormPrompt(briefing, talker)
+			in.Instructions = delivery.Instructions(role, "", talker.InstructionsInput())
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err
@@ -154,7 +157,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			return lux.Spec{}, runSizes{}, err
 		}
 	}
-	return buildSpec(s.Agent, in), runSizes{Now: in.Machine, Recorded: recorded}, nil
+	spec, err := runSpec(s.Agent, in)
+	return spec, runSizes{Now: in.Machine, Recorded: recorded}, err
 }
 
 // sessionResume puts on a session agent's resume the repositories linked

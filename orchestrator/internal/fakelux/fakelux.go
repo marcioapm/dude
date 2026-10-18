@@ -236,8 +236,8 @@ type Run struct {
 	// container's /workspace. root is that directory before anything is
 	// cloned into it: init writes there without paying for a clone.
 	workspace, root string
-	// Init scripts run, one per placement that ran its spec's init.
-	Inits int
+	// Placements that ran its spec's init (InitsOf).
+	inits int
 	// Edit tool calls made, so each has an id of its own.
 	edits int
 	// The agent's last sync_base did not bring every base in (pending,
