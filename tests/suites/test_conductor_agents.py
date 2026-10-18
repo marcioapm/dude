@@ -1,6 +1,7 @@
 """Independent conductor children through the deployed tool and phase paths."""
 
 import json
+import re
 
 from helpers import ApiClient, query, wait_until
 from fake_github import FakeGitHub
@@ -36,17 +37,21 @@ def _started(client, owner_dsn, task, parent):
 
 
 def _tool_answers(client, run_id, profile):
-    calls = {}
+    """start_agent calls the conductor made that dude answered, for a profile."""
     answers = []
     for event in client.events(runId=run_id, limit=1000):
         payload = event["payload"]
-        if event["eventType"] == "agent.tool.called" and payload.get("tool") == "start_agent":
-            calls[payload["callId"]] = payload.get("input", payload.get("arguments", {}))
-        elif event["eventType"] == "agent.tool.completed" and payload.get("tool") == "start_agent":
-            arguments = calls.get(payload.get("callId"), {})
-            if arguments.get("profile") == profile:
-                answers.append(payload)
+        if event["eventType"] != "agent.tool.dude" or payload.get("tool") != "start_agent":
+            continue
+        if (payload.get("arguments") or {}).get("profile") == profile:
+            result = payload.get("result") or {}
+            answers.append(json.loads(result) if isinstance(result, str) else result)
     return answers
+
+
+def _refused(client, run_id, tool):
+    """The scripted conductor's replies that say dude refused a call of tool."""
+    return [t for t in _said(client, run_id) if re.search(rf"dude {tool} answered 4\d\d", t)]
 
 
 def test_child_report_returns_once_without_moving_delivery(client: ApiClient, owner_dsn, forge_project):
@@ -92,18 +97,20 @@ def test_child_writer_excludes_another_but_allows_reports_and_selective_abort(cl
          _tool("start_agent", {"profile": "implementer", "key": "first"}),
          _tool("start_agent", {"profile": "implementer", "key": "second"}),
          _tool("start_agent", {"profile": "investigator", "key": "report"}))
-    answers = wait_until(lambda: _tool_answers(client, parent, "investigator") if len(_tool_answers(client, parent, "implementer")) == 2 else None,
-                         timeout=90)
+    # dude's own answers: the first implementer and the investigator are
+    # started, the second implementer is refused while the first holds the
+    # task's one writer slot.
+    investigator_answer = wait_until(lambda: _tool_answers(client, parent, "investigator"), timeout=90,
+                                     message="the investigator start was never answered")[0]
+    refusals = wait_until(lambda: _refused(client, parent, "start_agent"), timeout=60,
+                          message="the second implementer was never refused")
+    assert len(refusals) == 1, refusals
     implementer_answers = _tool_answers(client, parent, "implementer")
-    assert len(implementer_answers) == 2
-    assert "one writer" in " ".join(_said(client, parent)).lower(), implementer_answers
-    investigator = answers[0]
-    output = investigator.get("output", {})
-    if isinstance(output, str):
-        output = json.loads(output)
-    investigator_id = output["runId"]
-    wait_until(lambda: query(owner_dsn, "SELECT id FROM child_results WHERE child_run_id=%s", (investigator_id,)), timeout=120)
-    wait_until(lambda: query(owner_dsn, "SELECT d.id FROM child_result_outbox o JOIN directives d ON d.id=o.directive_id WHERE o.child_run_id=%s AND d.delivered_at IS NOT NULL", (investigator_id,)), timeout=90)
+    assert len(implementer_answers) == 1, implementer_answers
+    investigator_id = investigator_answer["runId"]
+    assert investigator_answer["profile"] == "investigator", investigator_answer
+    # The investigator hangs on purpose: it is the live sibling the abort of
+    # the writer must leave running. Delivery of a result is the first test.
     writer = next(row for row in _children(owner_dsn, task) if row["phase"] == "implement")
     sibling = next(row for row in _children(owner_dsn, task) if row["id"] == investigator_id)
     response = client.post(f"/v1/runs/{writer['id']}/abort", {})
