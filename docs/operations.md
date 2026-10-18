@@ -56,8 +56,13 @@ The release also holds the dude layer's build context under
 `bin/dude`, hashes the context, CLI bytes and `builder.platform`, builds and
 pushes the layer to `<parent of builder.repository>/layer:<hash>`, and
 records its digest in `image_layers`; the orchestrator and backend read the
-current row from there. A release whose inputs hash the same builds nothing
-new. `images.layer` (`DUDE_LAYER_IMAGE`) is an operator override by digest;
+current row from there. Only identical CLI bytes, context files and platform reuse
+an existing layer. The CLI embeds the release version, so every normal release
+changes the tag and lazily re-finishes published versions on first use. A rollback
+makes its recorded layer current again without rebuilding it. `builder.platform`
+defaults to `linux/runtime.GOARCH`; an explicit setting is preserved, but publishing
+requires the release-native CLI architecture.
+`images.layer` (`DUDE_LAYER_IMAGE`) is an operator override by digest;
 with it set the builder builds no layer and every process uses it. Before the
 first layer is published (a fresh install whose builder has not started, or
 failed), the image library is off and says the builder has not published a

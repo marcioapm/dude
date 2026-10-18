@@ -167,8 +167,13 @@ The dude layer is built and published by `dude-image-builder` from the installed
 `share/dude/layer/` and `bin/dude`. Its content tag hashes every context file,
 the CLI bytes and the builder platform. The layer is pushed to the `layer`
 repository beside the configured custom-image repository and its digest is
-recorded in `image_layers`. An identical release does not create another
-layer. `DUDE_LAYER_IMAGE`, when set, is an explicit operator override; when it
+recorded in `image_layers`. Only identical CLI bytes, context files and platform
+reuse a layer. The CLI embeds its version, so every normal release changes the
+tag and triggers lazy re-finishes on first use. A rollback selects its recorded
+layer again without rebuilding it. `builder.platform` defaults to
+`linux/runtime.GOARCH`; an explicit platform is preserved, but publication refuses
+a platform whose CLI this release does not carry.
+`DUDE_LAYER_IMAGE`, when set, is an explicit operator override; when it
 is unset, the orchestrator and backend use the current `image_layers` row.
 Before the first layer is published, library builds and Runs are unavailable
 with a clear reason. A new layer digest finishes published versions again on

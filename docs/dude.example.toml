@@ -137,7 +137,7 @@ auth = "none"                                            # DUDE_REGISTRY_AUTH
 # Where built images are pushed, and podman's auth file for it.
 # repository = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/dude/custom"   # DUDE_BUILDER_REPOSITORY
 # authfile = "/run/dude-image-builder/ecr-auth.json"     # DUDE_BUILDER_AUTHFILE
-platform = "linux/arm64"                                 # DUDE_BUILDER_PLATFORM
+# platform = "linux/arm64"                              # DUDE_BUILDER_PLATFORM; unset uses linux/runtime.GOARCH
 # Each build's limits (the settings page shows the CPUs and memory too).
 cpus = 1.5                                               # DUDE_BUILDER_CPUS
 memory = "1536m"                                         # DUDE_BUILDER_MEMORY
