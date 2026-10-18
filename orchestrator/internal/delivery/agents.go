@@ -327,13 +327,9 @@ func parseRole(root *template.Template, file, role, text string) error {
 			break
 		}
 	}
-	parts := map[string]string{
-		"head":   strings.Join(lines[:start], "\n"),
-		"stance": strings.Join(lines[start:end], "\n"),
-		"fixed":  strings.Join(lines[end:], "\n"),
-	}
-	for _, part := range []string{"head", "stance", "fixed"} {
-		body := strings.Trim(parts[part], "\n")
+	bodies := []string{strings.Join(lines[:start], "\n"), strings.Join(lines[start:end], "\n"), strings.Join(lines[end:], "\n")}
+	for i, part := range []string{"head", "stance", "fixed"} {
+		body := strings.Trim(bodies[i], "\n")
 		if part != "fixed" && strings.TrimSpace(body) == "" {
 			return fmt.Errorf("%s: its %s is empty", file, part)
 		}
