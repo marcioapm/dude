@@ -3852,7 +3852,7 @@ func TestCIStuckPendingIsEscalated(t *testing.T) {
 	w.gh.SetChecks("pending")
 	wi := w.reviewing()
 	w.sync()
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
 	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != "ci_stuck" {
 		t.Errorf("escalated for %q", r)
@@ -3868,7 +3868,7 @@ func TestCIStuckPendingIsEscalated(t *testing.T) {
 	if s := w.taskStatus(wi); s != "review" {
 		t.Fatalf("asked again at once: %s", s)
 	}
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '121 minutes' WHERE task_id = $1`, wi)
 	w.until("asked again", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
 		AND payload->>'reason' = 'ci_stuck'`, wi); n != 2 {
@@ -4111,8 +4111,10 @@ func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
 // escalationReason is why the task's delivery last stopped for a person.
 func (w *world) escalationReason(wi string) string {
 	var r string
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r)
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r); err != nil && err != pgx.ErrNoRows {
+		w.t.Fatal(err)
+	}
 	return r
 }
 
@@ -4227,27 +4229,30 @@ func TestAFailedBranchUpdateLosesNoFeedback(t *testing.T) {
 }
 
 // A stuck-CI signal that waited while a person decided is not acted on
-// once CI has passed.
+// once CI has passed: the passing reading closes the escalation itself.
 func TestAStaleStuckSignalDoesNotStopAgain(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("pending")
 	wi := w.reviewing()
 	w.sync()
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
 	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	// Another hour passes while the person decides: a second signal waits.
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '121 minutes' WHERE task_id = $1`, wi)
 	w.sync()
 	w.gh.SetChecks("success")
-	w.sync()
-	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
-		t.Fatalf("decide: %d %v", code, body)
-	}
-	w.until("waiting again", func() bool { w.pump(); return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge" })
+	w.until("waiting again", func() bool {
+		w.sync()
+		w.pump()
+		return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge"
+	})
 	for range 3 {
 		w.pump()
 	}
 	if s := w.taskStatus(wi); s == "awaiting_input" {
 		t.Error("stopped again for CI that has passed")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'reason' = 'ci_stuck'`, wi); n != 1 {
+		t.Fatalf("%d ci_stuck questions, want 1: a stale signal was acted on", n)
 	}
 }

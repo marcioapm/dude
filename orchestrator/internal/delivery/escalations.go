@@ -214,6 +214,43 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	return workflow.SignalTx(ctx, tx, org, wfID, SignalHumanDecision, nil, "")
 }
 
+// ChecksFinishedTx decides an open ci_stuck escalation about the pull
+// request (repo, number) as a person's wait would, once its recorded checks
+// are passing or failing: recorded as the system's decision, with a note
+// saying so. Anything else waiting at decide is left alone.
+func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int) error {
+	// Locked before it is read: the escalation open now may be another.
+	_, d, err := LockEscalationTx(ctx, tx, taskID)
+	if err != nil || !waitsAtDecide(d) || d.TaskStatus != "awaiting_input" || !stuckOn(d.State.Escalation, repo, number) {
+		return err
+	}
+	var current string
+	err = tx.QueryRow(ctx, `SELECT pr.checks::text FROM pull_requests pr
+		JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND r.name = $2 AND pr.number = $3
+		AND pr.state IN ('open', 'draft')`, taskID, repo, number).Scan(&current)
+	switch {
+	case db.IsNotFound(err):
+		return nil
+	case err != nil:
+		return err
+	case current != "passing" && current != "failing":
+		return nil
+	}
+	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: "wait",
+		Note:      fmt.Sprintf("The checks on %s#%d finished (%s): waiting on the pull request again.", repo, number, current),
+		ActorType: ledger.ActorSystem, ActorID: "forge"})
+}
+
+// stuckOn says the escalation is a ci_stuck about the pull request.
+func stuckOn(e *Escalation, repo string, number int) bool {
+	var d struct {
+		Repo   string `json:"repo"`
+		Number int    `json:"number"`
+	}
+	return e.Reason == "ci_stuck" && e.decode(&d) && d.Repo == repo && d.Number == number
+}
+
 // Events about escalations decided.
 const (
 	// A person (or the conductor, on the owner's answer) decided an
@@ -255,7 +292,7 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.QuestionID != "":
 		line = escalationAnsweredLine(in.QuestionID, in.Action)
 	case len(closed) > 0:
-		line = escalationOnBannerLine(in.Action, closed[0].ID)
+		line = escalationOnBannerLine(in.Action, closed[0].ID, in.ActorType == ledger.ActorSystem)
 	default:
 		return nil
 	}
@@ -269,10 +306,13 @@ func escalationAnsweredLine(questionID, action string) string {
 	return render(escalationAnsweredTmpl, struct{ QuestionID, Action string }{questionID, action})
 }
 
-// escalationOnBannerLine tells the conductor the person decided the
-// escalation on the banner, closing its question about it.
-func escalationOnBannerLine(action, questionID string) string {
-	return render(escalationOnBannerTmpl, struct{ QuestionID, Action string }{questionID, action})
+// escalationOnBannerLine tells the conductor the person (or dude, when
+// system) decided the escalation on the banner, closing its question about it.
+func escalationOnBannerLine(action, questionID string, system bool) string {
+	return render(escalationOnBannerTmpl, struct {
+		QuestionID, Action string
+		System             bool
+	}{questionID, action, system})
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
