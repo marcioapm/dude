@@ -246,6 +246,9 @@ type specRepo struct {
 	Path string
 	// Its setup script, run once per checkout before the agent (SetupInit).
 	Setup string
+	// Branches lux syncs into the checkout from others (syncedBranches):
+	// the final diff is against what of them the Run merged, too.
+	Synced []string
 }
 
 func (r specRepo) path() string {

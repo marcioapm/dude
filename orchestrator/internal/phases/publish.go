@@ -448,11 +448,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 				return s.refusePublish(ctx, p, fmt.Sprintf("%s has no branch %s to measure your commits from", repo.Name, from))
 			}
 		}
-		trusted, untrusted, err := s.trustedBase(ctx, gh, p.Org, p.RunID, slug, res.Repo, baseBranch)
-		if err != nil {
-			return errPublishTransient{err}
-		}
-		acc, err := accountPublish(ctx, gh, slug, baseBranch, start, res.Commit, trusted, untrusted, cmp)
+		acc, err := accountPublish(ctx, gh, slug, baseBranch, start, res.Commit, cmp)
 		if forge.Transient(err) {
 			return errPublishTransient{err}
 		}

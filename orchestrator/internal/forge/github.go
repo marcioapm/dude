@@ -1354,12 +1354,16 @@ func (g *GitHub) ChangedFiles(ctx context.Context, slug, base, head string) ([]s
 
 // Comparison is head against base as GitHub's compare says it: the
 // commits head has that base lacks (AheadBy) and the reverse (BehindBy:
-// base is an ancestor of head only at 0), and each changed file's lines.
+// base is an ancestor of head only at 0), each changed file's lines, and
+// the merge base the files are diffed from.
 type Comparison struct {
-	AheadBy   int            `json:"ahead_by"`
-	BehindBy  int            `json:"behind_by"`
-	Files     []ComparedFile `json:"files"`
-	MergeBase string         `json:"merge_base_commit"`
+	AheadBy  int            `json:"ahead_by"`
+	BehindBy int            `json:"behind_by"`
+	Files    []ComparedFile `json:"files"`
+	// GitHub sends a commit object here, not a sha.
+	MergeBase struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
 }
 
 // CommitComparison is the ancestry-bearing form used by phase advancement.
