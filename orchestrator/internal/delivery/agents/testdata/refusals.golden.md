@@ -438,13 +438,9 @@ you already asked for %s; a person has not decided yet
 
 no task %q or epic %q in this project (list_tasks shows them)
 
-## refusals/tools/child/profile-required
+## refusals/tools/github/check-id-check-run-from-1
 
-an existing phase profile is required
-
-## refusals/tools/child/tools-read-only
-
-independent report children cannot mutate workflow or start Runs
+checkId is the check run's id, from 1
 
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
@@ -942,83 +938,7 @@ no model tier %q: the tiers are the organization's (in Models)
 
 the tier %q names no model yet: a %s cannot run on it
 
-## refusals/delivery/child/already-replaced
+## refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
 
-this child already has a replacement
-
-## refusals/delivery/child/capabilities-mismatch
-
-capabilities must match the named profile
-
-## refusals/delivery/child/no-live-delivery
-
-this task has no live delivery
-
-## refusals/delivery/child/not-independent
-
-not an independent task child
-
-## refusals/delivery/child/note-too-long
-
-note exceeds 4000 characters
-
-## refusals/delivery/child/ownership-changed
-
-child ownership changed
-
-## refusals/delivery/child/parent-ended
-
-the parent conductor is ended, replaced, or itself a child
-
-## refusals/delivery/child/parent-key-required
-
-a task conductor parent and idempotency key are required
-
-## refusals/delivery/child/parent-not-live
-
-the parent is no longer live for this attempt
-
-## refusals/delivery/child/parent-old-attempt
-
-the parent conductor is from an old delivery attempt
-
-## refusals/delivery/child/parent-still-live
-
-the parent has not ended
-
-## refusals/delivery/child/parent-unauthorized
-
-the parent is not this task's authorized conductor
-
-## refusals/delivery/child/positive-attempt-required
-
-a positive delivery attempt is required
-
-## refusals/delivery/child/profile-required
-
-an existing phase profile is required
-
-## refusals/delivery/child/restart-key-required
-
-a restart idempotency key is required
-
-## refusals/delivery/child/task-ended
-
-this task has ended
-
-## refusals/delivery/child/task-publishing
-
-a publish of this task is under way; wait for it to finish
-
-## refusals/delivery/child/terminal-outcome-required
-
-a terminal child outcome is required
-
-## refusals/delivery/child/wrong-parent
-
-not this task's parent
-
-## refusals/delivery/child/wrong-task
-
-child does not belong to this task
+GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished
 

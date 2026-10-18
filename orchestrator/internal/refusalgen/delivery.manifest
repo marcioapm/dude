@@ -86,6 +86,7 @@ rMayNotReviewNotCollaboratorsOn         refusals/delivery/pr-actions/may-not-rev
 rNotReviewThread                        refusals/delivery/pr-actions/not-review-thread
 rNotThreadInYourFeedbackYou             refusals/delivery/pr-actions/not-thread-in-your-feedback-you
 rGithubReRunFailedChecksOn              refusals/delivery/pr-actions/github-re-run-failed-checks-on
+rGithubRefusedToRunFailedChecksOn       refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
 rGithubDidNotDo                         refusals/delivery/pr-actions/github-did-not-do
 rDeliveryMovedOnAsYouAsked              refusals/delivery/prwait/delivery-moved-on-as-you-asked
 rCannotStartWhileDeliveryWaitsOn        refusals/delivery/prwait/cannot-start-while-delivery-waits-on

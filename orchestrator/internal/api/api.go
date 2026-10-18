@@ -132,8 +132,8 @@ func (s *Server) Handler() http.Handler {
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
 	s.feedbackRoutes(mux)
-	// dude's own prompt for each role: what an organization that never
-	// edits runs, and where its first edit starts from.
+	// dude's own stance for each role: the one section of its instruction
+	// file a saved prompt takes the place of, and where a first edit starts.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		out := map[string]string{}
 		for _, role := range delivery.PromptRoles {

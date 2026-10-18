@@ -11,6 +11,4 @@ Acceptance criteria:
   - `total`
 - Totals match the invoice page to the cent
 
-No repository is checked out for this work: it changes no code. Its result is what you publish (see below) and what you reply.
-
-To give the people following this work a file — notes, a design, a report, a screenshot — run `dude publish FILE --name NAME --description "…"` (for example `dude publish notes.md --name notes.md --description "Why the export streams rows"`); the description is one short line saying what the file is for. They see each one next to the task at once, while you work, Markdown rendered; publishing the same name again adds a new version. Publish what a person would want to read; don't publish code.
+No repository is checked out for this work: it changes no code. Its result is what you publish and what you reply.

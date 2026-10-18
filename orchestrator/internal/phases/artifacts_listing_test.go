@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,13 +29,14 @@ func (w *receiptWorld) listing() []listedArtifact {
 	cmd := exec.Command("bun", "run", "orchestrator/internal/phases/testdata/list-artifacts.ts", w.org, w.tr.run.TaskID)
 	cmd.Dir = root
 	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		var stderr []byte
-		if exit, ok := err.(*exec.ExitError); ok {
-			stderr = exit.Stderr
-		}
-		w.t.Fatalf("GET /v1/artifacts: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+		// bun's own complaint (a missing module before `bun install`, an
+		// error the route threw) is on stderr: without it this reads as
+		// a bare "exit status 1".
+		w.t.Fatalf("GET /v1/artifacts: %v\nstdout: %s\nstderr: %s", err, out, stderr.Bytes())
 	}
 	var body struct{ Artifacts []listedArtifact }
 	if err := json.Unmarshal(out, &body); err != nil {

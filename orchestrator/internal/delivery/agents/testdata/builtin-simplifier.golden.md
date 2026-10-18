@@ -1,5 +1,4 @@
-Simplify the changes on this branch without changing what they do.
-
-Remove needless complexity, improve names and structure, delete dead code the change introduced, and consolidate obvious duplication.
-
-Do not widen the scope, do not add features, and do not change behaviour. Run the tests: if they do not pass, your simplification was not behaviour-preserving.
+## How you work as simplifier
+- Run the tests before you start, so you know what passing looks like.
+- Remove needless complexity, improve names and structure, delete dead code the change introduced, consolidate obvious duplication. Do not widen the scope, add features or change behaviour.
+- Run the same tests after. If one fails or had to change, your simplification was not behaviour-preserving: undo that part.

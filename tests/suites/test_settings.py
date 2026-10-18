@@ -95,7 +95,7 @@ def test_a_prompt_is_saved_kept_in_history_and_restored(client: ApiClient):
     # Never edited: dude's own prompt, and no history yet.
     assert before["versionId"] is None and before["versions"] == 0
     builtin = before["body"]
-    assert builtin.startswith("Implement this task.")
+    assert builtin.startswith("## How you work as implementer")
 
     saved = client.post("/v1/prompts/implementer", {"body": "# Implementer\n\nWrite the change.", "note": "Shorter"})
     assert saved.status_code == 201, saved.text
@@ -259,7 +259,7 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     page.goto(f"{web_url}#/org/settings/implementer")
     doc = page.get_by_test_id("prompt-document")
     # It reads rendered: dude's own prompt, never edited.
-    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("How you work as implementer")
     expect(page.get_by_test_id("org-settings")).to_contain_text("dude’s built-in prompt")
 
     # Edit is the source, in place; Cancel puts it back untouched.
@@ -268,7 +268,7 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     expect(source).to_be_focused()
     source.fill("# Implementer\n\nThrown away.")
     doc.get_by_test_id("markdown-cancel").click()
-    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("How you work as implementer")
     assert client.get("/v1/prompts/implementer/history").json()["versions"] == []
 
     # Save keeps it, and it reads rendered again. The bar formats the
@@ -313,7 +313,7 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     dialog.get_by_test_id("prompt-restore").click()
     expect(dialog.locator("[data-version='3']")).to_be_visible()
     page.keyboard.press("Escape")
-    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("How you work as implementer")
     assert console_errors == []
 
 

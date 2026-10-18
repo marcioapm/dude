@@ -351,7 +351,7 @@ func TestEachCodexTurnSumsItsOwnRequests(t *testing.T) {
 // chat's cards know it, with an unknown tool passed through by its name:
 // the shapes are the recorded ones, trimmed.
 func TestGitHubReadCompletionsWithholdBodies(t *testing.T) {
-	for _, tool := range []string{"github_search", "github_issue", "github_pull_request"} {
+	for _, tool := range []string{"github_search", "github_issue", "github_pull_request", "github_check_log"} {
 		for _, harness := range []string{"claude", "codex", "opencode", "opencode-acp"} {
 			t.Run(harness+"/"+tool, func(t *testing.T) {
 				w := newHarnessWorld(t)

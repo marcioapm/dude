@@ -19,3 +19,5 @@
 {{- define "refusals/tools/github/number-pull-request-from-1"}}number is the pull request's, from 1{{end}}
 
 {{- define "refusals/tools/github/files-at-most-paths-at-once"}}files: at most %d paths at once{{end}}
+
+{{- define "refusals/tools/github/check-id-check-run-from-1"}}checkId is the check run's id, from 1{{end}}

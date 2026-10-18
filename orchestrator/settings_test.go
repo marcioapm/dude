@@ -68,12 +68,15 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 		config.Provider["llm-openai"].Models["llm-impl"].Options["reasoningEffort"] != "high" {
 		t.Errorf("opencode config lacks the tier's effort: %s", spec.Env["OPENCODE_CONFIG_CONTENT"])
 	}
-	p := spec.Workload.Prompt
-	if !strings.Contains(p, "ORG PROMPT") || strings.Contains(p, "OLD ORG PROMPT") || strings.Contains(p, "handing over code that does not build") {
-		t.Errorf("the organization's current prompt should replace dude's:\n%s", p)
+	p := w.instructionsOf(spec.Labels["dude.run"])
+	if !strings.Contains(p, "ORG PROMPT") || strings.Contains(p, "OLD ORG PROMPT") || strings.Contains(p, delivery.BuiltinPrompt("implementer")) {
+		t.Errorf("the organization's current prompt should replace dude's stance:\n%s", p)
 	}
-	if strings.Index(p, "PROJECT ADDITION") < strings.Index(p, "ORG PROMPT") || !strings.Contains(p, "Greet people") {
-		t.Errorf("the project's addition should follow the organization's, with the task:\n%s", p)
+	if strings.Index(p, "PROJECT ADDITION") < strings.Index(p, "ORG PROMPT") {
+		t.Errorf("the project's addition should follow the organization's:\n%s", p)
+	}
+	if m := spec.Workload.Prompt; !strings.Contains(m, "Greet people") || strings.Contains(m, "ORG PROMPT") {
+		t.Errorf("the first message should be the task alone:\n%s", m)
 	}
 
 	var orgVersion, projectVersion string
@@ -95,8 +98,8 @@ func TestAnOrganizationThatNeverEditsRunsTheBuiltInPrompt(t *testing.T) {
 	w.deliver(wi)
 	var spec *lux.Spec
 	w.until("the implementer to reach lux", func() bool { spec = w.specOf("implement"); return spec != nil })
-	if !strings.HasPrefix(spec.Workload.Prompt, delivery.BuiltinPrompt("implementer")) {
-		t.Errorf("prompt:\n%s", spec.Workload.Prompt)
+	if f := w.instructionsOf(spec.Labels["dude.run"]); !strings.Contains(f, delivery.BuiltinPrompt("implementer")) || strings.Contains(f, "# This organisation") {
+		t.Errorf("instructions:\n%s", f)
 	}
 	if spec.Labels["dude.effort"] != "" {
 		t.Errorf("effort %q, want none", spec.Labels["dude.effort"])
