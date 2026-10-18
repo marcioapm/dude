@@ -229,6 +229,104 @@ func TestAMultiLineCriterionStaysOneItem(t *testing.T) {
 	}
 }
 
+// Saved prompts replace only the stance, never the charter, mechanics, role
+// purpose, fixed contracts or reviewer aspect. Literal markers keep the
+// expectations independent of the templates used to assemble instructions.
+func TestInstructionsContractMatrix(t *testing.T) {
+	roles := []struct {
+		role, purpose, stance string
+		fixed                 []string
+	}{
+		{"implementer", "You turn the task into working, tested code on the task's branch.",
+			"Work in small verified steps: change, run the affected checks, read the result, go on.",
+			[]string{"A later independent tester verifies your work; it does not replace your own testing.", "```yaml\nchecks:\n", "Only committed changes are kept."}},
+		{"investigator", "People and the conductor plan from your report.",
+			"Keep what you verified apart from what you infer, and end with a recommendation.",
+			nil}, // This role has a purpose and stance, but no post-stance contract.
+		{"reviewer", "a weak or wrong finding costs a whole fix round.",
+			"No finding is better than a weak one: do not pad.",
+			[]string{"A suspected finding is `low` or `note` at most.", "Findings, verdicts on earlier findings, and your summary", "review_summary:"}},
+		{"fixer", "Your fix is reviewed again, and on an open pull request it is checked on a candidate branch before the pull request moves.",
+			"Fix what was raised, completely, and nothing else",
+			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
+		{"simplifier", "Your diff is reviewed on its own, as a change that must not alter behaviour.",
+			"Run the tests before you start, so you know what passing looks like.",
+			[]string{"Only committed changes are kept.", "```yaml\nchecks:\n", "Never list a check as `pass` that you did not see pass."}},
+		{"qa_browser", "A person merging the change relies on your report more than on anything else.",
+			"A criterion passes only on evidence you saw: a screenshot, an output, a record.",
+			[]string{"You are independent verification: show, as a user would see it, whether this change does what the task says.", "criterion: 1", "The acceptance report and findings, in the format below"}},
+		{"conductor", "You are the person-facing side of the delivery",
+			"Keep people current without being asked: when a phase ends, a line or two on what happened and what comes next.",
+			[]string{"Start another phase only once the Run has ended.", "the pull-request gate refuses an unreviewed commit of yours.", "When the delivery takes the decisions, or the task is merged or closed, you are read-only"}},
+		{"brainstorm", "You think with people about their projects before work is planned",
+			"Be a partner, not an echo: bring a view.",
+			[]string{"Proposing again replaces the card.", "Write tasks the delivery can succeed with", "Say in your reply what you published"}},
+	}
+	modes := []struct {
+		name, projectMode     string
+		org, project, builtin bool
+	}{
+		{name: "builtin", builtin: true},
+		{name: "org_replace", org: true},
+		{name: "project_add", projectMode: "add", project: true, builtin: true},
+		{name: "project_replace", projectMode: "replace", org: true, project: true},
+	}
+	for _, role := range roles {
+		t.Run(role.role, func(t *testing.T) {
+			for _, mode := range modes {
+				t.Run(mode.name, func(t *testing.T) {
+					for _, tools := range []struct {
+						name    string
+						enabled bool
+					}{{"tools_false", false}, {"tools_true", true}} {
+						t.Run(tools.name, func(t *testing.T) {
+							org := "Organisation stance for " + role.role + ": verify {{task.title}}."
+							project := "Project stance for " + role.role + ": deliver {{task.title}}."
+							in := InstructionsInput{Tools: tools.enabled, CLI: tools.enabled, Checkouts: true,
+								BlockingSeverities: []string{"blocking", "high"}, Vars: PromptVars{Title: "CSV export"}}
+							if mode.org {
+								in.OrgPrompt = &org
+							}
+							if mode.project {
+								in.ProjectPrompt, in.ProjectPromptMode = project, mode.projectMode
+							}
+							got := Instructions(role.role, "correctness", in)
+							count := func(marker string, want int) {
+								t.Helper()
+								if n := strings.Count(got, marker); n != want {
+									t.Errorf("marker %q occurs %d times, want %d", marker, n, want)
+								}
+							}
+							presence := func(marker string, present bool) {
+								t.Helper()
+								want := 0
+								if present {
+									want = 1
+								}
+								count(marker, want)
+							}
+							for _, marker := range []string{"# How you work\n", "Label what you did not check as not checked.",
+								"# How dude works\n", "dude does the mechanics: it starts Runs, moves branches", role.purpose} {
+								count(marker, 1)
+							}
+							for _, marker := range role.fixed {
+								count(marker, 1)
+							}
+							presence(role.stance, mode.builtin)
+							presence("Organisation stance for "+role.role+": verify CSV export.", mode.org && mode.projectMode != "replace")
+							presence("Project stance for "+role.role+": deliver CSV export.", mode.project)
+							presence("Your tools act on the work you are part of. Use them; do not work around them.", tools.enabled)
+							presence("This Run has none of dude's tools:", !tools.enabled)
+							presence("# Your aspect: correctness", role.role == "reviewer")
+							presence("A plausible implementation is not evidence that the required behaviour actually holds.", role.role == "reviewer")
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 // underEveryMode is a role's instruction file under dude's stance, an
 // organisation's prompt, a project's added to dude's and a project's in
 // place of both: a contract the workflow or a person relies on must
