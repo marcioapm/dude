@@ -775,12 +775,17 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 	})
 	e.noPublishes = true
 	id := e.publish()
-	// The worker asks lux to push; the conductor's follower records it.
+	// The worker asks lux to push; the conductor's follower records it. The
+	// worker runs only while the push is unasked: once asked, a pass could
+	// claim the publish the moment the follower records it and compare
+	// before the counting below starts.
 	e.until("pushed", func() bool {
 		if e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'pushed'`, id) == 1 {
 			return true
 		}
-		e.settleOnce()
+		if e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'requested'`, id) == 1 {
+			e.settleOnce()
+		}
 		return false
 	})
 	ctx := context.Background()
@@ -814,9 +819,10 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 				failures, got, next.Sub(after), next.Sub(before), want)
 		}
 	}
-	// Counted from here: a pass racing the follower's report may have
-	// compared once already.
 	base := compares.Load()
+	if base != 0 {
+		t.Fatalf("%d comparisons before the push was recorded", base)
+	}
 	e.due(id)
 	backedOff(1, 2*time.Second)
 	if n := compares.Load() - base; n != 1 {
