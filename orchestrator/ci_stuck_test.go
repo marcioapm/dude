@@ -70,16 +70,16 @@ func TestCIStuckClearsItselfWhenTheChecksFinish(t *testing.T) {
 		return w.taskStatus(wi) == "review" &&
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1
 	})
-	var actorType, action, note string
-	if err := w.owner.QueryRow(context.Background(), `SELECT actor_type, payload->>'action', payload->>'note' FROM events
-		WHERE task_id = $1 AND event_type = 'task.decided'`, wi).Scan(&actorType, &action, &note); err != nil {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
+		t.Fatalf("%d decisions, want one", n)
+	}
+	var actorType, actorID, action, note string
+	if err := w.owner.QueryRow(context.Background(), `SELECT actor_type, actor_id, payload->>'action', payload->>'note' FROM events
+		WHERE task_id = $1 AND event_type = 'task.decided'`, wi).Scan(&actorType, &actorID, &action, &note); err != nil {
 		t.Fatal(err)
 	}
-	if actorType != "system" || action != "wait" || note == "" {
-		t.Errorf("decided by %s: %s %q, want the system's wait with a note", actorType, action, note)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
-		t.Errorf("%d decisions, want one", n)
+	if actorType != "system" || actorID != "forge" || action != "wait" || note != "The checks on target#1 finished (passing): waiting on the pull request again." {
+		t.Errorf("decided by %s/%s: %s %q, want forge's wait with the checks-finished note", actorType, actorID, action, note)
 	}
 	// Another sync decides nothing more.
 	for range 3 {
@@ -88,6 +88,107 @@ func TestCIStuckClearsItselfWhenTheChecksFinish(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
 		t.Errorf("%d decisions after more syncs, want one", n)
+	}
+}
+
+func (w *world) syncPR(wi, repo string) {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT pr.id FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.task_id = $1 AND r.name = $2`, wi, repo).Scan(&id); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.prs.Sync(context.Background(), w.org, id); err != nil {
+		w.t.Fatalf("sync %s: %v", repo, err)
+	}
+}
+
+func TestCIStuckPersonWaitsBeforeChecksFinish(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.syncPR(wi, "target")
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	w.until("stuck", func() bool { w.syncPR(wi, "target"); return w.taskStatus(wi) == "awaiting_input" })
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	w.syncPR(wi, "target")
+	owner := w.person("owner")
+	if code, body := w.decide(owner, wi, "wait", ""); code != 200 {
+		t.Fatalf("wait: %d %v", code, body)
+	}
+	w.gh.SetChecks("success")
+	w.syncPR(wi, "target")
+	w.until("waiting again", func() bool {
+		w.syncPR(wi, "target")
+		return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge"
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
+		t.Fatalf("%d decisions, want person's one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided' AND actor_id = $2 AND actor_type = 'human'`, wi, owner); n != 1 {
+		t.Fatalf("%d decisions by the person, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'reason' = 'ci_stuck'`, wi); n != 1 {
+		t.Fatalf("stale signal asked again: %d questions", n)
+	}
+}
+
+func TestCIStuckUnknownChecksLeaveTheEscalationOpen(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.syncPR(wi, "target")
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes', head_seen_at = now() - interval '2 hours' WHERE task_id = $1`, wi)
+	w.until("stuck", func() bool { w.syncPR(wi, "target"); return w.taskStatus(wi) == "awaiting_input" })
+	w.gh.SetChecks("none")
+	for range 3 {
+		w.syncPR(wi, "target")
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s != "awaiting_input" {
+		t.Fatalf("unknown checks closed escalation: %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 0 {
+		t.Fatalf("unknown checks caused %d decisions", n)
+	}
+}
+
+func TestCIStuckFailingChecksClearAndGetAFix(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.syncPR(wi, "target")
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	w.until("stuck", func() bool { w.syncPR(wi, "target"); return w.taskStatus(wi) == "awaiting_input" })
+	w.gh.SetChecks("run:failure")
+	w.syncPR(wi, "target")
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided' AND actor_type = 'system' AND actor_id = 'forge' AND payload->>'action' = 'wait'`, wi); n != 1 {
+		t.Fatalf("failing checks caused %d system waits, want 1", n)
+	}
+	w.until("failing check fixer", func() bool { return w.fixes(wi) > 0 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback @> '[{"source":"checks"}]'`, wi); n != 1 {
+		t.Fatalf("%d CI fixers, want 1", n)
+	}
+}
+
+func TestCIStuckSiblingGreenDoesNotClearWeb(t *testing.T) {
+	w := newPRFixWorldIn(t, true)
+	w.web.SetChecks("pending")
+	w.syncPR(w.wi, "web")
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1 AND repository_id = (SELECT id FROM repositories WHERE project_id = $2 AND name = 'web')`, w.wi, w.project)
+	w.until("web stuck", func() bool { w.syncPR(w.wi, "web"); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.gh.SetChecks("success")
+	for range 3 {
+		w.syncPR(w.wi, "target")
+		w.pump()
+	}
+	if s := w.taskStatus(w.wi); s != "awaiting_input" {
+		t.Fatalf("target's green closed web's escalation: %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, w.wi); n != 0 {
+		t.Fatalf("sibling checks caused %d decisions", n)
 	}
 }
 

@@ -4111,8 +4111,10 @@ func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
 // escalationReason is why the task's delivery last stopped for a person.
 func (w *world) escalationReason(wi string) string {
 	var r string
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r)
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r); err != nil && err != pgx.ErrNoRows {
+		w.t.Fatal(err)
+	}
 	return r
 }
 
@@ -4249,5 +4251,8 @@ func TestAStaleStuckSignalDoesNotStopAgain(t *testing.T) {
 	}
 	if s := w.taskStatus(wi); s == "awaiting_input" {
 		t.Error("stopped again for CI that has passed")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'reason' = 'ci_stuck'`, wi); n != 1 {
+		t.Fatalf("%d ci_stuck questions, want 1: a stale signal was acted on", n)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -44,8 +46,10 @@ func (w *budgetWorld) spent() int {
 
 func (w *budgetWorld) spentDetail() string {
 	var s string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'spent', '') FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&s)
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->'detail'->>'spent', '') FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&s); err != nil && err != pgx.ErrNoRows {
+		w.t.Fatal(err)
+	}
 	return s
 }
 
