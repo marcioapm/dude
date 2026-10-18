@@ -59,6 +59,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -820,6 +821,9 @@ func request(method, path string, body []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if path == "/tools/start_agent" {
+		req.Header.Set("X-Dude-Tool-Call-ID", rand.Text())
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

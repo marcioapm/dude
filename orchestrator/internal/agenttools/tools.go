@@ -2,7 +2,6 @@ package agenttools
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,7 +140,11 @@ type startAgentIn struct {
 	Tier    string `json:"tier,omitempty"`
 	Key     string `json:"key,omitempty"`
 }
-type startAgentOut struct{ RunID, Profile, Phase string }
+type startAgentOut struct {
+	RunID   string `json:"runId"`
+	Profile string `json:"profile"`
+	Phase   string `json:"phase"`
+}
 
 func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (startAgentOut, error) {
 	phase := delivery.PhaseForPromptRole(in.Profile)
@@ -150,20 +153,18 @@ func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (star
 	}
 	key := in.Key
 	if key == "" {
-		raw, _ := json.Marshal([]string{c.RunID, in.Profile, in.Prompt, in.Note, in.Tier})
-		sum := sha256.Sum256(raw)
-		key = "tool-" + fmt.Sprintf("%x", sum[:])
+		key = "tool:" + c.CallID
 	}
-	id, err := delivery.StartChildTx(ctx, tx, c.run(), phase, delivery.StartChildInput{
+	id, err := delivery.StartChildTx(ctx, tx, delivery.StartChildInput{
 		Parent: delivery.ChildParent{Kind: delivery.ChildParentTaskConductor, Run: c.run()}, Profile: in.Profile,
 		Prompt: in.Prompt, Note: in.Note, Tier: in.Tier, Key: key,
 		Capabilities: delivery.ChildCapabilities{PublishCode: delivery.Publishes[phase]},
 	})
 	if err != nil {
+		if delivery.IsRefusal(err) {
+			return startAgentOut{}, refuse("%s", err.Error())
+		}
 		return startAgentOut{}, err
-	}
-	if c.env.kick != nil {
-		c.env.kick()
 	}
 	return startAgentOut{RunID: id, Profile: in.Profile, Phase: phase}, nil
 }

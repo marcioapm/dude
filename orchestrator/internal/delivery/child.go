@@ -37,9 +37,17 @@ func childPhase(profile string) (string, error) {
 	return phase, nil
 }
 
-// StartChild only admits a durable Run. It has no tool adapter until child
-// lifecycle and publication isolation are wired into the phase syncer.
 func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, error) {
+	var id string
+	err := s.DB.InOrg(ctx, in.Parent.Run.Org, func(tx pgx.Tx) error {
+		var err error
+		id, err = StartChildTx(ctx, tx, in)
+		return err
+	})
+	return id, err
+}
+
+func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, error) {
 	phase, err := childPhase(in.Profile)
 	if err != nil {
 		return "", err
@@ -55,15 +63,6 @@ func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, err
 	}
 	ref := in.Parent.Run
 	var id string
-	err = s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		var err error
-		id, err = StartChildTx(ctx, tx, ref, phase, in)
-		return err
-	})
-	return id, err
-}
-
-func StartChildTx(ctx context.Context, tx pgx.Tx, ref RunRef, phase string, in StartChildInput) (id string, err error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return "", err
 	}

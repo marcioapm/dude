@@ -37,6 +37,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -76,6 +77,7 @@ type Server struct {
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
+	CallID                                      string
 	Child                                       bool
 	RunID, Org, ProjectID, TaskID, Role, Status string
 	// A session's agent: its session, in place of a task and project.
@@ -161,6 +163,25 @@ func (s *Server) Handler() http.Handler {
 			s.Log.Error("agent tools: token lookup failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		caller.CallID = r.Header.Get("X-Dude-Tool-Call-ID")
+		if r.Method == http.MethodPost && r.URL.Path == "/" {
+			body, err := io.ReadAll(io.LimitReader(r.Body, maxInput+1))
+			if err != nil || len(body) > maxInput {
+				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var envelope struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(body, &envelope) == nil && envelope.Method == "tools/call" && len(envelope.ID) > 0 {
+				caller.CallID = "mcp:" + string(envelope.ID)
+			}
+		}
+		if caller.CallID == "" {
+			caller.CallID = ids.New("call")
 		}
 		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
@@ -566,6 +587,9 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
+		if err == nil && t.name == "start_agent" && s.Kick != nil {
+			s.Kick()
+		}
 		return out, err
 	}
 	done, err := t.outside(ctx, c, checked)
