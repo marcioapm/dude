@@ -1,7 +1,7 @@
 package orchestrator_test
 
 // The read-only GitHub tools a session's agent and a task's conductor
-// share (github_search, github_issue, github_pull_request), called with
+// share (github_search, github_issue, github_pull_request, github_check_log), called with
 // their Runs' tokens as their agents would, against the fake GitHub: what
 // each may read, how GitHub's text reaches the agent, the caps, the hourly
 // reads, the ledger, and that reading a pull request lets no one act on it.
