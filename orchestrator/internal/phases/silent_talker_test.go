@@ -119,14 +119,7 @@ func TestAPersonsSteerBypassesSilentBackoff(t *testing.T) {
 	w.ageSilent("11 minutes")
 	w.interruptSilent()
 	for _, actor := range []string{ledger.ActorSystem, ledger.ActorAgent, ledger.ActorHuman} {
-		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-			_, err := delivery.Steer(w.ctx, tx, w.run.Org, delivery.SteerInput{
-				RunID: w.run.ID, Text: "Try another approach.", Actor: delivery.Writer{ActorType: actor, ActorID: "per_test"},
-			})
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
+		w.steer(actor)
 		w.follow(record(1, "lux.activity", map[string]any{"activity": "idle"}), busy(1))
 		w.exec(`UPDATE runs SET agent_active_at = now() - interval '9 minutes' WHERE id = $1`, w.run.ID)
 		w.interruptSilent()
@@ -157,14 +150,7 @@ func TestAPersonsOldOrSimultaneousSteerDoesNotBypassSilentBackoff(t *testing.T) 
 		t.Run(boundary, func(t *testing.T) {
 			w := newResumeWorld(t)
 			w.silentConductor("11 minutes", "")
-			if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-				_, err := delivery.Steer(w.ctx, tx, w.run.Org, delivery.SteerInput{
-					RunID: w.run.ID, Text: "Try another approach.", Actor: delivery.Writer{ActorType: ledger.ActorHuman, ActorID: "per_test"},
-				})
-				return err
-			}); err != nil {
-				t.Fatal(err)
-			}
+			w.steer(ledger.ActorHuman)
 			w.interruptSilent()
 			if boundary == "equal" {
 				w.exec(`UPDATE runs SET stuck_interrupted_at = (SELECT min(created_at) FROM directives WHERE run_id = $1) WHERE id = $1`, w.run.ID)
@@ -195,6 +181,18 @@ func (w *resumeWorld) silentConductor(silentFor string, change string) {
 func (w *resumeWorld) interruptSilent() {
 	w.t.Helper()
 	if err := w.s.beforeDue(w.ctx); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *resumeWorld) steer(actor string) {
+	w.t.Helper()
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		_, err := delivery.Steer(w.ctx, tx, w.run.Org, delivery.SteerInput{
+			RunID: w.run.ID, Text: "Try another approach.", Actor: delivery.Writer{ActorType: actor, ActorID: "per_test"},
+		})
+		return err
+	}); err != nil {
 		w.t.Fatal(err)
 	}
 }
