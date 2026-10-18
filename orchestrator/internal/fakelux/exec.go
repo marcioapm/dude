@@ -270,6 +270,29 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 
+func (s *Server) behaviourCommand(run *Run, spec map[string]any) bool {
+	args := run.behavior.Command
+	if len(args) == 0 {
+		return true
+	}
+	dir, err := s.checkout(run, spec)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, args[0], s.inWorkspace(run, args[1:])...)
+		cmd.Dir = dir
+		var out []byte
+		out, err = cmd.CombinedOutput()
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": string(out)}})
+	}
+	if err != nil {
+		s.setStateWith(run, "failed", "workload-failed")
+		return false
+	}
+	return true
+}
+
 // exitCode is how a command run to its end exited: its own code, or
 // otherwise (it could not start, or was killed) the one given.
 func exitCode(err error, otherwise int) int {

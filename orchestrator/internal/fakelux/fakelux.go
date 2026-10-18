@@ -40,6 +40,9 @@ import (
 // Behaviour is what a Run's agent does. Chosen per Run by the test, from the
 // spec it was submitted with.
 type Behaviour struct {
+	// Command executes in the workspace on every placement before the simulated
+	// agent runs; its output is streamed as an agent message, and errors fail the Run.
+	Command []string
 	// The agent's reply, streamed as message chunks.
 	Reply string
 	// Files to commit, path → content; none means the agent changes nothing.
@@ -1615,6 +1618,9 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	}
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
+	if !s.behaviourCommand(run, spec) {
+		return
+	}
 	if generic(spec) {
 		// No agent: the workload (sleep infinity) runs until stopped.
 		return

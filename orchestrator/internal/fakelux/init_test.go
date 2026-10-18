@@ -2,6 +2,8 @@ package fakelux
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -56,6 +58,60 @@ func TestInitRunsOnEveryPlacementFromTheSameSpec(t *testing.T) {
 	fake.mu.Unlock()
 	if inits != 2 {
 		t.Errorf("init ran %d times over two placements", inits)
+	}
+}
+
+func TestWorkloadReadsInitMarkerOnEveryPlacement(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour {
+		return Behaviour{Hang: true, Command: []string{"sh", "-eu", "-c", "cat /workspace/marker; rm /workspace/marker"}}
+	})
+	t.Cleanup(fake.Close)
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	ctx := context.Background()
+	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "acp"},
+		Init:     &lux.Init{Script: "cat > /workspace/marker <<'MARKER'\ninit bytes: $HOME /workspace `x`\nMARKER\n"}}, "init-observed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := ""
+	for epoch := 1; epoch <= 2; epoch++ {
+		if epoch == 2 {
+			if err := client.Stop(ctx, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, client, run.ID, "stopped")
+			if _, err := client.Resume(ctx, run.ID, lux.ResumeInput{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		observed := ""
+		stop := errors.New("observed workload output")
+		err := client.Output(readCtx, run.ID, cursor, 0, func(f lux.Frame) error {
+			if f.Event == nil || f.Event.Type != "acp.agent_message_chunk" || f.Epoch != epoch {
+				return nil
+			}
+			var update struct {
+				Content struct{ Text string } `json:"content"`
+			}
+			if err := json.Unmarshal(f.Event.Data, &update); err != nil {
+				return err
+			}
+			observed = update.Content.Text
+			cursor = f.Cursor
+			return stop
+		})
+		cancel()
+		if !errors.Is(err, stop) || observed != "init bytes: $HOME /workspace `x`\n" {
+			t.Fatalf("placement %d workload observed %q: %v", epoch, observed, err)
+		}
+		got, err := client.Get(ctx, run.ID)
+		if err != nil || got.State != "running" {
+			t.Fatalf("placement %d run = %+v: %v", epoch, got, err)
+		}
 	}
 }
 
