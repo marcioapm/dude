@@ -189,7 +189,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// whether the comment was recorded. rewritten is feedback recorded
 	// before whose body differs from the last one recorded.
 	var fresh, edited, rewritten []forge.Feedback
-	var workflowRunID, workflowStep string
+	var workflowRunID, workflowStep, escalationReason string
 	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// The cursor narrows the query; the ledger decides what is new.
@@ -422,11 +422,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
 		var decider string
-		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', '') FROM workflow_runs w
+		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', ''),
+			COALESCE(w.state->'escalation'->>'reason', '') FROM workflow_runs w
 			JOIN pull_requests p ON p.id = $2
 			WHERE w.task_id = $1 AND w.status IN ('running', 'waiting')
 			  AND COALESCE(w.state->>'branch', p.head_branch) = p.head_branch
-			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep, &decider)
+			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep, &decider, &escalationReason)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -475,8 +476,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	// Checks no longer pending while a person is asked about them being
 	// stuck: the delivery waits on the pull request again, as their wait
-	// would have it.
-	if workflowStep == "decide" && (status.Checks == forge.ChecksPassing || status.Checks == forge.ChecksFailing) && isOpen(status.State) {
+	// would have it. Read without a lock first: a sync takes the
+	// delivery's lock only for a ci_stuck escalation, which
+	// ChecksFinishedTx checks again under it.
+	if workflowStep == "decide" && escalationReason == "ci_stuck" && (status.Checks == forge.ChecksPassing || status.Checks == forge.ChecksFailing) && isOpen(status.State) {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 			return delivery.ChecksFinishedTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number, status.Checks)
 		}); err != nil {
