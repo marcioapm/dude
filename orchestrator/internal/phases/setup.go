@@ -74,20 +74,20 @@ func DeclaresSetup(stored lux.StoredSpec) bool {
 
 // SetupInit is the init that runs, in order, the setup script of each
 // repository the manifest names, from workspace (where its relative paths
-// are): in the checkout's root, once per
-// checkout, with bash -e and stdin closed, stopped after timeout. Its
-// marker, under the checkout's git dir and so never in its work tree, is
-// written only on success: a later start of the same checkout skips the
-// script, a fresh checkout or one a resume adds runs it. The first that
-// fails stops init with its code, having said which on stderr
-// (setupFailedPrefix), and lux fails the Run init-failed. A repository
-// with no checkout (lux dropped it when its clone failed) is passed over.
-// No manifest is no setup.
+// are): in the checkout's root, once per checkout, with bash -e and stdin
+// closed, stopped after timeout. Its marker, under the checkout's git dir
+// and so never in its work tree, is written only on success: a later
+// start of the same checkout skips the script, a fresh checkout or one a
+// resume adds runs it. The first that fails stops init with its code,
+// having said which on stderr (setupFailedPrefix), and lux fails the Run
+// init-failed. A repository with no checkout (lux dropped it when its
+// clone failed) is passed over. No manifest is no setup.
 //
 // The command-scope git settings every Run carries (workloadGitConfig)
-// are cleared for a script (a word from a multi-line value that is no
-// name is passed over: dash would refuse to unset it and stop init), so a hook installer writes the repository's
-// own config and hooks directory, which dude's hook then runs. A decoded
+// are cleared for a script, so a hook installer writes the repository's
+// own config and hooks directory, which dude's hook then runs. A word of
+// env's output that is no identifier (a line of a multi-line value) is
+// passed over: dash would refuse to unset it and stop init. A decoded
 // name or path keeps a trailing newline: each substitution ends with "."
 // and loses it after.
 func SetupInit(manifest, workspace string, timeout time.Duration) string {
