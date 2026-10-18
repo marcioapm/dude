@@ -751,6 +751,22 @@ test("142 rebuilds a key an interrupted 140 left invalid, and 140 and 141 run ag
   }
 }, 120_000);
 
+test("143 adds a nullable, size-checked setup script to existing repositories", async () => {
+  const { url, sql } = await migratedBefore("143");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_143', 'org 143', 'org-143')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_143', 'org_143', 'P', 'p-143', 'P')`;
+    await sql`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_143', 'org_143', 'prj_143', 'api', 'https://github.com/acme/api.git')`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["143_repository_setup_script.sql"]);
+    expect((await sql`SELECT setup_script FROM repositories WHERE id = 'repo_143'`)[0]?.setup_script).toBeNull();
+    const atLimit = "x".repeat(16_384);
+    await sql`UPDATE repositories SET setup_script = ${atLimit} WHERE id = 'repo_143'`;
+    expect((await sql`SELECT octet_length(setup_script) AS bytes FROM repositories WHERE id = 'repo_143'`)[0]?.bytes).toBe(16_384);
+    await expect(sql`UPDATE repositories SET setup_script = ${atLimit + "x"} WHERE id = 'repo_143'`).rejects.toThrow();
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
 test("108 leaves a valid index on the directives that resend another, and only those, outside a transaction", async () => {
   const file = (await listMigrationFiles()).find((f) => f.version === "108");
   expect(file && outsideTransaction(await file.contents())).toBe(true);
@@ -766,6 +782,7 @@ test("108 leaves a valid index on the directives that resend another, and only t
     await sql.end();
   }
 }, 120_000);
+
 
 test("110 stores a repository at https://www.github.com/ at https://github.com/, and leaves every other URL as it was", async () => {
   const { url, sql } = await migratedBefore("110");

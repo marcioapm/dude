@@ -109,15 +109,31 @@ test("changing a setup script stores it and records who changed it; blank clears
     .toEqual([[admin, "make hooks\n"]]);
 
   // Another field alone leaves the script as it was.
-  expect((await call(asAdmin, "PATCH", `/v1/repositories/${id}`, { trust: "untrusted_external" })).status).toBe(200);
+  const preserved = await call(asAdmin, "PATCH", `/v1/repositories/${id}`, { trust: "untrusted_external" });
+  expect(preserved.status).toBe(200);
+  expect((await preserved.json() as { setupScript: string | null }).setupScript).toBe("make hooks\n");
   expect(await stored(id)).toBe("make hooks\n");
+  const listed = (await (await call(asAdmin, "GET", `/v1/projects/${project}`)).json()) as {
+    repositories: Array<{ id: string; setupScript: string | null }>;
+  };
+  expect(listed.repositories.find((r) => r.id === id)?.setupScript).toBe("make hooks\n");
 
   for (const blank of ["", "  \n\t", null]) {
     await owner`UPDATE repositories SET setup_script = 'x' WHERE id = ${id}`;
+    const before = await owner`SELECT count(*)::int AS count FROM events
+      WHERE organization_id = ${org} AND event_type = 'repository.updated' AND payload->>'repositoryId' = ${id}`;
     const cleared = await call(asAdmin, "PATCH", `/v1/repositories/${id}`, { setupScript: blank });
     expect(cleared.status).toBe(200);
     expect(((await cleared.json()) as { setupScript: string | null }).setupScript).toBeNull();
     expect(await stored(id)).toBeNull();
+    const clearedList = (await (await call(asAdmin, "GET", `/v1/projects/${project}`)).json()) as {
+      repositories: Array<{ id: string; setupScript: string | null }>;
+    };
+    expect(clearedList.repositories.find((r) => r.id === id)?.setupScript).toBeNull();
+    const after = await owner`SELECT actor_id, payload FROM events
+      WHERE organization_id = ${org} AND event_type = 'repository.updated' AND payload->>'repositoryId' = ${id} ORDER BY cursor DESC LIMIT 1`;
+    expect((after[0] as { actor_id: string; payload: { setupScript?: string | null } }).actor_id).toBe(admin);
+    expect((after[0] as { payload: { setupScript?: string | null } }).payload.setupScript).toBeNull();
   }
 });
 
