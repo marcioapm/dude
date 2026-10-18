@@ -238,7 +238,7 @@ func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPu
 
 func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheckLogIn) (githubRead, error) {
 	if in.CheckID <= 0 {
-		return githubRead{}, refuseText("checkId is the check run's id, from 1")
+		return githubRead{}, refuse(rCheckIdCheckRunFrom1)
 	}
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID})
 }

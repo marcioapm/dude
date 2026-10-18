@@ -438,6 +438,10 @@ you already asked for %s; a person has not decided yet
 
 no task %q or epic %q in this project (list_tasks shows them)
 
+## refusals/tools/github/check-id-check-run-from-1
+
+checkId is the check run's id, from 1
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
