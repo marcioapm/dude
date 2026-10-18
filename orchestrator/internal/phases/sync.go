@@ -1912,6 +1912,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err != nil {
 			return true, s.retryLater(ctx, r, err)
 		}
+		if r.SourceKind != "" {
+			if err := s.childExecutionAllowed(ctx, r); err != nil {
+				return false, err
+			}
+		}
 		if err := Push(ctx, s.Lux, s.Log, r.LuxRunID, reqID, creds); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
 				return true, s.failKept(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
@@ -1966,6 +1971,15 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	completed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if r.SourceKind != "" && len(heads) > 0 {
+			held, err := s.recordChildHeads(ctx, tx, r, heads)
+			if err != nil {
+				return err
+			}
+			if held {
+				return errRetry
+			}
+		}
 		// Read before the update below records the published branch on
 		// every Run: set already, it is a candidate Run's own.
 		var own string
@@ -2001,6 +2015,40 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+func (s *Syncer) recordChildHeads(ctx context.Context, tx pgx.Tx, r phaseRun, heads map[string]delivery.RunHead) (bool, error) {
+	d, err := delivery.LoadDelivery(ctx, tx, r.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if d == nil {
+		return false, nil
+	}
+	held, err := delivery.StepHolds(ctx, tx, d.WorkflowID)
+	if err != nil {
+		return false, err
+	}
+	if held {
+		return true, nil
+	}
+	next := map[string]string{}
+	paths := []string{}
+	for repo, head := range heads {
+		next[repo] = head.SHA
+		for _, path := range head.ChangedPaths {
+			paths = append(paths, repo+"/"+path)
+		}
+	}
+	slices.Sort(paths)
+	rawHeads, _ := json.Marshal(next)
+	rawPaths, _ := json.Marshal(paths)
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{heads}',
+		COALESCE(state->'heads', '{}'::jsonb) || $2::jsonb), '{changedPaths}',
+		(SELECT COALESCE(jsonb_agg(DISTINCT p ORDER BY p), '[]'::jsonb)
+		 FROM jsonb_array_elements_text(COALESCE(state->'changedPaths', '[]'::jsonb) || $3::jsonb) p))
+		WHERE id = $1`, d.WorkflowID, rawHeads, rawPaths)
+	return false, err
 }
 
 // baseWait is how long after its turn ended a Run waits for lux to say
@@ -2119,15 +2167,6 @@ func lookupBase(bases map[string]string, repos []delivery.Repository, name strin
 // Repositories that did not move are left alone — no branch, no PR — and a
 // read-only one is never pushed at all (lux reports it "skipped").
 func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, string, error) {
-	var child bool
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, r.ID).Scan(&child)
-	}); err != nil {
-		return nil, "", err
-	}
-	if child {
-		return nil, "", fmt.Errorf("independent child publication is held until writer integration")
-	}
 	if r.talker() {
 		// Read-only: its spec names no push branch, and nothing it holds
 		// may move the task's branch.
@@ -2169,6 +2208,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub
 	for _, res := range push.Results {
+		if r.SourceKind != "" {
+			if err := s.childExecutionAllowed(ctx, r); err != nil {
+				return nil, "", err
+			}
+		}
 		repo, known := byName[res.Repo]
 		switch {
 		case res.Status == "skipped" || known && repo.Access == "read":
@@ -2230,6 +2274,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		attempted := func() (bool, error) { return s.mergeAttempted(ctx, r, repo.Name, res.Commit) }
 		adv, err := advance.Branch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
+			if r.SourceKind != "" {
+				if err := s.childExecutionAllowed(ctx, r); err != nil {
+					return err
+				}
+			}
 			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,
 					map[string]any{"repo": repo.Name, "commit": res.Commit})

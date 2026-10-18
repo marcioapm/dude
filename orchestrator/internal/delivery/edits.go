@@ -72,6 +72,10 @@ func stepHolds(ctx context.Context, tx pgx.Tx, wfID, lock string) (bool, error) 
 	return held, err
 }
 
+func StepHolds(ctx context.Context, tx pgx.Tx, wfID string) (bool, error) {
+	return stepHolds(ctx, tx, wfID, "")
+}
+
 // liveWriter (SQL, $1 the task): a phase Run that pushes to the task
 // branch, not ended.
 const liveWriter = `EXISTS (SELECT 1 FROM runs w WHERE w.task_id = $1 AND w.phase IN ` + writerPhases + `
@@ -676,6 +680,12 @@ func UntestedConductorHeadTx(ctx context.Context, tx pgx.Tx, taskID string, head
 	err := tx.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM conductor_publishes p, jsonb_each_text($2::jsonb) h(repo, sha)
 		WHERE p.task_id = $1 AND p.status = 'published' AND p.heads->h.repo->>'sha' = h.sha
+		  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1 AND k.phase IN ('review', 'test')
+		    AND k.status = 'completed' AND k.base_refs->>h.repo = h.sha)
+		UNION ALL
+		SELECT 1 FROM runs w, jsonb_each($2::jsonb) h(repo, sha)
+		WHERE w.task_id = $1 AND w.source_kind = 'task_conductor' AND w.phase IN ('implement', 'fix', 'simplify')
+		  AND w.status = 'completed' AND w.heads->h.repo->>'sha' = h.sha
 		  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1 AND k.phase IN ('review', 'test')
 		    AND k.status = 'completed' AND k.base_refs->>h.repo = h.sha))`, taskID, raw).Scan(&untested)
 	return untested, err
