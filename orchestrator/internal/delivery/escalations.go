@@ -224,8 +224,22 @@ func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, 
 	if err != nil || !waitsAtDecide(d) || d.TaskStatus != "awaiting_input" || !stuckOn(d.State.Escalation, repo, number) {
 		return err
 	}
+	var current string
+	err = tx.QueryRow(ctx, `SELECT pr.checks::text FROM pull_requests pr
+		JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND r.name = $2 AND pr.number = $3
+		AND pr.state IN ('open', 'draft')`, taskID, repo, number).Scan(&current)
+	if err == pgx.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current != "passing" && current != "failing" {
+		return nil
+	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: "wait",
-		Note:      fmt.Sprintf("The checks on %s#%d finished (%s): waiting on the pull request again.", repo, number, checks),
+		Note:      fmt.Sprintf("The checks on %s#%d finished (%s): waiting on the pull request again.", repo, number, current),
 		ActorType: ledger.ActorSystem, ActorID: "forge"})
 }
 
