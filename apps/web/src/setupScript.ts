@@ -40,14 +40,27 @@ const BYPASSES: ReadonlyArray<{ pattern: RegExp; message: string }> = [
 
 /**
  * Warnings for each use of core.hooksPath, --no-verify or HUSKY=0 outside a
- * whole-line comment, at the words themselves.
+ * whole-line comment, at the words themselves. Heredoc bodies are not understood.
  */
 export function lintSetupScript(text: string): CodeDiagnostic[] {
   const out: CodeDiagnostic[] = [];
   text.split("\n").forEach((line, i) => {
-    if (line.trimStart().startsWith("#")) return;
+    let quote: '"' | "'" | null = null;
+    let code = "";
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j]!;
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === "#" && (j === 0 || /\s/.test(line[j - 1]!))) {
+        break;
+      } else {
+        code += ch;
+      }
+    }
     for (const { pattern, message } of BYPASSES) {
-      for (const m of line.matchAll(pattern)) {
+      for (const m of code.matchAll(pattern)) {
         out.push({ severity: "warning", line: i + 1, from: m.index, to: m.index + m[0].length, message });
       }
     }

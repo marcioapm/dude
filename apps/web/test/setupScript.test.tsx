@@ -15,7 +15,7 @@ import { ApiError, type ProjectDetail, type Repository } from "../src/api/client
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
-import { lintSetupScript } from "../src/setupScript.ts";
+import { checkSetupScript, lintSetupScript } from "../src/setupScript.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -98,6 +98,10 @@ async function setText(text: string) {
   await settle(120);
 }
 
+test("setup script checks reject NUL and accept blank as none", () => {
+  expect(checkSetupScript("a\0b")).toEqual({ ok: false, problem: "nul" });
+  expect(checkSetupScript("  \n")).toEqual({ ok: true, value: null });
+});
 test("a repository with a script carries a mark that names it; one without has none", async () => {
   const page = await open(new ScriptClient(true));
   const marks = [...page.querySelectorAll<HTMLButtonElement>("[data-testid=setup-script-mark]")];
@@ -148,6 +152,7 @@ test("a script cleared to blank saves as none, and the mark goes", async () => {
   await until(() => client.patches.length > 0 || null, "the PATCH");
   expect(client.patches).toEqual([{ id: "repo_wc", changes: { setupScript: null } }]);
   await until(() => page.querySelectorAll("[data-testid=setup-script-mark]").length === 0 || null, "the mark gone");
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Actions for web-console");
 });
 
 test("over the server's byte limit, counted in UTF-8, the meter is danger and Save is disabled", async () => {
@@ -160,7 +165,7 @@ test("over the server's byte limit, counted in UTF-8, the meter is danger and Sa
   await setText("é".repeat(SETUP_SCRIPT_MAX_BYTES / 2) + "#");
   expect(d.querySelector("[data-testid=size-meter]")?.getAttribute("data-level")).toBe("danger");
   expect(d.querySelector("[data-testid=setup-script-invalid]")?.textContent).toBe(
-    "16 KB is over the 16 KB limit. Keep long files in the repository and have the script use them.");
+     "1 byte over the 16 KB limit. Keep long files in the repository and have the script use them.");
   expect(saveButton().disabled).toBe(true);
 });
 
@@ -191,7 +196,10 @@ test("lintSetupScript marks each bypass at its words, and only outside a comment
   expect(lintSetupScript("x\n  HUSKY=0 npm ci").map((d) => [d.line, d.from, d.to])).toEqual([[2, 2, 9]]);
   expect(lintSetupScript("git push --no-verify")).toHaveLength(1);
   expect(lintSetupScript("  # git config core.hooksPath x")).toEqual([]);
-  expect(lintSetupScript("HUSKY=1 npm ci\necho --no-verifying")).toEqual([]);
+  expect(lintSetupScript('echo "never use --no-verify"')).toEqual([]);
+  expect(lintSetupScript("npm ci  # no HUSKY=0 here")).toEqual([]);
+  expect(lintSetupScript("git commit --no-verify")).toHaveLength(1);
+  expect(lintSetupScript("git -c core.hooksPath=x")).toHaveLength(1);
 });
 
 test("a reader gets no row menu, and the mark opens the script read-only with Close", async () => {

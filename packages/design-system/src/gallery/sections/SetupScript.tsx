@@ -64,7 +64,7 @@ function ScriptFrame({ initial, readOnly, maxLines = 14 }: { readonly initial: s
         header={<><span className="ds-mono">bash</span><span>· runs once per new checkout</span>{readOnly ? <span>· read-only</span> : null}</>}
         footer={
           <>
-            <span>{textLines(text)} lines</span>
+            <span>{textLines(text)} {textLines(text) === 1 ? "line" : "lines"}</span>
             {diagnostics.length ? (
               <span style={{ display: "inline-flex", gap: 4, alignItems: "center", color: "var(--ds-tone-attention-fg)" }}>
                 <Icon name="warning" size={12} />{diagnostics.length} line bypasses hooks

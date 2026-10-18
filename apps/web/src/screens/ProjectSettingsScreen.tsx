@@ -17,7 +17,7 @@ import {
   FormStack,
   Input,
   RowMenu,
-  Section,
+  RowMenuTrigger,  Section,
   Spinner,
   Table,
   TBody,
@@ -266,6 +266,7 @@ function RepositoriesTab({ client, project, canEdit, onSaved, orgName }: TabProp
   const [scripting, setScripting] = useState<Repository | null>(null);
   const { busy, problem, save } = useSave();
   const addButton = useRef<HTMLButtonElement>(null);
+  const actionsButtons = useRef(new Map<string, HTMLButtonElement>());
   // A table uses the width it has; a form keeps to one readable column.
   return (
     <Section>
@@ -302,7 +303,7 @@ function RepositoriesTab({ client, project, canEdit, onSaved, orgName }: TabProp
                 <Td mono>{r.defaultBranch}</Td>
                 <Td>{r.trust === "untrusted_external" ? "External" : "Internal"}</Td>
                 <Td align="right">
-                  {canEdit ? <RowMenu label={`Actions for ${r.name}`} items={[
+                  {canEdit ?                      <RowMenu label={`Actions for ${r.name}`} trigger={<RowMenuTrigger ref={(button) => { if (button) actionsButtons.current.set(r.id, button); else actionsButtons.current.delete(r.id); }} label={`Actions for ${r.name}`} />} items={[
                     { id: "edit", label: "Edit", icon: "edit", onSelect: () => setEditing(r) },
                     { id: "setup-script", label: "Setup script…", icon: "terminal", onSelect: () => setScripting(r) },
                     { kind: "separator" },
@@ -330,8 +331,12 @@ function RepositoriesTab({ client, project, canEdit, onSaved, orgName }: TabProp
         />
       ) : null}
       {scripting ? (
-        <SetupScriptDialog client={client} repository={scripting} canEdit={canEdit} orgName={orgName}
-          onClose={() => setScripting(null)} onSaved={onSaved} />
+         <SetupScriptDialog client={client} repository={scripting} canEdit={canEdit} orgName={orgName}
+           onClose={() => setScripting(null)} onSaved={() => {
+             const id = scripting.id;
+             onSaved();
+             setTimeout(() => actionsButtons.current.get(id)?.focus(), 0);
+           }} />
       ) : null}
       <Dialog
         open={removing !== null}

@@ -32,7 +32,7 @@ export interface SetupScriptDialogProps {
 
 /** Mounted only while open, so each opening starts from the saved script. */
 export function SetupScriptDialog({ client, repository, canEdit, orgName, onClose, onSaved }: SetupScriptDialogProps) {
-  const saved = repository.setupScript ?? "";
+  const saved = (repository.setupScript ?? "").replace(/\r\n?/g, "\n");
   const [text, setText] = useState(saved);
   const { busy, problem, save, clear } = useSave();
   const diagnostics = useMemo(() => lintSetupScript(text), [text]);
@@ -86,7 +86,7 @@ export function SetupScriptDialog({ client, repository, canEdit, orgName, onClos
         <p className="setupScriptOver" role="alert" data-testid="setup-script-invalid">
           {check.problem === "nul"
             ? "A setup script can’t contain NUL characters."
-            : `${formatBytes(bytes)} is over the ${formatBytes(SETUP_SCRIPT_MAX_BYTES)} limit. Keep long files in the repository and have the script use them.`}
+             : `${(bytes - SETUP_SCRIPT_MAX_BYTES).toLocaleString("en-US")} ${bytes - SETUP_SCRIPT_MAX_BYTES === 1 ? "byte" : "bytes"} over the ${formatBytes(SETUP_SCRIPT_MAX_BYTES)} limit. Keep long files in the repository and have the script use them.`}
         </p>
       ) : null}
       {diagnostics.length ? (
@@ -128,7 +128,7 @@ export function SetupScriptDialog({ client, repository, canEdit, orgName, onClos
         <div className="setupScriptBody" data-testid="setup-script-dialog">
           {editor}
           {notes}
-          <p className="setupScriptHelp">Only {orgName}’s admins and this project’s can change it.</p>
+           <p className="setupScriptHelp">Only {orgName}’s admins and this project’s admins can change it.</p>
         </div>
       </Dialog>
     );
