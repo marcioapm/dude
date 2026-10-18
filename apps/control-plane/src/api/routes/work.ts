@@ -55,7 +55,7 @@ const TASK_SELECT = `
       'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
-  -- Lifecycle (migration 146): why a person ended it, and whether it is put away.
+  -- Lifecycle (migrations 147/148): why a person ended it, and whether it is put away.
   resolution, archived_at AS "archivedAt",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.archived_by) AS "archivedBy",

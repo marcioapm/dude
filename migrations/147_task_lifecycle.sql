@@ -1,4 +1,4 @@
--- 146_task_lifecycle.sql — a person ends a task saying why (Close, a
+-- 147_task_lifecycle.sql — a person ends a task saying why (Close, a
 -- resolution), and puts work away (Archive) (docs/design/tracking-work.md,
 -- Epic 1 — Lifecycle).
 --
