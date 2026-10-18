@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // setupWorkspace is a Run's /workspace as the composed init sees it: real
@@ -81,20 +83,26 @@ func (w *setupWorkspace) run(dir, name string, args ...string) (string, string, 
 	return stdout.String(), stderr.String(), err
 }
 
-// init runs the spec's init as lux's shim runs it: /bin/sh -c, in the
-// workload's environment, from the workdir.
+// init runs the spec's init as lux's shim runs it, /bin/sh -c in the
+// workload's environment, with the manifest of setups placed as lux places
+// a file secret. This workspace is the container's /workspace.
 func (w *setupWorkspace) init(setups ...Setup) (stdout, stderr string, code int) {
 	w.t.Helper()
-	init := SetupSpec(setups)
-	if init == nil {
-		w.t.Fatal("no init script")
+	return w.initWithin(SetupTimeout, setups...)
+}
+
+func (w *setupWorkspace) initWithin(timeout time.Duration, setups ...Setup) (stdout, stderr string, code int) {
+	w.t.Helper()
+	manifest := filepath.Join(w.t.TempDir(), "setup")
+	if err := os.WriteFile(manifest, []byte(SetupManifest(setups)), 0o400); err != nil {
+		w.t.Fatal(err)
 	}
-	return w.runInit(init.Script)
+	return w.runInit(SetupInit(manifest, w.root, timeout))
 }
 
 func (w *setupWorkspace) runInit(script string) (stdout, stderr string, code int) {
 	w.t.Helper()
-	out, errOut, err := w.run(w.root, "/bin/sh", "-c", script)
+	out, errOut, err := w.run(w.t.TempDir(), "/bin/sh", "-c", script)
 	code = 0
 	if ee, ok := err.(*exec.ExitError); ok {
 		code = ee.ExitCode()
@@ -104,8 +112,9 @@ func (w *setupWorkspace) runInit(script string) (stdout, stderr string, code int
 	return out, errOut, code
 }
 
+// setup is name's setup script, checked out where a phase Run has it.
 func (w *setupWorkspace) setup(name, script string) Setup {
-	return Setup{Name: name, Path: filepath.Join(w.root, "repos", name), Script: script}
+	return Setup{Name: name, Path: RepoPath(name), Script: script}
 }
 
 func exists(path string) bool { _, err := os.Stat(path); return err == nil }
@@ -209,52 +218,117 @@ func TestASetupScriptPastItsTimeFails(t *testing.T) {
 	w := newSetupWorkspace(t)
 	w.checkout("api")
 	started := time.Now()
-	_, errOut, code := w.runInit(SetupInit([]Setup{w.setup("api", "sleep 30\n")}, time.Second))
+	_, errOut, code := w.initWithin(time.Second, w.setup("api", "sleep 30\n"))
 	if code != 124 || !strings.Contains(errOut, setupFailedPrefix+"124 api") {
 		t.Errorf("exit %d\n%s", code, errOut)
 	}
 	if took := time.Since(started); took > 10*time.Second {
 		t.Errorf("stopped after %s", took)
 	}
-	if _, errOut, code := w.runInit(SetupInit([]Setup{w.setup("api", "sleep 0.1\n")}, 5*time.Second)); code != 0 {
+	if _, errOut, code := w.initWithin(5*time.Second, w.setup("api", "sleep 0.1\n")); code != 0 {
 		t.Errorf("a script within its time: exit %d\n%s", code, errOut)
 	}
 
 	if SetupTimeout != 15*time.Minute {
 		t.Errorf("SetupTimeout %s", SetupTimeout)
 	}
-	setups := []Setup{w.setup("api", "true\n")}
-	if got := SetupSpec(setups); got == nil || got.Script != SetupInit(setups, SetupTimeout) {
-		t.Errorf("a spec's init is not SetupInit with SetupTimeout: %+v", got)
+	var spec lux.Spec
+	SetupSpec(&spec, nil)
+	if spec.Init == nil || spec.Init.Script != SetupInit(SetupManifestPath, workspaceDir, SetupTimeout) {
+		t.Errorf("a spec's init is not SetupInit with SetupTimeout: %+v", spec.Init)
 	}
 }
 
-// The script is not the init's code: quotes, $(…), backticks, heredoc
-// markers and a name and path made to break out run as the script's own
-// text or are taken literally.
+// Nothing in the manifest is init's code: a name and a path with quotes,
+// $(…), backticks and newlines, and a script with a heredoc of the same,
+// are taken literally, and the manifest's next line still parses.
 func TestASetupScriptOrNameCannotBreakOutOfInit(t *testing.T) {
 	w := newSetupWorkspace(t)
 	canary := filepath.Join(t.TempDir(), "pwned")
-	odd := "a'b\"c$(touch " + canary + ")`touch " + canary + "`;x"
+	odd := "a'b\"c$(touch " + canary + ")`touch " + canary + "`;x\nnext line\n"
 	dir := filepath.Join(w.root, "repos", odd)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	w.git(dir, "init", "-q", "-b", "main")
 	got := filepath.Join(t.TempDir(), "got")
-	script := "cat > '" + got + "' <<'EOF'\n'\"$(x)`y` EOF\nEOF\n" + "printf '%s' \"$1\" >> '" + got + "'\n'; touch " + canary + " #\n"
-	_, errOut, code := w.init(Setup{Name: odd, Path: dir, Script: script})
+	after := filepath.Join(t.TempDir(), "after")
+	w.checkout("web")
+	script := "cat > '" + got + "' <<'EOF'\n'\"$(x)`y` EOF\nEOF\n" + "pwd >> '" + got + "'\n"
+	_, errOut, code := w.init(Setup{Name: odd, Path: workspaceDir + "/repos/" + odd, Script: script},
+		w.setup("web", "touch '"+after+"'\n"))
 	if exists(canary) {
 		t.Fatal("text from the name, path or script ran as init's code")
 	}
-	// The script's own last line opens a quote it never closes: bash refuses
-	// that line (2) after running the ones before, and init says so with the
-	// name as given.
-	if code != 2 || !strings.Contains(errOut, setupFailedPrefix+"2 "+odd) {
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, errOut)
+	}
+	if b, _ := os.ReadFile(got); string(b) != "'\"$(x)`y` EOF\n"+dir+"\n" {
+		t.Errorf("the script read %q", b)
+	}
+	if !strings.Contains(errOut, setupRunningPrefix+odd+"\n") {
+		t.Errorf("init did not name it as given:\n%s", errOut)
+	}
+	if !exists(after) {
+		t.Error("the next repository's script did not run")
+	}
+
+	// A failure names it as given too.
+	if err := os.Remove(filepath.Join(dir, ".git", "dude-setup-done")); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code = w.init(Setup{Name: odd, Path: workspaceDir + "/repos/" + odd, Script: "'; touch " + canary + " #\n"})
+	if exists(canary) || code != 2 || !strings.HasSuffix(errOut, setupFailedPrefix+"2 "+odd+"\n") {
 		t.Errorf("exit %d\n%s", code, errOut)
 	}
-	if b, _ := os.ReadFile(got); string(b) != "'\"$(x)`y` EOF\n" {
-		t.Errorf("the script's heredoc read %q", b)
+}
+
+// No manifest, or one naming no script, is an init that does nothing; a
+// repository with no checkout is passed over; a manifest init cannot read
+// fails it.
+func TestAManifestWithoutScriptsDoesNothing(t *testing.T) {
+	w := newSetupWorkspace(t)
+	w.checkout("api")
+	if got := SetupManifest([]Setup{{Name: "api", Path: RepoPath("api")}, {Name: "web", Path: RepoPath("web"), Script: " \n\t"}}); got != setupManifestHeader {
+		t.Errorf("manifest %q", got)
+	}
+	if out, errOut, code := w.init(w.setup("api", "")); code != 0 || out != "" || errOut != "" {
+		t.Errorf("an empty manifest: exit %d, %q %q", code, out, errOut)
+	}
+	if out, errOut, code := w.runInit(SetupInit(filepath.Join(t.TempDir(), "none"), w.root, SetupTimeout)); code != 0 || out != "" || errOut != "" {
+		t.Errorf("no manifest: exit %d, %q %q", code, out, errOut)
+	}
+	ran := filepath.Join(t.TempDir(), "ran")
+	_, errOut, code := w.init(w.setup("gone", "exit 9\n"), w.setup("api", "touch '"+ran+"'\n"))
+	if code != 0 || !exists(ran) || !strings.Contains(errOut, "dude: gone has no checkout") {
+		t.Errorf("a repository without a checkout: exit %d\n%s", code, errOut)
+	}
+	manifest := filepath.Join(t.TempDir(), "setup")
+	if err := os.WriteFile(manifest, []byte("not!base64 at all\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := w.runInit(SetupInit(manifest, w.root, SetupTimeout)); code != 1 || !strings.Contains(errOut, "unreadable") {
+		t.Errorf("an unreadable manifest: exit %d\n%s", code, errOut)
+	}
+}
+
+// A script reads neither init's stdin nor the manifest.
+func TestASetupScriptHasNoInput(t *testing.T) {
+	w := newSetupWorkspace(t)
+	w.checkout("api")
+	got := filepath.Join(t.TempDir(), "got")
+	manifest := filepath.Join(t.TempDir(), "setup")
+	if err := os.WriteFile(manifest, []byte(SetupManifest([]Setup{w.setup("api",
+		"cat > '"+got+"'\n{ cat <&3 || echo closed; } >> '"+got+"' 2>/dev/null\n")})), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", SetupInit(manifest, w.root, SetupTimeout))
+	cmd.Env, cmd.Stdin = w.env, strings.NewReader("init's own input\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(got); string(b) != "closed\n" {
+		t.Errorf("the script read %q", b)
 	}
 }
 
@@ -321,15 +395,5 @@ func TestAHookASetupScriptInstallsRunsUnderDudesHook(t *testing.T) {
 	w.git(dir, "commit", "-q", "--allow-empty", "-m", "allowed")
 	if w.git(dir, "rev-parse", "HEAD") == head {
 		t.Error("an allowed commit was not made")
-	}
-}
-
-// No script anywhere, or only blank ones: no init.
-func TestNoSetupScriptIsNoInit(t *testing.T) {
-	if got := SetupInit([]Setup{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/w", Script: " \n\t"}}, SetupTimeout); got != "" {
-		t.Errorf("init %q", got)
-	}
-	if SetupSpec(nil) != nil {
-		t.Error("an init with no setups")
 	}
 }

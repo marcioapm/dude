@@ -412,16 +412,14 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 			return lux.Spec{}, "", nil, nil, err
 		}
 		spec.Git = &lux.Git{}
-		var setups []phases.Setup
 		for _, rp := range repos {
 			lr := lux.Repository{Name: lux.SpecName(rp.Name), URL: rp.URL, Ref: rp.Ref, Path: phases.RepoPath(rp.Name), Push: new(bool)}
 			lr.Credential = names[lr.Name]
 			spec.Git.Repositories = append(spec.Git.Repositories, lr)
-			setups = append(setups, phases.Setup{Name: lr.Name, Path: lr.Path, Script: rp.Setup})
 		}
-		// Before its servers: lux starts them once init is done.
-		spec.Init = phases.SetupSpec(setups)
 		spec.Secrets = tokens
+		// Before its servers: lux starts them once init is done.
+		phases.SetupSpec(&spec, previewSetups(repos))
 	}
 	spec.Secrets = append(spec.Secrets, secrets...)
 	for _, rc := range recipes {
@@ -473,19 +471,34 @@ func credentialRepos(refs []previewRef) []phases.CredentialRepo {
 	return out
 }
 
-// resumeCredentials are fresh forge tokens for every token secret the
-// preview's lux Run declares: minted now, as an installation token from
-// the submit has expired by the next wake.
-func (p *Previews) resumeCredentials(ctx context.Context, r previewRun, stored lux.StoredSpec) ([]lux.Secret, error) {
-	gh, err := p.forge(ctx, r.Org)
-	if err != nil || gh == nil {
-		return nil, err
+// previewSetups are the setup scripts of a preview's repositories.
+func previewSetups(refs []previewRef) []phases.Setup {
+	out := make([]phases.Setup, 0, len(refs))
+	for _, rf := range refs {
+		out = append(out, phases.Setup{Name: lux.SpecName(rf.Name), Path: phases.RepoPath(rf.Name), Script: rf.Setup})
 	}
+	return out
+}
+
+// resumeRepoSecrets are fresh forge tokens for every token secret the
+// preview's lux Run declares, minted now, as an installation token from
+// the submit has expired by the next wake; and the setup manifest of its
+// repositories as they are now, when it declares one (lux keeps no value).
+func (p *Previews) resumeRepoSecrets(ctx context.Context, r previewRun, stored lux.StoredSpec) ([]lux.Secret, error) {
 	refs, err := p.refs(ctx, r)
 	if err != nil {
 		return nil, err
 	}
-	return phases.ResumeCredentials(ctx, gh, stored, credentialRepos(refs))
+	var setup []lux.Secret
+	if phases.DeclaresSetup(stored) {
+		setup = []lux.Secret{phases.SetupSecret(previewSetups(refs))}
+	}
+	gh, err := p.forge(ctx, r.Org)
+	if err != nil || gh == nil {
+		return setup, err
+	}
+	tokens, err := phases.ResumeCredentials(ctx, gh, stored, credentialRepos(refs))
+	return append(tokens, setup...), err
 }
 
 // operationCredentials are fresh tokens for a sync of a running preview,
@@ -808,7 +821,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		return err
 	}
 	var spec lux.Spec
-	tokens, err := p.resumeCredentials(ctx, r, lr.Spec)
+	tokens, err := p.resumeRepoSecrets(ctx, r, lr.Spec)
 	if err != nil {
 		return err
 	}

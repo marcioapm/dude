@@ -617,7 +617,7 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		return err
 	}
 	var spec lux.Spec
-	tokens, err := p.resumeCredentials(ctx, r.previewRun, lr.Spec)
+	tokens, err := p.resumeRepoSecrets(ctx, r.previewRun, lr.Spec)
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err

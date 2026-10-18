@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 )
 
 // SetupTimeout bounds one repository's setup script. lux puts no bound on
-// init, so the composed script does, with coreutils' timeout.
+// init, so init does, with coreutils' timeout.
 const SetupTimeout = 15 * time.Minute
 
 // Setup is a repository's setup script and where it is checked out.
@@ -22,62 +23,110 @@ type Setup struct {
 	Name, Path, Script string
 }
 
-// setupFailedPrefix starts the line the composed script writes last when
-// a repository's setup script fails: "<prefix><exit code> <name>".
+// setupFailedPrefix starts the line init writes last when a repository's
+// setup script fails: "<prefix><exit code> <name>".
 const setupFailedPrefix = "dude-setup-failed: "
 
 // setupRunningPrefix starts the line init writes before each script.
 const setupRunningPrefix = "dude: running the setup script of "
 
-// setupFunc runs one repository's setup script (dude_setup PATH BASE64):
-// in the checkout's root, once per checkout, with bash -e and stdin
-// closed, under SetupTimeout. Its marker, under the checkout's git dir and
-// so never in its work tree, is written only on success: a resume of the
-// same checkout skips the script, a fresh checkout runs it. The script
-// runs from a file beside the marker, decoded from base64. The
-// command-scope git settings every Run carries (workloadGitConfig) are
-// cleared for it, so a hook installer writes the repository's own config
-// and hooks directory, which dude's hook then runs. A subshell: the cd and
-// the environment end with it. timeout bounds each script.
-func setupFunc(timeout time.Duration) string {
-	return `dude_setup() (
-	cd "$1" || exit
+// The setup manifest: a file secret every agent Run and every preview of
+// repositories carries from its submit, its value given again on every
+// resume (lux keeps none), so a resume names a repository it adds. lux
+// keeps the init a Run was submitted with; the manifest is what changes.
+const (
+	setupSecretName = "dude-setup"
+	// SetupManifestPath is where the manifest is placed in the container.
+	SetupManifestPath = agentHome + "/.dude/setup"
+	// Its first line: never empty (lux refuses an empty secret value), and
+	// skipped by init, as every line starting with # is.
+	setupManifestHeader = "# dude setup scripts: a repository a line, its name, checkout and script, each base64\n"
+)
+
+// SetupManifest is the manifest for setups, in their order, a blank
+// script left out. Each field is base64, so no name, path or script can
+// break a line or reach the shell as code; a path under the workspace is
+// given relative to it, where init reads it from.
+func SetupManifest(setups []Setup) string {
+	var b strings.Builder
+	b.WriteString(setupManifestHeader)
+	enc := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	for _, s := range setups {
+		if strings.TrimSpace(s.Script) == "" {
+			continue
+		}
+		path := strings.TrimPrefix(s.Path, workspaceDir+"/")
+		b.WriteString(enc(s.Name) + " " + enc(path) + " " + enc(s.Script) + "\n")
+	}
+	return b.String()
+}
+
+// SetupSecret is the manifest as the Run's file secret.
+func SetupSecret(setups []Setup) lux.Secret {
+	return lux.Secret{Name: setupSecretName, Value: SetupManifest(setups), As: "file", Path: SetupManifestPath}
+}
+
+// DeclaresSetup reports whether a Run lux holds has the setup manifest:
+// every resume must give it again.
+func DeclaresSetup(stored lux.StoredSpec) bool {
+	return slices.ContainsFunc(stored.Secrets, func(s lux.StoredSecret) bool { return s.Name == setupSecretName })
+}
+
+// SetupInit is the init that runs, in order, the setup script of each
+// repository the manifest names, from workspace (where its relative paths
+// are): in the checkout's root, once per
+// checkout, with bash -e and stdin closed, stopped after timeout. Its
+// marker, under the checkout's git dir and so never in its work tree, is
+// written only on success: a later start of the same checkout skips the
+// script, a fresh checkout or one a resume adds runs it. The first that
+// fails stops init with its code, having said which on stderr
+// (setupFailedPrefix), and lux fails the Run init-failed. A repository
+// with no checkout (lux dropped it when its clone failed) is passed over.
+// No manifest is no setup.
+//
+// The command-scope git settings every Run carries (workloadGitConfig)
+// are cleared for a script, so a hook installer writes the repository's
+// own config and hooks directory, which dude's hook then runs. A decoded
+// name or path keeps a trailing newline: each substitution ends with "."
+// and loses it after.
+func SetupInit(manifest, workspace string, timeout time.Duration) string {
+	return `manifest=` + shellQuote(manifest) + `
+[ -f "$manifest" ] || exit 0
+cd ` + shellQuote(workspace) + ` || exit
+dude_setup() (
+	cd "$2" || exit
 	done=$(git rev-parse --git-path dude-setup-done) && script=$(git rev-parse --git-path dude-setup.sh) || exit
 	[ -e "$done" ] && exit 0
-	printf '%s' "$2" | base64 -d > "$script" || exit
+	printf '%s%s\n' '` + setupRunningPrefix + `' "$1" >&2
+	printf '%s' "$3" | base64 -d > "$script" || exit
 	for v in $(env | sed -n 's/^\(GIT_CONFIG_\(KEY\|VALUE\)_[0-9]*\)=.*/\1/p'); do unset "$v"; done
 	unset GIT_CONFIG_PARAMETERS
 	export GIT_CONFIG_COUNT=0
-	timeout -k 10s ` + strconv.Itoa(int(timeout.Seconds())) + `s bash -e "$script" < /dev/null
+	timeout -k 10s ` + strconv.Itoa(int(timeout.Seconds())) + `s bash -e "$script" < /dev/null 3<&-
 	code=$?
 	rm -f "$script"
 	[ "$code" -eq 0 ] || exit "$code"
 	: > "$done"
 )
+while IFS=' ' read -r name path script <&3; do
+	case $name in '' | '#'*) continue ;; esac
+	name=$(printf '%s' "$name" | base64 -d && echo .) && path=$(printf '%s' "$path" | base64 -d && echo .) ||
+		{ echo "dude: the setup manifest is unreadable" >&2; exit 1; }
+	name=${name%.} path=${path%.}
+	if [ ! -d "$path" ]; then
+		printf 'dude: %s has no checkout at %s; its setup script is skipped\n' "$name" "$path" >&2
+		continue
+	fi
+	dude_setup "$name" "$path" "$script" || { code=$?; printf '%s%s %s\n' '` + setupFailedPrefix + `' "$code" "$name" >&2; exit "$code"; }
+done 3< "$manifest"
 `
 }
 
-// SetupInit is the init script that runs every repository's setup script
-// in its checkout, in order, stopping at the first that fails: init then
-// exits with its code, having said which on stderr (setupFailedPrefix),
-// and lux fails the Run init-failed. "" when none has one. A name, path
-// and script reach the shell only single-quoted or as base64, never as
-// code. Each script is stopped after timeout.
-func SetupInit(setups []Setup, timeout time.Duration) string {
-	var b strings.Builder
-	for _, s := range setups {
-		if strings.TrimSpace(s.Script) == "" {
-			continue
-		}
-		if b.Len() == 0 {
-			b.WriteString(setupFunc(timeout))
-		}
-		name := shellQuote(s.Name)
-		b.WriteString("echo \"" + setupRunningPrefix + "\"" + name + " >&2\n")
-		b.WriteString("dude_setup " + shellQuote(s.Path) + " " + base64.StdEncoding.EncodeToString([]byte(s.Script)) +
-			" || { code=$?; echo \"" + setupFailedPrefix + "$code \"" + name + " >&2; exit \"$code\"; }\n")
-	}
-	return b.String()
+// SetupSpec gives a spec its setup: the fixed init and the manifest of
+// setups.
+func SetupSpec(spec *lux.Spec, setups []Setup) {
+	spec.Init = &lux.Init{Script: SetupInit(SetupManifestPath, workspaceDir, SetupTimeout)}
+	spec.Secrets = append(spec.Secrets, SetupSecret(setups))
 }
 
 // InitOutput is what a Run's init printed in its current placement, from
@@ -175,14 +224,6 @@ func (f SetupFailure) Reason() string {
 		}
 	}
 	return why + "."
-}
-
-// SetupSpec is a spec's init for setups, nil when none has a script.
-func SetupSpec(setups []Setup) *lux.Init {
-	if script := SetupInit(setups, SetupTimeout); script != "" {
-		return &lux.Init{Script: script}
-	}
-	return nil
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

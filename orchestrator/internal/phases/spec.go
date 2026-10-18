@@ -383,14 +383,15 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		spec.Init = SetupSpec(repoSetups(in.Repos))
 		for _, sec := range secrets.list {
 			if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == sec.Name }) {
 				spec.Secrets = append(spec.Secrets, sec)
 			}
 		}
+		if len(in.Repos) > 0 {
+			SetupSpec(&spec, repoSetups(in.Repos))
+		}
 	}
-
 	if c.ToolsURL != "" && in.ToolsToken != "" {
 		// dude's own tools, as this Run. lux serves them inside the container
 		// — a socket for the dude CLI, loopback for the agent's MCP client —
