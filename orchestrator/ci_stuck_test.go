@@ -117,6 +117,11 @@ func TestCIStuckPersonWaitsBeforeChecksFinish(t *testing.T) {
 	}
 	w.gh.SetChecks("success")
 	w.syncPR(wi, "target")
+	var prID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID); err != nil {
+		t.Fatal(err)
+	}
+	w.syncTakesNoDeliveryLock(t, wi, prID)
 	w.until("waiting again", func() bool {
 		w.syncPR(wi, "target")
 		return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge"
