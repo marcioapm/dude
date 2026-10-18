@@ -303,7 +303,7 @@ func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT organization_id, parent_run_id, child_run_id, generation FROM child_result_outbox
 			WHERE consumed_at IS NULL AND stale_at IS NULL AND (claimed_until IS NULL OR claimed_until < now())
-			ORDER BY created_at LIMIT 50`)
+			ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED`)
 		if err != nil {
 			return err
 		}

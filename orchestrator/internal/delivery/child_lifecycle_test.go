@@ -244,7 +244,7 @@ func TestChildWriterBlocksWorkflowAndConductorPublication(t *testing.T) {
 		t.Fatalf("workflow writer: %v", err)
 	}
 	w.exec(`UPDATE workflow_runs SET state = state || '{"decider":"conductor"}'::jsonb WHERE id = 'wf_life'`)
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
 		if _, err := ConductPublish(w.ctx, tx, w.in.Parent.Run, "publish"); !IsRefusal(err) {
 			return fmt.Errorf("conduct publish: %v", err)
 		}
@@ -524,6 +524,15 @@ func TestChildAtomicEnqueue(t *testing.T) {
 	}
 	if wins != 1 {
 		t.Fatalf("enqueues %d, want 1", wins)
+	}
+	var claimed int
+	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
+		return tx.QueryRow(w.ctx, `SELECT count(*) FROM child_result_outbox WHERE claimed_by IS NOT NULL`).Scan(&claimed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed != 0 {
+		t.Fatalf("workers left %d overlapping claims", claimed)
 	}
 	var directives, receipts int
 	if err := w.owner.QueryRow(w.ctx, `SELECT count(*),count(*) FILTER (WHERE consumed_at IS NOT NULL AND directive_id IS NOT NULL) FROM child_result_outbox`).Scan(&directives, &receipts); err != nil {

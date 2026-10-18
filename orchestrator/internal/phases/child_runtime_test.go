@@ -18,12 +18,24 @@ func TestChildRuntimeWriterFence(t *testing.T) {
 	if err := dbtest.Reachable(w.ctx); err != nil {
 		t.Fatal(err)
 	}
-	w.exec(`UPDATE runs SET source_kind = 'task_conductor', parent_run_id = id,
-		child_profile = 'implementer', child_capabilities = '{"publishCode":true}' WHERE id = $1`, w.run.ID)
-	if err := w.s.submit(w.ctx, w.run); err == nil {
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,kind,source_kind)
+		VALUES('run_parent',$1,$2,$3,1,'conductor','running','agent',NULL)`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`UPDATE tasks SET status='running' WHERE id=$1`, w.run.TaskID)
+	w.exec(`UPDATE runs SET source_kind = 'task_conductor', parent_run_id = 'run_parent',
+		child_profile = 'implementer', child_capabilities = '{"publishCode":true}', phase='implement',
+		role='implementer', status='running', control='none', child_stop_reason='parent-ended' WHERE id = $1`, w.run.ID)
+	r := w.run
+	r.SourceKind = "task_conductor"
+	r.Phase = "implement"
+	r.Role = "implementer"
+	r.Status = "running"
+	if err := w.s.childExecutionAllowed(w.ctx, r); err == nil || !strings.Contains(err.Error(), "stop request") {
+		t.Fatalf("writer child was not refused for its persisted stop request: %v", err)
+	}
+	if err := w.s.submit(w.ctx, r); err == nil {
 		t.Fatal("writer child reached submission instead of being held")
 	}
-	if _, _, err := w.s.publish(w.ctx, w.run); err == nil {
+	if _, _, err := w.s.publish(w.ctx, r); err == nil {
 		t.Fatal("writer child reached publication")
 	}
 }
