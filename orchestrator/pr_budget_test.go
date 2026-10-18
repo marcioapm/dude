@@ -151,3 +151,27 @@ func TestARetryAfterAFailedPullRequestFixRefundsNothing(t *testing.T) {
 		t.Errorf("%d PR fixers, want 3", n)
 	}
 }
+
+func TestALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t *testing.T) {
+	w := newPRFixWorld(t)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "fix" {
+			b.Hang = true
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("fix running", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running' AND pr_feedback <> '[]'::jsonb AND base_refs <> '{}'::jsonb`, w.wi) == 1
+	})
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state - 'prFixCharged', '{prFixesByRepo}', '{"target":5}') WHERE task_id = $1 AND step = 'awaitPRFix'`, w.wi)
+	var luxID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, w.wi).Scan(&luxID); err != nil {
+		t.Fatal(err)
+	}
+	w.lux.EndTurn(luxID)
+	w.until("legacy fix promoted", func() bool { return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review" })
+	if f := w.state("prFixesByRepo"); f != `{"target": 5}` {
+		t.Fatalf("legacy landing charged again: %s, want 5", f)
+	}
+}

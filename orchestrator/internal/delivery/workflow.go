@@ -413,8 +413,9 @@ type Candidate struct {
 // Repos: once, when its fix landed with commits; a retry of that round
 // gives it back.
 type PRFixCharge struct {
-	Round int      `json:"round"`
-	Repos []string `json:"repos"`
+	Round   int      `json:"round"`
+	Repos   []string `json:"repos"`
+	Pending bool     `json:"pending,omitempty"`
 }
 
 // PromotedRefresh is the after-promotion refresh still to do: the
@@ -1744,6 +1745,7 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	st.PRIteration++
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
+	st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Pending: true}
 	var spent []string // pull requests at the organization's budget
 	repos := feedbackRepos(st.PRFeedback)
 	if len(repos) == 0 {
@@ -1768,11 +1770,18 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	return workflow.Result{}, false, nil
 }
 
-// chargeLandedPRFix spends the round's fix, which published commits to
-// changed (by repository), from the budget of each open pull request it
-// changed. Once per round, whichever of its steps runs again.
+// currentPRFixCharge recognises rounds that spent their budget at start.
+func (st *State) currentPRFixCharge() *PRFixCharge {
+	if st.PRFixCharged == nil || st.PRFixCharged.Round != st.PRFixKey {
+		// A round without a start marker spent its budget when it started.
+		st.PRFixCharged = &PRFixCharge{Round: st.PRFixKey, Repos: feedbackRepos(st.PRFeedback)}
+	}
+	return st.PRFixCharged
+}
+
+// chargeLandedPRFix spends the round's fix once against each open PR it changed.
 func (w *steps) chargeLandedPRFix(ctx context.Context, sc workflow.StepContext, st *State, changed map[string]string) error {
-	if st.PRFixCharged != nil && st.PRFixCharged.Round == st.PRFixKey {
+	if !st.currentPRFixCharge().Pending {
 		return nil
 	}
 	open, err := w.openPRRepos(ctx, sc, st)
@@ -2601,7 +2610,7 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 		// its fix landed (a pull_request_moved; a failed fix spent none).
 		// A budget spent is a new one.
 		st.PRIteration--
-		if c := st.PRFixCharged; c != nil && c.Round == st.PRFixKey {
+		if c := st.currentPRFixCharge(); !c.Pending {
 			for _, repo := range c.Repos {
 				if st.PRFixes[repo] > 0 {
 					st.PRFixes[repo]--

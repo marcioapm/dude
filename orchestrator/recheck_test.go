@@ -571,6 +571,9 @@ func TestAPushWhileAFixIsCheckedIsNeverOverwritten(t *testing.T) {
 	if p := w.state("prIteration"); p != "1" {
 		t.Errorf("prIteration = %s after a retry of the round, want 1", p)
 	}
+	if f := w.state("prFixesByRepo"); f != `{"target": 1}` {
+		t.Errorf("after the moved round's retry prFixes = %s, want one landed fix", f)
+	}
 }
 
 // The candidate's test cannot run the application: a person waives it,
