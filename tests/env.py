@@ -192,6 +192,12 @@ def find_free_port() -> int:
                 return port
 
 
+def workspace_for(run_id: str) -> str:
+    """DUDE_TEST_WORKSPACE_ROOT is a parent directory, never a shared workspace."""
+    root = os.environ.get("DUDE_TEST_WORKSPACE_ROOT")
+    return str(Path(root) / f"e2e-workspace-{run_id}") if root else f"/tmp/dude-e2e-{run_id}"
+
+
 _ports_given: set[int] = set()
 _ports_lock = threading.Lock()
 
@@ -223,11 +229,11 @@ class TestEnvironment:
         # Logs from the processes the suite starts. Kept rather than discarded:
         # a failure in the orchestrator is otherwise invisible from the test, which
         # only sees that a Run never reached the state it waited for.
-        self.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", f"/tmp/dude-e2e-{self.run_id}"))
+        self.workspace_root = workspace_for(self.run_id)
+        self.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", self.workspace_root))
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.control_plane_url = f"http://localhost:{self.control_plane_port}"
         self.gallery_url = f"http://127.0.0.1:{self.gallery_port}"
-        self.workspace_root = f"/tmp/dude-e2e-{self.run_id}"
         self._init_services()
 
     def _init_services(self) -> None:
@@ -672,7 +678,7 @@ class TestEnvironment:
         env.web_proc = None
         env.control_plane_url = f"http://localhost:{env.control_plane_port}"
         env.gallery_url = f"http://127.0.0.1:{env.gallery_port}"
-        env.workspace_root = f"/tmp/dude-e2e-{env.run_id}"
+        env.workspace_root = workspace_for(env.run_id)
         # The parent's log directory, so anything started here logs beside
         # the control plane rather than somewhere nobody will look.
         env.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", env.workspace_root))
