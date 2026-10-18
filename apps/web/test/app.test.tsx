@@ -169,9 +169,9 @@ describe("epic archive navigation", () => {
       expect(requests).toEqual([!allEnded]);
       expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
       await until(() => page.querySelector(`[aria-label="${PROJECT.name} board"]`), "the project board");
-      expect(page.querySelector("[data-testid=epic-screen]")).toBeNull();
+      expect(page.querySelectorAll("[data-testid=epic-screen]").length).toBe(0);
       await until(() => page.querySelector(`[data-epic="${EPIC.id}"]`) ? null : true, "the archived epic removed from navigation and project list");
-      expect(page.querySelector(`[data-epic="${EPIC.id}"]`)).toBeNull();
+      expect(page.querySelectorAll(`[data-epic="${EPIC.id}"]`).length).toBe(0);
     });
   }
 
