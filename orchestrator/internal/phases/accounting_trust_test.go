@@ -47,8 +47,8 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 		git(t, a.work, "update-ref", "refs/remotes/lux/main", "HEAD")
 		acc := a.published()
 		samePaths(t, acc, "big.txt")
-		if acc.Lines != 500 || acc.Full == "" {
-			t.Fatalf("lines %d full %q, want 500 counted in full", acc.Lines, acc.Full)
+		if acc.Lines != 500 {
+			t.Fatalf("lines %d full %q, want 500", acc.Lines, acc.Full)
 		}
 	})
 	t.Run("a merge of a forged base commit hides nothing", func(t *testing.T) {
@@ -68,27 +68,28 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 			t.Fatalf("lines %d: the forged base hid big.txt", acc.Lines)
 		}
 	})
-	t.Run("a base lux reported that GitHub's main does not hold counts in full", func(t *testing.T) {
+	t.Run("a base lux reported that GitHub's main does not hold hides nothing", func(t *testing.T) {
 		a := newAccountingRun(t)
 		a.advanceBase(map[string]string{"base.go": lines(30, "base")})
 		a.syncBase()
 		git(t, a.work, "merge", "-q", "--no-edit", "lux/main")
 		a.base = a.commit(map[string]string{"big.txt": big}, "big")
 		acc := a.published()
-		if acc.Lines != 530 || !strings.Contains(acc.Full, "not on GitHub's main") {
-			t.Fatalf("lines %d full %q, want 530 counted in full", acc.Lines, acc.Full)
+		samePaths(t, acc, "big.txt")
+		if acc.Lines != 500 {
+			t.Fatalf("lines %d full %q, want big.txt's 500", acc.Lines, acc.Full)
 		}
 	})
-	t.Run("no base reported counts in full", func(t *testing.T) {
+	t.Run("main merged with no fetch lux reported counts only the task's work", func(t *testing.T) {
 		a := newAccountingRun(t)
 		a.advanceBase(map[string]string{"base.go": lines(30, "base")})
 		git(t, a.work, "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/lux/main")
 		git(t, a.work, "merge", "-q", "--no-edit", "lux/main")
 		a.commit(map[string]string{"mine.go": "mine\n"}, "mine")
 		acc := a.published()
-		samePaths(t, acc, "base.go", "mine.go")
-		if acc.Lines != 31 || !strings.Contains(acc.Full, "no fetch of main") {
-			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
+		samePaths(t, acc, "mine.go")
+		if acc.Lines != 1 || acc.Full != "" {
+			t.Fatalf("lines %d full %q, want mine.go's 1", acc.Lines, acc.Full)
 		}
 	})
 	t.Run("a compare GitHub cut short counts in full", func(t *testing.T) {
@@ -121,16 +122,22 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 		}
 	})
 	t.Run("a compare of what the base brought in cut short counts in full", func(t *testing.T) {
+		// main adds 300 files; the task merges it and deletes half: start...head
+		// and T...head list 151 files each, start...T 300.
 		a := newAccountingRun(t)
-		files := map[string]string{"shared.txt": "base\n"}
+		files := map[string]string{}
 		for i := range forge.CompareFileCap {
 			files[fmt.Sprintf("gen/f%03d", i)] = "x\n"
 		}
 		a.advanceBase(files)
 		a.syncBase()
+		a.mergeBase(nil)
+		for i := forge.CompareFileCap / 2; i < forge.CompareFileCap; i++ {
+			git(t, a.work, "rm", "-q", fmt.Sprintf("gen/f%03d", i))
+		}
 		a.commit(map[string]string{"shared.txt": "task\n"}, "task")
 		acc := a.published()
-		if !strings.Contains(acc.Full, "of what main brought in, its most") || acc.Lines != 1 {
+		if !strings.Contains(acc.Full, "of what main brought in, its most") || acc.Lines != 151 {
 			t.Fatalf("lines %d full %q", acc.Lines, acc.Full)
 		}
 	})
@@ -153,14 +160,11 @@ func TestAPublishCountsTheTasksOwnWorkAgainstTrustedData(t *testing.T) {
 // on, neither a full count nor a refusal.
 func TestAGitHubBlipOnATrustedCompareIsRetried(t *testing.T) {
 	for name, failing := range map[string]func(a *accountingRun, path string) bool{
-		"main...T": func(a *accountingRun, path string) bool {
-			return strings.HasSuffix(path, "/compare/main..."+a.base)
+		"main...head": func(a *accountingRun, path string) bool {
+			return strings.HasSuffix(path, "/compare/main..."+a.head())
 		},
 		"start...T": func(a *accountingRun, path string) bool {
 			return strings.HasSuffix(path, "/compare/"+a.start+"..."+a.base)
-		},
-		"T...head": func(a *accountingRun, path string) bool {
-			return strings.Contains(path, "/compare/"+a.base+"...")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

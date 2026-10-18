@@ -42,6 +42,7 @@ func TestGoldenRunNotices(t *testing.T) {
 		{"resumed", resumeNudge},
 		{"idle", idleNudge},
 		{"stuck-turn", stuckTurnNudge},
+		{"silent-turn", silentTurnNudge},
 		{"host-moved", movedNudge},
 		{"moved", movedTold(large, "")},
 		{"move-kept", moveKeptTold("XL", "Large", "lux said no", false)},

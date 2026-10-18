@@ -1444,7 +1444,9 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	answer := map[string]any{"files": files, "behind_by": n, "ahead_by": a, "commits": commits, "total_commits": a}
+	mergeBase, _ := s.git("merge-base", base, head)
+	answer := map[string]any{"files": files, "behind_by": n, "ahead_by": a, "commits": commits, "total_commits": a,
+		"merge_base_commit": map[string]any{"sha": mergeBase}}
 	s.mu.Lock()
 	rewrite := s.CompareAnswer
 	s.mu.Unlock()

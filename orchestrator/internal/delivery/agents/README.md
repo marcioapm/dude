@@ -6,8 +6,8 @@ sections a Run gets and fills in the data.
 
 | Directory | What it holds |
 | --- | --- |
-| `roles/<role>.md` | A role's built-in instructions: what an organisation's saved prompt replaces and a project's adds to or replaces, and what the settings page shows as dude's (`BuiltinPrompt`). Plain text, not a template. Paragraphs are separated by one blank line and stay separate: the fixer's first paragraph goes before the feedback it is given and the rest after it. |
-| `contracts/` | The framing every Run gets whatever its instructions say, because the workflow relies on it: how a reviewer reviews and reports, how a fixer fixes, the tester's report, committing, merging the base, the task, findings, pull request and people's feedback, tools, CLI, publishing, the workspace and machine notes. `review-focus/<category>.md` is each review category's focus; `review-range/<of>.md` why a review covers only its range. `images.md` is what replaces an image reference in a text an agent reads, and `feedback-page-line.md` where on its page a preview item was made. |
+| `instructions/` | Each Run's instruction file (`Instructions`): `charter.md` (How you work), `dude.md` (How dude works), `roles/<role>.md`, a reviewer's aspect (`aspects/reviewer/`), then `saved.md` (the saved prompts) and `notes.md` (the project's notes for the role). A role file is split at init (`parseRole`) into its title and purpose, its one `## How you work as <role>` section (the stance: the only part a saved prompt replaces, and what `BuiltinPrompt` and the settings page show as dude's) and every later section, which no saved prompt removes. |
+| `contracts/` | Pieces of the instruction files (included with `{{template}}`) and of first messages, because the workflow relies on it: how a reviewer reviews and reports, how a fixer fixes, the tester's report, committing, merging the base, the task, findings, pull request and people's feedback, tools, CLI, publishing, the workspace and machine notes. `review-range/<of>.md` why a review covers only its range. `images.md` is what replaces an image reference in a text an agent reads, and `feedback-page-line.md` where on its page a preview item was made. |
 | `briefings/` | What the conductor, a brainstorm and a Run on an epic are told about where they stand: the conductor's briefing and its digest, the session briefing, the epic section, the messages held for a task, the integration fixer's and reviewer's briefs (`integration-*`), and the replay of a conversation (`replay.md`, and `replay-lines.md`, one `{{define}}` per line an event renders as). |
 | `tools/<tool>.md` | Each dude tool's description, as the MCP server and `dude tools` list it, then one `{{define "tools/<tool>/<parameter>"}}` per parameter description (`questions.choices.label` for a field of a list's items). A session agent's tools, which share names with the task agents', are `tools/session/<tool>.md`. `tools/common/` holds what several tools share and the MCP server's instructions. The tool's name, its parameters' names and its schema stay in Go: `agenttools.define` reads the text by the tool's name, and a description naming no parameter of the tool stops the orchestrator at startup. |
 | `results/` | What a tool answers when it succeeds: `next` and its other words (`steer.md`, `ask-person.md`, `sync-base.md`, `machine-moved.md`…), GitHub reads' notes and refusals (`github.md`), the machine tools' own words (`machines.md`) and lux's refusals of a move (`machine-refused.md`), and the gate question's choices (`gate-choices.md`, one a line, Open and Draft first). |
@@ -16,7 +16,7 @@ sections a Run gets and fills in the data.
 | `notices/` | What dude tells a Run outside its prompt: a peer's message and its notices, epic note changes, a nudge (`idle`, `resumed`, `stuck-turn`, `host-moved`), a machine move's words, a repository linked or failing to check out, and in `told.md` a person's answer, a restart, a changed task, a mention on GitHub, the external-text notes, Talk it through and a session's new owner. `start-how.md` names each way to start a task as its button does. |
 | `testdata/` | The golden files: migrated prompt, briefing, tool, result, refusal, wake and notice text. Refusal goldens pin the generated `printf` formats; the generated Go constants restore compile-time format checking at call sites. The remaining Go-side protocol identifiers and unreachable legacy text are not claimed to be catalogue entries. |
 
-Where each is used: `prompts.go` (`Prompt`, `ConductorPrompt`),
+Where each is used: `instructions.go` (`Instructions`, `BuiltinPrompt`), `prompts.go` (`Prompt`, `ConductorPrompt`),
 `session.go` (`BrainstormPrompt`, the session briefing), `briefing.go`,
 `coordination_brief.go`, `adopted_prompt.go`, `feedback.go`
 (`FeedbackText`, the conductor's feedback wake line), `machine_choices.go`,
@@ -119,3 +119,30 @@ The briefing goldens (`briefing-*`, `epic-*`, `digest-*`,
 runs the migrations. Without a database those tests are skipped, and
 `go test -v` prints `SKIP … no test database` for each: it means they were
 not checked. With `-update` and no database they fail instead.
+
+## How a Run gets its instructions
+
+- **First message, task only.** `Prompt`, `ConductorPrompt` and `BrainstormPrompt` carry the task and
+  this Run's data: findings, feedback, the review range, checkouts, the conductor's note, a restart's
+  note, the epic briefing, the machine line. Wakes and briefings stay messages.
+- **Instruction file, pinned per Run.** `phases.buildSpec` (through `runSpec`) puts
+  `Instructions(...)` into the spec's `init.script`, computed once at submit from the prompt versions
+  `LoadPrompts` records on the Run (`runs.prompt_version_id`, `project_prompt_version_id`). The script
+  (`phases/instructions.go`) is POSIX `sh`, `set -eu`, a quoted here-document with a delimiter derived
+  from the text's SHA-256 (refused if the text holds it as a line), written to `/workspace/AGENTS.md.tmp`
+  then renamed; `CLAUDE.md` is written the same way and contains exactly `@AGENTS.md`. Agents start in
+  `/workspace`. lux runs init before the workload on every placement from the spec it keeps, so every
+  placement of a Run, moves and resumes included, gets the same bytes; a new Run gets the current text.
+  An init over 256 KiB is refused at submit.
+- **Not a secret.** lux registers every secret value with its redactor and would blank the
+  instructions wherever an agent quotes them; the file goes in `init`, never `secrets`.
+
+## What a saved prompt can and cannot change
+
+An organisation's prompt replaces the role's stance (`## How you work as <role>`); a project's adds
+after it (`add`) or replaces both it and the organisation's (`replace`). Saved text appears under
+`# This organisation` / `# This project`. No saved prompt removes How you work, How dude works, the
+role's other sections, a reviewer's aspect, what the role hands back, or the project's notes.
+
+The `checks:` block the implementer, fixer and simplifier are asked to end with is described in their
+role files but not yet enforced: dude does not parse or gate on it until PR3.

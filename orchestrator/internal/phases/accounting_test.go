@@ -23,11 +23,13 @@ type accountingRun struct {
 	origin string
 	work   string
 	start  string
-	// The base lux reported fetching (syncBase), "" before any.
+	// The main lux fetched (syncBase), "" before any; counting never reads it.
 	base string
 	// Sees each request to the fake GitHub of published.
 	intercept func(*http.Request) int
-	pushed    string
+	// May change each compare's answer (fakegithub.Server.CompareAnswer).
+	answer func(base, head string, answer map[string]any)
+	pushed string
 }
 
 func newAccountingRun(t *testing.T) *accountingRun {
@@ -74,8 +76,7 @@ func (a *accountingRun) advanceBase(files map[string]string) string {
 	return git(a.t, other, "rev-parse", "HEAD")
 }
 
-// syncBase is lux's fetch for sync_base: origin's main at lux/main, and
-// the commit lux reports fetching, which is the trusted base offered.
+// syncBase is lux's fetch for sync_base: origin's main at lux/main.
 func (a *accountingRun) syncBase() {
 	a.t.Helper()
 	git(a.t, a.work, "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/lux/main")
@@ -85,9 +86,8 @@ func (a *accountingRun) syncBase() {
 func (a *accountingRun) head() string { return git(a.t, a.work, "rev-parse", "HEAD") }
 
 // published is a publish of the checkout's HEAD as dude accounts it: lux
-// pushes it to origin (GitHub, here a fake over origin; push), GitHub
-// compares it with where the Run started, and the base lux reported
-// fetching (a.base) is checked against GitHub's main.
+// pushes it to origin (GitHub, here a fake over origin; push), and GitHub
+// compares it with where the Run started and with its main.
 func (a *accountingRun) published() accounting {
 	a.t.Helper()
 	acc, err := a.publishedErr()
@@ -107,11 +107,7 @@ func (a *accountingRun) publishedErr() (accounting, error) {
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	trusted, why, err := verifyBase(ctx, gh, "acme/target", "main", a.base)
-	if err != nil {
-		return accounting{}, err
-	}
-	return accountPublish(ctx, gh, "acme/target", "main", a.start, head, trusted, why, task)
+	return accountPublish(ctx, gh, "acme/target", "main", a.start, head, task)
 }
 
 // push is lux's push of the checkout's HEAD, once per head.
@@ -128,6 +124,7 @@ func (a *accountingRun) github() *forge.GitHub {
 	a.t.Helper()
 	fake := fakegithub.New(a.origin, "acme/target")
 	fake.Intercept = a.intercept
+	fake.CompareAnswer = a.answer
 	srv := httptest.NewServer(fake.Handler())
 	a.t.Cleanup(srv.Close)
 	return forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_x", APIBaseURL: srv.URL})

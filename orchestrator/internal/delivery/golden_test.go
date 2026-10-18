@@ -187,20 +187,21 @@ func goldenPhaseScenarios() []struct {
 	}
 }
 
+// A phase's first message, in each environment: the task and this Run's
+// data alone. Saved prompts are the instruction file's (TestGoldenInstructions),
+// and a message under one is the message under none.
 func TestGoldenPhasePrompts(t *testing.T) {
 	for _, sc := range goldenPhaseScenarios() {
-		for _, ins := range goldenInstructions {
-			for _, env := range goldenEnvs {
-				// Every instruction layer with every tool set and checkouts
-				// would be 150 cases saying the same thing; each layer is
-				// rendered fully equipped, each environment under dude's.
-				if ins.name != "builtin" && env.name != "full" {
-					continue
-				}
-				in := sc.in
+		for _, env := range goldenEnvs {
+			in := sc.in
+			in.Tools, in.CLI, in.Repositories = env.tools, env.cli, env.repos
+			got := Prompt(sc.phase, in)
+			golden(t, fmt.Sprintf("prompt-%s-%s", sc.name, env.name), got)
+			for _, ins := range goldenInstructions {
 				in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = ins.org, ins.project, ins.projectMod
-				in.Tools, in.CLI, in.Repositories = env.tools, env.cli, env.repos
-				golden(t, fmt.Sprintf("prompt-%s-%s-%s", sc.name, ins.name, env.name), Prompt(sc.phase, in))
+				if other := Prompt(sc.phase, in); other != got {
+					t.Errorf("%s/%s: the %s saved prompts change the first message", sc.name, env.name, ins.name)
+				}
 			}
 		}
 	}
@@ -337,29 +338,40 @@ func TestGoldenMachineLines(t *testing.T) {
 	}
 }
 
+// A conductor's first message: the briefing and its checkouts. Saved
+// prompts are its instruction file's, and change no message.
 func TestGoldenConductorPrompts(t *testing.T) {
 	briefing := "Conductor, Ana wrote.\n\nGoal:\n\nAs in ![the toolbar](attachment:att_toolbar) and ![gone](attachment:att_gone)."
+	in := goldenTask()
+	in.Tools = true
+	in.Repositories = readOnlyRepos()
+	in.TaskBranch = "dude/wi_g/attempt-1"
+	in.Context = "  Ship on Fridays never.  "
+	got := ConductorPrompt(briefing, in)
+	golden(t, "conductor-prompt", got)
 	for _, ins := range goldenInstructions {
-		in := goldenTask()
 		in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = ins.org, ins.project, ins.projectMod
-		in.Tools = true
-		in.Repositories = readOnlyRepos()
-		in.TaskBranch = "dude/wi_g/attempt-1"
-		in.Context = "  Ship on Fridays never.  "
-		golden(t, "conductor-prompt-"+ins.name, ConductorPrompt(briefing, in))
+		if ConductorPrompt(briefing, in) != got {
+			t.Errorf("the %s saved prompts change the conductor's message", ins.name)
+		}
 	}
 	golden(t, "conductor-prompt-norepo-notools", ConductorPrompt(briefing, goldenTask()))
-	in := goldenTask()
+	in = goldenTask()
 	in.Repositories = twoRepos()
 	golden(t, "conductor-prompt-no-task-branch", ConductorPrompt(briefing, in))
 }
 
+// A brainstorm's first message: the briefing and its checkouts.
 func TestGoldenBrainstormPrompts(t *testing.T) {
 	repos := []PromptRepo{{Name: "api", Path: "/workspace/repos/GLD/api"}, {Name: "web", Path: "/workspace/repos/GLD/web"}}
+	in := PromptInput{Tools: true, Anywhere: true, Repositories: repos, Context: "  Our roadmap is in docs/.  "}
+	got := BrainstormPrompt("Brainstorm, this is a new session.", in)
+	golden(t, "brainstorm-prompt", got)
 	for _, ins := range goldenInstructions {
-		in := PromptInput{OrgPrompt: ins.org, ProjectPrompt: ins.project, ProjectPromptMode: ins.projectMod,
-			Tools: true, Anywhere: true, Repositories: repos, Context: "  Our roadmap is in docs/.  "}
-		golden(t, "brainstorm-prompt-"+ins.name, BrainstormPrompt("Brainstorm, this is a new session.", in))
+		in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = ins.org, ins.project, ins.projectMod
+		if BrainstormPrompt("Brainstorm, this is a new session.", in) != got {
+			t.Errorf("the %s saved prompts change the brainstorm's message", ins.name)
+		}
 	}
 	golden(t, "brainstorm-prompt-bare", BrainstormPrompt("Brainstorm, this is a new session.", PromptInput{}))
 	golden(t, "brainstorm-prompt-tools-norepo", BrainstormPrompt("Brainstorm, briefed.", PromptInput{Tools: true}))

@@ -148,6 +148,9 @@ type specInput struct {
 	// The role's harness (delivery.Harness*); "" is OpenCode.
 	Harness string
 	Prompt  string
+	// The Run's instruction file (delivery.Instructions), written into
+	// /workspace by its init script on every placement; "" writes none.
+	Instructions string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
@@ -246,6 +249,9 @@ type specRepo struct {
 	Path string
 	// Its setup script, run once per checkout before the agent (SetupInit).
 	Setup string
+	// Branches lux syncs into the checkout from others (syncedBranches):
+	// the final diff is against what of them the Run merged, too.
+	Synced []string
 }
 
 func (r specRepo) path() string {
@@ -253,15 +259,6 @@ func (r specRepo) path() string {
 		return r.Path
 	}
 	return RepoPath(r.Name)
-}
-
-// workdir is where the agent starts: the one repository, or the directory
-// holding them all (the prompt names each).
-func workdir(repos []specRepo) string {
-	if len(repos) == 1 {
-		return repos[0].path()
-	}
-	return workspaceDir
 }
 
 // repoRefs is where each repository starts, by its name in the spec (what
@@ -330,7 +327,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		Workload: lux.Workload{
 			Adapter: "opencode",
 			Prompt:  in.Prompt,
-			Workdir: workdir(in.Repos),
+			// Where its instruction file is (instructionsInit), whatever
+			// it checks out: the first message names each repository.
+			Workdir: workspaceDir,
 			// On every stop lux can see coming, the checkout's final diff
 			// (livediff.go). A session's agent changes nothing: none.
 			BeforeStop: beforeStop(repoRefs(in.Repos)),
@@ -423,6 +422,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if fakeagent.Is(in.Model) {
 		spec.Labels["dude.harness"] = harnessScripted
 		spec.Workload.Adapter = "acp"
+		// lux-fake's scripts name files relative to the one repository it
+		// works in, and reads no instruction file: it starts there.
+		if len(in.Repos) == 1 {
+			spec.Workload.Workdir = in.Repos[0].path()
+		}
 		if in.Harness == delivery.HarnessClaudeCode || in.Harness == delivery.HarnessCodex {
 			spec.Labels["dude.harness"] = in.Harness
 			spec.Workload.Adapter = in.Harness

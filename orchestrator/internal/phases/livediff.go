@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -177,17 +178,23 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	defer st.mu.Unlock()
 
 	var refs map[string]string
+	var given map[string][]string
 	var luxState string
 	var working bool
 	var stored *string
 	var epoch int
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT r.base_shas, COALESCE(r.lux_state, ''),
+		if err := tx.QueryRow(ctx, `SELECT r.base_shas, COALESCE(r.lux_state, ''),
 				r.status = 'running' AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL,
 				-- A final diff is from a stop; after a resume the live one replaces it.
 				(SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id AND NOT d.final),
 				r.agent_session_epoch
-			FROM runs r WHERE r.id = $1`, r.ID).Scan(&refs, &luxState, &working, &stored, &epoch)
+			FROM runs r WHERE r.id = $1`, r.ID).Scan(&refs, &luxState, &working, &stored, &epoch); err != nil {
+			return err
+		}
+		var err error
+		given, err = delivery.DiffGivens(ctx, tx, r.ID, r.TaskID, r.Attempt, r.conductor())
+		return err
 	}); err != nil {
 		return false, err
 	}
@@ -202,7 +209,7 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	res, err := s.Lux.Exec(ctx, r.LuxRunID, diffCommand("-", refs))
+	res, err := s.Lux.Exec(ctx, r.LuxRunID, diffCommand("-", refs, given))
 	if err != nil {
 		return false, err
 	}
@@ -221,6 +228,17 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 		st.checksum = sum
 	}
 	return changed, err
+}
+
+// syncedBranches are the branches lux brings into r's checkout of repo
+// from others, in the order the diff folds them in: a conductor's task
+// branch, which lux fast-forwards it along, then the base branch, which
+// sync_base fetches.
+func syncedBranches(r phaseRun, repo delivery.Repository, tb delivery.TaskBranch) []string {
+	if r.conductor() {
+		return []string{tb.Branch, baseBranch(tb, repo)}
+	}
+	return []string{baseBranch(tb, repo)}
 }
 
 // inOrg is db.DB.InOrg, so the artifact collector can record too.
@@ -294,12 +312,13 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 // the artifact collector finds it (FinalDiffPrefix). refs is each
 // repository's starting point as the spec names it — the commit, or the
 // branch lux checks out — since the hook runs before dude has heard where
-// the checkout started.
+// the checkout started. The script retrieves recorded sync commits through
+// dude's authenticated service; an unavailable service keeps the full diff.
 func beforeStop(refs map[string]string) *lux.BeforeStop {
 	if len(refs) == 0 {
 		return nil
 	}
-	return &lux.BeforeStop{Command: diffCommand("artifacts", refs), Timeout: FinalDiffTimeout}
+	return &lux.BeforeStop{Command: diffCommand("artifacts", refs, nil), Timeout: FinalDiffTimeout}
 }
 
 // recordFinalDiff records the diff the beforeStop hook left, one patch per

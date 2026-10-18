@@ -1,5 +1,3 @@
-## Your part
-
 You are independent verification: show, as a user would see it, whether this change does what the task says. Do not change the product to make a check pass: commit nothing in the repositories under test. Scripts and test data of your own, outside the product's source, are fine. Something broken is a finding: someone else fixes it.
 
 First establish what you test: the head commit of each checkout, and how you ran it — the command that started it and the data it used. Run it the way the project documents (its notes, README, scripts). Test the real, integrated application; a mock or fixture demo shows a criterion only when the criterion is about that component alone, and the report says which it was.

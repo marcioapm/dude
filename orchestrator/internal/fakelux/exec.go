@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -70,12 +72,9 @@ func (s *Server) edit(run *Run, files map[string]string) {
 // out. A repository a resume added is cloned into the Run's workspace as
 // it is. Callers hold s.mu.
 func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
-	dir := run.workspace
-	if dir == "" {
-		var err error
-		if dir, err = os.MkdirTemp(s.Workspaces, "fakelux-"+run.ID+"-"); err != nil {
-			return "", err
-		}
+	dir, err := s.workspaceDir(run)
+	if err != nil {
+		return "", err
 	}
 	for _, repo := range specRepos(spec) {
 		src := s.repoPath(repo.URL)
@@ -116,6 +115,8 @@ func (s *Server) beforeStop(run *Run) {
 	var spec struct {
 		Workload struct {
 			BeforeStop *lux.BeforeStop `json:"beforeStop"`
+			Services   []lux.Service   `json:"services"`
+			MCPServers []lux.Service   `json:"mcpServers"`
 		} `json:"workload"`
 	}
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -140,6 +141,41 @@ func (s *Server) beforeStop(run *Run) {
 		env = append(env, "LUX_ARTIFACTS="+out)
 	}
 	cmd.Env = env
+	// Stand in for the image's dude CLI, reading through the authenticated service.
+	for _, svc := range append(spec.Workload.Services, spec.Workload.MCPServers...) {
+		if svc.Name != "dude" || svc.URL == "" {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(svc.URL, "/")+"/git/diff-bases", nil)
+		if err != nil {
+			continue
+		}
+		for _, h := range svc.Headers {
+			req.Header.Set(h.Name, run.secretValues[h.Secret])
+		}
+		s.mu.Unlock()
+		res, err := http.DefaultClient.Do(req)
+		s.mu.Lock()
+		if err != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(res.Body)
+		res.Body.Close()
+		if readErr != nil || res.StatusCode != http.StatusOK {
+			continue
+		}
+		bin, err := os.MkdirTemp(run.workspace, ".dude-cli-")
+		if err != nil {
+			continue
+		}
+		defer os.RemoveAll(bin)
+		_ = os.WriteFile(filepath.Join(bin, "dude"), []byte("#!/bin/sh\nprintf '%s' \"$FAKELUX_DIFF_BASES\"\n"), 0o755)
+		for i, arg := range cmd.Args {
+			cmd.Args[i] = strings.ReplaceAll(arg, "/usr/local/bin/dude", filepath.Join(bin, "dude"))
+		}
+		cmd.Env = append(cmd.Env, "FAKELUX_DIFF_BASES="+string(data))
+		break
+	}
 	code := exitCode(cmd.Run(), -1)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
 	collect(run)
@@ -275,6 +311,79 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 
+type workloadCommand struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// behaviourCommand returns with s.mu held, but releases it while waiting for
+// the process. Both the result and the simulated agent belong to this start.
+func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start int) bool {
+	args := run.behavior.Command
+	if len(args) == 0 {
+		return true
+	}
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	dir, err := s.checkout(run, spec)
+	if err != nil {
+		s.setStateWith(run, "failed", "workload-failed")
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := &workloadCommand{cancel: cancel, done: make(chan struct{})}
+	run.command = command
+	s.commands.Add(1)
+	defer s.commands.Done()
+	defer close(command.done)
+	cmd := exec.CommandContext(ctx, args[0], s.inWorkspace(run, args[1:])...)
+	cmd.Dir = dir
+	// Kill the shell and its children together; bound pipe draining even if
+	// a descendant escapes the process group while retaining stdout/stderr.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	beforeResult := s.beforeCommandResult
+	s.mu.Unlock()
+	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// WaitDelay only replaces a successful exit: inherited pipes do
+		// not turn a successful workload into a failure.
+		err = nil
+	}
+	// A shell can exit before its children. Do not leave those behind even
+	// when the command itself completed successfully.
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	if beforeResult != nil {
+		beforeResult(epoch)
+	}
+	s.mu.Lock()
+	if run.command == command {
+		run.command = nil
+	}
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	if !run.starting(epoch, start) || run.State != "running" || ctx.Err() == context.Canceled {
+		return false
+	}
+	s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+		"content": map[string]any{"type": "text", "text": string(out)}})
+	if err != nil {
+		s.setStateWith(run, "failed", "workload-failed")
+		return false
+	}
+	return true
+}
+
 // exitCode is how a command run to its end exited: its own code, or
 // otherwise (it could not start, or was killed) the one given.
 func exitCode(err error, otherwise int) int {
@@ -289,20 +398,33 @@ func exitCode(err error, otherwise int) int {
 }
 
 // runInit runs the spec's init.script as lux's shim does on every start,
-// resumes included: /bin/sh -c in the Run's checkout, with the spec's
+// resumes included: /bin/sh -c in the Run's /workspace, with the spec's
 // environment and its file secrets placed with this placement's values,
 // between lux.init start and done records, its output as stdout and
 // stderr records. One that exits non-zero ends the placement as lux ends
 // it (an exited event, reason init-failed; the Run failed "exit code N"),
-// and false is returned. The script's /workspace and each file secret's
-// path are read as where the fake put them. Callers hold s.mu.
+// and false is returned. The script's /workspace (outside here-documents,
+// inWorkspaceScript) and each file secret's path are read as where the
+// fake put them. An init the fake's liberty (setupManifest) leaves with
+// only a here-document to write runs in the Run's /workspace without
+// cloning its repositories. Callers hold s.mu.
 func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	init, _ := spec["init"].(map[string]any)
 	script, _ := init["script"].(string)
-	if strings.TrimSpace(script) == "" || s.nothingToInit(run, script) {
+	if strings.TrimSpace(script) == "" {
 		return true
 	}
-	dir, err := s.checkout(run, spec)
+	reads, scripted := s.setupManifest(run, script)
+	if reads && !scripted && !strings.Contains(script, "<<") {
+		return true
+	}
+	var dir string
+	var err error
+	if reads && !scripted {
+		dir, err = s.workspaceDir(run)
+	} else {
+		dir, err = s.checkout(run, spec)
+	}
 	if err == nil {
 		script, err = s.placeFileSecrets(run, script)
 	}
@@ -318,11 +440,12 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 			env = append(env, k+"="+str)
 		}
 	}
-	cmd := exec.Command("/bin/sh", "-c", strings.ReplaceAll(script, workspaceRoot, dir))
+	cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(script, dir))
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 1)
+	run.inits++
 	s.outputRecord(run, "stdout", stdout.String())
 	s.outputRecord(run, "stderr", stderr.String())
 	s.recordEvent(run, "lux.init", map[string]any{"phase": "done", "exitCode": code})
@@ -332,26 +455,30 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 	return true
 }
 
-// nothingToInit: the fake's one liberty with init. One that reads file
-// secrets (dude's setup manifest) that all hold nothing but blank and #
-// lines has nothing to do, and the fake skips it, as it skips beforeStop
-// for a Run with no checkout, rather than clone for it. Callers hold s.mu.
-func (s *Server) nothingToInit(run *Run, script string) bool {
+// setupManifest reports whether script reads dude's setup manifest (a
+// file secret), and whether that manifest names a script: holds a line
+// other than blank and #.
+//
+// The fake's one liberty with init follows from it: an init that reads
+// only manifests naming no script has no repository to set up, and the
+// fake clones nothing for it, as it skips beforeStop for a Run with no
+// checkout. With no here-document to write either (dude's instruction
+// file), it has nothing to do, and the fake skips it. Callers hold s.mu.
+func (s *Server) setupManifest(run *Run, script string) (reads, scripted bool) {
 	var spec lux.Spec
 	_ = json.Unmarshal(run.Spec, &spec)
-	read := false
 	for _, sec := range spec.Secrets {
 		if sec.Name != "dude-setup" || sec.As != "file" || !strings.Contains(script, sec.Path) {
 			continue
 		}
-		read = true
+		reads = true
 		for _, line := range strings.Split(run.secretValues[sec.Name], "\n") {
 			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-				return false
+				scripted = true
 			}
 		}
 	}
-	return read
+	return reads, scripted
 }
 
 // placeFileSecrets writes the Run's file secrets the script names, with
@@ -365,7 +492,7 @@ func (s *Server) placeFileSecrets(run *Run, script string) (string, error) {
 		if sec.As != "file" || !strings.Contains(script, sec.Path) {
 			continue
 		}
-		path := filepath.Join(run.workspace, ".lux", "secrets", sec.Name)
+		path := filepath.Join(run.root, ".lux", "secrets", sec.Name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return "", err
 		}

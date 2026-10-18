@@ -106,9 +106,14 @@ func TestTheImplementerOfWorkToContinueIsToldItIsSomeonesWorkInProgress(t *testi
 	fresh := w.task()
 	w.deliver(fresh)
 	want := "This is someone's work in progress on pull request #1 (`feature/half` in target), based on `main`"
-	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "meet the testing requirement below; if that needs no change, commit nothing and say so") ||
-		!strings.Contains(p, "add a test for each acceptance criterion that can be tested") {
+	if p := w.implementerPrompt(wi); !strings.Contains(p, want) || !strings.Contains(p, "meet the testing requirement in your instructions; if that needs no change, commit nothing and say so") {
 		t.Fatalf("implementer prompt does not say it continues someone's work:\n%s", p)
+	}
+	// The testing requirement it is pointed at is in its instruction file.
+	var impl string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
+	if f := w.instructionsOf(impl); !strings.Contains(f, "add a test for each acceptance criterion that can be tested") {
+		t.Fatalf("the implementer's instructions lack the testing requirement:\n%s", f)
 	}
 	if p := w.implementerPrompt(fresh); strings.Contains(p, "Work in progress") {
 		t.Fatalf("new work's implementer told it continues someone's:\n%s", p)

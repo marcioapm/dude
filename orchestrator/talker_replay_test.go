@@ -351,8 +351,8 @@ func TestATalkerBriefedAgainIsGivenTheConversationSoFar(t *testing.T) {
 			if replay < 0 || !strings.Contains(in[replay:], "You: "+answer) {
 				t.Errorf("the briefing again lacks the conversation:\n%s", in)
 			}
-			if instructions := strings.Index(in, "## How you work"); instructions < replay {
-				t.Errorf("the conversation is not in the briefing, before how it works:\n%s", in)
+			if strings.Contains(in, "## How you work") {
+				t.Errorf("the briefing again repeats how it works, which the Run's instruction file carries:\n%s", in)
 			}
 		})
 	}
