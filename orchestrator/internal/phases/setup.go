@@ -38,8 +38,9 @@ const setupRunningPrefix = "dude: running the setup script of "
 // command-scope git settings every Run carries (workloadGitConfig) are
 // cleared for it, so a hook installer writes the repository's own config
 // and hooks directory, which dude's hook then runs. A subshell: the cd and
-// the environment end with it.
-var setupFunc = `dude_setup() (
+// the environment end with it. timeout bounds each script.
+func setupFunc(timeout time.Duration) string {
+	return `dude_setup() (
 	cd "$1" || exit
 	done=$(git rev-parse --git-path dude-setup-done) && script=$(git rev-parse --git-path dude-setup.sh) || exit
 	[ -e "$done" ] && exit 0
@@ -47,28 +48,29 @@ var setupFunc = `dude_setup() (
 	for v in $(env | sed -n 's/^\(GIT_CONFIG_\(KEY\|VALUE\)_[0-9]*\)=.*/\1/p'); do unset "$v"; done
 	unset GIT_CONFIG_PARAMETERS
 	export GIT_CONFIG_COUNT=0
-	timeout -k 10s ` + strconv.Itoa(int(SetupTimeout.Seconds())) + `s bash -e "$script" < /dev/null
+	timeout -k 10s ` + strconv.Itoa(int(timeout.Seconds())) + `s bash -e "$script" < /dev/null
 	code=$?
 	rm -f "$script"
 	[ "$code" -eq 0 ] || exit "$code"
 	: > "$done"
 )
 `
+}
 
 // SetupInit is the init script that runs every repository's setup script
 // in its checkout, in order, stopping at the first that fails: init then
 // exits with its code, having said which on stderr (setupFailedPrefix),
 // and lux fails the Run init-failed. "" when none has one. A name, path
 // and script reach the shell only single-quoted or as base64, never as
-// code.
-func SetupInit(setups []Setup) string {
+// code. Each script is stopped after timeout.
+func SetupInit(setups []Setup, timeout time.Duration) string {
 	var b strings.Builder
 	for _, s := range setups {
 		if strings.TrimSpace(s.Script) == "" {
 			continue
 		}
 		if b.Len() == 0 {
-			b.WriteString(setupFunc)
+			b.WriteString(setupFunc(timeout))
 		}
 		name := shellQuote(s.Name)
 		b.WriteString("echo \"" + setupRunningPrefix + "\"" + name + " >&2\n")
@@ -177,7 +179,7 @@ func (f SetupFailure) Reason() string {
 
 // SetupSpec is a spec's init for setups, nil when none has a script.
 func SetupSpec(setups []Setup) *lux.Init {
-	if script := SetupInit(setups); script != "" {
+	if script := SetupInit(setups, SetupTimeout); script != "" {
 		return &lux.Init{Script: script}
 	}
 	return nil

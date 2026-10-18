@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setupWorkspace is a Run's /workspace as the composed init sees it: real
@@ -80,14 +81,19 @@ func (w *setupWorkspace) run(dir, name string, args ...string) (string, string, 
 	return stdout.String(), stderr.String(), err
 }
 
-// init runs the composed script as lux's shim runs init: /bin/sh -c, in
-// the workload's environment, from the workdir.
+// init runs the spec's init as lux's shim runs it: /bin/sh -c, in the
+// workload's environment, from the workdir.
 func (w *setupWorkspace) init(setups ...Setup) (stdout, stderr string, code int) {
 	w.t.Helper()
-	script := SetupInit(setups)
-	if script == "" {
+	init := SetupSpec(setups)
+	if init == nil {
 		w.t.Fatal("no init script")
 	}
+	return w.runInit(init.Script)
+}
+
+func (w *setupWorkspace) runInit(script string) (stdout, stderr string, code int) {
+	w.t.Helper()
 	out, errOut, err := w.run(w.root, "/bin/sh", "-c", script)
 	code = 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -197,18 +203,29 @@ func TestAFailedSetupScriptFailsInitAndIsTriedAgain(t *testing.T) {
 	}
 }
 
-// A script past its time is stopped, and init fails with timeout's 124.
+// A script past its time is stopped, and init fails with timeout's 124;
+// one within it finishes. A spec's init gives each script SetupTimeout.
 func TestASetupScriptPastItsTimeFails(t *testing.T) {
 	w := newSetupWorkspace(t)
 	w.checkout("api")
-	script := strings.Replace(SetupInit([]Setup{w.setup("api", "sleep 30\n")}), "timeout -k 10s 900s", "timeout -k 1s 1s", 1)
-	if !strings.Contains(setupFunc, "timeout -k 10s 900s bash -e") {
-		t.Fatalf("the bound is not where this test replaces it:\n%s", setupFunc)
+	started := time.Now()
+	_, errOut, code := w.runInit(SetupInit([]Setup{w.setup("api", "sleep 30\n")}, time.Second))
+	if code != 124 || !strings.Contains(errOut, setupFailedPrefix+"124 api") {
+		t.Errorf("exit %d\n%s", code, errOut)
 	}
-	_, errOut, err := w.run(w.root, "/bin/sh", "-c", script)
-	ee, ok := err.(*exec.ExitError)
-	if !ok || ee.ExitCode() != 124 || !strings.Contains(errOut, setupFailedPrefix+"124 api") {
-		t.Errorf("%v\n%s", err, errOut)
+	if took := time.Since(started); took > 10*time.Second {
+		t.Errorf("stopped after %s", took)
+	}
+	if _, errOut, code := w.runInit(SetupInit([]Setup{w.setup("api", "sleep 0.1\n")}, 5*time.Second)); code != 0 {
+		t.Errorf("a script within its time: exit %d\n%s", code, errOut)
+	}
+
+	if SetupTimeout != 15*time.Minute {
+		t.Errorf("SetupTimeout %s", SetupTimeout)
+	}
+	setups := []Setup{w.setup("api", "true\n")}
+	if got := SetupSpec(setups); got == nil || got.Script != SetupInit(setups, SetupTimeout) {
+		t.Errorf("a spec's init is not SetupInit with SetupTimeout: %+v", got)
 	}
 }
 
@@ -309,7 +326,7 @@ func TestAHookASetupScriptInstallsRunsUnderDudesHook(t *testing.T) {
 
 // No script anywhere, or only blank ones: no init.
 func TestNoSetupScriptIsNoInit(t *testing.T) {
-	if got := SetupInit([]Setup{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/w", Script: " \n\t"}}); got != "" {
+	if got := SetupInit([]Setup{{Name: "api", Path: "/workspace/repos/api"}, {Name: "web", Path: "/w", Script: " \n\t"}}, SetupTimeout); got != "" {
 		t.Errorf("init %q", got)
 	}
 	if SetupSpec(nil) != nil {
