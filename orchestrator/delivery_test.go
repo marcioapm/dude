@@ -39,6 +39,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
@@ -3582,12 +3584,253 @@ func (w *world) sync() {
 	_, _ = w.prs.Reconcile(context.Background(), 0)
 }
 
-// reviewing delivers a task to an open pull request waiting on people.
+// reviewing is a task with an open pull request waiting on people, as a
+// delivery through every phase leaves it with the scripted agent (the
+// tests that deliver and wait for "a pull request" cover that path), but
+// written directly: the agent's three commits on the task branch, its six
+// Runs (implement, review with one finding, fix, re-review, simplify, a
+// review of the simplifier's diff), the finding resolved, the workflow's
+// and the Runs' outcome events, and the delivery parked on
+// awaitPullRequest. The pull request is opened by
+// delivery.Store.OpenPullRequests, the publish's own code. No agent runs.
+//
+// Left out: the fake lux holds no Runs (each lux_run_id is one the fake
+// never issues), the implementer's NOTES.md, the agents' lifecycle and
+// tool events (agent.message is kept: briefings quote it), the consumed
+// phase.finished signals, and the fake GitHub's BranchLog and request log
+// of the publishes.
 func (w *world) reviewing() string {
+	w.t.Helper()
+	ctx := context.Background()
 	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		return delivery.NameOnlyRepository(ctx, tx, wi)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	branch := delivery.BranchFor(wi, 1)
+	wfr := ids.New(ids.WorkflowRun)
+	type run struct {
+		id, phase, category, key string
+		fixed                    bool
+		step                     fakeagent.Step
+	}
+	runs := []*run{
+		{phase: delivery.PhaseImplement, key: "implement"},
+		{phase: delivery.PhaseReview, category: "correctness", key: "review:0:correctness"},
+		{phase: delivery.PhaseFix, key: "fix:1"},
+		{phase: delivery.PhaseReview, category: "correctness", key: "review:1:correctness", fixed: true},
+		{phase: delivery.PhaseSimplify, key: "simplify"},
+		{phase: delivery.PhaseReview, category: "correctness", key: "review:2:correctness", fixed: true},
+	}
+	for _, r := range runs {
+		r.id = ids.New(ids.Run)
+		r.step = fakeagent.For(r.phase, "fake/scripted", r.id, r.fixed)
+	}
+	implement, review0, fix, review1, simplify, review2 := runs[0], runs[1], runs[2], runs[3], runs[4], runs[5]
+
+	// The publishers' commits, as the fake lux writes them (fakelux.commit),
+	// in one git process: main, then implement, fix and simplify on top.
+	var stream strings.Builder
+	at := time.Now().Unix()
+	for i, r := range []*run{implement, fix, simplify} {
+		fmt.Fprintf(&stream, "commit refs/heads/%s\nauthor agent <a@x> %d +0000\ncommitter agent <a@x> %d +0000\n", branch, at, at)
+		fmt.Fprintf(&stream, "data %d\n%s\n\n", len(r.step.Message)+1, r.step.Message)
+		if i == 0 {
+			stream.WriteString("from refs/heads/main\n")
+		}
+		for path, content := range r.step.Commit {
+			// "*:FACTORY.md" is every repository's FACTORY.md.
+			if _, file, ok := strings.Cut(path, ":"); ok {
+				path = file
+			}
+			fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+	}
+	importer := exec.Command("git", "-C", w.gh.Repo, "fast-import", "--quiet")
+	importer.Stdin = strings.NewReader(stream.String())
+	if out, err := importer.CombinedOutput(); err != nil {
+		w.t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	out, err := exec.Command("git", "-C", w.gh.Repo, "rev-parse", "main", branch+"~2", branch+"~1", branch).Output()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	shas := strings.Fields(string(out))
+	main, implemented, fixed, simplified := shas[0], shas[1], shas[2], shas[3]
+	target := func(sha string) map[string]string { return map[string]string{"target": sha} }
+
+	// What each Run started from and published, as the syncer records it.
+	type published struct {
+		base, sha string
+		paths     []string
+	}
+	starts := map[*run]string{implement: main, review0: implemented, fix: implemented, review1: fixed, simplify: fixed, review2: simplified}
+	heads := map[*run]published{
+		implement: {main, implemented, []string{"FACTORY.md"}},
+		fix:       {implemented, fixed, []string{fakeagent.FixedFile}},
+		simplify:  {fixed, simplified, []string{"SIMPLE.md"}},
+	}
+	parents := map[*run]*run{review0: implement, fix: implement, review1: fix, simplify: fix, review2: simplify}
+	finding := delivery.ParseFindings(review0.step.Reply)[0]
+	findingID := ids.New(ids.Finding)
+
+	clock := time.Now().Add(-30 * time.Second)
+	tick := func() time.Time { clock = clock.Add(10 * time.Millisecond); return clock }
+	ev := func(tx pgx.Tx, typ, runID, actorType, actorID, source string, payload map[string]any) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: w.org, ProjectID: w.project, TaskID: wi,
+			RunID: runID, ActorType: actorType, ActorID: actorID, Source: source, CorrelationID: wi, OccurredAt: tick(),
+			Payload: payload})
+		return err
+	}
+	status := func(tx pgx.Tx, s, reason string) error {
+		return ev(tx, delivery.EvTaskStatusChanged, "", ledger.ActorSystem, "workflow", ledger.SourceOrchestrator,
+			map[string]any{"status": s, "reason": reason})
+	}
+	st := delivery.State{TaskID: wi, ProjectID: w.project, Policy: scriptedPolicy(), Branch: branch,
+		HeadRunID: simplify.id, Heads: target(simplified), ChangedPaths: []string{"target/SIMPLE.md"}, Iteration: 3}
+
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		for i, r := range runs {
+			created := tick()
+			var parent, category, reviewRange, pushBranch, pushRequest, pushResult, own any
+			var findings, blocking []string
+			baseRefs, headsJSON := map[string]string{}, map[string]any{}
+			if r != implement {
+				baseRefs = target(starts[r])
+				parent = parents[r].id
+			}
+			if p, ok := heads[r]; ok {
+				headsJSON = map[string]any{"target": map[string]any{"base": p.base, "sha": p.sha, "changedPaths": p.paths}}
+				own, pushBranch, pushRequest = branch, "dude/"+wi+"/run-"+r.id, "push-"+r.id
+				result, _ := json.Marshal(map[string]any{"requestId": pushRequest, "results": []map[string]any{
+					{"repo": "target", "branch": pushBranch, "commit": p.sha, "status": "pushed"}}})
+				pushResult = string(result)
+			}
+			if r.phase == delivery.PhaseReview {
+				category, blocking = r.category, st.Policy.BlockingSeverities
+			}
+			if r == fix || r == review1 {
+				findings = []string{findingID}
+			}
+			if r == review2 {
+				rr, _ := json.Marshal(delivery.ReviewRange{Of: delivery.RangeSimplify, Base: target(fixed)})
+				reviewRange = string(rr)
+			}
+			bases, _ := json.Marshal(baseRefs)
+			shas, _ := json.Marshal(target(starts[r]))
+			headsRaw, _ := json.Marshal(headsJSON)
+			busy, ended := tick(), tick()
+			if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
+				parent_run_id, base_refs, base_shas, category, creation_key, finding_ids, blocking_severities, branch, heads, review_range,
+				lux_run_id, lux_state, lux_stop_reason, lux_pushes, lux_repositories, push_branch, push_request_id, push_result,
+				harness, harness_state, model, model_tier, machine, agent_session_epoch, can_run_containers,
+				agent_cost_usd, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+				created_at, started_at, agent_busy_at, agent_active_at, turn_done_at, files_changed_at, ended_at, phase_notified_at)
+				SELECT $1, $2, $3, $4, 1, 'completed', $5::run_phase, $6::agent_role,
+				$7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb,
+				$17, 'running', 'cancel', '{target}', '{target}', $18, $19, $20::jsonb,
+				'scripted', jsonb_build_object('sessionId', 'ses_' || $17), 'fake/scripted', $21,
+				jsonb_build_object('name', m.name, 'sizeId', m.id, 'cpus', m.cpus, 'memoryMiB', m.memory_mib, 'diskGiB', m.disk_gib,
+					'pool', NULL, 'poolId', m.pool_id, 'from', 'default'), 1, false,
+				0.01, 1000, 12, 34, 900, 100,
+				$22, $23, $23, $23, $23, $24, $24, $24
+				FROM machine_sizes m WHERE m.organization_id = $2 AND m.is_default`,
+				r.id, w.org, w.project, wi, r.phase, delivery.RoleForPhase[r.phase],
+				parent, bases, string(shas), category, wfr+":"+r.key,
+				db.NonNil(findings), db.NonNil(blocking), own, string(headsRaw), reviewRange,
+				"lrun_prepared_"+r.id, pushBranch, pushRequest, pushResult, onModelTier("fake/scripted"),
+				created, busy, ended); err != nil {
+				return fmt.Errorf("run %d: %w", i, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, file, line,
+			title, description, suggested_fix, status, resolved_by_run_id, resolution_note, fix_attempts)
+			VALUES ($1, $2, $3, $4, $5, $6::finding_severity, $7, $8, $9, $10, $11, 'resolved', $12, 'judged fixed by the re-review', 1)`,
+			findingID, w.org, wi, review0.id, finding.Category, finding.Severity, finding.File, finding.Line,
+			finding.Title, finding.Description, finding.SuggestedFix, review1.id); err != nil {
+			return err
+		}
+
+		// The ledger, in the order the real delivery writes it.
+		statusBefore := map[*run][2]string{implement: {"running", "implementing"}, fix: {"running", "fixing review findings"},
+			simplify: {"running", "simplifying"}}
+		round := 0
+		for _, r := range runs {
+			if s, ok := statusBefore[r]; ok {
+				if err := status(tx, s[0], s[1]); err != nil {
+					return err
+				}
+			}
+			if r.phase == delivery.PhaseReview {
+				if err := status(tx, "review", "agent review"); err != nil {
+					return err
+				}
+			}
+			payload := map[string]any{"attempt": 1, "phase": r.phase, "role": delivery.RoleForPhase[r.phase],
+				"publishes": delivery.Publishes[r.phase], "baseRefs": map[string]string{}}
+			if r != implement {
+				payload["baseRefs"] = target(starts[r])
+			}
+			if r.category != "" {
+				payload["category"] = r.category
+			}
+			if r == fix || r == review1 {
+				payload["findingIds"] = []string{findingID}
+			}
+			if err := ev(tx, delivery.EvRunCreated, r.id, ledger.ActorSystem, "workflow", ledger.SourceOrchestrator, payload); err != nil {
+				return err
+			}
+			if r.phase == delivery.PhaseReview {
+				if err := ev(tx, delivery.EvRunCreated, "", ledger.ActorSystem, "workflow", ledger.SourceOrchestrator,
+					map[string]any{"phase": "review", "reviewers": []string{"correctness"}, "iteration": round}); err != nil {
+					return err
+				}
+				round++
+			}
+			if err := ev(tx, "agent.message", r.id, ledger.ActorAgent, r.id, ledger.SourceRunner,
+				map[string]any{"contextTokens": 1000, "text": r.step.Reply}); err != nil {
+				return err
+			}
+			if p, ok := heads[r]; ok {
+				if err := ev(tx, delivery.EvGitCommitCreated, r.id, ledger.ActorAgent, r.id, ledger.SourceRunner,
+					map[string]any{"repo": "target", "branch": branch, "baseSha": p.base, "headSha": p.sha, "changedPaths": p.paths}); err != nil {
+					return err
+				}
+			}
+			if r.phase == delivery.PhaseReview {
+				count, by := 0, map[string]int{}
+				if r == review0 {
+					count, by = 1, map[string]int{finding.Severity: 1}
+				}
+				if err := ev(tx, delivery.EvReviewCompleted, r.id, ledger.ActorAgent, r.id, ledger.SourceRunner,
+					map[string]any{"phase": "review", "count": count, "bySeverity": by}); err != nil {
+					return err
+				}
+			}
+			if err := ev(tx, "run.completed", r.id, ledger.ActorSystem, r.id, ledger.SourceRunner,
+				map[string]any{"status": "completed"}); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(ctx, `UPDATE tasks SET status = 'review', updated_at = now() WHERE id = $1`, wi)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+
+	// The pull request, by the publish's own code: rendered from the rows
+	// above, opened on the fake GitHub, recorded with its event.
+	prIDs, err := (&delivery.Store{DB: w.app}).OpenPullRequests(ctx, w.org, &st, forge.Resolver{DB: w.app})
+	if err != nil || len(prIDs) != 1 {
+		w.t.Fatalf("open the pull request: %v %v", prIDs, err)
+	}
+	st.PullRequestIDs = prIDs
+	state, _ := json.Marshal(st)
+	signals, _ := json.Marshal([]string{delivery.SignalPRFeedback, delivery.SignalHumanDecision, delivery.SignalHumanFeedback})
+	mustExec(w.t, w.owner, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state,
+		awaiting_signals, task_id) VALUES ($1, $2, $3, $4, 'waiting', 'awaitPullRequest', $5::jsonb, $6::jsonb, $7)`,
+		wfr, w.org, delivery.WorkflowType, "delivery:"+wi, state, signals, wi)
 	return wi
 }
 
