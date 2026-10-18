@@ -240,6 +240,18 @@ def test_a_build_page_shows_the_container_check_passing_and_failing(
     expect(page.get_by_test_id("build-log")).to_contain_text("Not pushed. v1 stays published.")
     _shoot(page, "04-build-failed")
 
+    # A missing dude hook is not a container-engine failure: installing
+    # podman (or turning the flag off) cannot fix it.
+    hook_sentence = "The image has no /usr/local/share/dude/git-hooks/prepare-commit-msg after the dude layer, so its commits would carry no co-authors."
+    execute(owner_dsn, "UPDATE image_versions SET error = %s WHERE id = %s", (hook_sentence, failed["versionId"]))
+    execute(owner_dsn, """UPDATE image_builds SET error = %s,
+        containers_check = jsonb_build_object('passed', false, 'detail', %s::text, 'hook', true) WHERE id = %s""",
+            (hook_sentence, hook_sentence, failed["buildId"]))
+    page.reload()
+    expect(page.get_by_test_id("build-error")).to_have_text(hook_sentence)
+    expect(page.get_by_test_id("build-stages")).to_contain_text(hook_sentence)
+    expect(page.get_by_test_id("build-fix")).to_have_count(0)
+
     # agents-podman's own v1, checked and passed.
     passed = query(owner_dsn, "SELECT id FROM image_builds WHERE image_version_id = %s", (able["image"]["published"]["versionId"],))[0]["id"]
     execute(owner_dsn, """UPDATE image_builds SET check_seconds = 4,
