@@ -201,12 +201,16 @@ func trustedBases(ctx context.Context, tx pgx.Tx, r phaseRun) (map[string]string
 		if !ok {
 			continue
 		}
-		branch := cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
-		if sha := synced[name][branch]; isSHA(sha) {
+		if sha := synced[name][baseBranch(tb, repo)]; isSHA(sha) {
 			out[name] = sha
 		}
 	}
 	return out, nil
+}
+
+// baseBranch is the branch repo's task work is based on.
+func baseBranch(tb delivery.TaskBranch, repo delivery.Repository) string {
+	return cmp.Or(tb.Bases[repo.Name], repo.DefaultBranch)
 }
 
 // splitHistory splits historyScript's output into its repositories'
@@ -289,7 +293,9 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	work, err := s.execChecked(ctx, r, diffCommand("-", r.BaseSHAs), "the diff")
+	// Against where each checkout started, never narrowed by what the Run
+	// was given: a narrower base would hide added lines from the scan.
+	work, err := s.execChecked(ctx, r, diffCommand("-", r.BaseSHAs, nil), "the diff")
 	if err != nil {
 		return nil, err
 	}

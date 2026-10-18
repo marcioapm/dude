@@ -494,6 +494,7 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
   const by = name(e.actor?.id);
   switch (e.eventType) {
     case EventTypes.BrainstormTurnStopped:
+      if (typeof p.silentSecs === "number") return "Stopped Brainstorm's turn: its model gave no answer for 10\u00a0min.";
       return `Stopped Brainstorm's turn: ${typeof p.tool === "string" ? p.tool : "tool"} was open for 10\u00a0min.`;
     case EventTypes.BrainstormShared: {
       const who = Array.isArray(p.people) ? p.people.map(name) : [];
