@@ -14,7 +14,7 @@ Criteria:
 
 Unknown: {{task.nope}}
 
-Commit your work when you are done. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
+Commit your work when you are done. Never bypass the repository's hooks (`--no-verify`, `-c core.hooksPath=…`, or an environment switch a hook offers to skip itself). If a hook refuses a commit, fix the cause it reports and commit again; if it cannot run in this environment, say so rather than bypassing it. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
 
 Call sync_base when you need the base's latest work: credentials stay outside your checkout. Merge lux/<base>, never rebase, and never force anything. Resolve every conflict keeping both sides' intent, run the affected tests, and commit with git's default merge message. Finish your Run to publish normally.
 

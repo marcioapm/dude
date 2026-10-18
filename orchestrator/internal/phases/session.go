@@ -111,7 +111,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	}
 	for _, repo := range repos {
 		in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true,
-			Path: delivery.SessionRepoPath(repo.Key, repo.Name)})
+			Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 	}
 	in.RunID, in.OrganizationID, in.SessionID, in.Role = r.ID, r.Org, r.SessionID, role
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers

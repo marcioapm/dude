@@ -65,19 +65,24 @@ func (s *Server) edit(run *Run, files map[string]string) {
 	}
 }
 
-// checkout makes the Run's /workspace, once: each repository cloned into
-// repos/<name> at the commit lux checked out. Callers hold s.mu.
+// checkout makes the Run's /workspace, once, and each repository's
+// checkout in it, once: cloned into repos/<name> at the commit lux checked
+// out. A repository a resume added is cloned into the Run's workspace as
+// it is. Callers hold s.mu.
 func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
-	if run.workspace != "" {
-		return run.workspace, nil
-	}
-	dir, err := os.MkdirTemp(s.Workspaces, "fakelux-"+run.ID+"-")
-	if err != nil {
-		return "", err
+	dir := run.workspace
+	if dir == "" {
+		var err error
+		if dir, err = os.MkdirTemp(s.Workspaces, "fakelux-"+run.ID+"-"); err != nil {
+			return "", err
+		}
 	}
 	for _, repo := range specRepos(spec) {
 		src := s.repoPath(repo.URL)
 		dst := filepath.Join(dir, "repos", repo.Name)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
 		// As lux checks one out: a branch as a local branch (checkout -B,
 		// which the reflog records), anything else detached.
 		checkout := []string{"-C", dst, "checkout", "-q", "--detach", head(src, repo.Ref)}
@@ -281,4 +286,131 @@ func exitCode(err error, otherwise int) int {
 		return ee.ExitCode()
 	}
 	return otherwise
+}
+
+// runInit runs the spec's init.script as lux's shim does on every start,
+// resumes included: /bin/sh -c in the Run's checkout, with the spec's
+// environment and its file secrets placed with this placement's values,
+// between lux.init start and done records, its output as stdout and
+// stderr records. One that exits non-zero ends the placement as lux ends
+// it (an exited event, reason init-failed; the Run failed "exit code N"),
+// and false is returned. The script's /workspace and each file secret's
+// path are read as where the fake put them. Callers hold s.mu.
+func (s *Server) runInit(run *Run, spec map[string]any) bool {
+	init, _ := spec["init"].(map[string]any)
+	script, _ := init["script"].(string)
+	if strings.TrimSpace(script) == "" || s.nothingToInit(run, script) {
+		return true
+	}
+	dir, err := s.checkout(run, spec)
+	if err == nil {
+		script, err = s.placeFileSecrets(run, script)
+	}
+	if err != nil {
+		s.outputRecord(run, "stderr", "init script: "+err.Error()+"\n")
+		return s.initFailed(run, 1)
+	}
+	s.recordEvent(run, "lux.init", map[string]any{"phase": "start"})
+	env := os.Environ()
+	vars, _ := spec["env"].(map[string]any)
+	for k, v := range vars {
+		if str, ok := v.(string); ok {
+			env = append(env, k+"="+str)
+		}
+	}
+	cmd := exec.Command("/bin/sh", "-c", strings.ReplaceAll(script, workspaceRoot, dir))
+	cmd.Dir, cmd.Env = dir, env
+	var stdout, stderr tailWriter
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	code := exitCode(cmd.Run(), 1)
+	s.outputRecord(run, "stdout", stdout.String())
+	s.outputRecord(run, "stderr", stderr.String())
+	s.recordEvent(run, "lux.init", map[string]any{"phase": "done", "exitCode": code})
+	if code != 0 {
+		return s.initFailed(run, code)
+	}
+	return true
+}
+
+// nothingToInit: the fake's one liberty with init. One that reads file
+// secrets (dude's setup manifest) that all hold nothing but blank and #
+// lines has nothing to do, and the fake skips it, as it skips beforeStop
+// for a Run with no checkout, rather than clone for it. Callers hold s.mu.
+func (s *Server) nothingToInit(run *Run, script string) bool {
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	read := false
+	for _, sec := range spec.Secrets {
+		if sec.Name != "dude-setup" || sec.As != "file" || !strings.Contains(script, sec.Path) {
+			continue
+		}
+		read = true
+		for _, line := range strings.Split(run.secretValues[sec.Name], "\n") {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+				return false
+			}
+		}
+	}
+	return read
+}
+
+// placeFileSecrets writes the Run's file secrets the script names, with
+// the values lux holds for this placement, in its workspace's .lux (as
+// lux's shim places them on every start), and returns script with each
+// one's path read as where it was written. Callers hold s.mu.
+func (s *Server) placeFileSecrets(run *Run, script string) (string, error) {
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	for _, sec := range spec.Secrets {
+		if sec.As != "file" || !strings.Contains(script, sec.Path) {
+			continue
+		}
+		path := filepath.Join(run.workspace, ".lux", "secrets", sec.Name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, []byte(run.secretValues[sec.Name]), 0o600); err != nil {
+			return "", err
+		}
+		script = strings.ReplaceAll(script, sec.Path, path)
+	}
+	return script, nil
+}
+
+// initOutputMax is how much of each of init's channels the fake keeps:
+// the end, where a failure says what failed.
+const initOutputMax = 64 << 10
+
+// tailWriter keeps the last initOutputMax bytes written to it.
+type tailWriter struct{ b []byte }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= initOutputMax {
+		w.b = append(w.b[:0], p[len(p)-initOutputMax:]...)
+		return n, nil
+	}
+	if over := len(w.b) + len(p) - initOutputMax; over > 0 {
+		w.b = w.b[:copy(w.b, w.b[over:])]
+	}
+	w.b = append(w.b, p...)
+	return n, nil
+}
+
+func (w *tailWriter) String() string { return strings.ToValidUTF8(string(w.b), "") }
+
+func (s *Server) initFailed(run *Run, code int) bool {
+	s.luxEvent(run, "exited", map[string]any{"exitCode": code, "reason": "init-failed",
+		"message": fmt.Sprintf("init script exited with %d", code)})
+	s.setStateWith(run, "failed", fmt.Sprintf("exit code %d", code))
+	return false
+}
+
+// outputRecord is plain output on a Run's record stream. Callers hold s.mu.
+func (s *Server) outputRecord(run *Run, ch, data string) {
+	if data == "" {
+		return
+	}
+	run.records = append(run.records, record{Seq: int64(len(run.records) + 1), Epoch: run.Epoch, Ch: ch, Data: data})
+	run.cond.Broadcast()
 }
