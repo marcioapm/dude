@@ -283,6 +283,37 @@ func TestRestartWriterAdmissionAbortsOldInReplacementTransaction(t *testing.T) {
 	}
 }
 
+func TestWriterChildHeadIsUntestedUntilReviewAtThatHead(t *testing.T) {
+	w := newChildWorld(t)
+	writer := w.child("writer-head")
+	w.exec(`UPDATE runs SET phase='implement', child_profile='implementer', child_capabilities='{"publishCode":true}',
+		status='completed', heads='{"repo":{"sha":"0123456789012345678901234567890123456789","base":"base","changedPaths":["main.go"]}}'
+		WHERE id=$1`, writer)
+	var untested bool
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		var err error
+		untested, err = UntestedConductorHeadTx(w.ctx, tx, "wi_life", map[string]string{"repo": "0123456789012345678901234567890123456789"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !untested {
+		t.Fatal("writer child head was treated as tested")
+	}
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, base_refs)
+		VALUES ('review_head', $1, 'prj_life', 'wi_life', 3, 'completed', 'review', 'reviewer', '{"repo":"0123456789012345678901234567890123456789"}')`, w.org)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		var err error
+		untested, err = UntestedConductorHeadTx(w.ctx, tx, "wi_life", map[string]string{"repo": "0123456789012345678901234567890123456789"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if untested {
+		t.Fatal("review at writer child head did not clear gate")
+	}
+}
+
 func TestChildStaleResults(t *testing.T) {
 	for _, change := range []string{
 		`UPDATE tasks SET status = 'done' WHERE id = 'wi_life'`,
