@@ -603,6 +603,129 @@ func TestChildEnqueueClaimsDisjointBatches(t *testing.T) {
 	}
 }
 
+func claimChildForTest(t *testing.T, w *childWorld, id, token string) childClaim {
+	t.Helper()
+	var claims []childClaim
+	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(tx pgx.Tx) error {
+		var err error
+		claims, err = claimChildResultsTx(w.ctx, tx, token, 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].Child != id {
+		t.Fatalf("claim %v, want %s", claims, id)
+	}
+	return claims[0]
+}
+
+func TestChildTenantStepRejectsReclaimedToken(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "consume", true: "stale"}[stale], func(t *testing.T) {
+			w := newChildWorld(t)
+			id := w.child("reclaimed")
+			if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+				t.Fatal(err)
+			}
+			claim := claimChildForTest(t, w, id, "worker-a")
+			if stale {
+				w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
+			}
+			w.exec(`UPDATE child_result_outbox SET claimed_by='worker-b' WHERE child_run_id=$1`, id)
+			var delivered bool
+			if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				var err error
+				delivered, err = deliverChildResultTx(w.ctx, tx, claim)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if delivered || w.count("directives") != 0 {
+				t.Fatalf("reclaimed token delivered=%v directives=%d", delivered, w.count("directives"))
+			}
+			var consumed, markedStale bool
+			if err := w.owner.QueryRow(w.ctx, `SELECT consumed_at IS NOT NULL, stale_at IS NOT NULL FROM child_result_outbox WHERE child_run_id=$1`, id).Scan(&consumed, &markedStale); err != nil {
+				t.Fatal(err)
+			}
+			if consumed || markedStale {
+				t.Fatalf("reclaimed row changed consumed=%v stale=%v", consumed, markedStale)
+			}
+		})
+	}
+}
+
+func TestChildTenantLockMakesClaimSkip(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("locked")
+	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	claim := claimChildForTest(t, w, id, "worker-a")
+	tx, err := w.s.DB.Pool.Begin(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(w.ctx)
+	if _, err := tx.Exec(w.ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
+		t.Fatal(err)
+	}
+	var claims []childClaim
+	locked := make(chan struct{})
+	continueDelivery := make(chan struct{})
+	deliveryErr := make(chan error, 1)
+	go func() {
+		_, err := deliverChildResultTxWithHook(w.ctx, tx, claim, func() { close(locked); <-continueDelivery })
+		deliveryErr <- err
+	}()
+	<-locked
+	if err := w.s.DB.InSystem(w.ctx, "phase-sync", func(systemTx pgx.Tx) error {
+		var err error
+		claims, err = claimChildResultsTx(w.ctx, systemTx, "worker-b", 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("claim ignored locked row: %v", claims)
+	}
+	close(continueDelivery)
+	if err := <-deliveryErr; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var consumed bool
+	if err := w.owner.QueryRow(w.ctx, `SELECT consumed_at IS NOT NULL FROM child_result_outbox WHERE child_run_id=$1`, id).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if !consumed || w.count("directives") != 1 {
+		t.Fatalf("committed delivery consumed=%v directives=%d", consumed, w.count("directives"))
+	}
+}
+
+func TestChildTenantStepRejectsZeroRowConsume(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("zero-consume")
+	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	claim := claimChildForTest(t, w, id, "worker-a")
+	w.exec(`CREATE FUNCTION ignore_child_consume() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.consumed_at IS NOT NULL THEN RETURN NULL; END IF;
+			RETURN NEW;
+		END
+	$$`)
+	w.exec(`CREATE TRIGGER ignore_child_consume BEFORE UPDATE OF consumed_at ON child_result_outbox FOR EACH ROW EXECUTE FUNCTION ignore_child_consume()`)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := deliverChildResultTx(w.ctx, tx, claim)
+		return err
+	}); err == nil || w.count("directives") != 0 {
+		t.Fatalf("zero-row consume committed side effect: err=%v directives=%d", err, w.count("directives"))
+	}
+}
+
 func TestChildNotificationStaysWithParent(t *testing.T) {
 	w := newChildWorld(t)
 	id := w.child("immutable")

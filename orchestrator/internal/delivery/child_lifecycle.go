@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -327,49 +328,89 @@ func (s *Store) EnqueueChildResults(ctx context.Context) (int, error) {
 	}
 	n := 0
 	for _, p := range todo {
+		delivered := false
 		err := s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-			c, err := lockChild(ctx, tx, p.Child)
-			if err != nil {
-				return err
-			}
-			var claimed string
-			if err := tx.QueryRow(ctx, `SELECT claimed_by FROM child_result_outbox
-				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$4`, p.Parent, p.Child, p.Generation, p.Token).Scan(&claimed); err != nil {
-				return err
-			}
-			if !c.Actionable || c.ParentID != p.Parent {
-				if _, err := tx.Exec(ctx, `UPDATE child_results SET stale = true WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation); err != nil {
-					return err
-				}
-				_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET stale_at=now(), claimed_by=NULL, claimed_until=NULL WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation)
-				return err
-			}
-			var summary []byte
-			if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,
-				'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale)
-				FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary); err != nil {
-				return err
-			}
-			text, err := childResultText(summary)
-			if err != nil {
-				return err
-			}
-			directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL
-				WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, directive, p.Token)
-			if err == nil {
-				n++
-			}
+			var err error
+			delivered, err = deliverChildResultTx(ctx, tx, p)
 			return err
 		})
 		if err != nil {
 			return n, err
 		}
+		if delivered {
+			n++
+		}
 	}
 	return n, nil
+}
+
+func lockClaimedChildResultTx(ctx context.Context, tx pgx.Tx, p childClaim) (bool, error) {
+	var claimed string
+	err := tx.QueryRow(ctx, `SELECT claimed_by FROM child_result_outbox
+		WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$4 FOR UPDATE`,
+		p.Parent, p.Child, p.Generation, p.Token).Scan(&claimed)
+	if db.IsNotFound(err) {
+		return false, nil
+	}
+	return true, err
+}
+
+func deliverChildResultTx(ctx context.Context, tx pgx.Tx, p childClaim) (bool, error) {
+	return deliverChildResultTxWithHook(ctx, tx, p, nil)
+}
+
+func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, afterLock func()) (bool, error) {
+	c, err := lockChild(ctx, tx, p.Child)
+	if err != nil {
+		return false, err
+	}
+	locked, err := lockClaimedChildResultTx(ctx, tx, p)
+	if err != nil {
+		return false, err
+	}
+	if !locked {
+		return false, nil
+	}
+	if afterLock != nil {
+		afterLock()
+	}
+	if !c.Actionable || c.ParentID != p.Parent {
+		if _, err := tx.Exec(ctx, `UPDATE child_results SET stale = true WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation); err != nil {
+			return false, err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE child_result_outbox SET stale_at=now(), claimed_by=NULL, claimed_until=NULL
+			WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$4`, p.Parent, p.Child, p.Generation, p.Token)
+		if err != nil {
+			return false, err
+		}
+		if tag.RowsAffected() != 1 {
+			return false, fmt.Errorf("stale child result update affected %d rows", tag.RowsAffected())
+		}
+		return false, nil
+	}
+	var summary []byte
+	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,
+		'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale)
+		FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary); err != nil {
+		return false, err
+	}
+	text, err := childResultText(summary)
+	if err != nil {
+		return false, err
+	}
+	directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
+	if err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL
+		WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, directive, p.Token)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return false, fmt.Errorf("consume child result update affected %d rows", tag.RowsAffected())
+	}
+	return true, nil
 }
 
 func childResultText(summary []byte) (string, error) {
