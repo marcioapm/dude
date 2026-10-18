@@ -208,6 +208,20 @@ describe("the projection", () => {
     expect(project([...events, created(60_000)], "pending").startFailed).toBeNull();
   });
 
+  test("a setup script that failed the start: dude's sentence naming the repository and exit code, and the script's output", () => {
+    const output = "dude: running the setup script of api\nnpm ci\nnpm ERR! notarget @acme/tokens@^4.2.0";
+    const error = "The setup script of api failed with exit code 1: npm ERR! notarget @acme/tokens@^4.2.0";
+    const events = [created(), stage("waiting", 0), stage("container", 5_000),
+      ev("run.failed", { status: "failed", error, stage: "container", reason: "exit code 1", setup: { repository: "api", exitCode: 1, output } }, 50_000)];
+    const ended = project(events, "failed").turns.find((t) => t.kind === "ended")!;
+    expect(ended.kind === "ended" && ended.start?.failed).toEqual({ reason: error, source: "dude", setup: { repository: "api", exitCode: 1, output } });
+    expect(ended).toMatchObject({ setup: { repository: "api", exitCode: 1, output } });
+    // Without stages (an older lux), the ended line still carries it.
+    const bare = project([created(), ev("run.failed", { status: "failed", error, setup: { repository: "api", exitCode: 124, output: "" } }, 50_000)], "failed")
+      .turns.find((t) => t.kind === "ended")!;
+    expect(bare).toMatchObject({ text: `Failed: ${error}`, setup: { repository: "api", exitCode: 124, output: "" } });
+  });
+
   test("a drained Run whose resumePolicy (manual) fails it at the stop did not fail a start: no stopping-it failure", () => {
     const ran = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), stage("park", 20_000, 1, "drain")];
     const why = "drain: not resumed (resumePolicy manual)";
@@ -441,6 +455,24 @@ describe("a task's Run page", () => {
     // The header's statusNote names where it failed, bare beside the Run's own Failed status.
     const chip = page.querySelector("[data-testid=start-chip]")!;
     expect(chip.textContent).toBe("Failed while getting the image ready");
+  });
+
+  test("failed by a setup script: the repository and exit code in dude's words, and the end of what it printed", async () => {
+    const error = "The setup script of api failed with exit code 1: npm ERR! notarget @acme/tokens@^4.2.0";
+    const output = ["dude: running the setup script of api", ...Array.from({ length: 45 }, (_, i) => `npm warn line ${i}`),
+      "npm ERR! notarget @acme/tokens@^4.2.0", ""].join("\n");
+    const ledger = [created(), stage("waiting", 0), stage("container", 5_000),
+      ev("run.failed", { status: "failed", error, stage: "container", reason: "exit code 1", setup: { repository: "api", exitCode: 1, output } }, 50_000)];
+    const page = await runPage("failed", ledger);
+    const failed = await until(() => page.querySelector("[data-testid=start-failed]"), "the failure");
+    expect(failed.textContent).toBe(`Did not start: failed while starting the container: ${error}. Nothing was spent on the model.`);
+    const log = page.querySelector<HTMLElement>("[data-testid=setup-output]")!;
+    expect(log.textContent).toContain("Output of api’s setup script · exit 1 · the end");
+    expect(log.textContent).toContain("npm ERR! notarget @acme/tokens@^4.2.0");
+    // Its last 40 lines only (warn lines 6–44 and the error), and never init's own marker line.
+    expect(log.textContent).toContain("npm warn line 6");
+    expect(log.textContent).not.toContain("npm warn line 0");
+    expect(log.textContent).not.toContain("dude: running the setup script");
   });
 
   test("failed before lux named a stage: the Run's header has no stage words to add, and no stale wait badge", async () => {
