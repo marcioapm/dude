@@ -38,6 +38,21 @@ func (s *Syncer) childExecutionAllowed(ctx context.Context, r phaseRun) error {
 			}
 		}
 		if delivery.Publishes[phase] {
+			d, err := delivery.ReadDelivery(ctx, tx, r.TaskID)
+			if err != nil {
+				return err
+			}
+			attempt, err := delivery.EffectiveChildAttemptTx(ctx, tx, r.TaskID, d)
+			if err != nil {
+				return err
+			}
+			var ownAttempt int
+			if err := tx.QueryRow(ctx, `SELECT attempt FROM runs WHERE id=$1`, r.ID).Scan(&ownAttempt); err != nil {
+				return err
+			}
+			if d == nil || !d.Live() || attempt != ownAttempt {
+				return fmt.Errorf("child execution held: delivery attempt is no longer live")
+			}
 			var parentLive bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs p WHERE p.id = r.parent_run_id
 			AND p.task_id = r.task_id AND p.role = 'conductor' AND p.kind = 'agent'

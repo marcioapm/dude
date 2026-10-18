@@ -1853,6 +1853,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err := s.childExecutionAllowed(ctx, r); err != nil {
 			return false, err
 		}
+		if !delivery.Publishes[r.Phase] {
 		if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 			return true, err
 		}
@@ -1861,6 +1862,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			_, err := tx.Exec(ctx, `UPDATE runs SET status='completed', ended_at=now(), lux_stop_reason='complete', keep=false WHERE id=$1 AND status IN ('scheduled','starting','running') AND control <> 'abort'`, r.ID)
 			return err
 		})
+		}
 	}
 	// Pushed when it names a branch and holds a repository it may push —
 	// as lux was told, at submit or as a resume added one. Work on nothing
@@ -2024,6 +2026,13 @@ func (s *Syncer) recordChildHeads(ctx context.Context, tx pgx.Tx, r phaseRun, he
 	}
 	if d == nil {
 		return false, nil
+	}
+	attempt, err := delivery.EffectiveChildAttemptTx(ctx, tx, r.TaskID, d)
+	if err != nil {
+		return false, err
+	}
+	if !d.Live() || attempt != r.Attempt {
+		return false, fmt.Errorf("child delivery attempt is no longer live")
 	}
 	held, err := delivery.StepHoldsForUpdate(ctx, tx, d.WorkflowID)
 	if err != nil {

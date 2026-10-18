@@ -58,7 +58,7 @@ def test_child_writer_moves_branch_and_returns_commit(client: ApiClient, owner_d
     branch = f"dude/{task['id']}/attempt-1"
     head = wait_until(lambda: fake_github.branch_sha(branch), timeout=60)
     result = wait_until(lambda: query(owner_dsn, "SELECT commits FROM child_results WHERE child_run_id=%s", (child["id"],)), timeout=120)[0]
-    assert head in result["commits"].values()
+    assert head in result["commits"].values(), query(owner_dsn, "SELECT phase,status,push_branch,lux_pushes,base_shas,push_result,heads FROM runs WHERE id=%s", (child["id"],))
     wait_until(lambda: query(owner_dsn, "SELECT * FROM child_result_outbox WHERE child_run_id=%s AND consumed_at IS NOT NULL", (child["id"],)), timeout=90)
     assert _point(client, task["id"]) == "after_implement"
 
@@ -72,7 +72,7 @@ def test_child_writer_excludes_another_but_allows_reports_and_selective_abort(cl
          _tool("start_agent", {"profile": "implementer", "key": "second"}),
          _tool("start_agent", {"profile": "investigator", "key": "report"}))
     rows = wait_until(lambda: (rows := _children(owner_dsn, task)) and len(rows) == 2 and rows, timeout=90)
-    wait_until(lambda: any("implementer is working" in text for text in _said(client, parent)), timeout=60)
+    assert len([row for row in rows if row["phase"] == "implement"]) == 1
     writer = next(row for row in rows if row["phase"] == "implement")
     sibling = next(row for row in rows if row["phase"] == "investigate")
     response = client.post(f"/v1/runs/{writer['id']}/abort", {})

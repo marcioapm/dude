@@ -37,6 +37,17 @@ func childPhase(profile string) (string, error) {
 	return phase, nil
 }
 
+// EffectiveChildAttemptTx resolves legacy deliveries from persisted task Runs,
+// never from the requesting parent or child. Callers hold the task's locks.
+func EffectiveChildAttemptTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (int, error) {
+	if d != nil && d.State.Attempt > 0 {
+		return d.State.Attempt, nil
+	}
+	var attempt int
+	err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id=$1`, taskID).Scan(&attempt)
+	return attempt, err
+}
+
 func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, error) {
 	var id string
 	err := s.DB.InOrg(ctx, in.Parent.Run.Org, func(tx pgx.Tx) error {
@@ -103,7 +114,11 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 	if d == nil || !d.Live() {
 		return "", refusef("this task has no live delivery")
 	}
-	if d.State.Attempt != parentAttempt {
+	attempt, err := EffectiveChildAttemptTx(ctx, tx, ref.TaskID, d)
+	if err != nil {
+		return "", err
+	}
+	if attempt != parentAttempt {
 		return "", refusef("the parent conductor is from an old delivery attempt")
 	}
 	if Publishes[phase] {
@@ -119,7 +134,7 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 		}
 	}
 	id, err = createPhaseRunTx(ctx, tx, ref.Org, PhaseRun{
-		TaskID: ref.TaskID, Phase: phase, BaseRefs: d.State.Heads, Attempt: d.State.Attempt,
+		TaskID: ref.TaskID, Phase: phase, BaseRefs: d.State.Heads, Attempt: attempt,
 		ParentRunID: ref.RunID, ConductorRunID: ref.RunID, ConductorNote: in.Note,
 		Key: key, Tier: tier, Branch: d.State.Branch, Child: true,
 	})

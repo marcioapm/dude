@@ -67,7 +67,11 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	if err != nil {
 		return nil, err
 	}
-	c.ParentLive = live && !Ended(taskStatus) && d != nil && d.Live() && d.State.Attempt == c.Attempt
+	attempt, err := EffectiveChildAttemptTx(ctx, tx, c.TaskID, d)
+	if err != nil {
+		return nil, err
+	}
+	c.ParentLive = live && !Ended(taskStatus) && d != nil && d.Live() && attempt == c.Attempt
 	c.Actionable = c.ParentLive && c.ReplacedBy == "" && c.StopReason != "parent-ended"
 	return c, nil
 }
@@ -227,7 +231,11 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 			if err != nil {
 				return err
 			}
-			if d == nil || !d.Live() || d.State.Attempt != c.Attempt {
+			attempt, err := EffectiveChildAttemptTx(ctx, tx, taskID, d)
+			if err != nil {
+				return err
+			}
+			if d == nil || !d.Live() || attempt != c.Attempt {
 				return refusef("the parent is no longer live for this attempt")
 			}
 			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, d); err != nil {
