@@ -30,6 +30,7 @@ import { HostChips } from "../../components/HostChips.tsx";
 import { HostPresets, NetworkRefusedNote, RefusedHosts, type HostPreset } from "../../components/Network.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { egressAllows, egressProblem } from "@dude/domain";
+import { SetupScriptDemo } from "./SetupScript.tsx";
 
 const PROMPT = `# Implementer
 
@@ -313,6 +314,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-layout" title="Settings page" note="A left menu with sub-pages (the roles under Agents), rows of label and control, and on a project each value's source with Reset.">
         <Panes mode={mode}>
           <SettingsDemo />
+        </Panes>
+      </Block>
+      <Block id="s-repository-setup-script" title="Repository setup script: SetupScriptMark / CodeEditor shell / SizeMeter" note="A repository with a setup script carries a quiet terminal `setup` mark after its name, on the raised shade: a button that opens the script, for readers too, its name saying the repository, the action and its lines. Editors also reach it from the row menu (Setup script…). The script is a CodeEditor in `shell`, its placeholder muted guidance, capped at `maxLines` so the footer stays in sight. The footer's SizeMeter is neutral, attention past 90% of the limit, danger over it. A line that moves git's hooks away is a warning, never a block. The server's refusal is a danger Callout.">
+        <Panes mode={mode}>
+          <SetupScriptDemo />
         </Panes>
       </Block>
       <Block id="s-network" title="HostChips readOnly / HostPresets / RefusedHosts / NetworkRefusedNote" note="What an agent may reach. An organisation’s hosts on a project’s page are read-only chips under “From Acme”; what is always reachable is muted. Presets add a toolchain by name and tick one the list already reaches whole. Refused recently is a table with Allow on each and Allow all. A switch that lifts the list for one kind of agent (Brainstorm sessions) says, while on, what it risks in a danger Callout under it. In the Run, a tool call whose output names a refused host carries the note as ToolCallCard’s note, under it, never behind a click.">

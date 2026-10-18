@@ -3,10 +3,11 @@ import { autocompletion, closeBrackets, completionKeymap, type CompletionContext
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder as placeholderText } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import type { CodeDiagnostic, CodeEditorProps } from "./CodeEditor.tsx";
 import styles from "./CodeEditor.module.css";
@@ -31,6 +32,7 @@ const theme = EditorView.theme({
   ".cm-gutters": { backgroundColor: "transparent", color: "var(--ds-color-text-muted)", border: "none" },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 var(--ds-space-4) 0 var(--ds-space-12)", minWidth: "28px" },
   ".cm-activeLine": { backgroundColor: "var(--ds-color-hover-wash)" },
+  ".cm-placeholder": { color: "var(--ds-color-text-muted)" },
   ".cm-activeLineGutter": { backgroundColor: "var(--ds-color-hover-wash)", color: "var(--ds-color-text-primary)" },
   "&.cm-focused .cm-cursor": { borderLeftColor: "var(--ds-color-text-primary)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--ds-color-selection) !important" },
@@ -99,7 +101,7 @@ function toDiagnostics(state: EditorState, list: ReadonlyArray<CodeDiagnostic> |
   return out;
 }
 
-export default function CodeEditorCore({ value, onChange, language = "plain", diagnostics, complete, readOnly, "aria-label": label }: CodeEditorProps) {
+export default function CodeEditorCore({ value, onChange, language = "plain", placeholder, maxLines, diagnostics, complete, readOnly, "aria-label": label }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const latest = useRef({ onChange, complete });
@@ -142,6 +144,15 @@ export default function CodeEditorCore({ value, onChange, language = "plain", di
       }),
     ];
     if (language === "dockerfile") extensions.push(StreamLanguage.define(dockerFile));
+    if (language === "shell") extensions.push(StreamLanguage.define(shell));
+    if (placeholder) extensions.push(placeholderText(placeholder));
+    // The cap counts the content's own padding (8px above and below), so maxLines lines show whole.
+    if (maxLines) {
+      extensions.push(EditorView.theme({
+        "&": { maxHeight: `calc(${maxLines} * var(--ds-code-line) + 2 * var(--ds-space-8))` },
+        ".cm-scroller": { overflow: "auto" },
+      }));
+    }
     const v = new EditorView({ parent: host.current!, state: EditorState.create({ doc: value, extensions }) });
     view.current = v;
     return () => {
@@ -150,7 +161,7 @@ export default function CodeEditorCore({ value, onChange, language = "plain", di
     };
     // The editor is made once; value, readOnly and diagnostics follow below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language]);
+  }, [language, placeholder, maxLines]);
 
   useEffect(() => {
     const v = view.current;

@@ -169,6 +169,8 @@ export { ModelPicker, effectiveModel, modelWords } from "./ModelPicker.tsx";
 export type { ModelChoice, ModelPickerProps, PickerTier } from "./ModelPicker.tsx";
 export { CodeEditor } from "./CodeEditor.tsx";
 export type { CodeEditorProps, CodeDiagnostic, CodeCompletion, CodeCompletionContext } from "./CodeEditor.tsx";
+export { SetupScriptMark, SizeMeter, sizeLevel, textLines } from "./SetupScript.tsx";
+export type { SetupScriptMarkProps } from "./SetupScript.tsx";
 export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
