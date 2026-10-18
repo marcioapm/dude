@@ -2025,7 +2025,7 @@ func (s *Syncer) recordChildHeads(ctx context.Context, tx pgx.Tx, r phaseRun, he
 	if d == nil {
 		return false, nil
 	}
-	held, err := delivery.StepHolds(ctx, tx, d.WorkflowID)
+	held, err := delivery.StepHoldsForUpdate(ctx, tx, d.WorkflowID)
 	if err != nil {
 		return false, err
 	}
