@@ -11,6 +11,7 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
 import { PeopleProvider } from "../src/people.tsx";
+import { dudeName } from "../src/DudeMark.tsx";
 import { ResetMachineConfirm } from "../src/screens/actions.tsx";
 import { ApiError } from "../src/api/client.ts";
 import { TaskScreen, activityLines, filterActivity, filterFindings } from "../src/screens/TaskScreen.tsx";
@@ -430,6 +431,13 @@ describe("Activity's started lines", () => {
     const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
     return activityLines(events, people, runs, [], 1).map((l) => renderToStaticMarkup(<>{l.text}</>).replace(/<[^>]+>/g, ""));
   };
+
+  test("a checks-finished decision is dude's, while a person's decision names them", () => {
+    const decision = { ...created(null, { action: "wait" }), eventType: "task.decided" } as PersistedEvent;
+    expect(said([decision], [])).toEqual([`${dudeName(TASK_ID)} decided how delivery goes on: wait`]);
+    expect(said([{ ...decision, actor: { type: "human", id: "ana", name: "Ana" } } as PersistedEvent], []))
+      .toEqual(["Ana decided how delivery goes on: wait"]);
+  });
 
   test("name who started, as the role does, never the stage or a bare agent", () => {
     const runs = [run("r_impl", "implement", "implementer"), run("r_rev", "review", "reviewer", "correctness"),
