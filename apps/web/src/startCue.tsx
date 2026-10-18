@@ -86,7 +86,10 @@ const SETUP_TAIL_LINES = 40;
  * of its output under the failure, titled with the repository and exit code.
  */
 export function SetupOutput({ setup }: { setup: SetupFailure }) {
-  const lines = setup.output.split("\n").filter((l) => !l.startsWith(SETUP_RUNNING));
+  const marker = `${SETUP_RUNNING}${setup.repository}\n`;
+  const markerAt = setup.output.lastIndexOf(marker);
+  const output = markerAt >= 0 ? setup.output.slice(markerAt + marker.length) : setup.output;
+  const lines = output.split("\n").filter((l) => !l.startsWith(SETUP_RUNNING));
   while (lines.length && !lines.at(-1)!.trim()) lines.pop();
   const tail = lines.slice(-SETUP_TAIL_LINES);
   const title = `Output of ${setup.repository}’s setup script · exit ${setup.exitCode}${lines.length > tail.length ? " · the end" : ""}`;

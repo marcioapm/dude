@@ -475,6 +475,29 @@ describe("a task's Run page", () => {
     expect(log.textContent).not.toContain("dude: running the setup script");
   });
 
+  test("failed by a setup script keeps only the failed repository's output", async () => {
+    const error = "The setup script of web failed with exit code 1: npm ERR! boom";
+    const output = "dude: running the setup script of api\napi distinctive output\ndude: running the setup script of web\nnpm ERR! boom\n";
+    const ledger = [created(), stage("waiting", 0), stage("container", 5_000),
+      ev("run.failed", { status: "failed", error, stage: "container", reason: "exit code 1", setup: { repository: "web", exitCode: 1, output } }, 50_000)];
+    const page = await runPage("failed", ledger);
+    const log = await until(() => page.querySelector<HTMLElement>("[data-testid=setup-output]"), "the setup output");
+    expect(log.textContent).toContain("npm ERR! boom");
+    expect(log.textContent).not.toContain("api distinctive output");
+  });
+
+  test("short setup output removes its marker without calling it the end", async () => {
+    const output = "dude: running the setup script of api\nnpm ci\nnpm ERR! boom\n";
+    const error = "The setup script of api failed with exit code 1: npm ERR! boom";
+    const ledger = [created(), stage("waiting", 0), stage("container", 5_000),
+      ev("run.failed", { status: "failed", error, stage: "container", reason: "exit code 1", setup: { repository: "api", exitCode: 1, output } }, 50_000)];
+    const page = await runPage("failed", ledger);
+    const log = await until(() => page.querySelector<HTMLElement>("[data-testid=setup-output]"), "the setup output");
+    expect(log.textContent).not.toContain("dude: running the setup script");
+    expect(log.textContent).toContain("npm ERR! boom");
+    expect(log.textContent).not.toContain("· the end");
+  });
+
   test("failed before lux named a stage: the Run's header has no stage words to add, and no stale wait badge", async () => {
     const ledger = [created(), ev("run.failed", { status: "failed", error: "No model yet." }, 1_000)];
     expect(project(ledger, "failed").startFailed).toMatchObject({ stage: null, failed: { source: "dude" } });
