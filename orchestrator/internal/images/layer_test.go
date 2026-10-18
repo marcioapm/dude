@@ -281,7 +281,9 @@ func TestRunPublicationFailureReturnsCauseAndStopsHeartbeat(t *testing.T) {
 		}
 		return "", nil
 	}
-	if err := b.Run(context.Background()); !errors.Is(err, cause) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := b.Run(ctx); !errors.Is(err, cause) {
 		t.Fatalf("Run = %v", err)
 	}
 	if !strings.Contains(logs.String(), "registry unavailable") {

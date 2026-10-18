@@ -723,13 +723,13 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
       <dl className="buildFacts">
         <div><dt className="ds-tnum">{elapsed !== null ? formatDuration(elapsed) : build.state === "queued" ? queuePlace(build.ahead) : "—"}</dt><dd>{elapsed !== null ? (live ? "elapsed" : "took") : "in the line"}</dd></div>
         {build.buildSeconds ? <div><dt className="ds-tnum">{formatDuration(build.buildSeconds * 1000)}</dt><dd>building</dd></div> : null}
-        {build.checkSeconds ? <div><dt className="ds-tnum">{formatDuration(build.checkSeconds * 1000)}</dt><dd>checking containers</dd></div> : null}
+        {build.checkSeconds ? <div><dt className="ds-tnum">{formatDuration(build.checkSeconds * 1000)}</dt><dd>checking image</dd></div> : null}
         {build.pushSeconds ? <div><dt className="ds-tnum">{formatDuration(build.pushSeconds * 1000)}</dt><dd>pushing</dd></div> : null}
         <div><dt className="ds-tnum">{build.published ? `v${build.published.number}` : "none"}</dt><dd>{build.state === "succeeded" && build.kind === "build" ? "published now" : "published"}</dd></div>
       </dl>
       {live ? <BuilderOffline builder={build.builder} /> : null}
       {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
-      {build.state === "failed" && build.containersCheck && !build.containersCheck.passed ? (
+      {build.state === "failed" && build.canRunContainers && build.containersCheck && !build.containersCheck.passed ? (
         <p className="buildFix" data-testid="build-fix">
           Install them in the Containerfile, or build <code>FROM image:{ableBase ?? "<an image that can>"}</code>, which can run containers. Or untick Can run containers.
         </p>

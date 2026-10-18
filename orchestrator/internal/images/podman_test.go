@@ -607,6 +607,9 @@ func TestPodmanLocalFinishWithoutAShellSaysWhatItNeeds(t *testing.T) {
 // the hook check, and a commit in it runs dude's hook. Downloads OpenCode
 // and ripgrep, as the layer's Dockerfile does.
 func TestPodmanTheReleasesLayerCarriesDudesGitHook(t *testing.T) {
+	if os.Getenv("DUDE_PODMAN_TEST_REGISTRY") == "" {
+		t.Skip("DUDE_PODMAN_TEST_REGISTRY is unset: run scripts/test-image-builder.sh")
+	}
 	c := localPodman(t)
 	c.Self = staticSelf(t)
 	c.Limits.Platform = "linux/" + map[string]string{"aarch64": "arm64", "x86_64": "amd64"}[strings.TrimSpace(uname(t))]
