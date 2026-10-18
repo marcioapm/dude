@@ -241,14 +241,14 @@ describe("CodeEditor", () => {
   // having loaded the editor first.
   test("draws its frame at once, whether or not the editor's chunk has loaded", () => {
     const html = renderToStaticMarkup(
-      <CodeEditor aria-label="Containerfile" value={"FROM a\nRUN b\n"} header={<span>Containerfile</span>} after="USER agent" footer="3 lines" />,
+      <CodeEditor aria-label="Containerfile" value={"FROM a\nRUN b\n"} header={<span>Containerfile · v3</span>} after="USER agent" footer="3 lines" />,
     );
-    expect(html).toContain("Containerfile");
+    expect(html).toContain("<span>Containerfile · v3</span>");
     expect(html).toContain("USER agent");
     expect(html).toContain("3 lines");
   });
 
-  test("the text is a busy skeleton until the editor's chunk has loaded", () => {
+  test("the loading skeleton is busy and named for assistive tech", () => {
     const html = renderToStaticMarkup(<CodeEditorLoading label="Containerfile" lines={3} />);
     expect(html).toContain('aria-busy="true"');
     expect(html).toContain('aria-label="Containerfile, loading"');
