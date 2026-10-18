@@ -71,6 +71,19 @@ export interface CodeEditorProps {
 const Core = lazy(() => import("./CodeEditorCore.tsx"));
 
 /**
+ * What the text area shows while the editor's chunk loads: the text's
+ * lines as a skeleton, busy for assistive tech. Once the chunk has loaded
+ * in this page, CodeEditor no longer passes through it.
+ */
+export function CodeEditorLoading({ label, lines }: { readonly label: string; readonly lines: number }) {
+  return (
+    <div className={styles["loading"]} aria-busy="true" aria-label={`${label}, loading`}>
+      <SkeletonLines lines={Math.min(lines, 12)} />
+    </div>
+  );
+}
+
+/**
  * A framed code editor. The frame (header, the dude layer under the text,
  * the footer) is drawn at once; the text area is CodeMirror, loaded the
  * first time an editor renders.
@@ -85,13 +98,7 @@ export function CodeEditor(props: CodeEditorProps) {
         minHeight: `calc(${minLines} * var(--ds-code-line))`,
         ...(maxLines ? { maxHeight: `calc(${maxLines} * var(--ds-code-line) + 2 * var(--ds-space-8))` } : {}),
       }}>
-        <Suspense
-          fallback={
-            <div className={styles["loading"]} aria-busy="true" aria-label={`${props["aria-label"]}, loading`}>
-              <SkeletonLines lines={Math.min(lines, 12)} />
-            </div>
-          }
-        >
+        <Suspense fallback={<CodeEditorLoading label={props["aria-label"]} lines={lines} />}>
           <Core {...props} />
         </Suspense>
       </div>

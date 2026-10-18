@@ -13,7 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ImagePicker, type ImageChoiceView } from "../src/components/ImagePicker.tsx";
 import { BuildQueueStrip, BuildStages, ImageHistory, type ImageHistoryVersion } from "../src/components/Images.tsx";
-import { CodeEditor } from "../src/components/CodeEditor.tsx";
+import { CodeEditor, CodeEditorLoading } from "../src/components/CodeEditor.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -235,13 +235,22 @@ describe("ImageHistory", () => {
 });
 
 describe("CodeEditor", () => {
-  test("draws its frame at once, the text a skeleton until the editor's chunk has loaded", () => {
+  // Whether the editor's chunk has loaded is process-wide (one module
+  // registry for a root `bun test`), so the frame is asserted on CodeEditor
+  // and the loading skeleton on its own: neither depends on another file
+  // having loaded the editor first.
+  test("draws its frame at once, whether or not the editor's chunk has loaded", () => {
     const html = renderToStaticMarkup(
       <CodeEditor aria-label="Containerfile" value={"FROM a\nRUN b\n"} header={<span>Containerfile</span>} after="USER agent" footer="3 lines" />,
     );
     expect(html).toContain("Containerfile");
     expect(html).toContain("USER agent");
     expect(html).toContain("3 lines");
+  });
+
+  test("the text is a busy skeleton until the editor's chunk has loaded", () => {
+    const html = renderToStaticMarkup(<CodeEditorLoading label="Containerfile" lines={3} />);
     expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('aria-label="Containerfile, loading"');
   });
 });
