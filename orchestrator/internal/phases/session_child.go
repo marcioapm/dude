@@ -18,8 +18,12 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var models json.RawMessage
 		var prompt, note, tierOverride string
+		var orgEgress []string
 		if err := tx.QueryRow(ctx, `SELECT default_agent_models, COALESCE(r.child_prompt,''), COALESCE(r.conductor_note,''), COALESCE(r.tier_override,'')
 			FROM organizations o JOIN runs r ON r.organization_id=o.id WHERE r.id=$1`, r.ID).Scan(&models, &prompt, &note, &tierOverride); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT agent_egress FROM organizations WHERE id=$1`, r.Org).Scan(&orgEgress); err != nil {
 			return err
 		}
 		settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], models, models)
@@ -32,6 +36,11 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 				return err
 			}
 		}
+		sizesLoaded, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		machine, _ := sizesLoaded.ForRole(delivery.PromptRoleForPhase[r.Phase], delivery.Raises{}, nil, models)
 		tier, noTier, err := delivery.TierFor(ctx, tx, delivery.PromptRoleForPhase[r.Phase], settings)
 		if err != nil {
 			return err
@@ -50,6 +59,10 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		in.RunID, in.OrganizationID, in.SessionID, in.Phase, in.Role = r.ID, r.Org, r.SessionID, r.Phase, delivery.RoleForPhase[r.Phase]
 		in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 		in.Harness, in.Prompt = settings.HarnessName(), prompt
+		in.Egress = RunEgress(orgEgress, nil, "add")
+		if machine.Name != "" {
+			in.Machine = &machine
+		}
 		if note != "" {
 			in.Prompt += "\n\n" + note
 		}
