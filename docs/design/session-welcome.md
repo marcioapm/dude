@@ -107,14 +107,15 @@ back; under 1000px it stays the drawer it is today.
   Given one, it does create + link + start the agent in one transaction,
   so a failed send leaves no empty session, and answers with `runId` as
   well as `id`. Without one it is the bare create it was: the API is
-  additive. Image attachments on the first message are not taken yet:
-  a briefing carries no images. Later messages in the session's Chat take
-  them (`POST /v1/brainstorms/:id/attachments`, then `attachmentIds` on
-  `/chat`), as a directive to the live agent; a message that would start
-  an agent with images is refused 409 `images_need_agent`, and one that
-  would hand the session to a fresh agent on its changed model is refused
-  409 `images_need_model_swap` (words alone apply the change first). The
-  refused images stay unsent in the tray.
+  additive. Image attachments on this first message are out of scope: the
+  welcome page's `POST /v1/brainstorms` takes words only. Every message in
+  the session's Chat takes them (`POST /v1/brainstorms/:id/attachments`,
+  then `attachmentIds` on `/chat`), whatever agent reads it: a live agent
+  gets them with the words as a directive; a message that starts an agent,
+  or hands the session to a fresh one on its changed model (an answer to
+  its question included), briefs it with the words and queues the images
+  as its first directive, read after the briefing. Chat shows one message
+  with its words and images either way.
 - **Recent sessions** is the existing `GET /sessions` (newest activity
   first); it already carries title, filed count, shared and owner.
 
