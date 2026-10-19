@@ -311,16 +311,45 @@ func githubRefusal(read githubRead, err error) error {
 		wait = max(d, time.Minute).Round(time.Minute).String()
 	}
 	kind := refusalKind(err)
+	var lacks [][]string
+	if kind == "forbidden" {
+		lacks = permissionSets(e.AcceptedPermissions)
+	}
 	msg := githubText("refused", struct {
 		Kind, Slug, What, Wait string
 		Status                 int
-	}{kind, read.Slug, what, wait, status})
+		Lacks                  [][]string
+		Issue                  bool
+	}{kind, read.Slug, what, wait, status, lacks, read.Tool == "github_issue"})
 	payload := readPayload(read)
 	payload["refused"] = kind
 	if e != nil {
 		payload["status"] = e.Status
 	}
+	if len(lacks) > 0 {
+		payload["permission"] = e.AcceptedPermissions
+	}
 	return refuseRecorded(EvGitHubRead, payload, msg)
+}
+
+// permissionSets is forge.Error.AcceptedPermissions as GitHub's settings
+// name each permission ("pull_requests=read": "Pull requests: read"), one
+// list per alternative set.
+func permissionSets(accepted string) [][]string {
+	var sets [][]string
+	for _, set := range strings.Split(accepted, "; ") {
+		var names []string
+		for _, p := range strings.Split(set, ",") {
+			name, access, ok := strings.Cut(p, "=")
+			if !ok || name == "" {
+				return nil
+			}
+			name = strings.ReplaceAll(name, "_", " ")
+			names = append(names, strings.ToUpper(name[:1])+name[1:]+": "+access)
+		}
+		sets = append(sets, names)
+	}
+	return sets
 }
 
 // forgeError is GitHub's refusal err wraps, or nil for none (no answer).

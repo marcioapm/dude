@@ -40,7 +40,19 @@ GitHub did not answer reading acme/api: try again later
 
 ## github-forbidden
 
+GitHub refused reading acme/api#7 (HTTP 403); a pull request's conversation is read with github_pull_request
+
+## github-forbidden-pull-request
+
 GitHub refused reading acme/api#7 (HTTP 403)
+
+## github-forbidden-lacks
+
+dude's GitHub connection lacks Issues: read, so GitHub refused reading acme/api#7 (HTTP 403); a pull request's conversation is read with github_pull_request
+
+## github-forbidden-lacks-either
+
+dude's GitHub connection lacks Pull requests: read and Contents: read, or Issues: read, so GitHub refused reading acme/api#7 (HTTP 403)
 
 ## github-refused
 

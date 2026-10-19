@@ -196,6 +196,40 @@ func TestAPullRequestReadWithNoCountReadsEveryPage(t *testing.T) {
 	}
 }
 
+// A read GitHub refuses with 403 keeps which permissions it would have
+// taken, when the header is a list of them; anything else in the header is
+// dropped, and a rate limit's 403 keeps none.
+func TestAForbiddenReadKeepsTheAcceptedPermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, header string
+		rateLimited  bool
+		want         string
+	}{
+		{"one", "issues=read", false, "issues=read"},
+		{"alternatives", " pull_requests=read,contents=read ;issues=read", false, "pull_requests=read,contents=read; issues=read"},
+		{"not a permission", "issues=read; see https://example.test", false, ""},
+		{"unknown access", "issues=everything", false, ""},
+		{"rate limit", "issues=read", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Accepted-GitHub-Permissions", tc.header)
+				if tc.rateLimited {
+					w.Header().Set("Retry-After", "30")
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
+			}))
+			defer srv.Close()
+			_, err := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}).Issue(context.Background(), "acme/target", 7, 50)
+			var e *Error
+			if !errors.As(err, &e) || e.Status != http.StatusForbidden || e.AcceptedPermissions != tc.want {
+				t.Fatalf("err=%v (%#v), want accepted permissions %q", err, e, tc.want)
+			}
+		})
+	}
+}
+
 // Once GitHub says less than a fifth of the token's limit is left, an
 // agent's read is refused before any request, until it resets; delivery's
 // own reads go on.

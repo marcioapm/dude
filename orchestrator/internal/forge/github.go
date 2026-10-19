@@ -187,7 +187,37 @@ type Error struct {
 	// Refusal is dude's own reason for refusing an agent's read (one of the
 	// Refusal* kinds), "" when GitHub's answer is the refusal.
 	Refusal string
+	// AcceptedPermissions is a 403's X-Accepted-GitHub-Permissions: the
+	// permission sets that would have been let through, sets split by "; ",
+	// each "name=access" joined by ",". "" when GitHub sent none, or sent
+	// anything else (see acceptedPermissions).
+	AcceptedPermissions string
 }
+
+// acceptedPermissions is h's X-Accepted-GitHub-Permissions, normalised,
+// when every entry is a lowercase permission name and read, write or
+// admin; else "". Only such a value may reach an agent or the ledger.
+func acceptedPermissions(h http.Header) string {
+	raw := strings.TrimSpace(h.Get("X-Accepted-GitHub-Permissions"))
+	if raw == "" || len(raw) > 512 {
+		return ""
+	}
+	var sets []string
+	for _, set := range strings.Split(raw, ";") {
+		var perms []string
+		for _, p := range strings.Split(set, ",") {
+			name, access, ok := strings.Cut(strings.TrimSpace(p), "=")
+			if !ok || !permissionName.MatchString(name) || access != "read" && access != "write" && access != "admin" {
+				return ""
+			}
+			perms = append(perms, name+"="+access)
+		}
+		sets = append(sets, strings.Join(perms, ","))
+	}
+	return strings.Join(sets, "; ")
+}
+
+var permissionName = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 
 // Why dude refused an agent's read on its own account. Message then holds
 // dude's words only, never what GitHub sent.

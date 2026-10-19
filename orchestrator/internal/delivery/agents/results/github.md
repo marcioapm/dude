@@ -8,8 +8,10 @@
 {{- else if eq .Kind "not_found"}}GitHub has no {{.What}}, or dude cannot see it
 {{- else if and (eq .Kind "unavailable") (not .Status)}}GitHub did not answer reading {{.What}}: try again later
 {{- else if eq .Kind "unavailable"}}GitHub did not answer reading {{.What}} (HTTP {{.Status}}): try again later
+{{- else if .Lacks}}dude's GitHub connection lacks {{range $i, $set := .Lacks}}{{if $i}}, or {{end}}{{range $j, $p := $set}}{{if $j}} and {{end}}{{$p}}{{end}}{{end}}, so GitHub refused reading {{.What}} (HTTP {{.Status}})
 {{- else}}GitHub refused reading {{.What}} (HTTP {{.Status}})
-{{- end}}{{end}}
+{{- end}}
+{{- if and .Issue (eq .Kind "forbidden")}}; a pull request's conversation is read with github_pull_request{{end}}{{end}}
 
 {{- define "results/github/later"}}{{with .}}in {{.}}{{else}}later{{end}}{{end}}
 

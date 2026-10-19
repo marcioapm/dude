@@ -32,6 +32,10 @@ func TestGoldenGitHubAndMachineWords(t *testing.T) {
 		{"unavailable", read, &forge.Error{Status: 502}},
 		{"unreachable", slug, &forge.Unreachable{}},
 		{"forbidden", read, &forge.Error{Status: 403}},
+		{"forbidden-pull-request", githubRead{Tool: "github_pull_request", Slug: "acme/api", Number: 7}, &forge.Error{Status: 403}},
+		{"forbidden-lacks", read, &forge.Error{Status: 403, AcceptedPermissions: "issues=read"}},
+		{"forbidden-lacks-either", githubRead{Tool: "github_pull_request", Slug: "acme/api", Number: 7},
+			&forge.Error{Status: 403, AcceptedPermissions: "pull_requests=read,contents=read; issues=read"}},
 		{"refused", read, &forge.Error{Status: 422}},
 	} {
 		lines = append(lines, [2]string{"github-" + c.name, refused(c.read, c.err)})
