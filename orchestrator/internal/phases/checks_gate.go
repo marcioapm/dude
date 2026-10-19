@@ -306,37 +306,60 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 }
 
 // checksChangeMinRow is the length of the shortest rendered change row,
-// " +? -?\n"; checksCallsPage is how many calls newestCalls reads at once.
-const (
-	checksChangeMinRow = 7
-	checksCallsPage    = 32
-)
+// " +? -?\n".
+const checksChangeMinRow = 7
 
 // newestCalls renders the Run's newest whole calls up to checksCallsMax,
-// in the order they were made, reading checksCallsPage calls at a time
-// newest first, and counts every call the Run recorded.
+// in the order they were made, and counts every call the Run recorded.
+// One query groups the calls once and streams them newest first; reading
+// stops at the first call that would not fit.
 func newestCalls(ctx context.Context, tx pgx.Tx, runID string) (shown []string, total int, err error) {
-	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT `+checksCallKey+`) FROM events WHERE run_id = $1 AND event_type IN ($2, $3)`,
-		runID, evToolCalled, evToolCompleted).Scan(&total); err != nil {
+	rows, err := tx.Query(ctx, `WITH c AS (
+			SELECT `+checksCallKey+` AS id, min(cursor) AS first, count(*) OVER () AS total FROM events
+			WHERE run_id = $1 AND event_type IN ($2, $3) GROUP BY 1)
+		SELECT c.first, c.total, e.event_type, e.payload FROM c
+		JOIN events e ON e.run_id = $1 AND e.event_type IN ($2, $3) AND `+strings.ReplaceAll(checksCallKey, "payload", "e.payload")+` = c.id
+		ORDER BY c.first DESC, e.cursor`,
+		runID, evToolCalled, evToolCompleted)
+	if err != nil {
 		return nil, 0, err
 	}
+	defer rows.Close()
 	size := 0
-	before := int64(-1)
-	for len(shown) < total {
-		calls, first, err := recordedCalls(ctx, tx, runID, before)
-		if err != nil || len(calls) == 0 {
+	// fits renders a finished call and keeps it if it fits; the newest
+	// call is kept whatever its size.
+	fits := func(c *checksCall) bool {
+		text := checksCallText.Render(*c)
+		if size+len(text) > checksCallsMax && len(shown) > 0 {
+			return false
+		}
+		shown = append(shown, text)
+		size += len(text)
+		return true
+	}
+	var call *checksCall
+	first := int64(-1)
+	for rows.Next() {
+		var typ string
+		var p map[string]any
+		var at int64
+		if err := rows.Scan(&at, &total, &typ, &p); err != nil {
 			return nil, 0, err
 		}
-		for _, c := range calls {
-			text := checksCallText.Render(c)
-			if size+len(text) > checksCallsMax && len(shown) > 0 {
+		if at != first {
+			if call != nil && !fits(call) {
 				slices.Reverse(shown)
 				return shown, total, nil
 			}
-			shown = append(shown, text)
-			size += len(text)
+			call, first = &checksCall{}, at
 		}
-		before = first
+		addCallEvent(call, typ, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if call != nil {
+		fits(call)
 	}
 	slices.Reverse(shown)
 	return shown, total, nil
@@ -346,68 +369,36 @@ func newestCalls(ctx context.Context, tx pgx.Tx, runID string) (shown []string, 
 // its string callId, else "".
 const checksCallKey = `CASE WHEN jsonb_typeof(payload->'callId') = 'string' THEN payload->>'callId' ELSE '' END`
 
-// recordedCalls are up to checksCallsPage of the Run's tool calls, each
-// with its completion, newest first by their first event, made before the
-// one whose first event is at cursor before (-1: from the newest); first
-// is the oldest returned call's first cursor.
-func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, before int64) (calls []checksCall, first int64, err error) {
-	rows, err := tx.Query(ctx, `WITH c AS (
-			SELECT `+checksCallKey+` AS id, min(cursor) AS first FROM events
-			WHERE run_id = $1 AND event_type IN ($2, $3) GROUP BY 1),
-		page AS (SELECT id, first FROM c WHERE $4 < 0 OR first < $4 ORDER BY first DESC LIMIT $5)
-		SELECT page.first, e.event_type, e.payload FROM page
-		JOIN events e ON e.run_id = $1 AND e.event_type IN ($2, $3) AND `+strings.ReplaceAll(checksCallKey, "payload", "e.payload")+` = page.id
-		ORDER BY page.first DESC, e.cursor`,
-		runID, evToolCalled, evToolCompleted, before, checksCallsPage)
-	if err != nil {
-		return nil, 0, err
+// addCallEvent folds one of a call's tool events, read in cursor order,
+// into c.
+func addCallEvent(c *checksCall, typ string, p map[string]any) {
+	if tool, _ := p["tool"].(string); tool != "" && (c.Tool == "" || typ == evToolCalled) {
+		c.Tool = tool
 	}
-	defer rows.Close()
-	byFirst := map[int64]int{}
-	for rows.Next() {
-		var typ string
-		var p map[string]any
-		var at int64
-		if err := rows.Scan(&at, &typ, &p); err != nil {
-			return nil, 0, err
+	if typ == evToolCalled {
+		if in, ok := p["input"]; ok {
+			raw, _ := json.Marshal(in)
+			c.Input = string(raw)
 		}
-		i, seen := byFirst[at]
-		if !seen {
-			calls = append(calls, checksCall{})
-			i = len(calls) - 1
-			byFirst[at] = i
-			first = at
-		}
-		c := &calls[i]
-		if tool, _ := p["tool"].(string); tool != "" && (c.Tool == "" || typ == evToolCalled) {
-			c.Tool = tool
-		}
-		if typ == evToolCalled {
-			if in, ok := p["input"]; ok {
-				raw, _ := json.Marshal(in)
-				c.Input = string(raw)
-			}
+		return
+	}
+	c.Status, _ = p["status"].(string)
+	if exit, ok := p["exitCode"].(float64); ok {
+		n := int(exit)
+		c.Exit = &n
+	}
+	for _, name := range []string{"output", "stdout", "stderr"} {
+		out, ok := p[name].(map[string]any)
+		if !ok {
 			continue
 		}
-		c.Status, _ = p["status"].(string)
-		if exit, ok := p["exitCode"].(float64); ok {
-			n := int(exit)
-			c.Exit = &n
-		}
-		for _, name := range []string{"output", "stdout", "stderr"} {
-			out, ok := p[name].(map[string]any)
-			if !ok {
-				continue
-			}
-			st := checksStream{Name: name}
-			st.Head, _ = out["head"].(string)
-			st.Tail, _ = out["tail"].(string)
-			st.Omitted, st.Bytes = byteCount(out["omittedBytes"]), byteCount(out["bytes"])
-			st.Withheld = out["withheld"] == true
-			c.Streams = append(c.Streams, st)
-		}
+		st := checksStream{Name: name}
+		st.Head, _ = out["head"].(string)
+		st.Tail, _ = out["tail"].(string)
+		st.Omitted, st.Bytes = byteCount(out["omittedBytes"]), byteCount(out["bytes"])
+		st.Withheld = out["withheld"] == true
+		c.Streams = append(c.Streams, st)
 	}
-	return calls, first, rows.Err()
 }
 
 // boundHead is s up to n bytes, saying so when it was cut.
