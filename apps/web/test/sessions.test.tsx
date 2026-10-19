@@ -18,7 +18,7 @@ import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { App } from "../src/App.tsx";
-import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { ApiError, type Artifact, type SentAnswer, type UploadRoute } from "../src/api/client.ts";
 import { project } from "../src/api/conversation.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
@@ -413,6 +413,12 @@ describe("a brainstorm session's page", () => {
         this.attached.push(opts.attachmentIds ?? []);
         return super.sessionChat(id, text, opts);
       }
+      routes: UploadRoute[] = [];
+      override uploadAttachment(id: string, image: { name: string; original: Blob; delivered: Blob },
+        _onProgress?: (fraction: number) => void, route: UploadRoute = "tasks") {
+        this.routes.push(route);
+        return super.uploadAttachment(id, image);
+      }
     }
     const g = globalThis as { createImageBitmap?: unknown };
     const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
@@ -431,6 +437,7 @@ describe("a brainstorm session's page", () => {
       drop.dataTransfer = { types: ["Files"], items: [png], files: [png], dropEffect: "" };
       await act(async () => void page.querySelector("[data-testid=session-screen] textarea")!.dispatchEvent(drop));
       await until(() => page.querySelector("[data-testid=attachment-chip][data-state=ready]"), "the uploaded image");
+      expect(client.routes).toEqual(["brainstorms"]);
       await write(page, "look");
       expect(client.sent).toEqual(["look"]);
       expect(client.attached).toEqual([["att_fx1"]]);
