@@ -224,6 +224,7 @@ func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, pha
 		if err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE session_id=$1 AND creation_key=$2`, ref.SessionID, key).Scan(&id); err != nil {
 			return "", err
 		}
+		return id, nil
 	} else if err != nil {
 		return "", err
 	}
