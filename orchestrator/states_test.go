@@ -416,6 +416,15 @@ func (w *world) implemented(task string) {
 	}
 }
 
+// carriedOut is the conductor's tool call (decide, start_phase) at a
+// decision, accepted, and the phase Runs it starts done by agents (ran):
+// the delivery at its next decision or escalation.
+func (w *world) carriedOut(task, tool, args string) {
+	w.t.Helper()
+	w.must(task, tool, args)
+	w.ran(task)
+}
+
 // advanced runs the delivery's steps on what is in the database now, as the
 // orchestrator's loops do between agents: finished Runs signalled
 // (phases.NotifyFinished), then every runnable step. No Run is submitted to
