@@ -557,6 +557,46 @@ func TestARetargetedAdoptedPullRequestOffersWaysOnThatWork(t *testing.T) {
 	})
 }
 
+// An adopted attempt that stops in adopt, before any phase Run, leaves the
+// Runs' highest attempt behind its delivery's: a second Start over still
+// starts a new attempt, never the delivery the first one started.
+func TestStartOverAfterAnAttemptThatStoppedBeforeAnyRunStartsANewOne(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Branch("stack/base", "main", "The base")
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	pr := w.gh.Pull(n)
+	w.gh.Set(func(*fakegithub.Server) { pr.Base = "stack/base" })
+	task := w.adopting("pr", n, "feature/greet", "main")
+	stop := func(what string) {
+		t.Helper()
+		w.until(what+" to stop in adopt", func() bool { return w.taskStatus(task) == "awaiting_input" })
+		if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"}); status != 200 {
+			t.Fatalf("stop %s: %d %v", what, status, body)
+		}
+		w.until(what+" stopped", func() bool { return w.taskStatus(task) == "aborted" })
+	}
+	stop("the first attempt")
+	for i, what := range []string{"the second attempt", "the third attempt"} {
+		status, body := w.call("/internal/tasks/"+task+"/recover", map[string]any{"action": "restart"})
+		if status != 200 {
+			t.Fatalf("start over %d: %d %v", i+1, status, body)
+		}
+		if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND id = $2 AND status IN ('running', 'waiting')`,
+			task, body["workflowRunId"]); n != 1 {
+			t.Fatalf("start over %d answered a delivery that is not live: %v", i+1, body)
+		}
+		if i == 0 {
+			stop(what)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent'`, task); n != 0 {
+		t.Fatalf("%d phase Runs: the attempts were meant to stop before any", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 3 {
+		t.Fatalf("%d deliveries, want one per attempt", n)
+	}
+}
+
 // commitFile commits path with content on top of branch in the fake's
 // repository, as a person's push does; its SHA.
 func (w *world) commitFile(branch, path, content, message string) string {

@@ -21,6 +21,7 @@ export * from "./questions.ts";
 export * from "./coordination.ts";
 export * from "./startStages.ts";
 export * from "./relations.ts";
+export * from "./lifecycle.ts";
 export * from "./feedback.ts";
 export * from "./feedbackAnchor.ts";
 export * from "./previewOverlay.ts";

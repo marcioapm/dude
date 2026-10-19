@@ -86,7 +86,7 @@ class RelationsClient extends FixtureClient {
   }
 }
 
-const rels = (r: Partial<TaskRelations>): TaskRelations => ({ blockedBy: [], blocks: [], related: [], autoStart: null,
+const rels = (r: Partial<TaskRelations>): TaskRelations => ({ blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null,
   owner: { id: YOU, name: "Márcio Martins" }, ...r });
 
 async function page(client: RelationsClient) {

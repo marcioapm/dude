@@ -186,6 +186,81 @@ func TestTaskRelationWouldCycleIsLinearOnADiamondLadder(t *testing.T) {
 	}
 }
 
+// A deep chain among many unrelated edges: each step of the check reads
+// only the edges out of the tasks it reached, so a 400-deep walk stays
+// well under a second however many other edges the organisation has.
+func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
+	const depth, others = 400, 30000
+	w, in := newRelWorld(t, 0)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT $1||'_'||n, $1, 'prj_'||$1, n, 'T'||n, 'g' FROM generate_series(1, $2::int) n`, depth+others+1)
+	// CP-1 → CP-2 → … → CP-400.
+	w.exec(`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		SELECT $1, $1||'_'||n, $1||'_'||(n+1), 'blocks', 'per_'||$1 FROM generate_series(1, $2::int - 1) n`, depth)
+	// A chain among the rest, never reaching the first.
+	w.exec(`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		SELECT $1, $1||'_'||n, $1||'_'||(n+1), 'blocks', 'per_'||$1 FROM generate_series($2::int + 1, $3::int - 1) n`, depth, depth+others)
+	if _, err := w.owner.Exec(context.Background(), `ANALYZE task_relations`); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	start := time.Now()
+	if err := in(func(tx pgx.Tx) error {
+		if _, err := tx.Exec(context.Background(), `SET LOCAL statement_timeout = '30s'`); err != nil {
+			return err
+		}
+		// An edge from a task off the chain into its top: the walk goes all the way down and finds no loop.
+		return tx.QueryRow(context.Background(), `SELECT task_relation_would_cycle($1, $2)`, w.id(depth+others+1), w.id(1)).Scan(&got)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("a %d-deep chain among %d other edges: the check took %v", depth, others, took)
+	}
+	if got != nil {
+		t.Fatalf("no loop, got %v", got)
+	}
+}
+
+// list_tasks reads every task's blockers through RelationsOf, under the
+// RLS role: each task_blocked_by call must probe its blockers by key, not
+// scan the organisation's tasks, or the listing grows with the square of
+// the project.
+func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
+	const n = 4000
+	w, in := newRelWorld(t, 0)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT $1||'_'||n, $1, 'prj_'||$1, n, 'T'||n, 'g' FROM generate_series(1, $2::int) n`, n)
+	// Every task but the first is blocked by the one before it.
+	w.exec(`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		SELECT $1, $1||'_'||n, $1||'_'||(n+1), 'blocks', 'per_'||$1 FROM generate_series(1, $2::int - 1) n`, n)
+	if _, err := w.owner.Exec(context.Background(), `ANALYZE tasks; ANALYZE task_relations`); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = w.id(i + 1)
+	}
+	var rels map[string]*TaskRelationsOut
+	start := time.Now()
+	if err := in(func(tx pgx.Tx) error {
+		var err error
+		rels, err = RelationsOf(context.Background(), tx, ids)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	t.Logf("RelationsOf over %d tasks under InOrg: %v", n, took)
+	if took > time.Second {
+		t.Fatalf("RelationsOf over %d blocked tasks took %v", n, took)
+	}
+	if !rels[w.id(1)].Startable || rels[w.id(2)].Startable || len(rels[w.id(n)].BlockedBy) != 1 {
+		t.Fatalf("CP-1 startable %v, CP-2 startable %v, CP-%d blocked by %v",
+			rels[w.id(1)].Startable, rels[w.id(2)].Startable, n, rels[w.id(n)].BlockedBy)
+	}
+}
+
 type requestFailingStarter struct{ cause error }
 
 func (s requestFailingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {

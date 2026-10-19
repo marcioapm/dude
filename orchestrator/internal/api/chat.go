@@ -259,7 +259,16 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 	if err != nil {
 		return "", err
 	}
+	if delivery.Reopened(d) {
+		// Reopened after it ran: talked through as a task not started is.
+		return delivery.DeciderConductor, s.talkThrough(ctx, tx, org, taskID, wr, override)
+	}
 	if d == nil {
+		// A closed or archived task never delivered is started by no
+		// message: its owner reopens it first (path 3).
+		if err := delivery.RefuseLifecycleTx(ctx, tx, taskID); err != nil {
+			return "", err
+		}
 		var status string
 		var started bool
 		if err := tx.QueryRow(ctx, `SELECT t.status::text, EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.phase IS NOT NULL)

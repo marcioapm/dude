@@ -208,6 +208,62 @@ func TestChildWriterAdmissionReservesOnlyOneWriter(t *testing.T) {
 	}
 }
 
+func TestAChildImplementerIsRefusedOnceAPersonEndsTheTask(t *testing.T) {
+	for _, ending := range []string{"closed", "archived"} {
+		t.Run(ending, func(t *testing.T) {
+			w := newChildWorld(t)
+			in := w.in
+			in.Profile = "implementer"
+			in.Capabilities.PublishCode = true
+			in.Key = "writer"
+			writer, err := w.s.StartChild(w.ctx, in)
+			if err != nil {
+				t.Fatalf("writer child on a live delivery: %v", err)
+			}
+			// Parked at its start with no pull request open: only the
+			// child writer stands between the task and a person's ending.
+			w.exec(`UPDATE tasks SET status = 'queued' WHERE id = 'wi_life'`)
+			w.exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_life'`)
+			end := func() error {
+				return w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+					close := CloseInput{TaskID: "wi_life", Resolution: ResolutionWontDo, Actor: Actor{ActorType: "system", ActorID: "test"}}
+					if ending == "archived" {
+						_, err := ArchiveTaskTx(w.ctx, tx, w.org, ArchiveInput{CloseInput: close})
+						return err
+					}
+					_, err := CloseTx(w.ctx, tx, w.org, close)
+					return err
+				})
+			}
+			var busy LifecycleRefusal
+			if err := end(); !errors.As(err, &busy) || busy.Code != "running" {
+				t.Fatalf("%s with a child writer working: %v", ending, err)
+			}
+			w.exec(`UPDATE runs SET status = 'aborted', ended_at = now() WHERE id = $1`, writer)
+			if err := end(); err != nil {
+				t.Fatalf("%s: %v", ending, err)
+			}
+			runs := w.count("runs")
+
+			in.Key = "after"
+			if _, err := w.s.StartChild(w.ctx, in); !IsRefusal(err) {
+				t.Fatalf("child implementer on an ended task: %v", err)
+			}
+			if _, err := w.s.RestartChild(w.ctx, w.org, "wi_life", writer, "after"); !IsRefusal(err) {
+				t.Fatalf("child implementer restart on an ended task: %v", err)
+			}
+			_, err = w.s.CreatePhaseRun(w.ctx, w.org, PhaseRun{TaskID: "wi_life", Phase: PhaseImplement, WorkflowID: "wf_life",
+				Attempt: 3, ParentRunID: "run_parent", Key: "child-after", Child: true})
+			if !errors.Is(err, ErrDeliveryEnded) {
+				t.Fatalf("child implementer Run under the ended delivery: %v", err)
+			}
+			if n := w.count("runs"); n != runs {
+				t.Fatalf("runs %d, want %d", n, runs)
+			}
+		})
+	}
+}
+
 func TestChildWriterAdmissionSeesWorkflowWriterAndPublishes(t *testing.T) {
 	for _, livePublish := range []string{"requested", "asked", "pushed", "moving"} {
 		t.Run(livePublish, func(t *testing.T) {
@@ -240,7 +296,7 @@ func TestChildWriterBlocksWorkflowAndConductorPublication(t *testing.T) {
 	if _, err := w.s.StartChild(w.ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.s.CreatePhaseRun(w.ctx, w.org, PhaseRun{TaskID: "wi_life", Phase: PhaseImplement, Attempt: 3, Key: "workflow-writer"}); !errors.As(err, new(workflow.Wait)) {
+	if _, err := w.s.CreatePhaseRun(w.ctx, w.org, PhaseRun{TaskID: "wi_life", Phase: PhaseImplement, WorkflowID: "wf_life", Attempt: 3, Key: "workflow-writer"}); !errors.As(err, new(workflow.Wait)) {
 		t.Fatalf("workflow writer: %v", err)
 	}
 	w.exec(`UPDATE workflow_runs SET state = state || '{"decider":"conductor"}'::jsonb WHERE id = 'wf_life'`)

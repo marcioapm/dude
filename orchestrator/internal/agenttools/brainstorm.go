@@ -117,7 +117,7 @@ func sessionListTasks(ctx context.Context, tx pgx.Tx, c Caller, in sessionListTa
 	if err != nil {
 		return listTasksOut{}, err
 	}
-	return projectTasks(ctx, tx, inProject(c, p.ID), in.Text, false)
+	return projectTasks(ctx, tx, inProject(c, p.ID), listTasksIn{Text: in.Text})
 }
 
 func sessionListEpics(ctx context.Context, tx pgx.Tx, c Caller, in projectIn) ([]epicOut, error) {

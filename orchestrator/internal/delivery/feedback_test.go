@@ -378,6 +378,39 @@ func TestASubmitOnABlockedTaskNeverDeliveredWaits(t *testing.T) {
 	}
 }
 
+// Path 12: a submit on a closed or archived task never delivered starts
+// nothing; it is refused with the start rule's words and the drafts kept.
+func TestASubmitOnAClosedTaskNeverDeliveredIsRefused(t *testing.T) {
+	for _, put := range []string{"closed", "archived"} {
+		t.Run(put, func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			w.exec(t, `UPDATE tasks SET status = 'aborted', resolution = 'wont_do' WHERE id = $1`, w.task)
+			if put == "archived" {
+				w.exec(t, `UPDATE tasks SET archived_at = now() WHERE id = $1`, w.task)
+			}
+			w.draft(t, "fbi_1", w.ana, "one")
+			starter := &noStarter{}
+			err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+				_, err := delivery.SubmitFeedbackTx(context.Background(), tx, starter, delivery.Submission{
+					Org: w.org, TaskID: w.task, Person: w.ana, Key: "k-" + put, DraftIDs: []string{"fbi_1"},
+					Writer: delivery.Writer{ActorType: "person", ActorID: w.ana, Person: w.ana}})
+				return err
+			})
+			want := map[string]string{"closed": "was closed as Won't do: reopen it to start it.", "archived": "is archived: unarchive it to start it."}[put]
+			var fe delivery.FeedbackError
+			if !errors.As(err, &fe) || fe.Kind != "conflict" || !strings.Contains(fe.Msg, want) || !strings.Contains(fe.Msg, "Your drafts are kept.") {
+				t.Fatalf("submit on a %s task: %v, want a conflict saying %q", put, err, want)
+			}
+			if s := w.status(t, "fbi_1"); s != "draft" {
+				t.Errorf("the item is %s", s)
+			}
+			if starter.started != 0 {
+				t.Errorf("a %s task started: %d starts", put, starter.started)
+			}
+		})
+	}
+}
+
 // A fix Run restarted carries the same people's items: its replacement is
 // given them again, and they are delivered to it.
 func TestARestartedFixerIsGivenTheSameFeedback(t *testing.T) {

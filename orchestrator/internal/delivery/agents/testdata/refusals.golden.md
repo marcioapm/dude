@@ -348,7 +348,7 @@ too many calls: at most %d a minute; slow down
 
 ## refusals/tools/tools/peers-lists-your-peers-whole-leave
 
-peers lists your peers whole: leave text and startable out
+peers lists your peers whole: leave text, startable, archived and closed out
 
 ## refusals/tools/tools/title-required
 

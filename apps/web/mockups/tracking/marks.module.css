@@ -1,0 +1,241 @@
+/*
+ * The proposed marks, chip and row. Tokens only; no radius but the
+ * DS's control/mark radii, no borders but a field's edge and focus.
+ */
+
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+
+/* -- KindMark: glyph in secondary ink; a bug in strong ink, never a hue. -- */
+.kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+  outline: none;
+}
+.kind[data-kind="bug"] {
+  color: var(--ds-color-text-strong);
+}
+
+/* -- PriorityMark: P0/P1 strong, P3 muted, P2 silent (drawn only where asked). -- */
+.priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  outline: none;
+}
+.priority[data-priority="P2"] {
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-secondary);
+}
+.priority[data-priority="P3"] {
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- ArchivedMark: neutral, muted. -- */
+.archivedMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+/* -- IntroducedByChip -- */
+.introduced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.introducedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+/* Proposed: the dashed edge is the meaning (not yet a fact), as a dashed glyph is elsewhere. */
+.introduced[data-state="proposed"] .introducedChip {
+  background: transparent;
+  outline: 1px dashed var(--ds-color-border-strong);
+  outline-offset: -1px;
+}
+.introducedWords {
+  white-space: nowrap;
+}
+.introducedTitle {
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.introducedBy {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.introducedActions {
+  display: inline-flex;
+  gap: var(--ds-space-4);
+}
+
+/* -- TaskFilterBar -- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.chipWrap {
+  display: inline-flex;
+  align-items: center;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.chip:focus-visible,
+.chipClear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.chip:hover {
+  background: var(--ds-color-hover-wash);
+}
+.chip[data-set],
+.chip[aria-pressed="true"] {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-strong);
+}
+.chip b {
+  font-weight: var(--ds-weight-medium);
+}
+.chipWrap:has(.chipClear) .chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.chipClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-control-sm);
+  height: var(--ds-size-control-sm);
+  border: 0;
+  border-radius: 0 var(--ds-radius-control) var(--ds-radius-control) 0;
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+}
+.chipClear:hover {
+  color: var(--ds-color-text-strong);
+}
+
+/* -- TaskRow: 32px (compact 28px), the menu row grammar. -- */
+.row {
+  display: flex;
+  align-items: center;
+  min-height: var(--ds-size-row-default);
+  list-style: none;
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.row[data-archived] .rowTitle {
+  color: var(--ds-color-text-secondary);
+}
+.rowOpen {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 76px 20px minmax(0, 1fr) auto 150px 32px 24px 40px;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  background: transparent;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  text-align: left;
+}
+.rowLead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-secondary);
+}
+.rowKind {
+  display: inline-flex;
+  justify-content: center;
+}
+.rowTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowFacts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.rowEpic {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-muted);
+}
+.rowPriority {
+  display: inline-flex;
+  justify-content: flex-end;
+}
+.rowOwner {
+  display: inline-flex;
+}
+.rowAge {
+  text-align: right;
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.rowMenu {
+  display: inline-flex;
+  width: var(--ds-size-control-sm);
+  justify-content: center;
+}
+@container tasklist (max-width: 720px) {
+  .rowOpen {
+    grid-template-columns: 76px 20px minmax(0, 1fr) auto 24px;
+  }
+  .rowEpic,
+  .rowAge,
+  .rowPriority {
+    display: none;
+  }
+}
