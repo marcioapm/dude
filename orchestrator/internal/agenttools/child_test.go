@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 func TestStartChildToolProfilesAndReplay(t *testing.T) {
@@ -79,17 +84,38 @@ func TestStartChildToolCallIdentity(t *testing.T) {
 }
 
 func TestChildToolsRefuseWorkflowAndRecursion(t *testing.T) {
-	f := setup(t)
+	var reads atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		w.WriteHeader(http.StatusOK)
+		if strings.Contains(r.URL.Path, "annotations") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"output":{"title":"ci","summary":"failure","text":"exit code 1"}}`))
+	}))
+	t.Cleanup(github.Close)
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: github.URL})
+	f := setupWith(t, &agenttools.Server{Forges: forgesOf{gh}})
+	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url)
+		VALUES ('repo_child', $1, $2, 'example', 'https://github.com/acme/example')`, f.org, f.project)
 	token := f.run(t, "run_report_child", "conductor", "running")
 	mustExec(t, f.owner, `UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}' WHERE id='run_report_child'`)
 	for _, name := range []string{"start_phase", "restart_run", "publish", "update_task", "ask_person", "create_task", "start_agent", "github_check_log"} {
-		status, out := f.post(t, token, name, `{"profile":"investigator"}`)
+		body := `{"profile":"investigator"}`
+		if name == "github_check_log" {
+			body = `{"repo":"acme/example","checkId":1}`
+		}
+		status, out := f.post(t, token, name, body)
+		if (name == "start_agent" || name == "github_check_log") && !strings.Contains(fmt.Sprint(out["error"]), "cannot mutate workflow or start Runs") {
+			t.Fatalf("child refusal boundary bypassed for %s: status %d, %v", name, status, out)
+		}
 		if status != 422 && status != 404 {
 			t.Fatalf("child tool %s returned %d", name, status)
 		}
-		if name == "start_agent" && !strings.Contains(fmt.Sprint(out["error"]), "cannot mutate workflow or start Runs") {
-			t.Fatalf("child refusal boundary bypassed: %v", out)
-		}
+	}
+	if reads.Load() != 0 {
+		t.Fatalf("child refusal reached external read: %d", reads.Load())
 	}
 	if status, _ := f.post(t, token, "list_tasks", `{}`); status != 200 {
 		t.Fatalf("report read returned %d", status)

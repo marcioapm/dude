@@ -8,6 +8,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,13 +28,29 @@ func childInstructions(t *testing.T, spec lux.Spec) string {
 
 func assertChildContract(t *testing.T, agents string) {
 	t.Helper()
-	_, contract, ok := strings.Cut(agents, "## Independent Report Child\n")
-	if !ok {
+	if !strings.Contains(agents, "## Independent Report Child\n") {
 		t.Fatal("child instruction file lacks independent-child contract")
 	}
-	for _, forbidden := range []string{"ask_person", "create_task", "request_repository", "start_phase", "start_agent", "github_check_log"} {
-		if strings.Contains(contract, forbidden) {
-			t.Fatalf("child instruction file advertises %s", forbidden)
+	allowed := map[string]bool{}
+	for _, tool := range delivery.ChildTools {
+		allowed[tool] = true
+	}
+	forbiddenTools := map[string]bool{}
+	for _, tools := range delivery.InstructionTools {
+		for _, forbidden := range tools {
+			if !allowed[forbidden] {
+				forbiddenTools[forbidden] = true
+			}
+		}
+	}
+	var forbiddenNames []string
+	for name := range forbiddenTools {
+		forbiddenNames = append(forbiddenNames, name)
+	}
+	slices.Sort(forbiddenNames)
+	for _, forbidden := range forbiddenNames {
+		if strings.Contains(agents, forbidden) {
+			t.Errorf("child instruction file advertises %s", forbidden)
 		}
 	}
 }
@@ -493,7 +510,7 @@ func TestChildReportSpec(t *testing.T) {
 	}
 }
 
-func TestAChildResumeKeepsItsInstructionContractAndPrompt(t *testing.T) {
+func TestChildResumeSpecReturnsNoInitAndTheChildPromptOverride(t *testing.T) {
 	w := newResumeWorld(t)
 	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
 	w.s.Agent.ToolsURL = "http://tools.test"
@@ -503,14 +520,6 @@ func TestAChildResumeKeepsItsInstructionContractAndPrompt(t *testing.T) {
 	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator',jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
 	r := w.run
 	r.SourceKind, r.Phase, r.Role, r.Attempt = "task_conductor", "investigate", "investigator", 1
-	first, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(first.Workload.Prompt, "Investigate the exact regression.") {
-		t.Fatal("child prompt override absent")
-	}
-	assertChildContract(t, childInstructions(t, first))
 	stored := lux.StoredSpec{Image: lux.Image{Ref: "test/image:latest"}}
 	resumed, _, _, _, err := w.s.spec(w.ctx, r, &stored, chosenImage{})
 	if err != nil {
@@ -520,9 +529,8 @@ func TestAChildResumeKeepsItsInstructionContractAndPrompt(t *testing.T) {
 		t.Fatal("resume sent a replacement init instead of retaining the stored spec")
 	}
 	if !strings.Contains(resumed.Workload.Prompt, "Investigate the exact regression.") {
-		t.Fatal("resumed child prompt override absent from retained spec")
+		t.Fatal("resume spec lacks child prompt override")
 	}
-	assertChildContract(t, childInstructions(t, first))
 }
 
 func TestRestartedChildKeepsItsInstructionContractAndPrompt(t *testing.T) {
@@ -536,20 +544,28 @@ func TestRestartedChildKeepsItsInstructionContractAndPrompt(t *testing.T) {
 	w.exec(`UPDATE runs SET status='completed',ended_at=now() WHERE id=$1`, w.run.ID)
 	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
 	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator',jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
-	r := w.run
-	r.SourceKind, r.Phase, r.Role, r.Attempt = "task_conductor", "investigate", "investigator", 1
+	var restarted string
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-		_, err := delivery.RestartChildTx(w.ctx, tx, w.run.Org, w.run.TaskID, w.run.ID, "restart-key")
+		var err error
+		restarted, err = delivery.RestartChildTx(w.ctx, tx, w.run.Org, w.run.TaskID, w.run.ID, "restart-key")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.exec(`UPDATE runs SET status='completed',ended_at=now() WHERE id=$1`, w.run.ID)
-	var restarted string
-	if err := w.owner.QueryRow(w.ctx, `SELECT id FROM runs WHERE child_replaces=$1`, w.run.ID).Scan(&restarted); err != nil {
+	runs, err := w.s.due(w.ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.ID = restarted
+	var r phaseRun
+	for _, loaded := range runs {
+		if loaded.ID == restarted {
+			r = loaded
+			break
+		}
+	}
+	if r.ID == "" {
+		t.Fatalf("replacement %s absent from production run loader", restarted)
+	}
 	spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
 	if err != nil {
 		t.Fatal(err)
