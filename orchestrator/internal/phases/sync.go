@@ -219,10 +219,6 @@ type phaseRun struct {
 	RetryDueAt    *time.Time
 }
 
-// sessionChildNormalSpecForTest is only enabled by the submit-path secret
-// regression test; production session children retain their dedicated spec.
-var sessionChildNormalSpecForTest bool
-
 // conductor says whether r is its task's conductor: no phase, never
 // finished at a turn's end, never published.
 func (r phaseRun) conductor() bool { return r.Phase == "" && r.Role == delivery.RoleConductor }
@@ -1356,7 +1352,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, sizes, nil, nil, err
 	}
-	if r.SourceKind == string(delivery.ChildParentSession) && !sessionChildNormalSpecForTest {
+	if r.SourceKind == string(delivery.ChildParentSession) {
 		return s.sessionChildSpec(ctx, r, stored, image)
 	}
 	var in specInput
@@ -1456,7 +1452,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		// The project's secrets this phase is given; a resume's, only the
 		// names it was submitted with (lux ignores a name added since).
-		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() && r.SourceKind != string(delivery.ChildParentSession) {
+		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() {
 			var names []string
 			if stored != nil {
 				if err := tx.QueryRow(ctx, `SELECT project_secret_names FROM runs WHERE id = $1`, r.ID).Scan(&names); err != nil {

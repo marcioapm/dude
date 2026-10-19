@@ -98,5 +98,6 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		sizes = runSizes{Now: in.Machine}
 		return nil
 	})
+	// Session children deliberately never receive project secrets.
 	return spec, sizes, nil, nil, err
 }

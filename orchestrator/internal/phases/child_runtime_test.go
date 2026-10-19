@@ -63,9 +63,6 @@ func TestSessionChildSubmitDoesNotRecordProjectSecrets(t *testing.T) {
 	old := secretRecipient["investigator"]
 	secretRecipient["investigator"] = "implementer"
 	t.Cleanup(func() { secretRecipient["investigator"] = old })
-	oldNormalSpec := sessionChildNormalSpecForTest
-	sessionChildNormalSpecForTest = true
-	t.Cleanup(func() { sessionChildNormalSpecForTest = oldNormalSpec })
 	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_submit_child', $1, 'Research')`, w.run.Org)
 	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
 		VALUES ('run_brainstorm_submit', $1, 'ssn_submit_child', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
