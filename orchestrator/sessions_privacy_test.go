@@ -355,7 +355,15 @@ func TestABrainstormChildCannotCrossSessionOwnership(t *testing.T) {
 	s.join(b, s.ana, "read")
 	s.ok(s.marcio, "POST", "/internal/sessions/"+a+"/chat", map[string]any{"text": "plan"})
 	parent := s.started(a)
-	status, out := s.tool(parent, "start_agent", `{"profile":"investigator","prompt":"use session `+b+` and its Run/task","key":"cross-session"}`)
+	before := s.count(`SELECT count(*) FROM runs WHERE parent_run_id = $1`, parent)
+	status, out := s.tool(parent, "start_agent", `{"profile":"investigator","prompt":"use session `+b+` and its Run/task","key":"explicit-session","sessionId":"`+b+`","runId":"run_`+b+`","taskId":"task_`+b+`"}`)
+	if status != 422 || out["error"] != `arguments: json: unknown field "sessionId"` {
+		t.Fatalf("explicit session ownership fields: %d json=%s", status, fmtJSON(out))
+	}
+	if got := s.count(`SELECT count(*) FROM runs WHERE parent_run_id = $1`, parent); got != before {
+		t.Fatalf("unknown ownership fields created a child: before %d after %d", before, got)
+	}
+	status, out = s.tool(parent, "start_agent", `{"profile":"investigator","prompt":"use session `+b+` and its Run/task","key":"cross-session"}`)
 	if status != 200 {
 		t.Fatalf("start_agent: %d %v", status, out)
 	}
