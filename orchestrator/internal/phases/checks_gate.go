@@ -16,11 +16,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-var checksText = delivery.MustText("notices/checks")
-var backedQuestion = delivery.MustText("notices/checks/backed")
-var missingQuestion = delivery.MustText("notices/checks/missing")
-var checksSkip = delivery.MustText("notices/checks/skip")
-var checksMany = delivery.MustText("notices/checks/many")
+var (
+	checksText          = delivery.MustText("notices/checks")
+	backedQuestion      = delivery.MustText("notices/checks/backed")
+	missingQuestion     = delivery.MustText("notices/checks/missing")
+	checksSkip          = delivery.MustText("notices/checks/skip")
+	checksMany          = delivery.MustText("notices/checks/many")
+	checksUnparseable   = delivery.MustText("notices/checks/unparseable")
+	checksUnestablished = delivery.MustText("notices/checks/unestablished")
+)
 
 // checksCountMax bounds the judge calls one report costs, one per check
 // plus one, made in turn before anything is pushed.
@@ -143,7 +147,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	}
 	checks, ok := delivery.ParseChecks(reply)
 	if !ok {
-		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: "missing or unparseable checks YAML block"})
+		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: checksUnparseable.Render(nil)})
 		return d, nil
 	}
 	if len(checks) > checksCountMax {
@@ -199,7 +203,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			verified = false
 			v.Result = "unverified"
 			if v.Reason == "" {
-				v.Reason = "the judgement did not establish verification"
+				v.Reason = checksUnestablished.Render(nil)
 			}
 		}
 		d.Verdicts = append(d.Verdicts, v)
