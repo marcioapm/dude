@@ -1,5 +1,7 @@
 # agenttools refusals: <handle> <key> per line. Each key is a {{define}} in
 # internal/delivery/agents/refusals/tools/<file>.md.
+rChildProfileRequired                  refusals/tools/child/profile-required
+rChildToolsReadOnly                    refusals/tools/child/tools-read-only
 rYourContainerNotRunningAsLux          refusals/tools/basesync/your-container-not-running-as-lux
 rThisRunHoldsNoRepositoryMay           refusals/tools/basesync/this-run-holds-no-repository-may
 rThisDudeCannotAskLuxFor               refusals/tools/basesync/this-dude-cannot-ask-lux-for

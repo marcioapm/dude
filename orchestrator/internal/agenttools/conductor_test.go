@@ -88,7 +88,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		"github_check_log,github_issue,github_pull_request,github_search,"+
 		"list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,remember,reply_on_pull_request,"+
 		"request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
-		"restart_run,run_diff,search_memory,start_phase,steer,sync_base,update_task,wait_for_reply" {
+		"restart_run,run_diff,search_memory,start_agent,start_phase,steer,sync_base,update_task,wait_for_reply" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.

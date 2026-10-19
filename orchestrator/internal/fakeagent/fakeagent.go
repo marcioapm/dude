@@ -740,6 +740,8 @@ func For(phase, model, runID string, fixed bool) Step {
 			Reply: "Implemented it."}
 	}
 	switch phase {
+	case "investigate":
+		return Step{Reply: "Investigated the task; the report records the findings.", Publish: map[string]string{"REPORT.md": "Investigation findings for " + runID}}
 	case "implement":
 		if model == DoneModel {
 			return Step{Reply: "The goal is met already: nothing to add."}

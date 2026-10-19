@@ -118,6 +118,18 @@ func awaitsEvidence(verdicts []CriterionVerdict, published map[string]bool) bool
 // and says how long to wait before judging again.
 func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID string) (wait time.Duration, err error) {
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		wait, err = RecordVerdictTx(ctx, tx, org, st, runID)
+		return err
+	})
+	return wait, err
+}
+
+func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runID string) (wait time.Duration, err error) {
+	err = func() error {
+		var child bool
+		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, runID).Scan(&child); err != nil {
+			return err
+		}
 		var done bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM acceptance_verdicts WHERE run_id = $1)`, runID).Scan(&done); err != nil || done {
 			return err
@@ -161,23 +173,25 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'superseded',
+		if !child {
+			if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'superseded',
 				resolution_note = 'a later test ran the application again', updated_at = now()
 			WHERE task_id = $1 AND status = 'open' AND title LIKE $3 || '%' AND run_id <> $4
 			  AND `+thisAttempt+` AND NOT `+fromReview, st.TaskID, st.Attempt, EnvironmentPrefix, runID); err != nil {
-			return err
-		}
-		// What dude raised for a failed criterion is settled by the
-		// criterion's verdict now.
-		for _, v := range verdicts {
-			if v.Status != VerdictPass && v.Status != VerdictNotApplicable {
-				continue
+				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $4,
+			// What dude raised for a failed criterion is settled by the
+			// criterion's verdict now.
+			for _, v := range verdicts {
+				if v.Status != VerdictPass && v.Status != VerdictNotApplicable {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $4,
 					resolution_note = 'the criterion passed the next test', updated_at = now()
 				WHERE task_id = $1 AND status = 'open' AND title LIKE $3 AND run_id <> $4 AND `+thisAttempt,
-				st.TaskID, st.Attempt, criterionFindingTitle(v.Criterion, "")+"%", runID); err != nil {
-				return err
+					st.TaskID, st.Attempt, criterionFindingTitle(v.Criterion, "")+"%", runID); err != nil {
+					return err
+				}
 			}
 		}
 		// A blocking finding this test raised says why already. One an
@@ -211,7 +225,7 @@ func (s *Store) RecordVerdict(ctx context.Context, org string, st *State, runID 
 			}
 		}
 		return nil
-	})
+	}()
 	return wait, err
 }
 

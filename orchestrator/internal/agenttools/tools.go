@@ -46,6 +46,7 @@ var tools = []tool{
 	define("findings", conductors, findings),
 	define("pull_requests", conductors, pullRequests),
 	define("start_phase", conductors, startPhase),
+	define("start_agent", conductors, startAgent),
 	define("steer", conductors, steer),
 	define("restart_run", conductors, restartRun),
 	define("decide", conductors, decide),
@@ -54,6 +55,43 @@ var tools = []tool{
 	define("update_task", conductors, updateTask),
 	around(define("reply_on_pull_request", prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
 	define("publish", conductors, publish),
+}
+
+type startAgentIn struct {
+	Profile string `json:"profile"`
+	Prompt  string `json:"prompt,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Tier    string `json:"tier,omitempty"`
+	Key     string `json:"key,omitempty"`
+}
+
+type startAgentOut struct {
+	RunID   string `json:"runId"`
+	Profile string `json:"profile"`
+	Phase   string `json:"phase"`
+}
+
+func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (startAgentOut, error) {
+	phase := delivery.PhaseForPromptRole(in.Profile)
+	if phase == "" || in.Profile == "conductor" || in.Profile == "brainstorm" {
+		return startAgentOut{}, refuseText(rChildProfileRequired)
+	}
+	key := in.Key
+	if key == "" {
+		key = "tool:" + c.CallID
+	}
+	id, err := delivery.StartChildTx(ctx, tx, delivery.StartChildInput{
+		Parent: delivery.ChildParent{Kind: delivery.ChildParentTaskConductor, Run: c.run()}, Profile: in.Profile,
+		Prompt: in.Prompt, Note: in.Note, Tier: in.Tier, Key: key,
+		Capabilities: delivery.ChildCapabilities{PublishCode: delivery.Publishes[phase]},
+	})
+	if err != nil {
+		if delivery.IsRefusal(err) {
+			return startAgentOut{}, refuse("%s", err.Error())
+		}
+		return startAgentOut{}, err
+	}
+	return startAgentOut{RunID: id, Profile: in.Profile, Phase: phase}, nil
 }
 
 // ---- list_tasks --------------------------------------------------------------

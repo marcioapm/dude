@@ -18,12 +18,13 @@ import (
 // retryable refusal waits (up to a second) until await calls are recorded.
 type callLux struct {
 	lux.Client
-	mu    sync.Mutex
-	calls []string
-	err   map[string]error
-	gate  chan struct{}
-	once  *sync.Once
-	await int
+	mu       sync.Mutex
+	calls    []string
+	err      map[string]error
+	gate     chan struct{}
+	once     *sync.Once
+	await    int
+	onCancel func()
 }
 
 func (c *callLux) setPass(gated bool, await int) {
@@ -50,6 +51,9 @@ func (c *callLux) Stop(_ context.Context, id string) error {
 }
 
 func (c *callLux) Cancel(_ context.Context, id string) error {
+	if c.onCancel != nil {
+		c.onCancel()
+	}
 	c.mu.Lock()
 	c.calls = append(c.calls, "cancel "+id)
 	gate, once, await := c.gate, c.once, c.await
