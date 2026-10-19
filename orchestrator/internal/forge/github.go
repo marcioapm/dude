@@ -1942,18 +1942,11 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 	return out, nil
 }
 
-// conversationTail is a pull request's newest keep conversation comments,
-// oldest first, and how many it has. A pull request's conversation is its
-// issue's comments, listed oldest first; reading them needs Pull requests:
-// Read only, where GET /issues/{n} needs Issues: Read. The pull request's
-// own comment count lags and leads the list, so the list's pages say where
-// it ends: page 1's Link header names the last page L (none, or one that
-// does not parse: page 1 is all of it). The total is (L-1)*100 plus page L's
-// comments, and page L-1 is prepended when L holds fewer than keep. An empty
-// page L (comments deleted since page 1) makes L-1 the last page, once, and
-// then the page before it is prepended only when it is the held page 1. At
-// most 3 requests, and page 1 is never read twice. keep is at most 100: one
-// prepended page holds the rest.
+// conversationTail reads the newest conversation comments and derives their
+// total from the paginated list rather than the pull request's comment count.
+// It reads page 1, the last page from its Link header, and at most one page
+// before that. An empty last page is stepped back once. keep must be at most
+// 100, so one prepended page holds the rest.
 func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, keep int) ([]IssueComment, int, error) {
 	if keep <= 0 {
 		return []IssueComment{}, 0, nil
@@ -1972,22 +1965,23 @@ func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, 
 		err := g.do(ctx, "GET", path+strconv.Itoa(page), nil, &batch)
 		return batch, err
 	}
-	all, last, stepped := first, max(lastPage(link), 1), false
+	all, last := first, max(lastPage(link), 1)
+	lastWasEmpty := false
 	if last > 1 {
 		if all, err = read(last); err != nil {
 			return nil, 0, err
 		}
 		if len(all) == 0 {
-			last, stepped = last-1, true
+			last--
+			lastWasEmpty = true
 			if all, err = read(last); err != nil {
 				return nil, 0, err
 			}
 		}
 	}
 	total := (last-1)*100 + len(all)
-	// After a step back page last was the third request unless it is page 1;
-	// a fourth is not made, and a page last-1 of 1 is already held.
-	if len(all) < keep && last > 1 && (!stepped || last-1 == 1) {
+	// After an empty last page, only the held page 1 avoids a fourth request.
+	if len(all) < keep && last > 1 && (!lastWasEmpty || last == 2) {
 		prev, err := read(last - 1)
 		if err != nil {
 			return nil, 0, err
