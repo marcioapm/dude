@@ -63,6 +63,10 @@ func (s *Store) StartChild(ctx context.Context, in StartChildInput) (string, err
 }
 
 func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, error) {
+	return startChildTx(ctx, tx, in, nil)
+}
+
+func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLocks func()) (string, error) {
 	phase, err := childPhase(in.Profile)
 	if err != nil {
 		return "", err
@@ -89,7 +93,9 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 	}
 	var live bool
 	var parentAttempt int
-	// Parent Run precedes task, matching Chat and conductor ending.
+	// Chat, the parent Run, the delivery, then the task: the Run before
+	// the delivery as a publish takes them, the delivery before the task
+	// as every other holder of both does (LockEscalationTx).
 	err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.phase IS NULL
 			AND r.source_kind IS NULL AND r.replaced_by IS NULL AND r.control <> 'abort'
 			AND NOT COALESCE(`+Ending+`, false), r.attempt
@@ -104,6 +110,13 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 	if !live {
 		return "", refuseText(rChildParentEnded)
 	}
+	d, err := LoadDelivery(ctx, tx, ref.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if betweenLocks != nil {
+		betweenLocks()
+	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, ref.TaskID).Scan(&status); err != nil {
 		return "", err
@@ -116,10 +129,6 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 	id, err = runByKey(ctx, tx, ref.TaskID, key)
 	if err != nil || id != "" {
 		return id, err
-	}
-	d, err := LoadDelivery(ctx, tx, ref.TaskID)
-	if err != nil {
-		return "", err
 	}
 	if d == nil || !d.Live() {
 		return "", refuseText(rChildNoLiveDelivery)
