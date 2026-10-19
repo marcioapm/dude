@@ -23,7 +23,9 @@ const escalationQuestion = `{"question":"Stuck on the finding. I propose one mor
 	"choices":["Retry as proposed","Accept as it is","Stop"],"actions":["retry","accept","stop"]}`
 
 // stuck is a conducted delivery whose review is stuck on its finding (one
-// fix attempt per finding): escalated, the conductor told.
+// fix attempt per finding): escalated, the conductor told. The conductor's
+// earlier wakes arrive batched (conductor_wakes/directives are fewer than on
+// the real path), so tests must not assert per-decision delivery on this state.
 func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
 	scripted := w.lux.Decide
