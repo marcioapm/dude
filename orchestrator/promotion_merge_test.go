@@ -95,7 +95,7 @@ func TestAPromotionAdmissibleInOneRepositoryButNotTheOtherMovesNeither(t *testin
 		theirs = w.web.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
 	}
 	w.comment("Please rename the greeting.")
-	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
+	w.personAsked()
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -179,7 +179,7 @@ func TestAPromotionsMergeOntoAPersonsCommitIsNotAdopted(t *testing.T) {
 		x = w.gh.MergeInto(w.branch, "main", nil)
 	}
 	w.comment("Please rename the greeting.")
-	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
+	w.personAsked()
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -275,7 +275,7 @@ func (w *prFixWorld) untilPromoted() {
 func (w *prFixWorld) refusedOver(found *string) {
 	w.t.Helper()
 	w.comment("Please rename the greeting.")
-	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
+	w.personAsked()
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		w.t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}

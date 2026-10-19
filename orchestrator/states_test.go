@@ -25,6 +25,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -561,20 +562,7 @@ func (w *world) finished(runID string) {
 		w.t.Fatal(err)
 	}
 	if phase == delivery.PhaseFix {
-		var feedback []forge.ActionableFeedback
-		if err := json.Unmarshal(prFeedback, &feedback); err != nil {
-			w.t.Fatal(err)
-		}
-		for _, item := range feedback {
-			if strings.Contains(item.Body, "Base integration:") {
-				w.t.Fatal("finished refuses Base integration: feedback; drive the integration fixer on the real path")
-			}
-			for _, line := range strings.Split(item.Body, "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "tool:") {
-					w.t.Fatal("finished refuses tool: feedback; drive the fixer's tool calls on the real path")
-				}
-			}
-		}
+		w.refuseRealPathFeedback(prFeedback)
 	}
 	if own != "" {
 		branch = own
@@ -604,52 +592,14 @@ func (w *world) finished(runID string) {
 			"push": r.Access == "write"})
 	}
 	tier := w.tierOf(phase)
-	labels := map[string]any{"dude.run": runID, "dude.task": task, "dude.phase": phase, "dude.role": delivery.RoleForPhase[phase],
-		"dude.model": tier.Model}
-	if reviewOf != "" {
-		labels["dude.review_range"] = reviewOf
-	}
-	if phase == delivery.PhaseTest {
-		var criteria []string
-		if err := w.owner.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&criteria); err != nil {
-			w.t.Fatal(err)
-		}
-		labels["dude.criteria"] = strconv.Itoa(len(criteria))
-	}
-	step := w.lux.Decide(map[string]any{"labels": labels, "git": map[string]any{"repositories": specRepos}})
-	unsupported := step
-	unsupported.Reply, unsupported.Message = "", ""
-	unsupported.Commit, unsupported.Publish, unsupported.Descriptions = nil, nil, nil
-	// These fields only emit lifecycle/tool/network events, omitted by this state.
-	unsupported.Tools, unsupported.ToolOutput, unsupported.Thought, unsupported.Lookups = nil, nil, "", nil
-	if !reflect.DeepEqual(unsupported, reflect.Zero(reflect.TypeOf(unsupported)).Interface()) {
-		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, unsupported)
-	}
+	step := w.agentTurn(runID, task, phase, reviewOf, tier, specRepos)
 
-	// Its commit, as the fake lux writes it, by repository: "<repo>:<path>"
-	// in that one, "*:<path>" in every writable one, a bare path in the
-	// first writable one.
 	heads := map[string]any{}
 	published := map[string]string{}
 	paths := map[string][]string{}
+	var pushBranch, pushRequest, pushResult any
 	if delivery.Publishes[phase] {
-		files := map[string]map[string]string{}
-		for path, content := range step.Commit {
-			repo, file, ok := strings.Cut(path, ":")
-			targets := []string{repo}
-			switch {
-			case !ok && len(writable) > 0:
-				targets, file = writable[:1], path
-			case repo == "*":
-				targets = writable
-			}
-			for _, name := range targets {
-				if files[name] == nil {
-					files[name] = map[string]string{}
-				}
-				files[name][file] = content
-			}
-		}
+		files := commitByRepository(step.Commit, writable)
 		for _, name := range writable {
 			if len(files[name]) == 0 {
 				continue
@@ -664,9 +614,6 @@ func (w *world) finished(runID string) {
 			paths[name] = slices.Sorted(maps.Keys(files[name]))
 			heads[name] = map[string]any{"sha": sha, "changedPaths": paths[name], "base": starts[name]}
 		}
-	}
-	var pushBranch, pushRequest, pushResult any
-	if delivery.Publishes[phase] {
 		pushBranch, pushRequest = "dude/"+task+"/run-"+runID, "push-"+runID
 		var results []map[string]any
 		for _, name := range writable {
@@ -717,13 +664,11 @@ func (w *world) finished(runID string) {
 			harness, tier.Model, tier.Name, tier.Effort); err != nil {
 			return err
 		}
-		ev := func(typ, actorType string, payload map[string]any) error {
-			_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: w.org, ProjectID: w.project, TaskID: task,
-				RunID: runID, ActorType: actorType, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task, Payload: payload})
-			return err
+		ev := func(typ string, payload map[string]any) error {
+			return w.runEvent(ctx, tx, task, runID, typ, ledger.ActorAgent, payload)
 		}
 		if step.Reply != "" {
-			if err := ev("agent.message", ledger.ActorAgent, map[string]any{"contextTokens": 1000, "text": step.Reply}); err != nil {
+			if err := ev("agent.message", map[string]any{"contextTokens": 1000, "text": step.Reply}); err != nil {
 				return err
 			}
 		}
@@ -737,7 +682,7 @@ func (w *world) finished(runID string) {
 			if !ok {
 				continue
 			}
-			if err := ev(delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{"repo": name, "branch": branch,
+			if err := ev(delivery.EvGitCommitCreated, map[string]any{"repo": name, "branch": branch,
 				"baseSha": starts[name], "headSha": sha, "changedPaths": paths[name]}); err != nil {
 				return err
 			}
@@ -769,13 +714,91 @@ func (w *world) finished(runID string) {
 			time.Now(), phases.UnreadRunFinished); err != nil {
 			return err
 		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: w.org, ProjectID: w.project, TaskID: task,
-			RunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task,
-			Payload: map[string]any{"status": "completed"}})
-		return err
+		return w.runEvent(ctx, tx, task, runID, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// runEvent appends a ledger event of runID's, as its runner records it.
+func (w *world) runEvent(ctx context.Context, tx pgx.Tx, task, runID, typ, actorType string, payload map[string]any) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: w.org, ProjectID: w.project, TaskID: task,
+		RunID: runID, ActorType: actorType, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task, Payload: payload})
+	return err
+}
+
+// refuseRealPathFeedback fails on fixer feedback finished cannot play: an
+// integration fixer's (Base integration:) or one driving tool calls (tool:).
+func (w *world) refuseRealPathFeedback(prFeedback json.RawMessage) {
+	w.t.Helper()
+	var feedback []forge.ActionableFeedback
+	if err := json.Unmarshal(prFeedback, &feedback); err != nil {
+		w.t.Fatal(err)
+	}
+	for _, item := range feedback {
+		if strings.Contains(item.Body, "Base integration:") {
+			w.t.Fatal("finished refuses Base integration: feedback; drive the integration fixer on the real path")
+		}
+		for _, line := range strings.Split(item.Body, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "tool:") {
+				w.t.Fatal("finished refuses tool: feedback; drive the fixer's tool calls on the real path")
+			}
+		}
+	}
+}
+
+// agentTurn asks the fake lux how runID's agent plays its turn, with the
+// labels and checkouts its spec gives, and fails unless the Behaviour only
+// replies, commits and publishes.
+func (w *world) agentTurn(runID, task, phase, reviewOf string, tier delivery.Tier, specRepos []any) fakelux.Behaviour {
+	w.t.Helper()
+	labels := map[string]any{"dude.run": runID, "dude.task": task, "dude.phase": phase, "dude.role": delivery.RoleForPhase[phase],
+		"dude.model": tier.Model}
+	if reviewOf != "" {
+		labels["dude.review_range"] = reviewOf
+	}
+	if phase == delivery.PhaseTest {
+		var criteria []string
+		if err := w.owner.QueryRow(context.Background(), `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).
+			Scan(&criteria); err != nil {
+			w.t.Fatal(err)
+		}
+		labels["dude.criteria"] = strconv.Itoa(len(criteria))
+	}
+	step := w.lux.Decide(map[string]any{"labels": labels, "git": map[string]any{"repositories": specRepos}})
+	unsupported := step
+	unsupported.Reply, unsupported.Message = "", ""
+	unsupported.Commit, unsupported.Publish, unsupported.Descriptions = nil, nil, nil
+	// These fields only emit lifecycle/tool/network events, omitted by finished.
+	unsupported.Tools, unsupported.ToolOutput, unsupported.Thought, unsupported.Lookups = nil, nil, "", nil
+	if !reflect.DeepEqual(unsupported, reflect.Zero(reflect.TypeOf(unsupported)).Interface()) {
+		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, unsupported)
+	}
+	return step
+}
+
+// commitByRepository splits an agent's commit by repository as the fake lux
+// writes it: "<repo>:<path>" in that one, "*:<path>" in every writable one,
+// a bare path in the first writable one.
+func commitByRepository(commit map[string]string, writable []string) map[string]map[string]string {
+	files := map[string]map[string]string{}
+	for path, content := range commit {
+		repo, file, ok := strings.Cut(path, ":")
+		targets := []string{repo}
+		switch {
+		case !ok && len(writable) > 0:
+			targets, file = writable[:1], path
+		case repo == "*":
+			targets = writable
+		}
+		for _, name := range targets {
+			if files[name] == nil {
+				files[name] = map[string]string{}
+			}
+			files[name][file] = content
+		}
+	}
+	return files
 }
 
 // commitOn commits files over from as the agent (fakelux.commit) and points
@@ -850,9 +873,6 @@ func (w *world) publishedArtifact(ctx context.Context, tx pgx.Tx, wi, runID, nam
 		id, w.org, runID, name, ctype, len(content), "prepared_"+id, description); err != nil {
 		return err
 	}
-	_, err := ledger.Append(ctx, tx, ledger.Event{Type: "artifact.created", OrganizationID: w.org, ProjectID: w.project,
-		TaskID: wi, RunID: runID, ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: wi,
-		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype, "sizeBytes": len(content),
-			"sha256": "", "description": description}})
-	return err
+	return w.runEvent(ctx, tx, wi, runID, "artifact.created", ledger.ActorAgent, map[string]any{"artifactId": id, "name": name,
+		"contentType": ctype, "sizeBytes": len(content), "sha256": "", "description": description})
 }
