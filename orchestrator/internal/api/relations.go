@@ -29,9 +29,13 @@ func overrideFor(r *http.Request, o startOverride, how string) (*delivery.Overri
 	return &delivery.Override{ActorType: p.ActorType, ActorID: p.Actor, How: how, Note: strings.TrimSpace(o.Note)}, nil
 }
 
-// blockedFailure answers a start refused as blocked: 409 blocked, the
-// blockers in its details. Anything else passes through.
+// blockedFailure answers a start the rule refused: 409 blocked with the
+// blockers in its details, 409 archived, 409 closed. Anything else passes
+// through.
 func blockedFailure(err error) error {
+	if reason := delivery.StartRefusalReason(err); reason == delivery.RefusedArchived || reason == delivery.RefusedClosed {
+		return fail(http.StatusConflict, reason, "%s", err.Error())
+	}
 	b, ok := delivery.AsBlocked(err)
 	if !ok {
 		return err
@@ -40,16 +44,15 @@ func blockedFailure(err error) error {
 		details: map[string]any{"blockers": delivery.BlockersPayload(b.Blockers)}}
 }
 
-// refusedStart records a start refused as blocked (task.start_refused) in
-// a transaction of its own, the refused one having rolled back, and
-// answers it; any other error passes through.
+// refusedStart records a start the rule refused (task.start_refused) in a
+// transaction of its own, the refused one having rolled back, and answers
+// it; any other error passes through.
 func (s *Server) refusedStart(ctx context.Context, org, taskID, path string, p principal, err error) error {
-	b, ok := delivery.AsBlocked(err)
-	if !ok {
+	if delivery.StartRefusalReason(err) == "" {
 		return err
 	}
 	_ = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return delivery.RecordStartRefusedTx(ctx, tx, org, taskID, path, p.ActorType, p.Actor, b.Blockers)
+		return delivery.RecordRefusalTx(ctx, tx, org, taskID, path, p.ActorType, p.Actor, err)
 	})
 	return blockedFailure(err)
 }

@@ -1,4 +1,4 @@
--- 157_session_attachments.sql — an image may be a brainstorm session's.
+-- 159_session_attachments.sql — an image may be a brainstorm session's.
 --
 -- A member's message in a session's Chat may carry images, as a steer does
 -- (071). The upload belongs to the session it was made in, and to no task:

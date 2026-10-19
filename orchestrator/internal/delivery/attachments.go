@@ -31,7 +31,7 @@ const attachmentJSON = `json_build_object('id', a.id, 'name', a.name, 'contentTy
 	'original', json_build_object('contentType', a.original_content_type, 'width', a.original_width,
 		'height', a.original_height, 'bytes', a.original_bytes))`
 
-// AttachOwner is what an upload belongs to (migration 157): a task, or a
+// AttachOwner is what an upload belongs to (migration 159): a task, or a
 // brainstorm session; exactly one is set.
 type AttachOwner struct{ TaskID, SessionID string }
 

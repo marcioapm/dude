@@ -238,6 +238,22 @@ run %s is %s and can no longer be steered
 
 a message sent again carries the images it had: send new images in a new message
 
+## refusals/domain/lifecycle/agent
+
+%s Nobody can start it anyway until a person does that. Tell the person, and end your turn.
+
+## refusals/domain/lifecycle/archived
+
+%s is archived: unarchive it to start it.
+
+## refusals/domain/lifecycle/closed
+
+%s was closed as %s: reopen it to start it.
+
+## refusals/domain/lifecycle/closed-pick-up
+
+%s was closed: reopen it to pick it back up.
+
 ## refusals/domain/attachments/image-not-one-this-session
 
 image %s is not one of this session's

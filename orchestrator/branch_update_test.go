@@ -1088,12 +1088,14 @@ func (w *world) prFixSettled(wi string) prFix {
 	return f
 }
 
-// reviewFixSettled delivers task wi and waits for the review loop's first
-// fix, which publishes to the task branch itself, to settle and the
-// delivery to go on: to an open pull request, or escalated.
+// reviewFixSettled delivers task wi, its implementer and first review done
+// by agents (upTo), and waits for the review loop's first fix, which
+// publishes to the task branch itself, to settle and the delivery to go on:
+// to an open pull request, or escalated.
 func (w *world) reviewFixSettled(wi string) prFix {
 	w.t.Helper()
 	w.deliver(wi)
+	w.upTo(wi, delivery.PhaseFix)
 	var f prFix
 	read := func() {
 		f.paths = nil

@@ -7,8 +7,8 @@
 
 import type { TaskStatus } from "./hierarchy.ts";
 
-/** The kinds stored. "Blocked by" is `blocks` read from the other side. */
-export type TaskRelationKind = "blocks" | "related";
+/** The kinds stored. "Blocked by" is `blocks` read from the other side; `duplicates` is Close's alone. */
+export type TaskRelationKind = "blocks" | "related" | "duplicates";
 
 /** The kinds a person or agent names, from the task they are on. */
 export type RelationSide = "blocked_by" | "blocks" | "related";
@@ -82,7 +82,7 @@ export type AutoStartHow = "deliver" | "talk";
 export const AUTO_START_HOW_LABEL: Record<AutoStartHow, string> = { deliver: "Deliver", talk: "Talk it through" };
 
 /** Why a start when unblocked ended without firing (task.auto_start_cancelled's `why`); `failed` carries `error`. */
-export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal" | "failed";
+export type AutoStartEnd = "owner" | "started" | "owner_changed" | "unblocked_by_removal" | "failed" | "closed" | "archived";
 
 /** One relation as `GET /v1/tasks/:id/relations` lists it. */
 export interface TaskRelationView {
@@ -107,12 +107,18 @@ export interface TaskRelationView {
   canRemove: boolean;
   /** Whose it is to remove, by name, when the reader may not. */
   removableBy: string | null;
+  /** On a Duplicated by row: the tasks its blocking was handed to this one for. */
+  handedOver?: string[];
 }
 
 export interface TaskRelations {
   blockedBy: TaskRelationView[];
   blocks: TaskRelationView[];
   related: TaskRelationView[];
+  /** The task this one was closed as a duplicate of (one at most); Reopen removes it. */
+  duplicateOf: TaskRelationView[];
+  /** The tasks closed as duplicates of this one. */
+  duplicatedBy: TaskRelationView[];
   /** The task's start when unblocked, if set. */
   autoStart: { how: AutoStartHow; by: { id: string; name: string }; at: string } | null;
   /** The reader owns the task (sets and cancels start when unblocked). */

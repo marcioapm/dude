@@ -134,7 +134,7 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 		}
 	}
 	id, err = createPhaseRunTx(ctx, tx, ref.Org, PhaseRun{
-		TaskID: ref.TaskID, Phase: phase, BaseRefs: d.State.Heads, Attempt: attempt,
+		TaskID: ref.TaskID, Phase: phase, WorkflowID: d.WorkflowID, BaseRefs: d.State.Heads, Attempt: attempt,
 		ParentRunID: ref.RunID, ConductorRunID: ref.RunID, ConductorNote: in.Note,
 		Key: key, Tier: tier, Branch: d.State.Branch, Child: true,
 	})
