@@ -14,6 +14,9 @@ type checksFake struct {
 	backed, missing string
 	err             error
 	calls           int
+	// unrecorded: answers with no CallID, a judgement model_calls never
+	// recorded.
+	unrecorded bool
 }
 
 func (f *checksFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
@@ -22,7 +25,15 @@ func (f *checksFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 	if f.calls%2 == 0 {
 		d = f.missing
 	}
-	return judge.Judgement{Decision: d, CallID: "call_test", Reasoning: "fixture evidence"}, f.err
+	if f.err != nil {
+		// An error rejects whatever comes with it: here a yes, recorded.
+		return judge.Judgement{Decision: d, CallID: "call_test"}, f.err
+	}
+	id := "call_test"
+	if f.unrecorded {
+		id = ""
+	}
+	return judge.Judgement{Decision: d, CallID: id, Reasoning: "fixture evidence"}, nil
 }
 
 func checksReply(w *harnessWorld, text string) {
@@ -42,19 +53,21 @@ func TestChecksJudgementsFailClosed(t *testing.T) {
 		name, backed, missing string
 		err                   error
 		want                  bool
+		unrecorded            bool
 	}{
-		{"accepted", judge.Yes, judge.No, nil, true},
-		{"backed unsure", judge.Unsure, judge.No, nil, false},
-		{"missing unsure", judge.Yes, judge.Unsure, nil, false},
-		{"unbacked", judge.No, judge.No, nil, false},
-		{"missing", judge.Yes, judge.Yes, nil, false},
-		{"zero", "", "", nil, false},
-		{"timeout", "", "", errors.New("timeout"), false},
+		{"accepted", judge.Yes, judge.No, nil, true, false},
+		{"backed unsure", judge.Unsure, judge.No, nil, false, false},
+		{"missing unsure", judge.Yes, judge.Unsure, nil, false, false},
+		{"unbacked", judge.No, judge.No, nil, false, false},
+		{"missing", judge.Yes, judge.Yes, nil, false, false},
+		{"zero, what judge.Service returns failing", "", "", nil, false, false},
+		{"timeout", judge.Yes, judge.No, errors.New("timeout"), false, false},
+		{"recorded nowhere", judge.Yes, judge.No, nil, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, passingChecks)
-			w.s.Judge = &checksFake{backed: tc.backed, missing: tc.missing, err: tc.err}
+			w.s.Judge = &checksFake{backed: tc.backed, missing: tc.missing, err: tc.err, unrecorded: tc.unrecorded}
 			got, err := w.s.judgeChecks(context.Background(), w.run)
 			if err != nil || got.Verified != tc.want {
 				t.Fatalf("%+v %v", got, err)
