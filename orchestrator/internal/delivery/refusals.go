@@ -146,6 +146,7 @@ const (
 	rChildTerminalOutcomeRequired           = "a terminal child outcome is required"
 	rChildWrongTask                         = "child does not belong to this task"
 	rChildRestartKeyRequired                = "a restart idempotency key is required"
+	rChildSessionRestartUnsupported         = "session children cannot be restarted; start a new investigator child from the live brainstorm"
 	rChildAlreadyReplaced                   = "this child already has a replacement"
 	rChildParentNotLive                     = "the parent is no longer live for this attempt"
 	rChildWrongParent                       = "not this task's parent"

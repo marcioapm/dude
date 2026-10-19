@@ -15,6 +15,7 @@
 {{define "refusals/delivery/child/terminal-outcome-required"}}a terminal child outcome is required{{end}}
 {{define "refusals/delivery/child/wrong-task"}}child does not belong to this task{{end}}
 {{define "refusals/delivery/child/restart-key-required"}}a restart idempotency key is required{{end}}
+{{define "refusals/delivery/child/session-restart-unsupported"}}session children cannot be restarted; start a new investigator child from the live brainstorm{{end}}
 {{define "refusals/delivery/child/already-replaced"}}this child already has a replacement{{end}}
 {{define "refusals/delivery/child/parent-not-live"}}the parent is no longer live for this attempt{{end}}
 {{define "refusals/delivery/child/wrong-parent"}}not this task's parent{{end}}

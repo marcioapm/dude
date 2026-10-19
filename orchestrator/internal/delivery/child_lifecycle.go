@@ -218,6 +218,9 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		if err != nil {
 			return err
 		}
+		if c.SessionID != "" {
+			return refuseText(rChildSessionRestartUnsupported)
+		}
 		if c.TaskID != taskID {
 			return refuseText(rChildWrongTask)
 		}

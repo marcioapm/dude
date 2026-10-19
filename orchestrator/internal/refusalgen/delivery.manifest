@@ -142,6 +142,7 @@ rChildOwnershipChanged                 refusals/delivery/child/ownership-changed
 rChildTerminalOutcomeRequired          refusals/delivery/child/terminal-outcome-required
 rChildWrongTask                        refusals/delivery/child/wrong-task
 rChildRestartKeyRequired               refusals/delivery/child/restart-key-required
+rChildSessionRestartUnsupported        refusals/delivery/child/session-restart-unsupported
 rChildAlreadyReplaced                  refusals/delivery/child/already-replaced
 rChildParentNotLive                    refusals/delivery/child/parent-not-live
 rChildWrongParent                      refusals/delivery/child/wrong-parent
