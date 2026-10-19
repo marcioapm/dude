@@ -305,9 +305,7 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 			if live {
 				return refuseText(rChildParentStillLive)
 			}
-			_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended', control='abort', control_requested_at=now(), keep=false
-				WHERE parent_run_id=$1 AND source_kind='session' AND status IN ('pending','scheduled','starting','running','paused')`, parentID)
-			return err
+			return StopSessionChildrenTx(ctx, tx, parentID)
 		})
 	}
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -335,6 +333,17 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 			AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused') AND child_stop_reason IS DISTINCT FROM 'parent-ended'`, taskID, parentID)
 		return err
 	})
+}
+
+// StopSessionChildrenTx requires the parent Run row lock. It takes no session
+// lock: failure writers already hold the row, after which taking LockSession
+// would invert admission's session-before-parent order.
+func StopSessionChildrenTx(ctx context.Context, tx pgx.Tx, parentID string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended', control='abort',
+		control_requested_at=now(), control_reason='brainstorm parent ended', keep=false
+		WHERE parent_run_id=$1 AND source_kind='session'
+		AND status IN ('pending','scheduled','starting','running','paused')`, parentID)
+	return err
 }
 
 // EnqueueChildResults claims bounded work and commits the parent's durable input

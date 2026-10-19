@@ -3294,6 +3294,11 @@ func (s *Syncer) failedTx(ctx context.Context, tx pgx.Tx, r phaseRun, reason str
 
 // failedTxWith is failedTx with more said in run.failed (a failed start's stage).
 func (s *Syncer) failedTxWith(ctx context.Context, tx pgx.Tx, r phaseRun, reason string, more map[string]any) error {
+	if r.brainstorm() {
+		if err := delivery.StopSessionChildrenTx(ctx, tx, r.ID); err != nil {
+			return err
+		}
+	}
 	if err := s.failUnread(ctx, tx, r, UnreadRunFailed); err != nil {
 		return err
 	}

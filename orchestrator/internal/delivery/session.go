@@ -465,10 +465,7 @@ func EndBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error
 		map[string]any{"status": "completed", "reason": why})); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended', control='abort',
-		control_requested_at=now(), control_reason='brainstorm parent ended', keep=false
-		WHERE parent_run_id=$1 AND source_kind='session'
-		AND status IN ('pending','scheduled','starting','running','paused')`, ref.RunID); err != nil {
+	if err := StopSessionChildrenTx(ctx, tx, ref.RunID); err != nil {
 		return err
 	}
 	_, err = SessionHandOver(ctx, tx, ref)
