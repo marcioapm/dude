@@ -26,6 +26,7 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		if err := tx.QueryRow(ctx, `SELECT agent_egress FROM organizations WHERE id=$1`, r.Org).Scan(&orgEgress); err != nil {
 			return err
 		}
+		role := delivery.PromptRoleForPhase[r.Phase]
 		settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], models, models)
 		if tierOverride != "" {
 			settings.Tier = tierOverride
@@ -40,7 +41,14 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		if err != nil {
 			return err
 		}
-		machine, _ := sizesLoaded.ForRole(delivery.PromptRoleForPhase[r.Phase], delivery.Raises{}, nil, models)
+		raised, err := delivery.LoadSessionRaise(ctx, tx, r.SessionID, role)
+		if err != nil {
+			return err
+		}
+		machine, _ := sizesLoaded.ForRole(role, raised, nil, models)
+		if machine.Raised != nil {
+			machine.From = "session"
+		}
 		tier, noTier, err := delivery.TierFor(ctx, tx, delivery.PromptRoleForPhase[r.Phase], settings)
 		if err != nil {
 			return err
