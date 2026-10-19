@@ -2,17 +2,100 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSessionChildSubmitDoesNotRecordProjectSecrets(t *testing.T) {
+	w := newResumeWorld(t)
+	fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	t.Cleanup(fake.Close)
+	w.s.Lux = lux.New(srv.URL, "k")
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	w.s.Agent.DefaultImage = "test/image:latest"
+	w.exec(`UPDATE organizations SET default_image_id=NULL WHERE id=$1`, w.run.Org)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('implementer', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1)), 'investigator', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients)
+		VALUES ($1, $2, 'SUBMIT_SECRET', 'submit-secret-value', 'test', '{implementer}')`, w.run.ProjectID, w.run.Org)
+	w.exec(`UPDATE runs SET status='pending', lux_run_id=NULL, lux_state=NULL, phase='implement', role='implementer', source_kind=NULL WHERE id=$1`, w.run.ID)
+	task := w.run
+	task.Status, task.LuxRunID, task.LuxState = statusPending, "", ""
+	task.Phase, task.Role, task.SourceKind = delivery.PhaseImplement, "implementer", ""
+	if err := w.s.submit(w.ctx, task); err != nil {
+		var reason string
+		_ = w.owner.QueryRow(w.ctx, `SELECT coalesce(error, '') FROM runs WHERE id=$1`, task.ID).Scan(&reason)
+		t.Fatalf("task submit: %v reason=%q", err, reason)
+	}
+	var taskState, taskLux, taskError string
+	if err := w.owner.QueryRow(w.ctx, `SELECT status::text, coalesce(lux_run_id, ''), coalesce(error, '') FROM runs WHERE id=$1`, task.ID).Scan(&taskState, &taskLux, &taskError); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Runs()) != 1 {
+		t.Fatalf("submitted runs: %d db status=%s lux=%s error=%s", len(fake.Runs()), taskState, taskLux, taskError)
+	}
+	var taskSpec lux.Spec
+	if err := json.Unmarshal(fake.Runs()[0].Spec, &taskSpec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(taskSpec.Secrets, func(s lux.Secret) bool { return s.Name == "SUBMIT_SECRET" && s.Value != "" }) {
+		t.Fatalf("task submit did not carry the configured secret")
+	}
+	var rows int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id=$1`, task.ID).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("task secret rows: %d %v", rows, err)
+	}
+
+	old := secretRecipient["investigator"]
+	secretRecipient["investigator"] = "implementer"
+	t.Cleanup(func() { secretRecipient["investigator"] = old })
+	oldNormalSpec := sessionChildNormalSpecForTest
+	sessionChildNormalSpecForTest = true
+	t.Cleanup(func() { sessionChildNormalSpecForTest = oldNormalSpec })
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_submit_child', $1, 'Research')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
+		VALUES ('run_brainstorm_submit', $1, 'ssn_submit_child', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, session_id, attempt, status, phase, role, source_kind,
+		parent_run_id, parent_session_id, child_profile, child_capabilities, child_prompt)
+		VALUES ('run_submit_child', $1, $2, 'ssn_submit_child', 1, 'pending', 'investigate', 'investigator', 'session',
+		'run_brainstorm_submit', 'ssn_submit_child', 'investigator', '{}'::jsonb, 'read')`, w.run.Org, w.run.ProjectID)
+	child := phaseRun{ID: "run_submit_child", Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, SessionID: "ssn_submit_child",
+		Phase: delivery.PhaseInvestigate, Role: "investigator", SourceKind: string(delivery.ChildParentSession), Status: statusPending}
+	if err := w.s.submit(w.ctx, child); err != nil {
+		t.Fatal(err)
+	}
+	var childState, childError string
+	if err := w.owner.QueryRow(w.ctx, `SELECT status::text, coalesce(error, '') FROM runs WHERE id=$1`, child.ID).Scan(&childState, &childError); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Runs()) != 2 {
+		t.Fatalf("submitted runs after child: %d db status=%s error=%s", len(fake.Runs()), childState, childError)
+	}
+	var childSpec lux.Spec
+	if err := json.Unmarshal(fake.Runs()[1].Spec, &childSpec); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(childSpec.Secrets, func(s lux.Secret) bool { return s.Name == "SUBMIT_SECRET" || s.Value != "" }) {
+		t.Fatal("session child submit carried a project secret")
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id=$1`, child.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("session child secret rows: %d %v", rows, err)
+	}
+}
 
 func childInstructions(t *testing.T, spec lux.Spec) string {
 	t.Helper()

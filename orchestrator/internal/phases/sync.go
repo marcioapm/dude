@@ -219,6 +219,10 @@ type phaseRun struct {
 	RetryDueAt    *time.Time
 }
 
+// sessionChildNormalSpecForTest is only enabled by the submit-path secret
+// regression test; production session children retain their dedicated spec.
+var sessionChildNormalSpecForTest bool
+
 // conductor says whether r is its task's conductor: no phase, never
 // finished at a turn's end, never published.
 func (r phaseRun) conductor() bool { return r.Phase == "" && r.Role == delivery.RoleConductor }
@@ -1352,7 +1356,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, sizes, nil, nil, err
 	}
-	if r.SourceKind == string(delivery.ChildParentSession) {
+	if r.SourceKind == string(delivery.ChildParentSession) && !sessionChildNormalSpecForTest {
 		return s.sessionChildSpec(ctx, r, stored, image)
 	}
 	var in specInput
