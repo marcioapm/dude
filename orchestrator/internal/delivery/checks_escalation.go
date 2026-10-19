@@ -78,12 +78,11 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	}
 	switch action {
 	case ActionWaive:
-		var turn int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor), 0) FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped'`,
-			id).Scan(&turn); err != nil {
+		turn, err := LatestTurnTx(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		_, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman,
+		_, err = ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman,
 			map[string]any{"turn": turn, "verified": true, "waived": true, "message": note, "checks": []any{}}))
 		return err
 	case "retry":

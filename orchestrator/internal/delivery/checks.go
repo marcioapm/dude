@@ -64,6 +64,15 @@ func ParseChecks(reply string) ([]Check, bool) {
 	return doc.Checks, true
 }
 
+// LatestTurnTx is the cursor of the Run's latest ended turn (its newest
+// agent.session.stopped), 0 before any: the turn a checks verdict is for.
+func LatestTurnTx(ctx context.Context, tx pgx.Tx, runID string) (int64, error) {
+	var turn int64
+	err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor), 0) FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped'`,
+		runID).Scan(&turn)
+	return turn, err
+}
+
 // RunReplyTailTx is the last budget bytes of what a Run's agent said,
 // joined as RunReplyTx joins it, read from the newest messages up to the
 // first that reaches budget. A report starting before those bytes is cut

@@ -62,11 +62,12 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	var rounds int
 	var rawSettings []byte
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor),0) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'`, r.ID).Scan(&turn); err != nil {
+		var err error
+		if turn, err = delivery.LatestTurnTx(ctx, tx, r.ID); err != nil {
 			return err
 		}
 		var raw []byte
-		err := tx.QueryRow(ctx, `SELECT payload FROM events WHERE run_id=$1 AND event_type=$2 AND (payload->>'turn')::bigint=$3 ORDER BY cursor DESC LIMIT 1`, r.ID, checksJudgedEvent, turn).Scan(&raw)
+		err = tx.QueryRow(ctx, `SELECT payload FROM events WHERE run_id=$1 AND event_type=$2 AND (payload->>'turn')::bigint=$3 ORDER BY cursor DESC LIMIT 1`, r.ID, checksJudgedEvent, turn).Scan(&raw)
 		if err == nil {
 			previous = &checksDecision{}
 			return json.Unmarshal(raw, previous)
@@ -103,9 +104,8 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		d.Message = checksText.Render(d.Verdicts)
 	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		var current int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor),0) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'`,
-			r.ID).Scan(&current); err != nil {
+		current, err := delivery.LatestTurnTx(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
 		if current != turn {
