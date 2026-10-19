@@ -2490,14 +2490,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// must not leave the task looking busy.
 		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
 	}
+	st.Escalation = nil
 	if e.Reason == ReasonChecksUnverified {
-		st.Escalation = nil
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 		}
 		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action)
 	}
-	st.Escalation = nil
 	switch d.Action {
 	case "stop":
 		// Kept, so the task can be picked back up where it stopped.

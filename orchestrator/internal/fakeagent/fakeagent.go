@@ -755,8 +755,10 @@ const (
 var CheckOutputs = [2]string{"FAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1",
 	"ok  \tgreeting\t0.01s"}
 
-// checksStep is a checks model's step for its turn (0 the first).
-func checksStep(model string, turn int) (commands [][3]string, report string, ok bool) {
+// ChecksTurn is what a checks model does in a turn of its Run (0 the
+// first, later ones send-backs): its commands and its reply's checks
+// report. ok is false for a model that is not a checks model.
+func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok bool) {
 	failing := [3]string{CheckCommand, CheckOutputs[0], "1"}
 	passing := [3]string{CheckCommand, CheckOutputs[1], "0"}
 	claim := ChecksReport([3]string{CheckCommand, "pass", "ok greeting"})
@@ -769,12 +771,6 @@ func checksStep(model string, turn int) (commands [][3]string, report string, ok
 	return nil, "", false
 }
 
-// ChecksTurn is what a checks model does in a later turn of its Run (a
-// send-back): its commands and its reply's checks report.
-func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok bool) {
-	return checksStep(model, turn)
-}
-
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.
 // A writer's step (delivery.ChecksGated: implement, fix, simplify) carries
@@ -783,7 +779,7 @@ func For(phase, model, runID string, fixed bool) Step {
 	step := forPhase(phase, model, runID, fixed)
 	if !step.Hang && (phase == "implement" || phase == "fix" || phase == "simplify") {
 		step.Checks = NoChecks
-		if commands, report, ok := checksStep(model, 0); ok && phase == "implement" {
+		if commands, report, ok := ChecksTurn(model, 0); ok && phase == "implement" {
 			step.Commands, step.Checks = commands, report
 		}
 	}

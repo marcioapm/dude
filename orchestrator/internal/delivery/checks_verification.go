@@ -15,8 +15,8 @@ import (
 func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
 	var payload []byte
 	err := tx.QueryRow(ctx, `SELECT e.payload FROM events e JOIN runs r ON r.id=e.run_id
-  WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type='run.checks.judged'
-   AND ($2=0 OR r.attempt=$2) ORDER BY e.cursor DESC LIMIT 1`, st.TaskID, st.Attempt).Scan(&payload)
+  WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
+   AND ($2=0 OR r.attempt=$2) ORDER BY e.cursor DESC LIMIT 1`, st.TaskID, st.Attempt, EvRunChecksJudged).Scan(&payload)
 	if db.IsNotFound(err) {
 		return "", nil
 	}
