@@ -769,6 +769,7 @@ class FakeGitHub:
                     "mergeable_state": "dirty" if self.github._conflicting(pr) else "clean",
                     "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
                     "body": pr.body,
+                    "comments": len([c for c in pr.comments if not c.get("path")]),
                     "user": {"login": pr.author, "type": "Bot" if pr.author.endswith("[bot]") else "User"},
                 }
 
@@ -1199,8 +1200,12 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
                     return self._send(200, self.github.pulls[int(m[1])].reviews)
                 if m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path):
+                    # Paged as GitHub pages it: dude reads a long conversation's last pages.
+                    from urllib.parse import parse_qs
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    per_page, page = min(int(q.get("per_page", 30)), 100), max(int(q.get("page", 1)), 1)
                     comments = [c for c in self.github.pulls[int(m[1])].comments if not c["path"]]
-                    return self._send(200, after_since(comments))
+                    return self._send(200, after_since(comments)[(page - 1) * per_page:page * per_page])
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/comments", path):
                     comments = [c for c in self.github.pulls[int(m[1])].comments if c["path"]]
                     return self._send(200, after_since(comments))

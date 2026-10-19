@@ -5,8 +5,9 @@ repository is on the local stand-in GitHub (`fake_github.py`). Told to by
 a message's "tool:" lines, it searches that repository's pull requests
 with `github_search`, reads the one it found with `github_pull_request`
 (its number taken from the search's answer), and says what it read: the
-pull request's title reaches the session's visible answer, quoted as
-external text, while no event keeps what GitHub said.
+pull request's title, its open thread and a person's comment on its
+conversation reach the session's visible answer, quoted as external text,
+while no event keeps what GitHub said.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     secret_words = "Only the reviewer named Quillon wrote this sentence"
     fake_github.review(1, "COMMENTED", body=secret_words, reviewer="quillon")
     fake_github.comment(1, "Keep the accent on olá.", author="ana", path="greet.py")
+    fake_github.comment(1, "Ship it, but the metric name is wrong.", author="dee", path=None)
     fake_github.open_issue("Rename the greeting module", "Unrelated to Portuguese.")
 
     session = client.post("/v1/brainstorms", {"title": "Greetings", "projects": [
@@ -52,12 +54,13 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
         f'tool: github_pull_request {{"repo": "{slug}", "number": {{{{last.items.0.number}}}}, "files": ["greet.py"]}}',
         'tool: say {"text": "Found: {{last.pullRequest.title}} changing {{last.files.0.path}}"}',
         'tool: say {"text": "Open thread by {{last.unresolvedThreads.0.comments.0.author}} on {{last.unresolvedThreads.0.path}}"}',
+        'tool: say {"text": "Conversation: {{last.comments.0.author}} said {{last.comments.0.body}}"}',
     ]
     # The agent is running, so the message is its next input (200), not a new Run (201).
     resp = client.post(f"/v1/brainstorms/{session}/chat", {"text": "\n".join(lines)})
     assert resp.status_code == 200, resp.text
     answer = wait_until(lambda: "\n".join(_said(client, session)[said:]) if any(
-        "Open thread by" in t for t in _said(client, session)[said:]) else None, timeout=60, message="the agent never said what it read")
+        "Conversation:" in t for t in _said(client, session)[said:]) else None, timeout=60, message="the agent never said what it read")
 
     assert "dude github_" not in answer, answer  # no tool failed
     found = next(line for line in answer.splitlines() if line.startswith("Found:"))
@@ -66,6 +69,10 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     assert "greet.py" in found, found
     thread = next(line for line in answer.splitlines() if line.startswith("Open thread by "))
     assert thread.startswith("Open thread by ⟦external ") and "⟧ana⟦/external " in thread and "greet.py" in thread, thread
+    # The conversation comment, which github_issue could not read without Issues: Read.
+    talk = next(line for line in answer.splitlines() if line.startswith("Conversation: "))
+    assert talk.startswith("Conversation: ⟦external ") and "⟧dee⟦/external " in talk, talk
+    assert " said ⟦external " in talk and "⟧Ship it, but the metric name is wrong.⟦/external " in talk, talk
 
     events = client.events(sessionId=session, limit=1000)
     reads = [e["payload"] for e in events if e["eventType"] == "github.read"]
