@@ -312,6 +312,89 @@ func TestASessionAnswerWithImagesAppliesTheModelSwap(t *testing.T) {
 	}
 }
 
+// refuseEvent makes Postgres refuse every insert of an event of type typ
+// for the rest of the test. Each test has its own database (dbtest).
+func (s *sessionWorld) refuseEvent(typ string) {
+	s.t.Helper()
+	mustExec(s.t, s.owner, `CREATE FUNCTION refuse_event() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.event_type = TG_ARGV[0] THEN
+				RAISE EXCEPTION 'event refused by the test';
+			END IF;
+			RETURN NEW;
+		END $$`)
+	mustExec(s.t, s.owner, `CREATE TRIGGER refuse_event BEFORE INSERT ON events FOR EACH ROW
+		EXECUTE FUNCTION refuse_event('`+typ+`')`)
+}
+
+// nothingWrittenFor says a refused message left no trace of itself: no
+// directive on any of the session's Runs, att unsent, and no event showing
+// att.
+func (s *sessionWorld) nothingWrittenFor(session, att string) {
+	s.t.Helper()
+	if n := s.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id WHERE r.session_id = $1`, session); n != 0 {
+		s.t.Errorf("%d directives left behind", n)
+	}
+	if n := s.count(`SELECT count(*) FROM attachments WHERE id = $1 AND directive_id IS NULL AND attached_at IS NULL`, att); n != 1 {
+		s.t.Errorf("%s was left attached to a directive", att)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1
+		AND payload->'attachments' @> jsonb_build_array(jsonb_build_object('id', $2::text))`, session, att); n != 0 {
+		s.t.Errorf("%d events showing %s left behind", n, att)
+	}
+}
+
+// A session's first message with an image whose start fails at its last
+// write, session.briefed (after the Run, its run.created, the image
+// directive, the attachment and the chat.message), leaves none of them.
+func TestAFailedFreshAgentStartLeavesNoRunDirectiveOrImage(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id := s.session()
+	s.uploadToSession(b, "att_first", id, "first.png", screenshot)
+	s.refuseEvent(delivery.EvSessionBriefed)
+	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_first"}})
+	if status < 500 {
+		t.Fatalf("answered %d %v, want a server error", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("%d Runs left behind", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type IN ('run.created', 'session.briefed', 'chat.message')`, id); n != 0 {
+		t.Errorf("%d run.created, session.briefed or chat.message events left behind", n)
+	}
+	s.nothingWrittenFor(id, "att_first")
+}
+
+// A model swap for a message with an image that fails at its last write,
+// session.model.applied (after the old agent is aborted and the fresh one
+// is started with the image), leaves the old agent live and untouched and
+// no fresh agent, directive, attachment or event.
+func TestAFailedModelSwapLeavesTheOldAgentAndNoImage(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	gpt := s.tierOn("Sol", "gpt-6-sol")
+	id, run, _ := s.liveSession()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": nil})
+	s.uploadToSession(b, "att_swap", id, "swap.png", screenshot)
+	events := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id)
+	s.refuseEvent(delivery.EvSessionModelApplied)
+	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
+	if status < 500 {
+		t.Fatalf("answered %d %v, want a server error", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+		t.Errorf("%d Runs, want only the old agent", n)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND control = 'none' AND ended_at IS NULL`, run); n != 1 {
+		t.Errorf("the old agent was not left live")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id); n != events {
+		t.Errorf("%d session events, want the %d before the message", n, events)
+	}
+	s.nothingWrittenFor(id, "att_swap")
+}
+
 // A message with images an ended agent never read goes to the session's
 // next live agent with its images: Chat shows them on the handed-on
 // message, and the next agent's lux input has them.
