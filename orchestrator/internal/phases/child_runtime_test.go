@@ -8,10 +8,52 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func childInstructions(t *testing.T, spec lux.Spec) string {
+	t.Helper()
+	if spec.Init == nil {
+		t.Fatal("child spec has no instruction init")
+	}
+	dir := t.TempDir()
+	script := strings.ReplaceAll(spec.Init.Script, "/workspace", dir)
+	runInit(t, dir, script)
+	agents, _ := readBack(t, dir)
+	return agents
+}
+
+func assertChildContract(t *testing.T, agents string) {
+	t.Helper()
+	if !strings.Contains(agents, "## Independent Report Child\n") {
+		t.Fatal("child instruction file lacks independent-child contract")
+	}
+	allowed := map[string]bool{}
+	for _, tool := range delivery.ChildTools {
+		allowed[tool] = true
+	}
+	forbiddenTools := map[string]bool{}
+	for _, tools := range delivery.InstructionTools {
+		for _, forbidden := range tools {
+			if !allowed[forbidden] {
+				forbiddenTools[forbidden] = true
+			}
+		}
+	}
+	var forbiddenNames []string
+	for name := range forbiddenTools {
+		forbiddenNames = append(forbiddenNames, name)
+	}
+	slices.Sort(forbiddenNames)
+	for _, forbidden := range forbiddenNames {
+		if strings.Contains(agents, forbidden) {
+			t.Errorf("child instruction file advertises %s", forbidden)
+		}
+	}
+}
 
 func TestChildRuntimeWriterFence(t *testing.T) {
 	w := newResumeWorld(t)
@@ -458,6 +500,7 @@ func TestChildReportSpec(t *testing.T) {
 			if spec.Git != nil && spec.Git.Push != nil {
 				t.Fatal("report child got push authority")
 			}
+			assertChildContract(t, childInstructions(t, spec))
 			for _, forbidden := range []string{"ask_person", "request_repository", "request_machine", "create_task"} {
 				if strings.Contains(spec.Workload.Prompt, forbidden) {
 					t.Fatalf("child prompt advertises %s", forbidden)
@@ -545,6 +588,72 @@ func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
 	if sessionID != nil || taskID == nil || *taskID != w.run.TaskID {
 		t.Fatalf("task artifact ownership: session=%v task=%v", sessionID, taskID)
 	}
+}
+
+func TestChildResumeSpecReturnsNoInitAndTheChildPromptOverride(t *testing.T) {
+	w := newResumeWorld(t)
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	w.s.Agent.ToolsURL = "http://tools.test"
+	w.s.Agent.ToolsService = true
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,phase='investigate',role='investigator',child_profile='investigator',child_capabilities='{}',child_prompt='Investigate the exact regression.',lux_run_id=NULL WHERE id=$1`, w.run.ID)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator',jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+	r := w.run
+	r.SourceKind, r.Phase, r.Role, r.Attempt = "task_conductor", "investigate", "investigator", 1
+	stored := lux.StoredSpec{Image: lux.Image{Ref: "test/image:latest"}}
+	resumed, _, _, _, err := w.s.spec(w.ctx, r, &stored, chosenImage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Init != nil {
+		t.Fatal("resume sent a replacement init instead of retaining the stored spec")
+	}
+	if !strings.Contains(resumed.Workload.Prompt, "Investigate the exact regression.") {
+		t.Fatal("resume spec lacks child prompt override")
+	}
+}
+
+func TestRestartedChildKeepsItsInstructionContractAndPrompt(t *testing.T) {
+	w := newResumeWorld(t)
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	w.s.Agent.ToolsURL = "http://tools.test"
+	w.s.Agent.ToolsService = true
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('run_parent',$1,$2,$3,1,'conductor','running')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state) VALUES('wf_child_restart',$1,$2,'task.delivery','child-restart','waiting','conductorDecision','{"attempt":1}')`, w.run.Org, w.run.TaskID)
+	w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',phase='investigate',role='investigator',child_profile='investigator',child_capabilities='{}',child_prompt='Investigate the exact regression.',lux_run_id=NULL WHERE id=$1`, w.run.ID)
+	w.exec(`UPDATE runs SET status='completed',ended_at=now() WHERE id=$1`, w.run.ID)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator',jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+	var restarted string
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		var err error
+		restarted, err = delivery.RestartChildTx(w.ctx, tx, w.run.Org, w.run.TaskID, w.run.ID, "restart-key")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := w.s.due(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r phaseRun
+	for _, loaded := range runs {
+		if loaded.ID == restarted {
+			r = loaded
+			break
+		}
+	}
+	if r.ID == "" {
+		t.Fatalf("replacement %s absent from production run loader", restarted)
+	}
+	spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(spec.Workload.Prompt, "Investigate the exact regression.") {
+		t.Fatal("restarted child prompt override absent")
+	}
+	assertChildContract(t, childInstructions(t, spec))
 }
 
 func TestChildRuntimeIsolation(t *testing.T) {

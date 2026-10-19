@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -455,8 +454,7 @@ func TestAConductorsSyncAcrossTwoOwnersCarriesEachOwnersToken(t *testing.T) {
 	task := w.task()
 	app := w.twoOwners(task)
 	cond := w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.wokenWith(task, "after implement")
 	r := runFor(w, w.luxRunOf(cond))
 	if r == nil || len(r.SyncCredentials) == 0 {
@@ -524,8 +522,7 @@ func TestAConductorsSyncCarriesAFreshAppToken(t *testing.T) {
 	app := w.asApp()
 	task := w.task()
 	cond := w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.wokenWith(task, "after implement")
 	r := runFor(w, w.luxRunOf(cond))
 	if r == nil || len(r.SyncCredentials) == 0 {

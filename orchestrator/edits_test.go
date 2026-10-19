@@ -42,8 +42,7 @@ func newEditing(t *testing.T) *editing {
 	e := &editing{world: w, task: w.task()}
 	e.cond = w.talk(e.task)
 	e.branch = delivery.BranchFor(e.task, 1)
-	w.must(e.task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(e.task) == delivery.PointImplemented })
+	w.implemented(e.task)
 	return e
 }
 
@@ -384,8 +383,7 @@ func TestALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
 	w.lux.NoSyncModes = true
 	e := &editing{world: w, task: w.task()}
 	e.cond = w.talk(e.task)
-	w.must(e.task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(e.task) == delivery.PointImplemented })
+	w.implemented(e.task)
 	w.wokenWith(e.task, "after implement")
 	w.until("read-only", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND checkout_read_only IS NOT NULL`, e.cond) == 1

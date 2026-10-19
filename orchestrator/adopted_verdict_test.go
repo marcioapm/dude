@@ -22,7 +22,7 @@ func (w *world) testingAdopted(model string) (string, int) {
 	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
 	mustExec(w.t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets", "it says goodbye"]' WHERE id = $1`, wi)
 	w.startDelivery(wi)
-	w.until("waiting on the adopted pull request", func() bool { return w.waitingOnPR(wi) })
+	w.agentsDone(wi, "waiting on the adopted pull request", func() bool { return w.waitingOnPR(wi) })
 	return wi, n
 }
 

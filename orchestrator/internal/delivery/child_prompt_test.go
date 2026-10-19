@@ -21,12 +21,11 @@ func TestChildResultPromptGolden(t *testing.T) {
 }
 
 func TestChildToolsContractGolden(t *testing.T) {
-	got := render(mustTemplate("contracts/child-tools"), PromptInput{Child: true, Tools: true, CLI: true})
+	got := render(mustTemplate("contracts/child-tools"), InstructionsInput{Child: true, Tools: true, CLI: true}.data("investigator"))
 	if *updateGoldens {
-		if err := os.WriteFile("testdata/child-tools.golden", []byte(got), 0o644); err != nil {
+		if err := os.WriteFile("testdata/child-tools.golden", []byte(got+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return
 	}
 	want, err := os.ReadFile("testdata/child-tools.golden")
 	if err != nil {

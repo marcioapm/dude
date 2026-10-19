@@ -134,8 +134,7 @@ func TestAScopedRoundJudgesEveryAttemptedFinding(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
 	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	var a, run string
@@ -173,8 +172,7 @@ func TestARoundsRequiredReviewerJudgesAFindingWithoutItsOwn(t *testing.T) {
 		}
 		return scripted(spec)
 	}
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	var a string
