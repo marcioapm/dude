@@ -2,14 +2,17 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // waitingOnPR says the task's delivery is parked on its pull requests.
@@ -196,6 +199,147 @@ func TestATestAtThePullRequestWaitThatKeepsFailingEscalates(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Errorf("%d pull requests", len(w.gh.Pulls()))
+	}
+}
+
+// firstReviewAfter makes the first review Run after arm is called raise a
+// finding; every other phase is the scripted agent's.
+func (w *world) firstReviewAfter() (arm func()) {
+	var mu sync.Mutex
+	armed, first := false, ""
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		run := fmt.Sprint(labels["dude.run"])
+		mu.Lock()
+		if armed && first == "" && labels["dude.phase"] == "review" {
+			first = run
+		}
+		raise := run == first
+		mu.Unlock()
+		if raise {
+			return fakelux.Behaviour{Reply: "One problem:\n\n```yaml\n" + fakeagent.Finding + "```\n"}
+		}
+		return scripted(spec)
+	}
+	return func() { mu.Lock(); armed = true; mu.Unlock() }
+}
+
+// The incident (ABS-28): the conductor reviewed the open pull request at
+// its wait, sent the finding to a fix at after_review, and steered the
+// fix's review on. The simplifier and the tester ran as for any review
+// loop, and the delivery went back to the pull request already open for
+// its only repository: no Open or Draft asked of it, no second pull
+// request, and the reviewer of the older head asked again.
+func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraft(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	arm := w.firstReviewAfter()
+	task := w.prOpen(w.task(), prAt{test: true})
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.gh.Review(1, "jerv", "COMMENTED")
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	phases := len(w.phasesRun(task))
+	arm()
+
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	// next at each review round the loop asks about (the fix's, the
+	// simplifier's diff's), until the delivery waits or asks before the PR.
+	w.until("waiting on the pull request, or the decision before it", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return w.waitingOnPR(task) && w.phaseRuns(task, "test") > 0
+	})
+	if point := w.decisionAt(task); point != "" {
+		t.Fatalf("parked on the conductor's %q decision, want waiting on the open pull request again\n%s", point, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+		task, delivery.EvDecisionAwaited, delivery.PointBeforePR); n != 0 {
+		t.Errorf("%d decisions awaited before the pull request", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'`, task); n != 0 {
+		t.Errorf("%d questions asked", n)
+	}
+	got := w.phasesRun(task)[phases:]
+	if !slices.Contains(got, "fix") || !slices.Contains(got, "simplify") || !slices.Contains(got, "test") {
+		t.Errorf("phases after the wait: %v, want the fix, the simplifier and the test", got)
+	}
+	if got := w.verdicts(task); len(got) == 0 || got[len(got)-1] != "pass" {
+		t.Errorf("verdicts %v, want the last passed", got)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
+	}
+	head := w.gh.SHA(branch)
+	if head == before {
+		t.Fatal("the pull request's head did not move")
+	}
+	if e := w.rerequests(task); len(e) != 1 || e[0]["head"] != head || !slices.Equal(strs(e[0]["reviewersRequested"]), []string{"jerv"}) {
+		t.Errorf("re-requests %v, want jerv asked for head %s", e, head)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'actingOnPr'`, task); n != 0 {
+		t.Error("waiting again still acting on the pull request")
+	}
+}
+
+// The same steering, with a fix that changes web for the first time: web's
+// work has no pull request, so the delivery still stops for the Open or
+// Draft before opening one there.
+func TestWorkPastTheReviewLoopAsksOpenOrDraftForARepositoryWithoutAnOpenPullRequest(t *testing.T) {
+	w := conducting(t)
+	arm := w.firstReviewAfter()
+	inLoop := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := inLoop(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	task := w.prOpen(w.task(), prAt{})
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, "repo_web_"+w.org, w.org, w.project)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+		VALUES ($1, $2, $3, 'write')`, w.org, task, "repo_web_"+w.org)
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	arm()
+
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the decision before the pull request, or waiting", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return w.waitingOnPR(task)
+	})
+	if point := w.decisionAt(task); point != delivery.PointBeforePR {
+		t.Fatalf("at %q, want the decision before the pull request\n%s", point, w.describeRuns())
+	}
+	if n := len(w.web.Pulls()); n != 0 {
+		t.Errorf("%d pull requests on web before the Open or Draft", n)
 	}
 }
 
