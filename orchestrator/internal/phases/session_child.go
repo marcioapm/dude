@@ -66,7 +66,7 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		if note != "" {
 			in.Prompt += "\n\n" + note
 		}
-		in.Instructions = delivery.Instructions(delivery.RoleForPhase[r.Phase], "", delivery.PromptInput{Child: true, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService}.InstructionsInput())
+		in.Instructions = delivery.Instructions(delivery.RoleForPhase[r.Phase], "", delivery.PromptInput{Child: true, SessionChild: true, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService}.InstructionsInput())
 		for _, repo := range repos {
 			in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true, Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 		}
