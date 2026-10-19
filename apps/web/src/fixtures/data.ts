@@ -320,6 +320,7 @@ export const SETTINGS: SettingsResponse = {
     maxReviewIterations: { value: 5, source: "organization" },
     maxAttemptsPerFinding: { value: 3, source: "organization" },
     maxPrFixIterations: { value: 5, source: "organization" },
+    checksFixRounds: { value: 2, source: "organization" },
     simplify: { value: true, source: "organization" },
     test: { value: false, source: "organization" },
     parkAfterMinutes: { value: 10, source: "organization" },

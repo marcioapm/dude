@@ -195,6 +195,8 @@ export const deliveryPolicySchema = z
     /** Fix attempts one finding may survive before it is escalated on its own. */
     maxAttemptsPerFinding: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
+    /** Times an implementer's, fixer's or simplifier's unbacked checks report is sent back before a person decides. */
+    checksFixRounds: z.number().int().min(0).max(20),
     simplify: z.boolean(),
     /** A browser tester exercises the change and publishes a video, before the pull request. */
     test: z.boolean(),

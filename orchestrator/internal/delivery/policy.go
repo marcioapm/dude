@@ -44,6 +44,9 @@ type Policy struct {
 	// PR fix rounds before escalating. Separate from the review bound: a person
 	// asking for changes is not the same failure as an agent finding them.
 	MaxPRFixIterations int `json:"maxPrFixIterations"`
+	// Times a gated phase's unbacked checks report is sent back to its
+	// agent before a person decides (ChecksGated); 0 asks a person at once.
+	ChecksFixRounds int `json:"checksFixRounds"`
 	// Minutes an agent waiting on a person stays live before it is parked
 	// (stopped, its conversation kept, resumed by the answer). Long enough
 	// for someone at their desk to answer while it is still running.
@@ -80,12 +83,28 @@ func DefaultPolicy() Policy {
 		// every criterion shown working, or a person's waiver.
 		Test:                 true,
 		MaxPRFixIterations:   3,
+		ChecksFixRounds:      DefaultChecksFixRounds,
 		ParkAfterMinutes:     10,
 		IdleNudgeMinutes:     0, // off
 		ConductorWarmMinutes: 5,
 		ConductorEditLines:   60,
 		ConductorEditFiles:   3,
 	}
+}
+
+// DefaultChecksFixRounds is Policy.ChecksFixRounds when no layer sets it.
+const DefaultChecksFixRounds = 2
+
+// MaxChecksFixRounds bounds Policy.ChecksFixRounds, as the settings API does.
+const MaxChecksFixRounds = 20
+
+// ChecksRounds is ChecksFixRounds as it applies: a stored value out of
+// range, written by hand, is the default.
+func (p Policy) ChecksRounds() int {
+	if p.ChecksFixRounds < 0 || p.ChecksFixRounds > MaxChecksFixRounds {
+		return DefaultChecksFixRounds
+	}
+	return p.ChecksFixRounds
 }
 
 // Phases.

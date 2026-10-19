@@ -575,7 +575,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
     form.blockingSeverities.length > 0 &&
     [form.maxReviewIterations, form.maxAttemptsPerFinding, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
       form.conductorEditFiles].every((n) => Number.isInteger(n) && n >= 1) &&
-    [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0);
+    [form.maxPrFixIterations, form.checksFixRounds, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0);
 
   return (
     <form
@@ -613,6 +613,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         {number("maxReviewIterations", 1, 20, "Review → fix cycles before the owner is asked.", "Review rounds")}
         {number("maxAttemptsPerFinding", 1, 20, "Fixes one finding may survive before it is raised on its own.", "Attempts per finding")}
         {number("maxPrFixIterations", 0, 20, "Fixes for pull request comments before the owner is asked.", "Pull request fix rounds")}
+        {number("checksFixRounds", 0, 20, "Times an agent's checks report that its commands do not back is sent back before the owner is asked.", "Checks report rounds")}
         <SettingRow
           label="Simplify pass"
           help="After review, before the pull request."

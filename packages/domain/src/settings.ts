@@ -207,6 +207,7 @@ export const settingsPatchSchema = z
         maxReviewIterations: nullable(field("maxReviewIterations")),
         maxAttemptsPerFinding: nullable(field("maxAttemptsPerFinding")),
         maxPrFixIterations: nullable(field("maxPrFixIterations")),
+        checksFixRounds: nullable(field("checksFixRounds")),
         simplify: nullable(field("simplify")),
         test: nullable(field("test")),
         parkAfterMinutes: nullable(field("parkAfterMinutes")),
