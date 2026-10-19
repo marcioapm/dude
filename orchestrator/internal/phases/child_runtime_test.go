@@ -605,6 +605,8 @@ func TestSessionChildSpecUsesReadOnlyLinkedRepositoriesAndNoSecrets(t *testing.T
 	w.exec(`UPDATE organizations SET agent_egress='{api.example.test}' WHERE id=$1`, w.run.Org)
 	w.exec(`UPDATE machine_sizes SET is_default=false WHERE organization_id=$1`, w.run.Org)
 	w.exec(`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, is_default) VALUES ('machine_session', $1, 'session-medium', 4, 8192, 80, true)`, w.run.Org)
+	w.exec(`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, is_default) VALUES ('machine_raised', $1, 'session-large', 8, 16384, 160, false)`, w.run.Org)
+	w.exec(`UPDATE sessions SET agent_machine=jsonb_build_object('sizeId','machine_raised','moveId','move_session','askedBy','run_brainstorm','reason','OOM','at','2026-10-19T00:00:00Z') WHERE id='ssn_spec'`)
 	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
 	w.run = phaseRun{ID: "run_session_child", Org: w.run.Org, SessionID: "ssn_spec", Phase: delivery.PhaseInvestigate, Role: delivery.RoleForPhase[delivery.PhaseInvestigate], SourceKind: string(delivery.ChildParentSession), Status: statusRunning}
 	w.s.Agent.ToolsURL = "http://tools.test"
@@ -635,7 +637,7 @@ func TestSessionChildSpecUsesReadOnlyLinkedRepositoriesAndNoSecrets(t *testing.T
 	if sp.Network == nil || !slices.Contains(sp.Network.Egress, lux.EgressRule{Host: "api.example.test"}) {
 		t.Fatalf("session child egress: %v", sp.Network)
 	}
-	if sp.Resources == nil || sp.Resources.CPUs != 4 || sp.Resources.Memory != 8192<<20 || sp.Resources.Disk != 80<<30 {
+	if sp.Resources == nil || sp.Resources.CPUs != 8 || sp.Resources.Memory != 16384<<20 || sp.Resources.Disk != 160<<30 {
 		t.Fatalf("session child machine: %+v", sp.Resources)
 	}
 	if sp.Labels["dude.harness"] != delivery.HarnessOpenCode || sp.Labels["dude.model"] != "gpt-6-sol" {
