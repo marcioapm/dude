@@ -133,7 +133,11 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, error) {
 	d := checksDecision{Verdicts: []checksVerdict{}}
 	var reply string
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { var err error; reply, err = delivery.RunReplyTx(ctx, tx, r.ID); return err }); err != nil {
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var err error
+		reply, err = delivery.RunReplyTailTx(ctx, tx, r.ID, checksReplyMax)
+		return err
+	}); err != nil {
 		return d, err
 	}
 	checks, ok := delivery.ParseChecks(reply)
@@ -211,6 +215,10 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 // (capOutput: its first and last 2 KiB, so a command's last lines, where
 // it says how it ended, are kept).
 const (
+	// checksReplyMax is how much of the end of the agent's reply is read
+	// for its last report: far more than a report, whose own cap in the
+	// context is checksReportMax.
+	checksReplyMax   = 256 << 10
 	checksReportMax  = 16 << 10
 	checksNotesMax   = 8 << 10
 	checksChangesMax = 16 << 10

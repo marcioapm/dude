@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -161,6 +162,54 @@ func (w *harnessWorld) countEvents(typ string) int {
 	}
 	return n
 }
+
+// The gate reads only the end of a long reply: the newest report after
+// more than checksReplyMax of earlier text is judged, and a malformed
+// newest report is never replaced by an earlier valid one.
+func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
+	filler := strings.Repeat("working on it\n", 2<<10)
+	older := func(w *harnessWorld) {
+		checksReply(w, passingChecks)
+		for size := 0; size <= checksReplyMax; size += len(filler) + 1 {
+			checksReply(w, filler)
+		}
+	}
+	t.Run("the newest report", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		older(w)
+		checksReply(w, "Done.")
+		checksReply(w, strings.ReplaceAll(passingChecks, "verify", "make check"))
+		var reply string
+		if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+			reply, err = delivery.RunReplyTailTx(context.Background(), tx, w.run.ID, checksReplyMax)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(reply) > checksReplyMax+len(filler)+1 || strings.Contains(reply, "command: verify") {
+			t.Fatalf("read %d bytes, the earliest report among them: %v", len(reply), strings.Contains(reply, "command: verify"))
+		}
+		fake := &checksFake{backed: judge.Yes, missing: judge.No}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || !got.Verified || fake.calls != 2 || got.Verdicts[0].Command != "make check" {
+			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		}
+	})
+	t.Run("a malformed newest report", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		older(w)
+		checksReply(w, passingChecks)
+		checksReply(w, "checks: [broken")
+		fake := &checksFake{backed: judge.Yes, missing: judge.No}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || got.Verified || fake.calls != 0 {
+			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		}
+	})
+}
+
 func TestChecksNonGatedPhaseDeclaration(t *testing.T) {
 	if delivery.ChecksGated[delivery.PhaseReview] {
 		t.Fatal("review is gated")

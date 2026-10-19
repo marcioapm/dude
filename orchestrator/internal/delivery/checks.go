@@ -1,8 +1,10 @@
 package delivery
 
 import (
+	"context"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -59,4 +61,33 @@ func ParseChecks(reply string) ([]Check, bool) {
 		}
 	}
 	return doc.Checks, true
+}
+
+// RunReplyTailTx is the end of what a Run's agent said, joined as
+// RunReplyTx joins it: its newest whole messages, up to the first that
+// reaches budget bytes counted from the newest. The last report is in it
+// unless more than budget bytes followed it; then ParseChecks finds none
+// and the gate fails closed.
+func RunReplyTailTx(ctx context.Context, tx pgx.Tx, runID string, budget int) (string, error) {
+	rows, err := tx.Query(ctx, `SELECT t FROM (
+			SELECT cursor, payload->>'text' AS t,
+				sum(COALESCE(octet_length(payload->>'text'), 0) + 1) OVER (ORDER BY cursor DESC) AS upto,
+				COALESCE(octet_length(payload->>'text'), 0) + 1 AS own
+			FROM events WHERE run_id = $1 AND event_type = 'agent.message') m
+		WHERE upto - own < $2 ORDER BY cursor`, runID, budget)
+	if err != nil {
+		return "", err
+	}
+	texts, err := pgx.CollectRows(rows, pgx.RowTo[*string])
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, t := range texts {
+		if t != nil {
+			b.WriteString(*t)
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }
