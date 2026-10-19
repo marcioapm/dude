@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -63,12 +64,16 @@ var InstructionTools = map[string][]string{
 	RoleBrainstorm: {"ask_person", "search_memory", "remember", "request_machine"},
 }
 
+// ChildTools are the tools an independent report child may call.
+var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
+
 // instructionData is what every instruction template is given.
 type instructionData struct {
 	InstructionsInput
 	Role string
 	// Which of the tools dude.md names this Run has.
-	Ask, Event, CreateTask, Repository, RunDiff, SyncBase bool
+	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, Remember, RequestMachine bool
+	ChildToolNames                                                                  string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
 }
@@ -82,11 +87,15 @@ func (in InstructionsInput) data(role string) instructionData {
 	has := map[string]bool{}
 	if in.Tools {
 		for _, t := range InstructionTools[toolRole] {
-			has[t] = true
+			if !in.Child || slices.Contains(ChildTools, t) {
+				has[t] = true
+			}
 		}
 	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
+		Remember: has["remember"], RequestMachine: has["request_machine"],
+		ChildToolNames:   strings.Join(ChildTools[:len(ChildTools)-1], ", ") + ", and " + ChildTools[len(ChildTools)-1],
 		ExternalTextNote: ExternalTextNote}
 }
 
@@ -162,7 +171,7 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 		sections = append(sections, render(roleNotesTmpl, c))
 	}
 	if in.Child {
-		sections = append(sections, render(childToolsTmpl, in))
+		sections = append(sections, render(childToolsTmpl, d))
 	}
 	return strings.Join(sections, "\n\n") + "\n"
 }
