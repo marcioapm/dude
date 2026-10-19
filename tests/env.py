@@ -22,6 +22,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 
 import boto3
 import psycopg
@@ -222,6 +224,11 @@ class TestEnvironment:
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     # Access mode's edge and backend, when a suite started them (start_access).
     _access_procs: list = field(default_factory=list, repr=False)
+    # The fake judgement proxy answers Backed yes unless the context has a
+    # recorded error; Missing is no. It is local and deterministic, never a
+    # real model call.
+    judge_server: ThreadingHTTPServer | None = field(default=None, repr=False)
+    judge_thread: threading.Thread | None = field(default=None, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -313,7 +320,37 @@ class TestEnvironment:
             time.sleep(0.05)
         self.lux_url = f"http://{addr_file.read_text()}"
 
+    def _start_judge(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("content-length", "0"))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                messages = body.get("messages", [])
+                question = " ".join(str(m.get("content", "")) for m in messages)
+                context = question.lower()
+                decision = "no" if "missing" in question.lower() else "yes"
+                if "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
+                    # Judge the latest recorded completion: an earlier
+                    # failed turn is not evidence against the corrected turn.
+                    last = context.rsplit("status:", 1)[-1]
+                    if "error" in last or "exit code 1" in last or "exit status 1" in last:
+                        decision = "no"
+                answer = json.dumps({"decision": decision, "confidence": 0.99, "reasoning": "scripted e2e judgement"})
+                response = json.dumps({"model": "judge-e2e", "choices": [{"message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+            def log_message(self, *_args):
+                pass
+        self.judge_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.judge_thread = threading.Thread(target=self.judge_server.serve_forever, daemon=True)
+        self.judge_thread.start()
+        self.judge_url = f"http://127.0.0.1:{self.judge_server.server_port}/v1"
+
     def _start_orchestrator(self) -> None:
+        self._start_judge()
         self.orchestrator_proc = subprocess.Popen(
             [str(REPO_ROOT / "orchestrator" / "bin" / "dude-orchestrator")],
             env={
@@ -330,7 +367,7 @@ class TestEnvironment:
                 # No real agent credentials in the suite; fake models only,
                 # and memory searched by words. The URL is a host nothing
                 # answers: what a Run's network allows for its model.
-                "DUDE_LLM_URL": "https://llm.dude.test/v1",
+                "DUDE_LLM_URL": self.judge_url,
                 "DUDE_LLM_KEY": "",
                 "DUDE_EMBEDDINGS_URL": "off",
                 # Only the contract gateway (or an explicit local topology smoke)
