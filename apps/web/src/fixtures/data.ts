@@ -102,6 +102,11 @@ const TASK_BASE = {
   people: [ref("u_marcio"), ref("u_ana")],
   decider: "policy" as const,
   awaitingDecision: null,
+  resolution: null,
+  duplicateOf: null,
+  archivedAt: null,
+  archivedBy: null,
+  closedBy: null,
   createdAt: iso(2 * 24 * 60 * MIN),
   updatedAt: iso(5 * MIN),
 };

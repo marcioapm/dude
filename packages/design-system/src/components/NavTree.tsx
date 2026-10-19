@@ -387,6 +387,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     return (
       <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"])}>
         {chevron}
+        <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
         {row.counts && row.counts.needs_you > 0 ? <NeedsYouCount count={row.counts.needs_you} className={styles["count"]} /> : null}
         <span className={styles["epicCount"]}>{e.tasks.length}</span>

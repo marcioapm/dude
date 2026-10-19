@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
-import { NavTree } from "../../components/NavTree.tsx";
+import { NavTree, NavTreeRow } from "../../components/NavTree.tsx";
 import { SidebarLink, SidebarProfile, Sidebar } from "../../components/Sidebar.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
@@ -48,10 +48,20 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree"
         title="NavTree"
-        note="Project → Epic → Task → Session, rendered flat with aria-level so keyboard movement is index arithmetic. Each level has its own row grammar: projects are sticky small-caps headers, epics carry the layers glyph and a total, tasks lead with a status dot and a mono key and trail with who is working (agent squares) and who is involved (human circles), sessions sit on a guide line behind a role avatar. Earlier Runs fold into one 'Attempt n' row each. Click a chevron or use ←→ to fold; a needs-you row opens by default down to the asking session, and a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
+        note="Project → Epic → Task → Session, rendered flat with aria-level so keyboard movement is index arithmetic. Each level has its own row grammar: projects are sticky small-caps headers, epics lead with the layers glyph and carry a total, tasks lead with a status dot and a mono key and trail with who is working (agent squares) and who is involved (human circles), sessions sit on a guide line behind a role avatar. Earlier Runs fold into one 'Attempt n' row each. Click a chevron or use ←→ to fold; a needs-you row opens by default down to the asking session, and a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
       >
         <Panes mode={mode} surface>
           <TreeDemo />
+        </Panes>
+      </Block>
+
+      <Block
+        id="nav-tree-epics"
+        title="NavTree epic rows"
+        note="An epic leads with the layers glyph after its chevron, 14px, muted, lifted to secondary on hover and selection (muted falls under 4.5:1 on the washes); a task row never draws it. Open, folded with a needs-you count, selected, and one to hover; then the tree at 220px, where the people drop."
+      >
+        <Panes mode={mode} surface>
+          <EpicRowsDemo />
         </Panes>
       </Block>
 
@@ -157,6 +167,41 @@ function TreeDemo() {
       </div>
       <Caption>selected: {selected ? `${selected.kind} ${selected.id}` : "none"}</Caption>
     </Col>
+  );
+}
+
+/** Epic rows in each state, as single rows, then a narrow tree. */
+function EpicRowsDemo() {
+  const epic = navProjects[0]!.epics![0]!;
+  const row = (expanded: boolean, needsYou: number): NavRow => ({
+    key: `epic:${epic.id}:${expanded}:${needsYou}`, ref: { kind: "epic", id: epic.id }, depth: 1, parentKey: null, expandable: true, expanded,
+    forced: false, node: epic, counts: { needs_you: needsYou, active: 1, ready: 0, failed: 0, waiting: 0, done: 0 }, triage: null, projectId: navProjects[0]!.id,
+  });
+  const states: ReadonlyArray<readonly [string, NavRow, boolean]> = [
+    ["open", row(true, 0), false],
+    ["folded, 2 need you", row(false, 2), false],
+    ["selected", row(false, 0), true],
+    ["hover me: the glyph lifts to secondary", row(false, 0), false],
+  ];
+  return (
+    <Row top>
+      <Col style={{ width: 300 }}>
+        {states.map(([label, r, selected]) => (
+          <div key={label}>
+            <Caption>{label}</Caption>
+            <div role="tree" aria-label={label}>
+              <NavTreeRow row={r} selected={selected} tabIndex={-1} onFocus={() => undefined} onKeyDown={() => undefined} onClick={() => undefined} onToggle={() => undefined} />
+            </div>
+          </div>
+        ))}
+      </Col>
+      <Col style={{ width: 220 }}>
+        <Caption>220px: the people drop, the glyph stays</Caption>
+        <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 360, overflow: "auto", width: 220, containerType: "inline-size" }}>
+          <NavTree projects={navProjects.slice(0, 1)} />
+        </div>
+      </Col>
+    </Row>
   );
 }
 

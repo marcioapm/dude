@@ -95,7 +95,8 @@ export const EventTypes = {
   /**
    * Start when unblocked ended without firing. Payload: `{ how, why, error? }`,
    * why `owner` | `started` | `owner_changed` | `unblocked_by_removal` |
-   * `failed` (its start failed for a reason other than a blocker: `error`).
+   * `closed` | `archived` | `failed` (its start failed for a reason other
+   * than a blocker: `error`).
    */
   TaskAutoStartCancelled: "task.auto_start_cancelled",
   /**
@@ -106,8 +107,8 @@ export const EventTypes = {
   /** Start when unblocked found a blocker still open at fire time. Payload: `{ by?, blockers }`. */
   TaskAutoStartRefused: "task.auto_start_refused",
   /**
-   * A start refused as blocked. Payload: `{ path, blockers }`. Makes
-   * refusals auditable; never shown as a line.
+   * A start refused. Payload: `{ path, reason: "archived" | "closed" | "blocked", blockers? }`
+   * (`blockers` for blocked). Makes refusals auditable; never shown as a line.
    */
   TaskStartRefused: "task.start_refused",
   /** A person started a blocked task anyway. Payload: `{ blockers: [{ key, status }], how, note? }`. */
@@ -117,6 +118,24 @@ export const EventTypes = {
    * when unblocked changed; a board or task page reads again.
    */
   RelationsChanged: "relations.changed",
+
+  // Lifecycle (docs/design/tracking-work.md, Epic 1): a person's decisions
+  // beside the status; the status move each makes is its own task.status_changed.
+  /**
+   * A person closed the task. Payload: `{ resolution, duplicateOf?, note?, handedOver?, removedRelations?, andArchived? }`
+   * (`duplicateOf` and the lists are task keys; `andArchived` when a task.archived {viaClose} follows in the same batch).
+   */
+  TaskClosed: "task.closed",
+  /** A person reopened it. Payload: `{ was }`, the resolution it had. */
+  TaskReopened: "task.reopened",
+  /** Archived. Payload: `{ viaEpic?, viaClose? }` (`viaEpic` the epic's id). */
+  TaskArchived: "task.archived",
+  /** Unarchived. Payload: `{ viaEpic? }`. */
+  TaskUnarchived: "task.unarchived",
+  /** An epic archived with its tasks. Payload: `{ epicId, title, tasks }`, `tasks` how many went with it. */
+  EpicArchived: "epic.archived",
+  /** An epic unarchived with the tasks archived with it. Payload: `{ epicId, title, tasks }`. */
+  EpicUnarchived: "epic.unarchived",
 
   // Brainstorm sessions: on the session (events.session_id), its members' alone.
   /** Payload: `{ title }`. */

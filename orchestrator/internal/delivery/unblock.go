@@ -68,11 +68,16 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 	if err := lockReleasesTx(ctx, tx, taskID); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT t.id, t.project_id, p.key_prefix || '-' || t.number,
+	// What it blocks, and what the tasks closed as its duplicates block:
+	// their blocking was handed to it (task_blocked_by, migration 158).
+	// ANY(ARRAY(...)) keeps the primary-key probe; an OR seq-scans.
+	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (t.project_id, t.number) t.id, t.project_id, p.key_prefix || '-' || t.number,
 			NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
 			EXISTS (SELECT 1 FROM task_auto_starts a WHERE a.task_id = t.id)
 		FROM task_relations r JOIN tasks t ON t.id = r.to_task_id JOIN projects p ON p.id = t.project_id
-		WHERE r.from_task_id = $1 AND r.kind = 'blocks' AND t.status = ANY($2::task_status[])
+		WHERE r.kind = 'blocks' AND t.status = ANY($2::task_status[])
+		  AND r.from_task_id = ANY (ARRAY(SELECT $1::text UNION ALL
+		      SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
 		ORDER BY t.project_id, t.number`, taskID, notStartedStatuses)
 	if err != nil {
 		return err
@@ -142,7 +147,9 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 // the merge (task, then delivery or task_auto_starts) against every start
 // path (delivery or task_auto_starts, then task) and deadlock.
 func lockReleasesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
-	rows, err := tx.Query(ctx, `SELECT to_task_id FROM task_relations WHERE from_task_id = $1 AND kind = 'blocks'
+	rows, err := tx.Query(ctx, `SELECT DISTINCT to_task_id FROM task_relations WHERE kind = 'blocks'
+		AND from_task_id = ANY (ARRAY(SELECT $1::text UNION ALL
+		    SELECT d.from_task_id FROM task_relations d WHERE d.to_task_id = $1 AND d.kind = 'duplicates'))
 		ORDER BY to_task_id`, taskID)
 	if err != nil {
 		return err
@@ -181,7 +188,8 @@ func unblockedLine(by, taskKey string, auto bool) string {
 
 // EndAutoStartTx ends the task's start when unblocked without firing it,
 // saying why (task.auto_start_cancelled): "owner", "started",
-// "owner_changed", "unblocked_by_removal", "failed". Nothing when none is set.
+// "owner_changed", "unblocked_by_removal", "failed", "closed", "archived".
+// Nothing when none is set.
 func EndAutoStartTx(ctx context.Context, tx pgx.Tx, org, taskID, why, actorType, actorID string) error {
 	_, err := endAutoStartTx(ctx, tx, org, taskID, "", why, actorType, actorID, nil)
 	return err
@@ -360,15 +368,18 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		return err
 	}
 	*claimed = generation
-	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text FROM tasks t
-		JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status); err != nil {
+	var put bool
+	if err := tx.QueryRow(ctx, `SELECT t.project_id, p.key_prefix || '-' || t.number, t.status::text,
+			COALESCE(task_start_refusal(t.id) IN ('archived', 'closed'), false)
+		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&projectID, &taskKey, &status, &put); err != nil {
 		return err
 	}
 	event := func(typ string, payload map[string]any) error {
 		return dudeEventTx(ctx, tx, org, projectID, taskID, typ, payload)
 	}
-	if !NotStarted(status) {
-		// Started some other way since: the request was consumed.
+	if !NotStarted(status) && !put {
+		// Started some other way since: the request was consumed. A closed
+		// or archived one is the guard's below, which says so.
 		return EndAutoStartTx(ctx, tx, org, taskID, "started", "", "")
 	}
 	by, pr, err := lastUnblock(ctx, tx, taskID)
@@ -389,7 +400,15 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	if _, err := LoadDelivery(ctx, tx, taskID); err != nil {
 		return err
 	}
-	err = RefuseBlockedTx(ctx, tx, taskID)
+	err = RefuseStartTx(ctx, tx, taskID)
+	if refused := lifecycleRefusal(err); refused != nil {
+		// A person closed or archived it: no request outlives that.
+		reason := StartRefusalReason(refused)
+		if err := RecordLifecycleRefusedTx(ctx, tx, org, taskID, "auto_start", reason, ledger.ActorSystem, "dude"); err != nil {
+			return err
+		}
+		return EndAutoStartTx(ctx, tx, org, taskID, reason, "", "")
+	}
 	if blocked, ok := AsBlocked(err); ok {
 		if _, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = NULL WHERE task_id = $1`, taskID); err != nil {
 			return err

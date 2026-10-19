@@ -673,9 +673,10 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 }
 
 func childToolAllowed(name string) bool {
-	switch name {
-	case "list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event":
-		return true
+	for _, allowed := range delivery.ChildTools {
+		if name == allowed {
+			return true
+		}
 	}
 	return false
 }
@@ -690,6 +691,9 @@ func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused re
 		}
 		if refused.blocked != nil {
 			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+		}
+		if refused.lifecycle != "" {
+			return delivery.RecordLifecycleRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", refused.lifecycle, ledger.ActorAgent, c.RunID)
 		}
 		return nil
 	}); logged != nil {
@@ -736,6 +740,8 @@ type refusal struct {
 	code    string
 	event   *refusedEvent
 	blocked *delivery.BlockedError
+	// A start refused as archived or closed: its reason.
+	lifecycle string
 }
 
 type refusedEvent struct {

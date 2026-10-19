@@ -541,7 +541,7 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 // While a pull request's fix is checked, what a Run publishes goes to the
 // candidate branch.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
-	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
+	in := PhaseRun{TaskID: st.TaskID, Phase: phase, WorkflowID: sc.WorkflowRunID, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
 	if st.Candidate != nil && Publishes[phase] {
 		in.Branch = st.Candidate.Branch
 	}
@@ -579,16 +579,15 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	// The backstop for an edge added between the start and this step: a
-	// first implementer never starts on a blocked task. Parked, not failed.
-	if !st.Overridden && st.Retries == 0 {
-		parked, err := w.s.parkIfBlocked(ctx, sc.OrganizationID, st)
-		if err != nil {
-			return workflow.Result{}, err
-		}
-		if parked {
-			return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
-				SleepUntil: time.Now().Add(blockedRecheck)}, nil
-		}
+	// first implementer never starts on a blocked task, and no implementer
+	// on a closed or archived one. Parked, not failed.
+	parked, err := w.s.parkIfBlocked(ctx, sc.OrganizationID, st, !st.Overridden && st.Retries == 0)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if parked {
+		return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
+			SleepUntil: time.Now().Add(blockedRecheck)}, nil
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
@@ -604,6 +603,10 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseImplement, k, func(p *PhaseRun) { p.FeedbackItemIDs = feedback; d.apply(p) })
+	if errors.Is(err, ErrDeliveryEnded) {
+		return workflow.Result{Next: "implementRun", State: st, AwaitSignals: []string{SignalRelationsUnblock},
+			SleepUntil: time.Now().Add(blockedRecheck)}, nil
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -1620,7 +1623,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 		if existing == "" {
 			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-				if err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
+				if _, err := lockAndRefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
 					return err
 				}
 				var writer bool

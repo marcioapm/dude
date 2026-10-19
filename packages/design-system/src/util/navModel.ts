@@ -11,7 +11,7 @@
  * a new status is a compile error before it can be a blank row.
  */
 
-import { TERMINAL_TASK_STATUSES, notStarted, type AgentRole, type RunStatus, type SessionStatus, type TaskStatus } from "@dude/domain";
+import { TERMINAL_TASK_STATUSES, notStarted, type AgentRole, type RunStatus, type SessionStatus, type TaskResolution, type TaskStatus } from "@dude/domain";
 import type { Person, PrChipPullRequest } from "./viewTypes.ts";
 import { toMs } from "./instant.ts";
 import {
@@ -92,6 +92,14 @@ export interface NavTask {
    * row carry the glyph, read-only. Absent for a task not started or ended.
    */
   readonly driver?: "deliver" | "conductor" | "deliver-chat" | undefined;
+  /**
+   * Why a person ended it, beside the status ("closed as Won't do"); a
+   * done task with nothing merged has `nothing_to_merge`. Archived tasks are
+   * never in the tree, so there is no `archived` here.
+   */
+  readonly resolution?: TaskResolution | undefined;
+  /** Closed as a duplicate: the key of the task it duplicates. */
+  readonly duplicateOf?: string | undefined;
 }
 
 /** A related task, as a chip, a menu and the strip name it. */
@@ -109,6 +117,8 @@ export interface NavEdges {
   readonly blockedBy: ReadonlyArray<string>;
   readonly blocks: ReadonlyArray<string>;
   readonly related: ReadonlyArray<string>;
+  /** The tasks closed as duplicates of it. */
+  readonly duplicatedBy?: ReadonlyArray<string> | undefined;
 }
 
 /** A start when unblocked, set: how, by whom, since when. */
@@ -144,6 +154,8 @@ export interface NavProject {
   readonly epics?: ReadonlyArray<NavEpic> | undefined;
   /** Tasks with no epic. Listed after the epics. */
   readonly tasks?: ReadonlyArray<NavTask> | undefined;
+  /** How many of its tasks are archived: the board's quiet hint. */
+  readonly archivedCount?: number | undefined;
 }
 
 export type NavKind = "project" | "epic" | "task" | "run" | "session";

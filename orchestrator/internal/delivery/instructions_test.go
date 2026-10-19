@@ -28,6 +28,12 @@ func TestGoldenReviewerInstructions(t *testing.T) {
 	}
 }
 
+func TestGoldenChildInstructions(t *testing.T) {
+	for _, role := range []string{"investigator", "reviewer", "qa_browser", "implementer", "fixer", "simplifier"} {
+		golden(t, "instructions-child-"+role, Instructions(role, "correctness", InstructionsInput{Child: true, Tools: true, CLI: true}))
+	}
+}
+
 func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 	org := "Organisation's stance: {{task.title}}."
 	for _, role := range PromptRoles {

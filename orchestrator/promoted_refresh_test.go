@@ -74,7 +74,7 @@ func (w *prFixWorld) verificationEvents(repo string) (ok, failed int) {
 }
 
 func (w *prFixWorld) untilTheFixIsOnThePullRequest() {
-	w.until("the fix on the pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool { return w.gh.SHA(w.branch) != w.before })
 }
 
 // moves counts the task's recorded moves of a fix onto its pull requests.

@@ -1,0 +1,78 @@
+/* Lifecycle's marks and dialogs. Tokens only; neutral ink throughout. */
+
+/* ArchivedMark: put away needs nobody, so muted, never a tone. */
+.archived {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--ds-color-text-muted);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The duplicate's chosen task, on the chrome shade like a list row. */
+.picked {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+
+.callTitle {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+.callActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-8);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.list li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}

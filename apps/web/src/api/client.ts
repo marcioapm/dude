@@ -9,6 +9,7 @@
 
 import type { NavProject, NavTask } from "@dude/design-system";
 import { driverMode } from "@dude/design-system/components";
+import type { CloseDecision } from "@dude/design-system/components";
 import { escalationWords } from "../escalation.ts";
 import { isActive } from "../activity.ts";
 // One question's answer as the form sends it: the choices picked, by index, and the person's own words.
@@ -359,6 +360,8 @@ export interface EpicOverview {
 export interface ProjectOverview {
   project: { id: string; name: string };
   epics: EpicOverview[];
+  /** Its archived epics, out of the list: here to unarchive. */
+  archivedEpics?: Array<{ id: string; title: string; archivedAt: string }>;
 }
 
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
@@ -1470,6 +1473,39 @@ export class ApiClient {
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
   markDone(taskId: string): Promise<{ status: string }> {
     return this.#request("POST", `/v1/tasks/${taskId}/done`, {});
+  }
+
+  /** Close a task, saying why: its owner or an admin. */
+  closeTask(taskId: string, decision: CloseDecision): Promise<unknown> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/close`, decision);
+  }
+
+  /** Undo a Close: back to Backlog, its runs kept. Refused on an archived task. */
+  reopenTask(taskId: string): Promise<unknown> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/reopen`, {});
+  }
+
+  /** Archive a task: one that hasn't ended is closed with the decision first, in one step. */
+  archiveTask(taskId: string, decision?: CloseDecision): Promise<unknown> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/archive`, decision ?? {});
+  }
+
+  unarchiveTask(taskId: string): Promise<unknown> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/unarchive`, {});
+  }
+
+  /** Archive an epic with its tasks; with withEndedTasks, its ended tasks alone. 409 unfinished names the rest. */
+  archiveEpic(epicId: string, withEndedTasks = false): Promise<{ archived: boolean; tasks: string[] }> {
+    return this.#request("POST", `/v1/epics/${encodeURIComponent(epicId)}/archive`, withEndedTasks ? { withEndedTasks: true } : {});
+  }
+
+  unarchiveEpic(epicId: string): Promise<{ tasks: string[] }> {
+    return this.#request("POST", `/v1/epics/${encodeURIComponent(epicId)}/unarchive`, {});
+  }
+
+  /** A project's archived tasks, newest archived first. */
+  archivedTasks(projectId: string): Promise<{ tasks: Task[] }> {
+    return this.#request("GET", `/v1/tasks${qs({ projectId, archived: "1" })}`);
   }
 
   /** How a stopped task can be picked back up now, and until when a resume can. */
