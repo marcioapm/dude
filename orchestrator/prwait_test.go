@@ -225,6 +225,23 @@ func (w *world) firstReviewAfter() (arm func()) {
 	return func() { mu.Lock(); armed = true; mu.Unlock() }
 }
 
+// verdictsOfTestAfter is the verdict status of each criterion judged on the
+// task's first test Run past the first n.
+func (w *world) verdictsOfTestAfter(task string, n int) []string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT status::text FROM acceptance_verdicts
+		WHERE run_id = (SELECT id FROM runs WHERE task_id = $1 AND phase = 'test' ORDER BY created_at, id OFFSET $2 LIMIT 1)
+		ORDER BY criterion`, task, n)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return out
+}
+
 // The incident (ABS-28): the conductor reviewed the open pull request at
 // its wait, sent the finding to a fix at after_review, and steered the
 // fix's review on. The simplifier and the tester ran as for any review
@@ -244,7 +261,7 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraf
 	w.gh.Review(1, "jerv", "COMMENTED")
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
-	phases := len(w.phasesRun(task))
+	phases, tests := len(w.phasesRun(task)), w.phaseRuns(task, "test")
 	arm()
 
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
@@ -261,7 +278,7 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraf
 		case delivery.PointBeforePR:
 			return true
 		}
-		return w.waitingOnPR(task) && w.phaseRuns(task, "test") > 0
+		return w.waitingOnPR(task) && w.phaseRuns(task, "test") > tests
 	})
 	if point := w.decisionAt(task); point != "" {
 		t.Fatalf("parked on the conductor's %q decision, want waiting on the open pull request again\n%s", point, w.describeRuns())
@@ -277,8 +294,8 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraf
 	if !slices.Contains(got, "fix") || !slices.Contains(got, "simplify") || !slices.Contains(got, "test") {
 		t.Errorf("phases after the wait: %v, want the fix, the simplifier and the test", got)
 	}
-	if got := w.verdicts(task); len(got) == 0 || got[len(got)-1] != "pass" {
-		t.Errorf("verdicts %v, want the last passed", got)
+	if got := w.verdictsOfTestAfter(task, tests); len(got) == 0 || slices.ContainsFunc(got, func(v string) bool { return v != "pass" }) {
+		t.Errorf("the new test's verdicts %v, want every criterion passed", got)
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
