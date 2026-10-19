@@ -79,8 +79,11 @@ async function upload(ctx: RequestContext, target: "task" | "session"): Promise<
       ? (await sql`SELECT id FROM tasks WHERE id = ${id}`)[0]
       : (await sql`SELECT id, session_role(${id}, ${ctx.principal.personId}) AS role FROM sessions WHERE id = ${id}`)[0]);
   if (!owner) throw notFound(`${target} ${id} not found`);
-  if (target === "session" && (owner as { role: string | null }).role === null) throw notFound(`session ${id} not found`);
-  if (target === "session" && (owner as { role: string }).role === "read") throw forbidden("you can read this session; only its owner and members who can chat may upload images");
+  if (target === "session") {
+    const { role } = owner as { role: string | null };
+    if (role === null) throw notFound(`session ${id} not found`);
+    if (role === "read") throw forbidden("you can read this session; only its owner and members who can chat may upload images");
+  }
 
   const body = await readCapped(ctx.request, MAX_BODY, tooBig);
   let form: FormData;
@@ -147,7 +150,7 @@ async function serve(ctx: RequestContext): Promise<Response> {
       CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
     FROM attachments WHERE id = ${ctx.params.id!}`)[0] as
     { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string; in_session: boolean; visible: boolean } | undefined);
-   if (!row || !row.visible) throw notFound("no such attachment");
+  if (!row || !row.visible) throw notFound("no such attachment");
   const [key, type] = variant === "original" ? [row.original_key, row.original_content_type] : [row.object_key, row.content_type];
   // The row admits only the four raster types; never anything a browser would run.
   if (!(ATTACHMENT_TYPES as readonly string[]).includes(type)) throw notFound("no such attachment");
@@ -172,9 +175,9 @@ async function serve(ctx: RequestContext): Promise<Response> {
 async function remove(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   await withOrg(ctx.principal.organizationId, async ({ sql }) => {
-  const row = (await sql`SELECT uploaded_by, attached_at,
-      CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
-    FROM attachments WHERE id = ${id} FOR UPDATE`)[0] as
+    const row = (await sql`SELECT uploaded_by, attached_at,
+        CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
+      FROM attachments WHERE id = ${id} FOR UPDATE`)[0] as
       { uploaded_by: string | null; attached_at: Date | null; visible: boolean } | undefined;
     if (!row || !row.visible) throw notFound("no such attachment");
     if (row.attached_at) throw conflict("this image was sent; it stays with its message");
