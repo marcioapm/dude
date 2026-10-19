@@ -127,6 +127,9 @@ rNoModelTierTiersAreOrganization        refusals/delivery/restart/no-model-tier-
 rTierNamesNoModelYetCannot              refusals/delivery/restart/tier-names-no-model-yet-cannot
 rChildProfileRequired                  refusals/delivery/child/profile-required
 rChildParentKeyRequired                refusals/delivery/child/parent-key-required
+rChildSessionProfile                   refusals/delivery/child/session-profile
+rChildSessionParentEnded               refusals/delivery/child/session-parent-ended
+rChildSessionEnded                     refusals/delivery/child/session-ended
 rChildCapabilitiesMismatch             refusals/delivery/child/capabilities-mismatch
 rChildNoteTooLong                      refusals/delivery/child/note-too-long
 rChildParentUnauthorized               refusals/delivery/child/parent-unauthorized
