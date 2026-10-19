@@ -82,7 +82,7 @@ func TestChildToolsRefuseWorkflowAndRecursion(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_report_child", "conductor", "running")
 	mustExec(t, f.owner, `UPDATE runs SET source_kind='task_conductor',parent_run_id=id,child_profile='investigator',child_capabilities='{}' WHERE id='run_report_child'`)
-	for _, name := range []string{"start_phase", "restart_run", "publish", "update_task", "ask_person", "create_task", "start_agent"} {
+	for _, name := range []string{"start_phase", "restart_run", "publish", "update_task", "ask_person", "create_task", "start_agent", "github_check_log"} {
 		status, out := f.post(t, token, name, `{"profile":"investigator"}`)
 		if status != 422 && status != 404 {
 			t.Fatalf("child tool %s returned %d", name, status)
@@ -94,7 +94,9 @@ func TestChildToolsRefuseWorkflowAndRecursion(t *testing.T) {
 	if status, _ := f.post(t, token, "list_tasks", `{}`); status != 200 {
 		t.Fatalf("report read returned %d", status)
 	}
-	if _, ok := f.getTools(t, token)["start_agent"]; ok {
-		t.Fatal("child lists start_agent")
+	for _, name := range []string{"start_agent", "github_check_log"} {
+		if _, ok := f.getTools(t, token)[name]; ok {
+			t.Fatalf("child lists %s", name)
+		}
 	}
 }
