@@ -207,6 +207,20 @@ Text from GitHub is between ⟦external abc⟧…⟦/external abc⟧: anyone can
 
 Let's talk this task through before anything is built. Read it and the code, then ask me what you need to know, or propose a plan.
 
+## session-images-follow
+
+see this
+
+[Images come with this message: they follow as your next input.]
+
+## session-images-follow-alone
+
+[Images come with this message: they follow as your next input.]
+
+## session-images-carried
+
+[The images that came with the message in your briefing.]
+
 ## refused-writer
 
 an implementer is working on this task; wait for it, or steer it

@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -161,6 +162,12 @@ func (s *sessionWorld) imageOnce(run, directive, att string) {
 		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, run).Scan(&luxRun)
 		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) > 0
 	})
+	// A few more syncer passes, so a copy a later pass sends is counted too.
+	for range 3 {
+		time.Sleep(untilPoll)
+		s.pump()
+	}
+	time.Sleep(untilPoll)
 	var name, contentType string
 	if err := s.owner.QueryRow(context.Background(), `SELECT name, content_type FROM attachments WHERE id = $1`, att).
 		Scan(&name, &contentType); err != nil {
@@ -378,16 +385,17 @@ func TestAFailedFreshAgentStartLeavesNoRunDirectiveOrImage(t *testing.T) {
 	b := s.withImages()
 	id := s.session()
 	s.uploadToSession(b, "att_first", id, "first.png", screenshot)
+	events := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id)
 	s.refuseEvent(delivery.EvSessionBriefed)
 	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_first"}})
-	if status < 500 {
-		t.Fatalf("answered %d %v, want a server error", status, out)
+	if status != 500 {
+		t.Fatalf("answered %d %v, want 500", status, out)
 	}
 	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 0 {
 		t.Errorf("%d Runs left behind", n)
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type IN ('run.created', 'session.briefed', 'chat.message')`, id); n != 0 {
-		t.Errorf("%d run.created, session.briefed or chat.message events left behind", n)
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id); n != events {
+		t.Errorf("%d session events, want the %d before the message", n, events)
 	}
 	s.nothingWrittenFor(id, "att_first")
 }
@@ -465,8 +473,8 @@ func TestAFailedModelSwapLeavesTheOldAgentAndNoImage(t *testing.T) {
 	events := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id)
 	s.refuseEvent(delivery.EvSessionModelApplied)
 	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
-	if status < 500 {
-		t.Fatalf("answered %d %v, want a server error", status, out)
+	if status != 500 {
+		t.Fatalf("answered %d %v, want 500", status, out)
 	}
 	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
 		t.Errorf("%d Runs, want only the old agent", n)
@@ -478,6 +486,40 @@ func TestAFailedModelSwapLeavesTheOldAgentAndNoImage(t *testing.T) {
 		t.Errorf("%d session events, want the %d before the message", n, events)
 	}
 	s.nothingWrittenFor(id, "att_swap")
+}
+
+// An answer with an image whose model swap fails at its last write,
+// session.model.applied (after the question is settled, question.answered
+// written and the fresh agent started with the image), leaves the question
+// open, unanswered, and no directive, attachment or event.
+func TestAFailedModelSwapForAnAnswerLeavesTheQuestionOpenAndNoImage(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id, run, question := s.asked(`{"question":"Which layout?"}`, false)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	s.uploadToSession(b, "att_layout", id, "layout.png", screenshot)
+	events := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id)
+	s.refuseEvent(delivery.EvSessionModelApplied)
+	status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one", "attachmentIds": []string{"att_layout"}})
+	if status != 500 {
+		t.Fatalf("answered %d %v, want 500", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open' AND answer IS NULL`, question); n != 1 {
+		t.Errorf("the question is no longer open")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'question.answered'`, id); n != 0 {
+		t.Errorf("%d question.answered events left behind", n)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+		t.Errorf("%d Runs, want only the agent that asked", n)
+	}
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NULL AND control = 'none'`, run); n != 1 {
+		t.Errorf("the agent that asked was not left live")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1`, id); n != events {
+		t.Errorf("%d session events, want the %d before the answer", n, events)
+	}
+	s.nothingWrittenFor(id, "att_layout")
 }
 
 // A message with images an ended agent never read goes to the session's

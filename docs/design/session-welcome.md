@@ -115,7 +115,10 @@ back; under 1000px it stays the drawer it is today.
   or hands the session to a fresh one on its changed model (an answer to
   its question included), briefs it with the words and queues the images
   as its first directive, read after the briefing. Chat shows one message
-  with its words and images either way.
+  with its words and images either way. The one exception: a message with
+  images that an ended agent never read, with no live agent to take it,
+  fails asking to send it again (a briefing carries no images); Try again
+  on an agent that never started hands those images to the fresh agent.
 - **Recent sessions** is the existing `GET /sessions` (newest activity
   first); it already carries title, filed count, shared and owner.
 

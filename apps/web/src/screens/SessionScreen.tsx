@@ -296,7 +296,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const isOwner = you.role === "owner";
   const reader = you.role === "read";
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
-  // A message that starts the agent takes images too: they follow its briefing.
+  // No live agent is no reason to refuse images: the message starts one, which gets them after its briefing.
   const attachOff = reader ? "You can read this session: writing is for its owner and members who can chat."
     : tray.disabledReason;
   const dude = dudeName(sessionId);

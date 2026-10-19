@@ -223,8 +223,9 @@ const LiveBrainstorm = `r.role = 'brainstorm' AND r.kind = 'agent' AND r.status 
 // images); Shown is the chat.message's text. A briefing is the Run's
 // prompt and carries no images: Images, the session's uploads, go as a
 // directive queued on the new Run, delivered after the briefing, and Chat
-// shows them on the message's chat.message. An Answer is shown as
-// question.answered by the caller, so it gets no chat.message.
+// shows them on the message's chat.message. An Answer gets no
+// chat.message: the caller shows it, with the images StartBrainstorm
+// returns, on its question.answered.
 type Opening struct {
 	Message, Shown string
 	Images         []string
