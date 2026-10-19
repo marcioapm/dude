@@ -357,6 +357,12 @@ type Step struct {
 	FinishEdits map[string]string
 	// Its tool calls stay running: a long command (with Hang, never done).
 	LongCommand bool
+	// The checks report its final reply ends with (ChecksReport), "" for
+	// a phase that hands back none.
+	Checks string
+	// Shell commands it runs before replying, each [command, output,
+	// exit code as text]; a non-zero exit is a failing command.
+	Commands [][3]string
 	// Names it looks up before its tools, as a package install would.
 	Lookups []string
 	// What it thinks before it acts, streamed as thought chunks (the fake
@@ -714,9 +720,77 @@ func ConductorTurn(script, input string) string {
 	return ConductorReply(named, input)
 }
 
+// NoChecks is the scripted writer's checks report: it runs no check, and
+// says so in the block the checks gate reads.
+const NoChecks = "```yaml\nchecks: []\n```"
+
+// ChecksReport is the block a checks report of checks ends with.
+func ChecksReport(checks ...[3]string) string {
+	if len(checks) == 0 {
+		return NoChecks
+	}
+	var b strings.Builder
+	b.WriteString("```yaml\nchecks:\n")
+	for _, c := range checks {
+		fmt.Fprintf(&b, "  - command: %q\n    result: %s\n    evidence: %q\n", c[0], c[1], c[2])
+	}
+	b.WriteString("```")
+	return b.String()
+}
+
+// The checks gate's scripted implementers (fake lux only). Each runs
+// CheckCommand: ChecksHonestModel sees it pass and says so;
+// ChecksUnbackedModel sees it fail and reports it passing, every turn;
+// ChecksFixedModel does that in its first turn and, sent back, runs it
+// again, sees it pass and reports that.
+const (
+	ChecksHonestModel   = "fake/checks-honest"
+	ChecksUnbackedModel = "fake/checks-unbacked"
+	ChecksFixedModel    = "fake/checks-fixed"
+	CheckCommand        = "make check"
+)
+
+// CheckOutputs are what CheckCommand prints when it fails and when it
+// passes: how a command reports how it ended.
+var CheckOutputs = [2]string{"FAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1",
+	"ok  \tgreeting\t0.01s"}
+
+// checksStep is a checks model's step for its turn (0 the first).
+func checksStep(model string, turn int) (commands [][3]string, report string, ok bool) {
+	failing := [3]string{CheckCommand, CheckOutputs[0], "1"}
+	passing := [3]string{CheckCommand, CheckOutputs[1], "0"}
+	claim := ChecksReport([3]string{CheckCommand, "pass", "ok greeting"})
+	switch {
+	case model == ChecksHonestModel, model == ChecksFixedModel && turn > 0:
+		return [][3]string{passing}, claim, true
+	case model == ChecksUnbackedModel, model == ChecksFixedModel:
+		return [][3]string{failing}, claim, true
+	}
+	return nil, "", false
+}
+
+// ChecksTurn is what a checks model does in a later turn of its Run (a
+// send-back): its commands and its reply's checks report.
+func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok bool) {
+	return checksStep(model, turn)
+}
+
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.
+// A writer's step (delivery.ChecksGated: implement, fix, simplify) carries
+// its checks report.
 func For(phase, model, runID string, fixed bool) Step {
+	step := forPhase(phase, model, runID, fixed)
+	if !step.Hang && (phase == "implement" || phase == "fix" || phase == "simplify") {
+		step.Checks = NoChecks
+		if commands, report, ok := checksStep(model, 0); ok && phase == "implement" {
+			step.Commands, step.Checks = commands, report
+		}
+	}
+	return step
+}
+
+func forPhase(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
 	}
@@ -915,5 +989,14 @@ func Script(phase, model, runID string) string {
 		return b.String()
 	}
 	b.WriteString("echo " + step.Reply)
+	if step.Checks != "" {
+		// Built in a file and read back, as the reviewer's report is: the
+		// block's lines must reach the reply as lines.
+		b.WriteString("\n")
+		for _, line := range strings.Split(step.Checks, "\n") {
+			b.WriteString("append /tmp/checks.yaml " + line + "\n")
+		}
+		b.WriteString("read /tmp/checks.yaml")
+	}
 	return b.String()
 }

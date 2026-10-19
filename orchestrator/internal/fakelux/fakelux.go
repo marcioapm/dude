@@ -45,6 +45,14 @@ type Behaviour struct {
 	Command []string
 	// The agent's reply, streamed as message chunks.
 	Reply string
+	// The checks report its reply ends with, and the shell commands it
+	// runs first, each [command, output, exit code]: a non-zero exit is
+	// reported failing as its harness reports one.
+	Checks   string
+	Commands [][3]string
+	// The scripted checks model whose commands and report each later turn
+	// plays (fakeagent.ChecksTurn); "" repeats Commands and Checks.
+	ChecksModel string
 	// Files to commit, path → content; none means the agent changes nothing.
 	// "<repo>:<path>" commits in that repository, "*:<path>" in every one
 	// the Run may push, and a bare path in the first of those.
@@ -936,7 +944,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
+	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Checks: step.Checks, Commands: step.Commands,
+		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
 }
@@ -1773,7 +1782,19 @@ func (s *Server) turn(run *Run) {
 	if run.woken {
 		s.edit(run, b.FinishEdits)
 	}
+	commands, checks := b.Commands, b.Checks
+	if c, report, ok := fakeagent.ChecksTurn(b.ChecksModel, run.turnsEnded); ok && checks != "" && b.Commands != nil {
+		commands, checks = c, report
+	}
+	if !asking {
+		for i, c := range commands {
+			s.command(run, fmt.Sprintf("check_%d_%d", run.turnsEnded, i), c)
+		}
+	}
 	reply := b.Reply
+	if checks != "" && !asking && !b.Conductor {
+		reply = strings.TrimSpace(reply + "\n\n" + checks)
+	}
 	if b.Conductor {
 		reply = run.Prompt()[strings.LastIndex(run.Prompt(), "echo ")+len("echo "):]
 		if !first {
