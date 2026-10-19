@@ -125,6 +125,7 @@ describe("LiveDiff", () => {
   test("with nothing changed it says so", () => {
     expect(renderToStaticMarkup(<LiveDiff base="b" files={[]} emptyMessage="Nothing yet." />)).toContain("Nothing yet.");
   });
+
 });
 
 describe("FileGallery", () => {

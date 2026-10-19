@@ -1275,7 +1275,8 @@ No change: the lines are built from existing parts.
 
 ## Not in this proposal
 
-- `duplicates` (A duplicates B: close A, point to B).
+- `duplicates` (A duplicates B: close A, point to B). Built since by Close as Duplicate:
+  see `docs/design/tracking-work.md`, *Duplicate: the `duplicates` relation, built*.
 - Parallel starts with agent comms: mocked as *Later* (see *With agent
   comms*), built when that messaging exists.
 - Any notification outside the app on unblock (decided: none for now).
@@ -1326,4 +1327,5 @@ Where the build departs from the text above:
 ## Open questions for Márcio
 
 None left from the proposal. Out of scope still: parallel starts with agent
-comms, `duplicates`, relations between epics, push notifications.
+comms, relations between epics, push notifications. (`duplicates` is built by
+`docs/design/tracking-work.md`.)

@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	s.githubRoutes(mux)
 	s.sourceRoutes(mux)
 	s.recoverRoutes(mux)
+	s.lifecycleRoutes(mux)
 	s.stallRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
@@ -599,12 +600,11 @@ func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) er
 }
 
 // taskOwner is the task's first active ordered member; nil when it has none.
+// The owner's id first, then its name by key: a join on the subquery loses
+// people_pkey under row-level security.
 func taskOwner(ctx context.Context, tx pgx.Tx, taskID string) (id, name *string, err error) {
-	err = tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
-		LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
-			WHERE tp.task_id = t.id AND p.removed_at IS NULL
-			ORDER BY tp.position, tp.person_id LIMIT 1) owner ON true
-		WHERE t.id = $1`, taskID).Scan(&id, &name)
+	err = tx.QueryRow(ctx, `SELECT o.pid, (SELECT name FROM people WHERE id = o.pid)
+		FROM (SELECT `+delivery.TaskOwnerOf+` AS pid FROM tasks t WHERE t.id = $1) o`, taskID).Scan(&id, &name)
 	return id, name, err
 }
 
@@ -1225,8 +1225,14 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		}
 		// Who marked it done goes with the move: a task it blocks is told
 		// it still blocks, and by whom it was marked done.
-		_, err = delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
+		moved, err := delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
 			"review", "done", "marked done by "+actor(r))
+		if err != nil || !moved {
+			return err
+		}
+		// Done with nothing merged has its name (tracking-work.md, "Close, and resolutions").
+		_, err = tx.Exec(r.Context(), `UPDATE tasks t SET resolution = 'nothing_to_merge' WHERE t.id = $1
+			AND NOT EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged')`, id)
 		return err
 	})
 	if err != nil {

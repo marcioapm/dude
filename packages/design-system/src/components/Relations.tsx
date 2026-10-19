@@ -287,7 +287,7 @@ export function StartMenu({ taskKey, blockers, onStart, onStartAnyway, auto, onS
 // A task's Relations
 // ---------------------------------------------------------------------------
 
-export type RelationGroupKind = "blocked-by" | "blocks" | "related";
+export type RelationGroupKind = "blocked-by" | "blocks" | "related" | "duplicate-of" | "duplicated-by";
 
 export interface RelationRowData extends RelatedTask {
   readonly owner?: Person | null | undefined;
@@ -305,10 +305,19 @@ export interface RelationRowData extends RelatedTask {
 export interface RelationGroupData {
   readonly kind: RelationGroupKind;
   readonly rows: ReadonlyArray<RelationRowData>;
+  /**
+   * A line under the group: a duplicate's handover ("CP-63's blocking came
+   * here with it: CP-47 now waits on CP-62.").
+   */
+  readonly note?: ReactNode;
 }
 
-const GROUP_LABEL: Record<RelationGroupKind, string> = { "blocked-by": "Blocked by", blocks: "Blocks", related: "Related" };
-const GROUP_GLYPH: Record<RelationGroupKind, IconName> = { "blocked-by": "lock", blocks: "blocks", related: "link" };
+const GROUP_LABEL: Record<RelationGroupKind, string> = { "blocked-by": "Blocked by", blocks: "Blocks", related: "Related",
+  "duplicate-of": "Duplicate of", "duplicated-by": "Duplicated by" };
+const GROUP_GLYPH: Record<RelationGroupKind, IconName> = { "blocked-by": "lock", blocks: "blocks", related: "link",
+  "duplicate-of": "copy", "duplicated-by": "copy" };
+/** Close writes a duplicate's edge and Reopen removes it: no row of theirs is removable here. */
+const FIXED: ReadonlySet<RelationGroupKind> = new Set(["duplicate-of", "duplicated-by"]);
 
 export interface RelationRowProps {
   readonly group: RelationGroupKind;
@@ -368,12 +377,14 @@ export interface RelationListProps {
 }
 
 /**
- * A task's relations: three groups under small-caps heads with their glyph
- * and count — Blocked by ("1 of 2 open" once one has merged), Blocks,
- * Related. An empty group is left out; with none at all, one line says
- * what relations are for. A row the reader may not remove says whose it
- * is, in the group's head, on its hover or focus, so nothing in the row
- * moves under the pointer; the same words are the row's description.
+ * A task's relations: groups under small-caps heads with their glyph and
+ * count — Blocked by ("1 of 2 open" once one has merged), Blocks, Related,
+ * and a duplicate's Duplicate of / Duplicated by (`copy`; never removable:
+ * Reopen removes it), each with an optional line under it. An empty group
+ * is left out; with none at all, one line says what relations are for. A
+ * row the reader may not remove says whose it is, in the group's head, on
+ * its hover or focus, so nothing in the row moves under the pointer; the
+ * same words are the row's description.
  */
 export function RelationList({ groups, onRemove, onAdd, onOpen, adding, hinting, wide }: RelationListProps) {
   const shown = groups.filter((g) => g.rows.length > 0);
@@ -405,11 +416,12 @@ export function RelationList({ groups, onRemove, onAdd, onOpen, adding, hinting,
               {g.rows.map((r) => {
                 const id = `${g.kind}:${r.key}`;
                 return (
-                  <RelationRow key={r.key} group={g.kind} row={r} hintId={`${hintId}-${r.key}`} onRemove={onRemove} onOpen={onOpen}
+                  <RelationRow key={r.key} group={g.kind} row={r} hintId={`${hintId}-${r.key}`} onRemove={FIXED.has(g.kind) ? undefined : onRemove} onOpen={onOpen}
                     onHint={(on) => setHovered((h) => (on ? id : h === id ? null : h))} />
                 );
               })}
             </ul>
+            {g.note ? <p className={styles["groupNote"]} data-testid="relation-note">{g.note}</p> : null}
           </div>
         );
       })}

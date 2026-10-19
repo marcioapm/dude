@@ -1,4 +1,4 @@
-{{define "refusals/tools/tools/peers-lists-your-peers-whole-leave"}}peers lists your peers whole: leave text and startable out{{end}}
+{{define "refusals/tools/tools/peers-lists-your-peers-whole-leave"}}peers lists your peers whole: leave text, startable, archived and closed out{{end}}
 
 {{- define "refusals/tools/tools/title-required"}}a title is required{{end}}
 

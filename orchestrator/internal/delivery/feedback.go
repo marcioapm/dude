@@ -353,6 +353,12 @@ func SubmitFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, in Submission)
 	if out, found, err := repeatedSubmit(ctx, tx, in); found || err != nil {
 		return out, err
 	}
+	if err := RefuseLifecycleTx(ctx, tx, in.TaskID); IsLifecycleRefusal(err) {
+		// Closed or archived (path 12): the rule's words, not a recovery's.
+		return Submitted{}, feedbackErr("conflict", "%s Your drafts are kept.", err.Error())
+	} else if err != nil {
+		return Submitted{}, err
+	}
 	if err := refuseEnded(status); err != nil {
 		return Submitted{}, err
 	}

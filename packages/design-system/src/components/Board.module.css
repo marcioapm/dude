@@ -95,6 +95,14 @@
   flex-shrink: 0;
   max-width: 100%;
 }
+/* "3 archived": quiet, secondary ink at the small size; the app's link inside takes it. */
+.archivedHint {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
 
 /* -- Body: the five columns, or a stack of swimlanes that scrolls as one. -- */
 .body {
