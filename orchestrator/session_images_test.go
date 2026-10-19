@@ -118,6 +118,68 @@ func TestASessionMessageRefusesImagesItMayNotSend(t *testing.T) {
 	}
 }
 
+// refusedImage sends another session's upload, att_other, as session's
+// message and says it was answered 400 invalid_attachment naming it.
+func (s *sessionWorld) refusedImage(b bucket, session, text string) {
+	s.t.Helper()
+	s.uploadToSession(b, "att_other", s.session(), "other.png", screenshot)
+	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+session+"/chat", map[string]any{"text": text, "attachmentIds": []string{"att_other"}})
+	e, _ := body["error"].(map[string]any)
+	const want = "image att_other is not one of this session's"
+	if status != 400 || e["code"] != "invalid_attachment" || e["message"] != want {
+		s.t.Fatalf("answered %d %v, want 400 invalid_attachment %q", status, body, want)
+	}
+	s.nothingWrittenFor(session, "att_other")
+}
+
+// A refused image is 400 invalid_attachment on the paths that start a
+// fresh agent too, not only on a live agent's, and writes nothing.
+func TestASessionMessageRefusesImagesOnTheFreshAgentPaths(t *testing.T) {
+	t.Run("fresh start", func(t *testing.T) {
+		s := newSessionWorld(t)
+		b := s.withImages()
+		id := s.session()
+		s.refusedImage(b, id, "look")
+		if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 0 {
+			t.Errorf("%d Runs started", n)
+		}
+	})
+	t.Run("model swap", func(t *testing.T) {
+		s := newSessionWorld(t)
+		b := s.withImages()
+		id, run, _ := s.liveSession()
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+		s.refusedImage(b, id, "look")
+		s.noSwap(id)
+		if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+			t.Errorf("%d Runs, want only the old agent", n)
+		}
+		if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND control = 'none' AND ended_at IS NULL`, run); n != 1 {
+			t.Errorf("the old agent was not left live")
+		}
+	})
+	t.Run("answer by a fresh agent", func(t *testing.T) {
+		s := newSessionWorld(t)
+		b := s.withImages()
+		id, run, question := s.asked(`{"question":"Which layout?"}`, false)
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+		s.refusedImage(b, id, "this one")
+		s.noSwap(id)
+		if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open' AND answer IS NULL`, question); n != 1 {
+			t.Errorf("the question is no longer open")
+		}
+		if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'question.answered'`, id); n != 0 {
+			t.Errorf("%d question.answered events written", n)
+		}
+		if n := s.count(`SELECT count(*) FROM runs WHERE session_id = $1`, id); n != 1 {
+			t.Errorf("%d Runs, want only the agent that asked", n)
+		}
+		if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NULL AND control = 'none'`, run); n != 1 {
+			t.Errorf("the agent that asked was not left live")
+		}
+	})
+}
+
 // freshAgentGotImage says the session's new agent run was briefed with
 // briefed and no image, that att alone went as the one directive queued on
 // it, and that lux got att once, on that directive (imageOnce). Returns the
