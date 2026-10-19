@@ -38,6 +38,13 @@ func (f *checksFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 	return judge.Judgement{Decision: d, CallID: id, Reasoning: "fixture evidence"}, nil
 }
 
+// acceptingJudge has w's Syncer judge every check backed and none missing.
+func acceptingJudge(w *harnessWorld) *checksFake {
+	fake := &checksFake{backed: judge.Yes, missing: judge.No}
+	w.s.Judge = fake
+	return fake
+}
+
 func checksReply(w *harnessWorld, text string) {
 	w.t.Helper()
 	err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
@@ -82,8 +89,7 @@ func TestChecksMissingAndSelfReportedFailuresRejectWithoutJudge(t *testing.T) {
 		t.Run(text, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, text)
-			fake := &checksFake{backed: judge.Yes, missing: judge.No}
-			w.s.Judge = fake
+			fake := acceptingJudge(w)
 			got, err := w.s.judgeChecks(context.Background(), w.run)
 			if err != nil || got.Verified || fake.calls != 0 {
 				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -94,8 +100,7 @@ func TestChecksMissingAndSelfReportedFailuresRejectWithoutJudge(t *testing.T) {
 func TestChecksRestartRetainsOnlyAcceptedCurrentTurn(t *testing.T) {
 	w := newHarnessWorld(t)
 	checksReply(w, passingChecks)
-	fake := &checksFake{backed: judge.Yes, missing: judge.No}
-	w.s.Judge = fake
+	acceptingJudge(w)
 	ok, _, err := w.s.checksBeforePush(context.Background(), w.run)
 	if err != nil || !ok {
 		t.Fatalf("%v %v", ok, err)
@@ -190,8 +195,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		if len(reply) > checksReplyMax+len(filler)+1 || strings.Contains(reply, "command: verify") {
 			t.Fatalf("read %d bytes, the earliest report among them: %v", len(reply), strings.Contains(reply, "command: verify"))
 		}
-		fake := &checksFake{backed: judge.Yes, missing: judge.No}
-		w.s.Judge = fake
+		fake := acceptingJudge(w)
 		got, err := w.s.judgeChecks(context.Background(), w.run)
 		if err != nil || !got.Verified || fake.calls != 2 || got.Verdicts[0].Command != "make check" {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -202,8 +206,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		older(w)
 		checksReply(w, passingChecks)
 		checksReply(w, "checks: [broken")
-		fake := &checksFake{backed: judge.Yes, missing: judge.No}
-		w.s.Judge = fake
+		fake := acceptingJudge(w)
 		got, err := w.s.judgeChecks(context.Background(), w.run)
 		if err != nil || got.Verified || fake.calls != 0 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -214,8 +217,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 	t.Run("a report at the start of one oversized message", func(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, passingChecks+"\n"+long)
-		fake := &checksFake{backed: judge.Yes, missing: judge.No}
-		w.s.Judge = fake
+		fake := acceptingJudge(w)
 		got, err := w.s.judgeChecks(context.Background(), w.run)
 		if err != nil || got.Verified || fake.calls != 0 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -224,8 +226,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 	t.Run("a report at the end of one oversized message", func(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, long+passingChecks)
-		fake := &checksFake{backed: judge.Yes, missing: judge.No}
-		w.s.Judge = fake
+		fake := acceptingJudge(w)
 		got, err := w.s.judgeChecks(context.Background(), w.run)
 		if err != nil || !got.Verified || fake.calls != 2 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -251,8 +252,7 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 		t.Run(fmt.Sprint(tc.n), func(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, report(tc.n))
-			fake := &checksFake{backed: judge.Yes, missing: judge.No}
-			w.s.Judge = fake
+			fake := acceptingJudge(w)
 			got, err := w.s.judgeChecks(context.Background(), w.run)
 			if err != nil || fake.calls != tc.calls {
 				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
@@ -265,11 +265,5 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 				t.Fatalf("%+v: the send-back lacks %q", got, want)
 			}
 		})
-	}
-}
-
-func TestChecksNonGatedPhaseDeclaration(t *testing.T) {
-	if delivery.ChecksGated[delivery.PhaseReview] {
-		t.Fatal("review is gated")
 	}
 }

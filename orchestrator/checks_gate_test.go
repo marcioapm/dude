@@ -100,39 +100,17 @@ func (w *world) implementerPushes(wi string) int {
 // not, with "waived" or "skipped" when it says so.
 func (w *world) judged(wi string) []string {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT CASE WHEN payload ? 'waived' THEN 'waived'
+	return w.ids(`SELECT CASE WHEN payload ? 'waived' THEN 'waived'
 			WHEN payload ? 'skipped' THEN 'skipped' WHEN (payload->>'verified')::bool THEN 'verified' ELSE 'unverified' END
 		FROM events e JOIN runs r ON r.id = e.run_id AND r.phase = 'implement'
 		WHERE r.task_id = $1 AND e.event_type = $2 ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		out = append(out, s)
-	}
-	return out
 }
 
 // sentBack are the directives the gate queued for the task's implementer.
 func (w *world) sentBack(wi string) []string {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT d.text FROM directives d JOIN runs r ON r.id = d.run_id
+	return w.ids(`SELECT d.text FROM directives d JOIN runs r ON r.id = d.run_id
 		WHERE r.task_id = $1 AND r.phase = 'implement' AND d.text LIKE 'Your checks report was not verified%' ORDER BY d.created_at`, wi)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		out = append(out, s)
-	}
-	return out
 }
 
 // An honest report the judge backs publishes: one judgement, verified, and
