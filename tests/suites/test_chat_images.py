@@ -27,7 +27,7 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, create_api_key, query, sign_in, wait_until
+from helpers import ApiClient, create_api_key, provision_person, query, sign_in, wait_until
 
 SHOTS = Path(os.environ.get("DUDE_TEST_SHOTS", "/var/tmp/cimg-dude-shots"))
 
@@ -955,4 +955,52 @@ def test_the_composer_takes_images_dropped_anywhere_on_the_session(
     expect(chips).to_have_count(5)
     for i in range(5):
         expect(chips.nth(i)).to_have_attribute("data-state", "ready", timeout=20_000)
+    assert console_errors == []
+
+
+# -- a brainstorm session ------------------------------------------------------
+
+
+@pytest.mark.ui
+def test_an_image_pasted_and_dropped_in_a_session_reaches_its_agent_and_shows_in_the_transcript(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, owner_dsn: str, console_errors: list
+):
+    # An agent that never ends its turn: it stays live to read the next message.
+    tier = client.tier_for("fake/hang")
+    assert client.patch("/v1/settings/organization", {"roles": {"brainstorm": {"tier": tier}}}).status_code == 200
+    created = client.post("/v1/brainstorms", {"title": "Checkout layout", "message": "look at the checkout"}).json()
+    session, run = created["id"], created["runId"]
+    wait_until(lambda: query(owner_dsn, "SELECT lux_state FROM runs WHERE id = %s", (run,))[0]["lux_state"] == "running",
+               timeout=60, message="the session's agent never ran")
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
+    field = page.get_by_placeholder("Message the brainstorm…")
+    expect(field).to_be_visible()
+    chips = page.get_by_test_id("attachment-chip")
+    _paste_into(field, _files(page, [("pasted.png", png(160, 90), "image/png")]))
+    expect(chips).to_have_count(1)
+    assert _drop_on(page.locator("[data-testid=session-screen] .runChat").first,
+                    _files(page, [("dropped.png", png(90, 160), "image/png")]), page=page)
+    expect(chips).to_have_count(2)
+    for i in range(2):
+        expect(chips.nth(i)).to_have_attribute("data-state", "ready", timeout=20_000)
+    field.fill("the total is cut off")
+    field.press("Enter")
+    expect(chips).to_have_count(0)
+
+    sent = wait_until(lambda: [e for e in client.events(sessionId=session) if e["eventType"] == "chat.message"
+                               and e["payload"].get("attachments")], timeout=15, message="no chat.message with images")[0]
+    assert [a["name"] for a in sent["payload"]["attachments"]] == ["pasted.png", "dropped.png"]
+    luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run)).get(sent["payload"]["directiveId"]),
+                       timeout=30, message="lux never got the images")
+    assert [(i["name"], i["contentType"]) for i in luxed] == [("pasted.png", "image/png"), ("dropped.png", "image/png")]
+    shown = page.get_by_test_id("message-image")
+    expect(shown).to_have_count(2)
+    expect(shown.first).to_have_attribute("aria-label", "Open pasted.png")
+    # The session's images are its members': another member of the organisation, outside it, cannot read one.
+    _, outsider = provision_person(client, env, "Otto Outside", "otto.outside@acme.dev")
+    image = sent["payload"]["attachments"][0]["id"]
+    assert outsider.get(f"/v1/attachments/{image}").status_code == 404
+    assert client.get(f"/v1/attachments/{image}").status_code == 200
     assert console_errors == []
