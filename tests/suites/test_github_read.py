@@ -38,7 +38,8 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     secret_words = "Only the reviewer named Quillon wrote this sentence"
     fake_github.review(1, "COMMENTED", body=secret_words, reviewer="quillon")
     fake_github.comment(1, "Keep the accent on olá.", author="ana", path="greet.py")
-    fake_github.comment(1, "Ship it, but the metric name is wrong.", author="dee", path=None)
+    conversation_words = "Ship it, but the metric name Zorvane is wrong."
+    fake_github.comment(1, conversation_words, author="dee", path=None)
     fake_github.open_issue("Rename the greeting module", "Unrelated to Portuguese.")
 
     session = client.post("/v1/brainstorms", {"title": "Greetings", "projects": [
@@ -72,7 +73,7 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     # The conversation comment, which github_issue could not read without Issues: Read.
     talk = next(line for line in answer.splitlines() if line.startswith("Conversation: "))
     assert talk.startswith("Conversation: ⟦external ") and "⟧dee⟦/external " in talk, talk
-    assert " said ⟦external " in talk and "⟧Ship it, but the metric name is wrong.⟦/external " in talk, talk
+    assert " said ⟦external " in talk and f"⟧{conversation_words}⟦/external " in talk, talk
 
     events = client.events(sessionId=session, limit=1000)
     reads = [e["payload"] for e in events if e["eventType"] == "github.read"]
@@ -80,3 +81,6 @@ def test_a_brainstorm_finds_a_pull_request_on_github_and_answers_with_its_title(
     assert reads[1]["number"] == 1 and reads[1]["files"] == ["greet.py"], reads
     # What GitHub said reached the agent alone: no event holds the description.
     assert secret_words not in json.dumps(events)
+    # The conversation is said in an agent.message by design; no read event keeps it.
+    reads_json = json.dumps(reads)
+    assert secret_words not in reads_json and conversation_words not in reads_json, reads_json
